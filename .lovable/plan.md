@@ -30,18 +30,33 @@ Multi-phase audit of the self-hosted Supabase cutover. No real secrets will be p
 - Special check for `manage-app-secrets`: confirm the self-hosted guard returns the structured `management_api_unavailable` 200 response and does not throw.
 - Output: endpoint status table (auth type, contract check, issues).
 
-### Phase 5 — Runtime smoke tests against api.postora.cloud
+### Destructive endpoint denylist (applies to Phases 5, 7, 8)
+The following functions must **never** be invoked live during the audit — only static contract review, CORS preflight check, missing-auth behavior, missing-input validation, and (if the function itself supports it) a built-in safe dry-run mode:
+- `process-post`, `process-scheduled-posts`
+- `whatsapp-broadcast`, `whatsapp-scheduled-sender`, any `whatsapp-*` send path
+- `send-inbox-email`, `send-auth-email`, `send-subscription-email`, `send-expiry-reminders`, `send-token-expiry-notifications`, `send-token-failure-alert`, `send-weekly-analytics`, `send-reset-otp`
+- `stripe-checkout`, `stripe-webhook`, `create-payment`, `verify-payment`, `stripe-manage-subscription`
+- `manage-cron-jobs`, `manage-app-secrets`, `manage-oauth-redirects`
+- `cloudinary-delete`, `cleanup-media`
+- any function that deletes, sends, publishes, bills, refreshes real OAuth tokens, or mutates production data
+
+### Phase 5 — Runtime smoke tests against api.postora.cloud (safe by default)
 - Anonymous REST ping (already observed in network logs: `app_settings` 200 — confirms gateway + anon JWT work).
-- Anonymous edge-function ping for `get-public-config` (public endpoint) via `curl`.
-- Auth/session flow: use Playwright against `localhost:8080` with the pre-minted Lovable browser session to load `/dashboard`, confirm session restore, screenshot, capture console errors.
-- Admin route guard: navigate `/admin` as the signed-in user, verify role-based gating.
-- RLS spot-check: anon REST call to a user-scoped table (e.g. `posts`) must return empty/403; service-role calls are NOT executed from the browser (no service key in client).
+- Anonymous edge-function ping for `get-public-config` (public, read-only).
+- For every function on the denylist: contract-only — confirm CORS preflight (`OPTIONS`), missing-auth returns structured 401/403 (not a crash), missing required input returns 400 with a clear error.
+- Service-role calls are **never** executed from browser/sandbox context. If service-role validation is genuinely needed, run it from a local server-side script outside this audit; never print the service role key; report only masked status and HTTP class.
+- Auth/session flow: if a Lovable browser session is pre-minted (`LOVABLE_BROWSER_SUPABASE_SESSION_JSON`), use Playwright against `localhost:8080` to load `/dashboard`, confirm session restore. If no session env is present, mark authenticated and admin UI flows as `not_tested` and list them under manual actions. Never ask the user for a password and never use a value that would require printing it.
+- Admin route guard: if signed in, navigate `/admin` and verify role-based gating; otherwise mark `not_tested`.
+- RLS spot-checks (do not rely on anon alone):
+  - anon REST on user-owned tables (`posts`, `media_files`, `social_accounts`) must return empty or 403 — verified.
+  - authenticated user can only see their own rows — only runs if a safe test session is available; otherwise `not_tested`.
+  - admin routes blocked for non-admin users — only runs if a safe non-admin test session is available; otherwise `not_tested`.
+  - Any RLS check that cannot run safely is listed as a manual action.
 
 ### Phase 6 — Frontend feature sweep (Playwright)
 - Visit each public route (`/`, `/auth`, `/pricing`, `/privacy`, `/terms`, `/docs` if present), screenshot, capture console + failed network.
-- Visit each authenticated route (Dashboard, Profiles, Create Post, Calendar, History, Media, Analytics, Templates, Settings, API Keys, Connection Health).
-- Visit admin routes (Users, Plans, Coupons, Messages, Notifications, Blog, Settings, OAuth Apps, Feature Flags, Logs, Observability, Token Health, Rate Limits, Launch Checklist).
-- For each: status (ok / warn / fail), console errors, failed XHRs.
+- If a pre-minted session is present, visit each authenticated route (Dashboard, Profiles, Create Post, Calendar, History, Media, Analytics, Templates, Settings, API Keys, Connection Health) and admin routes (Users, Plans, Coupons, Messages, Notifications, Blog, Settings, OAuth Apps, Feature Flags, Logs, Observability, Token Health, Rate Limits, Launch Checklist). If no session is present, mark all of these `not_tested` and list as manual action.
+- For each visited route: status (ok / warn / fail), console errors, failed XHRs.
 - No destructive actions (no real posting, no real Stripe charges, no real OAuth completion, no media deletion of real assets).
 
 ### Phase 7 — OAuth & integration static checks
