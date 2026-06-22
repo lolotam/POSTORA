@@ -11,6 +11,8 @@ Multi-phase audit of the self-hosted Supabase cutover. No real secrets will be p
 - Confirm `VITE_SUPABASE_PUBLISHABLE_KEY` and `VITE_SUPABASE_ANON_KEY` are both present, both JWT-shaped (3 dot-separated base64url segments), and equal.
 - Check edge-function vars (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL`, `SUPABASE_DB_URL`, `SB_MANAGEMENT_TOKEN`, `SUPABASE_PROJECT_REF`).
 - Check platform/integration keys against an "expected vs optional" matrix (Meta, TikTok, X, LinkedIn, Pinterest, Google, WhatsApp, Cloudinary, AtlasCloud, ACRCloud, OpenAI, OpenRouter, Google AI, Lovable, Resend, Stripe, Unsplash, Giphy, Pexels, Pixabay, Klipy, Slack).
+- For each credential, report exactly one of: `present` / `missing` / `optional` / `invalid_format` / `not_tested`. Never print partial token characters.
+- Do not validate by sending real actions to third-party APIs unless the API exposes a documented harmless health/check endpoint.
 - Output: masked secrets table only.
 
 ### Phase 2 — Static repo validation
