@@ -282,8 +282,24 @@ Deno.serve(async (req) => {
 
     const { action, platform, updates } = await req.json();
 
+    // Self-hosted Supabase has no remote Management API. Gate `list` and
+    // `update` behind SB_MANAGEMENT_TOKEN + a real SUPABASE_PROJECT_REF; on
+    // self-hosted we return a structured 200 instead of throwing.
+    const mgmtAvailable = !!Deno.env.get("SB_MANAGEMENT_TOKEN") && PROJECT_REF !== "self-hosted";
+
     switch (action) {
       case "list": {
+        if (!mgmtAvailable) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error_code: "management_api_unavailable",
+              message:
+                "Self-hosted Supabase: secrets must be managed via the host .env / Dokploy. Set SB_MANAGEMENT_TOKEN and SUPABASE_PROJECT_REF to enable remote management.",
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
         const result = await listSecrets();
         return new Response(JSON.stringify({ success: true, data: result }), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -291,6 +307,17 @@ Deno.serve(async (req) => {
       }
 
       case "update": {
+        if (!mgmtAvailable) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error_code: "management_api_unavailable",
+              message:
+                "Self-hosted Supabase: update secrets directly in the host .env / Dokploy.",
+            }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
         if (!updates || !Array.isArray(updates) || updates.length === 0) {
           throw new Error("No updates provided");
         }

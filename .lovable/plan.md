@@ -1,73 +1,116 @@
 ## Goal
 
-Cut the project cleanly over to the self-hosted Supabase at `https://api.postora.cloud` and remove every trace of the old Supabase Cloud project `efruibswazzuuupgyzmf`. Provide a single `.env` placeholder file you can fill in.
+Refine the prior cutover. The frontend is already pointing at `https://api.postora.cloud` and live code is free of the old cloud ref — this iteration tightens env naming compatibility, adds the helper + missing secrets, hardens `manage-app-secrets` for self-hosted, refreshes docs, and runs validation greps.
 
-## Scope (only what you asked for)
+## Already done (from prior turn — won't redo)
 
-1. **Delete the existing `.env`** (it points to `supabase.postora.cloud` and a stale anon JWT).
-2. **Create a new `.env`** at project root with placeholders only — no secret values committed. You'll paste real values yourself. It will contain:
-   - Frontend (Vite, used by the SPA): `VITE_SUPABASE_URL=https://api.postora.cloud`, `VITE_SUPABASE_PUBLISHABLE_KEY=<ANON_KEY placeholder>`, `VITE_SUPABASE_PROJECT_ID=self-hosted` (kept because some code reads it; documented as cosmetic).
-   - Server / Edge-Function side mirror (for local dev & deployment to the self-hosted edge runtime): `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_SECRET`, `DATABASE_URL`.
-   - All 37 platform/AI/integration secrets from your README list, each as `KEY=` placeholder (ACRCLOUD_*, APIFY, ATLASCLOUD, CLOUDINARY_*, FACEBOOK_*, INSTAGRAM_*, THREADS_*, GOOGLE_*, TIKTOK_*, TWITTER_*/X_*, LINKEDIN_*, PINTEREST_*, OPENAI/OPENROUTER/GOOGLE_AI_STUDIO, RESEND_*, STRIPE_*, UNSPLASH/GIPHY/PEXELS/PIXABAY/KLIPY, WHATSAPP_VERIFY_PIN, SB_MANAGEMENT_TOKEN, SEND_EMAIL_HOOK_SECRET, THREADS_DEMO_MODE).
-3. **Update `.env.example`** to mirror the new placeholder file (same keys, no values) so it stays the canonical reference.
-4. **Point the SPA at api.postora.cloud everywhere.** The Supabase client (`src/integrations/supabase/client.ts`) already reads from `VITE_SUPABASE_URL` — no code change needed there. I'll grep-replace any **hardcoded** occurrences of `supabase.postora.cloud`, `efruibswazzuuupgyzmf.supabase.co`, or `efruibswazzuuupgyzmf` in:
-   - `nginx.conf`
-   - `src/hooks/*` (useBrandScrape, useWhatsApp*, useTikTokApiAnalytics, useMessaging)
-   - `src/components/settings/IntegrationsSection.tsx`
-   - `src/components/messaging/*` (4 files)
-   - `src/integrations/__tests__/*`
-   - `supabase/functions/manage-app-secrets/index.ts`
-   - `supabase/config.toml` (project_id field — switch to a self-hosted sentinel)
-   - `scripts/upload_logos.{ts,js}` and `scripts/deploy-oauth-fixes.sh`
-   Replacement strategy: use `import.meta.env.VITE_SUPABASE_URL` (frontend) and `Deno.env.get("SUPABASE_URL")` (edge functions) instead of hardcoded hosts. Where a host literal is unavoidable (nginx, shell scripts), use `https://api.postora.cloud`.
-5. **Edge-function URL helper.** Several hooks build URLs like `https://<ref>.supabase.co/functions/v1/...`. I'll route these through a single helper `src/lib/functionsUrl.ts` that returns `${VITE_SUPABASE_URL}/functions/v1/<name>`, and refactor the listed callers to use it. This way any future host change is one edit.
-6. **Migrations & docs.** The 11 migration files and 6 doc files (`README.md`, `CLAUDE.md`, `AGENTS.md`, `API_REFERENCE.md`, `SECURITY-NOTES.md`, `LOVABLE-MIGRATION-INSTRUCTIONS.md`, `docs/*`) reference the old project ref in comments/examples. I will **not** rewrite historical migrations (they've already run on your DB and changing them breaks hash checks). I'll only update the docs and add a short "Host: api.postora.cloud" note to README.
+- Old `.env` deleted; new `.env` + `.env.example` created with placeholders at `api.postora.cloud`.
+- `nginx.conf`, `scripts/upload_logos.{ts,js}`, `scripts/deploy-oauth-fixes.sh`, `supabase/config.toml` (`project_id = "postora-self-hosted"`), and `supabase/functions/manage-app-secrets/index.ts` (`PROJECT_REF` env-driven) updated.
+- Live-code grep confirmed clean of `efruibswazzuuupgyzmf` and `supabase.postora.cloud` (only remaining match is a test asserting the cloud ref is absent — correct).
 
-## Out of scope (deliberately — to keep this PR focused)
+## Changes in this pass
 
-- Seeding `app_settings`, `subscription_plans`, `user_roles` (your call once you decide on admin email).
-- Deploying edge functions to the self-hosted edge-runtime.
-- Updating OAuth redirect URIs in each platform's dev console (manual, on your side).
-- Setting actual secret values (you'll do that in the new `.env`).
-- Linking the Google Search Console connector (separate one-tool step; will do right after env switch).
+### 1. Expand `.env` and `.env.example` (placeholders only, mirrored)
 
-## Technical details
+Add the additional variables the user listed so naming compatibility is covered both ways. Final placeholder set:
 
-- **Why `VITE_SUPABASE_PROJECT_ID` stays:** removing it would touch many files that read `import.meta.env.VITE_SUPABASE_PROJECT_ID` to construct URLs. Cleaner fix: keep the var but stop using it for URL construction (use `VITE_SUPABASE_URL` instead). The remaining reads become cosmetic logging.
-- **`supabase/config.toml`** uses `project_id = "efruibswazzuuupgyzmf"`. For self-hosted this field is only used by the Supabase CLI to namespace local state — I'll change it to `project_id = "postora-self-hosted"`. No runtime impact.
-- **Tests** in `src/integrations/__tests__/` will be updated to use a mocked `VITE_SUPABASE_URL` and stop asserting against the cloud host.
-- After the changes land, the live preview will still 401 until you paste the new `ANON_KEY` JWT (from your self-hosted `.env`) into Lovable's `VITE_SUPABASE_PUBLISHABLE_KEY`. That's the single value that unblocks the whole app.
+**Supabase (frontend + server, both naming patterns):**
+```
+VITE_SUPABASE_URL=https://api.postora.cloud
+VITE_SUPABASE_PUBLISHABLE_KEY=
+VITE_SUPABASE_ANON_KEY=
+VITE_SUPABASE_STUDIO_URL=https://api.postora.cloud
+VITE_SUPABASE_PROJECT_ID=self-hosted   # cosmetic only
+SUPABASE_URL=https://api.postora.cloud
+SUPABASE_ANON_KEY=
+SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_JWT_SECRET=
+DATABASE_URL=
+SUPABASE_DB_URL=
+SB_MANAGEMENT_TOKEN=
+SUPABASE_PROJECT_REF=self-hosted
+```
+With a comment: *"`VITE_SUPABASE_PUBLISHABLE_KEY` and `VITE_SUPABASE_ANON_KEY` must hold the same self-hosted anon JWT until the codebase standardizes on one variable."*
 
-## File changes summary
+**Platform / integration secrets (all empty placeholders):**
+ACRCLOUD_HOST / ACCESS_KEY / ACCESS_SECRET · APIFY_API_TOKEN · ATLASCLOUD_API_KEY · CLOUDINARY_CLOUD_NAME / API_KEY / API_SECRET · FACEBOOK_APP_ID/SECRET · INSTAGRAM_APP_ID/SECRET · THREADS_APP_ID/SECRET / DEMO_MODE / WEBHOOK_VERIFY_TOKEN · FACEBOOK_GRAPH_API_VERSION=v22.0 · GOOGLE_CLIENT_ID/SECRET · GOOGLE_AI_STUDIO_KEY · TIKTOK_CLIENT_KEY/SECRET · TWITTER_CLIENT_ID/SECRET · X_CLIENT_ID/SECRET (added) · LINKEDIN_CLIENT_ID/SECRET · PINTEREST_CLIENT_ID/SECRET · OPENAI_API_KEY · OPENROUTER_API_KEY · **LOVABLE_API_KEY** (added) · RESEND_API_KEY / WEBHOOK_SECRET · SEND_EMAIL_HOOK_SECRET · STRIPE_SECRET_KEY / WEBHOOK_SECRET · UNSPLASH_ACCESS_KEY · GIPHY_API_KEY · PEXELS_API_KEY · PIXABAY_API_KEY · KLIPY_API_KEY · **WHATSAPP_ACCESS_TOKEN / PHONE_NUMBER_ID / BUSINESS_ACCOUNT_ID / VERIFY_PIN / WEBHOOK_VERIFY_TOKEN** (expanded) · **SLACK_API_KEY** (added).
 
-```text
-delete      .env
-create      .env                        (placeholders)
-update      .env.example                (mirror placeholders)
-create      src/lib/functionsUrl.ts     (single source for /functions/v1 URLs)
-update      src/hooks/useBrandScrape.ts
-update      src/hooks/useWhatsAppCatalog.ts
-update      src/hooks/useWhatsAppBusinessProfile.ts
-update      src/hooks/useWhatsAppBroadcasts.ts
-update      src/hooks/useTikTokApiAnalytics.ts
-update      src/hooks/useMessaging.ts
-update      src/components/settings/IntegrationsSection.tsx
-update      src/components/messaging/WhatsAppDiagnostics.tsx
-update      src/components/messaging/WhatsAppTemplatesContent.tsx
-update      src/components/messaging/WhatsAppCatalogContent.tsx
-update      src/components/messaging/ConversationDetail.tsx
-update      src/integrations/__tests__/supabaseClient.test.ts
-update      src/integrations/__tests__/integration.test.ts
-update      supabase/functions/manage-app-secrets/index.ts
-update      supabase/config.toml
-update      nginx.conf
-update      scripts/upload_logos.ts
-update      scripts/upload_logos.js
-update      scripts/deploy-oauth-fixes.sh
-update      README.md / CLAUDE.md / AGENTS.md / API_REFERENCE.md / SECURITY-NOTES.md / LOVABLE-MIGRATION-INSTRUCTIONS.md / docs/OAUTH-TOKEN-REFRESH-GUIDE.md / docs/EXTERNAL-DEVELOPER-GUIDE.md
-leave       supabase/migrations/*.sql   (historical, do not rewrite)
+The prior X_API_KEY/X_API_SECRET names will be **kept alongside** X_CLIENT_ID/X_CLIENT_SECRET with a comment that they're aliases, so we don't break any code that still reads either name.
+
+### 2. Create `src/lib/functionsUrl.ts`
+
+```ts
+// Single source of truth for Edge Function URLs on the self-hosted instance.
+export function functionsUrl(name: string): string {
+  const base = import.meta.env.VITE_SUPABASE_URL;
+  if (!base) throw new Error("VITE_SUPABASE_URL is not configured");
+  return `${base.replace(/\/$/, "")}/functions/v1/${name}`;
+}
 ```
 
-## After you approve
+Then **search for and refactor** any frontend caller that builds a function URL manually (pattern `.supabase.co/functions/v1/` or `${...PROJECT_ID}.supabase.co/functions/v1/`). Prior grep showed **zero current callers** in `src/` — most code uses `supabase.functions.invoke()`. The helper still ships so future hand-built URLs have one place to go.
 
-I will execute the file changes above, then tell you exactly which value to paste into `VITE_SUPABASE_PUBLISHABLE_KEY` so the preview comes back online. Then we can move to seeding the DB and linking the Google Search Console connector.
+### 3. Tests
+
+Update `src/integrations/__tests__/supabaseClient.test.ts` and `integration.test.ts` to:
+- Mock `import.meta.env.VITE_SUPABASE_URL = "https://api.postora.cloud"` and `VITE_SUPABASE_PUBLISHABLE_KEY = "test-anon"`.
+- Keep the existing assertion that the source does **not** contain `efruibswazzuuupgyzmf` (it now serves as a regression guard).
+
+### 4. Harden `supabase/functions/manage-app-secrets/index.ts`
+
+The function calls `https://api.supabase.com/v1/projects/{ref}/secrets` — that's cloud-only. Add a guard at request entry:
+
+```ts
+const mgmtToken = Deno.env.get("SB_MANAGEMENT_TOKEN");
+if (!mgmtToken || PROJECT_REF === "self-hosted") {
+  return new Response(JSON.stringify({
+    success: false,
+    error_code: "management_api_unavailable",
+    message: "Self-hosted Supabase: secrets must be managed via the host .env / Dokploy. Set SB_MANAGEMENT_TOKEN and SUPABASE_PROJECT_REF to enable remote management.",
+  }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+```
+(Matches the project's "return 200 + structured error" memory rule.)
+
+### 5. `supabase/config.toml`
+
+Already changed to `project_id = "postora-self-hosted"`. Add a one-line comment above it: *"local CLI namespace only — does not affect runtime."*
+
+### 6. Docs
+
+Update only **active** docs (no rewriting historical migrations or old release notes):
+- `README.md`: change "Supabase Backend" line to `Self-hosted Supabase at https://api.postora.cloud`; replace any `efruibswazzuuupgyzmf` runtime reference with `postora-self-hosted` and a "historical only" callout where the ref is shown for archival reasons.
+- `CLAUDE.md`, `AGENTS.md`, `API_REFERENCE.md`, `SECURITY-NOTES.md`, `LOVABLE-MIGRATION-INSTRUCTIONS.md`, `docs/OAUTH-TOKEN-REFRESH-GUIDE.md`, `docs/EXTERNAL-DEVELOPER-GUIDE.md`: same treatment — host swap + historical tag on cloud refs. No migration files touched.
+
+### 7. Validation (run after edits)
+
+```bash
+grep -R "efruibswazzuuupgyzmf"            . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=playwright-report --exclude-dir=test-results
+grep -R "supabase.postora.cloud"          . --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=playwright-report --exclude-dir=test-results
+grep -R "efruibswazzuuupgyzmf.supabase.co" . --exclude-dir=node_modules --exclude-dir=.git
+grep -R ".supabase.co/functions/v1"       src supabase scripts --exclude-dir=node_modules
+```
+Expected outcome:
+- First three: hits only in `supabase/migrations/*.sql` (historical), in archived markdown clearly marked `<!-- historical -->`, and in the regression test that asserts the string is absent from `client.ts`.
+- Fourth: zero hits.
+TypeScript build runs automatically; I'll fix anything it surfaces.
+
+## Out of scope (still)
+
+- Real secret values (you'll fill them in).
+- Deploying edge functions to the self-hosted edge-runtime.
+- Updating OAuth redirect URIs in each platform's dev console.
+- Seeding `app_settings` / `subscription_plans` / `user_roles`.
+- Linking the Google Search Console connector (next pass, single tool call).
+
+## Final reminder you'll see after execution
+
+> The single runtime value you must paste to unblock the preview is:
+> ```
+> VITE_SUPABASE_PUBLISHABLE_KEY=<your self-hosted anon JWT>
+> VITE_SUPABASE_ANON_KEY=<same value>
+> ```
+> Until this is set, the live preview will return **401 Invalid authentication credentials** on every Supabase request — that's expected, not a code bug.
+
+I will not echo, log, or commit any real secret values.

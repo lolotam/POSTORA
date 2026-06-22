@@ -1,3 +1,4 @@
+# Local CLI namespace only — does not affect runtime. Runtime host is set via VITE_SUPABASE_URL / SUPABASE_URL.
 project_id = "postora-self-hosted"
 
 [functions.threads-webhook]
