@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- CSP frame-ancestors is set via HTTP headers (nginx/netlify), not meta -->
-    <link rel="icon" href="/favicon.png?v=2" type="image/png" />
+    <link rel="icon" type="image/x-icon" href="/favicon.png?v=2">
     <!-- Canonical is set dynamically per route via DocumentTitle.tsx -->
     
     <!-- Preconnect to external origins for faster API calls -->
@@ -12,18 +12,18 @@
     <link rel="dns-prefetch" href="https://api.postora.cloud" />
     <title>Postora — Social Media Management</title>
     <!-- Per-route title/description/canonical/og:url are set by DocumentTitle.tsx -->
-    <meta name="description" content="Schedule, create, and publish posts to Instagram, YouTube, TikTok, LinkedIn and more from one dashboard." />
+    <meta name="description" content="Schedule, create, and publish posts to Instagram, YouTube, TikTok, LinkedIn and more from one dashboard.">
     <meta name="author" content="Postora" />
 
-    <meta property="og:title" content="Postora — Social Media Management" />
-    <meta property="og:description" content="Schedule, create, and publish posts to Instagram, YouTube, TikTok, LinkedIn and more from one dashboard." />
+    
+    
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://postora.cloud/" />
-    <meta property="og:image" content="https://postora.cloud/og-image.png" />
+    <meta property="og:image" content="https://postora.cloud/og-image.png">
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:site" content="@Postora" />
-    <meta name="twitter:image" content="https://postora.cloud/og-image.png" />
+    <meta name="twitter:image" content="https://postora.cloud/og-image.png">
 
     <script type="application/ld+json">
       {
@@ -43,7 +43,11 @@
         "url": "https://postora.cloud/"
       }
     </script>
-  </head>
+    <meta property="og:title" content="Postora — Social Media Management">
+  <meta name="twitter:title" content="Postora — Social Media Management">
+  <meta property="og:description" content="Schedule, create, and publish posts to Instagram, YouTube, TikTok, LinkedIn and more from one dashboard.">
+  <meta name="twitter:description" content="Schedule, create, and publish posts to Instagram, YouTube, TikTok, LinkedIn and more from one dashboard.">
+</head>
 
   <body>
     <div id="root"></div>
