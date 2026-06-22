@@ -6,8 +6,8 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type",
 };
 
-const PROJECT_REF = "efruibswazzuuupgyzmf";
-const MANAGEMENT_API = "https://api.supabase.com";
+const PROJECT_REF = Deno.env.get("SUPABASE_PROJECT_REF") ?? "self-hosted";
+const MANAGEMENT_API = Deno.env.get("SUPABASE_MANAGEMENT_API") ?? "https://api.supabase.com";
 
 // Platform secret mappings
 const PLATFORM_SECRETS: Record<
