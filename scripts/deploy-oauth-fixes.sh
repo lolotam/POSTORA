@@ -11,7 +11,7 @@
 #
 set -euo pipefail
 
-PROJECT_REF="efruibswazzuuupgyzmf"
+PROJECT_REF="postora-self-hosted"
 FUNCTIONS=(tiktok-oauth pinterest-oauth twitter-oauth linkedin-oauth)
 
 if [[ -z "${SUPABASE_ACCESS_TOKEN:-}" ]]; then
