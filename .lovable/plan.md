@@ -1,6 +1,8 @@
 ## Postora Production-Readiness Audit Plan
 
-A read-only, multi-phase audit of the self-hosted Supabase cutover. No real secrets will be printed; all reporting uses masked status (`present` / `missing` / `optional` / `invalid_format` / `not_tested`).
+**Mode: Audit only** (Option A). No files will be modified. Issues are reported, not patched. To switch to **Audit + safe fixes** (Option B), the project owner must explicitly approve in writing; until then, Phase 9 is report-only.
+
+Multi-phase audit of the self-hosted Supabase cutover. No real secrets will be printed; reporting uses masked status (`present` / `missing` / `optional` / `invalid_format` / `not_tested`).
 
 ### Phase 1 — Environment & secrets validation
 - Parse `.env` (and `.env.example`) keys only; never echo values.
