@@ -67,44 +67,60 @@ The following functions must **never** be invoked live during the audit — only
 - Do NOT initiate real OAuth handshakes.
 
 ### Phase 8 — Workflow contract checks (no live publishing)
-- Posting flow: read `process-post` and `process-scheduled-posts` to confirm DB writes (posts + platform_posts), status transitions, error structure.
-- Media flow: read `cloudinary-upload`, validate path uses `${userId}/` (RLS rule from memory).
-- AI flow: read `generate-caption`, `generate-hashtags`, `generate-image`, `ai-config` — confirm Lovable AI Gateway + fallback chain wiring.
-- Billing flow: read `stripe-checkout`, `stripe-webhook`, `check-subscription` — confirm signature verification and missing-key behavior.
-- Messaging/WhatsApp: read `messaging-api`, `whatsapp-*` — confirm webhook verify token handling.
+- Posting flow: read `process-post` and `process-scheduled-posts` to confirm DB writes (posts + platform_posts), status transitions, error structure. Static only — function is on the denylist.
+- Media flow: read `cloudinary-upload`, validate path uses `${userId}/` (RLS rule from memory). `cloudinary-delete` and `cleanup-media` are denylisted — static review only.
+- AI flow: read `generate-caption`, `generate-hashtags`, `generate-image`, `ai-config` — confirm Lovable AI Gateway + fallback chain wiring. Do not call live unless billable cost is zero.
+- Billing flow: read `stripe-checkout`, `stripe-webhook`, `check-subscription` — confirm signature verification and missing-key behavior. Denylisted — static only.
+- Messaging/WhatsApp: read `messaging-api`, `whatsapp-*` — confirm webhook verify token handling. All send paths denylisted — static only.
 
-### Phase 9 — Auto-fix small safe issues
-Only if found during the audit. Examples of what I would fix in-place:
+### Phase 9 — Findings report (report-only under Option A)
+Under the current **Audit only** mode, this phase produces a list of recommended fixes — **no code changes are made**. Each finding includes file path, line, severity, and a proposed patch description. The owner can then approve Option B (Audit + safe fixes) for a follow-up pass.
+
+Examples of items this phase would surface:
 - Missing CORS headers on edge-function error branches
 - Edge functions that throw instead of returning structured 200 with `error_code`
 - Stray `efruibswazzuuupgyzmf` / `supabase.postora.cloud` in live code
 - Frontend hooks that build `.supabase.co/functions/v1` URLs manually
 
-What I will NOT touch:
+What this phase will never touch (even under Option B):
 - Historical migrations (`supabase/migrations/*.sql`)
 - Archived docs banners
 - Real secret values
 - Working compatibility env-var aliases
 - Anything outside the audit scope
 
+### `manage-app-secrets` special handling
+- Do **not** call the Supabase Cloud Management API in self-hosted mode.
+- Verify only that the endpoint returns the structured `management_api_unavailable` response and that Admin Settings renders that message without crashing.
+
 ### Phase 10 — Final structured report
-Sections A–G exactly as you requested:
+Every line item in the report carries one of these explicit status labels:
+- `verified` — runtime evidence captured this turn
+- `statically_verified` — confirmed by reading code / config only
+- `smoke_tested` — non-destructive live ping succeeded
+- `not_tested` — could not be tested safely; listed under manual actions
+- `blocked` — a precondition (credentials, session, deploy) is missing
+
+Sections A–G:
 - A. Environment status (masked)
 - B. Build/test status
 - C. Edge function table
 - D. Feature status table
 - E. Security status (grep results, RLS, admin guard, webhook auth)
-- F. Manual actions left for you (OAuth console redirect URIs, real account reconnects, Stripe mode confirmation, WhatsApp webhook verification, edge function deploy on the VPS, etc.)
-- G. Final conclusion: `ready` / `ready with warnings` / `blocked` + reason
+- F. Manual actions (OAuth console redirect URIs, real account reconnects, Stripe mode confirmation, WhatsApp webhook verification, edge function deploy on the VPS, missing test credentials, etc.)
+- G. Final conclusion. Allowed verdicts: `ready` / `ready with warnings` / `blocked` / `blocked by missing credentials` / `blocked by code errors` / `blocked by missing test credentials`.
+  - The app is **not** marked `ready` unless **all** of these pass: build, Supabase client init, anon REST under RLS, public route loading, public edge function ping, and admin route guard.
+  - If authenticated E2E cannot run because no safe session/test user exists, the verdict is at most `ready with warnings` or `blocked by missing test credentials` — never `ready`.
 
 ### Constraints honored throughout
 - No secret values printed, logged, screenshotted, or committed.
-- No destructive DB ops, no real posting, no real billing.
+- No partial token characters reported.
+- No destructive DB ops, no real posting, no real billing, no real OAuth handshakes, no real email/WhatsApp/Stripe sends.
+- No service-role calls from browser/sandbox context.
 - No rewriting of historical migrations or archived docs.
 - Self-hosted Supabase compatibility preserved.
 - Old compatibility env-var aliases (`VITE_SUPABASE_PUBLISHABLE_KEY` ↔ `VITE_SUPABASE_ANON_KEY`) preserved.
 
-### Expected runtime
-~15–25 tool calls total (mostly parallel reads, `rg`, `curl`, one Playwright sweep). Estimated wall-clock 3–6 minutes depending on Playwright route count.
+Approximate scope: ~15–25 tool calls (parallel file reads, `rg`, `curl`, one Playwright sweep).
 
-Approve this and I'll execute Phases 1–10 in order, fixing only safe issues in-place and returning the final structured report.
+Approve this and I'll execute Phases 1–10 in **Audit only** mode and return the final structured report. To enable in-place safe fixes, reply with explicit approval of Option B.
