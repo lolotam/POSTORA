@@ -3,7 +3,7 @@ import { encodeBase64 } from "jsr:@std/encoding/base64";
 import { join } from "jsr:@std/path";
 
 function resolveConfig() {
-    const url = Deno.env.get("SUPABASE_URL") || Deno.env.get("VITE_SUPABASE_URL") || "https://supabase.postora.cloud";
+    const url = Deno.env.get("SUPABASE_URL") || Deno.env.get("VITE_SUPABASE_URL") || "https://api.postora.cloud";
     const key = (Deno.env.get("SUPABASE_PUBLISHABLE_KEY") || Deno.env.get("VITE_SUPABASE_PUBLISHABLE_KEY") || "").trim();
 
     if (!key) {

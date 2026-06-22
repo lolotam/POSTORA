@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 
 function resolveConfig() {
-    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://supabase.postora.cloud";
+    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://api.postora.cloud";
     const key = (process.env.SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || "").trim();
 
     if (!key) {
