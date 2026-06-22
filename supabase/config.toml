@@ -1,4 +1,4 @@
-project_id = "efruibswazzuuupgyzmf"
+project_id = "postora-self-hosted"
 
 [functions.threads-webhook]
 verify_jwt = false
