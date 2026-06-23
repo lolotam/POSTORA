@@ -75,8 +75,9 @@ async function hmacSign(message: string, secret: string): Promise<string> {
 
 function getSecret(): string {
   const s =
-    Deno.env.get("OAUTH_STATE_SECRET") ??
-    Deno.env.get("SUPABASE_JWT_SECRET") ??
+    Deno.env.get("OAUTH_STATE_SECRET") ||
+    Deno.env.get("SUPABASE_JWT_SECRET") ||
+    Deno.env.get("JWT_SECRET") ||
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!s) {
     throw new Error(
