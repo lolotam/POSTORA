@@ -24,9 +24,11 @@ export interface PageSelectionData {
   pages: FacebookPage[];
   standaloneInstagram: StandaloneInstagram[];
   profileId: string;
-  providerToken: string;
+  providerToken: string | null;
+  selectionId: string | null;
   platform: Platform;
 }
+
 
 export function useFacebookOAuth(
   setConnectingPlatform: (p: any) => void,
