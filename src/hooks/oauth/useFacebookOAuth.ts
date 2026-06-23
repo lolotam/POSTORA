@@ -24,9 +24,11 @@ export interface PageSelectionData {
   pages: FacebookPage[];
   standaloneInstagram: StandaloneInstagram[];
   profileId: string;
-  providerToken: string;
+  providerToken: string | null;
+  selectionId: string | null;
   platform: Platform;
 }
+
 
 export function useFacebookOAuth(
   setConnectingPlatform: (p: any) => void,
@@ -96,7 +98,7 @@ export function useFacebookOAuth(
 
     if (data?.success) {
       if (data.needs_page_selection && data.pages && data.pages.length > 1) {
-        setPageSelectionData({ pages: data.pages, standaloneInstagram: data.standalone_instagram || [], profileId, providerToken, platform: targetPlatform });
+        setPageSelectionData({ pages: data.pages, standaloneInstagram: data.standalone_instagram || [], profileId, providerToken, selectionId: null, platform: targetPlatform });
         return;
       }
 
@@ -122,9 +124,13 @@ export function useFacebookOAuth(
     if (!pageSelectionData || !user) return;
     setSelectingPage(pageId);
     try {
-      const { data, error } = await supabase.functions.invoke("facebook-oauth", {
-        body: { action: "store_page", user_id: user.id, provider_token: pageSelectionData.providerToken, page_id: pageId, social_profile_id: pageSelectionData.profileId },
-      });
+      const storeBody: Record<string, unknown> = {
+        action: "store_page", user_id: user.id, page_id: pageId, social_profile_id: pageSelectionData.profileId,
+      };
+      if (pageSelectionData.selectionId) storeBody.selection_id = pageSelectionData.selectionId;
+      else if (pageSelectionData.providerToken) storeBody.provider_token = pageSelectionData.providerToken;
+      const { data, error } = await supabase.functions.invoke("facebook-oauth", { body: storeBody });
+
       if (error) throw error;
       if (data?.success) {
         await linkAccountToProfile(user.id, pageSelectionData.platform, pageSelectionData.profileId);
@@ -148,13 +154,15 @@ export function useFacebookOAuth(
     if (!pageSelectionData || !user) return;
     setSelectingPage(igAccount.id);
     try {
-      const { data, error } = await supabase.functions.invoke("facebook-oauth", {
-        body: {
-          action: "store_instagram", user_id: user.id, provider_token: pageSelectionData.providerToken,
-          instagram_account_id: igAccount.id, instagram_username: igAccount.username,
-          instagram_profile_picture: igAccount.profile_picture_url, social_profile_id: pageSelectionData.profileId,
-        },
-      });
+      const storeBody: Record<string, unknown> = {
+        action: "store_instagram", user_id: user.id,
+        instagram_account_id: igAccount.id, instagram_username: igAccount.username,
+        instagram_profile_picture: igAccount.profile_picture_url, social_profile_id: pageSelectionData.profileId,
+      };
+      if (pageSelectionData.selectionId) storeBody.selection_id = pageSelectionData.selectionId;
+      else if (pageSelectionData.providerToken) storeBody.provider_token = pageSelectionData.providerToken;
+      const { data, error } = await supabase.functions.invoke("facebook-oauth", { body: storeBody });
+
       if (error) throw error;
       if (data?.success) {
         await linkAccountToProfile(user.id, "instagram", pageSelectionData.profileId);
@@ -180,5 +188,57 @@ export function useFacebookOAuth(
     setConnectingProfile(null);
   };
 
-  return { pageSelectionData, selectingPage, handleFacebookConnect, handleSelectPage, handleSelectStandaloneInstagram, clearPageSelection };
+  // New unified backend callback path. Opens Meta authorize URL minted by the
+  // edge function; Facebook redirects to the backend, which 302s back with
+  // `?connected=facebook&select=<id>` so we can hydrate the page picker.
+  const handleFacebookConnectBackend = async (targetPlatform: Platform, profileId: string) => {
+    if (!user) throw new Error("Not authenticated");
+    setConnectingPlatform(targetPlatform);
+    setConnectingProfile(profileId);
+    const { data, error } = await supabase.functions.invoke("facebook-oauth", {
+      body: {
+        action: "authorize",
+        target_platform: targetPlatform === "instagram" ? "instagram" : "facebook",
+        social_profile_id: profileId,
+        return_to: `${window.location.origin}/profiles`,
+      },
+    });
+    if (error || !data?.url) {
+      setConnectingPlatform(null);
+      setConnectingProfile(null);
+      throw error || new Error("Failed to start Facebook authorization");
+    }
+    window.location.assign(data.url);
+  };
+
+  // Called after the GET callback redirects back with ?connected=facebook&select=<id>.
+  const loadPendingFacebookSelection = async (selectionId: string) => {
+    if (!user) return;
+    const { data, error } = await supabase.functions.invoke("facebook-oauth", {
+      body: { action: "get_pending_selection", user_id: user.id, selection_id: selectionId },
+    });
+    if (error || !data?.success) {
+      toast({ title: "Connection expired", description: "The Facebook selection link expired. Please reconnect.", variant: "destructive" });
+      return;
+    }
+    const platform: Platform = data.target_platform === "instagram" ? "instagram" : "facebook";
+    setPageSelectionData({
+      pages: data.pages || [],
+      standaloneInstagram: data.standalone_instagram || [],
+      profileId: data.social_profile_id,
+      providerToken: null,
+      selectionId,
+      platform,
+    });
+    setConnectingPlatform(platform);
+    setConnectingProfile(data.social_profile_id);
+  };
+
+  return {
+    pageSelectionData, selectingPage,
+    handleFacebookConnect, handleFacebookConnectBackend,
+    handleSelectPage, handleSelectStandaloneInstagram,
+    clearPageSelection, loadPendingFacebookSelection,
+  };
 }
+

@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
+import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,6 +10,23 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const FACEBOOK_REDIRECT_URI =
+  Deno.env.get("FACEBOOK_REDIRECT_URI") ??
+  (SUPABASE_URL
+    ? `${SUPABASE_URL}/functions/v1/facebook-oauth`
+    : "https://api.postora.cloud/functions/v1/facebook-oauth");
+const FB_DEFAULT_RETURN_TO = "https://postora.cloud/profiles";
+const FB_OAUTH_SCOPES = [
+  "email", "public_profile", "pages_show_list", "pages_read_engagement",
+  "pages_manage_posts", "pages_manage_engagement", "pages_read_user_content", "business_management",
+  "pages_manage_metadata", "pages_messaging", "read_insights",
+  "instagram_basic", "instagram_content_publish", "instagram_manage_comments",
+  "instagram_manage_messages",
+  "whatsapp_business_messaging", "whatsapp_business_management",
+  "ads_read", "ads_management",
+  "leads_retrieval", "pages_manage_ads",
+];
+
 
 interface FacebookPage {
   id: string;
@@ -284,9 +302,169 @@ async function ensurePageAccessToken(page: FacebookPage, providerToken: string):
   return null;
 }
 
+function safeReturnTo(candidate: unknown): string {
+  if (typeof candidate === "string") {
+    try {
+      const u = new URL(candidate);
+      if (u.protocol === "https:" && u.hostname.endsWith("postora.cloud")) {
+        return candidate;
+      }
+    } catch { /* fall through */ }
+  }
+  return FB_DEFAULT_RETURN_TO;
+}
+
+function redirectResponse(url: string): Response {
+  return new Response(null, { status: 302, headers: { ...corsHeaders, Location: url } });
+}
+
+async function loadPendingSelectionRow(
+  supabase: AnySupabase,
+  selectionId: string,
+  userId: string,
+): Promise<{
+  provider_token: string;
+  social_profile_id: string | null;
+  target_platform: "facebook" | "instagram";
+  pages_json: unknown;
+  ig_standalone_json: unknown;
+} | null> {
+  const { data, error } = await supabase
+    .from("oauth_pending_facebook_selections")
+    .select("provider_token, social_profile_id, target_platform, pages_json, ig_standalone_json, expires_at, user_id")
+    .eq("id", selectionId)
+    .maybeSingle();
+  if (error || !data || data.user_id !== userId) return null;
+  if (new Date(data.expires_at).getTime() < Date.now()) return null;
+  return data;
+}
+
+async function handleFacebookGetCallback(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const code = url.searchParams.get("code");
+  const stateParam = url.searchParams.get("state");
+  const oauthError = url.searchParams.get("error");
+  const errorReason = url.searchParams.get("error_reason") ?? url.searchParams.get("error_description");
+
+  let returnTo = FB_DEFAULT_RETURN_TO;
+
+  if (oauthError) {
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", oauthError);
+    if (errorReason) target.searchParams.set("error_description", errorReason);
+    return redirectResponse(target.toString());
+  }
+
+  if (!code || !stateParam) {
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "missing_code_or_state");
+    return redirectResponse(target.toString());
+  }
+
+  let state;
+  try {
+    state = await verifyOAuthState(stateParam, { expectedPlatform: "facebook" });
+  } catch (e) {
+    console.warn("Facebook callback state verification failed:", e);
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "invalid_state");
+    return redirectResponse(target.toString());
+  }
+
+  returnTo = safeReturnTo(state.return_to);
+  const targetPlatform = (state as { target_platform?: string }).target_platform === "instagram"
+    ? "instagram"
+    : "facebook";
+
+  const appId = Deno.env.get("FACEBOOK_APP_ID");
+  const appSecret = Deno.env.get("FACEBOOK_APP_SECRET");
+  if (!appId || !appSecret || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("Facebook OAuth configuration missing during GET callback");
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "service_configuration");
+    return redirectResponse(target.toString());
+  }
+
+  // Exchange code → short-lived user token, then upgrade to long-lived.
+  const tokenUrl =
+    `https://graph.facebook.com/v22.0/oauth/access_token` +
+    `?client_id=${encodeURIComponent(appId)}` +
+    `&client_secret=${encodeURIComponent(appSecret)}` +
+    `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+    `&code=${encodeURIComponent(code)}`;
+
+  const tokenRes = await fetch(tokenUrl);
+  const tokenJson = await tokenRes.json();
+  if (!tokenRes.ok || !tokenJson.access_token) {
+    console.error("Facebook code exchange failed:", tokenJson?.error?.message ?? "unknown");
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "code_exchange_failed");
+    return redirectResponse(target.toString());
+  }
+
+  const { token: longLivedUserToken } = await exchangeForLongLivedToken(tokenJson.access_token);
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const igViaFbEnabled = await isInstagramViaFacebookEnabled(supabase);
+
+  // Reuse existing helpers to enumerate pages + standalone IG.
+  const pages = await fetchFacebookPages(longLivedUserToken);
+  const linkedIgIds = new Set<string>();
+  for (const p of pages) {
+    if (p.instagram_business_account?.id) linkedIgIds.add(p.instagram_business_account.id);
+  }
+  const standaloneIg = igViaFbEnabled
+    ? await fetchStandaloneInstagramAccounts(longLivedUserToken, linkedIgIds)
+    : [];
+
+  const { data: inserted, error: insertError } = await supabase
+    .from("oauth_pending_facebook_selections")
+    .insert({
+      user_id: state.user_id,
+      social_profile_id: state.profile_id ?? null,
+      target_platform: targetPlatform,
+      provider_token: longLivedUserToken,
+      pages_json: pages.map((p) => ({
+        id: p.id,
+        name: p.name,
+        has_instagram: igViaFbEnabled ? !!p.instagram_business_account : false,
+      })),
+      ig_standalone_json: standaloneIg,
+    })
+    .select("id")
+    .single();
+
+  if (insertError || !inserted) {
+    console.error("Failed to stash pending Facebook selection:", insertError);
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "selection_stash_failed");
+    return redirectResponse(target.toString());
+  }
+
+  const target = new URL(returnTo);
+  target.searchParams.set("connected", "facebook");
+  target.searchParams.set("select", inserted.id);
+  return redirectResponse(target.toString());
+}
+
 Deno.serve(async (req) => {
+
+
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
+  }
+
+  // Backend OAuth callback (unified pattern). Provider redirects here with
+  // ?code=...&state=...; we exchange the code server-side, stash pages in a
+  // short-lived selection row, then 302 back to the frontend.
+  if (req.method === "GET") {
+    return await handleFacebookGetCallback(req);
   }
 
   if (req.method !== "POST") {
@@ -295,6 +473,7 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+
 
   const body = await req.json().catch(() => ({}));
   const authHeader = req.headers.get("Authorization");
@@ -333,12 +512,21 @@ Deno.serve(async (req) => {
     });
   }
 
-  const validActions = ["list_pages", "store_page", "store_account", "store_instagram"];
-  const requiresProviderToken = validActions.includes(body.action);
+  const validActions = [
+    "list_pages", "store_page", "store_account", "store_instagram",
+    "authorize", "get_pending_selection",
+  ];
+  // Legacy actions that require the FB JS SDK provider_token. New backend
+  // callback path uses `selection_id` instead, so providing either satisfies
+  // store_page / store_instagram.
+  const legacyTokenActions = ["list_pages", "store_account"];
+  const selectionOrTokenActions = ["store_page", "store_instagram"];
   const missingActionField =
-    (requiresProviderToken && !body.provider_token) ||
+    (legacyTokenActions.includes(body.action) && !body.provider_token) ||
+    (selectionOrTokenActions.includes(body.action) && !body.provider_token && !body.selection_id) ||
     (body.action === "store_page" && !body.page_id) ||
-    (body.action === "store_instagram" && !body.instagram_account_id);
+    (body.action === "store_instagram" && !body.instagram_account_id) ||
+    (body.action === "get_pending_selection" && !body.selection_id);
 
   if (!validActions.includes(body.action) || missingActionField) {
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
@@ -348,9 +536,12 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { action, provider_token, platform, social_profile_id, page_id } = body;
+    const { action, social_profile_id, page_id } = body;
+    let { provider_token } = body as { provider_token?: string };
+    const platform = body.platform;
 
     console.log("Facebook OAuth action:", action);
+
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
@@ -358,8 +549,70 @@ Deno.serve(async (req) => {
     const igViaFbEnabled = await isInstagramViaFacebookEnabled(supabase);
     console.log("Instagram via Facebook enabled:", igViaFbEnabled);
 
+    // Action: Build the Meta authorization URL (new unified backend-callback path).
+    if (action === "authorize") {
+      const targetPlatform = body.target_platform === "instagram" ? "instagram" : "facebook";
+      const returnTo = safeReturnTo(body.return_to);
+      const state = await createOAuthState({
+        platform: "facebook",
+        flow: "pages",
+        user_id,
+        profile_id: social_profile_id ?? null,
+        return_to: returnTo,
+        extra: { target_platform: targetPlatform },
+      });
+      const appId = Deno.env.get("FACEBOOK_APP_ID")!;
+      const authorizeUrl =
+        `https://www.facebook.com/v22.0/dialog/oauth` +
+        `?client_id=${encodeURIComponent(appId)}` +
+        `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+        `&state=${encodeURIComponent(state)}` +
+        `&response_type=code` +
+        `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`;
+      return new Response(JSON.stringify({ success: true, url: authorizeUrl }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Action: Look up a pending selection row created by the GET callback.
+    // Returns pages + standalone IG but NEVER the provider token.
+    if (action === "get_pending_selection") {
+      const row = await loadPendingSelectionRow(supabase, body.selection_id, user_id);
+      if (!row) {
+        return new Response(JSON.stringify({ error: "Selection not found or expired" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        success: true,
+        pages: row.pages_json ?? [],
+        standalone_instagram: row.ig_standalone_json ?? [],
+        social_profile_id: row.social_profile_id,
+        target_platform: row.target_platform,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // For store_page / store_instagram, allow the caller to reference a
+    // pending selection row created by the GET callback instead of sending
+    // the FB SDK provider_token directly. The server reads the long-lived
+    // token from that row and deletes it after a successful store.
+    let pendingSelectionId: string | null = null;
+    if ((action === "store_page" || action === "store_instagram") && body.selection_id && !provider_token) {
+      const row = await loadPendingSelectionRow(supabase, body.selection_id, user_id);
+      if (!row) {
+        return new Response(JSON.stringify({ error: "Selection not found or expired" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      provider_token = row.provider_token;
+      pendingSelectionId = body.selection_id;
+    }
+
     // Action: Get list of Facebook Pages the user manages (for selection UI)
     if (action === "list_pages") {
+
       if (!provider_token) {
         throw new Error("Missing provider_token");
       }
@@ -515,6 +768,10 @@ Deno.serve(async (req) => {
         console.log("Instagram via Facebook disabled - skipping Instagram auto-import");
       }
 
+      if (pendingSelectionId) {
+        await supabase.from("oauth_pending_facebook_selections").delete().eq("id", pendingSelectionId);
+      }
+
       return new Response(JSON.stringify({
         success: true,
         page_name: selectedPage.name,
@@ -523,6 +780,7 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
 
     // Legacy action: store_account (backward compatibility)
     if (action === "store_account") {
@@ -765,6 +1023,10 @@ Deno.serve(async (req) => {
 
       console.log("Standalone Instagram account stored:", instagram_username);
 
+      if (pendingSelectionId) {
+        await supabase.from("oauth_pending_facebook_selections").delete().eq("id", pendingSelectionId);
+      }
+
       return new Response(JSON.stringify({
         success: true,
         instagram_username,
@@ -772,6 +1034,7 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
 
     return new Response(JSON.stringify({ error: "Invalid action" }), {
       status: 400,
