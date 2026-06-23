@@ -102,8 +102,20 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
     const connected = searchParams.get("connected");
     const channel = searchParams.get("channel");
     const accountName = searchParams.get("account_name");
+    const selectionId = searchParams.get("select");
 
     if (!connected) return;
+
+    // Facebook backend-callback page selection handoff.
+    if (connected === "facebook" && selectionId && handlers.loadPendingFacebookSelection && user) {
+      handlers.loadPendingFacebookSelection(selectionId);
+      const next = new URLSearchParams(searchParams);
+      next.delete("connected");
+      next.delete("select");
+      setSearchParams(next);
+      return;
+    }
+
 
     const platformMessages: Record<string, { title: string; description: string }> = {
       youtube: { title: "YouTube connected!", description: channel ? `Connected channel: ${channel}` : "Your YouTube channel has been connected successfully." },
