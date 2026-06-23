@@ -1,97 +1,92 @@
 ## Goal
 
-Standardize all Postora OAuth providers on backend Edge Function callbacks of the form:
+Unify Threads OAuth onto the backend Edge Function callback pattern, matching the TikTok / Pinterest / Reddit rollout. The provider must redirect to `https://api.postora.cloud/functions/v1/threads-oauth`, and the function must verify a signed state, exchange the code, save the account, and 302 to `https://postora.cloud/profiles?connected=threads`.
 
-```
-https://api.postora.cloud/functions/v1/<platform>-oauth
-```
+Threads credentials stay independent (`THREADS_APP_ID` / `THREADS_APP_SECRET`). HTTPS guard, capability probing, long‑lived token exchange, scope list, and stored shape of `social_accounts` are preserved exactly. n8n surfaces are not touched.
 
-After token exchange + account save, every function redirects to:
+## Current state (from exploration)
 
-```
-https://postora.cloud/profiles?connected=<platform>
-```
+- `supabase/functions/threads-oauth/index.ts` — POST‑only API with `action=authorize` and `action=callback`. `authorize` builds the provider URL using a frontend‑supplied `return_to || redirect_uri` (currently `${origin}/profiles`) as the registered redirect URI, and embeds an **unsigned** base64 JSON state (`user_id`, `social_profile_id`, `return_to`).
+- `src/hooks/oauth/useThreadsOAuth.ts` — sends `redirect_uri: ${origin}/profiles` to backend; on return, `src/hooks/oauth/useOAuthRedirectHandler.ts` decodes the legacy state from `/profiles?code=...&state=...` and POSTs back with `action=callback`.
+- Shared helper `supabase/functions/_shared/oauthState.ts` (HMAC‑signed state via `OAUTH_STATE_SECRET`) is already in use by Reddit / TikTok / Pinterest.
+- `src/lib/oauthRedirects.ts` already maps `threads → threads-oauth` and exposes `buildReturnUrl("threads")`.
 
-All flow context (`profile_id`, `flow`, `return_to`, `nonce`) travels inside the OAuth `state` parameter — never inside the registered redirect URI.
+## Changes
 
----
+### 1. `supabase/functions/threads-oauth/index.ts`
 
-## Phase 1 — Inventory & redirect matrix
+Adopt the same lifecycle shape as `tiktok-oauth` / `pinterest-oauth`:
 
-Read every OAuth hook (`src/hooks/oauth/*`), every callback page (`src/pages/OAuthCallback.tsx`, `PinterestCallback.tsx`, `TikTokCallback.tsx`), every backend OAuth function (`facebook-oauth`, `instagram-oauth`, `threads-oauth`, `tiktok-oauth`, `pinterest-oauth`, `twitter-oauth`, `linkedin-oauth`, `youtube-oauth`, `reddit-oauth`, `bluesky-oauth`, `whatsapp-oauth`), plus `manage-oauth-redirects` and `src/lib/oauthState.ts`.
+- Add `THREADS_REDIRECT_URI` constant defaulting to `${SUPABASE_URL}/functions/v1/threads-oauth`, overridable via env.
+- Keep all existing constants and the missing‑credentials guard.
+- Extract two helpers from the current `callback` body so they can be shared by the legacy POST path and the new GET path:
+  - `exchangeThreadsCode(code, redirectUri)` — short‑lived → long‑lived token exchange.
+  - `saveThreadsAccount(supabase, user_id, social_profile_id, tokenData)` — `/me` fetch, avatar caching, capability probes (insights / discovery / keyword_search / location_tagging w/ sample‑data fingerprint / mentions), `share_to_instagram` / `delete_posts` defaults, `accountMetadata` assembly, and the atomic upsert into `social_accounts` (preserved verbatim).
+- **GET handler** at `/functions/v1/threads-oauth?code=...&state=...`:
+  - On `?error=...`: 302 to `${RETURN_URL_DEFAULT}?connected=threads&error=...`.
+  - Verify state via `verifyOAuthState(state, { expectedPlatform: "threads" })`.
+  - Run `exchangeThreadsCode(code, THREADS_REDIRECT_URI)` then `saveThreadsAccount(...)`.
+  - 302 to `payload.return_to ?? RETURN_URL_DEFAULT` with `connected=threads` and `profile_id` (when present).
+  - On thrown error: 302 to `…/profiles?connected=threads&error=threads_callback_failed`.
+- **POST `authorize`** (refactored):
+  - Authenticate caller, keep the empty‑`THREADS_APP_ID` guard.
+  - Force `effectiveRedirect = THREADS_REDIRECT_URI`. Frontend‑supplied `redirect_uri` is ignored except for echoing it back as `requested_redirect_uri` in the response for debug.
+  - Replace base64 JSON state with `createOAuthState({ platform: "threads", user_id, profile_id: social_profile_id ?? null, return_to: return_to ?? RETURN_URL_DEFAULT })`.
+  - Build the URL exactly as today (manual `&scope=` concatenation so commas stay literal) using `effectiveRedirect` and the new state.
+  - Keep the structured `threads_oauth_authorize_url_built` log; do **not** add anything that leaks the app secret.
+- **POST `callback`** kept as a **legacy compatibility shim** so in‑flight sessions opened against `/profiles` still finish:
+  - Annotated `// LEGACY: removable after provider console fully cut over.`
+  - Validates caller, requires `redirect_uri` + `code`, calls `exchangeThreadsCode(code, redirect_uri)` + `saveThreadsAccount(...)`.
+- Top‑level `catch` keeps the sanitized 500 response.
 
-Deliverable: current-vs-target redirect matrix (in final report) and list of files needing changes. Backend functions for all 11 providers already exist — no new function directories needed except `instagram-business-oauth`.
+### 2. `src/hooks/oauth/useThreadsOAuth.ts`
 
-## Phase 2 — Shared config + state helper
+- Stop sending any `redirect_uri` to the backend.
+- Keep the HTTPS guard and its existing toast.
+- `handleThreadsConnect`: POST `{ action: "authorize", social_profile_id: profileId, return_to: buildReturnUrl("threads") }` and follow `data.url`. `user_id` no longer needed in the body (resolved server‑side from JWT).
+- `handleThreadsCallback`: keep as a legacy shim for `useOAuthRedirectHandler`. Switch its `redirect_uri` to `OAUTH_CALLBACKS.threads` so the legacy POST path still works during the transition.
+- No change to `useOAuthRedirectHandler` — it continues to handle legacy `/profiles?code=&state=` returns until the old provider redirect URI is removed.
 
-- **New** `src/lib/oauthRedirects.ts` — exports `OAUTH_CALLBACKS` map and `buildCallbackUrl(platform)` that resolves from `import.meta.env.VITE_SUPABASE_URL` (fallback `https://api.postora.cloud`). Includes `instagram` and `instagramBusiness` keys.
-- **New** `supabase/functions/_shared/oauthState.ts` — `createState({platform, flow, profile_id, return_to})` (signs with HMAC using `OAUTH_STATE_SECRET`, includes `nonce`, `created_at`, 10-min expiry) and `verifyState(stateParam)`. If `OAUTH_STATE_SECRET` is missing, fall back to existing per-function logic so nothing breaks; emit a one-time warning.
-- Extend `src/lib/oauthState.ts` to embed/parse the same shape on the frontend side where hooks still build state locally.
+### 3. Env / docs
 
-## Phase 3 — Backend lifecycle standardization
+No code changes besides the inline `THREADS_REDIRECT_URI` fallback. Documented (chat + final report) variables:
 
-For every existing OAuth edge function, unify the lifecycle:
+- `THREADS_APP_ID`, `THREADS_APP_SECRET` (already present)
+- `THREADS_REDIRECT_URI` (optional, defaults to `${SUPABASE_URL}/functions/v1/threads-oauth`)
+- `OAUTH_STATE_SECRET` (provisioned in earlier phase)
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
 
-1. **Init** (`GET ?action=start` or POST from frontend) — validate env, build provider auth URL, sign state, return `{ authorize_url }`.
-2. **Callback** (`GET /?code=...&state=...`) — verify state, exchange code, fetch account/pages, upsert `social_accounts`, link to `social_profile_id` from state, then `Response.redirect(`https://postora.cloud/profiles?connected=<platform>`, 302)`.
-3. **Errors** — redirect to `/profiles?connected=<platform>&error=<masked_code>`; never leak tokens or secret values; log masked.
+No secret values are read or logged.
 
-Provider-specific work:
+### 4. Database
 
-- **facebook-oauth** — switch registered redirect from `https://postora.cloud/profiles` to its function URL; preserve Pages selection flow (handle Pages list either before redirect-back via interstitial query param, or via existing `/profiles` UI passing `?connected=facebook&pages=true`).
-- **instagram-oauth** (existing) — refactor to Direct Instagram Business Login only. `state.flow = "direct"`.
-- **instagram-business-oauth** — **NEW** function. Reuse Facebook Pages helper logic, fetch attached IG Business accounts, save selected. `state.flow = "facebook_business"`.
-- **threads-oauth** — keep separate app creds; switch callback to function URL; preserve HTTPS guard.
-- **tiktok-oauth** — switch from `https://postora.cloud/tiktok-callback` to function URL; keep `TikTokCallback.tsx` route temporarily as a 410/redirect-to-profiles compatibility shim.
-- **pinterest-oauth** — switch from `https://postora.cloud/oauth/pinterest/callback` to function URL; keep `PinterestCallback.tsx` as compatibility shim.
-- **twitter-oauth** — verify `TWITTER_REDIRECT_URI` (with `X_*` aliases) equals function URL.
-- **linkedin-oauth** — single endpoint; branch on `state.flow` (`personal` vs `organization`). For `organization`, after token exchange, fetch `/v2/organizationAcls?q=roleAssignee` (or equivalent) and store one row per managed organization in `social_accounts` (existing schema already supports per-page rows via `platform_user_id` + `account_metadata`). Decision: do **not** create `linkedin-page-oauth` — single endpoint is sufficient because scopes can be conditionally requested based on flow.
-- **youtube-oauth** — verify exact-match function URL.
-- **reddit-oauth** — move `profile_id` from query string into signed state.
-- **bluesky-oauth** — update `public/client-metadata.json` `redirect_uris` to include the function URL; preserve PKCE + DPoP.
-- **whatsapp-oauth** — Embedded Signup; keep as-is, no provider redirect URI change, but ensure final redirect lands on `/profiles?connected=whatsapp`.
+No schema or data changes. Existing rows in `social_accounts` for `platform = "threads"` are unaffected: the upsert key (`user_id, platform, platform_user_id`) and stored columns are identical to today.
 
-## Phase 4 — Frontend hook + UI refactor
+### 5. Validation
 
-- Refactor all hooks in `src/hooks/oauth/` to read callback URLs from `OAUTH_CALLBACKS` and to send `profile_id` / `flow` only via state, never via redirect URI.
-- **New UI**: `LinkedInConnectDialog` with two cards: *Personal Account* (flow=`personal`) and *Commercial Page / Organization* (flow=`organization`); after org connect, surface the fetched org list (reuse existing Pages selector pattern if available).
-- **New UI**: `InstagramConnectDialog` with two cards: *Connect Instagram Directly* (flow=`direct`, hits `instagram-oauth`) and *Connect via Facebook Business* (flow=`facebook_business`, hits `instagram-business-oauth`).
-- Wire both dialogs into the existing Connect-account entry points on `/profiles`.
-- Mark `OAuthCallback.tsx`, `PinterestCallback.tsx`, `TikTokCallback.tsx` as **deprecated compatibility shims**: keep routes, but body becomes "Finishing connection…" + `window.location.replace('/profiles?connected=<platform>')`. Add code comment with removal target.
+- `bunx --bun tsgo --noEmit`
+- `rg -n "thread-oauth" src supabase` → expect 0
+- `rg -n "threads-oauth" src supabase` → expect new and existing refs only
+- `rg -n "postora.cloud/profiles" src/hooks/oauth/useThreadsOAuth.ts supabase/functions/threads-oauth` → only `RETURN_URL_DEFAULT` / `buildReturnUrl`
+- `rg -n "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase` → expect 0 in live code
+- `git diff --check`
 
-## Phase 5 — Provider hardening checks
+### 6. Guard reviews
 
-Static checks only (no provider console access from Lovable):
-- TikTok / Pinterest / YouTube: exact-match URL audit in code + report.
-- Bluesky: `client-metadata.json` updated.
-- WhatsApp: confirm Embedded Signup completion path.
-- Twitter/X: env alias handling (`TWITTER_*` || `X_*`).
-- Threads: separate `THREADS_APP_ID` / `THREADS_APP_SECRET` confirmed.
+- CleanCodeGuard on the refactored edge function + hook.
+- TestGuard: no test files changed; no test‑code review required.
 
-## Phase 6 — Compatibility & cleanup
+## Out of scope
 
-- Keep `OAuthCallback.tsx`, `PinterestCallback.tsx`, `TikTokCallback.tsx` as forward-only shims with TODO comments listing the provider-console URL to remove.
-- Keep `/profiles` accepting `?connected=<platform>` to refresh queries (already supported via `useOAuthRedirectHandler.ts`).
-- No deletion of working OAuth logic until phase 7 passes.
+- No changes to `supabase/functions/n8n-api`, `n8n-community-node/`, or the public API contracts.
+- No changes to other Threads functions (`threads-comment`, `threads-insights`, `threads-publish`, etc.) — they read `social_accounts` rows whose shape is preserved.
+- No Facebook changes (still the documented exception).
+- No database migration.
 
-## Phase 7 — Validation
+## Manual provider action (post‑deploy)
 
-- Add Vitest unit tests for: `buildCallbackUrl`, state sign/verify roundtrip, LinkedIn flow branching helper, Instagram flow branching helper.
-- Run lint, build, typecheck, vitest.
-- Run grep guards (forbid `efruibswazzuuupgyzmf`, `supabase.postora.cloud`, `.supabase.co/functions/v1`, `postora.cloud/tiktok-callback`, `postora.cloud/oauth/pinterest/callback` in live code paths — allow in migrations/archived docs/compat shims with comment).
+Meta / Threads Developer Console → Use cases → Threads API → Settings → Redirect URIs:
 
-## Phase 8 — Final report
-
-Return sections A–I as specified in the request, including provider console checklist (provider | new URI | old URI to remove | exact-match required | scopes | status).
-
----
-
-## Technical details
-
-**Database**: no schema change planned. `social_accounts` already stores per-page/per-org rows via `platform_user_id` + `account_metadata` JSONB + `social_profile_id`. If LinkedIn org fetch reveals a missing column during implementation, a new timestamped migration will be added — historical migrations untouched.
-
-**Secrets needed (do NOT request unless missing at implementation time)**: `OAUTH_STATE_SECRET` (generated via `generate_secret`, 64 chars). All provider client IDs/secrets are assumed already present.
-
-**Out of scope**: rotating provider client secrets; updating provider developer consoles (manual step listed in final report).
-
-**Risk mitigation**: backend functions changed one at a time; frontend compat shims keep old provider-console URIs working until each console is updated.
+1. **Add** `https://api.postora.cloud/functions/v1/threads-oauth`.
+2. Keep the existing `https://postora.cloud/profiles` redirect temporarily so in‑flight sessions still complete via the legacy POST shim.
+3. After 24–48h of successful GET callback logs in `threads-oauth`, **remove** the legacy `/profiles` redirect URI.
