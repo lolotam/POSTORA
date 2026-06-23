@@ -20,15 +20,13 @@ export function useBlueskyOAuth(
     setConnectingProfile(profileId);
 
     try {
-      const origin = window.location.origin;
-      const redirectUri = `${origin}/profiles`;
-
-      if (origin !== "https://postora.cloud" && origin !== "https://postora.lovable.app" && !origin.includes("lovable.app")) {
-        toast({ title: "OAuth redirect domain", description: "This domain may not be registered in the Bluesky client metadata redirect_uris. If the OAuth flow fails, add this domain to public/client-metadata.json redirect_uris." });
-      }
-
       const { data, error } = await supabase.functions.invoke("bluesky-oauth", {
-        body: { action: "authorize", handle, user_id: user.id, social_profile_id: profileId, redirect_uri: redirectUri },
+        body: {
+          action: "authorize",
+          handle,
+          social_profile_id: profileId,
+          return_to: `${window.location.origin}/profiles`,
+        },
       });
       if (error) throw error;
       if (data?.url) { window.location.href = data.url; } else { throw new Error("No authorization URL received"); }
@@ -40,12 +38,11 @@ export function useBlueskyOAuth(
     }
   };
 
-  const handleBlueskyOAuthCallback = async (code: string, state: string, profileId: string) => {
+  const handleBlueskyOAuthCallback = async (code: string, state: string, _profileId: string) => {
     setConnectingPlatform("bluesky");
     try {
-      const origin = window.location.origin;
       const { data, error } = await supabase.functions.invoke("bluesky-oauth", {
-        body: { action: "callback", code, state, redirect_uri: `${origin}/profiles` },
+        body: { action: "callback", code, state },
       });
       if (error) throw error;
       if (data?.success) {
@@ -75,7 +72,7 @@ export function useBlueskyOAuth(
     setConnectingPlatform("bluesky");
     try {
       const { data, error } = await supabase.functions.invoke("bluesky-oauth", {
-        body: { action: "connect", handle, app_password: appPassword, user_id: user.id, social_profile_id: profileId },
+        body: { action: "connect", handle, app_password: appPassword, social_profile_id: profileId },
       });
       if (error) throw error;
       if (data?.success) {
