@@ -102,19 +102,26 @@ export default function Auth() {
       if (pendingIg || pendingFb) {
         navigate("/profiles" + window.location.search, { replace: true });
       } else {
+        setIsRedirecting(true);
         // Check if user has a subscription — if not, send to pricing
         const checkSubscription = async () => {
-          const { data: sub } = await supabase
-            .from("user_subscriptions")
-            .select("id")
-            .eq("user_id", user.id)
-            .eq("status", "active")
-            .maybeSingle();
+          try {
+            const { data: sub } = await supabase
+              .from("user_subscriptions")
+              .select("id")
+              .eq("user_id", user.id)
+              .eq("status", "active")
+              .maybeSingle();
 
-          if (sub) {
-            navigate("/dashboard");
-          } else {
-            navigate("/pricing");
+            if (sub) {
+              navigate("/dashboard", { replace: true });
+            } else {
+              navigate("/pricing", { replace: true });
+            }
+          } catch {
+            navigate("/dashboard", { replace: true });
+          } finally {
+            setIsRedirecting(false);
           }
         };
         checkSubscription();
