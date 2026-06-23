@@ -103,6 +103,8 @@ export default function Profiles() {
     handleBlueskyOAuthConnect,
     handleFacebookConnect,
     handleInstagramBusinessLogin,
+    handleInstagramConnect,
+    handleLinkedInConnect,
     clearPageSelection,
     clearBlueskyDialog,
   } = useProfileOAuth();
@@ -119,9 +121,14 @@ export default function Profiles() {
         return;
       }
     }
-    // Instagram: skip method dialog, go directly to confirmation
+    // Instagram: show flow-choice dialog (Direct vs Facebook Business)
     if (platform === "instagram") {
       setIgConfirmProfileId(profileId);
+      return;
+    }
+    // LinkedIn: show flow-choice dialog (Personal vs Organization)
+    if (platform === "linkedin") {
+      setLinkedinConnectProfileId(profileId);
       return;
     }
     originalHandleConnectPlatform(profileId, platform);
