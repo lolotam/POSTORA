@@ -434,8 +434,70 @@ Deno.serve(async (req) => {
     const igViaFbEnabled = await isInstagramViaFacebookEnabled(supabase);
     console.log("Instagram via Facebook enabled:", igViaFbEnabled);
 
+    // Action: Build the Meta authorization URL (new unified backend-callback path).
+    if (action === "authorize") {
+      const targetPlatform = body.target_platform === "instagram" ? "instagram" : "facebook";
+      const returnTo = safeReturnTo(body.return_to);
+      const state = await createOAuthState({
+        platform: "facebook",
+        flow: "pages",
+        user_id,
+        profile_id: social_profile_id ?? null,
+        return_to: returnTo,
+        extra: { target_platform: targetPlatform },
+      });
+      const appId = Deno.env.get("FACEBOOK_APP_ID")!;
+      const authorizeUrl =
+        `https://www.facebook.com/v22.0/dialog/oauth` +
+        `?client_id=${encodeURIComponent(appId)}` +
+        `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+        `&state=${encodeURIComponent(state)}` +
+        `&response_type=code` +
+        `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`;
+      return new Response(JSON.stringify({ success: true, url: authorizeUrl }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Action: Look up a pending selection row created by the GET callback.
+    // Returns pages + standalone IG but NEVER the provider token.
+    if (action === "get_pending_selection") {
+      const row = await loadPendingSelectionRow(supabase, body.selection_id, user_id);
+      if (!row) {
+        return new Response(JSON.stringify({ error: "Selection not found or expired" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({
+        success: true,
+        pages: row.pages_json ?? [],
+        standalone_instagram: row.ig_standalone_json ?? [],
+        social_profile_id: row.social_profile_id,
+        target_platform: row.target_platform,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // For store_page / store_instagram, allow the caller to reference a
+    // pending selection row created by the GET callback instead of sending
+    // the FB SDK provider_token directly. The server reads the long-lived
+    // token from that row and deletes it after a successful store.
+    let pendingSelectionId: string | null = null;
+    if ((action === "store_page" || action === "store_instagram") && body.selection_id && !provider_token) {
+      const row = await loadPendingSelectionRow(supabase, body.selection_id, user_id);
+      if (!row) {
+        return new Response(JSON.stringify({ error: "Selection not found or expired" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      provider_token = row.provider_token;
+      pendingSelectionId = body.selection_id;
+    }
+
     // Action: Get list of Facebook Pages the user manages (for selection UI)
     if (action === "list_pages") {
+
       if (!provider_token) {
         throw new Error("Missing provider_token");
       }
