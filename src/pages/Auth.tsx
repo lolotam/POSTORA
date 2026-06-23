@@ -34,11 +34,12 @@ export default function Auth() {
   const [fullName, setFullName] = useState("");
   const [errors, setErrors] = useState<{ email?: string; password?: string; confirmPassword?: string; mfaCode?: string }>({});
   const [linkExpired, setLinkExpired] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaFactorId, setMfaFactorId] = useState<string | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { signUp, signIn, signInWithGoogle, user } = useAuth();
+  const { signUp, signIn, signInWithGoogle, user, isLoading: authLoading } = useAuth();
 
   // Add noindex meta tag for auth pages
   useEffect(() => {
@@ -101,19 +102,26 @@ export default function Auth() {
       if (pendingIg || pendingFb) {
         navigate("/profiles" + window.location.search, { replace: true });
       } else {
+        setIsRedirecting(true);
         // Check if user has a subscription — if not, send to pricing
         const checkSubscription = async () => {
-          const { data: sub } = await supabase
-            .from("user_subscriptions")
-            .select("id")
-            .eq("user_id", user.id)
-            .eq("status", "active")
-            .maybeSingle();
+          try {
+            const { data: sub } = await supabase
+              .from("user_subscriptions")
+              .select("id")
+              .eq("user_id", user.id)
+              .eq("status", "active")
+              .maybeSingle();
 
-          if (sub) {
-            navigate("/dashboard");
-          } else {
-            navigate("/pricing");
+            if (sub) {
+              navigate("/dashboard", { replace: true });
+            } else {
+              navigate("/pricing", { replace: true });
+            }
+          } catch {
+            navigate("/dashboard", { replace: true });
+          } finally {
+            setIsRedirecting(false);
           }
         };
         checkSubscription();
@@ -407,6 +415,14 @@ export default function Auth() {
   const isForgotPassword = view === "forgot-password";
   const isResetPassword = view === "reset-password";
   const isMfaVerify = view === "mfa-verify";
+
+  if (authLoading || isRedirecting || (user && !isResetPassword && !isMfaVerify)) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex relative overflow-hidden">
