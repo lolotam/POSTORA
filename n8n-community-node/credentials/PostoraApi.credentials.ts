@@ -24,7 +24,7 @@ export class PostoraApi implements ICredentialType {
       name: 'baseUrl',
       type: 'string',
       default: 'https://api.postora.cloud/functions/v1/n8n-api',
-      description: 'Postora API base URL. Only change if using a self-hosted instance.',
+      description: 'Postora backend n8n-api function URL. Defaults to the hosted Postora backend (https://api.postora.cloud/functions/v1/n8n-api). Change only if you run a self-hosted Postora deployment with a different API host.',
     },
   ];
 

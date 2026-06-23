@@ -1,119 +1,59 @@
+## n8n community node — URL audit & docs refresh
 
-# Facebook OAuth Backend Callback — Activation Checklist
+### Audit result (no runtime URL changes required)
 
-Plan = activation checklist + one tiny new file. After approval I will create the delta SQL file in build mode; no code edits are needed.
+- `credentials/PostoraApi.credentials.ts` already defaults `baseUrl` to `https://api.postora.cloud/functions/v1/n8n-api` (new self-hosted backend).
+- `nodes/Postora/Postora.node.ts` builds every request from that credential `baseUrl`:
+  - `GET  {baseUrl}/api/v1/accounts`
+  - `POST {baseUrl}/api/v1/post`
+  - `GET  {baseUrl}/api/v1/post/{id}`
+  - `GET  {baseUrl}/api/v1/posts`
+  - `POST {baseUrl}/api/v1/upload-media`
+- No legacy `*.supabase.co`, `efruibswazzuuupgyzmf`, or `supabase.postora.cloud` references anywhere in the package.
+- No OAuth redirect URIs or inbound webhooks live in the node — OAuth runs inside the Postora app (`facebook-oauth`, etc.), not in n8n.
 
-## 1. Summary
+So the code is already compatible. The only changes needed are documentation accuracy + a version bump so users know it targets the new backend.
 
-The full SQL script `supabase/manual-sql/20260623_facebook_pending_selections.sql` is entirely idempotent (`CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` + `CREATE POLICY`, `CREATE INDEX IF NOT EXISTS`, trailing `DELETE … WHERE expires_at < now()`) so re-running it is safe. To minimize blast radius the owner only needs the *new* trailing cleanup statement and the optional pg_cron schedule, packaged as a small delta file.
+### Planned edits
 
-## 2. Manual SQL status
+1. `n8n-community-node/credentials/PostoraApi.credentials.ts`
+   - Tighten the `baseUrl` description: clarify it must point at the Postora backend `n8n-api` function (e.g. `https://api.postora.cloud/functions/v1/n8n-api`), and that self-hosted Postora deployments should substitute their own API host. No default value change.
 
-- Original 32-line script: **already applied** by owner ("Success. No rows returned").
-- New trailing section (one-shot expired-row `DELETE` + pg_cron comment template) added during the CleanCodeGuard fix: **needs delta SQL only**.
-- Recommended: create `supabase/manual-sql/20260623_facebook_pending_selections_cleanup_delta.sql` with the content below; owner reviews and runs.
+2. `n8n-community-node/README.md`
+   - Replace the platform list in the intro with the currently shipping set (Facebook, Instagram, Threads, YouTube Beta, Pinterest, LinkedIn personal, Bluesky) to match `platformOptions` in `Postora.node.ts`. Remove TikTok / X / Reddit from the headline list (they're commented out in the node).
+   - Add a short **API Endpoint** section documenting:
+     - Default base URL: `https://api.postora.cloud/functions/v1/n8n-api`
+     - Endpoints used by the node (the 5 routes above)
+     - Auth header: `x-api-key: <Postora API key>`
+     - Note: OAuth connections are made in the Postora app, not in n8n.
+   - Fix the Pinterest row in the Platform-Specific Options table (current node also exposes Description/Link); keep table aligned with `Postora.node.ts`.
 
-**DATABASE ACTION REQUIRED:** delta SQL review/run before treating the activation as fully complete. The backend callback will function without it — the delta only adds maintenance hygiene.
+3. `n8n-community-node/package.json`
+   - Bump `version` from `0.1.0` → `0.2.0` (backend host migration milestone).
+   - Update `description` platform list to match README.
 
-Delta file content (to be created in build mode):
+### Out of scope (explicitly not changed)
 
-```sql
--- Purpose: cleanup/maintenance follow-up for oauth_pending_facebook_selections.
--- Type: data (DELETE) + optional pg_cron schedule. Safe to re-run.
--- Depends on: 20260623_facebook_pending_selections.sql (already applied).
--- Rollback: SELECT cron.unschedule('oauth_pending_fb_sweep'); -- only if scheduled.
---
--- Reviewed by: Postora owner before execution.
--- This script is NOT executed automatically.
+- No change to default `baseUrl` value (already correct).
+- No change to request paths, auth scheme, or node behavior.
+- No edits to historical migrations, app OAuth code, or provider-console settings.
+- No automatic SQL execution.
 
--- 1. One-shot sweep of any already-expired rows.
-DELETE FROM public.oauth_pending_facebook_selections
-WHERE expires_at < now();
+### Validation
 
--- 2. (Optional) Schedule a recurring sweep every 15 minutes via pg_cron.
---    Uncomment after confirming pg_cron is enabled in this project.
--- SELECT cron.schedule(
---   'oauth_pending_fb_sweep',
---   '*/15 * * * *',
---   $$DELETE FROM public.oauth_pending_facebook_selections WHERE expires_at < now()$$
--- );
-```
+- `cd n8n-community-node && npm run lint` (which runs `tsc --noEmit`) — report `script not available` if `npm` install isn't run.
+- `rg "supabase\.co|efruibsw|supabase\.postora" n8n-community-node` → must return empty.
+- `git diff --check` on the three edited files.
 
-## 3. Facebook provider console status
+### Guard reviews
 
-Manual — still required. Owner must add to Meta → Facebook Login → Valid OAuth Redirect URIs:
+- **CleanCodeGuard** on the credential description + README structure (naming, no speculative config, no dead links).
+- **TestGuard**: no test files in `n8n-community-node/`; will state "no test files changed; no test-code review required."
 
-- `https://api.postora.cloud/functions/v1/facebook-oauth` (new, backend callback)
-- Keep `https://postora.cloud/profiles` (legacy SDK fallback) until retirement criteria are met (24–48h clean logs + Pages test pass + IG Business regression pass).
+### Manual actions required
 
-## 4. Edge redeploy status
+- None for the runtime. After merging, republish the npm package (`npm publish` from `n8n-community-node/`) so end users get the corrected default and docs.
 
-Ready for redeploy of `facebook-oauth` once:
+### Final status target
 
-1. Delta SQL is acknowledged (not strictly blocking).
-2. Edge runtime env present: `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_REDIRECT_URI=https://api.postora.cloud/functions/v1/facebook-oauth`, `OAUTH_STATE_SECRET`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`. Reported as masked status only:
-
-| Var | Status |
-|---|---|
-| `FACEBOOK_APP_ID` | not_tested |
-| `FACEBOOK_APP_SECRET` | not_tested |
-| `FACEBOOK_REDIRECT_URI` | optional (code falls back to `${SUPABASE_URL}/functions/v1/facebook-oauth`) |
-| `OAUTH_STATE_SECRET` | required, not_tested |
-| `SUPABASE_URL` | required, not_tested |
-| `SUPABASE_SERVICE_ROLE_KEY` | required, not_tested |
-
-No values inspected or logged.
-
-## 5. Safe smoke test after deploy
-
-After redeploy, owner-runnable, no real OAuth completion:
-
-1. `curl -i -X OPTIONS https://api.postora.cloud/functions/v1/facebook-oauth -H 'Origin: https://postora.cloud' -H 'Access-Control-Request-Method: POST'` → expect `200/204` + `Access-Control-Allow-Origin: *`.
-2. `curl -i -X POST https://api.postora.cloud/functions/v1/facebook-oauth -H 'Content-Type: application/json' -d '{}'` → expect `401 Unauthorized` (no bearer).
-3. With an authenticated session bearer, POST `{"action":"authorize","target_platform":"facebook","social_profile_id":"<test-profile-uuid>","return_to":"https://postora.cloud/profiles"}` → response must:
-   - contain `success:true` and a `url`,
-   - `url` host = `www.facebook.com`,
-   - `redirect_uri` query param = `https://api.postora.cloud/functions/v1/facebook-oauth`,
-   - `state` query param is present and non-trivial (signed).
-4. STOP here — do not complete real Meta consent unless owner explicitly approves the full backend-callback test (Phase 6 below).
-
-## 6. Backend callback end-to-end test (owner-approved only)
-
-1. From `/profiles`, trigger Connect Facebook via `handleFacebookConnectBackend` (backend path).
-2. Complete Meta consent with a safe test FB account.
-3. Confirm browser lands on `https://postora.cloud/profiles?connected=facebook&select=<uuid>`.
-4. Confirm page picker hydrates (pages + standalone IG) — response from `get_pending_selection` must NOT contain `provider_token`.
-5. Select one test Page → `store_page` request uses `selection_id` (not `provider_token`).
-6. Verify in DB: the matching row in `oauth_pending_facebook_selections` is gone after success.
-7. Confirm the connected Page appears in Profiles.
-8. Regression: connect an Instagram Business account via the existing dedicated flow; confirm unaffected.
-
-## 7. Files to be changed (build mode)
-
-- `supabase/manual-sql/20260623_facebook_pending_selections_cleanup_delta.sql` — new delta SQL file (content above).
-
-No production code or test changes.
-
-## 8. Validation results
-
-- `rg "facebook-oauth" src supabase`: only expected refs.
-- `rg "oauth_pending_facebook_selections" src supabase`: only the SQL file + the four edge-function call sites (load, insert, two deletes).
-- `rg "provider_token" src/hooks/oauth/useFacebookOAuth.ts supabase/functions/facebook-oauth supabase/functions/instagram-business-oauth`: all hits in marked legacy branches or the service-role selection reader.
-- `rg "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase`: hits limited to historical `supabase/migrations/*.sql` and the regression test that asserts these strings are *absent* from the live client. No live-code refs.
-- `typecheck` / `lint` / `build` / `vitest`: not_tested (no production code changes this turn).
-- `git diff --check`: not run.
-
-## 9. Guard review results
-
-- **CleanCodeGuard:** SQL-only delta; no production code changed. Existing edge function and hooks already cleared the prior pass. No new violations.
-- **TestGuard:** no test files changed; no test-code review required.
-
-## 10. Security / secrets check
-
-No secrets read, printed, logged, or committed. `provider_token` continues to leave the database only via service-role context; `get_pending_selection` never returns it.
-
-## 11. Final status
-
-**ready_for_provider_console_update** → **ready_for_edge_redeploy** → **ready_for_backend_callback_test**. The delta SQL is a non-blocking maintenance follow-up; the backend callback is functionally usable today.
-
-Used the clean-code-guard and test-guard skills.
+`completed` (docs + version bump only; runtime URLs were already migrated).

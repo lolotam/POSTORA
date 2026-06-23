@@ -2,7 +2,7 @@
 
 This is an [n8n](https://n8n.io/) community node for [Postora](https://postora.cloud) — the AI-powered social media management platform.
 
-Publish content to **Instagram, Facebook, TikTok, YouTube, Twitter/X, LinkedIn, Pinterest, Threads, Bluesky, and Reddit** directly from your n8n workflows.
+Publish content to **Facebook, Instagram, Threads, YouTube (Beta), Pinterest, LinkedIn (personal), and Bluesky** directly from your n8n workflows.
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/reference/license/) workflow automation platform.
 
@@ -44,9 +44,22 @@ When creating a post, you can set platform-specific options:
 | Platform | Options |
 |----------|---------|
 | YouTube | Title, Privacy (public/unlisted/private), Category ID |
-| TikTok | Privacy level, Allow Comments/Duet/Stitch |
-| Pinterest | Board ID, Title |
-| Reddit | Subreddit, Title |
+| Pinterest | Board ID, Title, Description, Link |
+
+## API Endpoint
+
+The node talks to the Postora backend `n8n-api` edge function — it does **not** call any social provider directly.
+
+- **Default base URL:** `https://api.postora.cloud/functions/v1/n8n-api` (override in the credential only for self-hosted Postora deployments)
+- **Auth header:** `x-api-key: <your Postora API key>`
+- **Endpoints used by the node:**
+  - `GET  {baseUrl}/api/v1/accounts` — list connected accounts
+  - `POST {baseUrl}/api/v1/post` — create / schedule a post
+  - `GET  {baseUrl}/api/v1/post/{id}` — get a post's publishing status
+  - `GET  {baseUrl}/api/v1/posts` — list recent posts
+  - `POST {baseUrl}/api/v1/upload-media` — upload binary media (base64)
+
+OAuth connections to Facebook, Instagram, YouTube, Pinterest, LinkedIn, Threads, and Bluesky are made inside the Postora app (Settings → Profiles), not in n8n.
 
 ## Media Source Options
 

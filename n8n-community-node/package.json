@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-postora",
-  "version": "0.1.0",
-  "description": "n8n community node for Postora — publish to social media platforms (Instagram, Facebook, TikTok, YouTube, Pinterest, Twitter/X, LinkedIn, Threads, Bluesky, Reddit)",
+  "version": "0.2.0",
+  "description": "n8n community node for Postora — publish to social media platforms (Facebook, Instagram, Threads, YouTube, Pinterest, LinkedIn, Bluesky)",
   "keywords": [
     "n8n-community-node-package",
     "n8n",
