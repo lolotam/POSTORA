@@ -339,7 +339,122 @@ async function loadPendingSelectionRow(
   return data;
 }
 
+async function handleFacebookGetCallback(req: Request): Promise<Response> {
+  const url = new URL(req.url);
+  const code = url.searchParams.get("code");
+  const stateParam = url.searchParams.get("state");
+  const oauthError = url.searchParams.get("error");
+  const errorReason = url.searchParams.get("error_reason") ?? url.searchParams.get("error_description");
+
+  let returnTo = FB_DEFAULT_RETURN_TO;
+
+  if (oauthError) {
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", oauthError);
+    if (errorReason) target.searchParams.set("error_description", errorReason);
+    return redirectResponse(target.toString());
+  }
+
+  if (!code || !stateParam) {
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "missing_code_or_state");
+    return redirectResponse(target.toString());
+  }
+
+  let state;
+  try {
+    state = await verifyOAuthState(stateParam, { expectedPlatform: "facebook" });
+  } catch (e) {
+    console.warn("Facebook callback state verification failed:", e);
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "invalid_state");
+    return redirectResponse(target.toString());
+  }
+
+  returnTo = safeReturnTo(state.return_to);
+  const targetPlatform = (state as { target_platform?: string }).target_platform === "instagram"
+    ? "instagram"
+    : "facebook";
+
+  const appId = Deno.env.get("FACEBOOK_APP_ID");
+  const appSecret = Deno.env.get("FACEBOOK_APP_SECRET");
+  if (!appId || !appSecret || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.error("Facebook OAuth configuration missing during GET callback");
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "service_configuration");
+    return redirectResponse(target.toString());
+  }
+
+  // Exchange code → short-lived user token, then upgrade to long-lived.
+  const tokenUrl =
+    `https://graph.facebook.com/v22.0/oauth/access_token` +
+    `?client_id=${encodeURIComponent(appId)}` +
+    `&client_secret=${encodeURIComponent(appSecret)}` +
+    `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+    `&code=${encodeURIComponent(code)}`;
+
+  const tokenRes = await fetch(tokenUrl);
+  const tokenJson = await tokenRes.json();
+  if (!tokenRes.ok || !tokenJson.access_token) {
+    console.error("Facebook code exchange failed:", tokenJson?.error?.message ?? "unknown");
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "code_exchange_failed");
+    return redirectResponse(target.toString());
+  }
+
+  const { token: longLivedUserToken } = await exchangeForLongLivedToken(tokenJson.access_token);
+
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const igViaFbEnabled = await isInstagramViaFacebookEnabled(supabase);
+
+  // Reuse existing helpers to enumerate pages + standalone IG.
+  const pages = await fetchFacebookPages(longLivedUserToken);
+  const linkedIgIds = new Set<string>();
+  for (const p of pages) {
+    if (p.instagram_business_account?.id) linkedIgIds.add(p.instagram_business_account.id);
+  }
+  const standaloneIg = igViaFbEnabled
+    ? await fetchStandaloneInstagramAccounts(longLivedUserToken, linkedIgIds)
+    : [];
+
+  const { data: inserted, error: insertError } = await supabase
+    .from("oauth_pending_facebook_selections")
+    .insert({
+      user_id: state.user_id,
+      social_profile_id: state.profile_id ?? null,
+      target_platform: targetPlatform,
+      provider_token: longLivedUserToken,
+      pages_json: pages.map((p) => ({
+        id: p.id,
+        name: p.name,
+        has_instagram: igViaFbEnabled ? !!p.instagram_business_account : false,
+      })),
+      ig_standalone_json: standaloneIg,
+    })
+    .select("id")
+    .single();
+
+  if (insertError || !inserted) {
+    console.error("Failed to stash pending Facebook selection:", insertError);
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "selection_stash_failed");
+    return redirectResponse(target.toString());
+  }
+
+  const target = new URL(returnTo);
+  target.searchParams.set("connected", "facebook");
+  target.searchParams.set("select", inserted.id);
+  return redirectResponse(target.toString());
+}
+
 Deno.serve(async (req) => {
+
 
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
