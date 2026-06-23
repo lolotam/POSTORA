@@ -70,6 +70,7 @@ async function verifyAndParseState(state: string) {
     user_id: string;
     social_profile_id: string | null;
     return_to: string;
+    flow?: "personal" | "organization";
   };
 }
 
