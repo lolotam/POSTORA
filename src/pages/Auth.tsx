@@ -416,6 +416,14 @@ export default function Auth() {
   const isResetPassword = view === "reset-password";
   const isMfaVerify = view === "mfa-verify";
 
+  if (authLoading || isRedirecting || (user && !isResetPassword && !isMfaVerify)) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background flex relative overflow-hidden">
       {/* Background Effects */}
