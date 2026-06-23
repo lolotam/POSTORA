@@ -115,7 +115,7 @@ Deno.serve(async (req) => {
         return new Response("Missing code/state", { status: 400 });
       }
 
-      const { user_id, social_profile_id, return_to } = await verifyAndParseState(state);
+      const { user_id, social_profile_id, return_to, flow } = await verifyAndParseState(state);
 
       const result = await completeOAuth({
         code,
@@ -124,9 +124,11 @@ Deno.serve(async (req) => {
         redirect_uri: redirectUri,
       });
 
-      // Redirect back to app
+      // Redirect back to app. Use flow-aware `connected` marker so the UI can
+      // distinguish a personal connection from an organization/page connection.
       const returnUrl = new URL(return_to);
-      returnUrl.searchParams.set("connected", "linkedin");
+      const connectedMarker = flow === "organization" ? "linkedin_organization" : "linkedin";
+      returnUrl.searchParams.set("connected", connectedMarker);
       if (social_profile_id) returnUrl.searchParams.set("profile_id", social_profile_id);
       returnUrl.searchParams.set("account_name", result.name);
 
