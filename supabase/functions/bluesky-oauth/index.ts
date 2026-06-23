@@ -387,7 +387,7 @@ Deno.serve(async (req) => {
 
   try {
     const body = await req.json();
-    const { action, handle, app_password, social_profile_id, code, state, code_verifier, dpop_private_key, redirect_uri } = body;
+    const { action, handle, app_password, social_profile_id, code, state, return_to } = body;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const logger = createLogger(supabase, 'bluesky-oauth', 'auth');
     // Authenticate caller for actions that modify user data
