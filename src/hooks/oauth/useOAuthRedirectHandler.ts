@@ -95,7 +95,7 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
         }
       } catch { /* Not Bluesky */ }
     }
-  }, [searchParams, user]);
+  }, [searchParams, user, handlers, setSearchParams]);
 
   // Handle successful server-side OAuth redirects
   useEffect(() => {
@@ -133,7 +133,7 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
       refetchSocialQueries(queryClient);
       setSearchParams({});
     }
-  }, [searchParams, toast, setSearchParams]);
+  }, [searchParams, toast, setSearchParams, user, handlers, queryClient]);
 
   // Cleanup localStorage on mount
   useEffect(() => {
