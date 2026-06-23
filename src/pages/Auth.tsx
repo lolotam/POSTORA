@@ -38,7 +38,7 @@ export default function Auth() {
   const [mfaFactorId, setMfaFactorId] = useState<string | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { signUp, signIn, signInWithGoogle, user } = useAuth();
+  const { signUp, signIn, signInWithGoogle, user, isLoading: authLoading } = useAuth();
 
   // Add noindex meta tag for auth pages
   useEffect(() => {
