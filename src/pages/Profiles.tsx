@@ -45,6 +45,8 @@ import {
   ConnectionTroubleshooter,
   PlatformAccountsTab,
 } from "@/components/profiles";
+import { LinkedInConnectDialog, type LinkedInFlow } from "@/components/profiles/LinkedInConnectDialog";
+import { InstagramConnectDialog, type InstagramFlow } from "@/components/profiles/InstagramConnectDialog";
 import { TikTokDebugPanel } from "@/components/profiles/TikTokDebugPanel";
 import { ThreadsDebugPanel } from "@/components/admin/ThreadsDebugPanel";
 import { UpgradeModal } from "@/components/UpgradeModal";
@@ -61,6 +63,7 @@ export default function Profiles() {
     max?: number;
   }>({ open: false, type: "social_account" });
   const [igConfirmProfileId, setIgConfirmProfileId] = useState<string | null>(null);
+  const [linkedinConnectProfileId, setLinkedinConnectProfileId] = useState<string | null>(null);
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
   const { toast } = useToast();
   const { user } = useAuth();
