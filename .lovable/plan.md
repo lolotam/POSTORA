@@ -1,67 +1,68 @@
-# LinkedIn OAuth Finalization Audit
+## YouTube/Google + WhatsApp OAuth Finalization
 
-## Current state — already unified
+### Audit results (current vs target)
 
-Auditing the live code shows LinkedIn is already largely on the target architecture:
+**YouTube/Google — `supabase/functions/youtube-oauth/index.ts`**
 
-- **Single endpoint** `supabase/functions/linkedin-oauth/index.ts` handles both flows.
-- **GET callback** at `/functions/v1/linkedin-oauth?code&state` is implemented and 302s back to `return_to?connected=linkedin&...`.
-- **POST `authorize`** generates an HMAC-SHA256 signed state with `{ user_id, social_profile_id, return_to, flow }`, accepts `flow: "personal" | "organization"`, and grants member-only scopes for personal and member + org scopes for organization.
-- **POST `callback`** kept as legacy compat shim.
-- **POST `refresh`** exists for token refresh.
-- **Backend-forced redirect_uri**: hardcoded `https://api.postora.cloud/functions/v1/linkedin-oauth` (frontend-supplied URI ignored — good, but not env-driven).
-- **Org pages**: on connect we fetch `/v2/organizationAcls?q=roleAssignee&role=ADMINISTRATOR&state=APPROVED` and persist the list in `account_metadata.linkedin_pages` for use by posting UI.
-- **Frontend**: `LinkedInConnectDialog` and `useLinkedInOAuth(profileId, flow)` already exist and are wired into `Profiles.tsx`. `n8n-api` not affected.
+| Item | Current | Target | Action |
+|---|---|---|---|
+| Endpoint | `…/functions/v1/youtube-oauth` | same | ok |
+| Redirect URI | Hardcoded `https://api.postora.cloud/functions/v1/youtube-oauth` | env-driven with fallback | **fix** |
+| State | HMAC-signed with `GOOGLE_CLIENT_SECRET` | signed | ok |
+| GET callback | Implemented, exchanges code server-side, 302 to `/profiles?connected=youtube` | same | ok |
+| Refresh | `action: "refresh"`, preserves refresh_token | same | ok |
+| Frontend supplies redirect_uri | Yes, in legacy `handleYouTubeCallback` POST shim | No | **fix (hook)** |
+| Frontend supplies user_id at authorize | Yes (backend trusts it) | derive from JWT | **fix (minimal)** |
+| Old Supabase cloud refs | None in live code | none | ok |
 
-## Architecture decision
+**WhatsApp — `supabase/functions/whatsapp-oauth/index.ts`**
 
-**Keep one endpoint** (`linkedin-oauth`). State carries `flow`, scopes are flow-aware, and org-page discovery already lives in the existing callback path. No justification exists to split into `linkedin-page-oauth`.
+| Item | Current | Target | Decision |
+|---|---|---|---|
+| Endpoint | `…/functions/v1/whatsapp-oauth` | same | ok |
+| Flow type | Meta **Embedded Signup** (FB JS SDK → `signup.code`, no provider redirect URI) | not a normal OAuth redirect | **document, do not force** |
+| Token exchange | Server-side `GRAPH_API/oauth/access_token` with `FACEBOOK_APP_ID`/`SECRET` | server-side | ok |
+| Auth | Authenticates caller via Supabase JWT, uses service role for writes | server-side | ok |
+| Webhook verify | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` + HMAC signature on POST | same | ok |
+| Config test | Reports missing config cleanly | same | ok |
+| Disconnect | `action: "disconnect"`, best-effort `subscribed_apps` unsubscribe | same | ok |
+| Real sends | None during audit | none | ok |
 
-## Current vs Target — remaining gaps
+### Changes
 
-| Area | Current | Target / Action |
-|---|---|---|
-| Redirect URI source | Hardcoded constant in `linkedin-oauth/index.ts` | Read from `LINKEDIN_REDIRECT_URI` env, default to `${SUPABASE_URL}/functions/v1/linkedin-oauth`. Document in `.env.example`. |
-| State signer | Local HMAC keyed by `LINKEDIN_CLIENT_SECRET` | Keep local signer untouched to avoid invalidating in-flight sessions and breaking already-signed states; add a one-line comment noting the deliberate choice. (Migrating to `_shared/oauthState.ts` would invalidate signatures created by older deploys mid-flight; no functional gain — same HMAC-SHA256.) |
-| Callback redirect param | `?connected=linkedin` for both flows | When state `flow === "organization"`, use `?connected=linkedin_organization`; keep `?connected=linkedin` for personal. Preserve existing `account_name` and `profile_id` params. |
-| Hook return surface | `handleLinkedInConnect(profileId, flow)` only | Also expose `connectLinkedInPersonal(profileId)` and `connectLinkedInOrganization(profileId)` as thin aliases. Stop forwarding `user_id` (JWT already authoritative). Add `setConnectingPlatform/Profile` calls on start so UI button states match other providers. |
-| `.env.example` | `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` | Add `LINKEDIN_REDIRECT_URI=https://api.postora.cloud/functions/v1/linkedin-oauth`. (`OAUTH_STATE_SECRET` already in the file.) |
-| Frontend dialog | Already exists with correct copy | No change required. |
+**1. `supabase/functions/youtube-oauth/index.ts`**
+- Replace constant `YOUTUBE_REDIRECT_URI` with env-driven resolver:
+  ```ts
+  const YOUTUBE_REDIRECT_URI =
+    Deno.env.get("YOUTUBE_REDIRECT_URI") ??
+    (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/youtube-oauth`
+                  : "https://api.postora.cloud/functions/v1/youtube-oauth");
+  ```
+- In `action: "authorize"`, derive `user_id` from the caller's JWT via `authenticateCaller(req, body?.user_id)` (same helper already used by the legacy POST `callback`); keep `social_profile_id` and `return_to` from body.
+- No changes to scopes, token exchange, refresh, channel discovery, DB upsert, or GET callback shape.
 
-## Files to change
+**2. `src/hooks/oauth/useYouTubeOAuth.ts`**
+- `handleYouTubeConnect`: stop sending `user_id` (JWT carries identity); keep `social_profile_id`, `return_to`. Set `setConnectingPlatform("youtube")` + `setConnectingProfile(profileId)` at start; clear on error.
+- `handleYouTubeCallback` (legacy POST shim): stop sending `redirect_uri` and `user_id`; keep `code` + `social_profile_id` for in-flight sessions.
 
-1. `supabase/functions/linkedin-oauth/index.ts`
-   - Replace hardcoded `LINKEDIN_REDIRECT_URI` constant with `Deno.env.get("LINKEDIN_REDIRECT_URI") ?? \`${SUPABASE_URL}/functions/v1/linkedin-oauth\``.
-   - In GET callback, set `connected=linkedin_organization` when parsed state has `flow === "organization"`, otherwise `connected=linkedin`.
-   - No changes to scopes, token handling, org-ACL fetching, or DB upsert shape.
-2. `src/hooks/oauth/useLinkedInOAuth.ts`
-   - Drop `user_id` from invoke body (JWT carries identity).
-   - Set `setConnectingPlatform("linkedin")` + `setConnectingProfile(profileId)` at start of authorize; clear on error.
-   - Add aliases `connectLinkedInPersonal` / `connectLinkedInOrganization`.
-   - Keep `handleLinkedInCallback` as legacy shim.
-3. `.env.example`
-   - Add `LINKEDIN_REDIRECT_URI=https://api.postora.cloud/functions/v1/linkedin-oauth` in the LinkedIn block. No inline comments, no real values.
+**3. `.env.example`**
+- Add `YOUTUBE_REDIRECT_URI=https://api.postora.cloud/functions/v1/youtube-oauth` under the existing YouTube/Google block. No real secrets, no inline comments. WhatsApp block already present and complete.
 
-## Out of scope
+**4. WhatsApp**
+- **No code changes.** Embedded Signup uses Meta's FB JS SDK callback (`FB.login` → `signup.code`) and does **not** use a normal OAuth `redirect_uri`. The backend endpoint `whatsapp-oauth` already owns token exchange, webhook subscription, and phone registration server-side. This is documented as a permanent architectural exception alongside Facebook.
 
-- `n8n-api`, `n8n-community-node/`, `facebook-oauth`, posting logic in `process-post`.
-- Any DB migration — `social_accounts.account_metadata.linkedin_pages` already accepts org list.
-- Swapping the local HMAC signer for `_shared/oauthState.ts` (would invalidate in-flight signed states; functionally equivalent).
+### Out of scope
+- `supabase/functions/n8n-api` (untouched).
+- `facebook-oauth` (existing documented exception).
+- WhatsApp webhook signature / verify-token logic (already correct).
+- DB schema / data — no changes.
+- Swapping local HMAC signer for `_shared/oauthState.ts` (functionally equivalent; would invalidate in-flight signed states).
 
-## Validation
-
+### Validation
 - `bunx tsgo --noEmit`
-- greps: `linkedin-page-oauth` (must be 0), `linkedin-oauth` (present), `.supabase.co/functions/v1` / `efruibswazzuuupgyzmf` / `supabase.postora.cloud` (none in live code).
+- `rg "youtube-oauth|whatsapp-oauth|whatsapp-webhook" src supabase`
+- `rg "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase` — expect zero hits in live code.
 
-## Manual provider actions
-
-1. LinkedIn Developer Portal → Auth → Authorized redirect URLs: confirm `https://api.postora.cloud/functions/v1/linkedin-oauth` is registered.
-2. Confirm products enabled for the required scopes:
-   - Personal posting: `r_basicprofile`, `w_member_social`, `w_member_social_feed`, `r_member_postAnalytics`, `r_member_profileAnalytics`, `r_1st_connections_size` (Community Management API).
-   - Organization posting: above plus `rw_organization_admin`, `r_organization_social`, `w_organization_social`, `r_organization_social_feed`, `w_organization_social_feed`, `r_organization_followers`.
-3. If any legacy redirect URI was registered, keep it temporarily; remove after 24–48h of clean GET-callback logs.
-4. Ensure runtime env has `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`, `LINKEDIN_REDIRECT_URI`, `OAUTH_STATE_SECRET` (the last only used by other providers but already standardized).
-
-## Final report
-
-Will follow the required template (Summary / Architecture decision / Files / DB / Validation / Guards / Secrets / Manual / Status).
+### Manual actions (final report)
+- **Google Cloud Console**: confirm authorized redirect URI `https://api.postora.cloud/functions/v1/youtube-oauth`; confirm OAuth consent scopes (`https://www.googleapis.com/auth/youtube`); confirm app status / test users; ensure runtime env has `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and optionally `YOUTUBE_REDIRECT_URI`.
+- **Meta / WhatsApp**: webhook callback `https://api.postora.cloud/functions/v1/whatsapp-webhook`, verify token must match `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, confirm Embedded Signup configuration IDs (`wa_cloud_api_config_id`, `wa_coexistence_config_id`) belong to the same Meta App as `FACEBOOK_APP_ID`/`SECRET`, runtime env has WhatsApp secrets.

@@ -13,8 +13,12 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
 // IMPORTANT: Google requires an exact string match for redirect_uri.
-// Use a stable, public URL (not derived from req.url, which may be http or internally rewritten).
-const YOUTUBE_REDIRECT_URI = "https://api.postora.cloud/functions/v1/youtube-oauth";
+// Env-driven with a stable public fallback (never derived from req.url).
+const YOUTUBE_REDIRECT_URI =
+  Deno.env.get("YOUTUBE_REDIRECT_URI") ??
+  (SUPABASE_URL
+    ? `${SUPABASE_URL}/functions/v1/youtube-oauth`
+    : "https://api.postora.cloud/functions/v1/youtube-oauth");
 
 function base64UrlEncode(input: string) {
   return btoa(input)
@@ -121,11 +125,11 @@ Deno.serve(async (req) => {
       if (!GOOGLE_CLIENT_ID) throw new Error("GOOGLE_CLIENT_ID not configured");
       if (!GOOGLE_CLIENT_SECRET) throw new Error("GOOGLE_CLIENT_SECRET not configured");
 
-      const userId = body?.user_id as string | undefined;
+      const auth = await authenticateCaller(req, body?.user_id);
+      const userId = auth.userId;
       const socialProfileId = (body?.social_profile_id as string | null | undefined) ?? null;
       const returnTo = body?.return_to as string | undefined;
 
-      if (!userId) throw new Error("Missing user_id");
       if (!returnTo) throw new Error("Missing return_to");
 
       // Single scope: `youtube` is a superset of youtube.readonly and youtube.upload.
