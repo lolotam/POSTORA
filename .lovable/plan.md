@@ -1,88 +1,76 @@
-## Reddit + Bluesky OAuth Finalization
+## Final OAuth Matrix Audit — Plan
 
-### Audit results (current vs target)
+A read-only audit pass. Only one small safe change is proposed: completing missing placeholders in `.env.example`. No code, no DB, no provider-console action will be performed automatically.
 
-**Reddit — `supabase/functions/reddit-oauth/index.ts`**
+### Scope
 
-| Item | Current | Target | Action |
-|---|---|---|---|
-| Endpoint name | `reddit-oauth` (lowercase) | same | ok |
-| Redirect URI | env `REDDIT_REDIRECT_URI` → `${SUPABASE_URL}/functions/v1/reddit-oauth` | same | ok |
-| Signed state (HMAC) via `_shared/oauthState.ts` carrying `profile_id`/`return_to` | yes | yes | ok |
-| GET callback exchanges code server-side, 302 to `return_to?connected=reddit` | yes | yes | ok |
-| Frontend sends `redirect_uri` + `user_id` at authorize | **yes** (with `profile_id` in legacy `/profiles?platform=reddit&profile_id=…`) | no | **fix (hook)** |
-| Frontend POST `callback` shim still wires `redirect_uri` + `user_id` | yes | minimal compat | **fix (hook)** |
-| Old Supabase cloud refs | none in live code | none | ok |
+- Verify unification status for all 13 OAuth platforms.
+- Run static greps for legacy hosts/typos.
+- Confirm `.env.example` coverage for all unified redirect URIs.
+- Produce provider-console + redeploy checklists.
+- Do NOT touch Facebook, WhatsApp Embedded Signup, `n8n-api`, or `public/n8n-complete-workflow.json`.
 
-**Bluesky — `supabase/functions/bluesky-oauth/index.ts`**
+### Pre-audit findings (already collected)
 
-| Item | Current | Target | Action |
-|---|---|---|---|
-| Endpoint name | `bluesky-oauth` | same | ok |
-| `CLIENT_ID` is metadata URL `https://postora.cloud/client-metadata.json` | yes | yes (ATProto identity) | ok |
-| `redirect_uri` used in authorize/token | `redirect_uri \|\| "https://postora.cloud/profiles"` — frontend route, not backend | backend Edge Function URL | **fix** |
-| GET callback handler in edge function | **missing** (only POST `action: "callback"` invoked by frontend after redirect to `/profiles`) | present | **add** |
-| State already carries `user_id`, `social_profile_id`, `handle`, `code_verifier`, DPoP keys (base64-encoded JSON) | yes | yes (preserve as-is — PKCE/DPoP intact) | ok |
-| Token exchange + DB upsert server-side | yes | yes | ok |
-| `public/client-metadata.json` includes backend URL | yes (entry already present alongside `/profiles` + Lovable preview) | yes | ok |
-| Frontend sends `redirect_uri` + `user_id` | yes | no | **fix (hook)** |
-| Old Supabase cloud refs | none | none | ok |
+**Legacy host grep** (`.supabase.co/functions/v1`, `supabase.postora.cloud`, `efruibswazzuuupgyzmf`, `thread-oauth`, `instgram`, `Reddit-oauth`, `linkedin-page-oauth`):
+- All hits are in allowed locations only:
+  - `supabase/migrations/*.sql` — historical migrations (must not be edited).
+  - `src/integrations/__tests__/supabaseClient.test.ts` — intentional regression test.
+  - `public/n8n-complete-workflow.json` — protected n8n artifact; flagged as "n8n artifact needs separate compatibility review".
+- No live `src/` or live edge-function code contains legacy hosts.
 
-### Changes
+**Edge-function env-driven redirects** (resolved via `Deno.env.get(...) ?? https://api.postora.cloud/functions/v1/<name>-oauth`):
+- `tiktok-oauth` → reads `TIKTOK_REDIRECT_URI` ✅
+- `pinterest-oauth` → reads `PINTEREST_REDIRECT_URI` ✅
+- `threads-oauth` → reads `THREADS_REDIRECT_URI` ✅
+- `instagram-oauth`, `instagram-business-oauth`, `linkedin-oauth`, `youtube-oauth`, `reddit-oauth`, `bluesky-oauth` ✅
+- `twitter-oauth` → redirect URI is **hardcoded** to `https://api.postora.cloud/functions/v1/twitter-oauth` (already correct, but not env-driven). Minor inconsistency — not changed in this audit per "no large changes" rule. Flagged in report.
 
-**1. `src/hooks/oauth/useRedditOAuth.ts`**
-- `handleRedditConnect`: stop sending `user_id` and `redirect_uri`; keep `social_profile_id` + `return_to: ${origin}/profiles`. Move `setConnectingPlatform("reddit")`/`setConnectingProfile(profileId)` to start, clear on error.
-- `handleRedditCallback` (legacy POST shim): stop sending `redirect_uri` and `user_id`; keep `code` + `social_profile_id` for in-flight sessions.
+**`.env.example` current coverage**: has INSTAGRAM, INSTAGRAM_BUSINESS, YOUTUBE, LINKEDIN, REDDIT, BLUESKY.
+**Missing placeholders**: `TIKTOK_REDIRECT_URI`, `PINTEREST_REDIRECT_URI`, `THREADS_REDIRECT_URI`, `TWITTER_REDIRECT_URI`.
 
-**2. `supabase/functions/bluesky-oauth/index.ts`**
-- Add module constant:
-  ```ts
-  const BLUESKY_REDIRECT_URI =
-    Deno.env.get("BLUESKY_REDIRECT_URI") ??
-    `${SUPABASE_URL.replace(/\/+$/, "")}/functions/v1/bluesky-oauth`;
-  ```
-- In `action: "authorize"` and `action: "callback"`, replace `redirect_uri || "https://postora.cloud/profiles"` with `BLUESKY_REDIRECT_URI` (the body's `redirect_uri` is no longer trusted). The value must match an entry in `client-metadata.json` — the backend URL is already listed.
-- Add a `GET` handler at the top of `Deno.serve`:
-  - Parse `code` + `state` query params.
-  - Reuse the existing callback logic (decode base64 state, discover token endpoint, DPoP-bound token exchange with nonce retry, profile fetch, DB upsert) by extracting it into a small `completeBlueskyCallback(code, state, supabase, logger)` helper, then invoking it.
-  - On success, 302 to `${state.return_to ?? "https://postora.cloud/profiles"}?connected=bluesky` (+ `profile_id` if present).
-  - On error, 302 to `https://postora.cloud/profiles?connected=bluesky&error=bluesky_callback_failed`.
-- Extend state encoding to include `return_to` (default `"https://postora.cloud/profiles"`) so the GET handler can route back. Keep existing keys intact — pure additive change preserves any in-flight sessions.
-- Keep `action: "callback"` POST path as legacy compat shim, refactored to call the same helper.
-- No changes to PKCE generation, DPoP key generation/export/import, nonce retry, scope, or `account_metadata` shape.
+### The one proposed change
 
-**3. `src/hooks/oauth/useBlueskyOAuth.ts`**
-- `handleBlueskyOAuthConnect`: stop sending `redirect_uri` and `user_id`; keep `handle` + `social_profile_id`. Remove the domain-warning toast (no longer relevant — backend owns redirect).
-- `handleBlueskyOAuthCallback` (legacy POST shim): stop sending `redirect_uri`; keep `code` + `state` for in-flight sessions.
-- `handleBlueskyConnect` (app-password flow): stop sending `user_id` (JWT verified backend-side by `authenticateCaller`).
+Append the 4 missing placeholders to `.env.example` (no inline comments, no real values), grouped near existing OAuth redirect block:
 
-**4. `public/client-metadata.json`**
-- No changes. Backend URL `https://api.postora.cloud/functions/v1/bluesky-oauth` already listed. `/profiles` and Lovable preview entries stay for legacy/preview support and will be retired once backend cutover is verified.
+```
+TIKTOK_REDIRECT_URI=https://api.postora.cloud/functions/v1/tiktok-oauth
+PINTEREST_REDIRECT_URI=https://api.postora.cloud/functions/v1/pinterest-oauth
+THREADS_REDIRECT_URI=https://api.postora.cloud/functions/v1/threads-oauth
+TWITTER_REDIRECT_URI=https://api.postora.cloud/functions/v1/twitter-oauth
+```
 
-**5. `.env.example`**
-- Add a Reddit + Bluesky block:
-  ```
-  REDDIT_CLIENT_ID=
-  REDDIT_CLIENT_SECRET=
-  REDDIT_REDIRECT_URI=https://api.postora.cloud/functions/v1/reddit-oauth
+Nothing else will be edited.
 
-  BLUESKY_REDIRECT_URI=https://api.postora.cloud/functions/v1/bluesky-oauth
-  ```
-  (Bluesky's "client identity" is the metadata URL — no `BLUESKY_CLIENT_ID`/`SECRET` env exists in code and none will be invented. `token_endpoint_auth_method` is `none`.)
+### Validation steps (build mode)
+
+1. `bunx tsgo --noEmit` (typecheck).
+2. `git diff --check`.
+3. Re-run the full grep set to confirm only allowed legacy refs remain.
+4. CleanCodeGuard: `.env.example` only — trivial doc change.
+5. TestGuard: no test files changed → state "no test-code review required".
+
+### Final report sections
+
+The report will include:
+
+1. **Summary** — OAuth unification ready, with Facebook + WhatsApp + n8n artifact documented exceptions.
+2. **OAuth provider matrix** — 13-row table with platform, status, backend callback, frontend return, source hook, source edge function, env vars, provider action, legacy URL keep/remove, notes.
+3. **Exceptions** — Facebook (Supabase provider_token + Pages selector), WhatsApp (Embedded Signup FB SDK), n8n artifact (`public/n8n-complete-workflow.json`).
+4. **Files changed** — `.env.example` only (or none if not approved).
+5. **Database changes** — none.
+6. **Validation results** — typecheck/lint/build/tests/grep/git diff.
+7. **Guard review results**.
+8. **Security/secrets check** — confirmed no secrets exposed (placeholders only).
+9. **Provider console checklist** — exact backend URL per provider, scopes, legacy URL keep/remove timing.
+10. **Edge function deployment checklist** — only functions actually modified in prior tasks (tiktok, pinterest, threads, instagram, instagram-business, linkedin, youtube, reddit, bluesky). whatsapp-oauth/webhook only if changed.
+11. **Remaining blockers** — none (Facebook + WhatsApp are documented exceptions, not blockers).
+12. **Final status** — `ready_with_documented_exceptions`.
 
 ### Out of scope
-- `supabase/functions/n8n-api` (untouched).
-- Bluesky `connect` (app-password) flow internals beyond dropping client `user_id`.
-- Bluesky `refresh` and `get_lists` actions.
-- Rotating signing keys or migrating Bluesky state to HMAC — current base64 state is integrity-bound by DPoP and the auth-server's code↔state pairing; rewriting it would invalidate in-flight sessions.
-- DB schema/data — none.
 
-### Validation
-- `bunx tsgo --noEmit`
-- `rg -n "reddit-oauth|bluesky-oauth|Reddit-oauth" src supabase public`
-- `rg -n "profile_id=.*reddit" src supabase public`
-- `rg -n "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase public` — expect zero hits in live code.
-
-### Manual actions (final report)
-- **Reddit Developer Console**: confirm authorized redirect URI `https://api.postora.cloud/functions/v1/reddit-oauth`; remove the legacy `https://postora.cloud/profiles?platform=reddit&profile_id=…`-style URI after 24–48h of clean backend GET-callback logs; runtime env has `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` (optionally `REDDIT_REDIRECT_URI`); redeploy `reddit-oauth`.
-- **Bluesky / ATProto**: confirm `https://postora.cloud/client-metadata.json` resolves in production with backend URL in `redirect_uris`; retire `/profiles` and Lovable-preview entries once the backend GET cutover is verified; runtime env optionally has `BLUESKY_REDIRECT_URI`; redeploy `bluesky-oauth`.
+- Facebook custom-redirect migration (future task).
+- WhatsApp Embedded Signup redesign.
+- `n8n-api` and `public/n8n-complete-workflow.json` rewrites.
+- Twitter env-driven refactor (flag only).
+- Any DB migration or SQL execution.
