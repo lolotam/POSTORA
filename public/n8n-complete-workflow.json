@@ -7,7 +7,10 @@
       "name": "Manual Trigger",
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
-      "position": [250, 300]
+      "position": [
+        250,
+        300
+      ]
     },
     {
       "parameters": {
@@ -29,9 +32,12 @@
       "name": "Configuration",
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.2,
-      "position": [450, 300],
+      "position": [
+        450,
+        300
+      ],
       "notesInFlow": true,
-      "notes": "⚙️ Set your API key here or use $env.POSTORA_API_KEY"
+      "notes": "\u2699\ufe0f Set your API key here or use $env.POSTORA_API_KEY"
     },
     {
       "parameters": {
@@ -59,9 +65,12 @@
       "name": "Upload via URLs (JSON)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [650, 140],
+      "position": [
+        650,
+        140
+      ],
       "notesInFlow": true,
-      "notes": "📤 Method 1: JSON with media_urls array"
+      "notes": "\ud83d\udce4 Method 1: JSON with media_urls array"
     },
     {
       "parameters": {
@@ -93,9 +102,12 @@
       "name": "Upload via Form-Data",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [650, 300],
+      "position": [
+        650,
+        300
+      ],
       "notesInFlow": true,
-      "notes": "📤 Method 2: Form-Data with binary files"
+      "notes": "\ud83d\udce4 Method 2: Form-Data with binary files"
     },
     {
       "parameters": {
@@ -123,9 +135,12 @@
       "name": "Upload via Base64",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [650, 460],
+      "position": [
+        650,
+        460
+      ],
       "notesInFlow": true,
-      "notes": "📤 Method 3: JSON with base64 data"
+      "notes": "\ud83d\udce4 Method 3: JSON with base64 data"
     },
     {
       "parameters": {
@@ -140,7 +155,10 @@
       "name": "Merge Results",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 2.1,
-      "position": [850, 300]
+      "position": [
+        850,
+        300
+      ]
     },
     {
       "parameters": {
@@ -161,16 +179,19 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"caption\": \"Check out our latest post! 🚀 #socialmedia #automation #postora\",\n  \"platforms\": [\"instagram\", \"facebook\", \"tiktok\", \"youtube\", \"pinterest\", \"linkedin\"],\n  \"media_file_ids\": {{ JSON.stringify($json.media_file_ids || []) }},\n  \"scheduled_at\": null,\n  \n  \"youtube_privacy\": \"public\",\n  \"youtube_title\": \"My Awesome Video\",\n  \"youtube_description\": \"Created with Postora automation\",\n  \"youtube_tags\": [\"automation\", \"socialmedia\"],\n  \n  \"tiktok_post_mode\": \"DIRECT_POST\",\n  \"tiktok_allow_comments\": true,\n  \"tiktok_allow_duet\": true,\n  \"tiktok_allow_stitch\": true,\n  \n  \"instagram_share_to_feed\": true,\n  \n  \"pinterest_title\": \"Check this out!\",\n  \"pinterest_link\": \"https://postora.app\"\n}",
+        "jsonBody": "={\n  \"caption\": \"Check out our latest post! \ud83d\ude80 #socialmedia #automation #postora\",\n  \"platforms\": [\"instagram\", \"facebook\", \"tiktok\", \"youtube\", \"pinterest\", \"linkedin\"],\n  \"media_file_ids\": {{ JSON.stringify($json.media_file_ids || []) }},\n  \"scheduled_at\": null,\n  \n  \"youtube_privacy\": \"public\",\n  \"youtube_title\": \"My Awesome Video\",\n  \"youtube_description\": \"Created with Postora automation\",\n  \"youtube_tags\": [\"automation\", \"socialmedia\"],\n  \n  \"tiktok_post_mode\": \"DIRECT_POST\",\n  \"tiktok_allow_comments\": true,\n  \"tiktok_allow_duet\": true,\n  \"tiktok_allow_stitch\": true,\n  \n  \"instagram_share_to_feed\": true,\n  \n  \"pinterest_title\": \"Check this out!\",\n  \"pinterest_link\": \"https://postora.app\"\n}",
         "options": {}
       },
       "id": "create-post-node",
       "name": "Create Post",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.1,
-      "position": [1050, 300],
+      "position": [
+        1050,
+        300
+      ],
       "notesInFlow": true,
-      "notes": "📱 Publish to all platforms\nUses media_file_ids from upload step"
+      "notes": "\ud83d\udcf1 Publish to all platforms\nUses media_file_ids from upload step"
     },
     {
       "parameters": {
@@ -199,35 +220,44 @@
       "name": "Check Success",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2,
-      "position": [1250, 300]
+      "position": [
+        1250,
+        300
+      ]
     },
     {
       "parameters": {
-        "content": "## ✅ Success Path\n\nPost was created successfully!\n\nYou can:\n- Log to a spreadsheet\n- Send a Slack notification\n- Update a database\n- Trigger another workflow"
+        "content": "## \u2705 Success Path\n\nPost was created successfully!\n\nYou can:\n- Log to a spreadsheet\n- Send a Slack notification\n- Update a database\n- Trigger another workflow"
       },
       "id": "success-note",
       "name": "Success Actions",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [1450, 180],
+      "position": [
+        1450,
+        180
+      ],
       "width": 280,
       "height": 180
     },
     {
       "parameters": {
-        "content": "## ❌ Error Handling\n\nPost creation failed.\n\nYou can:\n- Send error alert to Slack\n- Retry the request\n- Log to error tracking"
+        "content": "## \u274c Error Handling\n\nPost creation failed.\n\nYou can:\n- Send error alert to Slack\n- Retry the request\n- Log to error tracking"
       },
       "id": "error-note",
       "name": "Error Actions",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [1450, 400],
+      "position": [
+        1450,
+        400
+      ],
       "width": 280,
       "height": 180
     },
     {
       "parameters": {
-        "content": "## 🚀 Postora Complete Workflow\n\n### This workflow demonstrates:\n\n**1. Three Upload Methods:**\n- **JSON + URLs**: Upload from external URLs\n- **Form-Data**: Upload binary files directly\n- **JSON + Base64**: Upload encoded data\n\n**2. Multi-file Upload:**\n- Upload multiple files in single request\n- Returns array of `media_file_ids`\n\n**3. Create Post:**\n- Pass `media_file_ids` from upload\n- Set platform-specific options\n- Publish to multiple platforms\n\n### curl Examples:\n\n**Upload Multiple URLs:**\n```bash\ncurl -X POST \\\n  'https://[PROJECT].supabase.co/functions/v1/n8n-api/api/v1/upload-media' \\\n  -H 'x-api-key: YOUR_KEY' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"media_urls\": [\n      \"https://example.com/img1.jpg\",\n      \"https://example.com/img2.jpg\"\n    ]\n  }'\n```\n\n**Upload Multiple Files:**\n```bash\ncurl -X POST \\\n  'https://[PROJECT].supabase.co/functions/v1/n8n-api/api/v1/upload-media' \\\n  -H 'x-api-key: YOUR_KEY' \\\n  -F 'files[]=@/path/to/image1.jpg' \\\n  -F 'files[]=@/path/to/image2.png' \\\n  -F 'files[]=@/path/to/video.mp4'\n```\n\n**Upload Base64:**\n```bash\ncurl -X POST \\\n  'https://[PROJECT].supabase.co/functions/v1/n8n-api/api/v1/upload-media' \\\n  -H 'x-api-key: YOUR_KEY' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"files_data\": [\"data:image/jpeg;base64,...\"],\n    \"file_names\": [\"photo.jpg\"]\n  }'\n```\n\n### Response Format:\n```json\n{\n  \"success\": true,\n  \"media_files\": [...],\n  \"media_file_ids\": [\"id1\", \"id2\"],\n  \"total_uploaded\": 2,\n  \"total_failed\": 0\n}\n```",
+        "content": "## \ud83d\ude80 Postora Complete Workflow\n\n### This workflow demonstrates:\n\n**1. Three Upload Methods:**\n- **JSON + URLs**: Upload from external URLs\n- **Form-Data**: Upload binary files directly\n- **JSON + Base64**: Upload encoded data\n\n**2. Multi-file Upload:**\n- Upload multiple files in single request\n- Returns array of `media_file_ids`\n\n**3. Create Post:**\n- Pass `media_file_ids` from upload\n- Set platform-specific options\n- Publish to multiple platforms\n\n### curl Examples:\n\n**Upload Multiple URLs:**\n```bash\ncurl -X POST \\\n  'https://api.postora.cloud/functions/v1/n8n-api/api/v1/upload-media' \\\n  -H 'x-api-key: YOUR_KEY' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"media_urls\": [\n      \"https://example.com/img1.jpg\",\n      \"https://example.com/img2.jpg\"\n    ]\n  }'\n```\n\n**Upload Multiple Files:**\n```bash\ncurl -X POST \\\n  'https://api.postora.cloud/functions/v1/n8n-api/api/v1/upload-media' \\\n  -H 'x-api-key: YOUR_KEY' \\\n  -F 'files[]=@/path/to/image1.jpg' \\\n  -F 'files[]=@/path/to/image2.png' \\\n  -F 'files[]=@/path/to/video.mp4'\n```\n\n**Upload Base64:**\n```bash\ncurl -X POST \\\n  'https://api.postora.cloud/functions/v1/n8n-api/api/v1/upload-media' \\\n  -H 'x-api-key: YOUR_KEY' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"files_data\": [\"data:image/jpeg;base64,...\"],\n    \"file_names\": [\"photo.jpg\"]\n  }'\n```\n\n### Response Format:\n```json\n{\n  \"success\": true,\n  \"media_files\": [...],\n  \"media_file_ids\": [\"id1\", \"id2\"],\n  \"total_uploaded\": 2,\n  \"total_failed\": 0\n}\n```",
         "height": 900,
         "width": 450
       },
@@ -235,7 +265,10 @@
       "name": "Documentation",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
-      "position": [40, 60]
+      "position": [
+        40,
+        60
+      ]
     }
   ],
   "connections": {
