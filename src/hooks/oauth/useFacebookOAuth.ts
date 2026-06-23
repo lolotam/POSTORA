@@ -98,7 +98,7 @@ export function useFacebookOAuth(
 
     if (data?.success) {
       if (data.needs_page_selection && data.pages && data.pages.length > 1) {
-        setPageSelectionData({ pages: data.pages, standaloneInstagram: data.standalone_instagram || [], profileId, providerToken, platform: targetPlatform });
+        setPageSelectionData({ pages: data.pages, standaloneInstagram: data.standalone_instagram || [], profileId, providerToken, selectionId: null, platform: targetPlatform });
         return;
       }
 
