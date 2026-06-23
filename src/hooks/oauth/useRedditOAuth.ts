@@ -14,30 +14,34 @@ export function useRedditOAuth(
 
   const handleRedditConnect = async (profileId: string) => {
     if (!user) throw new Error("Not authenticated");
-    const { data, error } = await supabase.functions.invoke("reddit-oauth", {
-      body: {
-        action: "authorize",
-        user_id: user.id,
-        social_profile_id: profileId,
-        redirect_uri: `${window.location.origin}/profiles?platform=reddit&profile_id=${profileId}`,
-        return_to: `${window.location.origin}/profiles`,
-      },
-    });
-    if (error) throw error;
-    if (data?.url) { window.location.href = data.url; } else { throw new Error("No authorization URL received"); }
+    setConnectingPlatform("reddit");
+    setConnectingProfile(profileId);
+    try {
+      const { data, error } = await supabase.functions.invoke("reddit-oauth", {
+        body: {
+          action: "authorize",
+          social_profile_id: profileId,
+          return_to: `${window.location.origin}/profiles`,
+        },
+      });
+      if (error) throw error;
+      if (data?.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error("No authorization URL received");
+      }
+    } catch (err) {
+      setConnectingPlatform(null);
+      setConnectingProfile(null);
+      throw err;
+    }
   };
 
   const handleRedditCallback = async (code: string, profileId: string) => {
     setConnectingPlatform("reddit");
     try {
       const { data, error } = await supabase.functions.invoke("reddit-oauth", {
-        body: {
-          action: "callback",
-          code,
-          redirect_uri: `${window.location.origin}/profiles?platform=reddit&profile_id=${profileId}`,
-          user_id: user?.id,
-          social_profile_id: profileId,
-        },
+        body: { action: "callback", code, social_profile_id: profileId },
       });
       if (error) throw error;
       if (data?.success) {
