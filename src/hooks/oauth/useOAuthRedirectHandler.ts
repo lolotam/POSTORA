@@ -14,7 +14,9 @@ interface CallbackHandlers {
   handleRedditCallback: (code: string, profileId: string) => Promise<void>;
   handleInstagramBusinessCallback: (code: string, profileId: string) => Promise<void>;
   handleBlueskyOAuthCallback: (code: string, state: string, profileId: string) => Promise<void>;
+  loadPendingFacebookSelection?: (selectionId: string) => Promise<void>;
 }
+
 
 export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
   const [searchParams, setSearchParams] = useSearchParams();
