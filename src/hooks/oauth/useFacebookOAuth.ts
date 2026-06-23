@@ -188,5 +188,57 @@ export function useFacebookOAuth(
     setConnectingProfile(null);
   };
 
-  return { pageSelectionData, selectingPage, handleFacebookConnect, handleSelectPage, handleSelectStandaloneInstagram, clearPageSelection };
+  // New unified backend callback path. Opens Meta authorize URL minted by the
+  // edge function; Facebook redirects to the backend, which 302s back with
+  // `?connected=facebook&select=<id>` so we can hydrate the page picker.
+  const handleFacebookConnectBackend = async (targetPlatform: Platform, profileId: string) => {
+    if (!user) throw new Error("Not authenticated");
+    setConnectingPlatform(targetPlatform);
+    setConnectingProfile(profileId);
+    const { data, error } = await supabase.functions.invoke("facebook-oauth", {
+      body: {
+        action: "authorize",
+        target_platform: targetPlatform === "instagram" ? "instagram" : "facebook",
+        social_profile_id: profileId,
+        return_to: `${window.location.origin}/profiles`,
+      },
+    });
+    if (error || !data?.url) {
+      setConnectingPlatform(null);
+      setConnectingProfile(null);
+      throw error || new Error("Failed to start Facebook authorization");
+    }
+    window.location.assign(data.url);
+  };
+
+  // Called after the GET callback redirects back with ?connected=facebook&select=<id>.
+  const loadPendingFacebookSelection = async (selectionId: string) => {
+    if (!user) return;
+    const { data, error } = await supabase.functions.invoke("facebook-oauth", {
+      body: { action: "get_pending_selection", user_id: user.id, selection_id: selectionId },
+    });
+    if (error || !data?.success) {
+      toast({ title: "Connection expired", description: "The Facebook selection link expired. Please reconnect.", variant: "destructive" });
+      return;
+    }
+    const platform: Platform = data.target_platform === "instagram" ? "instagram" : "facebook";
+    setPageSelectionData({
+      pages: data.pages || [],
+      standaloneInstagram: data.standalone_instagram || [],
+      profileId: data.social_profile_id,
+      providerToken: null,
+      selectionId,
+      platform,
+    });
+    setConnectingPlatform(platform);
+    setConnectingProfile(data.social_profile_id);
+  };
+
+  return {
+    pageSelectionData, selectingPage,
+    handleFacebookConnect, handleFacebookConnectBackend,
+    handleSelectPage, handleSelectStandaloneInstagram,
+    clearPageSelection, loadPendingFacebookSelection,
+  };
 }
+
