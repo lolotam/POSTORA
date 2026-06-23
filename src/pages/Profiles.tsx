@@ -8,16 +8,6 @@ import { Platform } from "@/lib/types";
 import { allPlatforms } from "@/lib/platformConstants";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useProfileOAuth } from "@/hooks/useProfileOAuth";
 import { useQuotas } from "@/hooks/useQuotas";
