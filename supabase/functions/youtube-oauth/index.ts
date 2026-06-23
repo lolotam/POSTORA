@@ -125,11 +125,11 @@ Deno.serve(async (req) => {
       if (!GOOGLE_CLIENT_ID) throw new Error("GOOGLE_CLIENT_ID not configured");
       if (!GOOGLE_CLIENT_SECRET) throw new Error("GOOGLE_CLIENT_SECRET not configured");
 
-      const userId = body?.user_id as string | undefined;
+      const auth = await authenticateCaller(req, body?.user_id);
+      const userId = auth.userId;
       const socialProfileId = (body?.social_profile_id as string | null | undefined) ?? null;
       const returnTo = body?.return_to as string | undefined;
 
-      if (!userId) throw new Error("Missing user_id");
       if (!returnTo) throw new Error("Missing return_to");
 
       // Single scope: `youtube` is a superset of youtube.readonly and youtube.upload.
