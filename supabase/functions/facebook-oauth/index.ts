@@ -397,12 +397,21 @@ Deno.serve(async (req) => {
     });
   }
 
-  const validActions = ["list_pages", "store_page", "store_account", "store_instagram"];
-  const requiresProviderToken = validActions.includes(body.action);
+  const validActions = [
+    "list_pages", "store_page", "store_account", "store_instagram",
+    "authorize", "get_pending_selection",
+  ];
+  // Legacy actions that require the FB JS SDK provider_token. New backend
+  // callback path uses `selection_id` instead, so providing either satisfies
+  // store_page / store_instagram.
+  const legacyTokenActions = ["list_pages", "store_account"];
+  const selectionOrTokenActions = ["store_page", "store_instagram"];
   const missingActionField =
-    (requiresProviderToken && !body.provider_token) ||
+    (legacyTokenActions.includes(body.action) && !body.provider_token) ||
+    (selectionOrTokenActions.includes(body.action) && !body.provider_token && !body.selection_id) ||
     (body.action === "store_page" && !body.page_id) ||
-    (body.action === "store_instagram" && !body.instagram_account_id);
+    (body.action === "store_instagram" && !body.instagram_account_id) ||
+    (body.action === "get_pending_selection" && !body.selection_id);
 
   if (!validActions.includes(body.action) || missingActionField) {
     return new Response(JSON.stringify({ error: "Invalid request body" }), {
@@ -412,9 +421,12 @@ Deno.serve(async (req) => {
   }
 
   try {
-    const { action, provider_token, platform, social_profile_id, page_id } = body;
+    const { action, social_profile_id, page_id } = body;
+    let { provider_token } = body as { provider_token?: string };
+    const platform = body.platform;
 
     console.log("Facebook OAuth action:", action);
+
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
