@@ -4,6 +4,8 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { refetchSocialQueries } from "./oauthUtils";
 
+export type LinkedInFlow = "personal" | "organization";
+
 export function useLinkedInOAuth(
   setConnectingPlatform: (p: any) => void,
   setConnectingProfile: (p: string | null) => void,
@@ -14,22 +16,42 @@ export function useLinkedInOAuth(
 
   const handleLinkedInConnect = async (
     profileId: string,
-    flow: "personal" | "organization" = "personal",
+    flow: LinkedInFlow = "personal",
   ) => {
     if (!user) throw new Error("Not authenticated");
-    const { data, error } = await supabase.functions.invoke("linkedin-oauth", {
-      body: {
-        action: "authorize",
-        user_id: user.id,
-        social_profile_id: profileId,
-        flow,
-        return_to: `${window.location.origin}/profiles`,
-      },
-    });
-    if (error) throw error;
-    if (data?.url) { window.location.href = data.url; } else { throw new Error("No authorization URL received"); }
+    setConnectingPlatform("linkedin");
+    setConnectingProfile(profileId);
+    try {
+      // Note: do not forward user_id or redirect_uri from the client.
+      // The edge function derives identity from the JWT and forces the redirect URI
+      // from LINKEDIN_REDIRECT_URI server-side.
+      const { data, error } = await supabase.functions.invoke("linkedin-oauth", {
+        body: {
+          action: "authorize",
+          social_profile_id: profileId,
+          flow,
+          return_to: `${window.location.origin}/profiles`,
+        },
+      });
+      if (error) throw error;
+      if (data?.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error("No authorization URL received");
+      }
+    } catch (error) {
+      setConnectingPlatform(null);
+      setConnectingProfile(null);
+      throw error;
+    }
   };
 
+  const connectLinkedInPersonal = (profileId: string) =>
+    handleLinkedInConnect(profileId, "personal");
+  const connectLinkedInOrganization = (profileId: string) =>
+    handleLinkedInConnect(profileId, "organization");
+
+  // Legacy POST-callback shim (kept for any in-flight client sessions).
   const handleLinkedInCallback = async (code: string, profileId: string) => {
     setConnectingPlatform("linkedin");
     try {
@@ -52,5 +74,10 @@ export function useLinkedInOAuth(
     }
   };
 
-  return { handleLinkedInConnect, handleLinkedInCallback };
+  return {
+    handleLinkedInConnect,
+    connectLinkedInPersonal,
+    connectLinkedInOrganization,
+    handleLinkedInCallback,
+  };
 }

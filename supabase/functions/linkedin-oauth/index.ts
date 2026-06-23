@@ -12,8 +12,11 @@ const LINKEDIN_CLIENT_SECRET = Deno.env.get("LINKEDIN_CLIENT_SECRET");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-// LinkedIn OAuth 2.0 redirect URI - must match exactly what's configured in LinkedIn Developer Portal
-const LINKEDIN_REDIRECT_URI = "https://api.postora.cloud/functions/v1/linkedin-oauth";
+// LinkedIn OAuth 2.0 redirect URI - must match exactly what's configured in LinkedIn Developer Portal.
+// Backend-forced: ignore any frontend-supplied redirect_uri. Env-driven with safe default.
+const LINKEDIN_REDIRECT_URI =
+  Deno.env.get("LINKEDIN_REDIRECT_URI") ??
+  (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/linkedin-oauth` : "https://api.postora.cloud/functions/v1/linkedin-oauth");
 
 function base64UrlEncode(input: string) {
   return btoa(input)
@@ -112,7 +115,7 @@ Deno.serve(async (req) => {
         return new Response("Missing code/state", { status: 400 });
       }
 
-      const { user_id, social_profile_id, return_to } = await verifyAndParseState(state);
+      const { user_id, social_profile_id, return_to, flow } = await verifyAndParseState(state);
 
       const result = await completeOAuth({
         code,
@@ -121,9 +124,11 @@ Deno.serve(async (req) => {
         redirect_uri: redirectUri,
       });
 
-      // Redirect back to app
+      // Redirect back to app. Use flow-aware `connected` marker so the UI can
+      // distinguish a personal connection from an organization/page connection.
       const returnUrl = new URL(return_to);
-      returnUrl.searchParams.set("connected", "linkedin");
+      const connectedMarker = flow === "organization" ? "linkedin_organization" : "linkedin";
+      returnUrl.searchParams.set("connected", connectedMarker);
       if (social_profile_id) returnUrl.searchParams.set("profile_id", social_profile_id);
       returnUrl.searchParams.set("account_name", result.name);
 
