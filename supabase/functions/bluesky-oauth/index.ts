@@ -432,6 +432,7 @@ Deno.serve(async (req) => {
         dpop_public_key: publicKeyJWK,
         auth_server: authServer,
         pds_url: resolvedPds,
+        return_to: return_to ?? RETURN_URL_DEFAULT,
         nonce: crypto.randomUUID(),
       };
       
@@ -441,7 +442,7 @@ Deno.serve(async (req) => {
       const authParams = new URLSearchParams({
         client_id: CLIENT_ID,
         response_type: "code",
-        redirect_uri: redirect_uri || "https://postora.cloud/profiles",
+        redirect_uri: BLUESKY_REDIRECT_URI,
         scope: "atproto transition:generic",
         state: stateParam,
         code_challenge: codeChallenge,
