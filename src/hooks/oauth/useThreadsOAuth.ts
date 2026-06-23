@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { OAUTH_CALLBACKS, buildReturnUrl } from "@/lib/oauthRedirects";
 
 export function useThreadsOAuth(
   setConnectingPlatform: (p: any) => void,
@@ -25,17 +26,30 @@ export function useThreadsOAuth(
       return;
     }
     const { data, error } = await supabase.functions.invoke("threads-oauth", {
-      body: { action: "authorize", user_id: user.id, social_profile_id: profileId, redirect_uri: `${window.location.origin}/profiles` },
+      body: {
+        action: "authorize",
+        social_profile_id: profileId,
+        return_to: buildReturnUrl("threads"),
+      },
     });
     if (error) throw error;
     if (data?.url) { window.location.href = data.url; } else { throw new Error("No authorization URL received"); }
   };
 
+  // Legacy shim: only triggers when the provider still redirects to
+  // /profiles?code=&state= (old base64 state). Removable once the
+  // Threads developer console no longer lists the /profiles redirect URI.
   const handleThreadsCallback = async (code: string, profileId: string) => {
     setConnectingPlatform("threads");
     try {
       const { data, error } = await supabase.functions.invoke("threads-oauth", {
-        body: { action: "callback", code, redirect_uri: `${window.location.origin}/profiles`, user_id: user?.id, social_profile_id: profileId },
+        body: {
+          action: "callback",
+          code,
+          redirect_uri: OAUTH_CALLBACKS.threads,
+          user_id: user?.id,
+          social_profile_id: profileId,
+        },
       });
       if (error) throw error;
       if (data?.success) {
