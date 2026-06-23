@@ -10,6 +10,8 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const SUPABASE_FUNCTIONS_BASE_URL =
+  (SUPABASE_URL ?? "https://api.postora.cloud").replace(/\/+$/, "");
 
 // AT Protocol OAuth configuration
 const CLIENT_ID = "https://postora.cloud/client-metadata.json";
@@ -18,7 +20,7 @@ const BLUESKY_AUTH_SERVER = "https://bsky.social";
 // Unified backend callback URL. Must match an entry in client-metadata.json.
 const BLUESKY_REDIRECT_URI =
   Deno.env.get("BLUESKY_REDIRECT_URI") ??
-  `${SUPABASE_URL.replace(/\/+$/, "")}/functions/v1/bluesky-oauth`;
+  `${SUPABASE_FUNCTIONS_BASE_URL}/functions/v1/bluesky-oauth`;
 const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
 
 // Generate a random code verifier for PKCE
@@ -382,21 +384,27 @@ Deno.serve(async (req) => {
       return Response.redirect(ret.toString(), 302);
     }
   }
-
-
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
 
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const { action, handle, app_password, social_profile_id, code, state, return_to } = body;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const logger = createLogger(supabase, 'bluesky-oauth', 'auth');
-    // Authenticate caller for actions that modify user data
-    let user_id: string | undefined;
-    if (["authorize", "connect"].includes(action)) {
+    let user_id: string;
+    try {
       const auth = await authenticateCaller(req, body.user_id);
       user_id = auth.userId;
-    } else {
-      user_id = body.user_id; // callback uses state-embedded user_id
+    } catch {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // ============= OAUTH AUTHORIZE =============
@@ -498,7 +506,7 @@ Deno.serve(async (req) => {
           const parData = await parResponse.json();
           const authUrl = `${authServerMetadata.authorization_endpoint}?request_uri=${encodeURIComponent(parData.request_uri)}&client_id=${encodeURIComponent(CLIENT_ID)}`;
           
-          console.log("PAR successful, redirecting to:", authUrl);
+          console.log("PAR successful");
           await logger.info("Bluesky OAuth PAR successful", { handle: normalizedHandle }, user_id);
           
           return new Response(JSON.stringify({ 
@@ -516,7 +524,7 @@ Deno.serve(async (req) => {
       // Direct authorization (fallback)
       const authUrl = `${authServerMetadata.authorization_endpoint}?${authParams.toString()}`;
       
-      console.log("Redirecting to authorization URL:", authUrl);
+      console.log("Bluesky authorization URL generated");
 
       return new Response(JSON.stringify({ 
         success: true, 
@@ -565,7 +573,7 @@ Deno.serve(async (req) => {
       });
 
       const sessionData = await sessionResponse.json();
-      console.log("Bluesky session response:", JSON.stringify(sessionData).slice(0, 200));
+      console.log("Bluesky session response status:", sessionResponse.status);
 
       if (sessionData.error) {
         throw new Error(`Bluesky authentication failed: ${sessionData.message || sessionData.error}`);

@@ -12,11 +12,13 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const REDDIT_CLIENT_ID = Deno.env.get("REDDIT_CLIENT_ID")!;
 const REDDIT_CLIENT_SECRET = Deno.env.get("REDDIT_CLIENT_SECRET")!;
+const SUPABASE_FUNCTIONS_BASE_URL =
+  (SUPABASE_URL ?? "https://api.postora.cloud").replace(/\/+$/, "");
 
 // Unified backend callback URL. Provider console MUST register exactly this.
 const REDDIT_REDIRECT_URI =
   Deno.env.get("REDDIT_REDIRECT_URI") ??
-  `${SUPABASE_URL.replace(/\/+$/, "")}/functions/v1/reddit-oauth`;
+  `${SUPABASE_FUNCTIONS_BASE_URL}/functions/v1/reddit-oauth`;
 
 const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
 
@@ -161,13 +163,30 @@ Deno.serve(async (req) => {
 
   // POST API: authorize + legacy callback (kept for backward compatibility
   // until the provider console is fully cut over to the GET callback URL).
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   try {
-    const body = await req.json();
+    const body = await req.json().catch(() => ({}));
     const { action, code, redirect_uri, social_profile_id, return_to } = body;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    let user_id: string;
+    try {
+      const auth = await authenticateCaller(req, body.user_id);
+      user_id = auth.userId;
+    } catch {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (action === "authorize") {
-      const { userId: user_id } = await authenticateCaller(req, body.user_id);
       const scopes = "identity submit read";
 
       // Signed state carries profile_id + return_to. NEVER pass them as
@@ -198,7 +217,6 @@ Deno.serve(async (req) => {
     if (action === "callback") {
       // LEGACY path used by the old frontend /profiles?code=... shim.
       // Safe to remove once the provider console only points at the GET URL.
-      const { userId: user_id } = await authenticateCaller(req, body.user_id);
       // For the legacy path the redirect_uri arg is whatever the frontend
       // shim was registered as; Reddit requires exact match.
       const credentials = btoa(`${REDDIT_CLIENT_ID}:${REDDIT_CLIENT_SECRET}`);

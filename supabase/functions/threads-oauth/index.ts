@@ -12,11 +12,13 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const THREADS_APP_ID = Deno.env.get("THREADS_APP_ID")!;
 const THREADS_APP_SECRET = Deno.env.get("THREADS_APP_SECRET")!;
+const SUPABASE_FUNCTIONS_BASE_URL =
+  (SUPABASE_URL ?? "https://api.postora.cloud").replace(/\/+$/, "");
 
 // Unified backend callback URL. Provider console MUST register exactly this.
 const THREADS_REDIRECT_URI =
   Deno.env.get("THREADS_REDIRECT_URI") ??
-  `${SUPABASE_URL.replace(/\/+$/, "")}/functions/v1/threads-oauth`;
+  `${SUPABASE_FUNCTIONS_BASE_URL}/functions/v1/threads-oauth`;
 
 const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
 
@@ -323,14 +325,30 @@ Deno.serve(async (req) => {
   // ============================================================
   // POST API: authorize + legacy callback shim
   // ============================================================
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), {
+      status: 405,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   try {
     const body = await req.json().catch(() => ({}));
     const { action, code, redirect_uri, social_profile_id, return_to } = body;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    if (action === "authorize") {
-      const { userId: user_id } = await authenticateCaller(req, body.user_id);
+    let user_id: string;
+    try {
+      const auth = await authenticateCaller(req, body.user_id);
+      user_id = auth.userId;
+    } catch {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
+    if (action === "authorize") {
       if (!THREADS_APP_ID || THREADS_APP_ID.trim() === "") {
         console.error(JSON.stringify({
           event: "threads_oauth_missing_app_id",
@@ -388,7 +406,6 @@ Deno.serve(async (req) => {
     // Kept so in-flight sessions whose provider redirect still points at
     // https://postora.cloud/profiles can finish via the frontend POST shim.
     if (action === "callback") {
-      const { userId: user_id } = await authenticateCaller(req, body.user_id);
       if (!code) throw new Error("Missing code");
       if (!redirect_uri) throw new Error("Missing redirect_uri");
       if (!THREADS_APP_ID || !THREADS_APP_SECRET) {
