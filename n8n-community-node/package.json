@@ -1,14 +1,8 @@
 {
   "name": "n8n-nodes-postora",
-  "version": "0.2.0",
-  "description": "n8n community node for Postora — publish to social media platforms (Facebook, Instagram, Threads, YouTube, Pinterest, LinkedIn, Bluesky)",
-  "keywords": [
-    "n8n-community-node-package",
-    "n8n",
-    "postora",
-    "social-media",
-    "automation"
-  ],
+  "version": "1.0.3",
+  "description": "n8n community node for Postora — publish to social media platforms (Instagram, Facebook, TikTok, YouTube, Pinterest, Twitter/X, LinkedIn, Threads, Bluesky, Reddit)",
+  "keywords": ["n8n-community-node-package", "n8n", "postora", "social-media", "automation"],
   "license": "MIT",
   "homepage": "https://postora.cloud",
   "author": {
@@ -26,17 +20,11 @@
     "prepublishOnly": "npm run build",
     "lint": "tsc --noEmit"
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "n8n": {
     "n8nNodesApiVersion": 1,
-    "credentials": [
-      "dist/credentials/PostoraApi.credentials.js"
-    ],
-    "nodes": [
-      "dist/nodes/Postora/Postora.node.js"
-    ]
+    "credentials": ["dist/credentials/PostoraApi.credentials.js"],
+    "nodes": ["dist/nodes/Postora/Postora.node.js"]
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
