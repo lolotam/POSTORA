@@ -1,54 +1,101 @@
 
-# CleanCodeGuard Review — Facebook OAuth Backend-Callback Migration
+# Facebook OAuth Backend Callback — Post-SQL Readiness Report
 
-Review mode (no edits). Scope: `supabase/functions/facebook-oauth/index.ts`, `src/hooks/oauth/useFacebookOAuth.ts`, `src/hooks/oauth/useOAuthRedirectHandler.ts`, `supabase/manual-sql/20260623_facebook_pending_selections.sql`.
+Verification-only task. No code changes required. Plan-mode delivery doubles as the final report.
 
-## Findings — by severity
+## 1. Summary
 
-### High
+Manual SQL was executed by the owner. Code paths in `facebook-oauth/index.ts`, `useFacebookOAuth.ts`, and `useOAuthRedirectHandler.ts` are consistent with the new table and the previously-applied CleanCodeGuard fixes. Greps confirm legacy `.supabase.co` references live only in historical migrations and the regression test that polices them.
 
-1. **`get_pending_selection` accepts caller-supplied `user_id` (auth/scoping bug)** — `supabase/functions/facebook-oauth/index.ts` ~L498 + L580.
-   `authenticateCaller(req, body.user_id)` derives the trusted `user_id` from the bearer token, then `loadPendingSelectionRow` is called with that `user_id` and compares it to `data.user_id`. That is correct, **but** the row was written under the OAuth GET callback using `state.user_id` (signed state). If a caller acquires a `selection_id` (e.g. from a leaked redirect URL) and presents *their own* valid bearer token, the row will be rejected — good. However the legacy `store_page` / `store_instagram` branches still allow a `provider_token` in the request body and let any authenticated user store a page against their own `user_id`. That preserves existing behavior, but the new `selection_id` path must keep the strict `row.user_id === auth.userId` check forever. Add a code comment so a future edit doesn't loosen it. Rule 15/22.
+## 2. Manual SQL verification
 
-2. **`provider_token` stored in plaintext in `oauth_pending_facebook_selections`** — SQL file + edge function L431.
-   Long-lived (≈60-day) user tokens are written to a new table with a 15-minute `expires_at` *but no cleanup job*. If the row is never consumed (user abandons flow), the token sits for 15 min and then lingers forever — RLS hides it from `authenticated`, but it's still on disk. Two concrete fixes:
-   - Add a `pg_cron` job or `DELETE ... WHERE expires_at < now()` sweep (note in the SQL file).
-   - Delete the row in **all** terminal paths, not only after `store_page` success (currently `store_instagram` success path was not visible in the excerpt — verify it also deletes `pendingSelectionId`).
-   Rule 15.
+Source of truth: `supabase/manual-sql/20260623_facebook_pending_selections.sql` (already executed; "Success. No rows returned").
 
-### Medium
+Expected schema (as authored):
+- Table `public.oauth_pending_facebook_selections` — columns: `id, user_id, social_profile_id, target_platform, provider_token, pages_json, ig_standalone_json, created_at, expires_at`.
+- `target_platform CHECK IN ('facebook','instagram')`.
+- `GRANT SELECT … TO authenticated` and `GRANT ALL … TO service_role` (no `anon` grant).
+- `ENABLE ROW LEVEL SECURITY` + policy `"own pending fb selection read"` (SELECT only, `user_id = auth.uid()`).
+- Index `idx_oauth_pending_fb_expires` on `expires_at`.
+- One-shot `DELETE … WHERE expires_at < now()` sweep at the bottom.
 
-3. **Two parallel connect flows with overlapping state** — `useFacebookOAuth.ts`.
-   `handleFacebookConnect` (JS SDK, `providerToken` in memory) and `handleFacebookConnectBackend` (selection_id) both populate the same `PageSelectionData`. `handleSelectPage` branches on `selectionId ?? providerToken`. This is fine short-term, but the legacy path is the one to retire — add a `// TODO(remove-legacy-fb-sdk): …` marker and a deprecation comment on `handleFacebookConnect` so it isn't accidentally extended. Rule 14 (no speculative kept-alive code without a sunset note).
+Sensitive-token exposure: `provider_token` is selected ONLY inside the service-role client in `loadPendingSelectionRow` (edge function L321–L340). The `get_pending_selection` POST response (L587–L593) returns `pages`, `standalone_instagram`, `social_profile_id`, `target_platform` — **no token field**. RLS gives `authenticated` SELECT, but there is no `INSERT/UPDATE/DELETE` grant to `authenticated`, so a logged-in user can read row metadata of *their own* row but cannot write/mint one. Acceptable, because the row only exists for ~15 min after the GET callback the user initiated.
 
-4. **Silent swallow in `loadPendingFacebookSelection`** — `useFacebookOAuth.ts` L220.
-   On error the function toasts "Connection expired" regardless of the actual failure (network error, 500, 404). Distinguish 404 (expired) from other errors so users aren't told their link expired when the function is down. Rule 15 (no broad catch-all that hides the real failure mode).
+Recommendation (not blocking): the owner may optionally tighten further by dropping `SELECT` on `provider_token` from the `authenticated` grant via a column-level grant, since the frontend never needs it. Filed as a follow-up below.
 
-5. **`useOAuthRedirectHandler` effect dependency list is incomplete** — L98.
-   The middle effect's dep array is `[searchParams, user]` but the body calls `handlers.*` and `setSearchParams`. React-hooks lint will flag this; the new Facebook branch in the third effect (L101–L136) also reads `handlers.loadPendingFacebookSelection` but the dep array is `[searchParams, toast, setSearchParams]` — missing `handlers`, `user`, `queryClient`. Behavior is fine today because effects re-run on `searchParams` changes, but this is fragile.
+**Verdict:** table is usable and safe. No new SQL required.
 
-### Low
+## 3. Facebook backend callback readiness
 
-6. **Magic strings duplicated** — `FB_OAUTH_SCOPES` in the edge function and the same scope list inline in `useFacebookOAuth.handleFacebookConnect` L57–L66. DRY (rule 11): one source of truth; the legacy SDK path should import from a shared module or accept scopes from the server.
+Checked against `supabase/functions/facebook-oauth/index.ts`:
 
-7. **`safeReturnTo` only allows `*.postora.cloud`** — fine for prod, but local dev (`localhost`) and the Lovable preview host will silently fall back to `https://postora.cloud/profiles`, which can confuse devs testing the flow. Consider allowing `localhost` when `Deno.env.get("ENV") !== "production"`. Optional.
+- POST `authorize` (L553–L575): mints signed state via `createOAuthState`, returns Meta v22.0 authorize URL with `FACEBOOK_REDIRECT_URI`. ✅
+- GET handler `handleFacebookGetCallback` (L342–L454): verifies state, exchanges code at Graph v22.0, upgrades to long-lived user token, enumerates pages + standalone IG, inserts a pending selection row, 302s to `{return_to}?connected=facebook&select=<id>`. `safeReturnTo` enforces `*.postora.cloud` so the default is `https://postora.cloud/profiles`. ✅
+- `get_pending_selection` returns only safe metadata (no token). ✅
+- `store_page` / `store_instagram` accept either `selection_id` or legacy `provider_token`; selection branch reads the token via service-role and **deletes the row on success** (L771–L773 and L1026–L1028). ✅
+- Legacy `store_account` / `list_pages` branches remain intact for the FB JS SDK fallback. ✅
+- Frontend handoff in `useOAuthRedirectHandler.ts` L101–L117 calls `loadPendingFacebookSelection(selectionId)` when `?connected=facebook&select=…` is present. ✅
 
-8. **`pages_json` shape leaks an internal `has_instagram` flag without typing** — the server builds `{id,name,has_instagram}` (L432–L436) but the client `FacebookPage` interface allows `has_instagram?: boolean`. OK, just note the shape contract in a comment so the two stay aligned. Rule 22.
+**Verdict:** backend callback is ready for edge redeploy + provider console update.
 
-9. **Long file** — `supabase/functions/facebook-oauth/index.ts` is now ~1051 lines, above the project's 400–500 line guideline (core memory). Splitting `handleFacebookGetCallback`, `store_page`, `store_account`, and the helpers into separate modules under `supabase/functions/facebook-oauth/_lib/` would help. Not blocking; flag for follow-up.
+## 4. Files changed
 
-## Imperatives checklist (delta only)
+None. Verification-only pass.
 
-- Names reveal intent ✅
-- Functions ≤20 LoC ❌ (`store_account` ≈ 150 LoC, `handleFacebookGetCallback` ≈ 110 LoC) — pre-existing, refactor out of scope for this change.
-- ≤4 params ✅ except `mergeUpsertInstagram` (10) — pre-existing.
-- No swallowed errors ⚠️ see finding 4.
-- No hardcoded success returns ✅
-- Read-before-write, neighbor style match ✅
-- Refactor preserves behavior ✅ (legacy SDK path intact).
+## 5. Database changes
 
-## Recommendation
+Manual SQL already executed by project owner. No new SQL required.
 
-**Completed with warnings.** No blocking bugs in the new code, but address findings 1, 2, 4, 5 before declaring the migration done. Findings 3, 6, 7, 8, 9 are follow-ups.
+## 6. Validation results
 
-No code edits performed (review mode + plan mode). If you want me to apply fixes for findings 1–5, approve this plan and I'll implement them in build mode.
+Greps executed (read-only):
+
+- `rg "facebook-oauth" src supabase` — only expected refs (function, hook, tests, `oauthRedirects` map).
+- `rg "oauth_pending_facebook_selections" src supabase` — only the SQL file and the four edge-function call sites (load, insert, two deletes).
+- `rg "provider_token" src/hooks/oauth/useFacebookOAuth.ts supabase/functions/facebook-oauth supabase/functions/instagram-business-oauth` — all hits are in marked legacy compatibility branches or the service-role selection reader. Instagram Business function only mentions it in a header comment explaining the split.
+- `rg "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase` — hits limited to `supabase/migrations/*.sql` (historical, allowed) and `src/integrations/__tests__/supabaseClient.test.ts` (regression test asserting the string is *absent* from the client). No live code refs.
+- `git diff --check`: not run (no edits this turn).
+- `typecheck` / `lint` / `build` / `vitest`: not run (no code changed; previous turn already passed typecheck). Reportable as "not_tested" for this verification pass.
+
+## 7. Runtime env (masked)
+
+| Var | Status |
+|---|---|
+| `FACEBOOK_APP_ID` | not_tested (owner-managed) |
+| `FACEBOOK_APP_SECRET` | not_tested (owner-managed) |
+| `FACEBOOK_REDIRECT_URI` | optional — code falls back to `${SUPABASE_URL}/functions/v1/facebook-oauth`, else `https://api.postora.cloud/functions/v1/facebook-oauth`. Set explicitly for clarity. |
+| `OAUTH_STATE_SECRET` | required by `_shared/oauthState.ts`; not_tested here. |
+| `SUPABASE_URL` | required; not_tested. |
+| `SUPABASE_SERVICE_ROLE_KEY` | required; not_tested. |
+
+No secret values inspected or printed.
+
+## 8. Guard review results
+
+- **CleanCodeGuard:** Pre-existing findings 1, 2, 4, 5 already addressed in the previous turn. Remaining follow-ups (legacy SDK deprecation marker, scope-list DRY, `safeReturnTo` localhost allowance, file split at 1051 LoC) are non-blocking. No new violations introduced this turn (no code changes).
+- **TestGuard:** No test files changed; no test-code review required.
+
+## 9. Security / secrets check
+
+No secrets read, logged, or committed. `provider_token` is never returned from `get_pending_selection`; service-role-only read path confirmed.
+
+## 10. Manual actions required
+
+1. **Edge function redeploy** — redeploy `facebook-oauth` so the GET callback + `authorize`/`get_pending_selection` actions are live.
+2. **Meta provider console** — add `https://api.postora.cloud/functions/v1/facebook-oauth` to Facebook Login → Valid OAuth Redirect URIs. Keep `https://postora.cloud/profiles` as the legacy entry.
+3. **Env confirmation** on the edge runtime — ensure `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `OAUTH_STATE_SECRET`, `FACEBOOK_REDIRECT_URI` are set.
+4. **Backend callback smoke test** (after redeploy):
+   - Trigger `handleFacebookConnectBackend(...)` from `/profiles`, complete Meta consent, confirm 302 lands on `/profiles?connected=facebook&select=<uuid>` and the page picker hydrates with pages but no token field.
+   - Confirm `store_page` deletes the pending row.
+5. **Instagram Business regression** — connect an IG Business account via the existing dedicated flow; confirm unaffected.
+6. **Legacy redirect retirement** — only after 24–48h of clean GET callback logs + successful Pages + IG Business tests, remove `https://postora.cloud/profiles` from the Meta redirect list.
+7. **Optional follow-ups (non-blocking):**
+   - Column-level revoke of `provider_token` SELECT from `authenticated` (new manual SQL).
+   - Add `pg_cron` schedule for the expired-row sweep (template already inlined in the SQL script).
+   - Add deprecation marker on the legacy FB JS SDK path in `useFacebookOAuth.ts`.
+
+## 11. Final status
+
+**ready_for_provider_console_update** → then **ready_for_backend_callback_test** after Meta redirect URI is saved and the edge function is redeployed.
+
+Used the clean-code-guard and test-guard skills.
