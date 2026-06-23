@@ -302,7 +302,45 @@ async function ensurePageAccessToken(page: FacebookPage, providerToken: string):
   return null;
 }
 
+function safeReturnTo(candidate: unknown): string {
+  if (typeof candidate === "string") {
+    try {
+      const u = new URL(candidate);
+      if (u.protocol === "https:" && u.hostname.endsWith("postora.cloud")) {
+        return candidate;
+      }
+    } catch { /* fall through */ }
+  }
+  return FB_DEFAULT_RETURN_TO;
+}
+
+function redirectResponse(url: string): Response {
+  return new Response(null, { status: 302, headers: { ...corsHeaders, Location: url } });
+}
+
+async function loadPendingSelectionRow(
+  supabase: AnySupabase,
+  selectionId: string,
+  userId: string,
+): Promise<{
+  provider_token: string;
+  social_profile_id: string | null;
+  target_platform: "facebook" | "instagram";
+  pages_json: unknown;
+  ig_standalone_json: unknown;
+} | null> {
+  const { data, error } = await supabase
+    .from("oauth_pending_facebook_selections")
+    .select("provider_token, social_profile_id, target_platform, pages_json, ig_standalone_json, expires_at, user_id")
+    .eq("id", selectionId)
+    .maybeSingle();
+  if (error || !data || data.user_id !== userId) return null;
+  if (new Date(data.expires_at).getTime() < Date.now()) return null;
+  return data;
+}
+
 Deno.serve(async (req) => {
+
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
