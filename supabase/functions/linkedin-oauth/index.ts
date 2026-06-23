@@ -143,6 +143,9 @@ Deno.serve(async (req) => {
       const userId = body?.user_id as string | undefined;
       const socialProfileId = (body?.social_profile_id as string | null | undefined) ?? null;
       const returnTo = body?.return_to as string | undefined;
+      const rawFlow = (body?.flow as string | undefined) ?? "personal";
+      const flow: "personal" | "organization" =
+        rawFlow === "organization" ? "organization" : "personal";
 
       if (!userId) throw new Error("Missing user_id");
       if (!returnTo) throw new Error("Missing return_to");
@@ -151,7 +154,14 @@ Deno.serve(async (req) => {
       // (Community Management API). "Sign In with OpenID Connect" is NOT enabled
       // on this app, so we must NOT request openid/profile/email.
       // Identity is fetched via /v2/me using r_basicprofile.
-      const includeOrgScopes = body?.include_org_scopes !== false;
+      //
+      // Flow-aware scopes:
+      //   personal      -> member-only scopes
+      //   organization  -> member + organization/page scopes
+      const explicitOrgFlag =
+        body?.include_org_scopes !== undefined ? body.include_org_scopes !== false : null;
+      const includeOrgScopes =
+        explicitOrgFlag !== null ? explicitOrgFlag : flow === "organization";
 
       const memberScopes = [
         "r_basicprofile",
@@ -180,6 +190,7 @@ Deno.serve(async (req) => {
         user_id: userId,
         social_profile_id: socialProfileId,
         return_to: returnTo,
+        flow,
       });
 
       const params = new URLSearchParams({
