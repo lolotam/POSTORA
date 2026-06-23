@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
+import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,6 +10,23 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const FACEBOOK_REDIRECT_URI =
+  Deno.env.get("FACEBOOK_REDIRECT_URI") ??
+  (SUPABASE_URL
+    ? `${SUPABASE_URL}/functions/v1/facebook-oauth`
+    : "https://api.postora.cloud/functions/v1/facebook-oauth");
+const FB_DEFAULT_RETURN_TO = "https://postora.cloud/profiles";
+const FB_OAUTH_SCOPES = [
+  "email", "public_profile", "pages_show_list", "pages_read_engagement",
+  "pages_manage_posts", "pages_manage_engagement", "pages_read_user_content", "business_management",
+  "pages_manage_metadata", "pages_messaging", "read_insights",
+  "instagram_basic", "instagram_content_publish", "instagram_manage_comments",
+  "instagram_manage_messages",
+  "whatsapp_business_messaging", "whatsapp_business_management",
+  "ads_read", "ads_management",
+  "leads_retrieval", "pages_manage_ads",
+];
+
 
 interface FacebookPage {
   id: string;
