@@ -7,6 +7,7 @@
   "policy_uri": "https://postora.cloud/privacy",
   "redirect_uris": [
     "https://postora.cloud/profiles",
+    "https://api.postora.cloud/functions/v1/bluesky-oauth",
     "https://postora.lovable.app/profiles",
     "https://id-preview--b52780c5-cd0a-406b-a6a2-d9724d901b18.lovable.app/profiles"
   ],
