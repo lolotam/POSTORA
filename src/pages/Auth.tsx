@@ -34,6 +34,7 @@ export default function Auth() {
   const [fullName, setFullName] = useState("");
   const [errors, setErrors] = useState<{ email?: string; password?: string; confirmPassword?: string; mfaCode?: string }>({});
   const [linkExpired, setLinkExpired] = useState(false);
+  const [isRedirecting, setIsRedirecting] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaFactorId, setMfaFactorId] = useState<string | null>(null);
   const navigate = useNavigate();
