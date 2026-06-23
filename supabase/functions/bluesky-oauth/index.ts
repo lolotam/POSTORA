@@ -15,6 +15,12 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CLIENT_ID = "https://postora.cloud/client-metadata.json";
 const BLUESKY_AUTH_SERVER = "https://bsky.social";
 
+// Unified backend callback URL. Must match an entry in client-metadata.json.
+const BLUESKY_REDIRECT_URI =
+  Deno.env.get("BLUESKY_REDIRECT_URI") ??
+  `${SUPABASE_URL.replace(/\/+$/, "")}/functions/v1/bluesky-oauth`;
+const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
+
 // Generate a random code verifier for PKCE
 function generateCodeVerifier(): string {
   const array = new Uint8Array(32);
