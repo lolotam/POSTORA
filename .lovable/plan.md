@@ -1,101 +1,119 @@
 
-# Facebook OAuth Backend Callback — Post-SQL Readiness Report
+# Facebook OAuth Backend Callback — Activation Checklist
 
-Verification-only task. No code changes required. Plan-mode delivery doubles as the final report.
+Plan = activation checklist + one tiny new file. After approval I will create the delta SQL file in build mode; no code edits are needed.
 
 ## 1. Summary
 
-Manual SQL was executed by the owner. Code paths in `facebook-oauth/index.ts`, `useFacebookOAuth.ts`, and `useOAuthRedirectHandler.ts` are consistent with the new table and the previously-applied CleanCodeGuard fixes. Greps confirm legacy `.supabase.co` references live only in historical migrations and the regression test that polices them.
+The full SQL script `supabase/manual-sql/20260623_facebook_pending_selections.sql` is entirely idempotent (`CREATE TABLE IF NOT EXISTS`, `DROP POLICY IF EXISTS` + `CREATE POLICY`, `CREATE INDEX IF NOT EXISTS`, trailing `DELETE … WHERE expires_at < now()`) so re-running it is safe. To minimize blast radius the owner only needs the *new* trailing cleanup statement and the optional pg_cron schedule, packaged as a small delta file.
 
-## 2. Manual SQL verification
+## 2. Manual SQL status
 
-Source of truth: `supabase/manual-sql/20260623_facebook_pending_selections.sql` (already executed; "Success. No rows returned").
+- Original 32-line script: **already applied** by owner ("Success. No rows returned").
+- New trailing section (one-shot expired-row `DELETE` + pg_cron comment template) added during the CleanCodeGuard fix: **needs delta SQL only**.
+- Recommended: create `supabase/manual-sql/20260623_facebook_pending_selections_cleanup_delta.sql` with the content below; owner reviews and runs.
 
-Expected schema (as authored):
-- Table `public.oauth_pending_facebook_selections` — columns: `id, user_id, social_profile_id, target_platform, provider_token, pages_json, ig_standalone_json, created_at, expires_at`.
-- `target_platform CHECK IN ('facebook','instagram')`.
-- `GRANT SELECT … TO authenticated` and `GRANT ALL … TO service_role` (no `anon` grant).
-- `ENABLE ROW LEVEL SECURITY` + policy `"own pending fb selection read"` (SELECT only, `user_id = auth.uid()`).
-- Index `idx_oauth_pending_fb_expires` on `expires_at`.
-- One-shot `DELETE … WHERE expires_at < now()` sweep at the bottom.
+**DATABASE ACTION REQUIRED:** delta SQL review/run before treating the activation as fully complete. The backend callback will function without it — the delta only adds maintenance hygiene.
 
-Sensitive-token exposure: `provider_token` is selected ONLY inside the service-role client in `loadPendingSelectionRow` (edge function L321–L340). The `get_pending_selection` POST response (L587–L593) returns `pages`, `standalone_instagram`, `social_profile_id`, `target_platform` — **no token field**. RLS gives `authenticated` SELECT, but there is no `INSERT/UPDATE/DELETE` grant to `authenticated`, so a logged-in user can read row metadata of *their own* row but cannot write/mint one. Acceptable, because the row only exists for ~15 min after the GET callback the user initiated.
+Delta file content (to be created in build mode):
 
-Recommendation (not blocking): the owner may optionally tighten further by dropping `SELECT` on `provider_token` from the `authenticated` grant via a column-level grant, since the frontend never needs it. Filed as a follow-up below.
+```sql
+-- Purpose: cleanup/maintenance follow-up for oauth_pending_facebook_selections.
+-- Type: data (DELETE) + optional pg_cron schedule. Safe to re-run.
+-- Depends on: 20260623_facebook_pending_selections.sql (already applied).
+-- Rollback: SELECT cron.unschedule('oauth_pending_fb_sweep'); -- only if scheduled.
+--
+-- Reviewed by: Postora owner before execution.
+-- This script is NOT executed automatically.
 
-**Verdict:** table is usable and safe. No new SQL required.
+-- 1. One-shot sweep of any already-expired rows.
+DELETE FROM public.oauth_pending_facebook_selections
+WHERE expires_at < now();
 
-## 3. Facebook backend callback readiness
+-- 2. (Optional) Schedule a recurring sweep every 15 minutes via pg_cron.
+--    Uncomment after confirming pg_cron is enabled in this project.
+-- SELECT cron.schedule(
+--   'oauth_pending_fb_sweep',
+--   '*/15 * * * *',
+--   $$DELETE FROM public.oauth_pending_facebook_selections WHERE expires_at < now()$$
+-- );
+```
 
-Checked against `supabase/functions/facebook-oauth/index.ts`:
+## 3. Facebook provider console status
 
-- POST `authorize` (L553–L575): mints signed state via `createOAuthState`, returns Meta v22.0 authorize URL with `FACEBOOK_REDIRECT_URI`. ✅
-- GET handler `handleFacebookGetCallback` (L342–L454): verifies state, exchanges code at Graph v22.0, upgrades to long-lived user token, enumerates pages + standalone IG, inserts a pending selection row, 302s to `{return_to}?connected=facebook&select=<id>`. `safeReturnTo` enforces `*.postora.cloud` so the default is `https://postora.cloud/profiles`. ✅
-- `get_pending_selection` returns only safe metadata (no token). ✅
-- `store_page` / `store_instagram` accept either `selection_id` or legacy `provider_token`; selection branch reads the token via service-role and **deletes the row on success** (L771–L773 and L1026–L1028). ✅
-- Legacy `store_account` / `list_pages` branches remain intact for the FB JS SDK fallback. ✅
-- Frontend handoff in `useOAuthRedirectHandler.ts` L101–L117 calls `loadPendingFacebookSelection(selectionId)` when `?connected=facebook&select=…` is present. ✅
+Manual — still required. Owner must add to Meta → Facebook Login → Valid OAuth Redirect URIs:
 
-**Verdict:** backend callback is ready for edge redeploy + provider console update.
+- `https://api.postora.cloud/functions/v1/facebook-oauth` (new, backend callback)
+- Keep `https://postora.cloud/profiles` (legacy SDK fallback) until retirement criteria are met (24–48h clean logs + Pages test pass + IG Business regression pass).
 
-## 4. Files changed
+## 4. Edge redeploy status
 
-None. Verification-only pass.
+Ready for redeploy of `facebook-oauth` once:
 
-## 5. Database changes
-
-Manual SQL already executed by project owner. No new SQL required.
-
-## 6. Validation results
-
-Greps executed (read-only):
-
-- `rg "facebook-oauth" src supabase` — only expected refs (function, hook, tests, `oauthRedirects` map).
-- `rg "oauth_pending_facebook_selections" src supabase` — only the SQL file and the four edge-function call sites (load, insert, two deletes).
-- `rg "provider_token" src/hooks/oauth/useFacebookOAuth.ts supabase/functions/facebook-oauth supabase/functions/instagram-business-oauth` — all hits are in marked legacy compatibility branches or the service-role selection reader. Instagram Business function only mentions it in a header comment explaining the split.
-- `rg "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase` — hits limited to `supabase/migrations/*.sql` (historical, allowed) and `src/integrations/__tests__/supabaseClient.test.ts` (regression test asserting the string is *absent* from the client). No live code refs.
-- `git diff --check`: not run (no edits this turn).
-- `typecheck` / `lint` / `build` / `vitest`: not run (no code changed; previous turn already passed typecheck). Reportable as "not_tested" for this verification pass.
-
-## 7. Runtime env (masked)
+1. Delta SQL is acknowledged (not strictly blocking).
+2. Edge runtime env present: `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `FACEBOOK_REDIRECT_URI=https://api.postora.cloud/functions/v1/facebook-oauth`, `OAUTH_STATE_SECRET`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`. Reported as masked status only:
 
 | Var | Status |
 |---|---|
-| `FACEBOOK_APP_ID` | not_tested (owner-managed) |
-| `FACEBOOK_APP_SECRET` | not_tested (owner-managed) |
-| `FACEBOOK_REDIRECT_URI` | optional — code falls back to `${SUPABASE_URL}/functions/v1/facebook-oauth`, else `https://api.postora.cloud/functions/v1/facebook-oauth`. Set explicitly for clarity. |
-| `OAUTH_STATE_SECRET` | required by `_shared/oauthState.ts`; not_tested here. |
-| `SUPABASE_URL` | required; not_tested. |
-| `SUPABASE_SERVICE_ROLE_KEY` | required; not_tested. |
+| `FACEBOOK_APP_ID` | not_tested |
+| `FACEBOOK_APP_SECRET` | not_tested |
+| `FACEBOOK_REDIRECT_URI` | optional (code falls back to `${SUPABASE_URL}/functions/v1/facebook-oauth`) |
+| `OAUTH_STATE_SECRET` | required, not_tested |
+| `SUPABASE_URL` | required, not_tested |
+| `SUPABASE_SERVICE_ROLE_KEY` | required, not_tested |
 
-No secret values inspected or printed.
+No values inspected or logged.
 
-## 8. Guard review results
+## 5. Safe smoke test after deploy
 
-- **CleanCodeGuard:** Pre-existing findings 1, 2, 4, 5 already addressed in the previous turn. Remaining follow-ups (legacy SDK deprecation marker, scope-list DRY, `safeReturnTo` localhost allowance, file split at 1051 LoC) are non-blocking. No new violations introduced this turn (no code changes).
-- **TestGuard:** No test files changed; no test-code review required.
+After redeploy, owner-runnable, no real OAuth completion:
 
-## 9. Security / secrets check
+1. `curl -i -X OPTIONS https://api.postora.cloud/functions/v1/facebook-oauth -H 'Origin: https://postora.cloud' -H 'Access-Control-Request-Method: POST'` → expect `200/204` + `Access-Control-Allow-Origin: *`.
+2. `curl -i -X POST https://api.postora.cloud/functions/v1/facebook-oauth -H 'Content-Type: application/json' -d '{}'` → expect `401 Unauthorized` (no bearer).
+3. With an authenticated session bearer, POST `{"action":"authorize","target_platform":"facebook","social_profile_id":"<test-profile-uuid>","return_to":"https://postora.cloud/profiles"}` → response must:
+   - contain `success:true` and a `url`,
+   - `url` host = `www.facebook.com`,
+   - `redirect_uri` query param = `https://api.postora.cloud/functions/v1/facebook-oauth`,
+   - `state` query param is present and non-trivial (signed).
+4. STOP here — do not complete real Meta consent unless owner explicitly approves the full backend-callback test (Phase 6 below).
 
-No secrets read, logged, or committed. `provider_token` is never returned from `get_pending_selection`; service-role-only read path confirmed.
+## 6. Backend callback end-to-end test (owner-approved only)
 
-## 10. Manual actions required
+1. From `/profiles`, trigger Connect Facebook via `handleFacebookConnectBackend` (backend path).
+2. Complete Meta consent with a safe test FB account.
+3. Confirm browser lands on `https://postora.cloud/profiles?connected=facebook&select=<uuid>`.
+4. Confirm page picker hydrates (pages + standalone IG) — response from `get_pending_selection` must NOT contain `provider_token`.
+5. Select one test Page → `store_page` request uses `selection_id` (not `provider_token`).
+6. Verify in DB: the matching row in `oauth_pending_facebook_selections` is gone after success.
+7. Confirm the connected Page appears in Profiles.
+8. Regression: connect an Instagram Business account via the existing dedicated flow; confirm unaffected.
 
-1. **Edge function redeploy** — redeploy `facebook-oauth` so the GET callback + `authorize`/`get_pending_selection` actions are live.
-2. **Meta provider console** — add `https://api.postora.cloud/functions/v1/facebook-oauth` to Facebook Login → Valid OAuth Redirect URIs. Keep `https://postora.cloud/profiles` as the legacy entry.
-3. **Env confirmation** on the edge runtime — ensure `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`, `OAUTH_STATE_SECRET`, `FACEBOOK_REDIRECT_URI` are set.
-4. **Backend callback smoke test** (after redeploy):
-   - Trigger `handleFacebookConnectBackend(...)` from `/profiles`, complete Meta consent, confirm 302 lands on `/profiles?connected=facebook&select=<uuid>` and the page picker hydrates with pages but no token field.
-   - Confirm `store_page` deletes the pending row.
-5. **Instagram Business regression** — connect an IG Business account via the existing dedicated flow; confirm unaffected.
-6. **Legacy redirect retirement** — only after 24–48h of clean GET callback logs + successful Pages + IG Business tests, remove `https://postora.cloud/profiles` from the Meta redirect list.
-7. **Optional follow-ups (non-blocking):**
-   - Column-level revoke of `provider_token` SELECT from `authenticated` (new manual SQL).
-   - Add `pg_cron` schedule for the expired-row sweep (template already inlined in the SQL script).
-   - Add deprecation marker on the legacy FB JS SDK path in `useFacebookOAuth.ts`.
+## 7. Files to be changed (build mode)
+
+- `supabase/manual-sql/20260623_facebook_pending_selections_cleanup_delta.sql` — new delta SQL file (content above).
+
+No production code or test changes.
+
+## 8. Validation results
+
+- `rg "facebook-oauth" src supabase`: only expected refs.
+- `rg "oauth_pending_facebook_selections" src supabase`: only the SQL file + the four edge-function call sites (load, insert, two deletes).
+- `rg "provider_token" src/hooks/oauth/useFacebookOAuth.ts supabase/functions/facebook-oauth supabase/functions/instagram-business-oauth`: all hits in marked legacy branches or the service-role selection reader.
+- `rg "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase`: hits limited to historical `supabase/migrations/*.sql` and the regression test that asserts these strings are *absent* from the live client. No live-code refs.
+- `typecheck` / `lint` / `build` / `vitest`: not_tested (no production code changes this turn).
+- `git diff --check`: not run.
+
+## 9. Guard review results
+
+- **CleanCodeGuard:** SQL-only delta; no production code changed. Existing edge function and hooks already cleared the prior pass. No new violations.
+- **TestGuard:** no test files changed; no test-code review required.
+
+## 10. Security / secrets check
+
+No secrets read, printed, logged, or committed. `provider_token` continues to leave the database only via service-role context; `get_pending_selection` never returns it.
 
 ## 11. Final status
 
-**ready_for_provider_console_update** → then **ready_for_backend_callback_test** after Meta redirect URI is saved and the edge function is redeployed.
+**ready_for_provider_console_update** → **ready_for_edge_redeploy** → **ready_for_backend_callback_test**. The delta SQL is a non-blocking maintenance follow-up; the backend callback is functionally usable today.
 
 Used the clean-code-guard and test-guard skills.
