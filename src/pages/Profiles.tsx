@@ -334,30 +334,29 @@ export default function Profiles() {
       />
 
 
-      <AlertDialog open={!!igConfirmProfileId} onOpenChange={(open) => { if (!open) setIgConfirmProfileId(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Connect Instagram</AlertDialogTitle>
-            <AlertDialogDescription>
-              Make sure you are logged in to your Instagram account in this same browser before continuing. You will be redirected to Instagram to authorize the connection.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={connectingPlatform === "instagram"}
-              onClick={() => {
-                if (igConfirmProfileId) {
-                  handleInstagramBusinessLogin(igConfirmProfileId);
-                  setIgConfirmProfileId(null);
-                }
-              }}
-            >
-              Continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <InstagramConnectDialog
+        open={!!igConfirmProfileId}
+        onOpenChange={(open) => { if (!open) setIgConfirmProfileId(null); }}
+        disabled={connectingPlatform === "instagram"}
+        onSelect={(flow: InstagramFlow) => {
+          if (igConfirmProfileId) {
+            handleInstagramConnect(igConfirmProfileId, flow);
+            setIgConfirmProfileId(null);
+          }
+        }}
+      />
+
+      <LinkedInConnectDialog
+        open={!!linkedinConnectProfileId}
+        onOpenChange={(open) => { if (!open) setLinkedinConnectProfileId(null); }}
+        disabled={connectingPlatform === "linkedin"}
+        onSelect={(flow: LinkedInFlow) => {
+          if (linkedinConnectProfileId) {
+            handleLinkedInConnect(linkedinConnectProfileId, flow);
+            setLinkedinConnectProfileId(null);
+          }
+        }}
+      />
 
       <UpgradeModal
         open={upgradeModal.open}
