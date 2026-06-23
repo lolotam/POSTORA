@@ -653,6 +653,10 @@ Deno.serve(async (req) => {
         console.log("Instagram via Facebook disabled - skipping Instagram auto-import");
       }
 
+      if (pendingSelectionId) {
+        await supabase.from("oauth_pending_facebook_selections").delete().eq("id", pendingSelectionId);
+      }
+
       return new Response(JSON.stringify({
         success: true,
         page_name: selectedPage.name,
@@ -661,6 +665,7 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
 
     // Legacy action: store_account (backward compatibility)
     if (action === "store_account") {
