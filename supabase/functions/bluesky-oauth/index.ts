@@ -349,6 +349,42 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Provider callback: GET /functions/v1/bluesky-oauth?code=...&state=...
+  if (req.method === "GET") {
+    const url = new URL(req.url);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const oauthError = url.searchParams.get("error");
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const logger = createLogger(supabase, "bluesky-oauth", "auth");
+
+    if (oauthError) {
+      const ret = new URL(RETURN_URL_DEFAULT);
+      ret.searchParams.set("connected", "bluesky");
+      ret.searchParams.set("error", oauthError);
+      return Response.redirect(ret.toString(), 302);
+    }
+    if (!code || !state) {
+      return new Response("Missing code/state", { status: 400 });
+    }
+
+    try {
+      const result = await completeBlueskyCallback(supabase, logger, code, state);
+      const ret = new URL(result.returnTo);
+      ret.searchParams.set("connected", "bluesky");
+      if (result.profileId) ret.searchParams.set("profile_id", result.profileId);
+      return Response.redirect(ret.toString(), 302);
+    } catch (err) {
+      console.error("Bluesky GET callback error:", err);
+      const ret = new URL(RETURN_URL_DEFAULT);
+      ret.searchParams.set("connected", "bluesky");
+      ret.searchParams.set("error", "bluesky_callback_failed");
+      return Response.redirect(ret.toString(), 302);
+    }
+  }
+
+
+
   try {
     const body = await req.json();
     const { action, handle, app_password, social_profile_id, code, state, code_verifier, dpop_private_key, redirect_uri } = body;
