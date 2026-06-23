@@ -345,12 +345,20 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Backend OAuth callback (unified pattern). Provider redirects here with
+  // ?code=...&state=...; we exchange the code server-side, stash pages in a
+  // short-lived selection row, then 302 back to the frontend.
+  if (req.method === "GET") {
+    return await handleFacebookGetCallback(req);
+  }
+
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+
 
   const body = await req.json().catch(() => ({}));
   const authHeader = req.headers.get("Authorization");
