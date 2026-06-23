@@ -908,6 +908,10 @@ Deno.serve(async (req) => {
 
       console.log("Standalone Instagram account stored:", instagram_username);
 
+      if (pendingSelectionId) {
+        await supabase.from("oauth_pending_facebook_selections").delete().eq("id", pendingSelectionId);
+      }
+
       return new Response(JSON.stringify({
         success: true,
         instagram_username,
@@ -915,6 +919,7 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
 
     return new Response(JSON.stringify({ error: "Invalid action" }), {
       status: 400,
