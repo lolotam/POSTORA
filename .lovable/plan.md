@@ -1,76 +1,65 @@
-## Final OAuth Matrix Audit — Plan
+## n8n Artifact Compatibility Review — Plan
 
-A read-only audit pass. Only one small safe change is proposed: completing missing placeholders in `.env.example`. No code, no DB, no provider-console action will be performed automatically.
+Documentation-only update to one sticky-note inside the n8n workflow artifact. No runtime nodes, no public API code, no auth format changes.
 
-### Scope
+### Findings
 
-- Verify unification status for all 13 OAuth platforms.
-- Run static greps for legacy hosts/typos.
-- Confirm `.env.example` coverage for all unified redirect URIs.
-- Produce provider-console + redeploy checklists.
-- Do NOT touch Facebook, WhatsApp Embedded Signup, `n8n-api`, or `public/n8n-complete-workflow.json`.
+**`public/n8n-complete-workflow.json`** (3 sticky notes + 7 runtime nodes):
+- Line 22 — `Configuration` Set node `apiBaseUrl` value is already `https://api.postora.cloud/functions/v1/n8n-api` ✅ (runtime correct)
+- All `httpRequest` nodes derive their URL from `{{$node["Configuration"].json["apiBaseUrl"]}}` (no hardcoded legacy URLs)
+- Line 230 — `Documentation` sticky-note `content` contains 3 curl examples using `https://[PROJECT].supabase.co/functions/v1/n8n-api/...` → **documentation string only**, used to teach users; classification: `documentation string`
+- The curl examples use header `x-api-key: YOUR_KEY` — this header **is supported** by `n8n-api` (verified at `supabase/functions/n8n-api/index.ts:1687`, which also accepts `Authorization: Apikey|Bearer`). Auth docs are valid; no change needed.
 
-### Pre-audit findings (already collected)
+**`n8n-community-node/`**:
+- `credentials/PostoraApi.credentials.ts` baseURL default is `https://api.postora.cloud/functions/v1/n8n-api` ✅
+- Header is `x-api-key` ✅ (supported)
+- No legacy URLs.
 
-**Legacy host grep** (`.supabase.co/functions/v1`, `supabase.postora.cloud`, `efruibswazzuuupgyzmf`, `thread-oauth`, `instgram`, `Reddit-oauth`, `linkedin-page-oauth`):
-- All hits are in allowed locations only:
-  - `supabase/migrations/*.sql` — historical migrations (must not be edited).
-  - `src/integrations/__tests__/supabaseClient.test.ts` — intentional regression test.
-  - `public/n8n-complete-workflow.json` — protected n8n artifact; flagged as "n8n artifact needs separate compatibility review".
-- No live `src/` or live edge-function code contains legacy hosts.
+**`supabase/functions/n8n-api/index.ts`**:
+- No legacy hosts. Accepts both `x-api-key` and `Authorization: Apikey|Bearer xxx`. No change.
 
-**Edge-function env-driven redirects** (resolved via `Deno.env.get(...) ?? https://api.postora.cloud/functions/v1/<name>-oauth`):
-- `tiktok-oauth` → reads `TIKTOK_REDIRECT_URI` ✅
-- `pinterest-oauth` → reads `PINTEREST_REDIRECT_URI` ✅
-- `threads-oauth` → reads `THREADS_REDIRECT_URI` ✅
-- `instagram-oauth`, `instagram-business-oauth`, `linkedin-oauth`, `youtube-oauth`, `reddit-oauth`, `bluesky-oauth` ✅
-- `twitter-oauth` → redirect URI is **hardcoded** to `https://api.postora.cloud/functions/v1/twitter-oauth` (already correct, but not env-driven). Minor inconsistency — not changed in this audit per "no large changes" rule. Flagged in report.
+**Other docs** (`docs/*`, `API_REFERENCE.md`, `README.md`): contain legacy `efruibswazzuuupgyzmf` / `supabase.co` references, but each file already starts with the "Self-hosted migration notice (2026-06)" banner explaining these are historical. **Out of scope** for this n8n-artifact-specific review.
 
-**`.env.example` current coverage**: has INSTAGRAM, INSTAGRAM_BUSINESS, YOUTUBE, LINKEDIN, REDDIT, BLUESKY.
-**Missing placeholders**: `TIKTOK_REDIRECT_URI`, `PINTEREST_REDIRECT_URI`, `THREADS_REDIRECT_URI`, `TWITTER_REDIRECT_URI`.
+### Single proposed change
 
-### The one proposed change
+Update only the `Documentation` sticky-note `content` (node index 10) in `public/n8n-complete-workflow.json`:
 
-Append the 4 missing placeholders to `.env.example` (no inline comments, no real values), grouped near existing OAuth redirect block:
+- Replace 3 occurrences of `https://[PROJECT].supabase.co/functions/v1/n8n-api/api/v1/upload-media` with `https://api.postora.cloud/functions/v1/n8n-api/api/v1/upload-media`.
+- Keep the `x-api-key: YOUR_KEY` header as-is (still supported, matches the community node).
+- Keep request bodies, parameter names, response shape, and all runtime nodes unchanged.
 
-```
-TIKTOK_REDIRECT_URI=https://api.postora.cloud/functions/v1/tiktok-oauth
-PINTEREST_REDIRECT_URI=https://api.postora.cloud/functions/v1/pinterest-oauth
-THREADS_REDIRECT_URI=https://api.postora.cloud/functions/v1/threads-oauth
-TWITTER_REDIRECT_URI=https://api.postora.cloud/functions/v1/twitter-oauth
-```
+No edits to:
+- Any runtime node URL, parameter, or credential.
+- `supabase/functions/n8n-api/`.
+- `n8n-community-node/`.
+- `.env.example`.
+- Auth header format.
+- API request/response shape.
+- Other docs (each has the migration banner already).
 
-Nothing else will be edited.
+### Validation
 
-### Validation steps (build mode)
+- Re-run grep for `[PROJECT].supabase.co` in `public/n8n-complete-workflow.json` → expect zero hits.
+- `python3 -c "import json; json.load(open('public/n8n-complete-workflow.json'))"` to confirm JSON still parses.
+- `git diff --check`.
+- typecheck/lint/build skipped — JSON-only doc change.
 
-1. `bunx tsgo --noEmit` (typecheck).
-2. `git diff --check`.
-3. Re-run the full grep set to confirm only allowed legacy refs remain.
-4. CleanCodeGuard: `.env.example` only — trivial doc change.
-5. TestGuard: no test files changed → state "no test-code review required".
+### Guard reviews
 
-### Final report sections
-
-The report will include:
-
-1. **Summary** — OAuth unification ready, with Facebook + WhatsApp + n8n artifact documented exceptions.
-2. **OAuth provider matrix** — 13-row table with platform, status, backend callback, frontend return, source hook, source edge function, env vars, provider action, legacy URL keep/remove, notes.
-3. **Exceptions** — Facebook (Supabase provider_token + Pages selector), WhatsApp (Embedded Signup FB SDK), n8n artifact (`public/n8n-complete-workflow.json`).
-4. **Files changed** — `.env.example` only (or none if not approved).
-5. **Database changes** — none.
-6. **Validation results** — typecheck/lint/build/tests/grep/git diff.
-7. **Guard review results**.
-8. **Security/secrets check** — confirmed no secrets exposed (placeholders only).
-9. **Provider console checklist** — exact backend URL per provider, scopes, legacy URL keep/remove timing.
-10. **Edge function deployment checklist** — only functions actually modified in prior tasks (tiktok, pinterest, threads, instagram, instagram-business, linkedin, youtube, reddit, bluesky). whatsapp-oauth/webhook only if changed.
-11. **Remaining blockers** — none (Facebook + WhatsApp are documented exceptions, not blockers).
-12. **Final status** — `ready_with_documented_exceptions`.
+- CleanCodeGuard: no production code changed; review not required.
+- TestGuard: no test files changed; no test-code review required.
 
 ### Out of scope
 
-- Facebook custom-redirect migration (future task).
-- WhatsApp Embedded Signup redesign.
-- `n8n-api` and `public/n8n-complete-workflow.json` rewrites.
-- Twitter env-driven refactor (flag only).
-- Any DB migration or SQL execution.
+- Mass-rewriting `docs/*` legacy refs (covered by existing migration banner).
+- Changing `x-api-key` ↔ `Authorization: Apikey` documentation style (both supported).
+- Any DB change (none needed).
+- Republishing the n8n community node package.
+
+### Manual actions after merge
+
+- Users who imported the old workflow JSON: re-import or copy the updated `Documentation` sticky note text. Runtime nodes do not need re-import (they were already correct).
+
+### Final status target
+
+`completed` — documentation-only fix, no behavior change.
