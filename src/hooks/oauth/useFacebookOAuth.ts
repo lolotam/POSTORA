@@ -218,7 +218,18 @@ export function useFacebookOAuth(
       body: { action: "get_pending_selection", user_id: user.id, selection_id: selectionId },
     });
     if (error || !data?.success) {
-      toast({ title: "Connection expired", description: "The Facebook selection link expired. Please reconnect.", variant: "destructive" });
+      // Distinguish "expired/not found" (404) from transport/server errors so
+      // the user is not falsely told their link expired when the function is
+      // down. supabase-js surfaces the HTTP status on FunctionsHttpError.
+      const status = (error as { context?: { status?: number } } | null)?.context?.status;
+      const isExpired = status === 404 || /not found|expired/i.test(String(data?.error ?? ""));
+      toast({
+        title: isExpired ? "Connection expired" : "Connection failed",
+        description: isExpired
+          ? "The Facebook selection link expired. Please reconnect."
+          : (error instanceof Error ? error.message : "Could not load your Facebook selection. Please try again."),
+        variant: "destructive",
+      });
       return;
     }
     const platform: Platform = data.target_platform === "instagram" ? "instagram" : "facebook";

@@ -329,6 +329,9 @@ async function loadPendingSelectionRow(
   pages_json: unknown;
   ig_standalone_json: unknown;
 } | null> {
+  // SECURITY: the `user_id = userId` equality below is the only guard that
+  // stops one authenticated user from consuming another user's pending
+  // selection row (and its long-lived FB user token). Do NOT relax it.
   const { data, error } = await supabase
     .from("oauth_pending_facebook_selections")
     .select("provider_token, social_profile_id, target_platform, pages_json, ig_standalone_json, expires_at, user_id")

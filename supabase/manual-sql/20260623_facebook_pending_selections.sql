@@ -30,3 +30,12 @@ USING (user_id = auth.uid());
 
 CREATE INDEX IF NOT EXISTS idx_oauth_pending_fb_expires
   ON public.oauth_pending_facebook_selections (expires_at);
+
+-- One-shot sweep of any already-expired rows. Safe to re-run.
+-- Recommended follow-up: schedule via pg_cron, e.g.
+--   SELECT cron.schedule(
+--     'oauth_pending_fb_sweep',
+--     '*/15 * * * *',
+--     $$DELETE FROM public.oauth_pending_facebook_selections WHERE expires_at < now()$$
+--   );
+DELETE FROM public.oauth_pending_facebook_selections WHERE expires_at < now();
