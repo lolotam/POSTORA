@@ -82,5 +82,48 @@ export function useInstagramOAuth(
     }
   };
 
-  return { handleInstagramBusinessLogin, handleInstagramBusinessCallback };
+  /**
+   * Unified Instagram connect entry point. Routes to the appropriate flow:
+   * - "direct": Direct Instagram Business Login (instagram-oauth)
+   * - "facebook_business": Connect via Facebook Pages (instagram-business-oauth)
+   */
+  const handleInstagramConnect = async (
+    profileId: string,
+    flow: "direct" | "facebook_business",
+  ) => {
+    if (flow === "facebook_business") {
+      if (!user) throw new Error("Not authenticated");
+      setConnectingPlatform("instagram");
+      setConnectingProfile(profileId);
+      try {
+        const { data, error } = await supabase.functions.invoke(
+          "instagram-business-oauth",
+          {
+            body: {
+              action: "authorize",
+              user_id: user.id,
+              social_profile_id: profileId,
+              flow: "facebook_business",
+              return_to: `${window.location.origin}/profiles`,
+            },
+          },
+        );
+        if (error) throw error;
+        if (data?.url) {
+          window.location.href = data.url;
+        } else {
+          // Backend may not be deployed yet — fall back to existing Facebook flow.
+          await handleFacebookConnect("instagram" as Platform, profileId);
+        }
+      } catch (err) {
+        console.error("Instagram (Facebook Business) error:", err);
+        // Safe fallback to existing Pages flow.
+        await handleFacebookConnect("instagram" as Platform, profileId);
+      }
+      return;
+    }
+    await handleInstagramBusinessLogin(profileId);
+  };
+
+  return { handleInstagramBusinessLogin, handleInstagramBusinessCallback, handleInstagramConnect };
 }

@@ -8,16 +8,6 @@ import { Platform } from "@/lib/types";
 import { allPlatforms } from "@/lib/platformConstants";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useProfileOAuth } from "@/hooks/useProfileOAuth";
 import { useQuotas } from "@/hooks/useQuotas";
@@ -45,6 +35,8 @@ import {
   ConnectionTroubleshooter,
   PlatformAccountsTab,
 } from "@/components/profiles";
+import { LinkedInConnectDialog, type LinkedInFlow } from "@/components/profiles/LinkedInConnectDialog";
+import { InstagramConnectDialog, type InstagramFlow } from "@/components/profiles/InstagramConnectDialog";
 import { TikTokDebugPanel } from "@/components/profiles/TikTokDebugPanel";
 import { ThreadsDebugPanel } from "@/components/admin/ThreadsDebugPanel";
 import { UpgradeModal } from "@/components/UpgradeModal";
@@ -61,6 +53,7 @@ export default function Profiles() {
     max?: number;
   }>({ open: false, type: "social_account" });
   const [igConfirmProfileId, setIgConfirmProfileId] = useState<string | null>(null);
+  const [linkedinConnectProfileId, setLinkedinConnectProfileId] = useState<string | null>(null);
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
   const { toast } = useToast();
   const { user } = useAuth();
@@ -100,6 +93,8 @@ export default function Profiles() {
     handleBlueskyOAuthConnect,
     handleFacebookConnect,
     handleInstagramBusinessLogin,
+    handleInstagramConnect,
+    handleLinkedInConnect,
     clearPageSelection,
     clearBlueskyDialog,
   } = useProfileOAuth();
@@ -116,9 +111,14 @@ export default function Profiles() {
         return;
       }
     }
-    // Instagram: skip method dialog, go directly to confirmation
+    // Instagram: show flow-choice dialog (Direct vs Facebook Business)
     if (platform === "instagram") {
       setIgConfirmProfileId(profileId);
+      return;
+    }
+    // LinkedIn: show flow-choice dialog (Personal vs Organization)
+    if (platform === "linkedin") {
+      setLinkedinConnectProfileId(profileId);
       return;
     }
     originalHandleConnectPlatform(profileId, platform);
@@ -324,30 +324,29 @@ export default function Profiles() {
       />
 
 
-      <AlertDialog open={!!igConfirmProfileId} onOpenChange={(open) => { if (!open) setIgConfirmProfileId(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Connect Instagram</AlertDialogTitle>
-            <AlertDialogDescription>
-              Make sure you are logged in to your Instagram account in this same browser before continuing. You will be redirected to Instagram to authorize the connection.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={connectingPlatform === "instagram"}
-              onClick={() => {
-                if (igConfirmProfileId) {
-                  handleInstagramBusinessLogin(igConfirmProfileId);
-                  setIgConfirmProfileId(null);
-                }
-              }}
-            >
-              Continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <InstagramConnectDialog
+        open={!!igConfirmProfileId}
+        onOpenChange={(open) => { if (!open) setIgConfirmProfileId(null); }}
+        disabled={connectingPlatform === "instagram"}
+        onSelect={(flow: InstagramFlow) => {
+          if (igConfirmProfileId) {
+            handleInstagramConnect(igConfirmProfileId, flow);
+            setIgConfirmProfileId(null);
+          }
+        }}
+      />
+
+      <LinkedInConnectDialog
+        open={!!linkedinConnectProfileId}
+        onOpenChange={(open) => { if (!open) setLinkedinConnectProfileId(null); }}
+        disabled={connectingPlatform === "linkedin"}
+        onSelect={(flow: LinkedInFlow) => {
+          if (linkedinConnectProfileId) {
+            handleLinkedInConnect(linkedinConnectProfileId, flow);
+            setLinkedinConnectProfileId(null);
+          }
+        }}
+      />
 
       <UpgradeModal
         open={upgradeModal.open}

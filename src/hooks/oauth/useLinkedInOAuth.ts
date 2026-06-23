@@ -12,10 +12,19 @@ export function useLinkedInOAuth(
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const handleLinkedInConnect = async (profileId: string) => {
+  const handleLinkedInConnect = async (
+    profileId: string,
+    flow: "personal" | "organization" = "personal",
+  ) => {
     if (!user) throw new Error("Not authenticated");
     const { data, error } = await supabase.functions.invoke("linkedin-oauth", {
-      body: { action: "authorize", user_id: user.id, social_profile_id: profileId, return_to: `${window.location.origin}/profiles` },
+      body: {
+        action: "authorize",
+        user_id: user.id,
+        social_profile_id: profileId,
+        flow,
+        return_to: `${window.location.origin}/profiles`,
+      },
     });
     if (error) throw error;
     if (data?.url) { window.location.href = data.url; } else { throw new Error("No authorization URL received"); }
