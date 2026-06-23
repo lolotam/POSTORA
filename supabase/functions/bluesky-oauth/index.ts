@@ -15,6 +15,12 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CLIENT_ID = "https://postora.cloud/client-metadata.json";
 const BLUESKY_AUTH_SERVER = "https://bsky.social";
 
+// Unified backend callback URL. Must match an entry in client-metadata.json.
+const BLUESKY_REDIRECT_URI =
+  Deno.env.get("BLUESKY_REDIRECT_URI") ??
+  `${SUPABASE_URL.replace(/\/+$/, "")}/functions/v1/bluesky-oauth`;
+const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
+
 // Generate a random code verifier for PKCE
 function generateCodeVerifier(): string {
   const array = new Uint8Array(32);
@@ -200,14 +206,188 @@ async function discoverAuthServer(authServer: string): Promise<{
   };
 }
 
+interface CallbackResult {
+  username: string;
+  displayName?: string;
+  userId: string;
+  profileId: string | null;
+  returnTo: string;
+}
+
+async function completeBlueskyCallback(
+  supabase: ReturnType<typeof createClient>,
+  logger: ReturnType<typeof createLogger>,
+  code: string,
+  state: string,
+): Promise<CallbackResult> {
+  let stateData: Record<string, unknown>;
+  try {
+    const stateJson = new TextDecoder().decode(
+      Uint8Array.from(atob(state.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0)),
+    );
+    stateData = JSON.parse(stateJson);
+  } catch {
+    throw new Error("Invalid state parameter");
+  }
+
+  const stateUserId = stateData.user_id as string;
+  const stateProfileId = (stateData.social_profile_id as string | null | undefined) ?? null;
+  const stateHandle = stateData.handle as string;
+  const stateCodeVerifier = stateData.code_verifier as string;
+  const stateDpopPrivateKey = stateData.dpop_private_key as JsonWebKey;
+  const stateDpopPublicKey = stateData.dpop_public_key as JsonWebKey;
+  const stateAuthServer = stateData.auth_server as string | undefined;
+  const statePdsUrl = stateData.pds_url as string | undefined;
+  const stateReturnTo = (stateData.return_to as string | undefined) ?? RETURN_URL_DEFAULT;
+
+  const authServerMetadata = await discoverAuthServer(stateAuthServer || BLUESKY_AUTH_SERVER);
+  const privateKey = await importPrivateKey(stateDpopPrivateKey);
+
+  const dpopProof = await generateDPoPProof(
+    privateKey,
+    stateDpopPublicKey,
+    "POST",
+    authServerMetadata.token_endpoint,
+  );
+
+  const tokenParams = new URLSearchParams({
+    grant_type: "authorization_code",
+    code,
+    redirect_uri: BLUESKY_REDIRECT_URI,
+    client_id: CLIENT_ID,
+    code_verifier: stateCodeVerifier,
+  });
+
+  await logger.info("Exchanging code for tokens", { token_endpoint: authServerMetadata.token_endpoint, handle: stateHandle }, stateUserId);
+
+  let tokenResponse = await fetch(authServerMetadata.token_endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded", "DPoP": dpopProof },
+    body: tokenParams.toString(),
+  });
+  let tokenData = await tokenResponse.json();
+
+  if (tokenResponse.status === 400 && tokenData.error === "use_dpop_nonce") {
+    const serverNonce = tokenResponse.headers.get("DPoP-Nonce");
+    if (serverNonce) {
+      const dpopProofWithNonce = await generateDPoPProof(
+        privateKey, stateDpopPublicKey, "POST",
+        authServerMetadata.token_endpoint, undefined, serverNonce,
+      );
+      tokenResponse = await fetch(authServerMetadata.token_endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "DPoP": dpopProofWithNonce },
+        body: tokenParams.toString(),
+      });
+      tokenData = await tokenResponse.json();
+    }
+  }
+
+  if (!tokenResponse.ok || tokenData.error) {
+    const errMsg = tokenData.error_description || tokenData.error || "Unknown error";
+    await logger.error("Token exchange failed", { handle: stateHandle, error: errMsg, status: tokenResponse.status }, stateUserId);
+    throw new Error(`Token exchange failed: ${errMsg}`);
+  }
+
+  const { access_token, refresh_token, sub: did } = tokenData;
+
+  const profileDpopProof = await generateDPoPProof(
+    privateKey, stateDpopPublicKey, "GET",
+    `https://bsky.social/xrpc/app.bsky.actor.getProfile?actor=${did}`,
+    access_token,
+  );
+  const profileResponse = await fetch(
+    `https://bsky.social/xrpc/app.bsky.actor.getProfile?actor=${did}`,
+    { headers: { Authorization: `DPoP ${access_token}`, "DPoP": profileDpopProof } },
+  );
+  const profileData = await profileResponse.json();
+  const username = profileData.handle || stateHandle;
+  const displayName = profileData.displayName;
+  const avatarUrl = await cacheAvatarToCloudinary(profileData.avatar, stateUserId, "bluesky", did);
+
+  const { error: dbError } = await supabase
+    .from("social_accounts")
+    .upsert(
+      {
+        user_id: stateUserId,
+        platform: "bluesky",
+        platform_user_id: did,
+        platform_username: username,
+        avatar_url: avatarUrl,
+        access_token,
+        refresh_token,
+        is_active: true,
+        social_profile_id: stateProfileId,
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        account_metadata: {
+          display_name: displayName,
+          did,
+          auth_method: "oauth",
+          pds_url: statePdsUrl || "https://bsky.social",
+          auth_server: stateAuthServer || "https://bsky.social",
+          dpop_private_key: stateDpopPrivateKey,
+          dpop_public_key: stateDpopPublicKey,
+        },
+        needs_reauth: false,
+        failure_count: 0,
+        last_refresh_error: null,
+      },
+      { onConflict: "user_id,platform,platform_user_id" },
+    );
+  if (dbError) {
+    await logger.error("Failed to save Bluesky OAuth account", { handle: username, error: dbError.message }, stateUserId);
+    throw new Error("Failed to save Bluesky account");
+  }
+  await logger.info("Bluesky OAuth account connected successfully", { handle: username, did, auth_method: "oauth" }, stateUserId);
+
+  return { username, displayName, userId: stateUserId, profileId: stateProfileId, returnTo: stateReturnTo };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Provider callback: GET /functions/v1/bluesky-oauth?code=...&state=...
+  if (req.method === "GET") {
+    const url = new URL(req.url);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const oauthError = url.searchParams.get("error");
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const logger = createLogger(supabase, "bluesky-oauth", "auth");
+
+    if (oauthError) {
+      const ret = new URL(RETURN_URL_DEFAULT);
+      ret.searchParams.set("connected", "bluesky");
+      ret.searchParams.set("error", oauthError);
+      return Response.redirect(ret.toString(), 302);
+    }
+    if (!code || !state) {
+      return new Response("Missing code/state", { status: 400 });
+    }
+
+    try {
+      const result = await completeBlueskyCallback(supabase, logger, code, state);
+      const ret = new URL(result.returnTo);
+      ret.searchParams.set("connected", "bluesky");
+      if (result.profileId) ret.searchParams.set("profile_id", result.profileId);
+      return Response.redirect(ret.toString(), 302);
+    } catch (err) {
+      console.error("Bluesky GET callback error:", err);
+      const ret = new URL(RETURN_URL_DEFAULT);
+      ret.searchParams.set("connected", "bluesky");
+      ret.searchParams.set("error", "bluesky_callback_failed");
+      return Response.redirect(ret.toString(), 302);
+    }
+  }
+
+
+
   try {
     const body = await req.json();
-    const { action, handle, app_password, social_profile_id, code, state, code_verifier, dpop_private_key, redirect_uri } = body;
+    const { action, handle, app_password, social_profile_id, code, state, return_to } = body;
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const logger = createLogger(supabase, 'bluesky-oauth', 'auth');
     // Authenticate caller for actions that modify user data
@@ -252,6 +432,7 @@ Deno.serve(async (req) => {
         dpop_public_key: publicKeyJWK,
         auth_server: authServer,
         pds_url: resolvedPds,
+        return_to: return_to ?? RETURN_URL_DEFAULT,
         nonce: crypto.randomUUID(),
       };
       
@@ -261,7 +442,7 @@ Deno.serve(async (req) => {
       const authParams = new URLSearchParams({
         client_id: CLIENT_ID,
         response_type: "code",
-        redirect_uri: redirect_uri || "https://postora.cloud/profiles",
+        redirect_uri: BLUESKY_REDIRECT_URI,
         scope: "atproto transition:generic",
         state: stateParam,
         code_challenge: codeChallenge,
@@ -346,187 +527,21 @@ Deno.serve(async (req) => {
       });
     }
 
-    // ============= OAUTH CALLBACK =============
+    // ============= OAUTH CALLBACK (legacy POST shim) =============
+    // The provider now redirects directly to the GET handler above. This POST
+    // path is kept temporarily for any in-flight sessions still using the old
+    // frontend /profiles?code=... shim.
     if (action === "callback") {
-      console.log("Processing Bluesky OAuth callback");
-
       if (!code || !state) {
         throw new Error("Code and state are required for callback");
       }
-
-      // Decode state parameter
-      let stateData;
-      try {
-        const stateJson = new TextDecoder().decode(
-          Uint8Array.from(atob(state.replace(/-/g, "+").replace(/_/g, "/")), c => c.charCodeAt(0))
-        );
-        stateData = JSON.parse(stateJson);
-      } catch (e) {
-        throw new Error("Invalid state parameter");
-      }
-
-      const { 
-        user_id: stateUserId, 
-        social_profile_id: stateProfileId, 
-        handle: stateHandle,
-        code_verifier: stateCodeVerifier,
-        dpop_private_key: stateDpopPrivateKey,
-        dpop_public_key: stateDpopPublicKey,
-        auth_server: stateAuthServer,
-        pds_url: statePdsUrl,
-      } = stateData;
-
-      // Discover token endpoint
-      const authServerMetadata = await discoverAuthServer(stateAuthServer || BLUESKY_AUTH_SERVER);
-      
-      // Import the private key
-      const privateKey = await importPrivateKey(stateDpopPrivateKey);
-      
-      // Generate DPoP proof for token request
-      const dpopProof = await generateDPoPProof(
-        privateKey,
-        stateDpopPublicKey,
-        "POST",
-        authServerMetadata.token_endpoint
+      const result = await completeBlueskyCallback(supabase, logger, code, state);
+      return new Response(
+        JSON.stringify({ success: true, username: result.username, displayName: result.displayName }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
-
-      // Exchange code for tokens
-      const tokenParams = new URLSearchParams({
-        grant_type: "authorization_code",
-        code,
-        redirect_uri: redirect_uri || "https://postora.cloud/profiles",
-        client_id: CLIENT_ID,
-        code_verifier: stateCodeVerifier,
-      });
-
-      await logger.info("Exchanging code for tokens", { token_endpoint: authServerMetadata.token_endpoint, handle: stateHandle }, stateUserId);
-
-      let tokenResponse = await fetch(authServerMetadata.token_endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "DPoP": dpopProof,
-        },
-        body: tokenParams.toString(),
-      });
-
-      let tokenData = await tokenResponse.json();
-      console.log("Token response status:", tokenResponse.status);
-
-      // DPoP Nonce Retry (RFC 9449): if server requires nonce, retry with it
-      if (tokenResponse.status === 400 && tokenData.error === "use_dpop_nonce") {
-        const serverNonce = tokenResponse.headers.get("DPoP-Nonce");
-        if (serverNonce) {
-          console.log("Server requires DPoP nonce, retrying with nonce...");
-          await logger.info("DPoP nonce required, retrying token exchange", { handle: stateHandle }, stateUserId);
-
-          const dpopProofWithNonce = await generateDPoPProof(
-            privateKey,
-            stateDpopPublicKey,
-            "POST",
-            authServerMetadata.token_endpoint,
-            undefined,
-            serverNonce
-          );
-
-          tokenResponse = await fetch(authServerMetadata.token_endpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-              "DPoP": dpopProofWithNonce,
-            },
-            body: tokenParams.toString(),
-          });
-
-          tokenData = await tokenResponse.json();
-          console.log("Token response after nonce retry:", tokenResponse.status);
-        }
-      }
-
-      if (!tokenResponse.ok || tokenData.error) {
-        const errMsg = tokenData.error_description || tokenData.error || "Unknown error";
-        await logger.error("Token exchange failed", { handle: stateHandle, error: errMsg, status: tokenResponse.status }, stateUserId);
-        throw new Error(`Token exchange failed: ${errMsg}`);
-      }
-
-      const { access_token, refresh_token, sub: did } = tokenData;
-
-      // Get user profile using DPoP-bound access token
-      const profileDpopProof = await generateDPoPProof(
-        privateKey,
-        stateDpopPublicKey,
-        "GET",
-        `https://bsky.social/xrpc/app.bsky.actor.getProfile?actor=${did}`,
-        access_token
-      );
-
-      const profileResponse = await fetch(
-        `https://bsky.social/xrpc/app.bsky.actor.getProfile?actor=${did}`,
-        {
-          headers: { 
-            Authorization: `DPoP ${access_token}`,
-            "DPoP": profileDpopProof,
-          },
-        }
-      );
-      
-      const profileData = await profileResponse.json();
-      console.log("Profile fetched:", profileData.handle);
-
-      const username = profileData.handle || stateHandle;
-      const rawAvatarUrl = profileData.avatar;
-      const displayName = profileData.displayName;
-
-      // Cache avatar to Cloudinary for permanent storage
-      const avatarUrl = await cacheAvatarToCloudinary(rawAvatarUrl, stateUserId, "bluesky", did);
-
-      // Atomic upsert - prevents race conditions and ensures only 1 row per user/platform/account
-      const { error: dbError } = await supabase
-        .from("social_accounts")
-        .upsert(
-          {
-            user_id: stateUserId,
-            platform: "bluesky",
-            platform_user_id: did,
-            platform_username: username,
-            avatar_url: avatarUrl,
-            access_token,
-            refresh_token,
-            is_active: true,
-            social_profile_id: stateProfileId,
-            connected_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-            account_metadata: { 
-              display_name: displayName, 
-              did,
-              auth_method: "oauth",
-              pds_url: statePdsUrl || "https://bsky.social",
-              auth_server: stateAuthServer || "https://bsky.social",
-              dpop_private_key: stateDpopPrivateKey,
-              dpop_public_key: stateDpopPublicKey,
-            },
-            // Reset health tracking on successful reconnection
-            needs_reauth: false,
-            failure_count: 0,
-            last_refresh_error: null,
-          },
-          {
-            onConflict: "user_id,platform,platform_user_id",
-          }
-        );
-
-      if (dbError) {
-        console.error("Database error:", dbError);
-        await logger.error("Failed to save Bluesky OAuth account", { handle: username, error: dbError.message }, stateUserId);
-        throw new Error("Failed to save Bluesky account");
-      }
-
-      await logger.info("Bluesky OAuth account connected successfully", { handle: username, did, auth_method: "oauth" }, stateUserId);
-
-      return new Response(JSON.stringify({ success: true, username, displayName }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
     }
+
 
     // ============= APP PASSWORD CONNECT (Legacy) =============
     if (action === "connect") {

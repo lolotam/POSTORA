@@ -1,68 +1,88 @@
-## YouTube/Google + WhatsApp OAuth Finalization
+## Reddit + Bluesky OAuth Finalization
 
 ### Audit results (current vs target)
 
-**YouTube/Google — `supabase/functions/youtube-oauth/index.ts`**
+**Reddit — `supabase/functions/reddit-oauth/index.ts`**
 
 | Item | Current | Target | Action |
 |---|---|---|---|
-| Endpoint | `…/functions/v1/youtube-oauth` | same | ok |
-| Redirect URI | Hardcoded `https://api.postora.cloud/functions/v1/youtube-oauth` | env-driven with fallback | **fix** |
-| State | HMAC-signed with `GOOGLE_CLIENT_SECRET` | signed | ok |
-| GET callback | Implemented, exchanges code server-side, 302 to `/profiles?connected=youtube` | same | ok |
-| Refresh | `action: "refresh"`, preserves refresh_token | same | ok |
-| Frontend supplies redirect_uri | Yes, in legacy `handleYouTubeCallback` POST shim | No | **fix (hook)** |
-| Frontend supplies user_id at authorize | Yes (backend trusts it) | derive from JWT | **fix (minimal)** |
-| Old Supabase cloud refs | None in live code | none | ok |
+| Endpoint name | `reddit-oauth` (lowercase) | same | ok |
+| Redirect URI | env `REDDIT_REDIRECT_URI` → `${SUPABASE_URL}/functions/v1/reddit-oauth` | same | ok |
+| Signed state (HMAC) via `_shared/oauthState.ts` carrying `profile_id`/`return_to` | yes | yes | ok |
+| GET callback exchanges code server-side, 302 to `return_to?connected=reddit` | yes | yes | ok |
+| Frontend sends `redirect_uri` + `user_id` at authorize | **yes** (with `profile_id` in legacy `/profiles?platform=reddit&profile_id=…`) | no | **fix (hook)** |
+| Frontend POST `callback` shim still wires `redirect_uri` + `user_id` | yes | minimal compat | **fix (hook)** |
+| Old Supabase cloud refs | none in live code | none | ok |
 
-**WhatsApp — `supabase/functions/whatsapp-oauth/index.ts`**
+**Bluesky — `supabase/functions/bluesky-oauth/index.ts`**
 
-| Item | Current | Target | Decision |
+| Item | Current | Target | Action |
 |---|---|---|---|
-| Endpoint | `…/functions/v1/whatsapp-oauth` | same | ok |
-| Flow type | Meta **Embedded Signup** (FB JS SDK → `signup.code`, no provider redirect URI) | not a normal OAuth redirect | **document, do not force** |
-| Token exchange | Server-side `GRAPH_API/oauth/access_token` with `FACEBOOK_APP_ID`/`SECRET` | server-side | ok |
-| Auth | Authenticates caller via Supabase JWT, uses service role for writes | server-side | ok |
-| Webhook verify | `WHATSAPP_WEBHOOK_VERIFY_TOKEN` + HMAC signature on POST | same | ok |
-| Config test | Reports missing config cleanly | same | ok |
-| Disconnect | `action: "disconnect"`, best-effort `subscribed_apps` unsubscribe | same | ok |
-| Real sends | None during audit | none | ok |
+| Endpoint name | `bluesky-oauth` | same | ok |
+| `CLIENT_ID` is metadata URL `https://postora.cloud/client-metadata.json` | yes | yes (ATProto identity) | ok |
+| `redirect_uri` used in authorize/token | `redirect_uri \|\| "https://postora.cloud/profiles"` — frontend route, not backend | backend Edge Function URL | **fix** |
+| GET callback handler in edge function | **missing** (only POST `action: "callback"` invoked by frontend after redirect to `/profiles`) | present | **add** |
+| State already carries `user_id`, `social_profile_id`, `handle`, `code_verifier`, DPoP keys (base64-encoded JSON) | yes | yes (preserve as-is — PKCE/DPoP intact) | ok |
+| Token exchange + DB upsert server-side | yes | yes | ok |
+| `public/client-metadata.json` includes backend URL | yes (entry already present alongside `/profiles` + Lovable preview) | yes | ok |
+| Frontend sends `redirect_uri` + `user_id` | yes | no | **fix (hook)** |
+| Old Supabase cloud refs | none | none | ok |
 
 ### Changes
 
-**1. `supabase/functions/youtube-oauth/index.ts`**
-- Replace constant `YOUTUBE_REDIRECT_URI` with env-driven resolver:
+**1. `src/hooks/oauth/useRedditOAuth.ts`**
+- `handleRedditConnect`: stop sending `user_id` and `redirect_uri`; keep `social_profile_id` + `return_to: ${origin}/profiles`. Move `setConnectingPlatform("reddit")`/`setConnectingProfile(profileId)` to start, clear on error.
+- `handleRedditCallback` (legacy POST shim): stop sending `redirect_uri` and `user_id`; keep `code` + `social_profile_id` for in-flight sessions.
+
+**2. `supabase/functions/bluesky-oauth/index.ts`**
+- Add module constant:
   ```ts
-  const YOUTUBE_REDIRECT_URI =
-    Deno.env.get("YOUTUBE_REDIRECT_URI") ??
-    (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/youtube-oauth`
-                  : "https://api.postora.cloud/functions/v1/youtube-oauth");
+  const BLUESKY_REDIRECT_URI =
+    Deno.env.get("BLUESKY_REDIRECT_URI") ??
+    `${SUPABASE_URL.replace(/\/+$/, "")}/functions/v1/bluesky-oauth`;
   ```
-- In `action: "authorize"`, derive `user_id` from the caller's JWT via `authenticateCaller(req, body?.user_id)` (same helper already used by the legacy POST `callback`); keep `social_profile_id` and `return_to` from body.
-- No changes to scopes, token exchange, refresh, channel discovery, DB upsert, or GET callback shape.
+- In `action: "authorize"` and `action: "callback"`, replace `redirect_uri || "https://postora.cloud/profiles"` with `BLUESKY_REDIRECT_URI` (the body's `redirect_uri` is no longer trusted). The value must match an entry in `client-metadata.json` — the backend URL is already listed.
+- Add a `GET` handler at the top of `Deno.serve`:
+  - Parse `code` + `state` query params.
+  - Reuse the existing callback logic (decode base64 state, discover token endpoint, DPoP-bound token exchange with nonce retry, profile fetch, DB upsert) by extracting it into a small `completeBlueskyCallback(code, state, supabase, logger)` helper, then invoking it.
+  - On success, 302 to `${state.return_to ?? "https://postora.cloud/profiles"}?connected=bluesky` (+ `profile_id` if present).
+  - On error, 302 to `https://postora.cloud/profiles?connected=bluesky&error=bluesky_callback_failed`.
+- Extend state encoding to include `return_to` (default `"https://postora.cloud/profiles"`) so the GET handler can route back. Keep existing keys intact — pure additive change preserves any in-flight sessions.
+- Keep `action: "callback"` POST path as legacy compat shim, refactored to call the same helper.
+- No changes to PKCE generation, DPoP key generation/export/import, nonce retry, scope, or `account_metadata` shape.
 
-**2. `src/hooks/oauth/useYouTubeOAuth.ts`**
-- `handleYouTubeConnect`: stop sending `user_id` (JWT carries identity); keep `social_profile_id`, `return_to`. Set `setConnectingPlatform("youtube")` + `setConnectingProfile(profileId)` at start; clear on error.
-- `handleYouTubeCallback` (legacy POST shim): stop sending `redirect_uri` and `user_id`; keep `code` + `social_profile_id` for in-flight sessions.
+**3. `src/hooks/oauth/useBlueskyOAuth.ts`**
+- `handleBlueskyOAuthConnect`: stop sending `redirect_uri` and `user_id`; keep `handle` + `social_profile_id`. Remove the domain-warning toast (no longer relevant — backend owns redirect).
+- `handleBlueskyOAuthCallback` (legacy POST shim): stop sending `redirect_uri`; keep `code` + `state` for in-flight sessions.
+- `handleBlueskyConnect` (app-password flow): stop sending `user_id` (JWT verified backend-side by `authenticateCaller`).
 
-**3. `.env.example`**
-- Add `YOUTUBE_REDIRECT_URI=https://api.postora.cloud/functions/v1/youtube-oauth` under the existing YouTube/Google block. No real secrets, no inline comments. WhatsApp block already present and complete.
+**4. `public/client-metadata.json`**
+- No changes. Backend URL `https://api.postora.cloud/functions/v1/bluesky-oauth` already listed. `/profiles` and Lovable preview entries stay for legacy/preview support and will be retired once backend cutover is verified.
 
-**4. WhatsApp**
-- **No code changes.** Embedded Signup uses Meta's FB JS SDK callback (`FB.login` → `signup.code`) and does **not** use a normal OAuth `redirect_uri`. The backend endpoint `whatsapp-oauth` already owns token exchange, webhook subscription, and phone registration server-side. This is documented as a permanent architectural exception alongside Facebook.
+**5. `.env.example`**
+- Add a Reddit + Bluesky block:
+  ```
+  REDDIT_CLIENT_ID=
+  REDDIT_CLIENT_SECRET=
+  REDDIT_REDIRECT_URI=https://api.postora.cloud/functions/v1/reddit-oauth
+
+  BLUESKY_REDIRECT_URI=https://api.postora.cloud/functions/v1/bluesky-oauth
+  ```
+  (Bluesky's "client identity" is the metadata URL — no `BLUESKY_CLIENT_ID`/`SECRET` env exists in code and none will be invented. `token_endpoint_auth_method` is `none`.)
 
 ### Out of scope
 - `supabase/functions/n8n-api` (untouched).
-- `facebook-oauth` (existing documented exception).
-- WhatsApp webhook signature / verify-token logic (already correct).
-- DB schema / data — no changes.
-- Swapping local HMAC signer for `_shared/oauthState.ts` (functionally equivalent; would invalidate in-flight signed states).
+- Bluesky `connect` (app-password) flow internals beyond dropping client `user_id`.
+- Bluesky `refresh` and `get_lists` actions.
+- Rotating signing keys or migrating Bluesky state to HMAC — current base64 state is integrity-bound by DPoP and the auth-server's code↔state pairing; rewriting it would invalidate in-flight sessions.
+- DB schema/data — none.
 
 ### Validation
 - `bunx tsgo --noEmit`
-- `rg "youtube-oauth|whatsapp-oauth|whatsapp-webhook" src supabase`
-- `rg "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase` — expect zero hits in live code.
+- `rg -n "reddit-oauth|bluesky-oauth|Reddit-oauth" src supabase public`
+- `rg -n "profile_id=.*reddit" src supabase public`
+- `rg -n "\.supabase\.co/functions/v1|efruibswazzuuupgyzmf|supabase\.postora\.cloud" src supabase public` — expect zero hits in live code.
 
 ### Manual actions (final report)
-- **Google Cloud Console**: confirm authorized redirect URI `https://api.postora.cloud/functions/v1/youtube-oauth`; confirm OAuth consent scopes (`https://www.googleapis.com/auth/youtube`); confirm app status / test users; ensure runtime env has `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and optionally `YOUTUBE_REDIRECT_URI`.
-- **Meta / WhatsApp**: webhook callback `https://api.postora.cloud/functions/v1/whatsapp-webhook`, verify token must match `WHATSAPP_WEBHOOK_VERIFY_TOKEN`, confirm Embedded Signup configuration IDs (`wa_cloud_api_config_id`, `wa_coexistence_config_id`) belong to the same Meta App as `FACEBOOK_APP_ID`/`SECRET`, runtime env has WhatsApp secrets.
+- **Reddit Developer Console**: confirm authorized redirect URI `https://api.postora.cloud/functions/v1/reddit-oauth`; remove the legacy `https://postora.cloud/profiles?platform=reddit&profile_id=…`-style URI after 24–48h of clean backend GET-callback logs; runtime env has `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` (optionally `REDDIT_REDIRECT_URI`); redeploy `reddit-oauth`.
+- **Bluesky / ATProto**: confirm `https://postora.cloud/client-metadata.json` resolves in production with backend URL in `redirect_uris`; retire `/profiles` and Lovable-preview entries once the backend GET cutover is verified; runtime env optionally has `BLUESKY_REDIRECT_URI`; redeploy `bluesky-oauth`.
