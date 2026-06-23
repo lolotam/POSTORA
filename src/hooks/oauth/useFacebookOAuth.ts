@@ -154,13 +154,15 @@ export function useFacebookOAuth(
     if (!pageSelectionData || !user) return;
     setSelectingPage(igAccount.id);
     try {
-      const { data, error } = await supabase.functions.invoke("facebook-oauth", {
-        body: {
-          action: "store_instagram", user_id: user.id, provider_token: pageSelectionData.providerToken,
-          instagram_account_id: igAccount.id, instagram_username: igAccount.username,
-          instagram_profile_picture: igAccount.profile_picture_url, social_profile_id: pageSelectionData.profileId,
-        },
-      });
+      const storeBody: Record<string, unknown> = {
+        action: "store_instagram", user_id: user.id,
+        instagram_account_id: igAccount.id, instagram_username: igAccount.username,
+        instagram_profile_picture: igAccount.profile_picture_url, social_profile_id: pageSelectionData.profileId,
+      };
+      if (pageSelectionData.selectionId) storeBody.selection_id = pageSelectionData.selectionId;
+      else if (pageSelectionData.providerToken) storeBody.provider_token = pageSelectionData.providerToken;
+      const { data, error } = await supabase.functions.invoke("facebook-oauth", { body: storeBody });
+
       if (error) throw error;
       if (data?.success) {
         await linkAccountToProfile(user.id, "instagram", pageSelectionData.profileId);
