@@ -73,7 +73,6 @@ async function verifyAndParseState(state: string) {
     user_id: string;
     social_profile_id: string | null;
     return_to: string;
-    flow?: "personal" | "organization";
   };
 }
 
@@ -115,7 +114,7 @@ Deno.serve(async (req) => {
         return new Response("Missing code/state", { status: 400 });
       }
 
-      const { user_id, social_profile_id, return_to, flow } = await verifyAndParseState(state);
+      const { user_id, social_profile_id, return_to } = await verifyAndParseState(state);
 
       const result = await completeOAuth({
         code,
@@ -124,11 +123,9 @@ Deno.serve(async (req) => {
         redirect_uri: redirectUri,
       });
 
-      // Redirect back to app. Use flow-aware `connected` marker so the UI can
-      // distinguish a personal connection from an organization/page connection.
+      // Redirect back to app. Single unified pathway: always 'linkedin'.
       const returnUrl = new URL(return_to);
-      const connectedMarker = flow === "organization" ? "linkedin_organization" : "linkedin";
-      returnUrl.searchParams.set("connected", connectedMarker);
+      returnUrl.searchParams.set("connected", "linkedin");
       if (social_profile_id) returnUrl.searchParams.set("profile_id", social_profile_id);
       returnUrl.searchParams.set("account_name", result.name);
 
@@ -149,54 +146,32 @@ Deno.serve(async (req) => {
       const userId = body?.user_id as string | undefined;
       const socialProfileId = (body?.social_profile_id as string | null | undefined) ?? null;
       const returnTo = body?.return_to as string | undefined;
-      const rawFlow = (body?.flow as string | undefined) ?? "personal";
-      const flow: "personal" | "organization" =
-        rawFlow === "organization" ? "organization" : "personal";
 
       if (!userId) throw new Error("Missing user_id");
       if (!returnTo) throw new Error("Missing return_to");
 
-      // LinkedIn OAuth 2.0 scopes — only the ones approved for this app
-      // (Community Management API). "Sign In with OpenID Connect" is NOT enabled
-      // on this app, so we must NOT request openid/profile/email.
-      // Identity is fetched via /v2/me using r_basicprofile.
-      //
-      // Flow-aware scopes:
-      //   personal      -> member-only scopes
-      //   organization  -> member + organization/page scopes
-      const explicitOrgFlag =
-        body?.include_org_scopes !== undefined ? body.include_org_scopes !== false : null;
-      const includeOrgScopes =
-        explicitOrgFlag !== null ? explicitOrgFlag : flow === "organization";
-
-      const memberScopes = [
+      // Single unified pathway: always request the full member + organization
+      // scope set. The user picks where to publish (personal vs. company page)
+      // later from inside the app.
+      const scopes = [
         "r_basicprofile",
         "w_member_social",
         "w_member_social_feed",
         "r_member_postAnalytics",
         "r_member_profileAnalytics",
         "r_1st_connections_size",
-      ];
-
-      const orgScopes = [
         "rw_organization_admin",
         "r_organization_social",
         "w_organization_social",
         "r_organization_social_feed",
         "w_organization_social_feed",
         "r_organization_followers",
-      ];
-
-      const scopes = [
-        ...memberScopes,
-        ...(includeOrgScopes ? orgScopes : []),
       ].join(" ");
 
       const state = await buildSignedState({
         user_id: userId,
         social_profile_id: socialProfileId,
         return_to: returnTo,
-        flow,
       });
 
       const params = new URLSearchParams({
