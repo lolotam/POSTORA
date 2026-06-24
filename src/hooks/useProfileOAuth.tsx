@@ -40,7 +40,7 @@ export function useProfileOAuth() {
   const { handleThreadsConnect, handleThreadsCallback } = useThreadsOAuth(setConnectingPlatform, setConnectingProfile);
   const { blueskyDialogData, handleBlueskyOAuthConnect, handleBlueskyOAuthCallback, handleBlueskyConnect, clearBlueskyDialog } = useBlueskyOAuth(setConnectingPlatform, setConnectingProfile);
   const { handleRedditConnect, handleRedditCallback } = useRedditOAuth(setConnectingPlatform, setConnectingProfile);
-  const { pageSelectionData, selectingPage, handleFacebookConnect, handleSelectPage, handleSelectStandaloneInstagram, clearPageSelection } = useFacebookOAuth(setConnectingPlatform, setConnectingProfile);
+  const { pageSelectionData, selectingPage, handleFacebookConnect, handleSelectPage, handleSelectStandaloneInstagram, clearPageSelection, loadPendingFacebookSelection } = useFacebookOAuth(setConnectingPlatform, setConnectingProfile);
   const {
     handleInstagramBusinessLogin,
     handleInstagramBusinessCallback,
@@ -125,5 +125,10 @@ export function useProfileOAuth() {
     handleLinkedInConnect,
     clearPageSelection,
     clearBlueskyDialog,
+    igSelectionData,
+    selectingIg,
+    connectedIgIds,
+    handleSelectIgAccount,
+    clearIgSelection,
   };
 }
