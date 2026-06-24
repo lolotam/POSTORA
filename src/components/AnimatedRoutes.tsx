@@ -48,6 +48,7 @@ const Terms = lazyWithRetry(() => import("@/pages/Terms"), "Terms");
 const CookiePolicy = lazyWithRetry(() => import("@/pages/CookiePolicy"), "CookiePolicy");
 const GoogleApiDisclosure = lazyWithRetry(() => import("@/pages/GoogleApiDisclosure"), "GoogleApiDisclosure");
 const PublicProfile = lazyWithRetry(() => import("@/pages/PublicProfile"), "PublicProfile");
+const ContentCalendarTemplate = lazyWithRetry(() => import("@/pages/templates/ContentCalendarTemplate"), "ContentCalendarTemplate");
 
 const NotFound = lazyWithRetry(() => import("@/pages/NotFound"), "NotFound");
 const ConnectionHealth = lazyWithRetry(() => import("@/pages/ConnectionHealth"), "ConnectionHealth");
@@ -350,6 +351,7 @@ export function AnimatedRoutes() {
           }
         />
         <Route path="/p/:shareToken" element={<AnimatedPage><PublicProfile /></AnimatedPage>} />
+        <Route path="/templates/content-calendar-template" element={<AnimatedPage><ContentCalendarTemplate /></AnimatedPage>} />
         
         {/* What's New / Blog Routes */}
         <Route
