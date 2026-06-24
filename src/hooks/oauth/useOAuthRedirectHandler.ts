@@ -15,6 +15,7 @@ interface CallbackHandlers {
   handleInstagramBusinessCallback: (code: string, profileId: string) => Promise<void>;
   handleBlueskyOAuthCallback: (code: string, state: string, profileId: string) => Promise<void>;
   loadPendingFacebookSelection?: (selectionId: string) => Promise<void>;
+  loadPendingInstagramSelection?: (selectionId: string) => Promise<void>;
 }
 
 
@@ -115,6 +116,17 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
       setSearchParams(next);
       return;
     }
+
+    // Instagram-via-Facebook account picker handoff.
+    if (connected === "instagram_business" && selectionId && handlers.loadPendingInstagramSelection && user) {
+      handlers.loadPendingInstagramSelection(selectionId);
+      const next = new URLSearchParams(searchParams);
+      next.delete("connected");
+      next.delete("select");
+      setSearchParams(next);
+      return;
+    }
+
 
 
     const platformMessages: Record<string, { title: string; description: string }> = {

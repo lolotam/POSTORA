@@ -40,8 +40,18 @@ export function useProfileOAuth() {
   const { handleThreadsConnect, handleThreadsCallback } = useThreadsOAuth(setConnectingPlatform, setConnectingProfile);
   const { blueskyDialogData, handleBlueskyOAuthConnect, handleBlueskyOAuthCallback, handleBlueskyConnect, clearBlueskyDialog } = useBlueskyOAuth(setConnectingPlatform, setConnectingProfile);
   const { handleRedditConnect, handleRedditCallback } = useRedditOAuth(setConnectingPlatform, setConnectingProfile);
-  const { pageSelectionData, selectingPage, handleFacebookConnect, handleSelectPage, handleSelectStandaloneInstagram, clearPageSelection } = useFacebookOAuth(setConnectingPlatform, setConnectingProfile);
-  const { handleInstagramBusinessLogin, handleInstagramBusinessCallback, handleInstagramConnect } = useInstagramOAuth(setConnectingPlatform, setConnectingProfile, handleFacebookConnect);
+  const { pageSelectionData, selectingPage, handleFacebookConnect, handleSelectPage, handleSelectStandaloneInstagram, clearPageSelection, loadPendingFacebookSelection } = useFacebookOAuth(setConnectingPlatform, setConnectingProfile);
+  const {
+    handleInstagramBusinessLogin,
+    handleInstagramBusinessCallback,
+    handleInstagramConnect,
+    igSelectionData,
+    selectingIg,
+    connectedIgIds,
+    loadPendingInstagramSelection,
+    handleSelectIgAccount,
+    clearIgSelection,
+  } = useInstagramOAuth(setConnectingPlatform, setConnectingProfile, handleFacebookConnect);
 
   // Handle OAuth redirects from URL params
   useOAuthRedirectHandler({
@@ -53,6 +63,8 @@ export function useProfileOAuth() {
     handleRedditCallback,
     handleInstagramBusinessCallback,
     handleBlueskyOAuthCallback,
+    loadPendingFacebookSelection,
+    loadPendingInstagramSelection,
   });
 
   const handleConnectPlatform = async (profileId: string, platform: Platform) => {
@@ -113,5 +125,10 @@ export function useProfileOAuth() {
     handleLinkedInConnect,
     clearPageSelection,
     clearBlueskyDialog,
+    igSelectionData,
+    selectingIg,
+    connectedIgIds,
+    handleSelectIgAccount,
+    clearIgSelection,
   };
 }

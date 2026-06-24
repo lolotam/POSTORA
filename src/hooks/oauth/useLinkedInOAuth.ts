@@ -4,8 +4,6 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { refetchSocialQueries } from "./oauthUtils";
 
-export type LinkedInFlow = "personal" | "organization";
-
 export function useLinkedInOAuth(
   setConnectingPlatform: (p: any) => void,
   setConnectingProfile: (p: string | null) => void,
@@ -14,22 +12,18 @@ export function useLinkedInOAuth(
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const handleLinkedInConnect = async (
-    profileId: string,
-    flow: LinkedInFlow = "personal",
-  ) => {
+  const handleLinkedInConnect = async (profileId: string) => {
     if (!user) throw new Error("Not authenticated");
     setConnectingPlatform("linkedin");
     setConnectingProfile(profileId);
     try {
-      // Note: do not forward user_id or redirect_uri from the client.
-      // The edge function derives identity from the JWT and forces the redirect URI
-      // from LINKEDIN_REDIRECT_URI server-side.
+      // Single unified pathway: backend always requests the full member +
+      // organization scope set. The user picks where to publish later from
+      // inside the app.
       const { data, error } = await supabase.functions.invoke("linkedin-oauth", {
         body: {
           action: "authorize",
           social_profile_id: profileId,
-          flow,
           return_to: `${window.location.origin}/profiles`,
         },
       });
@@ -46,11 +40,6 @@ export function useLinkedInOAuth(
     }
   };
 
-  const connectLinkedInPersonal = (profileId: string) =>
-    handleLinkedInConnect(profileId, "personal");
-  const connectLinkedInOrganization = (profileId: string) =>
-    handleLinkedInConnect(profileId, "organization");
-
   // Legacy POST-callback shim (kept for any in-flight client sessions).
   const handleLinkedInCallback = async (code: string, profileId: string) => {
     setConnectingPlatform("linkedin");
@@ -60,14 +49,23 @@ export function useLinkedInOAuth(
       });
       if (error) throw error;
       if (data?.success) {
-        toast({ title: "LinkedIn connected!", description: data.username ? `Connected account: ${data.username}` : "Your LinkedIn account has been connected successfully." });
+        toast({
+          title: "LinkedIn connected!",
+          description: data.username
+            ? `Connected account: ${data.username}`
+            : "Your LinkedIn account has been connected successfully.",
+        });
         refetchSocialQueries(queryClient);
       } else {
         throw new Error(data?.error || "Failed to complete LinkedIn connection");
       }
     } catch (error) {
       console.error("LinkedIn callback error:", error);
-      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect LinkedIn", variant: "destructive" });
+      toast({
+        title: "Connection failed",
+        description: error instanceof Error ? error.message : "Failed to connect LinkedIn",
+        variant: "destructive",
+      });
     } finally {
       setConnectingPlatform(null);
       setConnectingProfile(null);
@@ -76,8 +74,6 @@ export function useLinkedInOAuth(
 
   return {
     handleLinkedInConnect,
-    connectLinkedInPersonal,
-    connectLinkedInOrganization,
     handleLinkedInCallback,
   };
 }
