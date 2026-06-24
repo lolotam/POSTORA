@@ -1123,7 +1123,7 @@ export default function MediaLibrary() {
                         </div>
                       </div>
                       <DropdownMenu>
-                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="ghost"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
+                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="ghost" aria-label="View more options"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="bg-background">
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 mr-2" />Open</DropdownMenuItem>
                           <DropdownMenuSeparator />
