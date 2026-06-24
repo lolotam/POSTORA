@@ -1,59 +1,63 @@
-## n8n community node — URL audit & docs refresh
+## Problem
 
-### Audit result (no runtime URL changes required)
+All four failures share the same root cause: **missing/empty provider credentials on the self-hosted edge-functions container** (`api.postora.cloud`). The Reddit URL proves it — `client_id=` is empty in the authorize URL, which only happens if `Deno.env.get("REDDIT_CLIENT_ID")` returned `undefined`/empty and the function built the URL anyway.
 
-- `credentials/PostoraApi.credentials.ts` already defaults `baseUrl` to `https://api.postora.cloud/functions/v1/n8n-api` (new self-hosted backend).
-- `nodes/Postora/Postora.node.ts` builds every request from that credential `baseUrl`:
-  - `GET  {baseUrl}/api/v1/accounts`
-  - `POST {baseUrl}/api/v1/post`
-  - `GET  {baseUrl}/api/v1/post/{id}`
-  - `GET  {baseUrl}/api/v1/posts`
-  - `POST {baseUrl}/api/v1/upload-media`
-- No legacy `*.supabase.co`, `efruibswazzuuupgyzmf`, or `supabase.postora.cloud` references anywhere in the package.
-- No OAuth redirect URIs or inbound webhooks live in the node — OAuth runs inside the Postora app (`facebook-oauth`, etc.), not in n8n.
+| Symptom | Likely missing/misconfigured secret(s) |
+|---|---|
+| Reddit "invalid client id" (`client_id=` empty) | `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET` |
+| "Facebook SDK failed to load" | Browser-side: ad-blocker OR missing `VITE_FACEBOOK_APP_ID` in built frontend |
+| "Instagram Business isn't set up correctly on the server yet" | `INSTAGRAM_BUSINESS_APP_ID` / `INSTAGRAM_BUSINESS_APP_SECRET` (or Meta app creds) on edge container |
+| "We couldn't authenticate the TikTok connection" | `TIKTOK_CLIENT_KEY` / `TIKTOK_CLIENT_SECRET` on edge container, or redirect URI mismatch |
 
-So the code is already compatible. The only changes needed are documentation accuracy + a version bump so users know it targets the new backend.
+## Plan
 
-### Planned edits
+### Phase 1 — Diagnose (read-only, no code changes)
 
-1. `n8n-community-node/credentials/PostoraApi.credentials.ts`
-   - Tighten the `baseUrl` description: clarify it must point at the Postora backend `n8n-api` function (e.g. `https://api.postora.cloud/functions/v1/n8n-api`), and that self-hosted Postora deployments should substitute their own API host. No default value change.
+1. Grep the edge functions for the exact env var names used:
+   - `supabase/functions/reddit-oauth/`
+   - `supabase/functions/instagram-business-oauth/`
+   - `supabase/functions/tiktok-oauth/`
+   - frontend usage of `VITE_FACEBOOK_APP_ID` / FB SDK loader
+2. SSH into Contabo and `docker exec` into the edge-runtime container to list which of these are actually present (report only `present`/`missing` — never values).
+3. Confirm the exact redirect URIs each function uses, so the user can match them in each provider dashboard.
 
-2. `n8n-community-node/README.md`
-   - Replace the platform list in the intro with the currently shipping set (Facebook, Instagram, Threads, YouTube Beta, Pinterest, LinkedIn personal, Bluesky) to match `platformOptions` in `Postora.node.ts`. Remove TikTok / X / Reddit from the headline list (they're commented out in the node).
-   - Add a short **API Endpoint** section documenting:
-     - Default base URL: `https://api.postora.cloud/functions/v1/n8n-api`
-     - Endpoints used by the node (the 5 routes above)
-     - Auth header: `x-api-key: <Postora API key>`
-     - Note: OAuth connections are made in the Postora app, not in n8n.
-   - Fix the Pinterest row in the Platform-Specific Options table (current node also exposes Description/Link); keep table aligned with `Postora.node.ts`.
+### Phase 2 — Code hardening (small, safe)
 
-3. `n8n-community-node/package.json`
-   - Bump `version` from `0.1.0` → `0.2.0` (backend host migration milestone).
-   - Update `description` platform list to match README.
+Make each OAuth function **fail fast with a clear, structured error** instead of building a broken authorize URL. Pattern already established in `oauthErrors.ts`:
 
-### Out of scope (explicitly not changed)
+- `reddit-oauth/index.ts` — if `REDDIT_CLIENT_ID` or `REDDIT_CLIENT_SECRET` missing → return 200 with `{ success:false, error_code:"missing_config", message:"Reddit isn't set up correctly on the server yet." }` and redirect back to `/profiles?error=reddit_oauth&code=missing_config`. **Do not** generate an authorize URL with an empty `client_id`.
+- Same guard added to `instagram-business-oauth/index.ts`, `tiktok-oauth/index.ts`, `threads-oauth/index.ts`, `pinterest-oauth/index.ts`, `facebook-oauth/index.ts` (only where the guard is missing).
+- Frontend: in the FB SDK loader, if `VITE_FACEBOOK_APP_ID` is empty, show the existing `missing_config` toast instead of the generic "SDK failed to load" message (the current copy wrongly blames ad-blockers).
 
-- No change to default `baseUrl` value (already correct).
-- No change to request paths, auth scheme, or node behavior.
-- No edits to historical migrations, app OAuth code, or provider-console settings.
-- No automatic SQL execution.
+No new files, no schema changes.
 
-### Validation
+### Phase 3 — Manual actions for the project owner
 
-- `cd n8n-community-node && npm run lint` (which runs `tsc --noEmit`) — report `script not available` if `npm` install isn't run.
-- `rg "supabase\.co|efruibsw|supabase\.postora" n8n-community-node` → must return empty.
-- `git diff --check` on the three edited files.
+After code is deployed, the owner must (on the Contabo box, edge-functions env):
 
-### Guard reviews
+1. Set the missing secrets — list will be produced in Phase 1 report. Likely:
+   - `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`
+   - `INSTAGRAM_BUSINESS_APP_ID`, `INSTAGRAM_BUSINESS_APP_SECRET` (if separate from FB app)
+   - `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`
+2. Restart only the edge-functions container.
+3. In each provider dashboard, whitelist:
+   - Reddit: `https://api.postora.cloud/functions/v1/reddit-oauth`
+   - IG Business: already whitelisted per prior turn
+   - TikTok: `https://api.postora.cloud/functions/v1/tiktok-oauth`
 
-- **CleanCodeGuard** on the credential description + README structure (naming, no speculative config, no dead links).
-- **TestGuard**: no test files in `n8n-community-node/`; will state "no test files changed; no test-code review required."
+### Phase 4 — Validation
 
-### Manual actions required
+- `npm run lint`, `npm run build`, `npm run typecheck`, `npx vitest run`
+- CleanCodeGuard + TestGuard reviews
+- After owner sets secrets + restarts container: manual E2E click-through on Reddit, IG Business, TikTok.
 
-- None for the runtime. After merging, republish the npm package (`npm publish` from `n8n-community-node/`) so end users get the corrected default and docs.
+### What this plan does NOT do
 
-### Final status target
+- Does not run SQL (none required).
+- Does not write secrets for the owner (must be set on the self-hosted box).
+- Does not touch the provider dashboards.
+- Does not change n8n, posting, or any unrelated code path.
 
-`completed` (docs + version bump only; runtime URLs were already migrated).
+### Deliverable
+
+A short, focused PR that ensures **no OAuth function ever generates a broken authorize URL with an empty `client_id`** — every missing-config case routes through the existing `oauthErrors` normalizer and surfaces the user-friendly "isn't set up correctly on the server yet" toast.
