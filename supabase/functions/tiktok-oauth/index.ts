@@ -224,8 +224,15 @@ Deno.serve(async (req) => {
 
     // ---------- authorize: returns auth URL with signed state ----------
     if (action === "authorize") {
-      if (!TIKTOK_CLIENT_KEY) {
-        throw new Error("TIKTOK_CLIENT_KEY not configured");
+      if (!TIKTOK_CLIENT_KEY || !TIKTOK_CLIENT_SECRET) {
+        console.error("TikTok OAuth not configured: missing TIKTOK_CLIENT_KEY/TIKTOK_CLIENT_SECRET");
+        return new Response(
+          JSON.stringify({
+            error_code: "missing_config",
+            error: "TikTok isn't set up correctly on the server yet. Please contact support.",
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
       }
 
       const { userId: user_id } = await authenticateCaller(req, body.user_id);
