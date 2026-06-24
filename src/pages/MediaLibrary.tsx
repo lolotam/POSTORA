@@ -1088,7 +1088,7 @@ export default function MediaLibrary() {
                         <div className={cn("absolute rounded-full flex items-center justify-center transition-all", columnsPerRow >= 10 ? "top-0.5 left-0.5 w-3 h-3" : columnsPerRow >= 8 ? "top-1 left-1 w-4 h-4" : "top-1 left-1 w-6 h-6", selectedFiles.has(file.id) ? "bg-primary text-primary-foreground" : "bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100")}>{selectedFiles.has(file.id) ? <CheckCircle2 className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-3 h-3" : "w-4 h-4"} /> : <div className={cn("rounded-full border-2 border-muted-foreground", columnsPerRow >= 10 ? "w-1.5 h-1.5" : columnsPerRow >= 8 ? "w-2 h-2" : "w-3 h-3")} />}</div>
                         <div className={cn("absolute flex items-center opacity-0 group-hover:opacity-100 transition-opacity", columnsPerRow >= 10 ? "top-0.5 right-0.5 gap-0" : columnsPerRow >= 8 ? "top-1 right-1 gap-0.5" : "top-1 right-1 gap-1")}>
                           <DropdownMenu>
-                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="secondary" className={columnsPerRow >= 10 ? "h-4 w-4" : columnsPerRow >= 8 ? "h-5 w-5" : "h-7 w-7"}><MoreVertical className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-2.5 h-2.5" : "w-3 h-3"} /></Button></DropdownMenuTrigger>
+                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="secondary" aria-label="View more options" className={columnsPerRow >= 10 ? "h-4 w-4" : columnsPerRow >= 8 ? "h-5 w-5" : "h-7 w-7"}><MoreVertical className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-2.5 h-2.5" : "w-3 h-3"} /></Button></DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="bg-background">
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 mr-2" />Open</DropdownMenuItem>
                               <DropdownMenuSeparator />
@@ -1123,7 +1123,7 @@ export default function MediaLibrary() {
                         </div>
                       </div>
                       <DropdownMenu>
-                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="ghost"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
+                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="ghost" aria-label="View more options"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="bg-background">
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 mr-2" />Open</DropdownMenuItem>
                           <DropdownMenuSeparator />
