@@ -5,7 +5,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { Platform } from "@/lib/types";
 import { buildReturnUrl } from "@/lib/oauthRedirects";
 import { refetchSocialQueries } from "./oauthUtils";
-import { describeOAuthError } from "./oauthErrors";
 
 export function useInstagramOAuth(
   setConnectingPlatform: (p: any) => void,
@@ -40,7 +39,7 @@ export function useInstagramOAuth(
       console.error("Instagram Business Login error:", err);
       toast({
         title: "Connection failed",
-        description: await describeOAuthError(err, "Instagram"),
+        description: err instanceof Error ? err.message : "Failed to start Instagram connection",
         variant: "destructive",
       });
       setConnectingPlatform(null);
@@ -111,7 +110,7 @@ export function useInstagramOAuth(
       console.error("Instagram Business callback error:", err);
       toast({
         title: "Connection failed",
-        description: await describeOAuthError(err, "Instagram"),
+        description: err instanceof Error ? err.message : "Failed to connect Instagram",
         variant: "destructive",
       });
     } finally {
@@ -147,7 +146,10 @@ export function useInstagramOAuth(
       console.error("Instagram (Facebook Business) error:", err);
       toast({
         title: "Connection failed",
-        description: await describeOAuthError(err, "Instagram Business"),
+        description:
+          err instanceof Error
+            ? err.message
+            : "Failed to start Instagram Business connection",
         variant: "destructive",
       });
       setConnectingPlatform(null);

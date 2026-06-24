@@ -15,8 +15,6 @@ import {
   useRedditOAuth,
   useInstagramOAuth,
   useOAuthRedirectHandler,
-  describeOAuthError,
-  type OAuthPlatformLabel,
 } from "./oauth";
 
 // Re-export types for backward compatibility
@@ -92,14 +90,7 @@ export function useProfileOAuth() {
       }
     } catch (error) {
       console.error("Connection error:", error);
-      const oauthLabel: OAuthPlatformLabel | null =
-        platform === "tiktok" ? "TikTok"
-        : (platform as ExtendedPlatform) === "pinterest" ? "Pinterest"
-        : null;
-      const description = oauthLabel
-        ? await describeOAuthError(error, oauthLabel)
-        : error instanceof Error ? error.message : "Failed to connect account";
-      toast({ title: "Connection failed", description, variant: "destructive" });
+      toast({ title: "Connection failed", description: error instanceof Error ? error.message : "Failed to connect account", variant: "destructive" });
       setConnectingProfile(null);
       setConnectingPlatform(null);
     }
