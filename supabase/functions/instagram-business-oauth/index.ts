@@ -3,15 +3,12 @@
  * ------------------------
  * Connect Instagram via Facebook Business / Pages.
  *
- * Unified backend-callback lifecycle:
- *   - POST action="authorize" → returns Meta authorization URL with signed state
- *   - GET  ?code&state         → callback; exchanges code, lists Pages and
- *                                attached Instagram Business accounts, persists
- *                                each, then 302 → return_to
- *
- * The classic Facebook-Pages-only flow (FB SDK + provider_token + list_pages /
- * store_page) continues to live in `facebook-oauth` and is intentionally NOT
- * modified here.
+ * Lifecycle:
+ *   - POST action="authorize"            → returns Meta authorization URL with signed state
+ *   - GET  ?code&state                   → callback; exchanges code, lists IG candidates,
+ *                                          stashes them, 302 → return_to with ?select=<id>
+ *   - POST action="get_pending_selection" → load candidates for the picker UI
+ *   - POST action="store_ig_account"      → persist one selected IG account
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -79,16 +76,22 @@ interface FbPage {
   };
 }
 
-async function exchangeAndPersist(
+interface IgCandidate {
+  ig_user_id: string;
+  ig_username: string;
+  ig_profile_picture_url: string | null;
+  facebook_page_id: string;
+  facebook_page_name: string;
+  page_access_token: string;
+}
+
+async function exchangeAndListIg(
   code: string,
-  user_id: string,
-  social_profile_id: string | null,
 ): Promise<
-  | { kind: "ok"; count: number }
+  | { kind: "ok"; candidates: IgCandidate[]; long_lived_token: string; expires_in: number }
   | { kind: "no_instagram" }
   | { kind: "error"; message: string }
 > {
-  // Step 1: exchange code for user access token
   const tokenUrl = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token`);
   tokenUrl.searchParams.set("client_id", FACEBOOK_APP_ID);
   tokenUrl.searchParams.set("client_secret", FACEBOOK_APP_SECRET);
@@ -105,7 +108,6 @@ async function exchangeAndPersist(
   }
   const userToken = tokenData.access_token as string;
 
-  // Step 2: long-lived token (best-effort)
   let longLivedToken = userToken;
   let expiresIn = 5184000;
   try {
@@ -121,10 +123,9 @@ async function exchangeAndPersist(
       expiresIn = llData.expires_in || expiresIn;
     }
   } catch (_err) {
-    // Keep short-lived token if long-lived exchange fails
+    // keep short-lived
   }
 
-  // Step 3: list Pages with linked IG Business accounts
   const pages: FbPage[] = [];
   let nextUrl: string | null =
     `https://graph.facebook.com/${GRAPH_VERSION}/me/accounts` +
@@ -144,66 +145,75 @@ async function exchangeAndPersist(
     nextUrl = pageData.paging?.next ?? null;
   }
 
-  const igPages = pages.filter((p) => p.instagram_business_account?.id);
-  if (igPages.length === 0) return { kind: "no_instagram" };
+  const candidates: IgCandidate[] = pages
+    .filter((p) => p.instagram_business_account?.id)
+    .map((p) => {
+      const ig = p.instagram_business_account!;
+      return {
+        ig_user_id: ig.id,
+        ig_username: ig.username || `ig_${ig.id}`,
+        ig_profile_picture_url: ig.profile_picture_url ?? null,
+        facebook_page_id: p.id,
+        facebook_page_name: p.name,
+        page_access_token: p.access_token,
+      };
+    });
 
-  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  let count = 0;
+  if (candidates.length === 0) return { kind: "no_instagram" };
+  return { kind: "ok", candidates, long_lived_token: longLivedToken, expires_in: expiresIn };
+}
 
-  for (const page of igPages) {
-    const ig = page.instagram_business_account!;
-    const igUserId = ig.id;
-    const username = ig.username || `ig_${igUserId}`;
-    const avatarUrl = await cacheAvatarToCloudinary(
-      ig.profile_picture_url,
-      user_id,
-      "instagram",
-      igUserId,
-    );
+async function persistOneIgAccount(
+  supabase: ReturnType<typeof createClient>,
+  user_id: string,
+  social_profile_id: string | null,
+  candidate: IgCandidate,
+  expires_in: number,
+): Promise<{ success: boolean; error?: string }> {
+  const avatarUrl = await cacheAvatarToCloudinary(
+    candidate.ig_profile_picture_url ?? undefined,
+    user_id,
+    "instagram",
+    candidate.ig_user_id,
+  );
 
-    const accountData = {
-      user_id,
-      platform: "instagram",
-      platform_user_id: igUserId,
-      platform_username: username,
-      avatar_url: avatarUrl,
-      access_token: page.access_token,
-      token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
-      is_active: true,
-      social_profile_id,
-      ig_auth_type: "facebook_business",
-      account_metadata: {
-        ig_user_id: igUserId,
-        ig_username: username,
-        flow: "facebook_business",
-        source: "facebook_business",
-        facebook_page_id: page.id,
-        facebook_page_name: page.name,
-        page_access_token: page.access_token,
-        ig_business_account_id: igUserId,
-        token_type: "page_token",
-      },
-      connected_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-      needs_reauth: false,
-      failure_count: 0,
-      last_refresh_error: null,
-    };
+  const accountData = {
+    user_id,
+    platform: "instagram",
+    platform_user_id: candidate.ig_user_id,
+    platform_username: candidate.ig_username,
+    avatar_url: avatarUrl,
+    access_token: candidate.page_access_token,
+    token_expires_at: new Date(Date.now() + expires_in * 1000).toISOString(),
+    is_active: true,
+    social_profile_id,
+    ig_auth_type: "facebook_business",
+    account_metadata: {
+      ig_user_id: candidate.ig_user_id,
+      ig_username: candidate.ig_username,
+      flow: "facebook_business",
+      source: "facebook_business",
+      facebook_page_id: candidate.facebook_page_id,
+      facebook_page_name: candidate.facebook_page_name,
+      page_access_token: candidate.page_access_token,
+      ig_business_account_id: candidate.ig_user_id,
+      token_type: "page_token",
+    },
+    connected_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    needs_reauth: false,
+    failure_count: 0,
+    last_refresh_error: null,
+  };
 
-    const { error } = await supabase
-      .from("social_accounts")
-      .upsert(accountData, { onConflict: "user_id,platform,platform_user_id" });
-    if (error) {
-      console.error("instagram-business-oauth save error:", error.message);
-      continue;
-    }
-    count += 1;
+  const { error } = await supabase
+    .from("social_accounts")
+    .upsert(accountData, { onConflict: "user_id,platform,platform_user_id" });
+  if (error) {
+    console.error("instagram-business-oauth save error:", error.message);
+    return { success: false, error: error.message };
   }
-
-  if (count === 0) {
-    return { kind: "error", message: "Failed to save any Instagram Business accounts" };
-  }
-  return { kind: "ok", count };
+  return { success: true };
 }
 
 Deno.serve(async (req) => {
@@ -248,11 +258,7 @@ Deno.serve(async (req) => {
     }
 
     try {
-      const result = await exchangeAndPersist(
-        code,
-        payload.user_id,
-        (payload.profile_id as string | null) ?? null,
-      );
+      const result = await exchangeAndListIg(code);
       if (result.kind === "no_instagram") {
         return Response.redirect(
           appendQuery(returnTo, { error: "no_instagram_business" }),
@@ -263,10 +269,29 @@ Deno.serve(async (req) => {
         console.error("instagram-business-oauth callback error:", result.message);
         return Response.redirect(appendQuery(returnTo, { error: "connect_failed" }), 302);
       }
+
+      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const { data: stashRow, error: stashError } = await supabase
+        .from("oauth_pending_instagram_selections")
+        .insert({
+          user_id: payload.user_id,
+          social_profile_id: (payload.profile_id as string | null) ?? null,
+          ig_candidates_json: result.candidates,
+          long_lived_token: result.long_lived_token,
+          expires_in: result.expires_in,
+        })
+        .select("id")
+        .single();
+
+      if (stashError || !stashRow?.id) {
+        console.error("instagram-business-oauth stash error:", stashError?.message);
+        return Response.redirect(appendQuery(returnTo, { error: "connect_failed" }), 302);
+      }
+
       return Response.redirect(
         appendQuery(returnTo, {
           connected: "instagram_business",
-          count: String(result.count),
+          select: stashRow.id,
         }),
         302,
       );
@@ -283,16 +308,115 @@ Deno.serve(async (req) => {
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
   const action = body.action as string | undefined;
 
-  if (action !== "authorize") {
-    return jsonResponse({ error: "Invalid request body" }, 400);
-  }
-
   let user_id: string;
   try {
     const auth = await authenticateCaller(req, body.user_id as string | undefined);
     user_id = auth.userId;
   } catch {
     return jsonResponse({ error: "Unauthorized" }, 401);
+  }
+
+  // ---------------- get_pending_selection: load candidates for picker ----------
+  if (action === "get_pending_selection") {
+    const selection_id = body.selection_id as string | undefined;
+    if (!selection_id) return jsonResponse({ error: "Missing selection_id" }, 400);
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const { data: row, error } = await supabase
+      .from("oauth_pending_instagram_selections")
+      .select("id, user_id, social_profile_id, ig_candidates_json, expires_at")
+      .eq("id", selection_id)
+      .maybeSingle();
+
+    if (error || !row) {
+      return jsonResponse({ success: false, error: "Selection not found or expired" }, 404);
+    }
+    if (row.user_id !== user_id) {
+      return jsonResponse({ success: false, error: "Forbidden" }, 403);
+    }
+    if (row.expires_at && new Date(row.expires_at) < new Date()) {
+      return jsonResponse({ success: false, error: "Selection expired" }, 404);
+    }
+
+    const candidates = (row.ig_candidates_json as IgCandidate[] | null) ?? [];
+    return jsonResponse({
+      success: true,
+      social_profile_id: row.social_profile_id,
+      ig_accounts: candidates.map((c) => ({
+        ig_user_id: c.ig_user_id,
+        ig_username: c.ig_username,
+        ig_profile_picture_url: c.ig_profile_picture_url,
+        facebook_page_name: c.facebook_page_name,
+      })),
+    });
+  }
+
+  // ---------------- store_ig_account: persist one selected IG account ----------
+  if (action === "store_ig_account") {
+    const selection_id = body.selection_id as string | undefined;
+    const ig_user_id = body.ig_user_id as string | undefined;
+    const override_profile_id =
+      (body.social_profile_id as string | null | undefined) ?? null;
+    if (!selection_id || !ig_user_id) {
+      return jsonResponse({ error: "Missing selection_id or ig_user_id" }, 400);
+    }
+
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const { data: row, error } = await supabase
+      .from("oauth_pending_instagram_selections")
+      .select("id, user_id, social_profile_id, ig_candidates_json, expires_in, expires_at")
+      .eq("id", selection_id)
+      .maybeSingle();
+
+    if (error || !row) {
+      return jsonResponse({ success: false, error: "Selection not found or expired" }, 404);
+    }
+    if (row.user_id !== user_id) {
+      return jsonResponse({ success: false, error: "Forbidden" }, 403);
+    }
+    if (row.expires_at && new Date(row.expires_at) < new Date()) {
+      return jsonResponse({ success: false, error: "Selection expired" }, 404);
+    }
+
+    const candidates = (row.ig_candidates_json as IgCandidate[] | null) ?? [];
+    const candidate = candidates.find((c) => c.ig_user_id === ig_user_id);
+    if (!candidate) {
+      return jsonResponse({ success: false, error: "Account not in selection" }, 404);
+    }
+
+    const result = await persistOneIgAccount(
+      supabase,
+      user_id,
+      override_profile_id ?? row.social_profile_id ?? null,
+      candidate,
+      row.expires_in ?? 5184000,
+    );
+    if (!result.success) {
+      return jsonResponse({ success: false, error: result.error ?? "Save failed" }, 200);
+    }
+
+    return jsonResponse({
+      success: true,
+      ig_username: candidate.ig_username,
+      facebook_page_name: candidate.facebook_page_name,
+    });
+  }
+
+  // ---------------- clear_pending_selection: delete the stash row --------------
+  if (action === "clear_pending_selection") {
+    const selection_id = body.selection_id as string | undefined;
+    if (!selection_id) return jsonResponse({ error: "Missing selection_id" }, 400);
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    await supabase
+      .from("oauth_pending_instagram_selections")
+      .delete()
+      .eq("id", selection_id)
+      .eq("user_id", user_id);
+    return jsonResponse({ success: true });
+  }
+
+  if (action !== "authorize") {
+    return jsonResponse({ error: "Invalid request body" }, 400);
   }
 
   try {
