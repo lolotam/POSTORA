@@ -187,6 +187,16 @@ Deno.serve(async (req) => {
     }
 
     if (action === "authorize") {
+      if (!REDDIT_CLIENT_ID || !REDDIT_CLIENT_SECRET) {
+        console.error("Reddit OAuth not configured: missing REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET");
+        return new Response(
+          JSON.stringify({
+            error_code: "missing_config",
+            error: "Reddit isn't set up correctly on the server yet. Please contact support.",
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
       const scopes = "identity submit read";
 
       // Signed state carries profile_id + return_to. NEVER pass them as

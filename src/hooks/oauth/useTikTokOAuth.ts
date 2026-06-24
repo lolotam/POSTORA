@@ -27,6 +27,9 @@ export function useTikTokOAuth(
     });
 
     if (error) throw error;
+    if (data?.error) {
+      throw new Error(data.error);
+    }
     if (data?.url) {
       window.location.href = data.url;
     } else {
