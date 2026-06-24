@@ -55,7 +55,7 @@ const APIFY_ACTOR_KEYS = [
     icon: AtSign,
     color: "from-gray-500/20 to-gray-700/20",
     iconColor: "text-foreground",
-    defaultActor: "igview-owner/threads-post-scraper",
+    defaultActor: "apify/instagram-scraper",
   },
 ];
 

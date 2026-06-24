@@ -78,7 +78,7 @@ export function AiUsageAnalytics() {
       const thirtyDaysAgo = subDays(new Date(), 30).toISOString();
       const { data, error } = await supabase
         .from("system_logs")
-        .select("created_at, message, details, category")
+        .select("created_at, message, metadata, category")
         .eq("category", "ai")
         .gte("created_at", thirtyDaysAgo)
         .order("created_at", { ascending: true });
