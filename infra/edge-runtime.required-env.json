@@ -1,0 +1,671 @@
+{
+  "version": 1,
+  "description": "Canonical manifest of environment variables consumed by Supabase Edge Runtime functions in this repository. This is the single source of truth for: (1) the .env.example template, (2) the local env checker (scripts/check-edge-env-local.mjs), (3) the server env checker (scripts/check-edge-env-server.sh), and (4) the CI drift detector (npm run check:edge-env). SECURITY: values are never stored here. Each entry declares only a name, category, required flag, runtime target, aliases, and a human description. A variable marked required=false is only needed when the corresponding provider/platform is enabled.",
+  "note_on_injection": "Docker Compose .env interpolation (${VAR}) only substitutes values INTO the compose file. It does NOT inject variables into containers automatically. To reach the edge-functions container, variables must be passed via env_file: under the functions service OR explicitly mapped in its environment: block. See docs/EDGE_RUNTIME_ENV_RUNBOOK.md.",
+  "variables": [
+    {
+      "name": "SUPABASE_URL",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Base URL of the Supabase API gateway (Kong). Edge functions use this to call back into Postgres/auth."
+    },
+    {
+      "name": "SUPABASE_SERVICE_ROLE_KEY",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Service role JWT used by functions for privileged (bypass-RLS) database access."
+    },
+    {
+      "name": "SUPABASE_ANON_KEY",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": ["SUPABASE_PUBLISHABLE_KEY"],
+      "description": "Anon/publishable JWT. SUPABASE_PUBLISHABLE_KEY holds the SAME value and is an alias kept for naming compatibility."
+    },
+    {
+      "name": "SUPABASE_PUBLISHABLE_KEY",
+      "category": "supabase",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": ["SUPABASE_ANON_KEY"],
+      "description": "Alias for SUPABASE_ANON_KEY. At least one of the two MUST be set."
+    },
+    {
+      "name": "JWT_SECRET",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": ["SUPABASE_JWT_SECRET"],
+      "description": "HMAC secret used to sign/verify Supabase JWTs. SUPABASE_JWT_SECRET is an alias holding the same value."
+    },
+    {
+      "name": "SUPABASE_DB_URL",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Postgres connection string for direct DB access from functions when needed."
+    },
+    {
+      "name": "OAUTH_STATE_SECRET",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Secret used to sign/verify OAuth state parameters across all OAuth flows."
+    },
+    {
+      "name": "SITE_URL",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": ["PUBLIC_APP_ORIGIN"],
+      "description": "Public app origin used for redirects/callbacks. PUBLIC_APP_ORIGIN is an alias."
+    },
+    {
+      "name": "PUBLIC_APP_ORIGIN",
+      "category": "supabase",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": ["SITE_URL"],
+      "description": "Alias for SITE_URL."
+    },
+    {
+      "name": "PUBLIC_API_ORIGIN",
+      "category": "supabase",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Public API gateway origin. Defaults to the Supabase URL when unset."
+    },
+    {
+      "name": "SUPABASE_PROJECT_REF",
+      "category": "supabase",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Supabase project reference id. On self-hosted, use 'self-hosted'."
+    },
+
+    {
+      "name": "FACEBOOK_APP_ID",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Facebook/Meta app id. Required when Facebook/Instagram/Threads OAuth is enabled."
+    },
+    {
+      "name": "FACEBOOK_APP_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Facebook/Meta app secret. Required when Facebook/Instagram/Threads OAuth is enabled."
+    },
+    {
+      "name": "FACEBOOK_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for facebook-oauth function."
+    },
+    {
+      "name": "FACEBOOK_GRAPH_API_VERSION",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Meta Graph API version (e.g. v22.0). Defaults to v22.0."
+    },
+
+    {
+      "name": "INSTAGRAM_APP_ID",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Instagram app id (Meta). Required when Instagram OAuth is enabled."
+    },
+    {
+      "name": "INSTAGRAM_APP_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Instagram app secret (Meta)."
+    },
+    {
+      "name": "INSTAGRAM_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for instagram-oauth function."
+    },
+    {
+      "name": "INSTAGRAM_BUSINESS_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for instagram-business-oauth function."
+    },
+
+    {
+      "name": "THREADS_APP_ID",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Threads app id (Meta). Required when Threads OAuth is enabled."
+    },
+    {
+      "name": "THREADS_APP_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Threads app secret (Meta)."
+    },
+    {
+      "name": "THREADS_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for threads-oauth function."
+    },
+    {
+      "name": "THREADS_WEBHOOK_VERIFY_TOKEN",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Verify token for Threads webhook subscription."
+    },
+
+    {
+      "name": "TIKTOK_CLIENT_KEY",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "TikTok client key. Required when TikTok OAuth is enabled."
+    },
+    {
+      "name": "TIKTOK_CLIENT_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "TikTok client secret."
+    },
+    {
+      "name": "TIKTOK_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for tiktok-oauth function."
+    },
+    {
+      "name": "TIKTOK_WEBHOOK_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Signing secret for TikTok webhook verification."
+    },
+
+    {
+      "name": "PINTEREST_CLIENT_ID",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Pinterest client id. Required when Pinterest OAuth is enabled."
+    },
+    {
+      "name": "PINTEREST_CLIENT_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Pinterest client secret."
+    },
+    {
+      "name": "PINTEREST_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for pinterest-oauth function."
+    },
+
+    {
+      "name": "LINKEDIN_CLIENT_ID",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "LinkedIn client id. Required when LinkedIn OAuth is enabled."
+    },
+    {
+      "name": "LINKEDIN_CLIENT_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "LinkedIn client secret."
+    },
+    {
+      "name": "LINKEDIN_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for linkedin-oauth function."
+    },
+
+    {
+      "name": "TWITTER_CLIENT_ID",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Twitter/X OAuth2 client id. Required when X OAuth is enabled."
+    },
+    {
+      "name": "TWITTER_CLIENT_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Twitter/X OAuth2 client secret."
+    },
+    {
+      "name": "TWITTER_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for twitter-oauth function."
+    },
+
+    {
+      "name": "GOOGLE_CLIENT_ID",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Google OAuth client id. Used by YouTube OAuth."
+    },
+    {
+      "name": "GOOGLE_CLIENT_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Google OAuth client secret."
+    },
+    {
+      "name": "YOUTUBE_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for youtube-oauth function."
+    },
+
+    {
+      "name": "REDDIT_CLIENT_ID",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Reddit client id. Required when Reddit OAuth is enabled."
+    },
+    {
+      "name": "REDDIT_CLIENT_SECRET",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Reddit client secret."
+    },
+    {
+      "name": "REDDIT_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for reddit-oauth function."
+    },
+
+    {
+      "name": "BLUESKY_REDIRECT_URI",
+      "category": "oauth",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OAuth redirect URI for bluesky-oauth function."
+    },
+
+    {
+      "name": "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+      "category": "webhook",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Meta verify token for WhatsApp webhook subscription handshake."
+    },
+    {
+      "name": "WHATSAPP_VERIFY_PIN",
+      "category": "webhook",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Pin used in WhatsApp number verification flow."
+    },
+    {
+      "name": "WHATSAPP_ACCESS_TOKEN",
+      "category": "webhook",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "WhatsApp Cloud API access token for sending messages."
+    },
+    {
+      "name": "WHATSAPP_PHONE_NUMBER_ID",
+      "category": "webhook",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "WhatsApp business phone number id."
+    },
+    {
+      "name": "WHATSAPP_BUSINESS_ACCOUNT_ID",
+      "category": "webhook",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "WhatsApp business account id."
+    },
+    {
+      "name": "WHATSAPP_APP_SECRET",
+      "category": "webhook",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Meta app secret used to verify WhatsApp webhook X-Hub-Signature-256."
+    },
+    {
+      "name": "META_APP_SECRET",
+      "category": "webhook",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Meta app secret for general webhook signature verification (may be shared with WHATSAPP_APP_SECRET)."
+    },
+
+    {
+      "name": "RESEND_API_KEY",
+      "category": "email",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Resend API key for sending transactional email. Required when email is enabled."
+    },
+    {
+      "name": "RESEND_WEBHOOK_SECRET",
+      "category": "email",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Resend webhook signing secret used to verify inbound webhook signatures."
+    },
+    {
+      "name": "SEND_EMAIL_HOOK_SECRET",
+      "category": "email",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Optional shared secret gating the send-email hook endpoint."
+    },
+    {
+      "name": "EMAIL_FROM",
+      "category": "email",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": ["EMAIL_FROM_ADDRESS"],
+      "description": "From address for outbound email. EMAIL_FROM_ADDRESS is an alias."
+    },
+
+    {
+      "name": "STRIPE_SECRET_KEY",
+      "category": "stripe",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Stripe secret key for billing. Required when Stripe billing is enabled."
+    },
+    {
+      "name": "STRIPE_WEBHOOK_SECRET",
+      "category": "stripe",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Stripe webhook signing secret (whsec_...) for verifying webhook events."
+    },
+
+    {
+      "name": "OPENAI_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OpenAI API key for caption/hashtag/image generation."
+    },
+    {
+      "name": "OPENROUTER_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "OpenRouter API key (multi-model gateway)."
+    },
+    {
+      "name": "ANTHROPIC_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Anthropic API key."
+    },
+    {
+      "name": "GEMINI_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Google Gemini API key."
+    },
+    {
+      "name": "GOOGLE_AI_STUDIO_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": ["GOOGLE_API_KEY"],
+      "description": "Google AI Studio key. GOOGLE_API_KEY is an alias holding the same value."
+    },
+    {
+      "name": "PERPLEXITY_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Perplexity API key."
+    },
+    {
+      "name": "XAI_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "xAI (Grok) API key."
+    },
+    {
+      "name": "ZAI_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "ZhipuAI API key."
+    },
+    {
+      "name": "MINIMAX_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "MiniMax API key."
+    },
+    {
+      "name": "MINIMAX_GROUP_ID",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "MiniMax group id."
+    },
+    {
+      "name": "ELEVENLABS_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "ElevenLabs API key for text-to-speech."
+    },
+    {
+      "name": "LOVABLE_API_KEY",
+      "category": "ai",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Lovable image generation API key."
+    },
+
+    {
+      "name": "BRAVE_SEARCH_API_KEY",
+      "category": "scraping",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Brave Search API key for web search."
+    },
+    {
+      "name": "EXA_API_KEY",
+      "category": "scraping",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Exa search API key."
+    },
+    {
+      "name": "FIRECRAWL_API_KEY",
+      "category": "scraping",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Firecrawl API key for web scraping."
+    },
+    {
+      "name": "APIFY_API_KEY",
+      "category": "scraping",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": ["APIFY_API_TOKEN"],
+      "description": "Apify API key/token for scraper actors. Edge functions (ai-config) look up APIFY_API_KEY. APIFY_API_TOKEN is a legacy alias holding the same value."
+    },
+
+    {
+      "name": "UNSPLASH_ACCESS_KEY",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Unsplash API access key for stock photos."
+    },
+    {
+      "name": "CLOUDINARY_CLOUD_NAME",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Cloudinary cloud name for media transformations."
+    },
+    {
+      "name": "CLOUDINARY_API_KEY",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Cloudinary API key."
+    },
+    {
+      "name": "CLOUDINARY_API_SECRET",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Cloudinary API secret."
+    },
+    {
+      "name": "ACRCLOUD_HOST",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "ACRCloud host for music copyright detection."
+    },
+    {
+      "name": "ACRCLOUD_ACCESS_KEY",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "ACRCloud access key."
+    },
+    {
+      "name": "ACRCLOUD_ACCESS_SECRET",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "ACRCloud access secret."
+    },
+    {
+      "name": "DEEPGRAM_API_KEY",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Deepgram API key for audio transcription."
+    },
+    {
+      "name": "ATLASCLOUD_API_KEY",
+      "category": "media",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "AtlasCloud API key."
+    }
+  ]
+}
