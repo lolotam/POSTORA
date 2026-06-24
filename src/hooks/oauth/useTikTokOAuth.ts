@@ -4,6 +4,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { OAUTH_CALLBACKS, buildReturnUrl } from "@/lib/oauthRedirects";
 import { refetchSocialQueries } from "./oauthUtils";
+import { describeOAuthError } from "./oauthErrors";
 
 export function useTikTokOAuth(
   setConnectingPlatform: (p: any) => void,
@@ -63,8 +64,7 @@ export function useTikTokOAuth(
       console.error("TikTok callback error:", error);
       toast({
         title: "Connection failed",
-        description:
-          error instanceof Error ? error.message : "Failed to connect TikTok",
+        description: await describeOAuthError(error, "TikTok"),
         variant: "destructive",
       });
     } finally {

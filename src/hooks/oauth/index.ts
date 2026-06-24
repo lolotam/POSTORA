@@ -11,3 +11,5 @@ export { useInstagramOAuth } from "./useInstagramOAuth";
 export { useOAuthRedirectHandler } from "./useOAuthRedirectHandler";
 
 export type { FacebookPage, StandaloneInstagram, PageSelectionData } from "./useFacebookOAuth";
+
+export { describeOAuthError, type OAuthPlatformLabel } from "./oauthErrors";
