@@ -296,6 +296,14 @@ Deno.serve(async (req) => {
   }
 
   try {
+    if (configMissing()) {
+      console.error("Instagram Business OAuth not configured: missing FACEBOOK_APP_ID/SECRET or redirect URI");
+      return jsonResponse({
+        error_code: "missing_config",
+        error: "Instagram Business isn't set up correctly on the server yet. Please contact support.",
+      }, 200);
+    }
+
     const social_profile_id = (body.social_profile_id as string | null | undefined) ?? null;
     const return_to =
       (body.return_to as string | undefined) ??
