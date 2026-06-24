@@ -335,16 +335,14 @@ export default function Profiles() {
         }}
       />
 
-      <LinkedInConnectDialog
-        open={!!linkedinConnectProfileId}
-        onOpenChange={(open) => { if (!open) setLinkedinConnectProfileId(null); }}
-        disabled={connectingPlatform === "linkedin"}
-        onSelect={(flow: LinkedInFlow) => {
-          if (linkedinConnectProfileId) {
-            handleLinkedInConnect(linkedinConnectProfileId, flow);
-            setLinkedinConnectProfileId(null);
-          }
-        }}
+      <InstagramSelectionDialog
+        open={!!igSelectionData}
+        onOpenChange={(open) => { if (!open && !selectingIg) clearIgSelection(); }}
+        accounts={igSelectionData?.accounts ?? []}
+        selectingId={selectingIg}
+        connectedIds={connectedIgIds}
+        onSelect={handleSelectIgAccount}
+        onDone={clearIgSelection}
       />
 
       <UpgradeModal
