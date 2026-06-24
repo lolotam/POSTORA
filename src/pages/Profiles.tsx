@@ -35,8 +35,8 @@ import {
   ConnectionTroubleshooter,
   PlatformAccountsTab,
 } from "@/components/profiles";
-import { LinkedInConnectDialog, type LinkedInFlow } from "@/components/profiles/LinkedInConnectDialog";
 import { InstagramConnectDialog, type InstagramFlow } from "@/components/profiles/InstagramConnectDialog";
+import { InstagramSelectionDialog } from "@/components/profiles/InstagramSelectionDialog";
 import { TikTokDebugPanel } from "@/components/profiles/TikTokDebugPanel";
 import { ThreadsDebugPanel } from "@/components/admin/ThreadsDebugPanel";
 import { UpgradeModal } from "@/components/UpgradeModal";
@@ -53,7 +53,6 @@ export default function Profiles() {
     max?: number;
   }>({ open: false, type: "social_account" });
   const [igConfirmProfileId, setIgConfirmProfileId] = useState<string | null>(null);
-  const [linkedinConnectProfileId, setLinkedinConnectProfileId] = useState<string | null>(null);
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
   const { toast } = useToast();
   const { user } = useAuth();
@@ -97,6 +96,11 @@ export default function Profiles() {
     handleLinkedInConnect,
     clearPageSelection,
     clearBlueskyDialog,
+    igSelectionData,
+    selectingIg,
+    connectedIgIds,
+    handleSelectIgAccount,
+    clearIgSelection,
   } = useProfileOAuth();
 
   const handleConnectPlatform = async (profileId: string, platform: Platform) => {
@@ -114,11 +118,6 @@ export default function Profiles() {
     // Instagram: show flow-choice dialog (Direct vs Facebook Business)
     if (platform === "instagram") {
       setIgConfirmProfileId(profileId);
-      return;
-    }
-    // LinkedIn: show flow-choice dialog (Personal vs Organization)
-    if (platform === "linkedin") {
-      setLinkedinConnectProfileId(profileId);
       return;
     }
     originalHandleConnectPlatform(profileId, platform);
