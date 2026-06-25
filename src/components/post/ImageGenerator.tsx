@@ -524,6 +524,12 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                   ))}
                 </SelectContent>
               </Select>
+              {SLOW_MODELS.has(model) && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5 mt-1">
+                  <Loader2 className="w-3 h-3 mt-0.5 shrink-0" />
+                  GPT Image 2 typically takes <strong className="mx-1">1–2 minutes</strong> per image. Please keep this dialog open while it generates — don't refresh.
+                </p>
+              )}
             </div>
 
             {/* Reference Images - Only show for Nano Banana models */}
