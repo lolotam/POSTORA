@@ -482,12 +482,12 @@ async function testMinimax(key: string, ep: string) {
 }
 
 async function testFirecrawl(key: string) {
-  // /v1/team and /v1/key do not exist (both return 404). A minimal scrape of
-  // a stable URL validates the key: bad key -> 401, valid key -> 200.
-  const res = await fetch('https://api.firecrawl.dev/v1/scrape', {
+  // Firecrawl v2 is the current API. A minimal scrape of a stable URL
+  // validates the key: bad key -> 401, valid key -> 200.
+  const res = await fetch('https://api.firecrawl.dev/v2/scrape', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url: 'https://example.com' }),
+    body: JSON.stringify({ url: 'https://example.com', formats: ['markdown'] }),
   });
   await handleRes(res, 'Firecrawl');
 }
