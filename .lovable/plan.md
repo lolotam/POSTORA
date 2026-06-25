@@ -1,52 +1,81 @@
-## OTP + Cron Auth Security Hardening — Plan
+## OAuth Public Redirect Hardening — Plan
 
-### Phase 1 — OTP audit (`send-reset-otp`)
-Read the function and verify against checklist: no `debug_otp` in response, no OTP logging, 503 when `RESEND_API_KEY` missing, OTP stored hashed (SHA-256 / bcrypt), expiry enforced, single-use marker, old OTPs invalidated on reissue, constant-time compare on verify side, generic response (no email-existence leak), per-email/IP rate limit, sanitized errors. Apply minimal fixes only for confirmed gaps.
+### Current state (verified by reading the files)
 
-### Phase 2 — `_shared/cron-auth.ts` audit
-Read helper; confirm: missing/invalid secret → 401, both `Authorization: Bearer` and `x-cron-secret` accepted, service-role fallback documented and gated, no secret logging, no broad try/catch swallowing auth failure, CORS preflight still returns before auth check in callers.
+- `youtube-oauth/index.ts` — redirect fallback already hardened (uses `PUBLIC_API_ORIGIN`, no `SUPABASE_URL` fallback). **Scope is still the broad `https://www.googleapis.com/auth/youtube`** (lines 141–142) — needs narrowing.
+- `linkedin-oauth/index.ts` (lines 17–19) — falls back to `${SUPABASE_URL}/functions/v1/linkedin-oauth` → can resolve to `http://kong:8000/...`. **Vulnerable.**
+- `instagram-oauth/index.ts` (lines 26–28) — same `SUPABASE_URL` fallback. **Vulnerable.**
+- `instagram-business-oauth/index.ts` (lines 28–30) — same `SUPABASE_URL` fallback. **Vulnerable.**
+- `facebook-oauth/index.ts` (lines 13–17) — same `SUPABASE_URL` fallback. **Vulnerable.**
+- `infra/edge-runtime.required-env.json` — `PUBLIC_API_ORIGIN` already present ✅
+- `.env.example` — `PUBLIC_API_ORIGIN=https://api.postora.cloud` already present ✅
 
-### Phase 3 — Coverage check
-`grep -R "verifyCronAuth" supabase/functions` and confirm the 9 listed functions each import and call it before any work. Report any unprotected scheduled function found.
+### Changes
 
-### Phase 4 — Env manifest
-Inspect `infra/edge-runtime.required-env.json` and `.env.example` — add `CRON_SECRET` entry/placeholder if missing. Report production/container presence as `present|missing|empty|invalid_format` only. Do not generate a value.
+**1. `supabase/functions/youtube-oauth/index.ts`** — scope narrowing only (redirect already correct)
 
-### Phase 5 — Manual SQL migration (no execution)
-Create `supabase/migrations/<ts>_update_pg_cron_auth_headers.sql` containing:
-- `cron.unschedule` + `cron.schedule` re-registrations for the 9 jobs
-- URLs pinned to `https://api.postora.cloud/functions/v1/<fn>`
-- Header `Authorization: Bearer <CRON_SECRET_FROM_PRODUCTION_ENV>` placeholder
-- Comments: owner must substitute placeholder, run manually, replace any legacy `efruibswazzuuupgyzmf.supabase.co` URLs
-- Rollback notes (re-schedule previous job definitions)
-- Affected job list
+Replace lines 139–143:
+```ts
+const scopes = [
+  "https://www.googleapis.com/auth/youtube.readonly",
+  "https://www.googleapis.com/auth/youtube.upload",
+].join(" ");
+```
+Keep `response_type=code`, `access_type=offline`, `prompt=consent`, `include_granted_scopes=true` unchanged. Token exchange, state HMAC, channel fetch, DB write — all untouched.
 
-### Phase 6 — Deployment verification (self-hosted only)
-Via `ssh-contabo-mcp`: hash-compare repo function files vs `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions`. Report drift only; do NOT auto-sync. Check container logs for boot errors / `InvalidWorkerCreation` after restart (owner-triggered).
+**2. `supabase/functions/linkedin-oauth/index.ts`** — redirect fallback hardening
 
-### Phase 7 — Safe endpoint tests
-For each of the 9 functions:
-- No auth → expect 401/403
-- Wrong secret → expect 401/403
-- Valid secret: only for non-destructive (`observability-collector`, possibly `cleanup-media` dry-side). All others (`process-scheduled-posts/emails/blog-posts/flags`, `refresh-tokens`, `send-expiry-reminders`, `send-weekly-analytics`) → `not_tested_safe`.
+Replace lines 17–19:
+```ts
+const PUBLIC_API_ORIGIN =
+  Deno.env.get("PUBLIC_API_ORIGIN") ?? "https://api.postora.cloud";
+const LINKEDIN_REDIRECT_URI =
+  Deno.env.get("LINKEDIN_REDIRECT_URI") ??
+  `${PUBLIC_API_ORIGIN}/functions/v1/linkedin-oauth`;
+```
+Keep `SUPABASE_URL` intact (still used at lines 218/227/333/440 for internal Supabase calls). No scope change.
 
-### Phase 8 — Supply-chain
-File a follow-up: "Dependency vulnerability audit and safe upgrade plan". No fixes this task.
+**3. `supabase/functions/instagram-oauth/index.ts`** — same pattern, replace lines 26–28 with `INSTAGRAM_REDIRECT_URI` derived from `PUBLIC_API_ORIGIN`. No scope change.
 
-### Phase 9 — Validation
-Run: `check:edge-env`, `build`, `lint`, `vitest run`, `git diff --check`, and the four grep checks. Allow legacy refs only in historical migrations / archived docs.
+**4. `supabase/functions/instagram-business-oauth/index.ts`** — same pattern, replace lines 28–30 with `INSTAGRAM_BUSINESS_REDIRECT_URI` derived from `PUBLIC_API_ORIGIN`. No scope change.
 
-### Phase 10 — Guard reviews
-CleanCodeGuard on `send-reset-otp/index.ts`, `_shared/cron-auth.ts`, and any cron function modified. TestGuard skipped unless test files changed.
+**5. `supabase/functions/facebook-oauth/index.ts`** — same pattern, replace lines 13–17 with `FACEBOOK_REDIRECT_URI` derived from `PUBLIC_API_ORIGIN`. No scope change.
 
-### Phase 11 — Final report
-Structured 13-section report with masked status only. Final status one of: `completed`, `completed_requires_manual_sql`, `completed_requires_cron_secret`, `blocked_by_missing_cron_secret`, `blocked`.
+### Out of scope (explicitly not touching)
 
-### Guardrails honored
-- No SQL execution, no destructive ops
-- No secret/OTP/token printing
-- No Supabase Cloud / `efruibswazzuuupgyzmf` deploys
-- No n8n behavior changes
-- DB changes delivered as manual SQL only
+- Token exchange logic, account-storage logic, frontend behavior.
+- Google login / Supabase Auth callback (separate flow).
+- Other OAuth functions (tiktok, threads, pinterest, twitter, reddit, bluesky) — not in user-specified list.
+- n8n, database, secrets, SQL.
 
-Approve to switch to build mode and execute phases 1–11.
+### Env
+
+No env changes needed — `PUBLIC_API_ORIGIN` already in manifest + `.env.example`.
+
+### Database
+
+None.
+
+### Validation (after edits)
+
+- `npm run check:edge-env`
+- `npm run build`
+- `npm run lint`
+- `npx vitest run`
+- Greps for `http://kong:8000`, `efruibswazzuuupgyzmf`, `.supabase.co/functions/v1`, `supabase.postora.cloud` against `src supabase/functions scripts public`.
+- CleanCodeGuard self-check on the 5 changed files.
+- TestGuard: no test files changed → not required.
+
+### Manual production actions (owner / Zed — Lovable cannot do these)
+
+1. Sync the 5 changed Edge Function files to `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions`.
+2. Ensure production `.env` contains:
+   - `PUBLIC_API_ORIGIN=https://api.postora.cloud`
+   - `YOUTUBE_REDIRECT_URI=https://api.postora.cloud/functions/v1/youtube-oauth` (optional belt-and-suspenders)
+3. `docker compose up -d --no-deps functions`
+4. Run server env checker (`scripts/check-edge-env-server.sh`).
+5. Real OAuth tests for YouTube, LinkedIn, Instagram (direct + business), Facebook.
+
+### Expected final status
+
+`completed_ready_for_server_sync`
