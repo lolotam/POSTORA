@@ -23,9 +23,15 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const INSTAGRAM_APP_ID = Deno.env.get("INSTAGRAM_APP_ID")!;
 const INSTAGRAM_APP_SECRET = Deno.env.get("INSTAGRAM_APP_SECRET")!;
+// Public origin used to derive the OAuth redirect URI registered with Instagram.
+// On self-hosted Supabase, SUPABASE_URL points at the internal Kong gateway
+// (http://kong:8000), which is unreachable from the provider — never derive
+// the redirect_uri from it.
+const PUBLIC_API_ORIGIN =
+  Deno.env.get("PUBLIC_API_ORIGIN") ?? "https://api.postora.cloud";
 const INSTAGRAM_REDIRECT_URI =
   Deno.env.get("INSTAGRAM_REDIRECT_URI") ??
-  (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/instagram-oauth` : "");
+  `${PUBLIC_API_ORIGIN}/functions/v1/instagram-oauth`;
 const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
 
 const IG_SCOPES = [

@@ -25,9 +25,15 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const FACEBOOK_APP_ID = Deno.env.get("FACEBOOK_APP_ID")!;
 const FACEBOOK_APP_SECRET = Deno.env.get("FACEBOOK_APP_SECRET")!;
+// Public origin used to derive the OAuth redirect URI registered with Meta.
+// On self-hosted Supabase, SUPABASE_URL points at the internal Kong gateway
+// (http://kong:8000), which is unreachable from the provider — never derive
+// the redirect_uri from it.
+const PUBLIC_API_ORIGIN =
+  Deno.env.get("PUBLIC_API_ORIGIN") ?? "https://api.postora.cloud";
 const INSTAGRAM_BUSINESS_REDIRECT_URI =
   Deno.env.get("INSTAGRAM_BUSINESS_REDIRECT_URI") ??
-  (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/instagram-business-oauth` : "");
+  `${PUBLIC_API_ORIGIN}/functions/v1/instagram-business-oauth`;
 const GRAPH_VERSION = Deno.env.get("FACEBOOK_GRAPH_API_VERSION") ?? "v22.0";
 const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
 

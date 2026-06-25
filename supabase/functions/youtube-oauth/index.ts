@@ -136,10 +136,11 @@ Deno.serve(async (req) => {
 
       if (!returnTo) throw new Error("Missing return_to");
 
-      // Single scope: `youtube` is a superset of youtube.readonly and youtube.upload.
-      // It also covers thumbnails/set and commentThreads which the narrower scopes don't.
+      // Narrow scopes matching what Google has approved for this app.
+      // Broad `auth/youtube` is a restricted scope that triggers extra verification.
       const scopes = [
-        "https://www.googleapis.com/auth/youtube",
+        "https://www.googleapis.com/auth/youtube.readonly",
+        "https://www.googleapis.com/auth/youtube.upload",
       ].join(" ");
 
       const state = await buildSignedState({
