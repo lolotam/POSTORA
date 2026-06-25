@@ -109,6 +109,7 @@ export function AppCredentialsSettings() {
   const fetchSecrets = async () => {
     try {
       setLoading(true);
+      setUnavailableMessage(null);
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 
@@ -119,8 +120,12 @@ export function AppCredentialsSettings() {
       if (error) throw error;
       if (data?.success) {
         setSecrets(data.data);
+      } else if (data?.error_code === "management_api_unavailable") {
+        // Self-hosted: secrets are managed via host .env / Dokploy.
+        setSecrets({});
+        setUnavailableMessage(data?.message || "Remote secret management is unavailable on self-hosted Supabase.");
       } else {
-        throw new Error(data?.error || "Failed to fetch");
+        throw new Error(data?.error || data?.message || "Failed to fetch");
       }
     } catch (err: any) {
       toast({ title: "Error loading credentials", description: err.message, variant: "destructive" });
