@@ -3,9 +3,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
 
 // Model mapping for different APIs
-const MODEL_CONFIG: Record<string, { api: 'lovable' | 'google', model: string }> = {
+const MODEL_CONFIG: Record<string, { api: 'lovable' | 'google' | 'lovable_images', model: string }> = {
   'google/gemini-2.5-flash-image': { api: 'lovable', model: 'google/gemini-2.5-flash-image' },
   'google/gemini-3-pro-image-preview': { api: 'lovable', model: 'google/gemini-3-pro-image-preview' },
+  'openai/gpt-image-2': { api: 'lovable_images', model: 'openai/gpt-image-2' },
   'imagen-4.0-generate-001': { api: 'google', model: 'imagen-4.0-generate-001' },
   'imagen-4.0-ultra-generate-001': { api: 'google', model: 'imagen-4.0-ultra-generate-001' },
 };
