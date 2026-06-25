@@ -2,14 +2,204 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
 
-// Model mapping for different APIs
-const MODEL_CONFIG: Record<string, { api: 'lovable' | 'google' | 'lovable_images', model: string }> = {
-  'google/gemini-2.5-flash-image': { api: 'lovable', model: 'google/gemini-2.5-flash-image' },
-  'google/gemini-3-pro-image-preview': { api: 'lovable', model: 'google/gemini-3-pro-image-preview' },
-  'openai/gpt-image-2': { api: 'lovable_images', model: 'openai/gpt-image-2' },
-  'imagen-4.0-generate-001': { api: 'google', model: 'imagen-4.0-generate-001' },
-  'imagen-4.0-ultra-generate-001': { api: 'google', model: 'imagen-4.0-ultra-generate-001' },
+// =====================================================================
+// Image model resolution — reads from admin dashboard settings:
+//   system_settings.default_ai_model_image           (primary)
+//   system_settings.default_ai_model_image_fallback  (fallback)
+//   + final hardcoded fallback: Imagen via GOOGLE_AI_STUDIO_KEY.
+// No Lovable AI Gateway dependency. Each provider is called directly
+// with its own api_key (env var first, provider_api_keys table second).
+// =====================================================================
+
+interface ResolvedModel {
+  provider_code: string;
+  model_id: string;
+  api_endpoint: string;
+  api_key_env_var: string;
+  api_type: string; // 'openai' | 'google' | ...
+  source: 'requested' | 'primary' | 'fallback' | 'hardcoded';
+}
+
+const HARDCODED_FALLBACK: ResolvedModel = {
+  provider_code: 'gemini',
+  model_id: 'imagen-4.0-generate-001',
+  api_endpoint: 'https://generativelanguage.googleapis.com/v1beta',
+  api_key_env_var: 'GOOGLE_AI_STUDIO_KEY',
+  api_type: 'google',
+  source: 'hardcoded',
 };
+
+async function lookupModelByProviderAndId(
+  supabaseAdmin: any,
+  provider_code: string,
+  model_id: string,
+  source: ResolvedModel['source'],
+): Promise<ResolvedModel | null> {
+  const { data } = await supabaseAdmin
+    .from('ai_models')
+    .select('model_id, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
+    .eq('model_id', model_id)
+    .eq('ai_providers.provider_code', provider_code)
+    .eq('is_active', true)
+    .maybeSingle();
+  if (!data?.ai_providers || !data.ai_providers.is_active) return null;
+  return {
+    provider_code: data.ai_providers.provider_code,
+    model_id: data.model_id,
+    api_endpoint: data.ai_providers.api_endpoint,
+    api_key_env_var: data.ai_providers.api_key_env_var,
+    api_type: data.ai_providers.api_type,
+    source,
+  };
+}
+
+async function getSystemSettingModel(
+  supabaseAdmin: any,
+  key: string,
+  source: ResolvedModel['source'],
+): Promise<ResolvedModel | null> {
+  const { data } = await supabaseAdmin.from('system_settings').select('value').eq('key', key).maybeSingle();
+  const v = data?.value;
+  if (!v?.provider_code || !v?.model_id) return null;
+  return lookupModelByProviderAndId(supabaseAdmin, v.provider_code, v.model_id, source);
+}
+
+async function resolveModelChain(supabaseAdmin: any, requestedModelId?: string): Promise<ResolvedModel[]> {
+  const chain: ResolvedModel[] = [];
+  const seen = new Set<string>();
+  const push = (m: ResolvedModel | null) => {
+    if (!m) return;
+    const k = `${m.provider_code}::${m.model_id}`;
+    if (seen.has(k)) return;
+    seen.add(k);
+    chain.push(m);
+  };
+
+  // 1. Requested model (frontend dropdown picked something explicit)
+  if (requestedModelId) {
+    const { data } = await supabaseAdmin
+      .from('ai_models')
+      .select('model_id, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
+      .eq('model_id', requestedModelId)
+      .eq('is_active', true)
+      .maybeSingle();
+    if (data?.ai_providers?.is_active) {
+      push({
+        provider_code: data.ai_providers.provider_code,
+        model_id: data.model_id,
+        api_endpoint: data.ai_providers.api_endpoint,
+        api_key_env_var: data.ai_providers.api_key_env_var,
+        api_type: data.ai_providers.api_type,
+        source: 'requested',
+      });
+    }
+  }
+
+  // 2. Admin primary
+  push(await getSystemSettingModel(supabaseAdmin, 'default_ai_model_image', 'primary'));
+  // 3. Admin fallback
+  push(await getSystemSettingModel(supabaseAdmin, 'default_ai_model_image_fallback', 'fallback'));
+  // 4. Hardcoded last-resort
+  push(HARDCODED_FALLBACK);
+
+  return chain;
+}
+
+async function getProviderApiKey(supabaseAdmin: any, m: ResolvedModel): Promise<string | null> {
+  const fromEnv = Deno.env.get(m.api_key_env_var);
+  if (fromEnv) return fromEnv;
+  const { data } = await supabaseAdmin
+    .from('provider_api_keys')
+    .select('api_key')
+    .eq('provider_code', m.provider_code)
+    .maybeSingle();
+  return data?.api_key || null;
+}
+
+// ── Provider dispatchers ──────────────────────────────────────────────
+// Each returns { imageUrl, description } or throws.
+
+const OPENAI_SIZE_MAP: Record<string, string> = {
+  '1:1': '1024x1024',
+  '16:9': '1536x1024',
+  '9:16': '1024x1536',
+  '4:5': '1024x1280',
+  '4:3': '1280x1024',
+  '2:3': '1024x1536',
+  '3:2': '1536x1024',
+};
+
+async function callOpenAIImages(m: ResolvedModel, apiKey: string, prompt: string, aspectRatio: string) {
+  const size = OPENAI_SIZE_MAP[aspectRatio] || '1024x1024';
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 230_000);
+  try {
+    const resp = await fetch(`${m.api_endpoint.replace(/\/$/, '')}/images/generations`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: m.model_id, prompt, size, n: 1, quality: 'low' }),
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`OpenAI ${resp.status}: ${text.slice(0, 300)}`);
+    }
+    const data = await resp.json();
+    const b64 = data?.data?.[0]?.b64_json;
+    if (!b64) throw new Error(`OpenAI returned no image: ${JSON.stringify(data).slice(0, 200)}`);
+    return { imageUrl: `data:image/png;base64,${b64}`, description: 'Image generated successfully' };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function callGoogleGenerateContent(m: ResolvedModel, apiKey: string, prompt: string, aspectRatio: string) {
+  const body: any = {
+    contents: [{ parts: [{ text: prompt }] }],
+  };
+  // Image-capable Gemini models accept imageConfig under generationConfig
+  if (m.model_id.includes('image') && aspectRatio && aspectRatio !== 'free') {
+    body.generationConfig = {
+      responseModalities: ['TEXT', 'IMAGE'],
+      imageConfig: { aspectRatio },
+    };
+  }
+  const resp = await fetch(`${m.api_endpoint.replace(/\/$/, '')}/models/${m.model_id}:generateContent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new Error(`Google ${resp.status}: ${text.slice(0, 300)}`);
+  }
+  const data = await resp.json();
+  const parts = data?.candidates?.[0]?.content?.parts || [];
+  const imagePart = parts.find((p: any) => p.inline_data?.mime_type?.startsWith('image/') || p.inlineData?.mimeType?.startsWith('image/'));
+  if (!imagePart) {
+    throw new Error(`Google returned no image: ${JSON.stringify(data).slice(0, 200)}`);
+  }
+  const inline = imagePart.inline_data || imagePart.inlineData;
+  const mime = inline.mime_type || inline.mimeType;
+  const b64 = inline.data;
+  const textPart = parts.find((p: any) => p.text);
+  return { imageUrl: `data:${mime};base64,${b64}`, description: textPart?.text || 'Image generated successfully' };
+}
+
+async function generateWithModel(
+  m: ResolvedModel,
+  apiKey: string,
+  prompt: string,
+  aspectRatio: string,
+): Promise<{ imageUrl: string; description: string }> {
+  if (m.api_type === 'openai' || m.provider_code === 'openai') {
+    return callOpenAIImages(m, apiKey, prompt, aspectRatio);
+  }
+  if (m.api_type === 'google' || m.provider_code === 'gemini') {
+    return callGoogleGenerateContent(m, apiKey, prompt, aspectRatio);
+  }
+  throw new Error(`Unsupported provider api_type='${m.api_type}' (provider=${m.provider_code})`);
+}
 
 interface TierRateLimitConfig {
   maxRequestsPerHour: number;
