@@ -1,45 +1,52 @@
-## Plan: Debug and fix AI image generation
+## OTP + Cron Auth Security Hardening — Plan
 
-### Diagnosis from code inspection
-The current failure is very likely inside `supabase/functions/generate-image/index.ts`, not the toast UI.
+### Phase 1 — OTP audit (`send-reset-otp`)
+Read the function and verify against checklist: no `debug_otp` in response, no OTP logging, 503 when `RESEND_API_KEY` missing, OTP stored hashed (SHA-256 / bcrypt), expiry enforced, single-use marker, old OTPs invalidated on reissue, constant-time compare on verify side, generic response (no email-existence leak), per-email/IP rate limit, sanitized errors. Apply minimal fixes only for confirmed gaps.
 
-Key problems found:
-- The function calls `https://ai.gateway.lovable.dev/v1/chat/completions` for image generation, but the supported image-generation path should use `/v1/images/generations` for OpenAI image models and a model-specific request body for Gemini image models.
-- The UI has hardcoded image models that do not match the current supported catalog exactly:
-  - `google/gemini-3-pro-image-preview` should be replaced with supported IDs like `google/gemini-3-pro-image` or `google/gemini-3.1-flash-image`.
-- `generate-image` ignores the admin default image model from `/admin/settings`; it only uses the model sent by the UI and then falls back to a hardcoded Gemini model.
-- The previous manual SQL added newer image model rows, but the runtime function still maps only old/hardcoded IDs.
-- The current error mapping hides the real provider error behind a generic “AI service temporarily unavailable” message.
+### Phase 2 — `_shared/cron-auth.ts` audit
+Read helper; confirm: missing/invalid secret → 401, both `Authorization: Bearer` and `x-cron-secret` accepted, service-role fallback documented and gated, no secret logging, no broad try/catch swallowing auth failure, CORS preflight still returns before auth check in callers.
 
-### Implementation steps
-1. **Fix supported image model catalog in the frontend**
-   - Update `src/components/post/ImageGenerator.tsx` image model choices to use supported model IDs.
-   - Remove or replace unsupported/legacy image model IDs that can cause guaranteed provider failure.
+### Phase 3 — Coverage check
+`grep -R "verifyCronAuth" supabase/functions` and confirm the 9 listed functions each import and call it before any work. Report any unprotected scheduled function found.
 
-2. **Fix the `generate-image` Edge Function request path**
-   - Update `supabase/functions/generate-image/index.ts` so image generation uses the proper Gateway image endpoint and body shape.
-   - For `openai/gpt-image-2` / `openai/gpt-image-1-mini`: send `{ model, prompt, quality, size, n, stream: false }` or non-streaming JSON for this current UI.
-   - For `google/gemini-*image*`: send `{ model, messages, modalities: ['image','text'], stream: false }`.
-   - Parse the normalized response from `data[0].b64_json` and return `data:image/png;base64,...` to the existing UI.
+### Phase 4 — Env manifest
+Inspect `infra/edge-runtime.required-env.json` and `.env.example` — add `CRON_SECRET` entry/placeholder if missing. Report production/container presence as `present|missing|empty|invalid_format` only. Do not generate a value.
 
-3. **Use admin default image model safely**
-   - If the client does not send a valid supported image model, resolve `default_ai_model_image` via `get_active_ai_model_config(user.id, 'image')`.
-   - If the admin default is unsupported/legacy, fall back to a known working supported model.
+### Phase 5 — Manual SQL migration (no execution)
+Create `supabase/migrations/<ts>_update_pg_cron_auth_headers.sql` containing:
+- `cron.unschedule` + `cron.schedule` re-registrations for the 9 jobs
+- URLs pinned to `https://api.postora.cloud/functions/v1/<fn>`
+- Header `Authorization: Bearer <CRON_SECRET_FROM_PRODUCTION_ENV>` placeholder
+- Comments: owner must substitute placeholder, run manually, replace any legacy `efruibswazzuuupgyzmf.supabase.co` URLs
+- Rollback notes (re-schedule previous job definitions)
+- Affected job list
 
-4. **Improve diagnostics without leaking secrets**
-   - Log sanitized provider status/error code to `system_logs`.
-   - Return structured `success:false` error codes with a more useful message, without printing API keys or raw secret values.
-   - Preserve existing CORS behavior.
+### Phase 6 — Deployment verification (self-hosted only)
+Via `ssh-contabo-mcp`: hash-compare repo function files vs `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions`. Report drift only; do NOT auto-sync. Check container logs for boot errors / `InvalidWorkerCreation` after restart (owner-triggered).
 
-5. **Manual SQL script only if needed**
-   - Create a manual SQL file to update stale default image model settings to supported IDs if the database currently points to retired/unsupported values.
-   - The SQL will not be executed automatically.
+### Phase 7 — Safe endpoint tests
+For each of the 9 functions:
+- No auth → expect 401/403
+- Wrong secret → expect 401/403
+- Valid secret: only for non-destructive (`observability-collector`, possibly `cleanup-media` dry-side). All others (`process-scheduled-posts/emails/blog-posts/flags`, `refresh-tokens`, `send-expiry-reminders`, `send-weekly-analytics`) → `not_tested_safe`.
 
-6. **Validation**
-   - Run available validation scripts from `package.json` only.
-   - Run `git diff --check`.
-   - Review changed production code with CleanCodeGuard.
-   - TestGuard: no test-code review unless test files are changed.
+### Phase 8 — Supply-chain
+File a follow-up: "Dependency vulnerability audit and safe upgrade plan". No fixes this task.
 
-### External/manual actions required after implementation
-Because this project is self-hosted, code changes to Edge Functions will not take effect until you deploy/restart the function on the Contabo self-hosted stack. I will include the exact deploy command in the final report.
+### Phase 9 — Validation
+Run: `check:edge-env`, `build`, `lint`, `vitest run`, `git diff --check`, and the four grep checks. Allow legacy refs only in historical migrations / archived docs.
+
+### Phase 10 — Guard reviews
+CleanCodeGuard on `send-reset-otp/index.ts`, `_shared/cron-auth.ts`, and any cron function modified. TestGuard skipped unless test files changed.
+
+### Phase 11 — Final report
+Structured 13-section report with masked status only. Final status one of: `completed`, `completed_requires_manual_sql`, `completed_requires_cron_secret`, `blocked_by_missing_cron_secret`, `blocked`.
+
+### Guardrails honored
+- No SQL execution, no destructive ops
+- No secret/OTP/token printing
+- No Supabase Cloud / `efruibswazzuuupgyzmf` deploys
+- No n8n behavior changes
+- DB changes delivered as manual SQL only
+
+Approve to switch to build mode and execute phases 1–11.
