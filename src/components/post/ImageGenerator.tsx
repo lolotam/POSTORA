@@ -68,6 +68,13 @@ const imageModels = [
     supportsReference: true,
   },
   {
+    value: "openai/gpt-image-2",
+    label: "GPT Image 2",
+    description: "Premium OpenAI model — best for text & detail (1–2 min/image)",
+    badge: "Slow • HQ",
+    supportsReference: false,
+  },
+  {
     value: "imagen-4.0-generate-001",
     label: "Imagen 4",
     description: "Better text rendering & quality",
@@ -82,6 +89,10 @@ const imageModels = [
     supportsReference: false,
   },
 ];
+
+// Models that take significantly longer (1-2 min) — used to show a notice
+// and to extend the client-side wait without aborting the request.
+const SLOW_MODELS = new Set(["openai/gpt-image-2"]);
 
 // All aspect ratios available
 const allAspectRatios = [
