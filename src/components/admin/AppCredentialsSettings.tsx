@@ -326,6 +326,14 @@ export function AppCredentialsSettings() {
         </h3>
       </div>
 
+      {unavailableMessage && !loading && (
+        <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          {unavailableMessage}
+        </div>
+      )}
+
+
+
       {loading ? (
         <div className="flex items-center justify-center py-8">
           <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
