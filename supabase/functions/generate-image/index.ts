@@ -3,9 +3,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
 
 // Model mapping for different APIs
-const MODEL_CONFIG: Record<string, { api: 'lovable' | 'google', model: string }> = {
+const MODEL_CONFIG: Record<string, { api: 'lovable' | 'google' | 'lovable_images', model: string }> = {
   'google/gemini-2.5-flash-image': { api: 'lovable', model: 'google/gemini-2.5-flash-image' },
   'google/gemini-3-pro-image-preview': { api: 'lovable', model: 'google/gemini-3-pro-image-preview' },
+  'openai/gpt-image-2': { api: 'lovable_images', model: 'openai/gpt-image-2' },
   'imagen-4.0-generate-001': { api: 'google', model: 'imagen-4.0-generate-001' },
   'imagen-4.0-ultra-generate-001': { api: 'google', model: 'imagen-4.0-ultra-generate-001' },
 };
@@ -496,6 +497,69 @@ Make the image visually striking and engaging.`;
 
       imageUrl = images[0]?.image_url?.url || '';
       description = responseMessage?.content || 'Image generated successfully';
+
+    } else if (modelConfig.api === 'lovable_images') {
+      // OpenAI image-generations endpoint via Lovable AI Gateway
+      const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+      if (!LOVABLE_API_KEY) {
+        throw new Error('LOVABLE_API_KEY is not configured');
+      }
+
+      // Map aspect ratio to an OpenAI gpt-image-2 supported size
+      const sizeMap: Record<string, string> = {
+        '1:1': '1024x1024',
+        '16:9': '1536x1024',
+        '9:16': '1024x1536',
+        '4:5': '1024x1280',
+        '4:3': '1280x1024',
+        '2:3': '1024x1536',
+      };
+      const size = sizeMap[aspectRatio] || '1024x1024';
+
+      // gpt-image-2 is slow (1-2 min). Give it a generous abort budget.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 230_000); // 230s
+
+      let response: Response;
+      try {
+        response = await fetch('https://ai.gateway.lovable.dev/v1/images/generations', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: modelConfig.model,
+            prompt: fullPrompt,
+            quality: 'low',
+            size,
+            n: 1,
+            stream: false,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        if (response.status === 429) return errorResponse('Rate limit exceeded. Please try again later.', 429);
+        if (response.status === 402) return errorResponse('AI credits exhausted. Please add credits to continue.', 402);
+        const errorText = await response.text();
+        console.error('Lovable images endpoint error:', response.status, errorText);
+        const snippet = errorText.replace(/Bearer\s+[A-Za-z0-9._\-]+/g, 'Bearer ***').slice(0, 300);
+        throw new Error(`AI gateway error ${response.status} (model=${modelConfig.model}): ${snippet}`);
+      }
+
+      const data = await response.json();
+      const b64 = data?.data?.[0]?.b64_json;
+      if (!b64) {
+        console.error('No image in gpt-image-2 response:', JSON.stringify(data).slice(0, 500));
+        const apiErr = data?.error?.message || data?.error?.code || '';
+        throw new Error(`The model did not return an image (model=${modelConfig.model})${apiErr ? `: ${apiErr}` : ''}.`);
+      }
+      imageUrl = `data:image/png;base64,${b64}`;
+      description = 'Image generated successfully';
 
     } else {
       // Use Google Generative Language API directly for Imagen models

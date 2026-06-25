@@ -68,6 +68,13 @@ const imageModels = [
     supportsReference: true,
   },
   {
+    value: "openai/gpt-image-2",
+    label: "GPT Image 2",
+    description: "Premium OpenAI model — best for text & detail (1–2 min/image)",
+    badge: "Slow • HQ",
+    supportsReference: false,
+  },
+  {
     value: "imagen-4.0-generate-001",
     label: "Imagen 4",
     description: "Better text rendering & quality",
@@ -82,6 +89,10 @@ const imageModels = [
     supportsReference: false,
   },
 ];
+
+// Models that take significantly longer (1-2 min) — used to show a notice
+// and to extend the client-side wait without aborting the request.
+const SLOW_MODELS = new Set(["openai/gpt-image-2"]);
 
 // All aspect ratios available
 const allAspectRatios = [
@@ -513,6 +524,12 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                   ))}
                 </SelectContent>
               </Select>
+              {SLOW_MODELS.has(model) && (
+                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5 mt-1">
+                  <Loader2 className="w-3 h-3 mt-0.5 shrink-0" />
+                  GPT Image 2 typically takes <strong className="mx-1">1–2 minutes</strong> per image. Please keep this dialog open while it generates — don't refresh.
+                </p>
+              )}
             </div>
 
             {/* Reference Images - Only show for Nano Banana models */}
@@ -668,7 +685,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
               {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Generating...
+                  {SLOW_MODELS.has(model) ? "Generating… up to 2 minutes" : "Generating..."}
                 </>
               ) : isRateLimited ? (
                 "Rate limit reached"
