@@ -290,6 +290,9 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
         },
       });
 
+      // Debug: log full response so we can see exactly what the edge function returned
+      console.log('[ImageGenerator] generate-image raw response', { data, error });
+
       if (error) {
         console.error('Image generation error:', error);
         const status = (error as any)?.status;
@@ -298,10 +301,9 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
         // Try to parse the actual error from the edge function response
         let actualError = errorMessage;
         try {
-          // Supabase wraps errors, try to extract the real message
           if (typeof (error as any)?.context?.body === 'string') {
             const parsed = JSON.parse((error as any).context.body);
-            actualError = parsed.error || actualError;
+            actualError = parsed.message || parsed.error || actualError;
           }
         } catch (e) {
           // Keep the original error message
@@ -320,21 +322,9 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
           return;
         }
 
-        // Show specific error for API key issues
-        if (actualError.includes("API_KEY") || actualError.includes("not configured")) {
-          toast({
-            title: "Configuration Error",
-            description: "The AI image service is not properly configured. Please contact support.",
-            variant: "destructive",
-          });
-          return;
-        }
-
         toast({
           title: "Image generation Failed",
-          description: actualError.includes("non-2xx") ?
-            "The AI service is temporarily unavailable. Please try again later or use a different model." :
-            actualError,
+          description: actualError,
           variant: "destructive",
         });
         return;
@@ -343,15 +333,16 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
       // New structured failure shape from edge function (returns 200 with success:false)
       if (data && data.success === false) {
         const code = data.error_code as string | undefined;
-        const message = data.message as string | undefined;
+        const message = (data.message as string | undefined) || 'Image generation failed';
+        console.error('[ImageGenerator] structured failure', { code, message, data });
         if (code === 'ai_credits_exhausted') {
-          handleAIError({ status: 402, message: message || 'Credits exhausted' }, 'Image generation');
+          handleAIError({ status: 402, message }, 'Image generation');
         } else if (code === 'ai_rate_limited') {
-          handleAIError({ status: 429, message: message || 'Rate limited' }, 'Image generation');
+          handleAIError({ status: 429, message }, 'Image generation');
         } else {
           toast({
             title: 'Image generation Failed',
-            description: message || 'The AI service is temporarily unavailable. Please try again later or use a different model.',
+            description: message,
             variant: 'destructive',
           });
         }
