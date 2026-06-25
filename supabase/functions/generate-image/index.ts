@@ -465,13 +465,15 @@ Make the image visually striking and engaging.`;
         }
         const errorText = await response.text();
         console.error('Lovable AI gateway error:', response.status, errorText);
-        throw new Error(`AI gateway error: ${response.status}`);
+        // Surface real upstream status + sanitized snippet so we can debug
+        const snippet = errorText.replace(/Bearer\s+[A-Za-z0-9._\-]+/g, 'Bearer ***').slice(0, 300);
+        throw new Error(`AI gateway error ${response.status} (model=${modelConfig.model}): ${snippet}`);
       }
 
       const responseText = await response.text();
       if (!responseText || responseText.trim() === '') {
         console.error('Empty response from AI gateway');
-        throw new Error('AI gateway returned an empty response. Please try again.');
+        throw new Error(`AI gateway returned an empty response (model=${modelConfig.model}). Please try again.`);
       }
       
       let data;
@@ -479,7 +481,7 @@ Make the image visually striking and engaging.`;
         data = JSON.parse(responseText);
       } catch (parseErr) {
         console.error('Failed to parse AI response:', responseText.slice(0, 500));
-        throw new Error('AI gateway returned invalid response. Please try again.');
+        throw new Error(`AI gateway returned invalid response (model=${modelConfig.model}): ${responseText.slice(0, 200)}`);
       }
       
       // Extract image from Lovable AI response
@@ -488,7 +490,8 @@ Make the image visually striking and engaging.`;
       
       if (images.length === 0) {
         console.error('No image in Lovable AI response:', JSON.stringify(data).slice(0, 500));
-        throw new Error('Failed to generate image. The model did not return an image.');
+        const apiErr = data?.error?.message || data?.error?.code || '';
+        throw new Error(`The model did not return an image (model=${modelConfig.model})${apiErr ? `: ${apiErr}` : ''}.`);
       }
 
       imageUrl = images[0]?.image_url?.url || '';
