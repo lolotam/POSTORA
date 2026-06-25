@@ -702,9 +702,12 @@ Make the image visually striking and engaging.`;
     // a generic "temporarily unavailable" message.
     let message = `Image generation failed: ${errMsg}`;
 
-    if (lower.includes('lovable_api_key') || lower.includes('google_api_key')) {
+    if (lower.includes('all image providers failed') || lower.includes('missing ')) {
       error_code = 'ai_not_configured';
-      message = `AI image generation is not configured on the server (${errMsg}). Set LOVABLE_API_KEY in the edge-functions environment.`;
+      message = `Image generation is not configured. Set the provider API key (e.g. OPENAI_API_KEY or GOOGLE_AI_STUDIO_KEY) for the model selected in admin settings. ${errMsg}`;
+    } else if (lower.includes('unsupported provider')) {
+      error_code = 'ai_provider_unsupported';
+      message = `The configured image provider is not supported by this function. ${errMsg}`;
     } else if (lower.includes('credits')) {
       error_code = 'ai_credits_exhausted';
       message = 'AI credits exhausted. Please add credits to continue.';
