@@ -245,16 +245,21 @@ serve(async (req) => {
 
       console.log("OTP email sent successfully to", email);
     } else {
-      console.warn("RESEND_API_KEY is not configured; cannot email OTP.");
-      console.log(`OTP for ${email}: ${otp}`); // For testing without email
+      console.error("RESEND_API_KEY is not configured; refusing to issue reset code.");
+      return new Response(
+        JSON.stringify({
+          success: false,
+          error: "EMAIL_NOT_CONFIGURED",
+          message: "Password reset email service is not configured. Please contact support.",
+        }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
     return new Response(
-      JSON.stringify({ 
-        success: true, 
+      JSON.stringify({
+        success: true,
         message: "Reset code sent to your email",
-        // For testing/development, include OTP if no Resend configured
-        ...(resendApiKey ? {} : { debug_otp: otp })
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

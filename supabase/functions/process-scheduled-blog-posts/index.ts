@@ -1,3 +1,4 @@
+import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
@@ -29,6 +30,9 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  const __cronAuth = verifyCronAuth(req);
+  if (!__cronAuth.ok) return __cronAuth.response;
 
   try {
     console.log("Processing scheduled blog posts...");

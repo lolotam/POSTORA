@@ -1,3 +1,4 @@
+import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import {
@@ -605,6 +606,9 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return handleCorsOptions();
   }
+
+  const __cronAuth = verifyCronAuth(req);
+  if (!__cronAuth.ok) return __cronAuth.response;
 
   try {
     const supabaseAdmin = createClient(

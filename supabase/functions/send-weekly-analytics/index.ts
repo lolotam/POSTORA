@@ -1,3 +1,4 @@
+import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Resend } from "https://esm.sh/resend@2.0.0";
 
@@ -191,6 +192,9 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  const __cronAuth = verifyCronAuth(req);
+  if (!__cronAuth.ok) return __cronAuth.response;
 
   try {
     console.log("Starting weekly analytics email job...");
