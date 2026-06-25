@@ -3,6 +3,19 @@
 // or `x-cron-secret: <secret>`. Also allows callers presenting the Supabase
 // service-role key (used by internal scheduler invocations) as a Bearer token.
 
+// Constant-time string comparison to mitigate timing-side-channel leaks on the
+// shared cron secret. Returns false immediately on length mismatch, which is
+// safe because the secret length is itself a low-value, non-distinguishing
+// piece of metadata for an attacker (they would still need the secret value).
+function timingSafeEqual(a: string, b: string): boolean {
+  if (!a || !b || a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 export function verifyCronAuth(req: Request): { ok: true } | { ok: false; response: Response } {
   const cronSecret = Deno.env.get("CRON_SECRET");
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -12,7 +25,8 @@ export function verifyCronAuth(req: Request): { ok: true } | { ok: false; respon
     "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-cron-secret",
   };
 
-  // If no CRON_SECRET configured, refuse to run (fail closed).
+  // Fail closed if CRON_SECRET is not configured on the server.
+  // Do NOT echo the secret name's value or any presented header back to clients.
   if (!cronSecret) {
     return {
       ok: false,
@@ -29,13 +43,17 @@ export function verifyCronAuth(req: Request): { ok: true } | { ok: false; respon
     : "";
   const cronHeader = req.headers.get("x-cron-secret") || "";
 
+  // Accept the CRON_SECRET via either header. The service-role key is only
+  // accepted as a Bearer token for internal scheduler invocations from inside
+  // the platform (e.g., a privileged in-cluster caller). Service role must
+  // never be sent from a browser or untrusted network.
   const presented = cronHeader || bearer;
 
-  const matches =
-    (presented && presented === cronSecret) ||
-    (serviceRoleKey && bearer && bearer === serviceRoleKey);
+  const matchesCronSecret = timingSafeEqual(presented, cronSecret);
+  const matchesServiceRole =
+    !!serviceRoleKey && timingSafeEqual(bearer, serviceRoleKey);
 
-  if (!matches) {
+  if (!matchesCronSecret && !matchesServiceRole) {
     return {
       ok: false,
       response: new Response(

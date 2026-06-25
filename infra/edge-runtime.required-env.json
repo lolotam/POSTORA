@@ -91,6 +91,14 @@
       "aliases": [],
       "description": "Supabase project reference id. On self-hosted, use 'self-hosted'."
     },
+    {
+      "name": "CRON_SECRET",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Shared secret required to invoke scheduled (cron-triggered) edge functions. Sent by pg_cron as `Authorization: Bearer <CRON_SECRET>` or `x-cron-secret: <CRON_SECRET>`. Verified by supabase/functions/_shared/cron-auth.ts. Must be a high-entropy random string (>=32 chars). Rotate by updating .env, restarting the functions container, and re-running the manual SQL that rewrites the pg_cron headers."
+    },
 
     {
       "name": "FACEBOOK_APP_ID",
