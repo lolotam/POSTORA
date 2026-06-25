@@ -112,6 +112,11 @@ export function CaptionSection({
 
       if (error) throw error;
 
+      // Structured failure (200 + success:false) from edge function
+      if (data && data.success === false) {
+        throw new Error(data.message || "AI caption generation failed. Please try again.");
+      }
+
       if (data?.captions && Array.isArray(data.captions) && data.captions.length > 0) {
         setCaptionOptions(data.captions);
         showSuccessToast("Captions generated!", "Pick one of the 5 options below.");
