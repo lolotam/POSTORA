@@ -247,9 +247,12 @@ WHERE model_id IN (
   'grok-2',
   'grok-2-mini'
 )
-AND NOT EXISTS (
-  SELECT 1 FROM public.default_models dm
-  WHERE dm.model_id = public.ai_models.model_id
+AND (
+  to_regclass('public.default_models') IS NULL
+  OR NOT EXISTS (
+    SELECT 1 FROM public.default_models dm
+    WHERE dm.model_id = public.ai_models.model_id
+  )
 );
 
 COMMIT;
