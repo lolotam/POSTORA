@@ -14,9 +14,15 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
 // LinkedIn OAuth 2.0 redirect URI - must match exactly what's configured in LinkedIn Developer Portal.
 // Backend-forced: ignore any frontend-supplied redirect_uri. Env-driven with safe default.
+// Public origin used to derive the OAuth redirect URI registered with LinkedIn.
+// On self-hosted Supabase, SUPABASE_URL points at the internal Kong gateway
+// (http://kong:8000), which is unreachable from the provider — never derive
+// the redirect_uri from it.
+const PUBLIC_API_ORIGIN =
+  Deno.env.get("PUBLIC_API_ORIGIN") ?? "https://api.postora.cloud";
 const LINKEDIN_REDIRECT_URI =
   Deno.env.get("LINKEDIN_REDIRECT_URI") ??
-  (SUPABASE_URL ? `${SUPABASE_URL}/functions/v1/linkedin-oauth` : "https://api.postora.cloud/functions/v1/linkedin-oauth");
+  `${PUBLIC_API_ORIGIN}/functions/v1/linkedin-oauth`;
 
 function base64UrlEncode(input: string) {
   return btoa(input)

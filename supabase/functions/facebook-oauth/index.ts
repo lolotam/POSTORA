@@ -10,11 +10,15 @@ const corsHeaders = {
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+// Public origin used to derive the OAuth redirect URI registered with Meta.
+// On self-hosted Supabase, SUPABASE_URL points at the internal Kong gateway
+// (http://kong:8000), which is unreachable from the provider — never derive
+// the redirect_uri from it.
+const PUBLIC_API_ORIGIN =
+  Deno.env.get("PUBLIC_API_ORIGIN") ?? "https://api.postora.cloud";
 const FACEBOOK_REDIRECT_URI =
   Deno.env.get("FACEBOOK_REDIRECT_URI") ??
-  (SUPABASE_URL
-    ? `${SUPABASE_URL}/functions/v1/facebook-oauth`
-    : "https://api.postora.cloud/functions/v1/facebook-oauth");
+  `${PUBLIC_API_ORIGIN}/functions/v1/facebook-oauth`;
 const FB_DEFAULT_RETURN_TO = "https://postora.cloud/profiles";
 const FB_OAUTH_SCOPES = [
   "email", "public_profile", "pages_show_list", "pages_read_engagement",
