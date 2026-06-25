@@ -726,7 +726,8 @@ Return exactly 5 captions separated by --- on its own line. No numbering, no lab
     );
 
   } catch (error: unknown) {
-    console.error('Error generating caption:', error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Error generating caption:', errMsg);
     try {
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL') ?? '',
@@ -735,10 +736,20 @@ Return exactly 5 captions separated by --- on its own line. No numbering, no lab
       const errLogger = createLogger(supabaseAdmin, 'generate-caption', 'edge');
       await errLogger.error('Unhandled caption generation error', {
         feature: 'caption_generation',
-        error_message: error instanceof Error ? error.message : String(error),
+        error_message: errMsg,
         error_stack: error instanceof Error ? error.stack : undefined,
       });
     } catch {}
-    return errorResponse('Failed to generate caption. Please try again.');
+
+    // Return 200 with structured payload so the browser keeps CORS headers
+    // and the client can show a readable toast instead of a 5xx/CORS crash.
+    const isTimeout = errMsg.toLowerCase().includes('timeout') || errMsg.toLowerCase().includes('all fallback');
+    return jsonResponse({
+      success: false,
+      error_code: isTimeout ? 'ai_timeout' : 'ai_error',
+      message: isTimeout
+        ? 'AI is taking too long right now. Please try again in a moment.'
+        : 'Failed to generate caption. Please try again.',
+    }, 200);
   }
 });
