@@ -78,8 +78,16 @@ async function callMessagingApi(action: string, body: Record<string, unknown>) {
   
   // Handle graceful error responses (returned as 200 with error field)
   if (data.error_type) {
-    console.warn("Messaging API:", data.error_type, data.error);
-    throw new Error(data.error);
+    const msg = String(data.error || "");
+    const isIgNotProfessional =
+      data.error_type === "GRAPH_ERROR" &&
+      /not linked to an Instagram account|not professional account/i.test(msg);
+    if (!isIgNotProfessional) {
+      console.warn("Messaging API:", data.error_type, data.error);
+    }
+    const err = new Error(msg) as Error & { errorType?: string };
+    err.errorType = data.error_type;
+    throw err;
   }
   
   if (!res.ok) {
@@ -111,7 +119,11 @@ export function useConversations(socialAccountId: string | null, messagingPlatfo
         return (data.conversations || []) as Conversation[];
       } catch (err) {
         if (options?.silent) {
-          console.warn("Messaging conversations fetch failed silently:", err);
+          const msg = err instanceof Error ? err.message : String(err);
+          const isIgNotProfessional = /not linked to an Instagram account|not professional account/i.test(msg);
+          if (!isIgNotProfessional) {
+            console.warn("Messaging conversations fetch failed silently:", err);
+          }
           return [];
         }
         throw err;
