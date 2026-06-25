@@ -544,10 +544,7 @@ serve(async (req) => {
     // Log this request for rate limiting
     await logApiRequest(supabaseAdmin, user.id, 200);
 
-    const { prompt, model = 'google/gemini-2.5-flash-image', aspectRatio, quality, referenceImage, referenceImages } = await req.json();
-
-    const modelConfig = MODEL_CONFIG[model] || MODEL_CONFIG['google/gemini-2.5-flash-image'];
-    console.log('Generating image with model:', modelConfig.model, 'API:', modelConfig.api, 'plan:', planSlug);
+    const { prompt, model: requestedModel, aspectRatio, quality, referenceImage, referenceImages } = await req.json();
 
     // Build prompt with reference image context if available
     let referenceContext = '';
@@ -572,7 +569,6 @@ ${refDescriptions.join('\n')}
 Apply the references according to their types - style references affect visual aesthetics, content references guide subject matter, and image-to-image references should be transformed.`;
     }
 
-    // Construct the prompt with style requirements
     const fullPrompt = `Generate a high-quality image based on this description: ${prompt}.${referenceContext}
     
 Style requirements:
@@ -583,219 +579,42 @@ Style requirements:
 
 Make the image visually striking and engaging.`;
 
-    let imageUrl: string;
-    let description: string;
+    // Resolve full chain from admin settings
+    const chain = await resolveModelChain(supabaseAdmin, requestedModel);
+    console.log('[generate-image] resolved model chain:', chain.map(c => `${c.source}:${c.provider_code}/${c.model_id}`).join(' → '));
 
-    if (modelConfig.api === 'lovable') {
-      // Use Lovable AI Gateway for Gemini models
-      const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-      if (!LOVABLE_API_KEY) {
-        throw new Error('LOVABLE_API_KEY is not configured');
+    let imageUrl = '';
+    let description = '';
+    let usedModel: ResolvedModel | null = null;
+    const attemptErrors: string[] = [];
+
+    for (const m of chain) {
+      const apiKey = await getProviderApiKey(supabaseAdmin, m);
+      if (!apiKey) {
+        const msg = `[${m.source}] ${m.provider_code}/${m.model_id}: missing ${m.api_key_env_var}`;
+        console.warn(msg);
+        attemptErrors.push(msg);
+        continue;
       }
-
-      // Build message content with multiple reference images if available
-      let messageContent: any;
-      if (referenceImages && referenceImages.length > 0) {
-        // Include all reference images in order of priority
-        messageContent = [
-          { type: 'text', text: fullPrompt },
-          ...referenceImages.map((ref: { url: string }) => ({
-            type: 'image_url',
-            image_url: { url: ref.url }
-          }))
-        ];
-      } else if (referenceImage) {
-        messageContent = [
-          { type: 'text', text: fullPrompt },
-          { type: 'image_url', image_url: { url: referenceImage } }
-        ];
-      } else {
-        messageContent = fullPrompt;
-      }
-
-      const messages: any[] = [{
-        role: 'user',
-        content: messageContent
-      }];
-
-      // Build request body with proper aspect ratio configuration
-      const requestBody: any = {
-        model: modelConfig.model,
-        messages,
-        modalities: ['image', 'text'],
-      };
-
-      // Add generationConfig with imageConfig for aspect ratio support
-      // This follows the Google Gemini API format for proper aspect ratio handling
-      if (aspectRatio && aspectRatio !== 'free') {
-        requestBody.generationConfig = {
-          responseModalities: ['TEXT', 'IMAGE'],
-          imageConfig: {
-            aspectRatio: aspectRatio, // e.g., "16:9", "1:1", "9:16", "4:3", "3:4"
-          },
-        };
-      }
-
-      console.log('Sending request with config:', JSON.stringify(requestBody).slice(0, 500));
-
-      const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        if (response.status === 429) {
-          return errorResponse('Rate limit exceeded. Please try again later.', 429);
-        }
-        if (response.status === 402) {
-          return errorResponse('AI credits exhausted. Please add credits to continue.', 402);
-        }
-        const errorText = await response.text();
-        console.error('Lovable AI gateway error:', response.status, errorText);
-        // Surface real upstream status + sanitized snippet so we can debug
-        const snippet = errorText.replace(/Bearer\s+[A-Za-z0-9._\-]+/g, 'Bearer ***').slice(0, 300);
-        throw new Error(`AI gateway error ${response.status} (model=${modelConfig.model}): ${snippet}`);
-      }
-
-      const responseText = await response.text();
-      if (!responseText || responseText.trim() === '') {
-        console.error('Empty response from AI gateway');
-        throw new Error(`AI gateway returned an empty response (model=${modelConfig.model}). Please try again.`);
-      }
-      
-      let data;
       try {
-        data = JSON.parse(responseText);
-      } catch (parseErr) {
-        console.error('Failed to parse AI response:', responseText.slice(0, 500));
-        throw new Error(`AI gateway returned invalid response (model=${modelConfig.model}): ${responseText.slice(0, 200)}`);
+        console.log(`[generate-image] attempt ${m.source} ${m.provider_code}/${m.model_id}`);
+        const result = await generateWithModel(m, apiKey, fullPrompt, aspectRatio);
+        imageUrl = result.imageUrl;
+        description = result.description;
+        usedModel = m;
+        break;
+      } catch (err: any) {
+        const msg = `[${m.source}] ${m.provider_code}/${m.model_id}: ${err?.message || String(err)}`;
+        console.error(msg);
+        attemptErrors.push(msg);
       }
-      
-      // Extract image from Lovable AI response
-      const responseMessage = data.choices?.[0]?.message;
-      const images = responseMessage?.images || [];
-      
-      if (images.length === 0) {
-        console.error('No image in Lovable AI response:', JSON.stringify(data).slice(0, 500));
-        const apiErr = data?.error?.message || data?.error?.code || '';
-        throw new Error(`The model did not return an image (model=${modelConfig.model})${apiErr ? `: ${apiErr}` : ''}.`);
-      }
-
-      imageUrl = images[0]?.image_url?.url || '';
-      description = responseMessage?.content || 'Image generated successfully';
-
-    } else if (modelConfig.api === 'lovable_images') {
-      // OpenAI image-generations endpoint via Lovable AI Gateway
-      const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-      if (!LOVABLE_API_KEY) {
-        throw new Error('LOVABLE_API_KEY is not configured');
-      }
-
-      // Map aspect ratio to an OpenAI gpt-image-2 supported size
-      const sizeMap: Record<string, string> = {
-        '1:1': '1024x1024',
-        '16:9': '1536x1024',
-        '9:16': '1024x1536',
-        '4:5': '1024x1280',
-        '4:3': '1280x1024',
-        '2:3': '1024x1536',
-      };
-      const size = sizeMap[aspectRatio] || '1024x1024';
-
-      // gpt-image-2 is slow (1-2 min). Give it a generous abort budget.
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 230_000); // 230s
-
-      let response: Response;
-      try {
-        response = await fetch('https://ai.gateway.lovable.dev/v1/images/generations', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: modelConfig.model,
-            prompt: fullPrompt,
-            quality: 'low',
-            size,
-            n: 1,
-            stream: false,
-          }),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
-      if (!response.ok) {
-        if (response.status === 429) return errorResponse('Rate limit exceeded. Please try again later.', 429);
-        if (response.status === 402) return errorResponse('AI credits exhausted. Please add credits to continue.', 402);
-        const errorText = await response.text();
-        console.error('Lovable images endpoint error:', response.status, errorText);
-        const snippet = errorText.replace(/Bearer\s+[A-Za-z0-9._\-]+/g, 'Bearer ***').slice(0, 300);
-        throw new Error(`AI gateway error ${response.status} (model=${modelConfig.model}): ${snippet}`);
-      }
-
-      const data = await response.json();
-      const b64 = data?.data?.[0]?.b64_json;
-      if (!b64) {
-        console.error('No image in gpt-image-2 response:', JSON.stringify(data).slice(0, 500));
-        const apiErr = data?.error?.message || data?.error?.code || '';
-        throw new Error(`The model did not return an image (model=${modelConfig.model})${apiErr ? `: ${apiErr}` : ''}.`);
-      }
-      imageUrl = `data:image/png;base64,${b64}`;
-      description = 'Image generated successfully';
-
-    } else {
-      // Use Google Generative Language API directly for Imagen models
-      const API_KEY = Deno.env.get('GOOGLE_API_KEY') || Deno.env.get('GOOGLE_AI_STUDIO_KEY');
-      if (!API_KEY) {
-        throw new Error('GOOGLE_API_KEY is not configured for Imagen models');
-      }
-
-      const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelConfig.model}:generateContent`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': API_KEY,
-        },
-        body: JSON.stringify({
-          contents: [{
-            parts: [{ text: fullPrompt }]
-          }]
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('Google API error:', response.status, errorText);
-        throw new Error('Failed to generate image. Please try again.');
-      }
-
-      const data = await response.json();
-
-      // Parse Google API response to find image data
-      const parts = data.candidates?.[0]?.content?.parts || [];
-      const imagePart = parts.find((p: any) => p.inline_data && p.inline_data.mime_type.startsWith('image/'));
-      const textPart = parts.find((p: any) => p.text);
-
-      if (!imagePart) {
-        console.error('No image found in Google API response:', JSON.stringify(data).slice(0, 500));
-        throw new Error('Failed to generate image. The model did not return an image.');
-      }
-
-      const base64Image = imagePart.inline_data.data;
-      const mimeType = imagePart.inline_data.mime_type;
-      imageUrl = `data:${mimeType};base64,${base64Image}`;
-      description = textPart ? textPart.text : 'Image generated successfully';
     }
 
-    console.log('Image generated successfully with model:', modelConfig.model);
+    if (!usedModel) {
+      throw new Error(`All image providers failed. Attempts: ${attemptErrors.join(' | ')}`);
+    }
+
+    console.log('Image generated successfully with model:', `${usedModel.provider_code}/${usedModel.model_id}`, 'source:', usedModel.source);
 
     // Log successful image generation to system_logs
     try {
@@ -803,12 +622,15 @@ Make the image visually striking and engaging.`;
         level: 'info',
         category: 'ai',
         source: 'generate-image',
-        message: `Image generated using ${modelConfig.model}`,
+        message: `Image generated using ${usedModel.provider_code}/${usedModel.model_id} (${usedModel.source})`,
         user_id: user.id,
         metadata: {
           feature: 'image_generation',
-          model_used: modelConfig.model,
-          api_type: modelConfig.api,
+          model_used: usedModel.model_id,
+          provider_code: usedModel.provider_code,
+          api_type: usedModel.api_type,
+          chain_source: usedModel.source,
+          attempt_errors: attemptErrors,
           prompt: prompt?.substring(0, 500),
           aspect_ratio: aspectRatio,
           quality: quality,
@@ -821,6 +643,7 @@ Make the image visually striking and engaging.`;
     } catch (logErr) {
       console.error('Failed to log image generation:', logErr);
     }
+
 
     return new Response(
       JSON.stringify({ imageUrl, description }),
