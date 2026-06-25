@@ -33,6 +33,9 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const __cronAuth = verifyCronAuth(req);
+  if (!__cronAuth.ok) return __cronAuth.response;
+
   console.log("Starting scheduled flags processor...");
 
   try {
