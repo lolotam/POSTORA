@@ -344,41 +344,41 @@ serve(async (req) => {
     }
 
     const planSlug = accessCheck.planSlug;
-    
+
     // Admins bypass rate limiting entirely
     let rateLimitResult: RateLimitResult | null = null;
     if (!accessCheck.isAdmin) {
       // Get tier-based rate limit config
       const rateLimitConfig = await getTierRateLimitConfig(supabaseAdmin, user.id, planSlug);
-      
+
       // Check rate limit BEFORE processing (per-user limit with hourly/daily)
-      const rateLimitResult = await checkRateLimit(supabaseAdmin, user.id, rateLimitConfig);
+      rateLimitResult = await checkRateLimit(supabaseAdmin, user.id, rateLimitConfig);
       if (!rateLimitResult.allowed) {
-      const limitType = rateLimitResult.blockReason === 'daily' ? 'daily' : 'hourly';
-      const limitValue = rateLimitResult.blockReason === 'daily' ? rateLimitResult.limitDay : rateLimitResult.limitHour;
-      
-      console.log('Rate limit exceeded for user:', user.id, 'type:', limitType, 'plan:', planSlug);
-      return new Response(
-        JSON.stringify({
-          error: 'Rate limit exceeded',
-          message: `You've reached the ${limitType} limit of ${limitValue} AI caption generations. ${limitType === 'hourly' ? 'Please wait an hour.' : 'Try again tomorrow.'}`,
-          remainingHour: 0,
-          remainingDay: rateLimitResult.remainingDay,
-          retryAfter: rateLimitResult.retryAfter,
-        }),
-        {
-          status: 429,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json',
-            'X-RateLimit-Limit-Hour': String(rateLimitResult.limitHour),
-            'X-RateLimit-Limit-Day': String(rateLimitResult.limitDay),
-            'X-RateLimit-Remaining-Hour': '0',
-            'X-RateLimit-Remaining-Day': String(rateLimitResult.remainingDay),
-            'Retry-After': String(rateLimitResult.retryAfter),
-          },
-        }
-      );
+        const limitType = rateLimitResult.blockReason === 'daily' ? 'daily' : 'hourly';
+        const limitValue = rateLimitResult.blockReason === 'daily' ? rateLimitResult.limitDay : rateLimitResult.limitHour;
+
+        console.log('Rate limit exceeded for user:', user.id, 'type:', limitType, 'plan:', planSlug);
+        return new Response(
+          JSON.stringify({
+            error: 'Rate limit exceeded',
+            message: `You've reached the ${limitType} limit of ${limitValue} AI caption generations. ${limitType === 'hourly' ? 'Please wait an hour.' : 'Try again tomorrow.'}`,
+            remainingHour: 0,
+            remainingDay: rateLimitResult.remainingDay,
+            retryAfter: rateLimitResult.retryAfter,
+          }),
+          {
+            status: 429,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json',
+              'X-RateLimit-Limit-Hour': String(rateLimitResult.limitHour),
+              'X-RateLimit-Limit-Day': String(rateLimitResult.limitDay),
+              'X-RateLimit-Remaining-Hour': '0',
+              'X-RateLimit-Remaining-Day': String(rateLimitResult.remainingDay),
+              'Retry-After': String(rateLimitResult.retryAfter),
+            },
+          }
+        );
       }
 
       // Log this request for rate limiting
