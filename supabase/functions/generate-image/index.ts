@@ -465,13 +465,15 @@ Make the image visually striking and engaging.`;
         }
         const errorText = await response.text();
         console.error('Lovable AI gateway error:', response.status, errorText);
-        throw new Error(`AI gateway error: ${response.status}`);
+        // Surface real upstream status + sanitized snippet so we can debug
+        const snippet = errorText.replace(/Bearer\s+[A-Za-z0-9._\-]+/g, 'Bearer ***').slice(0, 300);
+        throw new Error(`AI gateway error ${response.status} (model=${modelConfig.model}): ${snippet}`);
       }
 
       const responseText = await response.text();
       if (!responseText || responseText.trim() === '') {
         console.error('Empty response from AI gateway');
-        throw new Error('AI gateway returned an empty response. Please try again.');
+        throw new Error(`AI gateway returned an empty response (model=${modelConfig.model}). Please try again.`);
       }
       
       let data;
@@ -479,7 +481,7 @@ Make the image visually striking and engaging.`;
         data = JSON.parse(responseText);
       } catch (parseErr) {
         console.error('Failed to parse AI response:', responseText.slice(0, 500));
-        throw new Error('AI gateway returned invalid response. Please try again.');
+        throw new Error(`AI gateway returned invalid response (model=${modelConfig.model}): ${responseText.slice(0, 200)}`);
       }
       
       // Extract image from Lovable AI response
@@ -488,7 +490,8 @@ Make the image visually striking and engaging.`;
       
       if (images.length === 0) {
         console.error('No image in Lovable AI response:', JSON.stringify(data).slice(0, 500));
-        throw new Error('Failed to generate image. The model did not return an image.');
+        const apiErr = data?.error?.message || data?.error?.code || '';
+        throw new Error(`The model did not return an image (model=${modelConfig.model})${apiErr ? `: ${apiErr}` : ''}.`);
       }
 
       imageUrl = images[0]?.image_url?.url || '';
@@ -618,9 +621,14 @@ Make the image visually striking and engaging.`;
     // Map known failures to readable codes and ALWAYS return CORS headers.
     const lower = errMsg.toLowerCase();
     let error_code = 'ai_error';
-    let message = 'The AI service is temporarily unavailable. Please try again later or use a different model.';
+    // Default: surface the real internal error so admins can debug instead of
+    // a generic "temporarily unavailable" message.
+    let message = `Image generation failed: ${errMsg}`;
 
-    if (lower.includes('credits')) {
+    if (lower.includes('lovable_api_key') || lower.includes('google_api_key')) {
+      error_code = 'ai_not_configured';
+      message = `AI image generation is not configured on the server (${errMsg}). Set LOVABLE_API_KEY in the edge-functions environment.`;
+    } else if (lower.includes('credits')) {
       error_code = 'ai_credits_exhausted';
       message = 'AI credits exhausted. Please add credits to continue.';
     } else if (lower.includes('rate limit')) {
@@ -628,16 +636,14 @@ Make the image visually striking and engaging.`;
       message = 'Too many requests. Please wait a moment and try again.';
     } else if (lower.includes('did not return an image') || lower.includes('no image')) {
       error_code = 'ai_no_image';
-      message = 'The model could not generate an image for this prompt. Try a different prompt or model.';
+      // keep detailed errMsg so user/admin sees model + provider reason
+      message = `The model could not generate an image. ${errMsg}`;
     } else if (lower.includes('empty response')) {
       error_code = 'ai_gateway_empty';
-      message = 'The AI service returned an empty response. Please try again.';
-    } else if (lower.includes('gateway') || lower.includes('google api') || lower.includes('failed to generate')) {
+      message = `The AI gateway returned an empty response. ${errMsg}`;
+    } else if (lower.includes('gateway') || lower.includes('google api')) {
       error_code = 'ai_gateway_error';
-      message = 'The AI provider returned an error. Please try a different model or try again.';
-    } else if (lower.includes('lovable_api_key') || lower.includes('google_api_key')) {
-      error_code = 'ai_not_configured';
-      message = 'AI image generation is not configured. Please contact support.';
+      message = `AI provider error: ${errMsg}`;
     }
 
     return jsonResponse({ success: false, error_code, message }, 200);
