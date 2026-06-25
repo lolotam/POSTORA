@@ -232,28 +232,31 @@ ON CONFLICT (provider_id, model_id) DO NOTHING;
 -- (only deactivates — never deletes — and never touches a model referenced
 --  by public.default_models so admin defaults don't break.)
 -- ---------------------------------------------------------------------------
-UPDATE public.ai_models
-SET is_active = false
-WHERE model_id IN (
-  'gpt-4',
-  'gpt-4-turbo',
-  'gpt-3.5-turbo',
-  'claude-3-opus',
-  'claude-3-sonnet',
-  'claude-3-haiku',
-  'gemini-1.5-pro',
-  'gemini-1.5-flash',
-  'gemini-1.0-pro',
-  'grok-2',
-  'grok-2-mini'
-)
-AND (
-  to_regclass('public.default_models') IS NULL
-  OR NOT EXISTS (
-    SELECT 1 FROM public.default_models dm
-    WHERE dm.model_id = public.ai_models.model_id
-  )
-);
+DO $$
+DECLARE
+  retired_ids text[] := ARRAY[
+    'gpt-4','gpt-4-turbo','gpt-3.5-turbo',
+    'claude-3-opus','claude-3-sonnet','claude-3-haiku',
+    'gemini-1.5-pro','gemini-1.5-flash','gemini-1.0-pro',
+    'grok-2','grok-2-mini'
+  ];
+BEGIN
+  IF to_regclass('public.default_models') IS NOT NULL THEN
+    EXECUTE $sql$
+      UPDATE public.ai_models
+      SET is_active = false
+      WHERE model_id = ANY($1)
+        AND NOT EXISTS (
+          SELECT 1 FROM public.default_models dm
+          WHERE dm.model_id = public.ai_models.model_id
+        )
+    $sql$ USING retired_ids;
+  ELSE
+    UPDATE public.ai_models
+    SET is_active = false
+    WHERE model_id = ANY(retired_ids);
+  END IF;
+END $$;
 
 COMMIT;
 
