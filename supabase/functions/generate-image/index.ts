@@ -580,7 +580,8 @@ Make the image visually striking and engaging.`;
     );
 
   } catch (error: unknown) {
-    console.error('Error generating image:', error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Error generating image:', errMsg);
 
     // Log failed image generation to system_logs
     try {
@@ -601,11 +602,11 @@ Make the image visually striking and engaging.`;
           level: 'error',
           category: 'ai',
           source: 'generate-image',
-          message: `Image generation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          message: `Image generation failed: ${errMsg}`,
           user_id: errUser.id,
           metadata: {
             feature: 'image_generation',
-            error: error instanceof Error ? error.message : String(error),
+            error: errMsg,
             success: false,
           },
         });
@@ -614,6 +615,31 @@ Make the image visually striking and engaging.`;
       console.error('Failed to log image generation error:', logErr);
     }
 
-    return errorResponse('Failed to generate image. Please try again.');
+    // Map known failures to readable codes and ALWAYS return CORS headers.
+    const lower = errMsg.toLowerCase();
+    let error_code = 'ai_error';
+    let message = 'The AI service is temporarily unavailable. Please try again later or use a different model.';
+
+    if (lower.includes('credits')) {
+      error_code = 'ai_credits_exhausted';
+      message = 'AI credits exhausted. Please add credits to continue.';
+    } else if (lower.includes('rate limit')) {
+      error_code = 'ai_rate_limited';
+      message = 'Too many requests. Please wait a moment and try again.';
+    } else if (lower.includes('did not return an image') || lower.includes('no image')) {
+      error_code = 'ai_no_image';
+      message = 'The model could not generate an image for this prompt. Try a different prompt or model.';
+    } else if (lower.includes('empty response')) {
+      error_code = 'ai_gateway_empty';
+      message = 'The AI service returned an empty response. Please try again.';
+    } else if (lower.includes('gateway') || lower.includes('google api') || lower.includes('failed to generate')) {
+      error_code = 'ai_gateway_error';
+      message = 'The AI provider returned an error. Please try a different model or try again.';
+    } else if (lower.includes('lovable_api_key') || lower.includes('google_api_key')) {
+      error_code = 'ai_not_configured';
+      message = 'AI image generation is not configured. Please contact support.';
+    }
+
+    return jsonResponse({ success: false, error_code, message }, 200);
   }
 });

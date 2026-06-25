@@ -344,41 +344,41 @@ serve(async (req) => {
     }
 
     const planSlug = accessCheck.planSlug;
-    
+
     // Admins bypass rate limiting entirely
     let rateLimitResult: RateLimitResult | null = null;
     if (!accessCheck.isAdmin) {
       // Get tier-based rate limit config
       const rateLimitConfig = await getTierRateLimitConfig(supabaseAdmin, user.id, planSlug);
-      
+
       // Check rate limit BEFORE processing (per-user limit with hourly/daily)
-      const rateLimitResult = await checkRateLimit(supabaseAdmin, user.id, rateLimitConfig);
+      rateLimitResult = await checkRateLimit(supabaseAdmin, user.id, rateLimitConfig);
       if (!rateLimitResult.allowed) {
-      const limitType = rateLimitResult.blockReason === 'daily' ? 'daily' : 'hourly';
-      const limitValue = rateLimitResult.blockReason === 'daily' ? rateLimitResult.limitDay : rateLimitResult.limitHour;
-      
-      console.log('Rate limit exceeded for user:', user.id, 'type:', limitType, 'plan:', planSlug);
-      return new Response(
-        JSON.stringify({
-          error: 'Rate limit exceeded',
-          message: `You've reached the ${limitType} limit of ${limitValue} AI caption generations. ${limitType === 'hourly' ? 'Please wait an hour.' : 'Try again tomorrow.'}`,
-          remainingHour: 0,
-          remainingDay: rateLimitResult.remainingDay,
-          retryAfter: rateLimitResult.retryAfter,
-        }),
-        {
-          status: 429,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json',
-            'X-RateLimit-Limit-Hour': String(rateLimitResult.limitHour),
-            'X-RateLimit-Limit-Day': String(rateLimitResult.limitDay),
-            'X-RateLimit-Remaining-Hour': '0',
-            'X-RateLimit-Remaining-Day': String(rateLimitResult.remainingDay),
-            'Retry-After': String(rateLimitResult.retryAfter),
-          },
-        }
-      );
+        const limitType = rateLimitResult.blockReason === 'daily' ? 'daily' : 'hourly';
+        const limitValue = rateLimitResult.blockReason === 'daily' ? rateLimitResult.limitDay : rateLimitResult.limitHour;
+
+        console.log('Rate limit exceeded for user:', user.id, 'type:', limitType, 'plan:', planSlug);
+        return new Response(
+          JSON.stringify({
+            error: 'Rate limit exceeded',
+            message: `You've reached the ${limitType} limit of ${limitValue} AI caption generations. ${limitType === 'hourly' ? 'Please wait an hour.' : 'Try again tomorrow.'}`,
+            remainingHour: 0,
+            remainingDay: rateLimitResult.remainingDay,
+            retryAfter: rateLimitResult.retryAfter,
+          }),
+          {
+            status: 429,
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'application/json',
+              'X-RateLimit-Limit-Hour': String(rateLimitResult.limitHour),
+              'X-RateLimit-Limit-Day': String(rateLimitResult.limitDay),
+              'X-RateLimit-Remaining-Hour': '0',
+              'X-RateLimit-Remaining-Day': String(rateLimitResult.remainingDay),
+              'Retry-After': String(rateLimitResult.retryAfter),
+            },
+          }
+        );
       }
 
       // Log this request for rate limiting
@@ -726,7 +726,8 @@ Return exactly 5 captions separated by --- on its own line. No numbering, no lab
     );
 
   } catch (error: unknown) {
-    console.error('Error generating caption:', error);
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.error('Error generating caption:', errMsg);
     try {
       const supabaseAdmin = createClient(
         Deno.env.get('SUPABASE_URL') ?? '',
@@ -735,10 +736,20 @@ Return exactly 5 captions separated by --- on its own line. No numbering, no lab
       const errLogger = createLogger(supabaseAdmin, 'generate-caption', 'edge');
       await errLogger.error('Unhandled caption generation error', {
         feature: 'caption_generation',
-        error_message: error instanceof Error ? error.message : String(error),
+        error_message: errMsg,
         error_stack: error instanceof Error ? error.stack : undefined,
       });
     } catch {}
-    return errorResponse('Failed to generate caption. Please try again.');
+
+    // Return 200 with structured payload so the browser keeps CORS headers
+    // and the client can show a readable toast instead of a 5xx/CORS crash.
+    const isTimeout = errMsg.toLowerCase().includes('timeout') || errMsg.toLowerCase().includes('all fallback');
+    return jsonResponse({
+      success: false,
+      error_code: isTimeout ? 'ai_timeout' : 'ai_error',
+      message: isTimeout
+        ? 'AI is taking too long right now. Please try again in a moment.'
+        : 'Failed to generate caption. Please try again.',
+    }, 200);
   }
 });

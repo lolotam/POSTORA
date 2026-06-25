@@ -201,6 +201,20 @@ export async function resolveChatModelConfig(
 /**
  * Execute a 3-tier AI call with fallback chain.
  */
+// Per-tier hard timeout. Keeps total request time bounded so edge gateway
+// (Kong ~60s) never returns a 504 with stripped CORS headers.
+const AI_TIER_TIMEOUT_MS = 15_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function callAiWithFallback(
   requestBody: any,
   primaryProvider: string,
@@ -220,11 +234,11 @@ export async function callAiWithFallback(
     const model1 = normalizeModelName(primaryModel, primaryProvider);
     const body1 = { ...requestBody, model: model1 };
     try {
-      const res = await fetch(ep1.apiUrl, {
+      const res = await fetchWithTimeout(ep1.apiUrl, {
         method: 'POST',
         headers: ep1.headers,
         body: JSON.stringify(body1),
-      });
+      }, AI_TIER_TIMEOUT_MS);
       tiers.push({ tier: 'primary', provider: primaryProvider, model: primaryModel, status: res.status });
       if (res.ok) {
         return { response: res, tierUsed: 'primary', modelUsed: primaryModel, providerUsed: primaryProvider, tiers };
@@ -233,8 +247,9 @@ export async function callAiWithFallback(
       tiers[tiers.length - 1].error = errText.substring(0, 500);
       console.error('Primary AI failed:', res.status, errText.substring(0, 200));
     } catch (e: any) {
-      tiers.push({ tier: 'primary', provider: primaryProvider, model: primaryModel, status: 0, error: e.message });
-      console.error('Primary AI exception:', e.message);
+      const msg = e?.name === 'AbortError' ? `timeout after ${AI_TIER_TIMEOUT_MS}ms` : e?.message;
+      tiers.push({ tier: 'primary', provider: primaryProvider, model: primaryModel, status: 0, error: msg });
+      console.error('Primary AI exception:', msg);
     }
   } else {
     tiers.push({ tier: 'primary', provider: primaryProvider, model: primaryModel, status: 0, error: 'API key not configured' });
@@ -247,11 +262,11 @@ export async function callAiWithFallback(
       const model2 = normalizeModelName(fallbackModel, fallbackProvider);
       const body2 = { ...requestBody, model: model2 };
       try {
-        const res = await fetch(ep2.apiUrl, {
+        const res = await fetchWithTimeout(ep2.apiUrl, {
           method: 'POST',
           headers: ep2.headers,
           body: JSON.stringify(body2),
-        });
+        }, AI_TIER_TIMEOUT_MS);
         tiers.push({ tier: 'fallback', provider: fallbackProvider, model: fallbackModel, status: res.status });
         if (res.ok) {
           return { response: res, tierUsed: 'fallback', modelUsed: fallbackModel, providerUsed: fallbackProvider, tiers };
@@ -260,8 +275,9 @@ export async function callAiWithFallback(
         tiers[tiers.length - 1].error = errText.substring(0, 500);
         console.error('Fallback AI failed:', res.status, errText.substring(0, 200));
       } catch (e: any) {
-        tiers.push({ tier: 'fallback', provider: fallbackProvider, model: fallbackModel, status: 0, error: e.message });
-        console.error('Fallback AI exception:', e.message);
+        const msg = e?.name === 'AbortError' ? `timeout after ${AI_TIER_TIMEOUT_MS}ms` : e?.message;
+        tiers.push({ tier: 'fallback', provider: fallbackProvider, model: fallbackModel, status: 0, error: msg });
+        console.error('Fallback AI exception:', msg);
       }
     } else {
       tiers.push({ tier: 'fallback', provider: fallbackProvider, model: fallbackModel, status: 0, error: 'API key not configured' });
@@ -274,11 +290,11 @@ export async function callAiWithFallback(
   if (ep3.apiKey) {
     const body3 = { ...requestBody, model: normalizedLrModel };
     try {
-      const res = await fetch(ep3.apiUrl, {
+      const res = await fetchWithTimeout(ep3.apiUrl, {
         method: 'POST',
         headers: ep3.headers,
         body: JSON.stringify(body3),
-      });
+      }, AI_TIER_TIMEOUT_MS);
       tiers.push({ tier: 'last_resort', provider: lrProvider, model: lrModel, status: res.status });
       if (res.ok) {
         return { response: res, tierUsed: 'last_resort', modelUsed: lrModel, providerUsed: lrProvider, tiers };
@@ -287,8 +303,9 @@ export async function callAiWithFallback(
       tiers[tiers.length - 1].error = errText.substring(0, 500);
       console.error('Last resort AI failed:', res.status, errText.substring(0, 200));
     } catch (e: any) {
-      tiers.push({ tier: 'last_resort', provider: lrProvider, model: lrModel, status: 0, error: e.message });
-      console.error('Last resort AI exception:', e.message);
+      const msg = e?.name === 'AbortError' ? `timeout after ${AI_TIER_TIMEOUT_MS}ms` : e?.message;
+      tiers.push({ tier: 'last_resort', provider: lrProvider, model: lrModel, status: 0, error: msg });
+      console.error('Last resort AI exception:', msg);
     }
   } else {
     tiers.push({ tier: 'last_resort', provider: lrProvider, model: lrModel, status: 0, error: 'API key not configured' });
