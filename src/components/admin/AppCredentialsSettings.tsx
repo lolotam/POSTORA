@@ -87,6 +87,7 @@ function extractWaValue(raw: unknown): string {
 export function AppCredentialsSettings() {
   const { toast } = useToast();
   const [secrets, setSecrets] = useState<Record<string, PlatformSecrets>>({});
+  const [unavailableMessage, setUnavailableMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [editingPlatform, setEditingPlatform] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<{ clientId: string; clientSecret: string }>({ clientId: "", clientSecret: "" });
@@ -108,6 +109,7 @@ export function AppCredentialsSettings() {
   const fetchSecrets = async () => {
     try {
       setLoading(true);
+      setUnavailableMessage(null);
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 
@@ -118,8 +120,12 @@ export function AppCredentialsSettings() {
       if (error) throw error;
       if (data?.success) {
         setSecrets(data.data);
+      } else if (data?.error_code === "management_api_unavailable") {
+        // Self-hosted: secrets are managed via host .env / Dokploy.
+        setSecrets({});
+        setUnavailableMessage(data?.message || "Remote secret management is unavailable on self-hosted Supabase.");
       } else {
-        throw new Error(data?.error || "Failed to fetch");
+        throw new Error(data?.error || data?.message || "Failed to fetch");
       }
     } catch (err: any) {
       toast({ title: "Error loading credentials", description: err.message, variant: "destructive" });
@@ -319,6 +325,14 @@ export function AppCredentialsSettings() {
           App Credentials
         </h3>
       </div>
+
+      {unavailableMessage && !loading && (
+        <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+          {unavailableMessage}
+        </div>
+      )}
+
+
 
       {loading ? (
         <div className="flex items-center justify-center py-8">
