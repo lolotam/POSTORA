@@ -607,6 +607,9 @@ Deno.serve(async (req) => {
     return handleCorsOptions();
   }
 
+  const __cronAuth = verifyCronAuth(req);
+  if (!__cronAuth.ok) return __cronAuth.response;
+
   try {
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
