@@ -12,13 +12,17 @@ const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_CLIENT_SECRET");
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-// IMPORTANT: Google requires an exact string match for redirect_uri.
-// Env-driven with a stable public fallback (never derived from req.url).
+// IMPORTANT: Google requires an EXACT string match for redirect_uri against the
+// value registered in Google Cloud Console. On self-hosted Supabase, SUPABASE_URL
+// points at the internal Kong gateway (http://kong:8000), which is neither
+// reachable from Google nor registered — using it as a redirect_uri produces
+// Google "Error 400: invalid_request" (redirect_uri_mismatch). Derive the public
+// redirect_uri only from explicitly-public configuration.
+const PUBLIC_API_ORIGIN =
+  Deno.env.get("PUBLIC_API_ORIGIN") ?? "https://api.postora.cloud";
 const YOUTUBE_REDIRECT_URI =
   Deno.env.get("YOUTUBE_REDIRECT_URI") ??
-  (SUPABASE_URL
-    ? `${SUPABASE_URL}/functions/v1/youtube-oauth`
-    : "https://api.postora.cloud/functions/v1/youtube-oauth");
+  `${PUBLIC_API_ORIGIN}/functions/v1/youtube-oauth`;
 
 function base64UrlEncode(input: string) {
   return btoa(input)
