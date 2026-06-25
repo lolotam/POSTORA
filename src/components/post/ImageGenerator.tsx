@@ -340,6 +340,24 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
         return;
       }
 
+      // New structured failure shape from edge function (returns 200 with success:false)
+      if (data && data.success === false) {
+        const code = data.error_code as string | undefined;
+        const message = data.message as string | undefined;
+        if (code === 'ai_credits_exhausted') {
+          handleAIError({ status: 402, message: message || 'Credits exhausted' }, 'Image generation');
+        } else if (code === 'ai_rate_limited') {
+          handleAIError({ status: 429, message: message || 'Rate limited' }, 'Image generation');
+        } else {
+          toast({
+            title: 'Image generation Failed',
+            description: message || 'The AI service is temporarily unavailable. Please try again later or use a different model.',
+            variant: 'destructive',
+          });
+        }
+        return;
+      }
+
       if (data?.error) {
         const errorMsg = data.error.toLowerCase();
         if (errorMsg.includes("401") || errorMsg.includes("unauthorized")) {
