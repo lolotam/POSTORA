@@ -87,6 +87,7 @@ function extractWaValue(raw: unknown): string {
 export function AppCredentialsSettings() {
   const { toast } = useToast();
   const [secrets, setSecrets] = useState<Record<string, PlatformSecrets>>({});
+  const [unavailableMessage, setUnavailableMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [editingPlatform, setEditingPlatform] = useState<string | null>(null);
   const [editValues, setEditValues] = useState<{ clientId: string; clientSecret: string }>({ clientId: "", clientSecret: "" });
