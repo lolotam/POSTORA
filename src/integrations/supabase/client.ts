@@ -70,26 +70,34 @@ export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABL
   }
 });
 
-// Listen once for refresh failures from GoTrue and clear the bad session so the
-// loop stops within the same tab instead of waiting for the next reload.
+// If GoTrue keeps rejecting the persisted refresh token (revoked, server reset,
+// or signing key rotated), clear the local session after a few consecutive
+// failures so the tab stops looping. Transient 5xx alone is not enough — we
+// require repeated failures to avoid signing users out during a brief outage.
 if (typeof window !== 'undefined') {
-  supabase.auth.onAuthStateChange((event) => {
-    if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') return;
-  });
+  const REFRESH_FAILURE_THRESHOLD = 3;
+  let consecutiveRefreshFailures = 0;
   const originalFetch = window.fetch.bind(window);
   window.fetch = async (...args) => {
+    const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request).url;
+    const isRefreshCall =
+      typeof url === 'string' &&
+      url.includes('/auth/v1/token') &&
+      url.includes('grant_type=refresh_token');
     const response = await originalFetch(...args);
-    try {
-      const url = typeof args[0] === 'string' ? args[0] : (args[0] as Request).url;
-      if (
-        response.status >= 400 &&
-        url.includes('/auth/v1/token') &&
-        url.includes('grant_type=refresh_token')
-      ) {
-        window.localStorage.removeItem(AUTH_STORAGE_KEY);
+    if (isRefreshCall) {
+      if (response.status >= 400) {
+        consecutiveRefreshFailures += 1;
+        if (consecutiveRefreshFailures >= REFRESH_FAILURE_THRESHOLD) {
+          try {
+            window.localStorage.removeItem(AUTH_STORAGE_KEY);
+          } catch {
+            /* ignore */
+          }
+        }
+      } else {
+        consecutiveRefreshFailures = 0;
       }
-    } catch {
-      /* ignore */
     }
     return response;
   };
