@@ -10,10 +10,10 @@ export function useDarkTheme() {
         .from("app_settings")
         .select("value")
         .eq("key", "dark_theme_variant")
-        .single();
+        .maybeSingle();
 
-      if (error && error.code !== "PGRST116") {
-        console.error("Error fetching theme:", error);
+      if (error) {
+        console.warn("Error fetching theme:", error.message);
         return "dark-purple-magenta";
       }
 
