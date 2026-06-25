@@ -685,7 +685,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
               {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Generating...
+                  {SLOW_MODELS.has(model) ? "Generating… up to 2 minutes" : "Generating..."}
                 </>
               ) : isRateLimited ? (
                 "Rate limit reached"
