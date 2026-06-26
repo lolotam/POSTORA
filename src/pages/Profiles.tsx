@@ -22,6 +22,7 @@ import {
 import { Loader2, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Layers } from "lucide-react";
 import { Reveal, Icon3D, GradientHeading, GradientDivider } from "@/components/fx";
 import { platformVariant, PLATFORM_TAB_ACTIVE } from "@/components/profiles/platformVariant";
@@ -229,34 +230,41 @@ export default function Profiles() {
           ) : (
             <Tabs defaultValue={defaultTab} className="w-full">
               <TabsList className="flex flex-nowrap h-auto gap-2 bg-transparent p-0 pt-4 overflow-x-auto scrollbar-hide">
+                <TooltipProvider delayDuration={150}>
                 {visiblePlatforms.map((config) => {
                   const count = accountsByPlatform[config.platform]?.length || 0;
                   const v = platformVariant(config.platform);
                   return (
-                    <TabsTrigger
-                      key={config.platform}
-                      value={config.platform}
-                      className={cn(
-                        "group relative gap-2 rounded-xl border border-border/60 bg-card/60 backdrop-blur-md px-3 py-2 transition-all duration-300 hover:-translate-y-0.5 hover:bg-card",
-                        "data-[state=active]:bg-gradient-to-br data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:ring-1 data-[state=active]:ring-white/20",
-                        PLATFORM_TAB_ACTIVE[v],
-                      )}
-                    >
-                      {betaPlatforms[config.platform] && (
-                        <Badge className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-500/20 text-amber-600 border-amber-500/30 text-[9px] px-1.5 py-0 leading-tight">Beta</Badge>
-                      )}
-                      <PlatformIcon platform={config.platform} size="sm" />
-                      {config.name}
-                      <Badge
-                        variant={count > 0 ? "default" : "secondary"}
-                        className={`h-5 min-w-[20px] text-xs ${count > 0 ? "bg-primary/20 text-primary group-data-[state=active]:bg-white/90 group-data-[state=active]:text-foreground" : "group-data-[state=active]:bg-white/20 group-data-[state=active]:text-white"}`}
-                      >
-                        {count}
-                      </Badge>
-                    </TabsTrigger>
+                    <Tooltip key={config.platform}>
+                      <TooltipTrigger asChild>
+                        <TabsTrigger
+                          value={config.platform}
+                          aria-label={getPlatformName(config.platform)}
+                          className={cn(
+                            "group relative gap-2 rounded-xl border border-border/60 bg-card/60 backdrop-blur-md px-3 py-2.5 transition-all duration-300 hover:-translate-y-0.5 hover:bg-card",
+                            "data-[state=active]:bg-gradient-to-br data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:ring-1 data-[state=active]:ring-white/20",
+                            PLATFORM_TAB_ACTIVE[v],
+                          )}
+                        >
+                          {betaPlatforms[config.platform] && (
+                            <Badge className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-500/20 text-amber-600 border-amber-500/30 text-[9px] px-1.5 py-0 leading-tight">Beta</Badge>
+                          )}
+                          <PlatformIcon platform={config.platform} size="lg" />
+                          <Badge
+                            variant={count > 0 ? "default" : "secondary"}
+                            className={`h-5 min-w-[20px] text-xs ${count > 0 ? "bg-primary/20 text-primary group-data-[state=active]:bg-white group-data-[state=active]:text-slate-900" : "group-data-[state=active]:bg-white group-data-[state=active]:text-slate-900"}`}
+                          >
+                            {count}
+                          </Badge>
+                        </TabsTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="top">{getPlatformName(config.platform)}</TooltipContent>
+                    </Tooltip>
                   );
                 })}
+                </TooltipProvider>
               </TabsList>
+
 
               {visiblePlatforms.map((config) => (
                 <TabsContent key={config.platform} value={config.platform} className="mt-4">
