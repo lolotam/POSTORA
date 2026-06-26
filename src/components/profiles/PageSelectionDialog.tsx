@@ -38,10 +38,11 @@ interface PageSelectionDialogProps {
 }
 
 function PageLogo({ page }: { page: FacebookPage }) {
-  const src = page.picture_url || `https://graph.facebook.com/${page.id}/picture?type=square`;
+  const src =
+    page.picture_url || `https://graph.facebook.com/${page.id}/picture?type=square`;
   const [errored, setErrored] = useState(false);
   return (
-    <div className="relative h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-blue-500 to-blue-700">
+    <div className="relative h-24 w-24 overflow-hidden rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700">
       {!errored ? (
         <img
           src={src}
@@ -51,7 +52,7 @@ function PageLogo({ page }: { page: FacebookPage }) {
           onError={() => setErrored(true)}
         />
       ) : (
-        <Facebook className="absolute inset-0 m-auto h-8 w-8 text-white" />
+        <Facebook className="absolute inset-0 m-auto h-10 w-10 text-white" />
       )}
     </div>
   );
@@ -77,7 +78,9 @@ export function PageSelectionDialog({
   const filteredIg = useMemo(
     () =>
       q
-        ? standaloneInstagram.filter((ig) => ig.username.toLowerCase().includes(q))
+        ? standaloneInstagram.filter((ig) =>
+            ig.username.toLowerCase().includes(q),
+          )
         : standaloneInstagram,
     [standaloneInstagram, q],
   );
@@ -90,26 +93,27 @@ export function PageSelectionDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Facebook className="h-5 w-5 text-blue-500" />
-            Select a Facebook Page
+        <DialogHeader className="text-center sm:text-center">
+          <DialogTitle className="text-center text-xl">
+            Configure Your Channel
           </DialogTitle>
-          <DialogDescription>
-            Choose which Facebook Page you want to connect. Pages marked{" "}
-            <span className="font-medium text-pink-500">IG</span> will also connect their linked
-            Instagram.
+          <DialogDescription className="text-center">
+            Select the Facebook page or account you want to connect.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search pages..."
-            value={pageSearchQuery}
-            onChange={(e) => onPageSearchChange(e.target.value)}
-            className="pl-9"
-          />
+        <div className="space-y-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="Search pages..."
+              value={pageSearchQuery}
+              onChange={(e) => onPageSearchChange(e.target.value)}
+              className="pl-9"
+            />
+          </div>
+
+          <div className="text-sm font-medium">Select Page:</div>
         </div>
 
         {filteredPages.length === 0 && filteredIg.length === 0 ? (
@@ -117,9 +121,9 @@ export function PageSelectionDialog({
             No pages match your search.
           </div>
         ) : (
-          <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+          <div className="max-h-[60vh] space-y-6 overflow-y-auto pr-1">
             {filteredPages.length > 0 && (
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              <div className="grid grid-cols-3 gap-6">
                 {filteredPages.map((page) => {
                   const isSelecting = selectingPage === page.id;
                   const disabled = !!selectingPage;
@@ -130,29 +134,27 @@ export function PageSelectionDialog({
                       disabled={disabled}
                       onClick={() => onSelectPage(page.id)}
                       className={cn(
-                        "group relative aspect-square rounded-xl border p-3 text-left transition-all",
-                        "flex flex-col items-center justify-center gap-2",
-                        "hover:border-primary hover:bg-accent/50",
+                        "group flex flex-col items-center gap-2 rounded-lg p-1 text-center transition-all",
+                        "hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                         "disabled:cursor-not-allowed",
                       )}
                     >
-                      {isSelecting && (
-                        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/70 backdrop-blur-sm">
-                          <Loader2 className="h-6 w-6 animate-spin text-primary" />
-                        </div>
-                      )}
-                      <PageLogo page={page} />
-                      <div className="w-full truncate text-center text-sm font-medium">
+                      <div className="relative">
+                        <PageLogo page={page} />
+                        {isSelecting && (
+                          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-background/70 backdrop-blur-sm">
+                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                          </div>
+                        )}
+                        {page.has_instagram && (
+                          <span className="absolute -right-1 -top-1 rounded-full border border-pink-500/40 bg-gradient-to-r from-purple-500/30 to-pink-500/30 px-2 py-0.5 text-[10px] font-medium text-pink-500 backdrop-blur-sm">
+                            IG
+                          </span>
+                        )}
+                      </div>
+                      <div className="line-clamp-2 w-full text-center text-sm font-medium leading-tight">
                         {page.name}
                       </div>
-                      <div className="w-full truncate text-center text-[11px] text-muted-foreground">
-                        Facebook Page
-                      </div>
-                      {page.has_instagram && (
-                        <span className="absolute right-2 top-2 rounded-full bg-gradient-to-r from-purple-500/20 to-pink-500/20 px-2 py-0.5 text-[10px] font-medium text-pink-500 border border-pink-500/30">
-                          IG
-                        </span>
-                      )}
                     </button>
                   );
                 })}
@@ -160,14 +162,14 @@ export function PageSelectionDialog({
             )}
 
             {filteredIg.length > 0 && (
-              <div>
-                <div className="mb-2 flex items-center gap-2 pt-2">
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
                   <Instagram className="h-4 w-4 text-pink-500" />
                   <span className="text-xs font-medium text-muted-foreground">
                     Standalone Instagram Accounts
                   </span>
                 </div>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                <div className="grid grid-cols-3 gap-6">
                   {filteredIg.map((ig) => {
                     const isSelecting = selectingPage === ig.id;
                     const disabled = !!selectingPage;
@@ -178,38 +180,36 @@ export function PageSelectionDialog({
                         disabled={disabled}
                         onClick={() => onSelectStandaloneInstagram?.(ig)}
                         className={cn(
-                          "group relative aspect-square rounded-xl border p-3 text-left transition-all",
-                          "flex flex-col items-center justify-center gap-2",
-                          "hover:border-primary hover:bg-accent/50",
+                          "group flex flex-col items-center gap-2 rounded-lg p-1 text-center transition-all",
+                          "hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                           "disabled:cursor-not-allowed",
                         )}
                       >
-                        {isSelecting && (
-                          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/70 backdrop-blur-sm">
-                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                        <div className="relative">
+                          <div className="relative h-24 w-24 overflow-hidden rounded-2xl bg-gradient-to-br from-pink-500 to-purple-600">
+                            {ig.profile_picture_url ? (
+                              <img
+                                src={ig.profile_picture_url}
+                                alt={ig.username}
+                                className="h-full w-full object-cover"
+                                loading="lazy"
+                              />
+                            ) : (
+                              <Instagram className="absolute inset-0 m-auto h-10 w-10 text-white" />
+                            )}
                           </div>
-                        )}
-                        <div className="relative h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-pink-500 to-purple-600">
-                          {ig.profile_picture_url ? (
-                            <img
-                              src={ig.profile_picture_url}
-                              alt={ig.username}
-                              className="h-full w-full object-cover"
-                              loading="lazy"
-                            />
-                          ) : (
-                            <Instagram className="absolute inset-0 m-auto h-8 w-8 text-white" />
+                          {isSelecting && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-background/70 backdrop-blur-sm">
+                              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                            </div>
                           )}
+                          <span className="absolute -right-1 -top-1 rounded-full border border-pink-500/40 bg-gradient-to-r from-purple-500/30 to-pink-500/30 px-2 py-0.5 text-[10px] font-medium text-pink-500 backdrop-blur-sm">
+                            IG
+                          </span>
                         </div>
-                        <div className="w-full truncate text-center text-sm font-medium">
+                        <div className="line-clamp-2 w-full text-center text-sm font-medium leading-tight">
                           @{ig.username}
                         </div>
-                        <div className="w-full truncate text-center text-[11px] text-muted-foreground">
-                          Instagram only
-                        </div>
-                        <span className="absolute right-2 top-2 rounded-full bg-gradient-to-r from-purple-500/20 to-pink-500/20 px-2 py-0.5 text-[10px] font-medium text-pink-500 border border-pink-500/30">
-                          IG
-                        </span>
                       </button>
                     );
                   })}
