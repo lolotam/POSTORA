@@ -1,167 +1,73 @@
-# Plan: Server-side runbook to resolve `Error 400: invalid_request` (kong redirect leak)
+# Plan: Google OAuth — Test-mode runbook + Verification submission checklist
 
-## Root cause (confirmed)
+Documentation only. **No code, no SQL, no env, no Edge Function redeploy, no SSH, no n8n changes.**
 
-The Google error URL decodes to:
+Lovable cannot perform any Google Cloud Console action — both deliverables are checklists the owner executes manually.
 
-```
-redirect_uri = http://kong:8000/functions/v1/youtube-oauth
-```
+---
 
-That is the **internal Docker Kong hostname**, which Google rightly rejects. The repo-side fix is already merged: `youtube-oauth` and the other 4 OAuth functions resolve `redirect_uri` from `PUBLIC_API_ORIGIN` first and only fall back to `SUPABASE_URL` for internal calls.
+## Deliverable 1 — `docs/runbooks/2026-06-26-google-oauth-unverified-test-mode.md`
 
-So the bug is **not in the code anymore** — it is in the running production container, which is either:
+Lets you and teammates connect YouTube today, without waiting for Google's review.
 
-1. still running the **old code** (functions volume not synced), or
-2. running the new code but with **no `PUBLIC_API_ORIGIN`** / **no `YOUTUBE_REDIRECT_URI`** in its env, so the new fallback chain still lands on `SUPABASE_URL` = `http://kong:8000`.
+Sections:
 
-Lovable cannot SSH into the Contabo VPS or restart Docker containers, so this plan is a runbook for the project owner (or Zed) to execute on the server. No file changes in the repo.
+1. **What this screen means** — Not a Postora bug; the YouTube OAuth redirect, token exchange, and callback are working (confirmed by the prior `kong:8000` fix). Wording (verbatim):
+   > "The warning can appear when the app is still in Testing or when the app requests sensitive/restricted scopes before the relevant OAuth verification is fully completed."
+   Plus a note that **"Branding verified" is not necessarily the same as "sensitive-scope verification completed"** — the app can show verified branding while the YouTube sensitive-scope verification still needs to be done.
+2. **Who is affected** — Any Gmail not on the Test Users list while Publishing status = Testing.
+3. **Add Test Users** — Cloud Console path: APIs & Services → OAuth consent screen → Test users → + ADD USERS (up to 100). Owner-only action.
+4. **Bypass path for added test users** — Advanced → Go to POSTORA (unsafe) → normal consent → tokens land in Postora.
+5. **Limits of Testing mode** — 100 user cap; refresh-token wording (verbatim):
+   > "For External apps in Testing, refresh tokens can expire after 7 days when requested scopes are broader than only openid/email/profile."
+6. **Validation** — Real test-user connect; row in `social_accounts` with `needs_reauth=false`; one test upload succeeds.
+7. **Manual actions Lovable cannot perform** — Adding test users, clicking the Advanced bypass.
+8. **Final status** — `ready_for_real_oauth_test`.
 
-## Deliverable
+---
 
-A single markdown runbook at `docs/runbooks/2026-06-26-fix-kong-redirect-leak.md` that the operator follows top-to-bottom on the Contabo VPS (`86.48.2.205`, Dokploy stack `postorasupabase-supabase-j8axyh`).
+## Deliverable 2 — `docs/runbooks/2026-06-26-google-oauth-verification-submission-checklist.md`
 
-## Runbook contents (what the file will contain)
+Everything Google requires to remove the warning for all users and lift the 7-day refresh-token expiry.
 
-### 1. Pre-flight on the VPS
+Sections:
 
-```bash
-ssh contabo
-cd /etc/dokploy/compose/postorasupabase-supabase-j8axyh
-```
+0. **Important — what Lovable cannot do** — explicit list: add test users, publish app, submit verification, upload demo video URL, fill scope justification, verify domain ownership, answer Google reviewer emails (within 7 days or request is closed).
+1. **Pre-flight checklist** — Publishing status In production, app name, support/contact emails, 120×120 logo, homepage `https://postora.cloud`, privacy `/privacy` (must mention YouTube/Google data + Limited Use + deletion path), terms `/terms`, authorized domain `postora.cloud` verified in Search Console under the same Google account that owns the Cloud project. Reminder: branding-verified ≠ sensitive-scope-verified.
+2. **Confirm actual requested scopes from code** — Open `supabase/functions/youtube-oauth/index.ts` and confirm it requests ONLY:
+   - `https://www.googleapis.com/auth/youtube.readonly`
+   - `https://www.googleapis.com/auth/youtube.upload`
+   - `openid email profile` — **only if actually needed**
+   And explicitly MUST NOT request the broad `https://www.googleapis.com/auth/youtube`. If present, narrow before submitting.
+3. **Scope justifications** — Drop-in paragraph per sensitive scope (where it's called, why it's minimum-necessary, where tokens are stored, RLS by `auth.uid()`).
+4. **Demo video requirements** — Unlisted YouTube, < 5 min, 6-shot storyboard: connect button → consent screen with all scopes visible → grant → return to Postora → exercise each sensitive scope (channel list, real upload) → revoke from `myaccount.google.com/permissions`.
+5. **YouTube API Services compliance** — Link to YouTube API Services Terms in privacy policy, data-retention statement, user-data-deletion path, YouTube API audit form when requested.
+6. **Submission form** — OAuth consent screen → PUBLISH APP → PREPARE FOR VERIFICATION → SUBMIT. Reviewer email cadence; 7-day response deadline.
+7. **What changes after approval** — Warning gone; 7-day refresh expiry lifted; 100-user cap removed; branding fields lock.
+8. **Rejection-recovery checklist** — Common reasons with one-line fixes (homepage unreachable, demo missing a scope, privacy policy missing YouTube section, domain not verified under right account, broad `youtube` scope still present).
+9. **Manual actions Lovable cannot perform** — Cross-reference §1, §4, §5, §6, §8.
+10. **Final status** — `ready_for_provider_console_update`.
 
-Confirm functions volume path:
+---
 
-```bash
-ls files/volumes/functions/youtube-oauth/index.ts
-```
+## What this task will NOT do
 
-### 2. Sync the 5 patched OAuth functions
+- No changes to `youtube-oauth/index.ts` or any other edge function.
+- No SQL, no migrations.
+- No `.env` / secrets / Dokploy / Docker changes.
+- No SSH or server actions.
+- No n8n changes.
+- No edits to existing privacy/terms pages (the checklist flags what YouTube-specific text Google will look for, but the owner decides and approves wording).
 
-From the repo (latest `main`), copy these 5 files into the functions volume:
+## Files created
 
-```text
-supabase/functions/youtube-oauth/index.ts
-supabase/functions/linkedin-oauth/index.ts
-supabase/functions/instagram-oauth/index.ts
-supabase/functions/instagram-business-oauth/index.ts
-supabase/functions/facebook-oauth/index.ts
-```
+- `docs/runbooks/2026-06-26-google-oauth-unverified-test-mode.md`
+- `docs/runbooks/2026-06-26-google-oauth-verification-submission-checklist.md`
+- `.lovable/plan.md` — index updated only because that file already exists and is used as the project plan index.
 
-Destination:
+## Final report (will appear after files are written)
 
-```text
-/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/<name>/index.ts
-```
-
-Verify with `sha256sum` on both sides before continuing.
-
-### 3. Confirm/append required env vars
-
-Edit `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code/.env`. The following lines MUST exist and be uncommented:
-
-```env
-PUBLIC_API_ORIGIN=https://api.postora.cloud
-YOUTUBE_REDIRECT_URI=https://api.postora.cloud/functions/v1/youtube-oauth
-```
-
-Optional but recommended (explicit per-provider URIs, removes any future ambiguity):
-
-```env
-FACEBOOK_REDIRECT_URI=https://api.postora.cloud/functions/v1/facebook-oauth
-INSTAGRAM_REDIRECT_URI=https://api.postora.cloud/functions/v1/instagram-oauth
-INSTAGRAM_BUSINESS_REDIRECT_URI=https://api.postora.cloud/functions/v1/instagram-business-oauth
-LINKEDIN_REDIRECT_URI=https://api.postora.cloud/functions/v1/linkedin-oauth
-```
-
-Confirm `docker-compose.yml` `functions` service still has `env_file: - ./.env` (per project knowledge).
-
-### 4. Restart ONLY the functions container
-
-```bash
-cd /etc/dokploy/compose/postorasupabase-supabase-j8axyh/code
-docker compose up -d --no-deps functions
-docker compose logs -f --tail=100 functions
-```
-
-Wait for "Serving functions" line, no boot errors.
-
-### 5. Verify env reached the container
-
-```bash
-docker compose exec functions sh -lc 'echo PUBLIC_API_ORIGIN=$PUBLIC_API_ORIGIN; echo YOUTUBE_REDIRECT_URI=$YOUTUBE_REDIRECT_URI'
-```
-
-Both must print the `https://api.postora.cloud/...` values, NOT empty.
-
-Then run the existing checker:
-
-```bash
-bash scripts/check-edge-env-server.sh
-```
-
-### 6. Verify the live OAuth URL
-
-From a workstation, hit the function's authorize endpoint (or use the app's "Connect YouTube" button) and inspect the resulting Google URL. The `redirect_uri` query param must read:
-
-```text
-https://api.postora.cloud/functions/v1/youtube-oauth
-```
-
-If it still says `http://kong:8000/...`, the container is still on old code — re-run step 2 and restart.
-
-### 7. Real OAuth round-trip
-
-1. In the app, click "Connect YouTube" as `dr.vet.waleedtam@gmail.com`.
-2. Confirm Google shows the consent screen (no Error 400).
-3. Approve.
-4. Confirm callback lands on `/profiles` and the new YouTube account row appears in `social_accounts` (via `supabase_postora_mcp`).
-5. Repeat for Facebook / Instagram / Instagram Business / LinkedIn to confirm the same hardening took effect.
-
-### 8. Rollback
-
-If step 4 logs show boot errors, restore the previous `index.ts` files from `files/volumes/functions/<name>/index.ts.bak` (take backups before step 2) and re-run `docker compose up -d --no-deps functions`.
-
-## Files changed in this task
-
-- **NEW** `docs/runbooks/2026-06-26-fix-kong-redirect-leak.md` — the runbook above.
-
-No source code, no SQL, no env manifest changes. The repo-side hardening is already done in a previous task.
-
-## Database changes
-
-None.
-
-## Env changes required
-
-None in the repo. On the **production VPS** `.env`, ensure the two `PUBLIC_API_ORIGIN` + `YOUTUBE_REDIRECT_URI` lines are present (step 3). They are already declared in `.env.example` and `infra/edge-runtime.required-env.json`.
-
-## Deployment notes for self-hosted Supabase
-
-Entirely covered by the runbook. Lovable cannot perform these steps; the project owner runs them on Contabo.
-
-## Validation results
-
-- Decoded the Google error URL → confirmed `redirect_uri=http://kong:8000/functions/v1/youtube-oauth`, which matches a server still using the `SUPABASE_URL` fallback (old code OR missing `PUBLIC_API_ORIGIN`).
-- Repo code already hardened in prior turn — no further code changes needed.
-
-## Guard review results
-
-- CleanCodeGuard: doc-only change, not applicable.
-- TestGuard: no test files changed; no test-code review required.
-
-## Security check
-
-No secrets, OAuth codes, access tokens, service-role keys, n8n keys, or cron secrets are written to the runbook. Only **non-secret** env var **names** and the public `https://api.postora.cloud/...` URLs appear.
-
-## Remaining manual actions (owner on Contabo)
-
-1. Sync 5 OAuth `index.ts` files to `files/volumes/functions/<name>/`.
-2. Ensure `PUBLIC_API_ORIGIN` and `YOUTUBE_REDIRECT_URI` are set in production `.env`.
-3. `docker compose up -d --no-deps functions`.
-4. Run `scripts/check-edge-env-server.sh`.
-5. Real OAuth test for YouTube + the other 4 providers.
-
-## Final status
-
-`completed_ready_for_server_sync` — runbook delivered; awaits manual execution on the Contabo VPS to clear the `kong:8000` redirect leak in production.
+- **Files created** — the three above.
+- **Confirmation** — no code, no SQL, no env, no server changes.
+- **Key manual Google Console actions** — add test users; click Advanced → Go to POSTORA (unsafe); publish app; submit for verification; upload demo video URL; fill scope justifications; verify `postora.cloud` in Search Console; answer reviewer emails within 7 days.
+- **Final status** — `completed`.
