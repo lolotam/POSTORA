@@ -12,6 +12,7 @@ export interface FacebookPage {
   id: string;
   name: string;
   has_instagram?: boolean;
+  picture_url?: string;
 }
 
 export interface StandaloneInstagram {
