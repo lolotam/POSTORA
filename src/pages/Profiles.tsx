@@ -22,6 +22,7 @@ import {
 import { Loader2, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Tooltip, TooltipProvider, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { Layers } from "lucide-react";
 import { Reveal, Icon3D, GradientHeading, GradientDivider } from "@/components/fx";
 import { platformVariant, PLATFORM_TAB_ACTIVE } from "@/components/profiles/platformVariant";
