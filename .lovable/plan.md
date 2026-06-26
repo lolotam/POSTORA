@@ -1,38 +1,25 @@
-## Restyle Facebook Page selection dialog to match uploaded reference
+## Goal
 
-Update `src/components/profiles/PageSelectionDialog.tsx` only — frontend/presentation change, no backend/OAuth/data changes.
+Restyle the platform tabs in `src/pages/Profiles.tsx` so each tab shows only the platform logo and the account count badge (no platform name), with a hover tooltip revealing the name, and fix the unreadable count badge in dark mode.
 
-### Visual changes to match reference
+## Changes (single file: `src/pages/Profiles.tsx`)
 
-**Header (centered, like reference):**
-- Title: `Configure Your Channel` (centered)
-- Description: `Select the Facebook page or account you want to connect.` (centered)
-- Small left-aligned label above the grid: `Select Page:`
+Tab trigger (lines ~236–256):
 
-**Grid cards (clone reference style):**
-- 3 columns (`grid-cols-3`), generous gap (`gap-6`)
-- Each card = just a large rounded-square logo + page name underneath
-  - Remove the bordered/aspect-square card box, hover ring background, "Facebook Page" subtitle, and outer card padding
-  - Logo: ~96px square, `rounded-2xl`, object-cover, subtle hover scale/opacity transition
-  - Name: centered, small font, below logo (truncate/wrap to 2 lines)
-- Keep "IG" badge in the top-right corner of the logo for pages with `has_instagram`
-- Keep loading spinner overlay on the logo while `selectingPage === page.id`
-- Keep image fallback (Facebook icon on error / no picture_url)
+1. **Remove the platform name text** (`{config.name}`).
+2. **Bigger logo**: change `<PlatformIcon size="sm" />` → `size="lg"`.
+3. **Compact button sizing**: tighten the trigger to fit just the icon + badge — e.g. `px-3 py-2.5 gap-2` (no extra horizontal space from the removed label). Keep rounded-xl, border, hover-lift, and active-gradient styling.
+4. **Hover tooltip with platform name**: wrap each `TabsTrigger` with `Tooltip`/`TooltipTrigger asChild`/`TooltipContent` from `@/components/ui/tooltip`, content = `getPlatformName(config.platform)` (or `config.name`). Add one `TooltipProvider` around the `TabsList`.
+5. **Fix dark-mode count badge contrast**: the active-state class currently uses `group-data-[state=active]:bg-white/90 group-data-[state=active]:text-foreground`. In dark mode `text-foreground` is white → invisible on white bg. Replace with an explicit dark color so the number stays readable on the white badge in both themes:
+   - Active + has accounts: `bg-white text-slate-900` (or `text-black`) instead of `text-foreground`.
+   - Keep inactive states unchanged.
+6. Keep the Beta badge positioning unchanged (still centered above the trigger).
 
-**Search input:** keep, but visually lighter (small, above the grid) — matches the same dialog family
+## Out of scope
 
-**Standalone Instagram section:** keep below FB pages, same card style, IG icon fallback, "IG" badge
+- No changes to OAuth flows, hooks, edge functions, SQL, env, n8n, or any other file.
+- `PageSelectionDialog` and `InstagramSelectionDialog` are not touched.
 
-**Footer:** keep single `Cancel` outline button
+## Final status
 
-**Dialog container:**
-- `sm:max-w-2xl`, dark-friendly (already using semantic tokens)
-- Centered header alignment via `text-center` on `DialogHeader`
-
-### Out of scope
-- No changes to `useFacebookOAuth.ts`, OAuth flow, edge functions, SQL, env, or n8n
-- No changes to `InstagramSelectionDialog.tsx` (kept as the structural sibling)
-- Logos still pulled from `page.picture_url` with fallback to `https://graph.facebook.com/${page.id}/picture?type=square`
-
-### Final status
-`completed` (documentation/UI-only restyle, ready for visual review in preview)
+`completed` — UI-only restyle in a single file.
