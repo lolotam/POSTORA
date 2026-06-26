@@ -1,23 +1,22 @@
+import { useMemo, useState } from "react";
+import { Facebook, Instagram, Loader2, Search } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { PlatformIcon } from "@/components/PlatformIcon";
-import { Loader2, Search } from "lucide-react";
-import {
-  AlertDialog,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { cn } from "@/lib/utils";
 
 interface FacebookPage {
   id: string;
   name: string;
   has_instagram?: boolean;
+  picture_url?: string;
 }
 
 interface StandaloneInstagram {
@@ -38,6 +37,26 @@ interface PageSelectionDialogProps {
   selectingPage: string | null;
 }
 
+function PageLogo({ page }: { page: FacebookPage }) {
+  const src = page.picture_url || `https://graph.facebook.com/${page.id}/picture?type=square`;
+  const [errored, setErrored] = useState(false);
+  return (
+    <div className="relative h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-blue-500 to-blue-700">
+      {!errored ? (
+        <img
+          src={src}
+          alt={page.name}
+          className="h-full w-full object-cover"
+          loading="lazy"
+          onError={() => setErrored(true)}
+        />
+      ) : (
+        <Facebook className="absolute inset-0 m-auto h-8 w-8 text-white" />
+      )}
+    </div>
+  );
+}
+
 export function PageSelectionDialog({
   open,
   onOpenChange,
@@ -49,141 +68,167 @@ export function PageSelectionDialog({
   onSelectStandaloneInstagram,
   selectingPage,
 }: PageSelectionDialogProps) {
-  const filteredPages = pages.filter((page) =>
-    page.name.toLowerCase().includes(pageSearchQuery.toLowerCase())
+  const q = pageSearchQuery.trim().toLowerCase();
+
+  const filteredPages = useMemo(
+    () => (q ? pages.filter((p) => p.name.toLowerCase().includes(q)) : pages),
+    [pages, q],
+  );
+  const filteredIg = useMemo(
+    () =>
+      q
+        ? standaloneInstagram.filter((ig) => ig.username.toLowerCase().includes(q))
+        : standaloneInstagram,
+    [standaloneInstagram, q],
   );
 
-  const filteredStandaloneIg = standaloneInstagram.filter((ig) =>
-    ig.username.toLowerCase().includes(pageSearchQuery.toLowerCase())
-  );
+  const handleOpenChange = (next: boolean) => {
+    if (!next) onPageSearchChange("");
+    onOpenChange(next);
+  };
 
   return (
-    <AlertDialog open={open} onOpenChange={onOpenChange}>
-      <AlertDialogContent className="max-w-lg">
-        <AlertDialogHeader>
-          <AlertDialogTitle className="flex items-center gap-2">
-            <PlatformIcon platform="facebook" size="sm" />
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent className="sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Facebook className="h-5 w-5 text-blue-500" />
             Select a Facebook Page
-          </AlertDialogTitle>
-          <AlertDialogDescription>
-            Choose which Facebook Page you want to connect. This Page will be used for publishing posts.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
+          </DialogTitle>
+          <DialogDescription>
+            Choose which Facebook Page you want to connect. Pages marked{" "}
+            <span className="font-medium text-pink-500">IG</span> will also connect their linked
+            Instagram.
+          </DialogDescription>
+        </DialogHeader>
 
-        {/* Search Input */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search pages..."
             value={pageSearchQuery}
             onChange={(e) => onPageSearchChange(e.target.value)}
-            className="pl-10"
+            className="pl-9"
           />
         </div>
 
-        {/* Pages with Instagram badge info */}
-        {pages.some((p) => p.has_instagram) && (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gradient-to-r from-purple-500/10 to-pink-500/10 border border-pink-500/20">
-            <PlatformIcon platform="instagram" size="sm" />
-            <span className="text-xs text-muted-foreground">
-              Pages with{" "}
-              <Badge
-                variant="secondary"
-                className="mx-1 h-5 bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-pink-400 border-pink-500/30"
-              >
-                IG
-              </Badge>{" "}
-              will also connect Instagram
-            </span>
+        {filteredPages.length === 0 && filteredIg.length === 0 ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">
+            No pages match your search.
+          </div>
+        ) : (
+          <div className="max-h-[60vh] space-y-4 overflow-y-auto pr-1">
+            {filteredPages.length > 0 && (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {filteredPages.map((page) => {
+                  const isSelecting = selectingPage === page.id;
+                  const disabled = !!selectingPage;
+                  return (
+                    <button
+                      key={page.id}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => onSelectPage(page.id)}
+                      className={cn(
+                        "group relative aspect-square rounded-xl border p-3 text-left transition-all",
+                        "flex flex-col items-center justify-center gap-2",
+                        "hover:border-primary hover:bg-accent/50",
+                        "disabled:cursor-not-allowed",
+                      )}
+                    >
+                      {isSelecting && (
+                        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/70 backdrop-blur-sm">
+                          <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                        </div>
+                      )}
+                      <PageLogo page={page} />
+                      <div className="w-full truncate text-center text-sm font-medium">
+                        {page.name}
+                      </div>
+                      <div className="w-full truncate text-center text-[11px] text-muted-foreground">
+                        Facebook Page
+                      </div>
+                      {page.has_instagram && (
+                        <span className="absolute right-2 top-2 rounded-full bg-gradient-to-r from-purple-500/20 to-pink-500/20 px-2 py-0.5 text-[10px] font-medium text-pink-500 border border-pink-500/30">
+                          IG
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {filteredIg.length > 0 && (
+              <div>
+                <div className="mb-2 flex items-center gap-2 pt-2">
+                  <Instagram className="h-4 w-4 text-pink-500" />
+                  <span className="text-xs font-medium text-muted-foreground">
+                    Standalone Instagram Accounts
+                  </span>
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {filteredIg.map((ig) => {
+                    const isSelecting = selectingPage === ig.id;
+                    const disabled = !!selectingPage;
+                    return (
+                      <button
+                        key={ig.id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => onSelectStandaloneInstagram?.(ig)}
+                        className={cn(
+                          "group relative aspect-square rounded-xl border p-3 text-left transition-all",
+                          "flex flex-col items-center justify-center gap-2",
+                          "hover:border-primary hover:bg-accent/50",
+                          "disabled:cursor-not-allowed",
+                        )}
+                      >
+                        {isSelecting && (
+                          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/70 backdrop-blur-sm">
+                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                          </div>
+                        )}
+                        <div className="relative h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-pink-500 to-purple-600">
+                          {ig.profile_picture_url ? (
+                            <img
+                              src={ig.profile_picture_url}
+                              alt={ig.username}
+                              className="h-full w-full object-cover"
+                              loading="lazy"
+                            />
+                          ) : (
+                            <Instagram className="absolute inset-0 m-auto h-8 w-8 text-white" />
+                          )}
+                        </div>
+                        <div className="w-full truncate text-center text-sm font-medium">
+                          @{ig.username}
+                        </div>
+                        <div className="w-full truncate text-center text-[11px] text-muted-foreground">
+                          Instagram only
+                        </div>
+                        <span className="absolute right-2 top-2 rounded-full bg-gradient-to-r from-purple-500/20 to-pink-500/20 px-2 py-0.5 text-[10px] font-medium text-pink-500 border border-pink-500/30">
+                          IG
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Pages List */}
-        <ScrollArea className="max-h-[300px] pr-4">
-          <div className="space-y-2">
-            {filteredPages.map((page) => (
-              <Button
-                key={page.id}
-                variant="outline"
-                className="w-full justify-between h-auto py-3"
-                onClick={() => onSelectPage(page.id)}
-                disabled={!!selectingPage}
-              >
-                <span className="font-medium">{page.name}</span>
-                <div className="flex items-center gap-2">
-                  {page.has_instagram && (
-                    <Badge
-                      variant="secondary"
-                      className="bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-pink-400 border-pink-500/30"
-                    >
-                      IG
-                    </Badge>
-                  )}
-                  {selectingPage === page.id && <Loader2 className="w-4 h-4 animate-spin" />}
-                </div>
-              </Button>
-            ))}
-          </div>
-
-          {/* Standalone Instagram Accounts Section */}
-          {filteredStandaloneIg.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-border/50">
-              <div className="flex items-center gap-2 mb-3">
-                <PlatformIcon platform="instagram" size="sm" />
-                <span className="text-sm font-medium text-muted-foreground">
-                  Standalone Instagram Accounts
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground mb-3">
-                These Instagram accounts are not linked to a Facebook Page but are in your Business Portfolio.
-              </p>
-              <div className="space-y-2">
-                {filteredStandaloneIg.map((ig) => (
-                  <Button
-                    key={ig.id}
-                    variant="outline"
-                    className="w-full justify-between h-auto py-3 border-pink-500/20 hover:bg-pink-500/5"
-                    onClick={() => onSelectStandaloneInstagram?.(ig)}
-                    disabled={!!selectingPage}
-                  >
-                    <div className="flex items-center gap-2">
-                      {ig.profile_picture_url ? (
-                        <img
-                          src={ig.profile_picture_url}
-                          alt={ig.username}
-                          className="w-6 h-6 rounded-full object-cover"
-                        />
-                      ) : (
-                        <PlatformIcon platform="instagram" size="sm" />
-                      )}
-                      <span className="font-medium">@{ig.username}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Badge
-                        variant="secondary"
-                        className="bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-pink-400 border-pink-500/30"
-                      >
-                        IG Only
-                      </Badge>
-                      {selectingPage === ig.id && <Loader2 className="w-4 h-4 animate-spin" />}
-                    </div>
-                  </Button>
-                ))}
-              </div>
-            </div>
-          )}
-        </ScrollArea>
-
-        <AlertDialogFooter>
-          <AlertDialogCancel
+        <DialogFooter>
+          <Button
+            variant="outline"
+            onClick={() => handleOpenChange(false)}
             disabled={!!selectingPage}
-            onClick={() => onPageSearchChange("")}
           >
             Cancel
-          </AlertDialogCancel>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
-
