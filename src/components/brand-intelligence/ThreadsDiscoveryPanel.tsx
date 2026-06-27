@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useBrandSearchHistory } from "@/hooks/useBrandSearchHistory";
+import { Clock, X as XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";

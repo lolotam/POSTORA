@@ -198,7 +198,7 @@ export default function ThreadsAnalytics() {
         {threadsMode === "analyze" && (
           <Reveal delay={120} className="space-y-4">
             <GradientRingCard variant="indigo" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
-              <BrandSearchBar platform="threads" onSearch={handleSearch} isLoading={isLoading} />
+              <BrandSearchBar platform="threads" scope="analyze" onSearch={handleSearch} isLoading={isLoading} />
             </GradientRingCard>
             {errorState && <ThreadsErrorCard state={errorState} />}
             {hasResults && (
