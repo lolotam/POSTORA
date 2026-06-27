@@ -791,12 +791,6 @@ export default function ScheduledPosts() {
                           <PlatformIcon platform={platform as Platform} size="sm" />
                         </div>
                       ))}
-                      {post.media_file_ids && post.media_file_ids.length > 0 && (
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground ml-auto">
-                          <Image className="w-3 h-3" />
-                          {post.media_file_ids.length}
-                        </span>
-                      )}
                     </div>
 
                     {/* Schedule Info */}
