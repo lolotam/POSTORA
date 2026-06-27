@@ -1,9 +1,10 @@
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { PlatformIcon } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
+import { PlatformChip } from "@/components/post/PlatformChip";
+import { LinkedInDestinationStack } from "@/components/post/LinkedInDestinationStack";
 import {
   InstagramSettings,
   FacebookSettings,
