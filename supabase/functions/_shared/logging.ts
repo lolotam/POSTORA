@@ -1,6 +1,59 @@
 // Use 'any' for SupabaseClient to avoid version mismatch issues between edge functions
 // deno-lint-ignore-file no-explicit-any
 
+// ─────────────────────────────────────────────────────────────────────
+// P3-4: Sensitive data redactor
+// ─────────────────────────────────────────────────────────────────────
+// Recursively scans objects/arrays for keys matching sensitive patterns
+// and replaces their values with [REDACTED]. Also redacts long hex/base64
+// strings and Bearer tokens that slip into values.
+
+const SENSITIVE_KEY_PATTERNS = [
+  /token/i,
+  /secret/i,
+  /password/i,
+  /api[-_]?key/i,
+  /^key$/i,
+  /otp/i,
+  /code[-_]?hash/i,
+  /bearer/i,
+  /authorization/i,
+  /private[-_]?key/i,
+  /service[-_]?role/i,
+  /cron[-_]?secret/i,
+  /webhook[-_]?secret/i,
+  /pepper/i,
+  /cookie/i,
+  /session[-_]?id/i,
+];
+
+const REDACTED = "[REDACTED]";
+const MAX_DEPTH = 10;
+
+export function redactSensitive(data: unknown, depth = 0): unknown {
+  if (depth > MAX_DEPTH) return REDACTED;
+  if (typeof data === "string") {
+    if (data.length >= 64 && /^[a-f0-9]+$/i.test(data)) return REDACTED;
+    if (/^Bearer\s+\S/i.test(data)) return REDACTED;
+    return data;
+  }
+  if (Array.isArray(data)) {
+    return data.map((item) => redactSensitive(item, depth + 1));
+  }
+  if (data !== null && typeof data === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      if (SENSITIVE_KEY_PATTERNS.some((p) => p.test(key))) {
+        result[key] = REDACTED;
+      } else {
+        result[key] = redactSensitive(value, depth + 1);
+      }
+    }
+    return result;
+  }
+  return data;
+}
+
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export type LogCategory = 'auth' | 'edge' | 'database' | 'token' | 'post' | 'system';
 
@@ -116,7 +169,7 @@ export async function logToDatabase(
         source: entry.source,
         message: entry.message,
         user_id: entry.user_id || null,
-        metadata: enrichedMetadata,
+        metadata: redactSensitive(enrichedMetadata) as Record<string, unknown>,
       });
 
     if (error) {
