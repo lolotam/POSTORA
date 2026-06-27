@@ -78,6 +78,8 @@ import { GradientHeading, GradientRingCard, Icon3D, Reveal, GradientDivider } fr
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { ScheduledPostMedia, type ScheduledMediaItem } from "@/components/scheduled/ScheduledPostMedia";
 import { MediaLightboxDialog } from "@/components/scheduled/MediaLightboxDialog";
+import { AccountAvatar } from "@/components/AccountAvatar";
+import { PlatformAccountMultiSelect } from "@/components/post/PlatformAccountMultiSelect";
 
 // Countdown timer component
 function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
@@ -133,6 +135,8 @@ export default function ScheduledPosts() {
   const [editCaption, setEditCaption] = useState("");
   const [editScheduledDate, setEditScheduledDate] = useState<Date | undefined>();
   const [editScheduledTime, setEditScheduledTime] = useState("");
+  const [editPlatforms, setEditPlatforms] = useState<Platform[]>([]);
+  const [editAccountIds, setEditAccountIds] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [publishingPostId, setPublishingPostId] = useState<string | null>(null);
@@ -333,6 +337,8 @@ export default function ScheduledPosts() {
   const handleEditClick = (post: Post) => {
     setEditPost(post);
     setEditCaption(post.caption || "");
+    setEditPlatforms((post.platforms || []) as Platform[]);
+    setEditAccountIds(post.metadata?.selected_account_ids || []);
     if (post.scheduled_at) {
       const date = new Date(post.scheduled_at);
       setEditScheduledDate(date);
@@ -360,11 +366,18 @@ export default function ScheduledPosts() {
         return;
       }
 
+      const nextMetadata = {
+        ...(editPost.metadata ?? {}),
+        selected_account_ids: editAccountIds,
+      };
+
       const { error } = await supabase
         .from("posts")
         .update({
           caption: editCaption,
           scheduled_at: scheduledAt.toISOString(),
+          platforms: editPlatforms,
+          metadata: nextMetadata,
         })
         .eq("id", editPost.id);
 
@@ -758,39 +771,38 @@ export default function ScheduledPosts() {
                       </div>
                     )}
 
-                    {/* Accounts */}
-                    <div className="flex flex-wrap items-start gap-4">
-                      {postAccounts.slice(0, 4).map((account: any) => (
-                        <div key={account.id} className="flex flex-col items-center gap-1" title={`@${account.platform_username} (${getPlatformName(account.platform)})`}>
-                          <Avatar className="w-8 h-8 border-2 border-background">
-                            <AvatarImage src={account.avatar_url || undefined} />
-                            <AvatarFallback className="text-xs">
-                              {account.platform_username?.[0]?.toUpperCase() || "?"}
-                            </AvatarFallback>
-                          </Avatar>
-                          <PlatformIcon platform={account.platform} size="xs" />
-                        </div>
+                    {/* Accounts (avatar with integrated platform icon) */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      {postAccounts.slice(0, 6).map((account: any) => (
+                        <AccountAvatar
+                          key={account.id}
+                          platform={account.platform}
+                          avatarUrl={account.avatar_url}
+                          name={account.platform_username}
+                          size="md"
+                          title={`@${account.platform_username} (${getPlatformName(account.platform)})`}
+                        />
                       ))}
-                      {postAccounts.length > 4 && (
-                        <div className="flex flex-col items-center gap-1">
-                          <div className="w-8 h-8 rounded-full bg-muted border-2 border-background flex items-center justify-center text-xs text-muted-foreground">
-                            +{postAccounts.length - 4}
-                          </div>
-                          <span className="text-[10px] text-muted-foreground">more</span>
+                      {postAccounts.length > 6 && (
+                        <div className="w-10 h-10 rounded-full bg-muted border-2 border-background flex items-center justify-center text-xs text-muted-foreground">
+                          +{postAccounts.length - 6}
                         </div>
                       )}
-                      {postAccounts.length === 0 && (
+                      {postAccounts.length === 0 && post.platforms.length > 0 && (
+                        // Fallback: no account avatars — show platform icons only
+                        post.platforms.map((platform) => (
+                          <div
+                            key={platform}
+                            className="w-10 h-10 rounded-full bg-muted/60 border-2 border-background flex items-center justify-center"
+                            title={getPlatformName(platform as Platform)}
+                          >
+                            <PlatformIcon platform={platform as Platform} size="sm" />
+                          </div>
+                        ))
+                      )}
+                      {postAccounts.length === 0 && post.platforms.length === 0 && (
                         <span className="text-xs text-muted-foreground">No accounts</span>
                       )}
-                    </div>
-
-                    {/* Platforms */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      {post.platforms.map((platform) => (
-                        <div key={platform} className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <PlatformIcon platform={platform as Platform} size="sm" />
-                        </div>
-                      ))}
                     </div>
 
                     {/* Schedule Info */}
@@ -835,23 +847,14 @@ export default function ScheduledPosts() {
 
           {editPost && (
             <div className="space-y-4">
-              {/* Platforms */}
-              <div>
-                <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                  Platforms
-                </label>
-                <div className="flex gap-2">
-                  {editPost.platforms.map((platform) => (
-                    <div
-                      key={platform}
-                      className="flex items-center gap-2 bg-muted/50 px-3 py-1.5 rounded-lg"
-                    >
-                      <PlatformIcon platform={platform as Platform} size="sm" />
-                      <span className="text-sm">{getPlatformName(platform as Platform)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {/* Platforms + Accounts (multi-select) — preview above the caption */}
+              <PlatformAccountMultiSelect
+                accounts={socialAccounts as any}
+                selectedPlatforms={editPlatforms}
+                selectedAccountIds={editAccountIds}
+                onPlatformsChange={setEditPlatforms}
+                onAccountsChange={setEditAccountIds}
+              />
 
               {/* Caption */}
               <div>
