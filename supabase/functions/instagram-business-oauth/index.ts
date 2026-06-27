@@ -392,7 +392,7 @@ Deno.serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data: row, error } = await supabase
       .from("oauth_pending_instagram_selections")
-      .select("id, user_id, social_profile_id, ig_candidates_json, expires_in, expires_at")
+      .select("id, user_id, social_profile_id, ig_candidates_json, expires_in, expires_at, long_lived_token")
       .eq("id", selection_id)
       .maybeSingle();
 
@@ -412,12 +412,31 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: false, error: "Account not in selection" }, 404);
     }
 
+    // Fetch the user's currently-granted scopes from Meta so we can persist the
+    // actual permission set (used by messaging/comments UI to detect missing
+    // scopes such as `instagram_manage_messages`).
+    let grantedScopes: string[] = [];
+    try {
+      const llt = row.long_lived_token as string | undefined;
+      if (llt) {
+        const permUrl = `https://graph.facebook.com/${GRAPH_VERSION}/me/permissions?access_token=${encodeURIComponent(llt)}`;
+        const permResp = await fetch(permUrl);
+        const permData = await permResp.json();
+        if (Array.isArray(permData?.data)) {
+          grantedScopes = permData.data
+            .filter((p: { status?: string }) => p?.status === "granted")
+            .map((p: { permission: string }) => p.permission);
+        }
+      }
+    } catch (_err) { /* best-effort */ }
+
     const result = await persistOneIgAccount(
       supabase,
       user_id,
       override_profile_id ?? row.social_profile_id ?? null,
       candidate,
       row.expires_in ?? 5184000,
+      grantedScopes,
     );
     if (!result.success) {
       return jsonResponse({ success: false, error: result.error ?? "Save failed" }, 200);
