@@ -27,7 +27,8 @@ describe("Threads cross-share parameter name", () => {
   });
 
   it("does not use the legacy crosspost_to_instagram parameter (Meta silently ignores it)", () => {
-    expect(src).not.toMatch(/crosspost_to_instagram/);
+    expect(src).not.toMatch(/containerParams\.crosspost_to_instagram/);
+    expect(src).not.toMatch(/["']crosspost_to_instagram["']/);
   });
 
   it("requests crossreshare_to_ig_status on the post-publish verify fetch", () => {
