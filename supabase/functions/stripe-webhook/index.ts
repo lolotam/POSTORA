@@ -207,17 +207,25 @@ Deno.serve(async (req) => {
       .insert({ event_id: event.id, event_type: event.type, status: "received" });
 
     if (dedupeErr) {
-      // Postgres unique_violation = 23505. Any conflict on PK means duplicate.
       const code = (dedupeErr as { code?: string }).code;
       if (code === "23505") {
-        logStep("Duplicate event, skipping", { eventId: event.id, type: event.type });
-        return new Response(JSON.stringify({ received: true, duplicate: true }), {
-          headers: { "Content-Type": "application/json" },
-        });
+        // Already seen. If a prior attempt succeeded, skip. If it failed,
+        // allow Stripe's retry to re-run the handler.
+        const { data: prior } = await supabase
+          .from("stripe_webhook_events")
+          .select("status")
+          .eq("event_id", event.id)
+          .maybeSingle();
+        if (prior?.status === "processed") {
+          logStep("Duplicate event already processed, skipping", { eventId: event.id });
+          return new Response(JSON.stringify({ received: true, duplicate: true }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        logStep("Retrying previously failed event", { eventId: event.id, priorStatus: prior?.status });
+      } else {
+        logStep("Dedupe insert failed (non-conflict)", { error: dedupeErr });
       }
-      // Unexpected DB error — log and continue processing so Stripe still gets a
-      // response. Better to risk one extra side-effect than to fail the webhook.
-      logStep("Dedupe insert failed (non-conflict)", { error: dedupeErr });
     }
 
     // Track resolved user_id across event handling for final logging
