@@ -218,7 +218,10 @@ export function LinkedInSettings({
             </div>
 
             <div className="max-h-64 overflow-y-auto py-1">
-              {/* Personal */}
+              {/* Personal accounts group */}
+              <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Personal account
+              </div>
               <label className="flex items-center gap-3 px-3 py-2 hover:bg-accent cursor-pointer">
                 <Checkbox
                   checked={selectedDestinationIds.includes(PERSONAL_ID)}
@@ -240,39 +243,51 @@ export function LinkedInSettings({
                 </div>
               </label>
 
-              {/* Pages */}
+              {/* Commercial pages group */}
               {availablePages.length === 0 ? (
-                <div className="px-3 py-3 text-xs text-muted-foreground">
-                  No LinkedIn Pages found on this account. Reconnect with the
-                  <code className="mx-1 px-1 rounded bg-muted">w_organization_social</code>
-                  scope to manage Pages.
-                </div>
+                <>
+                  <div className="my-1 border-t border-border/60" />
+                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Commercial pages
+                  </div>
+                  <div className="px-3 py-3 text-xs text-muted-foreground">
+                    No LinkedIn Pages found on this account. Reconnect with the
+                    <code className="mx-1 px-1 rounded bg-muted">w_organization_social</code>
+                    scope to manage Pages.
+                  </div>
+                </>
               ) : (
-                availablePages.map((page) => (
-                  <label
-                    key={page.id}
-                    className="flex items-center gap-3 px-3 py-2 hover:bg-accent cursor-pointer"
-                  >
-                    <Checkbox
-                      checked={selectedDestinationIds.includes(page.id)}
-                      onCheckedChange={(v) => toggle(page.id, !!v)}
-                    />
-                    <Avatar className="h-7 w-7">
-                      <AvatarImage src={page.logoUrl} alt={page.name} />
-                      <AvatarFallback className="text-xs">
-                        {page.name.charAt(0).toUpperCase()}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex flex-col text-left">
-                      <span className="text-sm truncate max-w-[220px]">{page.name}</span>
-                      {page.vanityName && (
-                        <span className="text-xs text-muted-foreground truncate max-w-[220px]">
-                          {page.vanityName}
-                        </span>
-                      )}
-                    </div>
-                  </label>
-                ))
+                <>
+                  <div className="my-1 border-t border-border/60" />
+                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    Commercial pages
+                  </div>
+                  {availablePages.map((page) => (
+                    <label
+                      key={page.id}
+                      className="flex items-center gap-3 px-3 py-2 hover:bg-accent cursor-pointer"
+                    >
+                      <Checkbox
+                        checked={selectedDestinationIds.includes(page.id)}
+                        onCheckedChange={(v) => toggle(page.id, !!v)}
+                      />
+                      <Avatar className="h-7 w-7">
+                        <AvatarImage src={page.logoUrl} alt={page.name} />
+                        <AvatarFallback className="text-xs">
+                          {page.name.charAt(0).toUpperCase()}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="flex flex-col text-left">
+                        <span className="text-sm truncate max-w-[220px]">{page.name}</span>
+                        {page.vanityName && (
+                          <span className="text-xs text-muted-foreground truncate max-w-[220px]">
+                            {page.vanityName}
+                          </span>
+                        )}
+                      </div>
+                    </label>
+                  ))}
+                </>
               )}
             </div>
           </PopoverContent>
