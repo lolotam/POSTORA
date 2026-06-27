@@ -139,7 +139,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
   const [linkedinVisibility, setLinkedinVisibility] = useState<"PUBLIC" | "CONNECTIONS" | "LOGGED_IN" | "CONTAINER">("PUBLIC");
   const [linkedinTitle, setLinkedinTitle] = useState("");
   const [linkedinDescription, setLinkedinDescription] = useState("");
-  const [linkedinSelectedPageId, setLinkedinSelectedPageId] = useState<string>("personal");
+  const [linkedinSelectedDestinationIds, setLinkedinSelectedDestinationIds] = useState<string[]>(["personal"]);
 
   // YouTube settings
   const [youtubeVideoType, setYoutubeVideoType] = useState<"video" | "short">("video");
