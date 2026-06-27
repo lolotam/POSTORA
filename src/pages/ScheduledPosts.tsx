@@ -847,23 +847,14 @@ export default function ScheduledPosts() {
 
           {editPost && (
             <div className="space-y-4">
-              {/* Platforms */}
-              <div>
-                <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                  Platforms
-                </label>
-                <div className="flex gap-2">
-                  {editPost.platforms.map((platform) => (
-                    <div
-                      key={platform}
-                      className="flex items-center gap-2 bg-muted/50 px-3 py-1.5 rounded-lg"
-                    >
-                      <PlatformIcon platform={platform as Platform} size="sm" />
-                      <span className="text-sm">{getPlatformName(platform as Platform)}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              {/* Platforms + Accounts (multi-select) — preview above the caption */}
+              <PlatformAccountMultiSelect
+                accounts={socialAccounts as any}
+                selectedPlatforms={editPlatforms}
+                selectedAccountIds={editAccountIds}
+                onPlatformsChange={setEditPlatforms}
+                onAccountsChange={setEditAccountIds}
+              />
 
               {/* Caption */}
               <div>
