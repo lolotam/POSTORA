@@ -78,6 +78,8 @@ import { GradientHeading, GradientRingCard, Icon3D, Reveal, GradientDivider } fr
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { ScheduledPostMedia, type ScheduledMediaItem } from "@/components/scheduled/ScheduledPostMedia";
 import { MediaLightboxDialog } from "@/components/scheduled/MediaLightboxDialog";
+import { AccountAvatar } from "@/components/AccountAvatar";
+import { PlatformAccountMultiSelect } from "@/components/post/PlatformAccountMultiSelect";
 
 // Countdown timer component
 function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
