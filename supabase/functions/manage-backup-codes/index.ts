@@ -15,17 +15,17 @@ import { z } from "npm:zod@3.23.8";
 
 const genericErrorMessage = "Request could not be completed";
 
-const ActionSchema = z.discriminatedUnion("action", {
-  status: z.object({ action: z.literal("status") }),
-  store: z.object({
+const ActionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("status") }),
+  z.object({
     action: z.literal("store"),
     codes: z.array(z.string().min(1).max(50)).length(10),
   }),
-  verify: z.object({
+  z.object({
     action: z.literal("verify"),
     code: z.string().min(1).max(50),
   }),
-});
+]);
 
 function jsonResponse(
   req: Request,
