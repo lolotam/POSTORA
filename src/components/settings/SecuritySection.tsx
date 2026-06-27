@@ -130,9 +130,6 @@ export function SecuritySection() {
   // Password validation schema
   const passwordSchema = z.string().min(8, "Password must be at least 8 characters");
 
-  // Password validation schema
-  const passwordSchema = z.string().min(8, "Password must be at least 8 characters");
-
   const resetPwState = () => {
     setNewPassword("");
     setConfirmPassword("");
