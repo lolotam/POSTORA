@@ -331,6 +331,8 @@ interface PlatformPostResult {
   location_debug?: Record<string, unknown>;
   /** Optional Threads-only topic tag debug surfaced in response_data.topic_tag_debug */
   topic_tag_debug?: Record<string, unknown>;
+  /** Optional structured payload merged into platform_posts.response_data (e.g. LinkedIn destination fan-out) */
+  response_data?: Record<string, unknown>;
 }
 
 /**
