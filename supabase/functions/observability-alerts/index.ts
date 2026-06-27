@@ -164,6 +164,13 @@ serve(async (req) => {
     return new Response("ok", { headers: corsHeaders });
   }
 
+  // P1-1: require CRON_SECRET (or service-role) before doing any work.
+  // This function is invoked exclusively by pg_cron; any unauthenticated
+  // caller would be able to drain email/Slack quota and trigger admin spam.
+  const __cronAuth = verifyCronAuth(req);
+  if (!__cronAuth.ok) return __cronAuth.response;
+
+
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
