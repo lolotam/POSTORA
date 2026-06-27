@@ -80,7 +80,8 @@ const platforms: PlatformConfig[] = [
     bgClass: "bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-600",
     variant: "sky",
     settings: [
-      { code: "linkedin_page_id", type: "string" },
+      { code: "linkedin_destination_ids", type: "string[]" },
+      { code: "linkedin_page_id", type: "string (deprecated)" },
       { code: "linkedin_article_url", type: "string (URL)" },
     ],
   },
