@@ -198,6 +198,28 @@ Deno.serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
+    // Idempotency: insert a dedupe row keyed by event.id BEFORE running any
+    // side effects. If Stripe retries the same event, the PK conflict means
+    // we've already processed (or attempted) it — return 200 immediately so
+    // Stripe stops retrying, and skip re-running handlers.
+    const { error: dedupeErr } = await supabase
+      .from("stripe_webhook_events")
+      .insert({ event_id: event.id, event_type: event.type, status: "received" });
+
+    if (dedupeErr) {
+      // Postgres unique_violation = 23505. Any conflict on PK means duplicate.
+      const code = (dedupeErr as { code?: string }).code;
+      if (code === "23505") {
+        logStep("Duplicate event, skipping", { eventId: event.id, type: event.type });
+        return new Response(JSON.stringify({ received: true, duplicate: true }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      // Unexpected DB error — log and continue processing so Stripe still gets a
+      // response. Better to risk one extra side-effect than to fail the webhook.
+      logStep("Dedupe insert failed (non-conflict)", { error: dedupeErr });
+    }
+
     // Track resolved user_id across event handling for final logging
     let resolvedUserId: string | undefined;
 
