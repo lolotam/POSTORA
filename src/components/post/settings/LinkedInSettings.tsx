@@ -1,6 +1,10 @@
+import { useMemo } from "react";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -14,7 +18,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Building2, Eye, Type, FileText, ExternalLink } from "lucide-react";
+import { Building2, Eye, Type, FileText, ExternalLink, ChevronDown, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getPlatformProfileUrl } from "@/lib/platformProfileUrls";
 
@@ -42,11 +46,13 @@ interface LinkedInSettingsProps {
   setLinkedInTitle: (v: string) => void;
   linkedInDescription: string;
   setLinkedInDescription: (v: string) => void;
-  selectedPageId: string;
-  setSelectedPageId: (v: string) => void;
+  selectedDestinationIds: string[];
+  setSelectedDestinationIds: (ids: string[]) => void;
   availablePages?: LinkedInPage[];
   selectedAccounts?: SelectedAccount[];
 }
+
+const PERSONAL_ID = "personal";
 
 export function LinkedInSettings({
   visibility,
@@ -55,11 +61,53 @@ export function LinkedInSettings({
   setLinkedInTitle,
   linkedInDescription,
   setLinkedInDescription,
-  selectedPageId,
-  setSelectedPageId,
+  selectedDestinationIds,
+  setSelectedDestinationIds,
   availablePages = [],
   selectedAccounts = [],
 }: LinkedInSettingsProps) {
+  const personalAccount = selectedAccounts[0];
+  const personalName = personalAccount?.platform_username || "Personal Profile";
+
+  const allDestinationIds = useMemo(
+    () => [PERSONAL_ID, ...availablePages.map((p) => p.id)],
+    [availablePages]
+  );
+
+  const toggle = (id: string, checked: boolean) => {
+    const set = new Set(selectedDestinationIds);
+    if (checked) {
+      set.add(id);
+    } else {
+      set.delete(id);
+    }
+    // Always keep at least one destination — fall back to personal.
+    if (set.size === 0) {
+      set.add(PERSONAL_ID);
+    }
+    setSelectedDestinationIds(Array.from(set));
+  };
+
+  const selectAll = () => setSelectedDestinationIds(allDestinationIds);
+  const clearToPersonal = () => setSelectedDestinationIds([PERSONAL_ID]);
+
+  const triggerLabel = (() => {
+    const count = selectedDestinationIds.length;
+    if (count === 0) return "Select destinations";
+    if (count === 1) {
+      const only = selectedDestinationIds[0];
+      if (only === PERSONAL_ID) return "Personal Profile";
+      const page = availablePages.find((p) => p.id === only);
+      return page?.name || "1 destination";
+    }
+    const hasPersonal = selectedDestinationIds.includes(PERSONAL_ID);
+    const pageCount = count - (hasPersonal ? 1 : 0);
+    if (hasPersonal && pageCount > 0) {
+      return `Personal Profile + ${pageCount} Page${pageCount > 1 ? "s" : ""}`;
+    }
+    return `${count} destinations`;
+  })();
+
   return (
     <div className="space-y-4">
       {/* Posting to LinkedIn as: */}
@@ -68,7 +116,12 @@ export function LinkedInSettings({
           <Label className="text-xs text-muted-foreground">Posting to LinkedIn as:</Label>
           <div className="flex flex-wrap gap-2">
             {selectedAccounts.map((account) => {
-              const profileUrl = getPlatformProfileUrl("linkedin", account.platform_username, account.platform_user_id, account.account_metadata);
+              const profileUrl = getPlatformProfileUrl(
+                "linkedin",
+                account.platform_username,
+                account.platform_user_id,
+                account.account_metadata
+              );
               return (
                 <a
                   key={account.id}
@@ -87,12 +140,17 @@ export function LinkedInSettings({
                       alt=""
                       className="w-8 h-8 rounded-full object-cover"
                       onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                        e.currentTarget.style.display = "none";
+                        e.currentTarget.nextElementSibling?.classList.remove("hidden");
                       }}
                     />
                   ) : null}
-                  <div className={cn("w-8 h-8 rounded-full bg-[#0A66C2] flex items-center justify-center text-white text-xs font-bold", account.avatar_url && "hidden")}>
+                  <div
+                    className={cn(
+                      "w-8 h-8 rounded-full bg-brand-linkedin flex items-center justify-center text-primary-foreground text-xs font-bold",
+                      account.avatar_url && "hidden"
+                    )}
+                  >
                     in
                   </div>
                   <div className="flex flex-col">
@@ -107,54 +165,126 @@ export function LinkedInSettings({
           </div>
         </div>
       )}
-      {/* Post to LinkedIn Page */}
+
+      {/* Post destinations multi-select */}
       <div className="space-y-2">
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <Building2 className="w-4 h-4" />
-                Post to LinkedIn Page (Optional)
+                Post Destinations
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Post to a company page you manage instead of your personal profile</p>
+              <p>Choose any combination of your personal profile and the company pages you manage.</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
-        <Select value={selectedPageId} onValueChange={setSelectedPageId}>
-          <SelectTrigger className="w-full">
-            <SelectValue placeholder="Post to Personal Profile" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="personal">
-              <span>Post to Personal Profile</span>
-            </SelectItem>
-            {availablePages.map((page) => (
-              <SelectItem key={page.id} value={page.id}>
-                <div className="flex items-center gap-2">
-                  <Avatar className="h-5 w-5">
-                    <AvatarImage src={page.logoUrl} alt={page.name} />
-                    <AvatarFallback className="text-xs">
-                      {page.name.charAt(0).toUpperCase()}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex flex-col">
-                    <span>{page.name}</span>
-                    {page.vanityName && (
-                      <span className="text-xs text-muted-foreground">{page.vanityName}</span>
-                    )}
-                  </div>
+
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full justify-between font-normal"
+            >
+              <span className="truncate text-left">{triggerLabel}</span>
+              <ChevronDown className="w-4 h-4 opacity-60 shrink-0" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-[--radix-popover-trigger-width] p-0">
+            <div className="flex items-center justify-between px-3 py-2 border-b text-xs">
+              <span className="text-muted-foreground">
+                {selectedDestinationIds.length} selected
+              </span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={selectAll}
+                >
+                  Select all
+                </button>
+                <span className="text-muted-foreground">·</span>
+                <button
+                  type="button"
+                  className="text-primary hover:underline"
+                  onClick={clearToPersonal}
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+
+            <div className="max-h-64 overflow-y-auto py-1">
+              {/* Personal */}
+              <label className="flex items-center gap-3 px-3 py-2 hover:bg-accent cursor-pointer">
+                <Checkbox
+                  checked={selectedDestinationIds.includes(PERSONAL_ID)}
+                  onCheckedChange={(v) => toggle(PERSONAL_ID, !!v)}
+                />
+                <Avatar className="h-7 w-7">
+                  {personalAccount?.avatar_url ? (
+                    <AvatarImage src={personalAccount.avatar_url} alt={personalName} />
+                  ) : null}
+                  <AvatarFallback>
+                    <User className="w-3.5 h-3.5" />
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex flex-col text-left">
+                  <span className="text-sm">Personal Profile</span>
+                  <span className="text-xs text-muted-foreground truncate max-w-[200px]">
+                    {personalName}
+                  </span>
                 </div>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+              </label>
+
+              {/* Pages */}
+              {availablePages.length === 0 ? (
+                <div className="px-3 py-3 text-xs text-muted-foreground">
+                  No LinkedIn Pages found on this account. Reconnect with the
+                  <code className="mx-1 px-1 rounded bg-muted">w_organization_social</code>
+                  scope to manage Pages.
+                </div>
+              ) : (
+                availablePages.map((page) => (
+                  <label
+                    key={page.id}
+                    className="flex items-center gap-3 px-3 py-2 hover:bg-accent cursor-pointer"
+                  >
+                    <Checkbox
+                      checked={selectedDestinationIds.includes(page.id)}
+                      onCheckedChange={(v) => toggle(page.id, !!v)}
+                    />
+                    <Avatar className="h-7 w-7">
+                      <AvatarImage src={page.logoUrl} alt={page.name} />
+                      <AvatarFallback className="text-xs">
+                        {page.name.charAt(0).toUpperCase()}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex flex-col text-left">
+                      <span className="text-sm truncate max-w-[220px]">{page.name}</span>
+                      {page.vanityName && (
+                        <span className="text-xs text-muted-foreground truncate max-w-[220px]">
+                          {page.vanityName}
+                        </span>
+                      )}
+                    </div>
+                  </label>
+                ))
+              )}
+            </div>
+          </PopoverContent>
+        </Popover>
+
+        <p className="text-xs text-muted-foreground">
+          The same post will be published once per selected destination.
+        </p>
       </div>
 
       {/* Visibility and Title Row */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Visibility */}
         <div className="space-y-2">
           <TooltipProvider>
             <Tooltip>
@@ -165,7 +295,7 @@ export function LinkedInSettings({
                 </Label>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Control who can see your post on LinkedIn</p>
+                <p>Control who can see your post on LinkedIn. Organization Pages always post as PUBLIC.</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -182,7 +312,6 @@ export function LinkedInSettings({
           </Select>
         </div>
 
-        {/* LinkedIn Title */}
         <div className="space-y-2">
           <TooltipProvider>
             <Tooltip>
@@ -206,7 +335,6 @@ export function LinkedInSettings({
         </div>
       </div>
 
-      {/* LinkedIn Description */}
       <div className="space-y-2">
         <TooltipProvider>
           <Tooltip>
