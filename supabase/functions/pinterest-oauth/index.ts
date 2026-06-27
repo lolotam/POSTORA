@@ -3,10 +3,7 @@ import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
 const PINTEREST_APP_ID = Deno.env.get("PINTEREST_CLIENT_ID");
 const PINTEREST_APP_SECRET = Deno.env.get("PINTEREST_CLIENT_SECRET");
@@ -140,6 +137,7 @@ async function savePinterestAccount(
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
