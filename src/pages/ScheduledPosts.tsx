@@ -33,7 +33,7 @@ import {
   Search,
   Clock,
   Calendar as CalendarIcon,
-  Image,
+  
   MoreHorizontal,
   Loader2,
   Edit,
