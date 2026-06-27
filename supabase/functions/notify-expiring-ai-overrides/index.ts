@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
+import { verifyCronAuth } from "../_shared/cron-auth.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY");
 
@@ -23,6 +24,10 @@ serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  // P1-2: require CRON_SECRET (or service-role) — cron-only function.
+  const __cronAuth = verifyCronAuth(req);
+  if (!__cronAuth.ok) return __cronAuth.response;
 
   try {
     const supabaseAdmin = createClient(

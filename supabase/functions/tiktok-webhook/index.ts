@@ -19,6 +19,22 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
+// Allow-list of webhook event types we actually act on. Unknown events are
+// silently 200'd (so TikTok stops retrying) but never branched on.
+const ALLOWED_EVENT_TYPES = new Set<string>([
+  "authorize",
+  "deauthorize",
+  "video.publish.complete",
+  "post.publish.complete",
+  "video.publish.failed",
+  "post.publish.failed",
+]);
+
+// Safe `publish_id` shape — alphanumeric + a few separators, bounded length.
+// TikTok publish IDs are large opaque tokens; tightening this prevents an
+// attacker from smuggling SQL/URL fragments through the field.
+const PUBLISH_ID_PATTERN = /^[A-Za-z0-9_\-:.]{1,128}$/;
+
 serve(async (req) => {
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -28,12 +44,12 @@ serve(async (req) => {
   try {
     const method = req.method;
     const url = new URL(req.url);
-    
+
     // Handle GET request for webhook verification
     if (method === 'GET') {
       const challenge = url.searchParams.get('challenge');
       if (challenge) {
-        console.log('TikTok webhook verification challenge:', challenge);
+        // P1-6: do not log the challenge value (treated as opaque secret material).
         return new Response(challenge, {
           status: 200,
           headers: { ...corsHeaders, 'Content-Type': 'text/plain' },
@@ -47,12 +63,55 @@ serve(async (req) => {
 
     // Handle POST request for webhook events
     if (method === 'POST') {
+      // P1-6 (interim): TikTok does not publish a single, stable, documented
+      // HMAC signature format that covers all webhook product surfaces today.
+      // Until the exact algorithm + secret format is confirmed against
+      // TikTok developer docs for our specific product subscription, we
+      // continue to require a static shared bearer (TIKTOK_WEBHOOK_SECRET)
+      // configured in the TikTok developer console. We harden this further by:
+      //   1) Reading the body as raw text (so a future HMAC pass can verify it).
+      //   2) Failing closed if TIKTOK_WEBHOOK_SECRET is unset.
+      //   3) Using a constant-time compare on the bearer.
+      //   4) Validating the event type against an explicit allow-list.
+      //   5) Restricting publish_id to a safe character pattern.
+      //   6) Refusing to log webhook payload contents.
+      // TODO(server): once TikTok's webhook signature scheme is confirmed
+      // for the active product, replace the static bearer with HMAC verification
+      // using the canonical secret. The raw-body read below is already in place.
       const webhookSecret = Deno.env.get('TIKTOK_WEBHOOK_SECRET');
-      const authorization = req.headers.get('Authorization');
+      const authorization = req.headers.get('Authorization') ?? '';
 
-      if (!webhookSecret || !authorization || !constantTimeEqual(authorization, webhookSecret)) {
+      if (!webhookSecret) {
+        // Fail closed: never accept the request when no shared secret is configured.
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      if (!constantTimeEqual(authorization, webhookSecret)) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const rawBody = await req.text();
+
+      // Defensive payload size cap — TikTok webhooks are tiny JSON blobs.
+      if (rawBody.length > 64 * 1024) {
+        return new Response(JSON.stringify({ error: 'Payload too large' }), {
+          status: 413,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      let body: any;
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        return new Response(JSON.stringify({ error: 'Invalid JSON' }), {
+          status: 400,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
@@ -60,40 +119,43 @@ serve(async (req) => {
       const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
       const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
       const supabase = createClient(supabaseUrl, supabaseServiceKey);
-      const body = await req.json();
-      console.log('TikTok webhook event received');
 
-      // Process different webhook event types
-      const eventType = body.event;
-      
+      const eventType = typeof body?.event === 'string' ? body.event : '';
+
+      // Silently accept (200) but do not act on unknown event types.
+      if (!ALLOWED_EVENT_TYPES.has(eventType)) {
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      // P1-6: never log full webhook payloads — they can carry user identifiers.
+      console.log(`TikTok webhook event received: ${eventType}`);
+
+      const publishIdRaw = typeof body?.publish_id === 'string' ? body.publish_id : '';
+      const publishId = PUBLISH_ID_PATTERN.test(publishIdRaw) ? publishIdRaw : '';
+
       switch (eventType) {
         case 'authorize':
-          break;
-          
         case 'deauthorize':
           break;
-          
+
         case 'video.publish.complete':
         case 'post.publish.complete':
-          // Update platform_posts if we have publish_id
-          if (body.publish_id) {
-            await updatePlatformPostStatus(supabase, body.publish_id, 'success', null, body);
+          if (publishId) {
+            await updatePlatformPostStatus(supabase, publishId, 'success', null, body);
           }
           break;
-          
+
         case 'video.publish.failed':
-        case 'post.publish.failed':
-          // Extract failure reason
+        case 'post.publish.failed': {
           const failReason = body.fail_reason || body.error?.message || body.error_code || 'Unknown failure';
-          
-          // Update platform_posts with failure
-          if (body.publish_id) {
-            await updatePlatformPostStatus(supabase, body.publish_id, 'failed', failReason, body);
+          if (publishId) {
+            await updatePlatformPostStatus(supabase, publishId, 'failed', String(failReason), body);
           }
           break;
-          
-        default:
-          break;
+        }
       }
 
       return new Response(JSON.stringify({ success: true }), {
@@ -108,9 +170,9 @@ serve(async (req) => {
     });
 
   } catch (error) {
-    console.error('TikTok webhook error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(JSON.stringify({ error: errorMessage }), {
+    // P1-6: never echo the raw error to the client — it may quote part of the request.
+    console.error('TikTok webhook error:', error instanceof Error ? error.message : 'unknown');
+    return new Response(JSON.stringify({ error: 'Internal error' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
