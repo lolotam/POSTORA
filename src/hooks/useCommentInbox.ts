@@ -108,6 +108,11 @@ export function useComments({ platform, socialAccountId, pageId, igUserId, enabl
         },
       });
       if (error) throw error;
+      if (data?.error_type || data?.error) {
+        const err = new Error(String(data.error || "Unable to load comments")) as Error & { errorType?: string };
+        err.errorType = data.error_type;
+        throw err;
+      }
       return platform === "facebook" ? parsePageComments(data) : parseIgComments(data);
     },
     enabled: enabled && !!socialAccountId && (!!pageId || !!igUserId),
