@@ -14,6 +14,7 @@ export interface Comment {
   parent_id?: string;
   post_id?: string;
   post_message?: string;
+  like_count?: number;
   platform: "facebook" | "instagram";
   replies?: Comment[];
 }
@@ -55,9 +56,12 @@ function parseIgComments(data: any): Comment[] {
   if (!data?.data) return comments;
 
   for (const media of data.data) {
-    const postLabel = media.caption || (media.like_count != null || media.comments_count != null
-      ? `[${media.media_type || "media"}] ${media.like_count ?? 0} likes · ${media.comments_count ?? 0} comments`
-      : "");
+    const engagement = media.like_count != null || media.comments_count != null
+      ? `${media.like_count ?? 0} likes · ${media.comments_count ?? 0} comments`
+      : "";
+    const postLabel = media.caption
+      ? `${media.caption}${engagement ? ` · ${engagement}` : ""}`
+      : (engagement ? `[${media.media_type || "media"}] ${engagement}` : "");
     if (!media.comments?.data) continue;
     for (const c of media.comments.data) {
       comments.push({
@@ -65,6 +69,7 @@ function parseIgComments(data: any): Comment[] {
         author_name: c.from?.username || c.username || "Unknown",
         author_id: c.from?.id,
         message: c.text || "",
+        like_count: c.like_count,
         created_time: c.timestamp,
         is_hidden: c.hidden || false,
         is_reply: false,
@@ -80,6 +85,7 @@ function parseIgComments(data: any): Comment[] {
           author_name: r.from?.username || r.username || "Unknown",
           author_id: r.from?.id,
           message: r.text || "",
+          like_count: r.like_count,
           created_time: r.timestamp,
           is_hidden: r.hidden || false,
           is_reply: true,
