@@ -4532,153 +4532,182 @@ async function postToLinkedIn(
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
   const personUrn = `urn:li:person:${account.platform_user_id}`;
-
-  // Get LinkedIn settings from metadata
   const metadata = post.metadata;
   const visibility = metadata?.linkedin_visibility || "public";
   const articleLink = metadata?.linkedin_article_link;
 
-  console.log(`LinkedIn post - visibility: ${visibility}, hasMedia: ${mediaUrls.length > 0}`);
+  // Build the list of destinations to publish to. Accept the new multi-select
+  // field; fall back to legacy single linkedin_page_id; default to personal.
+  const rawDestinations = Array.isArray(metadata?.linkedin_destination_ids)
+    ? (metadata!.linkedin_destination_ids as string[])
+    : metadata?.linkedin_page_id
+    ? ["personal", metadata.linkedin_page_id]
+    : ["personal"];
+  const destinationIds = Array.from(new Set(rawDestinations)).filter(Boolean);
+  if (destinationIds.length === 0) destinationIds.push("personal");
 
-  // Build share content
-  const shareContent: Record<string, unknown> = {
-    author: personUrn,
-    lifecycleState: "PUBLISHED",
-    visibility: {
-      "com.linkedin.ugc.MemberNetworkVisibility": visibility === "connections" ? "CONNECTIONS" : "PUBLIC",
-    },
-    specificContent: {
-      "com.linkedin.ugc.ShareContent": {
-        shareCommentary: {
-          text: post.caption || "",
-        },
-        shareMediaCategory: "NONE",
-      },
-    },
-  };
+  console.log(
+    `LinkedIn post - destinations: ${destinationIds.join(",")}, visibility: ${visibility}, hasMedia: ${mediaUrls.length > 0}`
+  );
 
-  // Add article link if provided
-  if (articleLink) {
-    (shareContent.specificContent as Record<string, unknown>)["com.linkedin.ugc.ShareContent"] = {
-      shareCommentary: {
-        text: post.caption || "",
+  const resolveActorUrn = (id: string) =>
+    id === "personal" ? personUrn : `urn:li:organization:${id}`;
+
+  /**
+   * Publish to a single LinkedIn actor (personal URN or organization URN).
+   * Asset registration must happen per actor — LinkedIn rejects an asset
+   * URN whose `owner` does not match the post `author`.
+   */
+  const publishToActor = async (actorUrn: string) => {
+    const isOrg = actorUrn.startsWith("urn:li:organization:");
+
+    const shareContent: Record<string, unknown> = {
+      author: actorUrn,
+      lifecycleState: "PUBLISHED",
+      visibility: {
+        // Organization pages cannot use CONNECTIONS visibility.
+        "com.linkedin.ugc.MemberNetworkVisibility":
+          !isOrg && visibility === "connections" ? "CONNECTIONS" : "PUBLIC",
       },
-      shareMediaCategory: "ARTICLE",
-      media: [
-        {
-          status: "READY",
-          originalUrl: articleLink,
+      specificContent: {
+        "com.linkedin.ugc.ShareContent": {
+          shareCommentary: { text: post.caption || "" },
+          shareMediaCategory: "NONE",
         },
-      ],
+      },
     };
-  }
 
-  // Handle image uploads for LinkedIn
-  if (mediaUrls.length > 0 && !articleLink) {
-    const isImage = isImageUrl(mediaUrls[0]);
-
-    if (isImage) {
-      // Register image upload
-      const registerResponse = await fetch(
-        "https://api.linkedin.com/v2/assets?action=registerUpload",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            registerUploadRequest: {
-              recipes: ["urn:li:digitalmediaRecipe:feedshare-image"],
-              owner: personUrn,
-              serviceRelationships: [
-                {
-                  relationshipType: "OWNER",
-                  identifier: "urn:li:userGeneratedContent",
-                },
-              ],
-            },
-          }),
-        }
-      );
-
-      if (!registerResponse.ok) {
-        const errorData = await registerResponse.json().catch(() => ({}));
-        console.error("LinkedIn register error:", errorData);
-        throw new Error(`LinkedIn image registration failed: ${errorData?.message || registerResponse.statusText}`);
-      }
-
-      const registerData = await registerResponse.json();
-      const uploadUrl = registerData?.value?.uploadMechanism?.["com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"]?.uploadUrl;
-      const asset = registerData?.value?.asset;
-
-      if (!uploadUrl || !asset) {
-        throw new Error("LinkedIn did not return upload URL");
-      }
-
-      // Download and upload image
-      const { blob, mimeType } = await downloadMediaAsBlob(mediaUrls[0]);
-
-      const uploadResponse = await fetch(uploadUrl, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": mimeType,
-        },
-        body: blob,
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error(`LinkedIn image upload failed: ${uploadResponse.statusText}`);
-      }
-
-      // Update share content with image
+    if (articleLink) {
       (shareContent.specificContent as Record<string, unknown>)["com.linkedin.ugc.ShareContent"] = {
-        shareCommentary: {
-          text: post.caption || "",
-        },
-        shareMediaCategory: "IMAGE",
-        media: [
-          {
-            status: "READY",
-            media: asset,
-          },
-        ],
+        shareCommentary: { text: post.caption || "" },
+        shareMediaCategory: "ARTICLE",
+        media: [{ status: "READY", originalUrl: articleLink }],
       };
     }
-  }
 
-  // Create the post
-  const postResponse = await fetch("https://api.linkedin.com/v2/ugcPosts", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      "X-Restli-Protocol-Version": "2.0.0",
-    },
-    body: JSON.stringify(shareContent),
-  });
+    if (mediaUrls.length > 0 && !articleLink) {
+      const isImage = isImageUrl(mediaUrls[0]);
+      if (isImage) {
+        const registerResponse = await fetch(
+          "https://api.linkedin.com/v2/assets?action=registerUpload",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              registerUploadRequest: {
+                recipes: ["urn:li:digitalmediaRecipe:feedshare-image"],
+                owner: actorUrn,
+                serviceRelationships: [
+                  { relationshipType: "OWNER", identifier: "urn:li:userGeneratedContent" },
+                ],
+              },
+            }),
+          }
+        );
 
-  if (!postResponse.ok) {
-    const errorData = await postResponse.json().catch(() => ({}));
-    console.error("LinkedIn post error:", errorData);
+        if (!registerResponse.ok) {
+          const errorData = await registerResponse.json().catch(() => ({}));
+          console.error("LinkedIn register error:", errorData);
+          throw new Error(
+            `LinkedIn image registration failed: ${errorData?.message || registerResponse.statusText}`
+          );
+        }
 
-    if (postResponse.status === 401) {
-      throw new Error("LinkedIn authentication expired. Please reconnect your LinkedIn account.");
+        const registerData = await registerResponse.json();
+        const uploadUrl =
+          registerData?.value?.uploadMechanism?.[
+            "com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest"
+          ]?.uploadUrl;
+        const asset = registerData?.value?.asset;
+        if (!uploadUrl || !asset) throw new Error("LinkedIn did not return upload URL");
+
+        const { blob, mimeType } = await downloadMediaAsBlob(mediaUrls[0]);
+        const uploadResponse = await fetch(uploadUrl, {
+          method: "PUT",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": mimeType,
+          },
+          body: blob,
+        });
+        if (!uploadResponse.ok) {
+          throw new Error(`LinkedIn image upload failed: ${uploadResponse.statusText}`);
+        }
+
+        (shareContent.specificContent as Record<string, unknown>)["com.linkedin.ugc.ShareContent"] = {
+          shareCommentary: { text: post.caption || "" },
+          shareMediaCategory: "IMAGE",
+          media: [{ status: "READY", media: asset }],
+        };
+      }
     }
-    if (postResponse.status === 403) {
-      throw new Error("LinkedIn permission denied. Make sure your app has w_member_social scope.");
+
+    const postResponse = await fetch("https://api.linkedin.com/v2/ugcPosts", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      body: JSON.stringify(shareContent),
+    });
+
+    if (!postResponse.ok) {
+      const errorData = await postResponse.json().catch(() => ({}));
+      console.error(`LinkedIn post error for ${actorUrn}:`, errorData);
+      if (postResponse.status === 401) {
+        throw new Error("LinkedIn authentication expired. Please reconnect your LinkedIn account.");
+      }
+      if (postResponse.status === 403) {
+        throw new Error(
+          `LinkedIn permission denied for ${actorUrn}. Make sure your app has w_member_social${isOrg ? " and w_organization_social" : ""} scope.`
+        );
+      }
+      throw new Error(`LinkedIn API error: ${errorData?.message || postResponse.statusText}`);
     }
-    throw new Error(`LinkedIn API error: ${errorData?.message || postResponse.statusText}`);
-  }
 
-  const postData = await postResponse.json();
-  const postId = postData.id as string;
-
-  return {
-    id: postId,
-    url: `https://www.linkedin.com/feed/update/${postId}`,
+    const postData = await postResponse.json();
+    const postId = postData.id as string;
+    return { postId, url: `https://www.linkedin.com/feed/update/${postId}` };
   };
+
+  // Fan out across selected destinations. Per-actor errors are captured;
+  // overall result succeeds if at least one destination publishes.
+  const results: Array<{
+    destination_id: string;
+    urn: string;
+    post_id?: string;
+    url?: string;
+    status: "success" | "failed";
+    error?: string;
+  }> = [];
+
+  for (const destId of destinationIds) {
+    const urn = resolveActorUrn(destId);
+    try {
+      const r = await publishToActor(urn);
+      results.push({ destination_id: destId, urn, post_id: r.postId, url: r.url, status: "success" });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      results.push({ destination_id: destId, urn, status: "failed", error: msg });
+    }
+  }
+
+  const successes = results.filter((r) => r.status === "success");
+  if (successes.length === 0) {
+    const errors = results.map((r) => `${r.destination_id}: ${r.error}`).join("; ");
+    throw new Error(`All LinkedIn destinations failed — ${errors}`);
+  }
+
+  const primary = successes[0];
+  return {
+    id: primary.post_id!,
+    url: primary.url!,
+    response_data: { destinations: results },
+  } as PlatformPostResult;
 }
 
 // ┌─────────────────────────────────────────────────────────────────────────┐
