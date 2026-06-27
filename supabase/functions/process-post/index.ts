@@ -175,6 +175,10 @@ interface PlatformMetadata {
   linkedin_visibility?: "public" | "connections" | null;
   linkedin_first_comment?: string | null;
   linkedin_article_link?: string | null;
+  /** Multi-destination publish. "personal" + organization page IDs. */
+  linkedin_destination_ids?: string[] | null;
+  /** @deprecated single-page legacy field; superseded by linkedin_destination_ids */
+  linkedin_page_id?: string | null;
 
   // ─────────────────────────────────────────────────────────────────────────
   // PINTEREST
