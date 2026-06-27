@@ -721,10 +721,28 @@ export default function ScheduledPosts() {
                   <CardContent className="space-y-4 px-5 pb-5">
                     {/* Caption */}
                     <div>
-                      <p className="text-sm line-clamp-3 text-foreground">
-                        {post.caption || <span className="text-muted-foreground italic">No caption</span>}
-                      </p>
+                      <HoverCard openDelay={200} closeDelay={100}>
+                        <HoverCardTrigger asChild>
+                          <p className="text-sm line-clamp-3 text-foreground cursor-pointer hover:text-primary transition-colors">
+                            {post.caption || <span className="text-muted-foreground italic">No caption</span>}
+                          </p>
+                        </HoverCardTrigger>
+                        {post.caption && (
+                          <HoverCardContent className="max-w-md w-[28rem] max-h-[60vh] overflow-y-auto">
+                            <p className="text-sm whitespace-pre-wrap text-foreground">{post.caption}</p>
+                          </HoverCardContent>
+                        )}
+                      </HoverCard>
                     </div>
+
+                    {/* Media thumbnails */}
+                    {post.media_file_ids && post.media_file_ids.length > 0 && (
+                      <ScheduledPostMedia
+                        mediaFileIds={post.media_file_ids}
+                        onOpen={(items, index) => setLightbox({ items, index })}
+                      />
+                    )}
+
 
                     {/* Profiles */}
                     {postProfiles.length > 0 && (
