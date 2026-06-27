@@ -1,60 +1,70 @@
-## Goal
+## Root cause
 
-Fix "AAL2 session required" error when MFA-enabled users change their password, and harden both password-change flows so they always go through proper verification (MFA challenge or email OTP) and a server-side update — never a raw client-side `auth.updateUser({ password })`.
+The Threads publish path in `supabase/functions/process-post/index.ts` (lines ~5486-5490) sends the wrong field names to Meta when the user checks "Share to Instagram Story":
 
-## Current state (audit)
+```ts
+containerParams.crosspost_to_instagram = "true";
+containerParams.crosspost_to_instagram_dark_mode = "true";
+```
 
-- **Logged-in change** (`src/components/settings/SecuritySection.tsx` + `src/components/profile/PasswordSection.tsx`) calls `supabase.auth.updateUser({ password })` directly from the browser. This is what fails with `AAL2 session is required…` when the user has a verified TOTP factor.
-- **Forgot-password (outside app)** uses `send-reset-otp` → `verify-reset-otp` edge functions and a `password_reset_otps` table. `verify-reset-otp` already updates the password server-side with the service-role key, but the contract requires `mfaCode` for every user and the frontend (`ResetPassword.tsx`) currently only collects email + sends a magic link — the OTP UI path isn't actually wired in. `verify-mfa-reset` is disabled (HTTP 410).
-- `check-user-mfa` exists and can report whether an email has a verified factor.
-- OTP code hashing + `used` flag exist; need to confirm rate-limit + single-use + expiry are enforced and the response stays generic.
+Meta's Threads Graph API (`POST /{threads-user-id}/threads`) expects:
 
-## Implementation plan
+```
+crossreshare_to_ig=true
+crossreshare_to_ig_dark_mode=true
+```
 
-### A. New shared edge function: `change-password`
-Single service-role endpoint that performs the final `supabase.auth.admin.updateUserById(userId, { password })`. It requires a valid user JWT and one of:
-1. **AAL2 session** — caller's JWT already has `aal: "aal2"` from a fresh `mfa.challengeAndVerify`. Verified server-side via `getUser(jwt)` + decoding the AAL claim.
-2. **Email-OTP proof** — `{ otp }` body, looked up in `password_reset_otps` (reused table, scoped by `purpose = 'change_password'` column added via migration) and matched against the caller's email. Only allowed when the user has **no verified MFA factor**.
+(Yes, "crossreshare" — that is Meta's actual spelling.) Confirmed by:
+- Meta docs: https://developers.facebook.com/docs/threads/reference/publishing/
+- meta-mcp PR #152 ("feat: cross-share Threads posts to Instagram Stories") which forwards exactly `crossreshare_to_ig` / `crossreshare_to_ig_dark_mode`.
+- Our own `supabase/functions/threads-debug-publish-check/index.ts` already uses the correct name `crossreshare_to_ig` in its sample payload — so the debug panel and the real publisher disagree, and the real publisher is wrong.
 
-Rate-limited via the existing `rate_limit_buckets` RPC (5/hour/user). Generic error responses. No password/OTP/token logging.
+Because `crosspost_to_instagram` is not a recognized parameter, Meta accepts the request, publishes the Thread, and silently drops the cross-share — exactly the symptom you described: "publishes to Threads only, no IG Story", despite the `threads_share_to_instagram` permission and test user being correctly set up.
 
-### B. Logged-in flow — `SecuritySection.tsx` & `PasswordSection.tsx`
-Replace the direct `updateUser` call with a pre-flight that:
-1. Calls `supabase.auth.mfa.listFactors()`.
-2. **If a verified TOTP factor exists** → open a "Confirm with authenticator code" step → `mfa.challenge` + `mfa.verify` to upgrade the session to AAL2 → then POST to `change-password` with the new password.
-3. **If no MFA factor** → POST to `send-change-password-otp` (new tiny wrapper around existing OTP issuance, scoped `purpose='change_password'`, sent to the user's own verified email) → user enters OTP → POST `change-password` with `{ otp, newPassword }`.
-4. Google-only users with no password keep the same branching (they will always go via email-OTP since they can't have MFA without a password).
+## Changes
 
-### C. Forgot-password flow — `ResetPassword.tsx` + `PasswordResetOptions.tsx`
-Wire the existing UI to actually use the OTP edge functions instead of `resetPasswordForEmail`:
-1. Email input → `send-reset-otp` → generic "If an account exists…" message.
-2. OTP + new-password screen → `verify-reset-otp`.
-3. Adjust `verify-reset-otp` so `mfaCode` is **only required when the account has a verified MFA factor** (call `check-user-mfa` internally). If MFA exists, prompt for TOTP code in the same screen and verify via admin MFA API; otherwise skip. Keeps MFA enforcement without leaking enrollment status (response is generic until OTP is valid).
-4. Mark OTP `used=true`, delete sibling unused OTPs for that email atomically.
+### 1. `supabase/functions/process-post/index.ts` (~lines 5486-5490)
+Rename the two container params:
 
-### D. SQL (only if missing — to be confirmed before writing)
-Likely already exists, but if `password_reset_otps` lacks a `purpose text not null default 'reset'` column, add one **manual** migration file at `supabase/manual-sql/20260627xxxxxx_otp_purpose.sql`. No automatic execution. No other schema changes.
+- `crosspost_to_instagram` → `crossreshare_to_ig`
+- `crosspost_to_instagram_dark_mode` → `crossreshare_to_ig_dark_mode`
 
-### E. Tests
-- `src/lib/__tests__/passwordChangeFlow.test.ts` — assert frontend never calls `supabase.auth.updateUser({ password })` directly (regression guard).
-- Edge function unit test for `change-password`: AAL1 + no OTP → 401; AAL2 → 200; OTP path with MFA-enrolled user → 403; valid OTP, no MFA → 200; reused OTP → 400; rate-limit exceeded → 429.
-- Update `verify-reset-otp` test for conditional `mfaCode`.
+Keep the existing pre-flight guard (capability check, video-block, warnings) unchanged.
 
-### F. Validation
-Run `npm run check:edge-env`, `npm run build`, `npm run lint`, `npx vitest run`, `git diff --check`, CleanCodeGuard, TestGuard.
+### 2. Capture Meta's cross-share result for diagnostics
+After publish, Meta returns `crossreshare_to_ig_status` (`"SUCCESS"` or `"FAILED"`) on the published media. When `wantsCrossShare` is true, fetch this field on the published thread id and:
+- log it in the verbose Threads log line,
+- include it in the existing `cross_share` block of the platform response (alongside `attempted`, `capability_at_publish`, `dark_mode`) so the History/Debug surface can show whether Meta actually delivered the Story.
+
+If the field cannot be fetched (e.g. transient error), record `status: "unknown"` — never fail the post.
+
+### 3. No DB, env, or frontend changes
+- Frontend toggle, settings persistence (`threads_cross_share_to_ig` / `_dark_mode`), and capability gating stay as-is.
+- No new secrets, no schema migration.
+
+## Validation
+
+- Unit/regression: add a small test asserting that when `metadata.threads_cross_share_to_ig === true` and capability is not `false` and media is not video, the outgoing `containerParams` includes `crossreshare_to_ig: "true"` (and `_dark_mode` when requested), and does NOT include the legacy `crosspost_to_instagram` keys.
+- Manual on VPS after edge deploy:
+  1. With a test user that has `threads_share_to_instagram` granted and IG linked in Accounts Center, publish a text or image post from Postora with the "Share to Instagram Story" toggle on.
+  2. Confirm the platform response now contains `cross_share.status: "SUCCESS"` and the Story appears in the linked IG account within a few seconds.
+  3. Repeat with dark mode on; confirm `crossreshare_to_ig_dark_mode=true` is sent (verbose log) and the Story uses dark styling.
+
+## Deployment (self-hosted)
+
+Edge function only — sync `supabase/functions/process-post/index.ts` to the self-hosted functions volume and restart the functions container:
+
+```
+docker compose up -d --no-deps functions
+```
+
+No SQL, no .env changes, no provider-console changes.
 
 ## Out of scope
 
-- Removing/altering `verify-mfa-reset` (stays disabled).
-- Any change to n8n, OAuth, or unrelated edge functions.
-- Direct SQL writes to `auth.users`.
-- Restructuring the existing `rate_limit_buckets` or MFA enrollment flows.
+- Re-enabling cross-share for video/carousel (Meta PR #152 shows it's now allowed for all four types, but lifting the current video guard is a separate decision and not what's blocking you today).
+- Changing the capability probe / OAuth scopes.
+- Updating `threads-debug-publish-check` (already correct).
 
-## Deliverables
-
-- New edge function `supabase/functions/change-password/index.ts` (+ test).
-- New edge function `supabase/functions/send-change-password-otp/index.ts`.
-- Updated `supabase/functions/verify-reset-otp/index.ts` (conditional MFA).
-- Updated `src/components/settings/SecuritySection.tsx`, `src/components/profile/PasswordSection.tsx`, `src/pages/ResetPassword.tsx`, `src/components/auth/PasswordResetOptions.tsx`.
-- Optional manual SQL file (only if `purpose` column missing).
-- Final report with status `completed_requires_server_sync` (edge functions need volume sync + functions container restart on the VPS).
+## Final status target
+`completed_requires_server_sync` — code fix only; needs the functions volume sync + container restart on the VPS.

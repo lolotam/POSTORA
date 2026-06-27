@@ -5484,9 +5484,13 @@ async function postToThreads(
       );
       console.log("Threads: Skipping cross-share — video media unsupported by Meta");
     } else {
+      // Meta's Threads Graph API parameter is `crossreshare_to_ig` (their spelling).
+      // The previous name `crosspost_to_instagram` was silently ignored — Thread
+      // published, IG Story never created. See docs:
+      // https://developers.facebook.com/docs/threads/reference/publishing/
       containerParams.crossreshare_to_ig = "true";
       crossShareApplied = true;
-      console.log("Threads: Enabling cross-share to Instagram Story");
+      console.log("Threads: Enabling cross-share to Instagram Story (crossreshare_to_ig=true)");
       if (metadata?.threads_cross_share_to_ig_dark_mode) {
         containerParams.crossreshare_to_ig_dark_mode = "true";
         console.log("Threads: Enabling dark mode for cross-share");
@@ -5673,6 +5677,7 @@ async function postToThreads(
   // accepted (location_id, is_quote_post, shortcode) — surfaces silent ignores.
   let postUrl = username ? `https://www.threads.com/@${username}` : undefined;
   let verifyData: any = null;
+  let crossShareStatus: string | null = null;
   try {
     const verifyRes = await fetch(
       `https://graph.threads.net/v1.0/${postId}?fields=id,permalink,shortcode,is_quote_post,media_type,location,location_id,topic_tag,crossreshare_to_ig_status&access_token=${accessToken}`

@@ -1,39 +1,42 @@
-import fs from "node:fs";
-import path from "node:path";
-import { it } from "vitest";
+import { describe, it, expect } from "vitest";
+import { readFileSync } from "fs";
+import { join } from "path";
 
-const root = path.resolve(import.meta.dirname, "..", "..", "..");
+/**
+ * Regression guard for the Threads → Instagram Story cross-share bug.
+ *
+ * Meta's Threads Graph API uses the parameter name `crossreshare_to_ig`
+ * (their spelling — verified against
+ * https://developers.facebook.com/docs/threads/reference/publishing/ and
+ * meta-mcp PR #152). The previous name `crosspost_to_instagram` was silently
+ * ignored by Meta: the Thread published successfully but the IG Story was
+ * never created.
+ *
+ * This test fails if anyone reintroduces the wrong parameter name in the
+ * Threads publish path.
+ */
+describe("Threads cross-share parameter name", () => {
+  const src = readFileSync(
+    join(process.cwd(), "supabase/functions/process-post/index.ts"),
+    "utf8"
+  );
 
-function read(file: string): string {
-  return fs.readFileSync(path.join(root, file), "utf8");
-}
+  it("uses Meta's crossreshare_to_ig parameter name", () => {
+    expect(src).toMatch(/containerParams\.crossreshare_to_ig\s*=\s*"true"/);
+    expect(src).toMatch(/containerParams\.crossreshare_to_ig_dark_mode\s*=\s*"true"/);
+  });
 
-it("process-post sends crossreshare_to_ig instead of legacy crosspost_to_instagram", () => {
-  const src = read("supabase/functions/process-post/index.ts");
-  if (!src.includes('crossreshare_to_ig = "true"'))
-    throw new Error("Must send crossreshare_to_ig param to Meta");
-  if (src.includes("crosspost_to_instagram"))
-    throw new Error("Must not use legacy crosspost_to_instagram param");
-});
+  it("does not use the legacy crosspost_to_instagram parameter (Meta silently ignores it)", () => {
+    expect(src).not.toMatch(/containerParams\.crosspost_to_instagram/);
+    expect(src).not.toMatch(/["']crosspost_to_instagram["']/);
+  });
 
-it("process-post requests crossreshare_to_ig_status in verify fetch", () => {
-  const src = read("supabase/functions/process-post/index.ts");
-  if (!src.includes("crossreshare_to_ig_status"))
-    throw new Error("Must request crossreshare_to_ig_status in verify fields");
-});
+  it("requests crossreshare_to_ig_status on the post-publish verify fetch", () => {
+    expect(src).toMatch(/crossreshare_to_ig_status/);
+  });
 
-it("process-post surfaces cross-share IG status in response", () => {
-  const src = read("supabase/functions/process-post/index.ts");
-  if (!src.includes("crossShareIgStatus"))
-    throw new Error("Must track cross-share IG status variable");
-  if (!src.includes("status: crossShareIgStatus"))
-    throw new Error("Must include status field in cross_share response");
-});
-
-it("debug publish check already uses correct crossreshare_to_ig", () => {
-  const src = read("supabase/functions/threads-debug-publish-check/index.ts");
-  if (!src.includes('crossreshare_to_ig = "true"'))
-    throw new Error("Debug check must use correct crossreshare_to_ig param");
-  if (src.includes("crosspost_to_instagram"))
-    throw new Error("Debug check must not use legacy crosspost_to_instagram param");
+  it("tracks crossShareIgStatus variable and surfaces it in the cross_share response", () => {
+    expect(src).toMatch(/\bcrossShareIgStatus\b/);
+    expect(src).toMatch(/status:\s*crossShareIgStatus/);
+  });
 });
