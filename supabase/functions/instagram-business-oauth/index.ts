@@ -307,6 +307,7 @@ Deno.serve(async (req) => {
           ig_candidates_json: result.candidates,
           long_lived_token: result.long_lived_token,
           expires_in: result.expires_in,
+          granted_scopes: result.granted_scopes,
         })
         .select("id")
         .single();
