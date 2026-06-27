@@ -16,10 +16,7 @@ import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -50,10 +47,10 @@ const META_SCOPES = [
   "instagram_manage_messages",
 ].join(",");
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(req, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
   });
 }
 
@@ -245,11 +242,12 @@ async function persistOneIgAccount(
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   if (configMissing()) {
     console.error("instagram-business-oauth configuration is incomplete");
-    return jsonResponse({ error: "Service configuration error" }, 500);
+    return jsonResponse(req, { error: "Service configuration error" }, 500);
   }
 
   // -------------------- GET: provider callback (unified path) -------------------
@@ -259,7 +257,7 @@ Deno.serve(async (req) => {
     const state = url.searchParams.get("state");
     const providerError = url.searchParams.get("error");
 
-    if (!state) return jsonResponse({ error: "Missing state" }, 400);
+    if (!state) return jsonResponse(req, { error: "Missing state" }, 400);
 
     let payload;
     try {
@@ -269,10 +267,10 @@ Deno.serve(async (req) => {
         "instagram-business-oauth: invalid state",
         err instanceof Error ? err.message : "",
       );
-      return jsonResponse({ error: "Invalid or expired state" }, 400);
+      return jsonResponse(req, { error: "Invalid or expired state" }, 400);
     }
     if (payload.flow !== "facebook_business") {
-      return jsonResponse({ error: "State flow mismatch" }, 400);
+      return jsonResponse(req, { error: "State flow mismatch" }, 400);
     }
 
     const returnTo =
@@ -330,7 +328,7 @@ Deno.serve(async (req) => {
   }
 
   if (req.method !== "POST") {
-    return jsonResponse({ error: "Method not allowed" }, 405);
+    return jsonResponse(req, { error: "Method not allowed" }, 405);
   }
 
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
@@ -341,13 +339,13 @@ Deno.serve(async (req) => {
     const auth = await authenticateCaller(req, body.user_id as string | undefined);
     user_id = auth.userId;
   } catch {
-    return jsonResponse({ error: "Unauthorized" }, 401);
+    return jsonResponse(req, { error: "Unauthorized" }, 401);
   }
 
   // ---------------- get_pending_selection: load candidates for picker ----------
   if (action === "get_pending_selection") {
     const selection_id = body.selection_id as string | undefined;
-    if (!selection_id) return jsonResponse({ error: "Missing selection_id" }, 400);
+    if (!selection_id) return jsonResponse(req, { error: "Missing selection_id" }, 400);
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data: row, error } = await supabase
@@ -357,17 +355,17 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (error || !row) {
-      return jsonResponse({ success: false, error: "Selection not found or expired" }, 404);
+      return jsonResponse(req, { success: false, error: "Selection not found or expired" }, 404);
     }
     if (row.user_id !== user_id) {
-      return jsonResponse({ success: false, error: "Forbidden" }, 403);
+      return jsonResponse(req, { success: false, error: "Forbidden" }, 403);
     }
     if (row.expires_at && new Date(row.expires_at) < new Date()) {
-      return jsonResponse({ success: false, error: "Selection expired" }, 404);
+      return jsonResponse(req, { success: false, error: "Selection expired" }, 404);
     }
 
     const candidates = (row.ig_candidates_json as IgCandidate[] | null) ?? [];
-    return jsonResponse({
+    return jsonResponse(req, {
       success: true,
       social_profile_id: row.social_profile_id,
       ig_accounts: candidates.map((c) => ({
@@ -386,7 +384,7 @@ Deno.serve(async (req) => {
     const override_profile_id =
       (body.social_profile_id as string | null | undefined) ?? null;
     if (!selection_id || !ig_user_id) {
-      return jsonResponse({ error: "Missing selection_id or ig_user_id" }, 400);
+      return jsonResponse(req, { error: "Missing selection_id or ig_user_id" }, 400);
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -397,19 +395,19 @@ Deno.serve(async (req) => {
       .maybeSingle();
 
     if (error || !row) {
-      return jsonResponse({ success: false, error: "Selection not found or expired" }, 404);
+      return jsonResponse(req, { success: false, error: "Selection not found or expired" }, 404);
     }
     if (row.user_id !== user_id) {
-      return jsonResponse({ success: false, error: "Forbidden" }, 403);
+      return jsonResponse(req, { success: false, error: "Forbidden" }, 403);
     }
     if (row.expires_at && new Date(row.expires_at) < new Date()) {
-      return jsonResponse({ success: false, error: "Selection expired" }, 404);
+      return jsonResponse(req, { success: false, error: "Selection expired" }, 404);
     }
 
     const candidates = (row.ig_candidates_json as IgCandidate[] | null) ?? [];
     const candidate = candidates.find((c) => c.ig_user_id === ig_user_id);
     if (!candidate) {
-      return jsonResponse({ success: false, error: "Account not in selection" }, 404);
+      return jsonResponse(req, { success: false, error: "Account not in selection" }, 404);
     }
 
     // Fetch the user's currently-granted scopes from Meta so we can persist the
@@ -439,10 +437,10 @@ Deno.serve(async (req) => {
       grantedScopes,
     );
     if (!result.success) {
-      return jsonResponse({ success: false, error: result.error ?? "Save failed" }, 200);
+      return jsonResponse(req, { success: false, error: result.error ?? "Save failed" }, 200);
     }
 
-    return jsonResponse({
+    return jsonResponse(req, {
       success: true,
       ig_username: candidate.ig_username,
       facebook_page_name: candidate.facebook_page_name,
@@ -452,24 +450,24 @@ Deno.serve(async (req) => {
   // ---------------- clear_pending_selection: delete the stash row --------------
   if (action === "clear_pending_selection") {
     const selection_id = body.selection_id as string | undefined;
-    if (!selection_id) return jsonResponse({ error: "Missing selection_id" }, 400);
+    if (!selection_id) return jsonResponse(req, { error: "Missing selection_id" }, 400);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     await supabase
       .from("oauth_pending_instagram_selections")
       .delete()
       .eq("id", selection_id)
       .eq("user_id", user_id);
-    return jsonResponse({ success: true });
+    return jsonResponse(req, { success: true });
   }
 
   if (action !== "authorize") {
-    return jsonResponse({ error: "Invalid request body" }, 400);
+    return jsonResponse(req, { error: "Invalid request body" }, 400);
   }
 
   try {
     if (configMissing()) {
       console.error("Instagram Business OAuth not configured: missing FACEBOOK_APP_ID/SECRET or redirect URI");
-      return jsonResponse({
+      return jsonResponse(req, {
         error_code: "missing_config",
         error: "Instagram Business isn't set up correctly on the server yet. Please contact support.",
       }, 200);
@@ -495,7 +493,7 @@ Deno.serve(async (req) => {
     authUrl.searchParams.set("response_type", "code");
     authUrl.searchParams.set("state", state);
 
-    return jsonResponse({
+    return jsonResponse(req, {
       url: authUrl.toString(),
       flow: "facebook_business",
       requested_redirect_uri: body.redirect_uri ?? null,
@@ -503,6 +501,6 @@ Deno.serve(async (req) => {
     });
   } catch (err) {
     console.error("instagram-business-oauth POST failed:", err);
-    return jsonResponse({ error: "Failed to start Instagram Business authorization" }, 500);
+    return jsonResponse(req, { error: "Failed to start Instagram Business authorization" }, 500);
   }
 });

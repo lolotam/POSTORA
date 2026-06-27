@@ -14,10 +14,7 @@ import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -47,10 +44,10 @@ function normalizeUsername(raw: string | null | undefined): string {
   return raw.toLowerCase().replace(/^@/, "").trim();
 }
 
-function jsonResponse(body: unknown, status = 200) {
+function jsonResponse(req, body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
   });
 }
 
@@ -214,11 +211,12 @@ async function exchangeAndPersist(
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   if (configMissing()) {
     console.error("instagram-oauth configuration is incomplete");
-    return jsonResponse({ error: "Service configuration error" }, 500);
+    return jsonResponse(req, { error: "Service configuration error" }, 500);
   }
 
   // -------------------- GET: provider callback (unified path) -------------------
@@ -229,7 +227,7 @@ Deno.serve(async (req) => {
     const providerError = url.searchParams.get("error");
 
     if (!state) {
-      return jsonResponse({ error: "Missing state" }, 400);
+      return jsonResponse(req, { error: "Missing state" }, 400);
     }
 
     let payload;
@@ -237,7 +235,7 @@ Deno.serve(async (req) => {
       payload = await verifyOAuthState(state, { expectedPlatform: "instagram" });
     } catch (err) {
       console.warn("instagram-oauth: invalid state", err instanceof Error ? err.message : "");
-      return jsonResponse({ error: "Invalid or expired state" }, 400);
+      return jsonResponse(req, { error: "Invalid or expired state" }, 400);
     }
 
     const returnTo = payload.return_to || `${RETURN_URL_DEFAULT}?connected=instagram`;
@@ -280,14 +278,14 @@ Deno.serve(async (req) => {
   }
 
   if (req.method !== "POST") {
-    return jsonResponse({ error: "Method not allowed" }, 405);
+    return jsonResponse(req, { error: "Method not allowed" }, 405);
   }
 
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
   const action = body.action as string | undefined;
 
   if (!action || !["authorize", "callback"].includes(action)) {
-    return jsonResponse({ error: "Invalid request body" }, 400);
+    return jsonResponse(req, { error: "Invalid request body" }, 400);
   }
 
   // Both POST actions require an authenticated caller
@@ -296,7 +294,7 @@ Deno.serve(async (req) => {
     const auth = await authenticateCaller(req, body.user_id as string | undefined);
     user_id = auth.userId;
   } catch {
-    return jsonResponse({ error: "Unauthorized" }, 401);
+    return jsonResponse(req, { error: "Unauthorized" }, 401);
   }
 
   try {
@@ -321,7 +319,7 @@ Deno.serve(async (req) => {
       authUrl.searchParams.set("response_type", "code");
       authUrl.searchParams.set("state", state);
 
-      return jsonResponse({
+      return jsonResponse(req, {
         url: authUrl.toString(),
         requested_redirect_uri: body.redirect_uri ?? null,
         effective_redirect_uri: INSTAGRAM_REDIRECT_URI,
@@ -333,11 +331,11 @@ Deno.serve(async (req) => {
     if (action === "callback") {
       const code = body.code as string | undefined;
       const social_profile_id = (body.social_profile_id as string | null | undefined) ?? null;
-      if (!code) return jsonResponse({ error: "Missing code" }, 400);
+      if (!code) return jsonResponse(req, { error: "Missing code" }, 400);
 
       const result = await exchangeAndPersist(code, user_id, social_profile_id);
       if (result.kind === "personal") {
-        return jsonResponse({
+        return jsonResponse(req, {
           error: "personal_account",
           account_type: "PERSONAL",
           requires_facebook: true,
@@ -346,14 +344,14 @@ Deno.serve(async (req) => {
         });
       }
       if (result.kind === "error") {
-        return jsonResponse({ success: false, error: result.message }, 200);
+        return jsonResponse(req, { success: false, error: result.message }, 200);
       }
-      return jsonResponse({ success: true, username: result.username });
+      return jsonResponse(req, { success: true, username: result.username });
     }
 
-    return jsonResponse({ error: "Invalid action" }, 400);
+    return jsonResponse(req, { error: "Invalid action" }, 400);
   } catch (err) {
     console.error("instagram-oauth POST failed:", err);
-    return jsonResponse({ error: "Authentication failed. Please try again." }, 500);
+    return jsonResponse(req, { error: "Authentication failed. Please try again." }, 500);
   }
 });

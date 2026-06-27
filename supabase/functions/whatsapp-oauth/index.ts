@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
+import { handleRestrictedCorsOptions, restrictedJsonResponse, restrictedErrorResponse } from "../_shared/cors.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v22.0";
 
@@ -18,7 +18,7 @@ interface DisconnectBody {
 }
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return handleCorsOptions();
+  if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
@@ -29,12 +29,12 @@ Deno.serve(async (req) => {
 
     // Auth: identify caller
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return unauthorizedResponse("Missing authorization header");
+    if (!authHeader) return restrictedErrorResponse(req, "Missing authorization header", 401);
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
     });
     const { data: userData, error: userErr } = await userClient.auth.getUser();
-    if (userErr || !userData?.user) return unauthorizedResponse("Invalid session");
+    if (userErr || !userData?.user) return restrictedErrorResponse(req, "Invalid session", 401);
     const userId = userData.user.id;
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
@@ -49,7 +49,7 @@ Deno.serve(async (req) => {
         .eq("id", social_account_id)
         .eq("user_id", userId)
         .maybeSingle();
-      if (!account) return errorResponse("Account not found", 404);
+      if (!account) return restrictedErrorResponse(req, "Account not found", 404);
 
       const meta = (account.account_metadata || {}) as Record<string, unknown>;
       const wabaId = meta.waba_id as string | undefined;
@@ -73,21 +73,21 @@ Deno.serve(async (req) => {
         .eq("id", social_account_id)
         .eq("user_id", userId);
 
-      return jsonResponse({ success: true });
+      return restrictedJsonResponse(req, { success: true });
     }
 
     // ============ EXCHANGE_SIGNUP ============
     if (body.action !== "exchange_signup") {
-      return errorResponse("Unknown action", 400);
+      return restrictedErrorResponse(req, "Unknown action", 400);
     }
 
     if (!appId || !appSecret) {
-      return errorResponse("FACEBOOK_APP_ID / FACEBOOK_APP_SECRET not configured.", 500);
+      return restrictedErrorResponse(req, "FACEBOOK_APP_ID / FACEBOOK_APP_SECRET not configured.", 500);
     }
 
     const { code, waba_id, phone_number_id, business_id, mode } = body;
     if (!code || !waba_id || !phone_number_id || !mode) {
-      return errorResponse("Missing required fields: code, waba_id, phone_number_id, mode", 400);
+      return restrictedErrorResponse(req, "Missing required fields: code, waba_id, phone_number_id, mode", 400);
     }
 
     // Server-side feature flag guard: block Cloud API connections when disabled
@@ -106,7 +106,7 @@ Deno.serve(async (req) => {
         cloudApiEnabled = val === true || val === "true";
       }
       if (!cloudApiEnabled) {
-        return errorResponse(
+        return restrictedErrorResponse(req, 
           "Cloud API connections are disabled. Please use Coexistence mode instead.",
           403,
         );
@@ -124,7 +124,7 @@ Deno.serve(async (req) => {
     const tokenData = await tokenRes.json();
     if (!tokenRes.ok || !tokenData.access_token) {
       console.error("[whatsapp-oauth] Token exchange failed:", tokenData);
-      return errorResponse(
+      return restrictedErrorResponse(req, 
         `Token exchange failed: ${tokenData.error?.message || JSON.stringify(tokenData)}`,
         400,
       );
@@ -232,7 +232,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    return jsonResponse({
+    return restrictedJsonResponse(req, {
       success: true,
       mode,
       registration_status: registrationStatus,
@@ -241,6 +241,6 @@ Deno.serve(async (req) => {
     });
   } catch (err) {
     console.error("[whatsapp-oauth] Error:", err);
-    return errorResponse((err as Error).message, 500);
+    return restrictedErrorResponse(req, (err as Error).message, 500);
   }
 });

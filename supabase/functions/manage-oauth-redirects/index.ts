@@ -1,11 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
+import { handleRestrictedCorsOptions, restrictedJsonResponse, restrictedErrorResponse } from "../_shared/cors.ts";
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return handleCorsOptions();
+  if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
 
   if (req.method !== "POST") {
-    return errorResponse("Method not allowed", 405);
+    return restrictedErrorResponse(req, "Method not allowed", 405);
   }
 
   try {
@@ -16,11 +16,11 @@ Deno.serve(async (req) => {
 
     // Verify admin
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return unauthorizedResponse();
+    if (!authHeader) return restrictedErrorResponse(req, "Unauthorized", 401);
 
     const token = authHeader.replace("Bearer ", "");
     const { data: { user }, error: authError } = await supabaseAdmin.auth.getUser(token);
-    if (authError || !user) return unauthorizedResponse();
+    if (authError || !user) return restrictedErrorResponse(req, "Unauthorized", 401);
 
     const { data: roleData } = await supabaseAdmin
       .from("user_roles")
@@ -29,12 +29,12 @@ Deno.serve(async (req) => {
       .eq("role", "admin")
       .maybeSingle();
 
-    if (!roleData) return unauthorizedResponse("Admin access required");
+    if (!roleData) return restrictedErrorResponse(req, "Admin access required", 401);
 
     const { client_id, redirect_uris } = await req.json();
 
     if (!client_id || !Array.isArray(redirect_uris)) {
-      return errorResponse("client_id (string) and redirect_uris (string[]) required", 400);
+      return restrictedErrorResponse(req, "client_id (string) and redirect_uris (string[]) required", 400);
     }
 
     // Use Supabase Management API to update the OAuth client's redirect URIs
@@ -63,7 +63,7 @@ Deno.serve(async (req) => {
       
       // If the admin API doesn't support this endpoint, return a helpful message
       if (response.status === 404) {
-        return jsonResponse({
+        return restrictedJsonResponse(req, {
           success: false,
           synced: false,
           message: "Supabase Auth Admin API for OAuth clients not available. URIs updated in local DB only. Please also update in Supabase Dashboard manually.",
@@ -71,13 +71,13 @@ Deno.serve(async (req) => {
         });
       }
       
-      return errorResponse(`Failed to sync with Supabase OAuth server: ${errorBody}`, response.status);
+      return restrictedErrorResponse(req, `Failed to sync with Supabase OAuth server: ${errorBody}`, response.status);
     }
 
     const result = await response.json();
     console.log("OAuth client updated successfully:", result);
 
-    return jsonResponse({
+    return restrictedJsonResponse(req, {
       success: true,
       synced: true,
       message: "Redirect URIs synced to Supabase OAuth server",
@@ -86,6 +86,6 @@ Deno.serve(async (req) => {
     });
   } catch (err) {
     console.error("manage-oauth-redirects error:", err);
-    return errorResponse(err.message || "Internal server error");
+    return restrictedErrorResponse(req, err.message || "Internal server error");
   }
 });

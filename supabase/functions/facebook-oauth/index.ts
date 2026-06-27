@@ -3,10 +3,7 @@ import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -318,8 +315,8 @@ function safeReturnTo(candidate: unknown): string {
   return FB_DEFAULT_RETURN_TO;
 }
 
-function redirectResponse(url: string): Response {
-  return new Response(null, { status: 302, headers: { ...corsHeaders, Location: url } });
+function redirectResponse(req, url: string): Response {
+  return new Response(null, { status: 302, headers: { ...restrictedCorsHeaders(req), Location: url } });
 }
 
 async function loadPendingSelectionRow(
@@ -360,14 +357,14 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
     target.searchParams.set("connected", "facebook");
     target.searchParams.set("error", oauthError);
     if (errorReason) target.searchParams.set("error_description", errorReason);
-    return redirectResponse(target.toString());
+    return redirectResponse(req, target.toString());
   }
 
   if (!code || !stateParam) {
     const target = new URL(returnTo);
     target.searchParams.set("connected", "facebook");
     target.searchParams.set("error", "missing_code_or_state");
-    return redirectResponse(target.toString());
+    return redirectResponse(req, target.toString());
   }
 
   let state;
@@ -378,7 +375,7 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
     const target = new URL(returnTo);
     target.searchParams.set("connected", "facebook");
     target.searchParams.set("error", "invalid_state");
-    return redirectResponse(target.toString());
+    return redirectResponse(req, target.toString());
   }
 
   returnTo = safeReturnTo(state.return_to);
@@ -393,7 +390,7 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
     const target = new URL(returnTo);
     target.searchParams.set("connected", "facebook");
     target.searchParams.set("error", "service_configuration");
-    return redirectResponse(target.toString());
+    return redirectResponse(req, target.toString());
   }
 
   // Exchange code → short-lived user token, then upgrade to long-lived.
@@ -411,7 +408,7 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
     const target = new URL(returnTo);
     target.searchParams.set("connected", "facebook");
     target.searchParams.set("error", "code_exchange_failed");
-    return redirectResponse(target.toString());
+    return redirectResponse(req, target.toString());
   }
 
   const { token: longLivedUserToken } = await exchangeForLongLivedToken(tokenJson.access_token);
@@ -451,16 +448,17 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
     const target = new URL(returnTo);
     target.searchParams.set("connected", "facebook");
     target.searchParams.set("error", "selection_stash_failed");
-    return redirectResponse(target.toString());
+    return redirectResponse(req, target.toString());
   }
 
   const target = new URL(returnTo);
   target.searchParams.set("connected", "facebook");
   target.searchParams.set("select", inserted.id);
-  return redirectResponse(target.toString());
+  return redirectResponse(req, target.toString());
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = restrictedCorsHeaders(req);
 
 
   if (req.method === "OPTIONS") {
