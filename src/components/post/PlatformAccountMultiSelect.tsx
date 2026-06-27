@@ -119,33 +119,31 @@ export function PlatformAccountMultiSelect({
                 <ChevronDown className="w-4 h-4 opacity-60" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-64 p-1" align="start">
-              <ScrollArea className="max-h-64">
-                {availablePlatforms.length === 0 && (
-                  <div className="p-3 text-sm text-muted-foreground">
-                    No connected accounts.
-                  </div>
-                )}
-                {availablePlatforms.map((p) => {
-                  const checked = selectedPlatforms.includes(p);
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => togglePlatform(p)}
-                      className={cn(
-                        "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-accent",
-                        checked && "bg-accent/60",
-                      )}
-                    >
-                      <Checkbox checked={checked} className="pointer-events-none" />
-                      <PlatformIcon platform={p} size="sm" />
-                      <span className="flex-1 text-left">{getPlatformName(p)}</span>
-                      {checked && <Check className="w-3.5 h-3.5 text-primary" />}
-                    </button>
-                  );
-                })}
-              </ScrollArea>
+            <PopoverContent className="w-64 p-1 max-h-64 overflow-y-auto" align="start">
+              {availablePlatforms.length === 0 && (
+                <div className="p-3 text-sm text-muted-foreground">
+                  No connected accounts.
+                </div>
+              )}
+              {availablePlatforms.map((p) => {
+                const checked = selectedPlatforms.includes(p);
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => togglePlatform(p)}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-accent",
+                      checked && "bg-accent/60",
+                    )}
+                  >
+                    <Checkbox checked={checked} className="pointer-events-none" />
+                    <PlatformIcon platform={p} size="sm" />
+                    <span className="flex-1 text-left">{getPlatformName(p)}</span>
+                    {checked && <Check className="w-3.5 h-3.5 text-primary" />}
+                  </button>
+                );
+              })}
             </PopoverContent>
           </Popover>
         </div>
