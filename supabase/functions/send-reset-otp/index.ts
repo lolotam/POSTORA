@@ -162,7 +162,7 @@ serve(async (req) => {
     // Resend is guaranteed configured at this point (early-exit above).
     const resend = new Resend(resendApiKey);
 
-    const subject = "Your Password Reset Code - Expires in 10 Minutes";
+    const subject = "Your password reset code (expires in 10 minutes)";
     const html = `
            <!DOCTYPE html>
            <html>
