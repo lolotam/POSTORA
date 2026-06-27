@@ -508,6 +508,12 @@ Deno.serve(async (req) => {
     // Log successful processing
     await logWebhookEvent(supabase, "info", event.type, `Successfully processed`, { eventId: event.id }, resolvedUserId);
 
+    // Mark dedupe row processed.
+    await supabase
+      .from("stripe_webhook_events")
+      .update({ status: "processed", processed_at: new Date().toISOString() })
+      .eq("event_id", event.id);
+
     return new Response(JSON.stringify({ received: true }), {
       headers: { "Content-Type": "application/json" },
     });
