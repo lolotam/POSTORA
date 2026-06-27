@@ -55,12 +55,29 @@
     --sidebar-border: 220 13% 91%;
     --sidebar-ring: 199 89% 48%;
 
-    /* Platform colors */
+    /* Platform brand colors (base + darker shade for 3D gradient chips) */
     --facebook: 221 44% 41%;
+    --facebook-dark: 221 60% 28%;
     --instagram: 340 75% 54%;
-    --tiktok: 0 0% 0%;
-    --twitter: 203 89% 53%;
-    --linkedin: 201 100% 35%;
+    --instagram-dark: 280 60% 38%;
+    --tiktok: 0 0% 8%;
+    --tiktok-dark: 0 0% 0%;
+    --twitter: 210 18% 12%;
+    --twitter-dark: 0 0% 0%;
+    --linkedin: 210 90% 40%;
+    --linkedin-dark: 210 90% 26%;
+    --youtube: 0 90% 50%;
+    --youtube-dark: 0 90% 35%;
+    --pinterest: 351 100% 45%;
+    --pinterest-dark: 351 100% 30%;
+    --threads: 0 0% 8%;
+    --threads-dark: 0 0% 0%;
+    --bluesky: 211 100% 50%;
+    --bluesky-dark: 211 100% 35%;
+    --reddit: 16 100% 50%;
+    --reddit-dark: 16 100% 35%;
+    --whatsapp: 142 70% 45%;
+    --whatsapp-dark: 142 70% 30%;
   }
 
   /* Default dark theme - Neon Purple-Magenta Gradient */

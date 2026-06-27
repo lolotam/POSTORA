@@ -1,9 +1,10 @@
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { PlatformIcon } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
+import { PlatformChip } from "@/components/post/PlatformChip";
+import { LinkedInDestinationStack } from "@/components/post/LinkedInDestinationStack";
 import {
   InstagramSettings,
   FacebookSettings,
@@ -143,8 +144,42 @@ export function PlatformSettingsSection({
         platform_user_id: a.platform_user_id,
       }));
 
-  const getAccountForPlatform = (platform: Platform) => 
+  const getAccountForPlatform = (platform: Platform) =>
     connectedAccounts.find(a => a.platform === platform && selectedAccountIds.includes(a.id));
+
+  // Platforms that require media (hidden in text-only mode)
+  const mediaRequiredPlatforms: Platform[] = ["instagram", "tiktok", "youtube", "pinterest"];
+  const visiblePlatforms = allPlatformOrder.filter((p) => {
+    if (uploadMethod === "text" && mediaRequiredPlatforms.includes(p)) return false;
+    return isPlatformEligible(p) && isPlatformVisible(p) && hasPlatformSelected(p);
+  });
+
+  // LinkedIn: build the destination avatar stack rendered under the chip
+  const linkedinPagesAvailable = connectedAccounts
+    .filter((a) => a.platform === "linkedin" && selectedAccountIds.includes(a.id))
+    .flatMap(
+      (a) =>
+        (a.account_metadata as { linkedin_pages?: Array<{ id: string; name: string; vanityName?: string; logoUrl?: string }> })
+          ?.linkedin_pages || []
+    );
+  const linkedinPrimaryAccount = getAccountForPlatform("linkedin");
+  const linkedinDestinations = (platformSettings.linkedinSelectedDestinationIds as string[] | undefined ?? ["personal"]).map((id) => {
+    if (id === "personal") {
+      return {
+        id: "personal",
+        name: linkedinPrimaryAccount?.platform_username || "Personal Profile",
+        avatarUrl: linkedinPrimaryAccount?.avatar_url ?? undefined,
+        isPersonal: true,
+      };
+    }
+    const page = linkedinPagesAvailable.find((p) => p.id === id);
+    return {
+      id,
+      name: page?.name || id,
+      avatarUrl: page?.logoUrl,
+      isPersonal: false,
+    };
+  });
 
   return (
     <Collapsible open={isOpen} onOpenChange={onOpenChange}>
@@ -171,67 +206,14 @@ export function PlatformSettingsSection({
                 </div>
               ) : (
               <>
-              <TabsList className="flex flex-wrap justify-center gap-2 h-auto p-2 bg-transparent">
-                {uploadMethod !== "text" && isPlatformEligible("instagram") && isPlatformVisible("instagram") && hasPlatformSelected("instagram") && (
-                  <TabsTrigger value="instagram" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="instagram" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">Instagram</span>
-                  </TabsTrigger>
-                )}
-                {uploadMethod !== "text" && isPlatformEligible("tiktok") && isPlatformVisible("tiktok") && hasPlatformSelected("tiktok") && (
-                  <TabsTrigger value="tiktok" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="tiktok" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">TikTok</span>
-                  </TabsTrigger>
-                )}
-                {isPlatformEligible("facebook") && isPlatformVisible("facebook") && hasPlatformSelected("facebook") && (
-                  <TabsTrigger value="facebook" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="facebook" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">Facebook</span>
-                  </TabsTrigger>
-                )}
-                {isPlatformEligible("twitter") && isPlatformVisible("twitter") && hasPlatformSelected("twitter") && (
-                  <TabsTrigger value="twitter" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="twitter" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">X-Twitter</span>
-                  </TabsTrigger>
-                )}
-                {isPlatformEligible("linkedin") && isPlatformVisible("linkedin") && hasPlatformSelected("linkedin") && (
-                  <TabsTrigger value="linkedin" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="linkedin" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">LinkedIn</span>
-                  </TabsTrigger>
-                )}
-                {uploadMethod !== "text" && isPlatformEligible("youtube") && isPlatformVisible("youtube") && hasPlatformSelected("youtube") && (
-                  <TabsTrigger value="youtube" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="youtube" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">YouTube</span>
-                  </TabsTrigger>
-                )}
-                {uploadMethod !== "text" && isPlatformEligible("pinterest") && isPlatformVisible("pinterest") && hasPlatformSelected("pinterest") && (
-                  <TabsTrigger value="pinterest" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="pinterest" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">Pinterest</span>
-                  </TabsTrigger>
-                )}
-                {isPlatformEligible("threads") && isPlatformVisible("threads") && hasPlatformSelected("threads") && (
-                  <TabsTrigger value="threads" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="threads" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">Threads</span>
-                  </TabsTrigger>
-                )}
-                {isPlatformEligible("bluesky") && isPlatformVisible("bluesky") && hasPlatformSelected("bluesky") && (
-                  <TabsTrigger value="bluesky" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="bluesky" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">Bluesky</span>
-                  </TabsTrigger>
-                )}
-                {isPlatformEligible("reddit") && isPlatformVisible("reddit") && hasPlatformSelected("reddit") && (
-                  <TabsTrigger value="reddit" className="flex flex-col items-center justify-center gap-1 w-14 h-14 sm:w-16 sm:h-16 rounded-xl bg-secondary/80 backdrop-blur-sm border border-border/50 shadow-sm hover:shadow-lg hover:border-primary/30 hover:-translate-y-1 data-[state=active]:bg-primary data-[state=active]:border-primary data-[state=active]:shadow-xl data-[state=active]:scale-110">
-                    <PlatformIcon platform="reddit" size="md" />
-                    <span className="text-[10px] font-medium truncate max-w-full">Reddit</span>
-                  </TabsTrigger>
-                )}
+              <TabsList className="flex flex-wrap justify-start sm:justify-center items-start gap-3 sm:gap-4 h-auto p-2 bg-transparent">
+                {visiblePlatforms.map((p) => (
+                  <PlatformChip key={p} platform={p} value={p}>
+                    {p === "linkedin" && linkedinDestinations.length > 0 && (
+                      <LinkedInDestinationStack destinations={linkedinDestinations} />
+                    )}
+                  </PlatformChip>
+                ))}
               </TabsList>
 
               {isPlatformEligible("instagram") && isPlatformVisible("instagram") && hasPlatformSelected("instagram") && <TabsContent value="instagram" className="mt-4 space-y-6">
@@ -532,8 +514,8 @@ export function PlatformSettingsSection({
                   setLinkedInTitle={platformSettings.setLinkedinTitle}
                   linkedInDescription={platformSettings.linkedinDescription}
                   setLinkedInDescription={platformSettings.setLinkedinDescription}
-                  selectedPageId={platformSettings.linkedinSelectedPageId}
-                  setSelectedPageId={platformSettings.setLinkedinSelectedPageId}
+                  selectedDestinationIds={platformSettings.linkedinSelectedDestinationIds}
+                  setSelectedDestinationIds={platformSettings.setLinkedinSelectedDestinationIds}
                   availablePages={
                     connectedAccounts
                       .filter(a => a.platform === "linkedin" && selectedAccountIds.includes(a.id))

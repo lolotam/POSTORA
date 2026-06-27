@@ -139,7 +139,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
   const [linkedinVisibility, setLinkedinVisibility] = useState<"PUBLIC" | "CONNECTIONS" | "LOGGED_IN" | "CONTAINER">("PUBLIC");
   const [linkedinTitle, setLinkedinTitle] = useState("");
   const [linkedinDescription, setLinkedinDescription] = useState("");
-  const [linkedinSelectedPageId, setLinkedinSelectedPageId] = useState<string>("personal");
+  const [linkedinSelectedDestinationIds, setLinkedinSelectedDestinationIds] = useState<string[]>(["personal"]);
 
   // YouTube settings
   const [youtubeVideoType, setYoutubeVideoType] = useState<"video" | "short">("video");
@@ -525,7 +525,9 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       linkedin_visibility: selectedPlatforms.includes("linkedin") ? linkedinVisibility : null,
       linkedin_title: linkedinTitle || null,
       linkedin_description: linkedinDescription || null,
-      linkedin_page_id: linkedinSelectedPageId !== "personal" ? linkedinSelectedPageId : null,
+      linkedin_destination_ids: selectedPlatforms.includes("linkedin") ? linkedinSelectedDestinationIds : null,
+      // Back-compat: legacy single page id consumed by older deploys of process-post.
+      linkedin_page_id: linkedinSelectedDestinationIds.find((id) => id !== "personal") ?? null,
       // YouTube settings
       youtube_video_type: selectedPlatforms.includes("youtube") ? youtubeVideoType : null,
       youtube_title: youtubeTitle || null,
@@ -739,7 +741,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     linkedinVisibility, setLinkedinVisibility,
     linkedinTitle, setLinkedinTitle,
     linkedinDescription, setLinkedinDescription,
-    linkedinSelectedPageId, setLinkedinSelectedPageId,
+    linkedinSelectedDestinationIds, setLinkedinSelectedDestinationIds,
 
     // YouTube
     youtubeVideoType, setYoutubeVideoType,
