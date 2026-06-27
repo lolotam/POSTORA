@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Facebook, Camera, MessageSquare, Loader2, Plus, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,16 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
   const pageId = selectedAccount?.platform_user_id || "";
+
+  useEffect(() => {
+    const platformAccounts = accounts.filter((account) => account.platform === platformTab);
+    if (platformAccounts.length === 0) return;
+    const stillValid = selectedAccountId && platformAccounts.some((account) => account.id === selectedAccountId);
+    if (!stillValid) {
+      setSelectedAccountId(platformAccounts[0].id);
+      setSelectedConversation(null);
+    }
+  }, [accounts, platformTab, selectedAccountId]);
 
   const handleAccountChange = (id: string) => {
     setSelectedAccountId(id);
