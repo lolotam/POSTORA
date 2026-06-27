@@ -7,7 +7,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
+
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { AccountAvatar } from "@/components/AccountAvatar";
 import { Platform } from "@/lib/types";
@@ -119,33 +119,31 @@ export function PlatformAccountMultiSelect({
                 <ChevronDown className="w-4 h-4 opacity-60" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-64 p-1" align="start">
-              <ScrollArea className="max-h-64">
-                {availablePlatforms.length === 0 && (
-                  <div className="p-3 text-sm text-muted-foreground">
-                    No connected accounts.
-                  </div>
-                )}
-                {availablePlatforms.map((p) => {
-                  const checked = selectedPlatforms.includes(p);
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => togglePlatform(p)}
-                      className={cn(
-                        "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-accent",
-                        checked && "bg-accent/60",
-                      )}
-                    >
-                      <Checkbox checked={checked} className="pointer-events-none" />
-                      <PlatformIcon platform={p} size="sm" />
-                      <span className="flex-1 text-left">{getPlatformName(p)}</span>
-                      {checked && <Check className="w-3.5 h-3.5 text-primary" />}
-                    </button>
-                  );
-                })}
-              </ScrollArea>
+            <PopoverContent className="w-64 p-1 max-h-64 overflow-y-auto" align="start">
+              {availablePlatforms.length === 0 && (
+                <div className="p-3 text-sm text-muted-foreground">
+                  No connected accounts.
+                </div>
+              )}
+              {availablePlatforms.map((p) => {
+                const checked = selectedPlatforms.includes(p);
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => togglePlatform(p)}
+                    className={cn(
+                      "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-accent",
+                      checked && "bg-accent/60",
+                    )}
+                  >
+                    <Checkbox checked={checked} className="pointer-events-none" />
+                    <PlatformIcon platform={p} size="sm" />
+                    <span className="flex-1 text-left">{getPlatformName(p)}</span>
+                    {checked && <Check className="w-3.5 h-3.5 text-primary" />}
+                  </button>
+                );
+              })}
             </PopoverContent>
           </Popover>
         </div>
@@ -172,50 +170,48 @@ export function PlatformAccountMultiSelect({
                 <ChevronDown className="w-4 h-4 opacity-60" />
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-72 p-1" align="start">
-              <ScrollArea className="max-h-80">
-                {selectedPlatforms.map((p) => {
-                  const list = accountsByPlatform.get(p) ?? [];
-                  return (
-                    <div key={p} className="mb-1">
-                      <div className="px-2 py-1 flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase">
-                        <PlatformIcon platform={p} size="xs" />
-                        {getPlatformName(p)}
-                      </div>
-                      {list.length === 0 && (
-                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                          No connected accounts.
-                        </div>
-                      )}
-                      {list.map((a) => {
-                        const checked = selectedAccountIds.includes(a.id);
-                        return (
-                          <button
-                            key={a.id}
-                            type="button"
-                            onClick={() => toggleAccount(a.id)}
-                            className={cn(
-                              "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-accent",
-                              checked && "bg-accent/60",
-                            )}
-                          >
-                            <Checkbox checked={checked} className="pointer-events-none" />
-                            <AccountAvatar
-                              platform={a.platform}
-                              avatarUrl={a.avatar_url}
-                              name={a.platform_username}
-                              size="sm"
-                            />
-                            <span className="flex-1 text-left truncate">
-                              @{a.platform_username || "account"}
-                            </span>
-                          </button>
-                        );
-                      })}
+            <PopoverContent className="w-72 p-1 max-h-80 overflow-y-auto" align="start">
+              {selectedPlatforms.map((p) => {
+                const list = accountsByPlatform.get(p) ?? [];
+                return (
+                  <div key={p} className="mb-1">
+                    <div className="px-2 py-1 flex items-center gap-2 text-xs font-semibold text-muted-foreground uppercase">
+                      <PlatformIcon platform={p} size="xs" />
+                      {getPlatformName(p)}
                     </div>
-                  );
-                })}
-              </ScrollArea>
+                    {list.length === 0 && (
+                      <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                        No connected accounts.
+                      </div>
+                    )}
+                    {list.map((a) => {
+                      const checked = selectedAccountIds.includes(a.id);
+                      return (
+                        <button
+                          key={a.id}
+                          type="button"
+                          onClick={() => toggleAccount(a.id)}
+                          className={cn(
+                            "w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-sm hover:bg-accent",
+                            checked && "bg-accent/60",
+                          )}
+                        >
+                          <Checkbox checked={checked} className="pointer-events-none" />
+                          <AccountAvatar
+                            platform={a.platform}
+                            avatarUrl={a.avatar_url}
+                            name={a.platform_username}
+                            size="sm"
+                          />
+                          <span className="flex-1 text-left truncate">
+                            @{a.platform_username || "account"}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })}
             </PopoverContent>
           </Popover>
         </div>
