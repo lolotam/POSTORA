@@ -187,7 +187,7 @@ serve(async (req) => {
                <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 0 8px 8px 0; margin: 24px 0;">
                  <p style="color: #92400e; font-size: 14px; margin: 0;">
                    <strong>⏰ This code expires in 10 minutes.</strong><br>
-                   You'll also need your authenticator app code.
+                   If you have two-factor authentication enabled you'll also need your authenticator code.
                  </p>
                </div>
 
