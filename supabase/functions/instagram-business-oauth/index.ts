@@ -194,6 +194,7 @@ async function persistOneIgAccount(
   social_profile_id: string | null,
   candidate: IgCandidate,
   expires_in: number,
+  granted_scopes: string[] = [],
 ): Promise<{ success: boolean; error?: string }> {
   const avatarUrl = await cacheAvatarToCloudinary(
     candidate.ig_profile_picture_url ?? undefined,
@@ -223,6 +224,8 @@ async function persistOneIgAccount(
       page_access_token: candidate.page_access_token,
       ig_business_account_id: candidate.ig_user_id,
       token_type: "page_token",
+      granted_scopes,
+      scopes_checked_at: new Date().toISOString(),
     },
     connected_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
