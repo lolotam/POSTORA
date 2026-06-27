@@ -91,6 +91,7 @@ export default {
           whatsapp: "hsl(var(--whatsapp))",
           "whatsapp-dark": "hsl(var(--whatsapp-dark))",
         },
+      },
       borderRadius: {
         lg: "var(--radius)",
         md: "calc(var(--radius) - 2px)",
