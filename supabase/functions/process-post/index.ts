@@ -5602,26 +5602,52 @@ async function postToThreads(
     const errLower = errMsg.toLowerCase();
     const wantedCrossShare = !!metadata?.threads_cross_share_to_ig;
 
-    // Classify cross-share-specific failures into a friendly message.
-    // Meta returns code 10 ("does not have permission") or 200 for missing scope.
-    const looksLikePermissionError =
-      errCode === 10 || errCode === 200 ||
-      errLower.includes("permission") ||
-      errLower.includes("unauthorized") ||
-      errLower.includes("unapproved") ||
-      errLower.includes("crosspost") ||
-      errLower.includes("instagram") ||
-      errLower.includes("ig account") ||
-      errLower.includes("linked");
-
-    if (wantedCrossShare && looksLikePermissionError) {
-      console.error(`Threads: Cross-share to IG failed [code=${errCode}]:`, errMsg);
-      throw new Error(
-        `Cross-share to Instagram failed: link an Instagram account to this Threads profile in Meta Accounts Center, then disconnect + reconnect Threads in Postora to grant the threads_share_to_instagram permission. (code=${errCode}: ${errMsg})`
+    // If we sent crossreshare_to_ig and Meta rejected the container, retry
+    // ONCE without the cross-share flag so the Thread itself still publishes.
+    // Common cases:
+    //  - code 33 ("does not exist or does not support this action") → no IG
+    //    account linked in Meta Accounts Center, or media not Story-eligible.
+    //  - code 10 / 200                                              → missing
+    //    threads_share_to_instagram scope on the token.
+    const crossShareLikelyCulprit =
+      crossShareApplied && (
+        errCode === 33 || errCode === 10 || errCode === 200 ||
+        errLower.includes("crossreshare") ||
+        errLower.includes("crosspost") ||
+        errLower.includes("instagram") ||
+        errLower.includes("ig account") ||
+        errLower.includes("linked")
       );
+
+    if (crossShareLikelyCulprit) {
+      console.warn(
+        `Threads: Container create failed with cross-share enabled [code=${errCode}]: ${errMsg}. Retrying without crossreshare_to_ig…`
+      );
+      delete containerParams.crossreshare_to_ig;
+      delete containerParams.crossreshare_to_ig_dark_mode;
+      crossShareApplied = false;
+      crossShareIgStatus = "rejected_by_meta";
+      threadsWarnings.push(
+        `Instagram Story cross-share was rejected by Meta (code ${errCode}). Make sure your Instagram account is linked to this Threads profile in Meta Accounts Center, then reconnect Threads in Postora. The Thread itself was still published.`
+      );
+
+      const retryUrl = new URL(containerEndpoint);
+      Object.entries(containerParams).forEach(([key, value]) => {
+        retryUrl.searchParams.set(key, value);
+      });
+      const retryResponse = await fetch(retryUrl.toString(), { method: "POST" });
+      const retryData = await retryResponse.json();
+      console.log("Threads: Retry container response:", JSON.stringify(retryData).slice(0, 200));
+      if (retryData.error) {
+        throw new Error(`Threads API error [code=${retryData.error.code}]: ${retryData.error.message}`);
+      }
+      // Replace containerData with the successful retry so downstream code uses it.
+      (containerData as Record<string, unknown>).id = retryData.id;
+    } else {
+      throw new Error(`Threads API error [code=${errCode}]: ${containerData.error.message}`);
     }
-    throw new Error(`Threads API error [code=${errCode}]: ${containerData.error.message}`);
   }
+
   tLocationDebug.create_container_success = true;
   // If we sent a topic_tag and the container creation succeeded, Meta accepted it.
   if (tTopicTagDebug.sent) {
