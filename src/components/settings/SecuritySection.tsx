@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -73,6 +73,20 @@ export function SecuritySection() {
   const [isGeneratingBackupCodes, setIsGeneratingBackupCodes] = useState(false);
   const [backupCodesCopied, setBackupCodesCopied] = useState(false);
 
+  const checkExistingBackupCodes = useCallback(async () => {
+    if (!user) return;
+
+    const {
+      data: statusResponse,
+      error: statusError,
+    } = await supabase.functions.invoke<{ unusedCount?: number }>(
+      "manage-backup-codes",
+      { body: { action: "status" } },
+    );
+
+    setHasBackupCodes(!statusError && (statusResponse?.unusedCount ?? 0) > 0);
+  }, [user]);
+
   // Check if user signed up with Google (no password)
   useEffect(() => {
     const checkAuthProvider = async () => {
@@ -92,10 +106,8 @@ export function SecuritySection() {
 
   // Check for existing backup codes on mount
   useEffect(() => {
-    if (user) {
-      checkExistingBackupCodes();
-    }
-  }, [user]);
+    void checkExistingBackupCodes();
+  }, [checkExistingBackupCodes]);
 
   const loadMfaFactors = async () => {
     setIsLoadingMfa(true);
@@ -181,7 +193,12 @@ export function SecuritySection() {
         }
       }
 
-      const friendlyName = `Authenticator App (${Math.random().toString(36).slice(2, 6).toUpperCase()})`;
+      const suffixBytes = new Uint8Array(2);
+      crypto.getRandomValues(suffixBytes);
+      const suffix = Array.from(suffixBytes, (byte) =>
+        byte.toString(16).padStart(2, "0")
+      ).join("").toUpperCase();
+      const friendlyName = `Authenticator App (${suffix})`;
 
       const { data, error } = await supabase.auth.mfa.enroll({
         factorType: "totp",
@@ -364,35 +381,45 @@ export function SecuritySection() {
     }
   };
 
-  // Backup codes: codes are generated and hashed server-side by the
-  // `manage-backup-codes` edge function. Plaintext codes are returned ONCE
-  // to display to the user; only SHA-256 hashes are persisted.
-
-  const checkExistingBackupCodes = async () => {
-    if (!user) return;
-    try {
-      const { data, error } = await supabase.functions.invoke("manage-backup-codes", {
-        body: { action: "status" },
-      });
-      if (error) throw error;
-      setHasBackupCodes((data?.count ?? 0) > 0);
-    } catch (error) {
-      console.error("Failed to load backup code status:", error);
-      setHasBackupCodes(false);
+  // Backup codes functions
+  // Cryptographically secure backup code generator.
+  // Charset length is 32 (a power of two), so masking each random byte with 0x1F
+  // maps uniformly to an index with zero modulo bias.
+  const generateBackupCode = () => {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const length = 8;
+    const randomBytes = new Uint8Array(length);
+    crypto.getRandomValues(randomBytes);
+    let code = '';
+    for (let i = 0; i < length; i++) {
+      code += chars.charAt(randomBytes[i] & 0x1f);
     }
+    return code;
   };
 
   const handleGenerateBackupCodes = async () => {
     if (!user) return;
     setIsGeneratingBackupCodes(true);
+    setBackupCodes([]);
+    setBackupCodesCopied(false);
 
     try {
-      const { data, error } = await supabase.functions.invoke("manage-backup-codes", {
-        body: { action: "generate" },
+      const uniqueCodes = new Set<string>();
+      while (uniqueCodes.size < 10) {
+        uniqueCodes.add(generateBackupCode());
+      }
+      const codes = Array.from(uniqueCodes);
+
+      const { data: storeResponse, error: storeError } = await supabase.functions.invoke<{
+        success?: boolean;
+        count?: number;
+      }>("manage-backup-codes", {
+        body: { action: "store", codes },
       });
-      if (error) throw error;
-      const codes: string[] = Array.isArray(data?.codes) ? data.codes : [];
-      if (codes.length === 0) throw new Error("No codes returned");
+
+      if (storeError || !storeResponse?.success || storeResponse.count !== 10) {
+        throw new Error("Backup code persistence failed");
+      }
 
       setBackupCodes(codes);
       setHasBackupCodes(true);
@@ -402,11 +429,11 @@ export function SecuritySection() {
         title: "Backup codes generated",
         description: "Save these codes in a safe place. They won't be shown again.",
       });
-    } catch (error) {
-      console.error("Error generating backup codes:", error);
+    } catch {
+      await checkExistingBackupCodes();
       toast({
         title: "Failed to generate backup codes",
-        description: error instanceof Error ? error.message : "An error occurred",
+        description: "Could not securely save backup codes. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -450,6 +477,14 @@ export function SecuritySection() {
       title: "Backup codes downloaded",
       description: "Store the file in a secure location.",
     });
+  };
+
+  const handleBackupCodesDialogOpenChange = (open: boolean) => {
+    setShowBackupCodesDialog(open);
+    if (!open) {
+      setBackupCodes([]);
+      setBackupCodesCopied(false);
+    }
   };
 
   return (
@@ -853,7 +888,10 @@ export function SecuritySection() {
       </Dialog>
 
       {/* Backup Codes Dialog */}
-      <Dialog open={showBackupCodesDialog} onOpenChange={setShowBackupCodesDialog}>
+      <Dialog
+        open={showBackupCodesDialog}
+        onOpenChange={handleBackupCodesDialogOpenChange}
+      >
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
@@ -914,7 +952,7 @@ export function SecuritySection() {
           </div>
 
           <DialogFooter>
-            <Button onClick={() => setShowBackupCodesDialog(false)}>
+            <Button onClick={() => handleBackupCodesDialogOpenChange(false)}>
               I've saved my codes
             </Button>
           </DialogFooter>

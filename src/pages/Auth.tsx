@@ -251,8 +251,12 @@ export default function Auth() {
     e.preventDefault();
     setErrors({});
 
-    if (!mfaCode || mfaCode.length !== 6) {
-      setErrors({ mfaCode: "Please enter the 6-digit code from your authenticator app" });
+    const normalizedBackupCode = mfaCode.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const isAuthenticatorCode = /^\d{6}$/.test(mfaCode.trim());
+    const isBackupCode = /^[A-HJ-NP-Z2-9]{8}$/.test(normalizedBackupCode);
+
+    if (!isAuthenticatorCode && !isBackupCode) {
+      setErrors({ mfaCode: "Enter a 6-digit authenticator code or 8-character backup code" });
       return;
     }
 
@@ -269,21 +273,30 @@ export default function Auth() {
     setIsLoading(true);
 
     try {
-      // Create a challenge for the factor
-      const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({
-        factorId: mfaFactorId,
-      });
+      if (isBackupCode) {
+        const { data, error } = await supabase.functions.invoke<{ success?: boolean }>(
+          "manage-backup-codes",
+          { body: { action: "verify", code: normalizedBackupCode } },
+        );
 
-      if (challengeError) throw challengeError;
+        if (error || !data?.success) throw new Error("Invalid code. Please try again.");
+      } else {
+        // Create a challenge for the factor
+        const { data: challengeData, error: challengeError } = await supabase.auth.mfa.challenge({
+          factorId: mfaFactorId,
+        });
 
-      // Verify the code
-      const { error: verifyError } = await supabase.auth.mfa.verify({
-        factorId: mfaFactorId,
-        challengeId: challengeData.id,
-        code: mfaCode.trim(),
-      });
+        if (challengeError) throw challengeError;
 
-      if (verifyError) throw verifyError;
+        // Verify the code
+        const { error: verifyError } = await supabase.auth.mfa.verify({
+          factorId: mfaFactorId,
+          challengeId: challengeData.id,
+          code: mfaCode.trim(),
+        });
+
+        if (verifyError) throw verifyError;
+      }
 
       toast({
         title: "Welcome back!",
@@ -479,7 +492,7 @@ export default function Auth() {
               </h2>
               <p className="text-muted-foreground">
                 {isMfaVerify
-                  ? "Enter the code from your authenticator app"
+                  ? "Enter an authenticator code or backup code"
                   : isResetPassword
                     ? "Enter your new password below"
                     : isForgotPassword
@@ -499,19 +512,19 @@ export default function Auth() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="mfaCode">Verification Code</Label>
+                  <Label htmlFor="mfaCode">Verification or Backup Code</Label>
                   <Input
                     id="mfaCode"
                     type="text"
-                    inputMode="numeric"
+                    inputMode="text"
                     autoComplete="one-time-code"
-                    placeholder="Enter 6-digit code"
+                    placeholder="123456 or ABCD2345"
                     value={mfaCode}
-                    onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                    onChange={(e) => setMfaCode(e.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, "").slice(0, 9))}
                     required
                     disabled={isLoading}
                     className={`text-center text-lg tracking-widest ${errors.mfaCode ? "border-destructive" : ""}`}
-                    maxLength={6}
+                    maxLength={9}
                   />
                   {errors.mfaCode && (
                     <p className="text-xs text-destructive">{errors.mfaCode}</p>
@@ -523,7 +536,7 @@ export default function Auth() {
                   variant="gradient"
                   className="w-full"
                   size="lg"
-                  disabled={isLoading || mfaCode.length !== 6}
+                  disabled={isLoading || !mfaCode.trim()}
                 >
                   {isLoading ? (
                     <>

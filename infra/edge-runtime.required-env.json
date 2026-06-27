@@ -60,6 +60,14 @@
       "description": "Secret used to sign/verify OAuth state parameters across all OAuth flows."
     },
     {
+      "name": "BACKUP_CODE_PEPPER",
+      "category": "supabase",
+      "required": true,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Server-only HMAC pepper used to hash MFA backup codes before persistence and verification."
+    },
+    {
       "name": "SITE_URL",
       "category": "supabase",
       "required": true,
