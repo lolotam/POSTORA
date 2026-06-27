@@ -169,7 +169,10 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const url = `${GRAPH_API_BASE}/${comment_id}/replies`;
+        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
+          ? INSTAGRAM_GRAPH_API_BASE
+          : GRAPH_API_BASE;
+        const url = `${apiBase}/${comment_id}/replies`;
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -187,7 +190,10 @@ Deno.serve(async (req) => {
           });
         }
         const isHidden = body.is_hidden !== undefined ? body.is_hidden : true;
-        const url = `${GRAPH_API_BASE}/${comment_id}?is_hidden=${isHidden}&access_token=${accessToken}`;
+        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
+          ? INSTAGRAM_GRAPH_API_BASE
+          : GRAPH_API_BASE;
+        const url = `${apiBase}/${comment_id}?is_hidden=${isHidden}&access_token=${encodeURIComponent(accessToken)}`;
         const res = await fetch(url, { method: "POST" });
         result = await res.json();
         break;
@@ -200,7 +206,10 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const url = `${GRAPH_API_BASE}/${comment_id}?access_token=${accessToken}`;
+        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
+          ? INSTAGRAM_GRAPH_API_BASE
+          : GRAPH_API_BASE;
+        const url = `${apiBase}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`;
         const res = await fetch(url, { method: "DELETE" });
         result = await res.json();
         break;
