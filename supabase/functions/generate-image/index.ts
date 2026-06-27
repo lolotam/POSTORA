@@ -1,6 +1,17 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
+import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
+import { z } from "npm:zod@3.23.8";
+
+const GenerateImageSchema = z.object({
+  prompt: z.string().min(1).max(5000),
+  model: z.string().max(100).optional(),
+  aspectRatio: z.string().max(20).optional(),
+  quality: z.string().max(20).optional(),
+  referenceImage: z.string().max(500).optional(),
+  referenceImages: z.array(z.string().max(500)).max(5).optional(),
+}).passthrough();
 
 // =====================================================================
 // Image model resolution — reads from admin dashboard settings:
@@ -544,7 +555,12 @@ serve(async (req) => {
     // Log this request for rate limiting
     await logApiRequest(supabaseAdmin, user.id, 200);
 
-    const { prompt, model: requestedModel, aspectRatio, quality, referenceImage, referenceImages } = await req.json();
+    const rawBody = await req.json();
+    const validation = validateRequestBody(GenerateImageSchema, rawBody);
+    if (!validation.success) {
+      return validationErrorResponse(validation, corsHeaders);
+    }
+    const { prompt, model: requestedModel, aspectRatio, quality, referenceImage, referenceImages } = validation.data;
 
     // Build prompt with reference image context if available
     let referenceContext = '';

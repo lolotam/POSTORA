@@ -85,6 +85,14 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 // NOTE: These modules are now extracted to reduce file size and improve maintainability
 // See: supabase/functions/_shared/platforms/ for reusable platform utilities
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
+import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
+import { z } from "npm:zod@3.23.8";
+
+const ProcessPostSchema = z.object({
+  post_id: z.string().min(1).max(100),
+  platforms: z.array(z.string().max(50)).optional(),
+  account_ids: z.array(z.string().max(100)).optional(),
+}).passthrough();
 
 /**
  * EdgeRuntime provides background task capabilities via waitUntil()
@@ -1059,7 +1067,15 @@ Deno.serve(async (req) => {
   try {
     // Parse request body first (can only be consumed once)
     // Supports optional `platforms` and `account_ids` for single-platform retry
-    const { post_id, platforms: overridePlatforms, account_ids: overrideAccountIds } = await req.json();
+    const rawBody = await req.json();
+    const validation = validateRequestBody(ProcessPostSchema, rawBody);
+    if (!validation.success) {
+      return new Response(JSON.stringify({ error: validation.error, details: validation.details }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const { post_id, platforms: overridePlatforms, account_ids: overrideAccountIds } = validation.data;
 
     if (!post_id) {
       return createErrorResponse("Missing post_id", 400);

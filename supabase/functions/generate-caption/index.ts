@@ -3,6 +3,19 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
 import { createLogger } from "../_shared/logging.ts";
 import { callAiWithFallback, logAiCall, resolveChatModelConfig } from "../_shared/ai-fallback.ts";
+import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
+import { z } from "npm:zod@3.23.8";
+
+import { z } from "npm:zod@3.23.8";
+
+const GenerateCaptionSchema = z.object({
+  context: z.string().max(10000).optional(),
+  platform: z.string().max(50).optional(),
+  tone: z.string().max(50).optional(),
+  model: z.string().max(100).optional(),
+  language: z.string().max(20).optional(),
+  requestType: z.string().max(50).optional(),
+}).passthrough();
 
 interface TierRateLimitConfig {
   maxRequestsPerHour: number;
@@ -385,7 +398,12 @@ serve(async (req) => {
       await logApiRequest(supabaseAdmin, user.id, 200);
     } // end admin bypass
 
-    const { context, platform, tone, model, language, requestType } = await req.json();
+    const rawBody = await req.json();
+    const validation = validateRequestBody(GenerateCaptionSchema, rawBody);
+    if (!validation.success) {
+      return validationErrorResponse(validation, corsHeaders);
+    }
+    const { context, platform, tone, model, language, requestType } = validation.data;
 
     // Handle brand_intelligence request type
     if (requestType === "brand_intelligence") {

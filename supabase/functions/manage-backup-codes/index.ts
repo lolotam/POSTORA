@@ -10,8 +10,22 @@ import {
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
+import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
+import { z } from "npm:zod@3.23.8";
 
 const genericErrorMessage = "Request could not be completed";
+
+const ActionSchema = z.discriminatedUnion("action", {
+  status: z.object({ action: z.literal("status") }),
+  store: z.object({
+    action: z.literal("store"),
+    codes: z.array(z.string().min(1).max(50)).length(10),
+  }),
+  verify: z.object({
+    action: z.literal("verify"),
+    code: z.string().min(1).max(50),
+  }),
+});
 
 function jsonResponse(
   req: Request,
@@ -221,9 +235,13 @@ async function servePostRequest(req: Request): Promise<Response> {
   if (!requestBody || typeof requestBody.action !== "string") {
     return jsonResponse(req, { error: genericErrorMessage }, 400);
   }
-  return executeAction(supabaseAdmin, userId, requestBody, req);
-}
-  return executeAction(supabaseAdmin, userId, requestBody);
+
+  const validation = validateRequestBody(ActionSchema, requestBody);
+  if (!validation.success) {
+    return validationErrorResponse(validation, { ...restrictedCorsHeaders(req) });
+  }
+
+  return executeAction(supabaseAdmin, userId, validation.data as Record<string, unknown>, req);
 }
 
 Deno.serve(async (req) => {
