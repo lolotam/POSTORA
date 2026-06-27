@@ -33,7 +33,7 @@ import {
   Search,
   Clock,
   Calendar as CalendarIcon,
-  Image,
+  
   MoreHorizontal,
   Loader2,
   Edit,
@@ -75,6 +75,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { GradientHeading, GradientRingCard, Icon3D, Reveal, GradientDivider } from "@/components/fx";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { ScheduledPostMedia, type ScheduledMediaItem } from "@/components/scheduled/ScheduledPostMedia";
+import { MediaLightboxDialog } from "@/components/scheduled/MediaLightboxDialog";
 
 // Countdown timer component
 function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
@@ -147,6 +150,9 @@ export default function ScheduledPosts() {
   const [bulkScheduledDate, setBulkScheduledDate] = useState<Date | undefined>();
   const [bulkScheduledTime, setBulkScheduledTime] = useState("");
   const [isBulkRescheduling, setIsBulkRescheduling] = useState(false);
+
+  // Media lightbox state
+  const [lightbox, setLightbox] = useState<{ items: ScheduledMediaItem[]; index: number } | null>(null);
 
   // Filter state
   const [platformFilter, setPlatformFilter] = useState<Platform | "all">("all");
@@ -715,10 +721,28 @@ export default function ScheduledPosts() {
                   <CardContent className="space-y-4 px-5 pb-5">
                     {/* Caption */}
                     <div>
-                      <p className="text-sm line-clamp-3 text-foreground">
-                        {post.caption || <span className="text-muted-foreground italic">No caption</span>}
-                      </p>
+                      <HoverCard openDelay={200} closeDelay={100}>
+                        <HoverCardTrigger asChild>
+                          <p className="text-sm line-clamp-3 text-foreground cursor-pointer hover:text-primary transition-colors">
+                            {post.caption || <span className="text-muted-foreground italic">No caption</span>}
+                          </p>
+                        </HoverCardTrigger>
+                        {post.caption && (
+                          <HoverCardContent className="max-w-md w-[28rem] max-h-[60vh] overflow-y-auto">
+                            <p className="text-sm whitespace-pre-wrap text-foreground">{post.caption}</p>
+                          </HoverCardContent>
+                        )}
+                      </HoverCard>
                     </div>
+
+                    {/* Media thumbnails */}
+                    {post.media_file_ids && post.media_file_ids.length > 0 && (
+                      <ScheduledPostMedia
+                        mediaFileIds={post.media_file_ids}
+                        onOpen={(items, index) => setLightbox({ items, index })}
+                      />
+                    )}
+
 
                     {/* Profiles */}
                     {postProfiles.length > 0 && (
@@ -767,12 +791,6 @@ export default function ScheduledPosts() {
                           <PlatformIcon platform={platform as Platform} size="sm" />
                         </div>
                       ))}
-                      {post.media_file_ids && post.media_file_ids.length > 0 && (
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground ml-auto">
-                          <Image className="w-3 h-3" />
-                          {post.media_file_ids.length}
-                        </span>
-                      )}
                     </div>
 
                     {/* Schedule Info */}
@@ -1042,6 +1060,14 @@ export default function ScheduledPosts() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Media Lightbox */}
+      <MediaLightboxDialog
+        open={lightbox !== null}
+        onOpenChange={(o) => !o && setLightbox(null)}
+        items={lightbox?.items ?? []}
+        initialIndex={lightbox?.index ?? 0}
+      />
     </DashboardLayout>
   );
 }
