@@ -165,6 +165,7 @@ Deno.serve(async (req) => {
     return new Response(null, { status: 200 });
   }
 
+  let currentEventId: string | undefined;
   try {
     logStep("Webhook received");
 
