@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Facebook, Camera, MessageSquare, Loader2, Plus } from "lucide-react";
+import { Facebook, Camera, MessageSquare, Loader2, Plus, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Link } from "react-router-dom";
 import { AccountSelector } from "./AccountSelector";
 import { ConversationList } from "./ConversationList";
 import { ConversationDetail } from "./ConversationDetail";
@@ -31,7 +32,10 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
   const { assignments } = useWhatsAppLabels();
 
   const messagingPlatform = platformTab === "facebook" ? "MESSENGER" : platformTab === "instagram" ? "INSTAGRAM" : "WHATSAPP";
-  const { data: conversations = [], isLoading: convsLoading } = useConversations(selectedAccountId, messagingPlatform);
+  const { data: conversations = [], isLoading: convsLoading, error: convsError } = useConversations(selectedAccountId, messagingPlatform);
+  const igMissingScope = platformTab === "instagram"
+    && convsError instanceof Error
+    && /instagram_manage_messages|MISSING_SCOPE|PERMISSION_ERROR/i.test(convsError.message);
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
   const pageId = selectedAccount?.platform_user_id || "";
@@ -177,6 +181,20 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
             onSelect={handleAccountChange}
             platformFilter="instagram"
           />
+          {igMissingScope && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+              <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 shrink-0" />
+              <div className="flex-1">
+                <p className="font-medium text-amber-700 dark:text-amber-300">Instagram DMs need an extra permission</p>
+                <p className="text-amber-700/80 dark:text-amber-300/80 mt-0.5">
+                  Reconnect your Instagram account and approve <code className="font-mono text-xs">instagram_manage_messages</code> so we can load your inbox.
+                </p>
+              </div>
+              <Button asChild size="sm" variant="outline" className="border-amber-500/50">
+                <Link to="/profiles">Reconnect</Link>
+              </Button>
+            </div>
+          )}
           {selectedAccountId && (
             <div className="border rounded-lg overflow-hidden flex h-[600px]">
               <div className="w-80 border-r shrink-0">

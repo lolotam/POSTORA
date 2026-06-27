@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useBrandSearchHistory } from "@/hooks/useBrandSearchHistory";
+import { Clock, X as XIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -73,6 +75,9 @@ export function ThreadsDiscoveryPanel() {
   const [commentText, setCommentText] = useState("");
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const blurTimer = useRef<number | null>(null);
+  const searchHistory = useBrandSearchHistory("threads", "discovery");
   const { ownsUsername } = useOwnedThreadsAccounts();
   const ownedAccountId = ownsUsername(profile?.username);
 
@@ -139,10 +144,12 @@ export function ThreadsDiscoveryPanel() {
   };
 
 
-  const handleSearch = async () => {
-    const clean = username.replace("@", "").trim();
+  const handleSearch = async (overrideUsername?: string) => {
+    const source = (overrideUsername ?? username).toString();
+    const clean = source.replace("@", "").trim();
     if (!clean) return;
 
+    setHistoryOpen(false);
     setIsLoading(true);
     setErrorState(null);
     setProfile(null);
@@ -180,6 +187,9 @@ export function ThreadsDiscoveryPanel() {
       setProfile(body.profile);
       setPosts(body.posts || []);
 
+      // Save to per-user search history (best-effort).
+      searchHistory.save(clean).catch(() => undefined);
+
       if ((body.posts || []).length === 0) {
         toast.info("No public posts found for this account");
       }
@@ -214,12 +224,68 @@ export function ThreadsDiscoveryPanel() {
           <Input
             placeholder="Enter a Threads username..."
             value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            onChange={(e) => {
+              setUsername(e.target.value);
+              if (searchHistory.items.length > 0) setHistoryOpen(true);
+            }}
+            onFocus={() => searchHistory.items.length > 0 && setHistoryOpen(true)}
+            onBlur={() => {
+              blurTimer.current = window.setTimeout(() => setHistoryOpen(false), 150);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSearch();
+              if (e.key === "Escape") setHistoryOpen(false);
+            }}
             className="pl-9"
           />
+          {historyOpen && searchHistory.items.length > 0 && (
+            <div
+              className="absolute z-20 mt-1 w-full rounded-lg border border-border bg-popover text-popover-foreground shadow-lg overflow-hidden"
+              onMouseDown={(e) => {
+                if (blurTimer.current) {
+                  window.clearTimeout(blurTimer.current);
+                  blurTimer.current = null;
+                }
+                e.preventDefault();
+              }}
+            >
+              <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5 border-b border-border/60">
+                <Clock className="w-3 h-3" /> Recent searches
+              </div>
+              <ul className="max-h-64 overflow-y-auto py-1">
+                {searchHistory.items.map((row) => (
+                  <li key={row.id} className="group flex items-center justify-between px-3 py-1.5 hover:bg-accent/60 cursor-pointer">
+                    <button
+                      type="button"
+                      className="flex-1 text-left text-sm truncate"
+                      onClick={() => {
+                        setUsername(row.query);
+                        handleSearch(row.query);
+                      }}
+                    >
+                      @{row.query}
+                      {row.use_count > 1 && (
+                        <span className="ml-2 text-[10px] text-muted-foreground">×{row.use_count}</span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Remove from history"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted text-muted-foreground hover:text-destructive"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        searchHistory.remove(row.id).catch(() => undefined);
+                      }}
+                    >
+                      <XIcon className="w-3.5 h-3.5" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
-        <Button onClick={handleSearch} disabled={isLoading || !username.trim()} className="gap-2">
+        <Button onClick={() => handleSearch()} disabled={isLoading || !username.trim()} className="gap-2">
           {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
           Discover
         </Button>

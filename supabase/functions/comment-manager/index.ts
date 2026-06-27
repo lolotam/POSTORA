@@ -82,9 +82,36 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const url = `${GRAPH_API_BASE}/${ig_user_id}/media?fields=id,caption,timestamp,comments{id,from,text,timestamp,hidden,username}&limit=25&access_token=${accessToken}`;
+        // Request like_count + comments_count on each media, plus replies under
+        // each comment. Higher `limit` so active accounts surface more history.
+        const fields = [
+          "id",
+          "caption",
+          "media_type",
+          "permalink",
+          "timestamp",
+          "like_count",
+          "comments_count",
+          "comments.limit(50){id,from{id,username},text,timestamp,hidden,username,like_count,replies{id,from{id,username},text,timestamp,hidden,username,like_count}}",
+        ].join(",");
+        const url = `${GRAPH_API_BASE}/${ig_user_id}/media?fields=${fields}&limit=50&access_token=${accessToken}`;
         const res = await fetch(url);
-        result = await res.json();
+        const raw = await res.json();
+        // If the whole call failed, return the error as-is so the client can map it.
+        if (raw?.error) {
+          result = raw;
+          break;
+        }
+        // Defensively normalize: never drop a media entry just because its
+        // comments edge errored (Meta sometimes returns partial errors).
+        if (Array.isArray(raw?.data)) {
+          for (const media of raw.data) {
+            if (media && media.comments && (media.comments as { error?: unknown }).error) {
+              media.comments = { data: [] };
+            }
+          }
+        }
+        result = raw;
         break;
       }
 

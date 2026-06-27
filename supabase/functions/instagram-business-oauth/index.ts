@@ -40,12 +40,14 @@ const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
 const META_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
-  "business_management",
   "pages_manage_metadata",
+  "pages_messaging",
+  "business_management",
   "instagram_basic",
   "instagram_content_publish",
   "instagram_manage_comments",
   "instagram_manage_insights",
+  "instagram_manage_messages",
 ].join(",");
 
 function jsonResponse(body: unknown, status = 200) {
@@ -94,8 +96,8 @@ interface IgCandidate {
 async function exchangeAndListIg(
   code: string,
 ): Promise<
-  | { kind: "ok"; candidates: IgCandidate[]; long_lived_token: string; expires_in: number }
-  | { kind: "no_instagram" }
+  | { kind: "ok"; candidates: IgCandidate[]; long_lived_token: string; expires_in: number; granted_scopes: string[] }
+  | { kind: "no_instagram"; granted_scopes: string[] }
   | { kind: "error"; message: string }
 > {
   const tokenUrl = new URL(`https://graph.facebook.com/${GRAPH_VERSION}/oauth/access_token`);
@@ -132,6 +134,23 @@ async function exchangeAndListIg(
     // keep short-lived
   }
 
+  // Fetch the user's *granted* permission set so we can persist it on each
+  // social_account. Used by the messaging/comments UI to detect when a scope
+  // (e.g. `instagram_manage_messages`) was declined and prompt for reconnect.
+  let grantedScopes: string[] = [];
+  try {
+    const permUrl = `https://graph.facebook.com/${GRAPH_VERSION}/me/permissions?access_token=${encodeURIComponent(longLivedToken)}`;
+    const permResp = await fetch(permUrl);
+    const permData = await permResp.json();
+    if (Array.isArray(permData?.data)) {
+      grantedScopes = permData.data
+        .filter((p: { status?: string }) => p?.status === "granted")
+        .map((p: { permission: string }) => p.permission);
+    }
+  } catch (_err) {
+    // best-effort; leave empty so UI assumes nothing about granted scopes
+  }
+
   const pages: FbPage[] = [];
   let nextUrl: string | null =
     `https://graph.facebook.com/${GRAPH_VERSION}/me/accounts` +
@@ -165,8 +184,8 @@ async function exchangeAndListIg(
       };
     });
 
-  if (candidates.length === 0) return { kind: "no_instagram" };
-  return { kind: "ok", candidates, long_lived_token: longLivedToken, expires_in: expiresIn };
+  if (candidates.length === 0) return { kind: "no_instagram", granted_scopes: grantedScopes };
+  return { kind: "ok", candidates, long_lived_token: longLivedToken, expires_in: expiresIn, granted_scopes: grantedScopes };
 }
 
 async function persistOneIgAccount(
@@ -175,6 +194,7 @@ async function persistOneIgAccount(
   social_profile_id: string | null,
   candidate: IgCandidate,
   expires_in: number,
+  granted_scopes: string[] = [],
 ): Promise<{ success: boolean; error?: string }> {
   const avatarUrl = await cacheAvatarToCloudinary(
     candidate.ig_profile_picture_url ?? undefined,
@@ -204,6 +224,8 @@ async function persistOneIgAccount(
       page_access_token: candidate.page_access_token,
       ig_business_account_id: candidate.ig_user_id,
       token_type: "page_token",
+      granted_scopes,
+      scopes_checked_at: new Date().toISOString(),
     },
     connected_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -370,7 +392,7 @@ Deno.serve(async (req) => {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data: row, error } = await supabase
       .from("oauth_pending_instagram_selections")
-      .select("id, user_id, social_profile_id, ig_candidates_json, expires_in, expires_at")
+      .select("id, user_id, social_profile_id, ig_candidates_json, expires_in, expires_at, long_lived_token")
       .eq("id", selection_id)
       .maybeSingle();
 
@@ -390,12 +412,31 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: false, error: "Account not in selection" }, 404);
     }
 
+    // Fetch the user's currently-granted scopes from Meta so we can persist the
+    // actual permission set (used by messaging/comments UI to detect missing
+    // scopes such as `instagram_manage_messages`).
+    let grantedScopes: string[] = [];
+    try {
+      const llt = row.long_lived_token as string | undefined;
+      if (llt) {
+        const permUrl = `https://graph.facebook.com/${GRAPH_VERSION}/me/permissions?access_token=${encodeURIComponent(llt)}`;
+        const permResp = await fetch(permUrl);
+        const permData = await permResp.json();
+        if (Array.isArray(permData?.data)) {
+          grantedScopes = permData.data
+            .filter((p: { status?: string }) => p?.status === "granted")
+            .map((p: { permission: string }) => p.permission);
+        }
+      }
+    } catch (_err) { /* best-effort */ }
+
     const result = await persistOneIgAccount(
       supabase,
       user_id,
       override_profile_id ?? row.social_profile_id ?? null,
       candidate,
       row.expires_in ?? 5184000,
+      grantedScopes,
     );
     if (!result.success) {
       return jsonResponse({ success: false, error: result.error ?? "Save failed" }, 200);
