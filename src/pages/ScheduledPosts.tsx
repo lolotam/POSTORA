@@ -366,11 +366,18 @@ export default function ScheduledPosts() {
         return;
       }
 
+      const nextMetadata = {
+        ...(editPost.metadata ?? {}),
+        selected_account_ids: editAccountIds,
+      };
+
       const { error } = await supabase
         .from("posts")
         .update({
           caption: editCaption,
           scheduled_at: scheduledAt.toISOString(),
+          platforms: editPlatforms,
+          metadata: nextMetadata,
         })
         .eq("id", editPost.id);
 
