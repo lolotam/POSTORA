@@ -144,10 +144,12 @@ export function ThreadsDiscoveryPanel() {
   };
 
 
-  const handleSearch = async () => {
-    const clean = username.replace("@", "").trim();
+  const handleSearch = async (overrideUsername?: string) => {
+    const source = (overrideUsername ?? username).toString();
+    const clean = source.replace("@", "").trim();
     if (!clean) return;
 
+    setHistoryOpen(false);
     setIsLoading(true);
     setErrorState(null);
     setProfile(null);
@@ -184,6 +186,9 @@ export function ThreadsDiscoveryPanel() {
 
       setProfile(body.profile);
       setPosts(body.posts || []);
+
+      // Save to per-user search history (best-effort).
+      searchHistory.save(clean).catch(() => undefined);
 
       if ((body.posts || []).length === 0) {
         toast.info("No public posts found for this account");
