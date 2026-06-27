@@ -5483,11 +5483,15 @@ async function postToThreads(
       );
       console.log("Threads: Skipping cross-share — video media unsupported by Meta");
     } else {
-      containerParams.crosspost_to_instagram = "true";
+      // Meta's Threads Graph API parameter is `crossreshare_to_ig` (their spelling).
+      // The previous name `crosspost_to_instagram` was silently ignored — Thread
+      // published, IG Story never created. See docs:
+      // https://developers.facebook.com/docs/threads/reference/publishing/
+      containerParams.crossreshare_to_ig = "true";
       crossShareApplied = true;
-      console.log("Threads: Enabling cross-share to Instagram Story");
+      console.log("Threads: Enabling cross-share to Instagram Story (crossreshare_to_ig=true)");
       if (metadata?.threads_cross_share_to_ig_dark_mode) {
-        containerParams.crosspost_to_instagram_dark_mode = "true";
+        containerParams.crossreshare_to_ig_dark_mode = "true";
         console.log("Threads: Enabling dark mode for cross-share");
       }
       if (canCrossShareToIg === null) {
@@ -5672,9 +5676,10 @@ async function postToThreads(
   // accepted (location_id, is_quote_post, shortcode) — surfaces silent ignores.
   let postUrl = username ? `https://www.threads.com/@${username}` : undefined;
   let verifyData: any = null;
+  let crossShareStatus: string | null = null;
   try {
     const verifyRes = await fetch(
-      `https://graph.threads.net/v1.0/${postId}?fields=id,permalink,shortcode,is_quote_post,media_type,location,location_id,topic_tag&access_token=${accessToken}`
+      `https://graph.threads.net/v1.0/${postId}?fields=id,permalink,shortcode,is_quote_post,media_type,location,location_id,topic_tag,crossreshare_to_ig_status&access_token=${accessToken}`
     );
     verifyData = await verifyRes.json();
     if (verifyData && typeof verifyData === "object" && "topic_tag" in verifyData) {
@@ -5686,12 +5691,15 @@ async function postToThreads(
     } else {
       console.warn("Threads: No permalink returned, using profile fallback");
     }
-    console.log(`Threads: Verification fetch: ${JSON.stringify(verifyData).slice(0, 400)}`);
-
-    // If we attempted cross-share, do a soft IG verification probe (best-effort).
     if (crossShareApplied) {
-      console.log("Threads: Cross-share was sent — IG side will be visible in Stories within ~2 min if accepted by Meta.");
+      const raw = (verifyData as Record<string, unknown> | null)?.crossreshare_to_ig_status;
+      crossShareStatus = typeof raw === "string" ? raw : null;
+      console.log(
+        `Threads: cross-share status from Meta = ${crossShareStatus ?? "unknown"} ` +
+        `(IG Story typically appears within ~2 min when SUCCESS)`
+      );
     }
+    console.log(`Threads: Verification fetch: ${JSON.stringify(verifyData).slice(0, 400)}`);
   } catch (e) {
     console.warn("Threads: Failed to fetch verification fields:", e);
     if (LOCATION_DEBUG_MODE) {
@@ -5827,6 +5835,7 @@ async function postToThreads(
           attempted: crossShareApplied,
           capability_at_publish: crossShareCapabilityAtPublish,
           dark_mode: !!metadata?.threads_cross_share_to_ig_dark_mode,
+          status: crossShareApplied ? (crossShareStatus ?? "unknown") : "skipped",
         }
       : undefined,
     ...(threadsWarnings.length > 0 ? { warnings: threadsWarnings } : {}),
