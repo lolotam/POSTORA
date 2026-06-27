@@ -75,6 +75,9 @@ import {
 } from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { GradientHeading, GradientRingCard, Icon3D, Reveal, GradientDivider } from "@/components/fx";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
+import { ScheduledPostMedia, type ScheduledMediaItem } from "@/components/scheduled/ScheduledPostMedia";
+import { MediaLightboxDialog } from "@/components/scheduled/MediaLightboxDialog";
 
 // Countdown timer component
 function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
