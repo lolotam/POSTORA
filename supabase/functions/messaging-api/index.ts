@@ -39,7 +39,7 @@ async function upsertOutboundConversation(
   const nowIso = new Date().toISOString();
 
   // Look up existing contact display name (if any)
-  const { data: existingContact } = await adminClient
+  const { data: existingContact } = await (adminClient as any)
     .from("whatsapp_contacts")
     .select("display_name")
     .eq("user_id", params.user_id)
@@ -49,7 +49,7 @@ async function upsertOutboundConversation(
   const participantName = existingContact?.display_name || `+${normalizedPhone}`;
 
   // Auto-save contact (no-op on conflict)
-  await adminClient.from("whatsapp_contacts").upsert(
+  await (adminClient as any).from("whatsapp_contacts").upsert(
     {
       user_id: params.user_id,
       phone_number: normalizedPhone,
@@ -60,7 +60,7 @@ async function upsertOutboundConversation(
   );
 
   // Upsert messaging_cache so conversation appears in the inbox
-  await adminClient.from("messaging_cache").upsert(
+  await (adminClient as any).from("messaging_cache").upsert(
     {
       user_id: params.user_id,
       social_account_id: params.social_account_id,
@@ -451,13 +451,13 @@ Deno.serve(async (req) => {
     // Helper: mark account as cloud-api-registered in DB
     async function markCloudApiRegistered(socialAccountId: string) {
       try {
-        const { data: acc } = await supabase
+        const { data: acc } = await (adminClient as any)
           .from("social_accounts")
           .select("account_metadata")
           .eq("id", socialAccountId)
           .maybeSingle();
         const meta = (acc?.account_metadata as Record<string, unknown>) || {};
-        await supabase
+        await (adminClient as any)
           .from("social_accounts")
           .update({ account_metadata: { ...meta, cloud_api_registered: true, cloud_api_registered_at: new Date().toISOString() } })
           .eq("id", socialAccountId);
