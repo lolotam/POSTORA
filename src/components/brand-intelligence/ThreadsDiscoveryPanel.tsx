@@ -75,6 +75,9 @@ export function ThreadsDiscoveryPanel() {
   const [commentText, setCommentText] = useState("");
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const blurTimer = useRef<number | null>(null);
+  const searchHistory = useBrandSearchHistory("threads", "discovery");
   const { ownsUsername } = useOwnedThreadsAccounts();
   const ownedAccountId = ownsUsername(profile?.username);
 
