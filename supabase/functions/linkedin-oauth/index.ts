@@ -149,11 +149,13 @@ Deno.serve(async (req) => {
       if (!LINKEDIN_CLIENT_ID) throw new Error("LINKEDIN_CLIENT_ID not configured");
       if (!LINKEDIN_CLIENT_SECRET) throw new Error("LINKEDIN_CLIENT_SECRET not configured");
 
-      const userId = body?.user_id as string | undefined;
+      // Authenticate from JWT; body user_id is only used as a hint for service-role calls.
+      const auth = await authenticateCaller(req, body?.user_id);
+      const userId = auth.userId;
+
       const socialProfileId = (body?.social_profile_id as string | null | undefined) ?? null;
       const returnTo = body?.return_to as string | undefined;
 
-      if (!userId) throw new Error("Missing user_id");
       if (!returnTo) throw new Error("Missing return_to");
 
       // Single unified pathway: always request the full member + organization
