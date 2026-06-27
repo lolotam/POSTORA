@@ -5360,8 +5360,16 @@ async function postToThreads(
 
   // Read capability flags from account metadata (written by threads-oauth probe)
   const caps = (account.account_metadata as any)?.capabilities || {};
-  const canCrossShareToIg: boolean | null =
+  let canCrossShareToIg: boolean | null =
     typeof caps.canCrossShareToIg === "boolean" ? caps.canCrossShareToIg : null;
+  // Fallback: if capability is still null, check the granted_scopes array directly
+  if (canCrossShareToIg === null) {
+    const grantedScopes: string[] = (account.account_metadata as any)?.granted_scopes || [];
+    if (grantedScopes.includes("threads_share_to_instagram")) {
+      canCrossShareToIg = true;
+      console.log("Threads: canCrossShareToIg resolved to true via granted_scopes fallback");
+    }
+  }
   const canUseLocationTagging: boolean | null =
     typeof caps.canUseLocationTagging === "boolean" ? caps.canUseLocationTagging : null;
   tLocationDebug.capability_can_use_location_tagging = canUseLocationTagging;
@@ -5484,7 +5492,7 @@ async function postToThreads(
       }
       if (canCrossShareToIg === null) {
         threadsWarnings.push(
-          "Share to Instagram was requested but the permission could not be verified before publishing. If the post does not appear on Instagram Stories, reconnect Threads to refresh the permission."
+          "Cross-sharing to Instagram Story was requested. The threads_share_to_instagram scope could not be verified — if the story doesn't appear, reconnect Threads and ensure your Instagram account is linked in Meta Accounts Center."
         );
       }
     }
@@ -5586,7 +5594,7 @@ async function postToThreads(
       errLower.includes("permission") ||
       errLower.includes("unauthorized") ||
       errLower.includes("unapproved") ||
-      errLower.includes("crossreshare") ||
+      errLower.includes("crosspost") ||
       errLower.includes("instagram") ||
       errLower.includes("ig account") ||
       errLower.includes("linked");

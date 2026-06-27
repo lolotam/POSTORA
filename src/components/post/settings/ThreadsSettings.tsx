@@ -269,13 +269,13 @@ export function ThreadsSettings({ settings, onChange, hasMedia, hasVideo = false
               </div>
             </div>
           )}
-          {false && !videoBlocksCrossShare && canCrossShareToIg === null && (
+          {!videoBlocksCrossShare && canCrossShareToIg === null && (
             <div className="flex items-start gap-2 text-xs text-muted-foreground">
               <Info className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>Not yet verified — will confirm at publish time.</span>
             </div>
           )}
-          {false && settings.crossShareToIg && !crossShareDisabled && (
+          {settings.crossShareToIg && !crossShareDisabled && (
             <div className="flex items-center justify-between pl-6">
               <div className="flex items-start gap-2">
                 <EyeOff className="w-4 h-4 mt-0.5 text-muted-foreground" />

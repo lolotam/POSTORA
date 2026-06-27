@@ -99,6 +99,32 @@ async function saveThreadsAccount(
 ): Promise<{ username: string }> {
   const { access_token: finalAccessToken, expires_in: expiresIn, tokenGrantedScopes } = exchange;
 
+  let permissionsFromApi: string[] = [];
+  if (!tokenGrantedScopes.includes("threads_share_to_instagram")) {
+    try {
+      const permissionsResponse = await fetch(
+        `https://graph.threads.net/v1.0/me/permissions?access_token=${encodeURIComponent(finalAccessToken)}`,
+      );
+      if (permissionsResponse.ok) {
+        const permissionsPayload = await permissionsResponse.json();
+        if (Array.isArray(permissionsPayload?.data)) {
+          permissionsFromApi = permissionsPayload.data
+            .filter((permission: { status?: unknown }) => permission.status === "granted")
+            .map((permission: { permission?: unknown }) => String(permission.permission ?? "").trim())
+            .filter(Boolean);
+          console.log("Threads /me/permissions probe:", JSON.stringify(permissionsFromApi));
+        }
+      } else {
+        console.warn(`Threads: /me/permissions probe failed (non-fatal): HTTP ${permissionsResponse.status}`);
+      }
+    } catch (e) {
+      console.warn("Threads: /me/permissions probe failed (non-fatal):", (e as Error).message);
+    }
+  }
+  const effectiveGrantedScopes = permissionsFromApi.length > 0
+    ? permissionsFromApi
+    : tokenGrantedScopes;
+
   // Get user profile
   const profileResponse = await fetch(
     `https://graph.threads.net/v1.0/me?fields=id,username,threads_profile_picture_url&access_token=${finalAccessToken}`,
@@ -179,8 +205,8 @@ async function saveThreadsAccount(
   capabilityProbe.share_to_instagram = { ok: true, capability: null, message: "Verified on first publish" };
   capabilityProbe.delete_posts = { ok: true, capability: null, message: "Verified on first delete attempt" };
 
-  if (tokenGrantedScopes.length > 0) {
-    if (tokenGrantedScopes.includes("threads_share_to_instagram")) {
+  if (effectiveGrantedScopes.length > 0) {
+    if (effectiveGrantedScopes.includes("threads_share_to_instagram")) {
       capabilityProbe.share_to_instagram = {
         ok: true,
         capability: true,
@@ -208,7 +234,7 @@ async function saveThreadsAccount(
 
   grantedScopes.push("threads_basic", "threads_content_publish");
 
-  for (const s of tokenGrantedScopes) {
+  for (const s of effectiveGrantedScopes) {
     if (!grantedScopes.includes(s)) grantedScopes.push(s);
   }
 
