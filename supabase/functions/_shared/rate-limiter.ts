@@ -1,5 +1,97 @@
 import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// ─────────────────────────────────────────────────────────────────────
+// P2-4: RPC-based atomic rate limiter (rate_limit_buckets table)
+// ─────────────────────────────────────────────────────────────────────
+// Unlike the legacy api_logs COUNT approach above, this uses a dedicated
+// table + stored function for O(1) atomic check-and-increment. Designed
+// for security-critical endpoints (send-reset-otp, manage-backup-codes).
+
+export interface RpcRateLimitResult {
+  allowed: boolean;
+  count: number;
+  remaining: number;
+  retryAfter: number;
+}
+
+function getClientIp(req: Request): string {
+  return (
+    req.headers.get("CF-Connecting-IP") ??
+    req.headers.get("X-Real-IP") ??
+    req.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ??
+    "unknown"
+  );
+}
+
+async function checkRateLimitRpc(
+  supabaseAdmin: SupabaseClient,
+  endpoint: string,
+  identifier: string,
+  maxRequests: number,
+  windowSeconds: number,
+): Promise<RpcRateLimitResult> {
+  try {
+    const { data, error } = await supabaseAdmin.rpc("check_rate_limit", {
+      p_endpoint: endpoint,
+      p_identifier: identifier,
+      p_max_requests: maxRequests,
+      p_window_seconds: windowSeconds,
+    });
+
+    if (error) {
+      console.error(`[rate-limiter] RPC error on ${endpoint}:`, error);
+      return { allowed: true, count: 0, remaining: maxRequests, retryAfter: 0 };
+    }
+    return (data ?? { allowed: true, count: 0, remaining: maxRequests, retryAfter: 0 }) as RpcRateLimitResult;
+  } catch (err) {
+    console.error(`[rate-limiter] error on ${endpoint}:`, err);
+    return { allowed: true, count: 0, remaining: maxRequests, retryAfter: 0 };
+  }
+}
+
+export async function checkIpRateLimit(
+  supabaseAdmin: SupabaseClient,
+  endpoint: string,
+  req: Request,
+  maxRequests: number,
+  windowSeconds: number,
+): Promise<RpcRateLimitResult> {
+  const ip = getClientIp(req);
+  return checkRateLimitRpc(supabaseAdmin, endpoint, ip, maxRequests, windowSeconds);
+}
+
+export async function checkUserRateLimit(
+  supabaseAdmin: SupabaseClient,
+  endpoint: string,
+  userId: string,
+  maxRequests: number,
+  windowSeconds: number,
+): Promise<RpcRateLimitResult> {
+  return checkRateLimitRpc(supabaseAdmin, endpoint, `user:${userId}`, maxRequests, windowSeconds);
+}
+
+export function rateLimitExceededResponse(
+  result: RpcRateLimitResult,
+  corsHeaders: Record<string, string>,
+): Response {
+  return new Response(
+    JSON.stringify({ error: "Too many requests. Please try again later." }),
+    {
+      status: 429,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        "Retry-After": String(result.retryAfter),
+        "X-RateLimit-Remaining": "0",
+      },
+    },
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Legacy api_logs-based rate limiter (retained for backward compat)
+// ─────────────────────────────────────────────────────────────────────
+
 interface RateLimitConfig {
   endpoint: string;
   maxRequests: number;

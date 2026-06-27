@@ -9,6 +9,7 @@ import {
 } from "../_shared/backup-codes.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 
 const genericErrorMessage = "Request could not be completed";
 
@@ -202,6 +203,19 @@ async function servePostRequest(req: Request): Promise<Response> {
   const supabaseAdmin = createAdminClient();
   const userId = await getAuthenticatedUserId(supabaseAdmin, token);
   if (!userId) return jsonResponse(req, { error: "Unauthorized" }, 401);
+
+  // P2-4: user-based rate limit — prevents backup-code brute force.
+  // 15 requests per 5 minutes covers status/store/verify combined.
+  const rateLimit = await checkUserRateLimit(
+    supabaseAdmin,
+    "manage-backup-codes",
+    userId,
+    15,
+    300,
+  );
+  if (!rateLimit.allowed) {
+    return rateLimitExceededResponse(rateLimit, { ...restrictedCorsHeaders(req) });
+  }
 
   const requestBody = await readActionBody(req);
   if (!requestBody || typeof requestBody.action !== "string") {

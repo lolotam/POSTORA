@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Resend } from "https://esm.sh/resend@2.0.0";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { checkIpRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 
 interface SendOTPRequest {
   email: string;
@@ -62,6 +63,19 @@ serve(async (req) => {
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    // P2-4: IP-based rate limit — prevents OTP flooding / email bombing.
+    // 5 requests per 10 minutes per IP.
+    const rateLimit = await checkIpRateLimit(
+      supabase,
+      "send-reset-otp",
+      req,
+      5,
+      600,
+    );
+    if (!rateLimit.allowed) {
+      return rateLimitExceededResponse(rateLimit, corsHeaders);
+    }
 
     const normalizedEmail = email.toLowerCase();
 
