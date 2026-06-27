@@ -19,6 +19,65 @@ function constantTimeEqual(left: string, right: string): boolean {
   return difference === 0;
 }
 
+/**
+ * Verify a TikTok webhook signature (P2-3).
+ *
+ * TikTok sends a "TikTok-Signature" header formatted as:
+ *   "t=<unix-timestamp>,s=<hex-hmac-sha256>"
+ *
+ * The HMAC is computed over the string "<timestamp>.<rawRequestBody>" using
+ * the app's client_secret as the key. See:
+ *   https://developers.tiktok.com/doc/webhooks-verification
+ *
+ * Returns true only when the signature is valid AND the timestamp is within
+ * the replay window (default 5 minutes).
+ */
+async function verifyTikTokSignature(
+  signatureHeader: string,
+  rawBody: string,
+  clientSecret: string,
+  maxAgeSeconds = 300,
+): Promise<boolean> {
+  // Parse "t=...,s=..." — the order of t and s may vary.
+  let timestamp = '';
+  let signature = '';
+  for (const part of signatureHeader.split(',')) {
+    const eqIdx = part.indexOf('=');
+    if (eqIdx < 0) continue;
+    const prefix = part.slice(0, eqIdx).trim();
+    const value = part.slice(eqIdx + 1).trim();
+    if (prefix === 't') timestamp = value;
+    else if (prefix === 's') signature = value;
+  }
+
+  if (!timestamp || !signature) return false;
+
+  // Replay protection: reject timestamps deviating more than maxAgeSeconds from now.
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > maxAgeSeconds) {
+    return false;
+  }
+
+  // Compute HMAC-SHA256(client_secret, "<timestamp>.<rawBody>")
+  const signedPayload = `${timestamp}.${rawBody}`;
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(clientSecret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  const mac = new Uint8Array(
+    await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload)),
+  );
+  const computedHex = Array.from(mac)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+
+  // Timing-safe comparison of the hex digests.
+  return constantTimeEqual(computedHex, signature.toLowerCase());
+}
+
 // Allow-list of webhook event types we actually act on. Unknown events are
 // silently 200'd (so TikTok stops retrying) but never branched on.
 const ALLOWED_EVENT_TYPES = new Set<string>([
@@ -63,45 +122,61 @@ serve(async (req) => {
 
     // Handle POST request for webhook events
     if (method === 'POST') {
-      // P1-6 (interim): TikTok does not publish a single, stable, documented
-      // HMAC signature format that covers all webhook product surfaces today.
-      // Until the exact algorithm + secret format is confirmed against
-      // TikTok developer docs for our specific product subscription, we
-      // continue to require a static shared bearer (TIKTOK_WEBHOOK_SECRET)
-      // configured in the TikTok developer console. We harden this further by:
-      //   1) Reading the body as raw text (so a future HMAC pass can verify it).
-      //   2) Failing closed if TIKTOK_WEBHOOK_SECRET is unset.
-      //   3) Using a constant-time compare on the bearer.
-      //   4) Validating the event type against an explicit allow-list.
-      //   5) Restricting publish_id to a safe character pattern.
-      //   6) Refusing to log webhook payload contents.
-      // TODO(server): once TikTok's webhook signature scheme is confirmed
-      // for the active product, replace the static bearer with HMAC verification
-      // using the canonical secret. The raw-body read below is already in place.
+      // P2-3: TikTok webhook signature verification.
+      // TikTok sends a "TikTok-Signature" header: "t=<unix-ts>,s=<hex-hmac-sha256>"
+      // computed as HMAC-SHA256(client_secret, "<timestamp>.<rawBody>").
+      // See https://developers.tiktok.com/doc/webhooks-verification
+      //
+      // Auth strategy (fail-closed, defense-in-depth):
+      //   A) If the TikTok-Signature header is present AND TIKTOK_CLIENT_SECRET is
+      //      configured, verify the HMAC-SHA256 with a 5-minute replay window.
+      //      This is the cryptographically verified path.
+      //   B) Otherwise, fall back to the static bearer (TIKTOK_WEBHOOK_SECRET) with
+      //      a constant-time compare — kept for the transition / legacy setups.
+      //   If NEITHER secret is configured, the request is rejected (fail closed).
+      //
+      // Additional hardening (unchanged from P1-6):
+      //   - Event type validated against an explicit allow-list.
+      //   - publish_id restricted to a safe character pattern.
+      //   - Full webhook payloads are never logged.
+      const clientSecret = Deno.env.get('TIKTOK_CLIENT_SECRET');
       const webhookSecret = Deno.env.get('TIKTOK_WEBHOOK_SECRET');
+      const signatureHeader =
+        req.headers.get('TikTok-Signature') ??
+        req.headers.get('Tiktok-Signature') ??
+        '';
       const authorization = req.headers.get('Authorization') ?? '';
 
-      if (!webhookSecret) {
-        // Fail closed: never accept the request when no shared secret is configured.
+      // Fail closed: at least one verification secret must be configured.
+      if (!clientSecret && !webhookSecret) {
         return new Response(JSON.stringify({ error: 'Unauthorized' }), {
           status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
 
-      if (!constantTimeEqual(authorization, webhookSecret)) {
-        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-          status: 401,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        });
-      }
-
+      // Read the raw body ONCE — needed for HMAC verification AND JSON parsing.
       const rawBody = await req.text();
 
       // Defensive payload size cap — TikTok webhooks are tiny JSON blobs.
       if (rawBody.length > 64 * 1024) {
         return new Response(JSON.stringify({ error: 'Payload too large' }), {
           status: 413,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      // Authenticate: try HMAC signature first, then bearer fallback.
+      let authenticated = false;
+      if (signatureHeader && clientSecret) {
+        authenticated = await verifyTikTokSignature(signatureHeader, rawBody, clientSecret);
+      }
+      if (!authenticated && webhookSecret) {
+        authenticated = constantTimeEqual(authorization, webhookSecret);
+      }
+      if (!authenticated) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         });
       }
