@@ -203,6 +203,7 @@ Deno.serve(async (req) => {
     // side effects. If Stripe retries the same event, the PK conflict means
     // we've already processed (or attempted) it — return 200 immediately so
     // Stripe stops retrying, and skip re-running handlers.
+    currentEventId = event.id;
     const { error: dedupeErr } = await supabase
       .from("stripe_webhook_events")
       .insert({ event_id: event.id, event_type: event.type, status: "received" });
