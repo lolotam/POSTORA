@@ -98,3 +98,96 @@ export function cacheableJsonResponse(data: unknown, maxAge = 300, status = 200)
     },
   });
 }
+
+/**
+ * RESTRICTED CORS (P2-2). Use on admin / auth-adjacent / credentialed endpoints
+ * (manage-*, ai-config, test-ai-model, backfill-subscription, n8n-api, send-reset-otp,
+ * verify-mfa-reset, manage-backup-codes, observability-alerts, notify-*,
+ * send-token-expiry-notifications, and the *-oauth callbacks).
+ *
+ * Unlike `corsHeaders` (which returns `Access-Control-Allow-Origin: *`), this reflects the
+ * request's Origin ONLY when it is on the allow-list, and emits `Vary: Origin`. When the
+ * Origin is absent (same-origin / server-to-server) it falls back to the primary production
+ * origin so legitimate callers still work. When Origin is present but not allowed, no
+ * `Access-Control-Allow-Origin` header is emitted, so browsers block the read.
+ *
+ * Public provider webhooks (stripe-webhook, tiktok-webhook, whatsapp-webhook, resend-webhook)
+ * must NOT use this — providers do not send an Origin, and they should keep `corsHeaders` (`*`).
+ */
+
+const PRODUCTION_ORIGINS = [
+  'https://postora.cloud',
+  'https://www.postora.cloud',
+] as const;
+
+const DEVELOPMENT_ORIGINS = [
+  'http://localhost:8080',
+  'http://127.0.0.1:8080',
+] as const;
+
+// Lovable preview/staging hosts, e.g. https://preview--<project>.lovable.app or
+// https://<project>.lovable.app. Kept as a regex so branch previews keep working.
+const LOVABLE_HOST_RE = /^https:\/\/(?:preview--)?[a-z0-9-]+\.lovable\.app$/;
+
+function configuredAllowedOrigins(): readonly string[] {
+  // Optional comma-separated override/addition via env. Lets ops grant a new origin
+  // (e.g. a fresh Lovable branch or a staging domain) without a redeploy.
+  const extra = Deno.env.get('ALLOWED_ORIGINS');
+  if (extra && extra.trim()) {
+    return extra
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+  }
+  return [...PRODUCTION_ORIGINS, ...DEVELOPMENT_ORIGINS];
+}
+
+function isAllowedOrigin(origin: string): boolean {
+  if (configuredAllowedOrigins().includes(origin)) return true;
+  return LOVABLE_HOST_RE.test(origin);
+}
+
+export function restrictedCorsHeaders(req: Request): Record<string, string> {
+  const base: Record<string, string> = {
+    'Access-Control-Allow-Headers':
+      'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Methods': 'POST, GET, OPTIONS',
+    Vary: 'Origin',
+  };
+  const origin = req.headers.get('Origin');
+  if (!origin) {
+    // Same-origin or non-browser caller: echo the primary production origin.
+    return { ...base, 'Access-Control-Allow-Origin': PRODUCTION_ORIGINS[0] };
+  }
+  if (isAllowedOrigin(origin)) {
+    return { ...base, 'Access-Control-Allow-Origin': origin };
+  }
+  // Unknown origin: omit Access-Control-Allow-Origin entirely so browsers block the read.
+  return base;
+}
+
+/** Preflight handler for restricted endpoints. 204 + restricted headers. */
+export function handleRestrictedCorsOptions(req: Request): Response {
+  return new Response(null, { status: 204, headers: restrictedCorsHeaders(req) });
+}
+
+/** JSON response bound to restricted CORS headers (use on sensitive endpoints). */
+export function restrictedJsonResponse(
+  req: Request,
+  data: unknown,
+  status = 200,
+): Response {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { ...restrictedCorsHeaders(req), 'Content-Type': 'application/json' },
+  });
+}
+
+/** Error response bound to restricted CORS headers. */
+export function restrictedErrorResponse(
+  req: Request,
+  message: string,
+  status = 500,
+): Response {
+  return restrictedJsonResponse(req, { error: message }, status);
+}

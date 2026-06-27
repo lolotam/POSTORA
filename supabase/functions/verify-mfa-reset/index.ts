@@ -1,30 +1,26 @@
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Content-Type": "application/json",
-};
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
-const disabledResponse = (): Response =>
+const disabledResponse = (req: Request): Response =>
   new Response(JSON.stringify({ error: "This endpoint is disabled" }), {
     status: 410,
-    headers: corsHeaders,
+    headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
   });
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
+    return new Response(null, { status: 204, headers: restrictedCorsHeaders(req) });
   }
 
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "Method not allowed" }), {
       status: 405,
-      headers: corsHeaders,
+      headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
     });
   }
 
   try {
-    return disabledResponse();
+    return disabledResponse(req);
   } catch {
-    return disabledResponse();
+    return disabledResponse(req);
   }
 });

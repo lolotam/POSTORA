@@ -8,21 +8,18 @@ import {
   normalizeBackupCode,
 } from "../_shared/backup-codes.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
+
 const genericErrorMessage = "Request could not be completed";
 
 function jsonResponse(
+  req: Request,
   responseBody: Record<string, unknown>,
   status = 200,
 ): Response {
   return new Response(JSON.stringify(responseBody), {
     status,
-    headers: { ...corsHeaders, "Content-Type": "application/json" },
+    headers: { ...restrictedCorsHeaders(req), "Content-Type": "application/json" },
   });
 }
 
@@ -154,74 +151,79 @@ async function storeCodesResponse(
   supabaseAdmin: SupabaseClient,
   userId: string,
   requestBody: Record<string, unknown>,
+  req: Request,
 ): Promise<Response> {
   const pepper = getPepper();
   const normalizedCodes = getNormalizedStoreCodes(requestBody);
-  if (!normalizedCodes) return jsonResponse({ error: genericErrorMessage }, 400);
+  if (!normalizedCodes) return jsonResponse(req,{ error: genericErrorMessage }, 400);
 
   await replaceStoredCodes(supabaseAdmin, userId, normalizedCodes, pepper);
-  return jsonResponse({ success: true, count: 10 });
+  return jsonResponse(req,{ success: true, count: 10 });
 }
 
 async function verifyCodeResponse(
   supabaseAdmin: SupabaseClient,
   userId: string,
   requestBody: Record<string, unknown>,
+  req: Request,
 ): Promise<Response> {
   const pepper = getPepper();
   const code = requestBody.code;
   if (typeof code !== "string" || !isValidBackupCode(code)) {
-    return jsonResponse({ success: false });
+    return jsonResponse(req,{ success: false });
   }
 
   const success = await consumeBackupCode(supabaseAdmin, userId, code, pepper);
-  return jsonResponse({ success });
+  return jsonResponse(req,{ success });
 }
 
 async function executeAction(
   supabaseAdmin: SupabaseClient,
   userId: string,
   requestBody: Record<string, unknown>,
+  req: Request,
 ): Promise<Response> {
   if (requestBody.action === "status") {
-    return jsonResponse({ unusedCount: await getUnusedCount(supabaseAdmin, userId) });
+    return jsonResponse(req,{ unusedCount: await getUnusedCount(supabaseAdmin, userId) });
   }
   if (requestBody.action === "store") {
-    return storeCodesResponse(supabaseAdmin, userId, requestBody);
+    return storeCodesResponse(supabaseAdmin, userId, requestBody, req);
   }
   if (requestBody.action === "verify") {
-    return verifyCodeResponse(supabaseAdmin, userId, requestBody);
+    return verifyCodeResponse(supabaseAdmin, userId, requestBody, req);
   }
-  return jsonResponse({ error: genericErrorMessage }, 400);
+  return jsonResponse(req,{ error: genericErrorMessage }, 400);
 }
 
-async function servePostRequest(request: Request): Promise<Response> {
-  const token = getBearerToken(request);
-  if (!token) return jsonResponse({ error: "Unauthorized" }, 401);
+async function servePostRequest(req: Request): Promise<Response> {
+  const token = getBearerToken(req);
+  if (!token) return jsonResponse(req, { error: "Unauthorized" }, 401);
 
   const supabaseAdmin = createAdminClient();
   const userId = await getAuthenticatedUserId(supabaseAdmin, token);
-  if (!userId) return jsonResponse({ error: "Unauthorized" }, 401);
+  if (!userId) return jsonResponse(req, { error: "Unauthorized" }, 401);
 
-  const requestBody = await readActionBody(request);
+  const requestBody = await readActionBody(req);
   if (!requestBody || typeof requestBody.action !== "string") {
-    return jsonResponse({ error: genericErrorMessage }, 400);
+    return jsonResponse(req, { error: genericErrorMessage }, 400);
   }
+  return executeAction(supabaseAdmin, userId, requestBody, req);
+}
   return executeAction(supabaseAdmin, userId, requestBody);
 }
 
-Deno.serve(async (request) => {
-  if (request.method === "OPTIONS") {
-    return new Response(null, { status: 204, headers: corsHeaders });
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { status: 204, headers: restrictedCorsHeaders(req) });
   }
-  if (request.method !== "POST") {
-    return jsonResponse({ error: genericErrorMessage }, 405);
+  if (req.method !== "POST") {
+    return jsonResponse(req, { error: genericErrorMessage }, 405);
   }
 
   try {
-    return await servePostRequest(request);
+    return await servePostRequest(req);
   } catch {
     console.error("[manage-backup-codes] Request failed");
-    return jsonResponse({ error: genericErrorMessage }, 500);
+    return jsonResponse(req, { error: genericErrorMessage }, 500);
   }
 });
