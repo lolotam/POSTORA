@@ -130,30 +130,64 @@ export function SecuritySection() {
   // Password validation schema
   const passwordSchema = z.string().min(8, "Password must be at least 8 characters");
 
-  const handleChangePassword = async () => {
-    setPasswordError("");
+  // Password validation schema
+  const passwordSchema = z.string().min(8, "Password must be at least 8 characters");
 
+  const resetPwState = () => {
+    setNewPassword("");
+    setConfirmPassword("");
+    setPasswordError("");
+    setPwStep("password");
+    setPwMfaCode("");
+    setPwOtpCode("");
+  };
+
+  const callChangePassword = async (body: { newPassword: string; otp?: string }) => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) throw new Error("Not signed in");
+
+    const { data, error } = await supabase.functions.invoke<{
+      success?: boolean;
+      error?: string;
+      code?: string;
+    }>("change-password", {
+      body,
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (error) {
+      // supabase.functions.invoke buries the JSON body in `context.response`.
+      const ctx = (error as { context?: { response?: Response } }).context;
+      if (ctx?.response) {
+        const payload = await ctx.response.json().catch(() => null);
+        if (payload?.code) return { code: payload.code as string, error: payload.error as string };
+        throw new Error(payload?.error ?? error.message);
+      }
+      throw new Error(error.message);
+    }
+    if (data?.code) return { code: data.code, error: data.error ?? "" };
+    if (!data?.success) throw new Error(data?.error ?? "Failed to update password");
+    return { success: true as const };
+  };
+
+  const handleStartPasswordChange = async () => {
+    setPasswordError("");
     const validation = passwordSchema.safeParse(newPassword);
     if (!validation.success) {
       setPasswordError(validation.error.errors[0].message);
       return;
     }
-
     if (newPassword !== confirmPassword) {
       setPasswordError("Passwords do not match");
       return;
     }
 
     setIsChangingPassword(true);
-
     try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
-
-      if (error) {
-        setPasswordError(error.message);
-      } else {
+      // First attempt — if MFA is enrolled the edge function returns
+      // mfa_required; if not, otp_required.
+      const result = await callChangePassword({ newPassword });
+      if ("success" in result) {
         toast({
           title: isGoogleUser ? "Password created!" : "Password changed!",
           description: isGoogleUser
@@ -161,11 +195,93 @@ export function SecuritySection() {
             : "Your password has been updated successfully.",
         });
         setPasswordDialogOpen(false);
-        setNewPassword("");
-        setConfirmPassword("");
+        resetPwState();
+        return;
       }
-    } catch (error) {
-      setPasswordError("Failed to update password. Please try again.");
+      if (result.code === "mfa_required") {
+        setPwStep("mfa");
+      } else if (result.code === "otp_required") {
+        // Issue an OTP straight away so the user just enters the code.
+        setPwStep("otp");
+        setPwOtpSending(true);
+        const { error: sendError } = await supabase.functions.invoke(
+          "send-change-password-otp",
+          { body: {} },
+        );
+        if (sendError) {
+          setPasswordError("Could not send verification email. Try again shortly.");
+        }
+        setPwOtpSending(false);
+      } else {
+        setPasswordError(result.error || "Unable to start password change");
+      }
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Failed to update password");
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleConfirmWithMfa = async () => {
+    setPasswordError("");
+    if (!/^\d{6}$/.test(pwMfaCode.trim())) {
+      setPasswordError("Enter the 6-digit code from your authenticator app");
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      // Upgrade the current session to AAL2.
+      const verified = mfaFactors.find((f) => f.status === "verified");
+      if (!verified) throw new Error("No verified authenticator factor");
+      const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({
+        factorId: verified.id,
+      });
+      if (challengeError) throw challengeError;
+      const { error: verifyError } = await supabase.auth.mfa.verify({
+        factorId: verified.id,
+        challengeId: challenge.id,
+        code: pwMfaCode.trim(),
+      });
+      if (verifyError) throw verifyError;
+
+      const result = await callChangePassword({ newPassword });
+      if ("success" in result) {
+        toast({ title: "Password changed!", description: "Your password has been updated." });
+        setPasswordDialogOpen(false);
+        resetPwState();
+      } else {
+        setPasswordError(result.error || "Failed to update password");
+      }
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Verification failed");
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleConfirmWithOtp = async () => {
+    setPasswordError("");
+    if (!/^\d{6}$/.test(pwOtpCode.trim())) {
+      setPasswordError("Enter the 6-digit code from the email we just sent");
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      const result = await callChangePassword({ newPassword, otp: pwOtpCode.trim() });
+      if ("success" in result) {
+        toast({
+          title: isGoogleUser ? "Password created!" : "Password changed!",
+          description: isGoogleUser
+            ? "You can now sign in with email and password."
+            : "Your password has been updated successfully.",
+        });
+        setPasswordDialogOpen(false);
+        resetPwState();
+      } else {
+        setPasswordError(result.error || "Invalid verification code");
+      }
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Failed to update password");
     } finally {
       setIsChangingPassword(false);
     }
