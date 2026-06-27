@@ -117,6 +117,21 @@ async function exchangeAndPersist(
   const finalAccessToken = (longLivedData.access_token as string) || shortLivedToken;
   const expiresIn = (longLivedData.expires_in as number) || 5184000;
 
+  let grantedScopes: string[] = [];
+  try {
+    const permResp = await fetch(
+      `https://graph.instagram.com/v22.0/me/permissions?access_token=${encodeURIComponent(finalAccessToken)}`,
+    );
+    const permData = await permResp.json();
+    if (Array.isArray(permData?.data)) {
+      grantedScopes = permData.data
+        .filter((p: { status?: string }) => p?.status === "granted")
+        .map((p: { permission: string }) => p.permission);
+    }
+  } catch (_err) {
+    // best-effort; account still saves even if Meta does not return permissions
+  }
+
   // Step 3: profile
   const profileResp = await fetch(
     `https://graph.instagram.com/v22.0/me?fields=id,username,account_type,profile_picture_url&access_token=${finalAccessToken}`,
@@ -172,6 +187,8 @@ async function exchangeAndPersist(
       token_type: "long_lived",
       flow: "direct",
       source: "instagram_business_login",
+      granted_scopes: grantedScopes,
+      scopes_checked_at: new Date().toISOString(),
     },
     connected_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
