@@ -283,8 +283,8 @@ Deno.serve(async (req) => {
       const { social_account_id, messaging_platform } = body;
       if (!social_account_id) throw new Error("social_account_id required");
 
-      const platform = messaging_platform || (account.platform === "instagram" ? "INSTAGRAM" : "MESSENGER");
       const account = await getAccountToken(social_account_id);
+      const platform = messaging_platform || (account.platform === "instagram" ? "INSTAGRAM" : "MESSENGER");
 
       let pageId = account.platform_user_id;
       let pageToken = account.access_token;
