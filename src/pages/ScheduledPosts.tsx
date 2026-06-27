@@ -337,6 +337,8 @@ export default function ScheduledPosts() {
   const handleEditClick = (post: Post) => {
     setEditPost(post);
     setEditCaption(post.caption || "");
+    setEditPlatforms((post.platforms || []) as Platform[]);
+    setEditAccountIds(post.metadata?.selected_account_ids || []);
     if (post.scheduled_at) {
       const date = new Date(post.scheduled_at);
       setEditScheduledDate(date);
