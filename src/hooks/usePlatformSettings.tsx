@@ -525,7 +525,9 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
       linkedin_visibility: selectedPlatforms.includes("linkedin") ? linkedinVisibility : null,
       linkedin_title: linkedinTitle || null,
       linkedin_description: linkedinDescription || null,
-      linkedin_page_id: linkedinSelectedPageId !== "personal" ? linkedinSelectedPageId : null,
+      linkedin_destination_ids: selectedPlatforms.includes("linkedin") ? linkedinSelectedDestinationIds : null,
+      // Back-compat: legacy single page id consumed by older deploys of process-post.
+      linkedin_page_id: linkedinSelectedDestinationIds.find((id) => id !== "personal") ?? null,
       // YouTube settings
       youtube_video_type: selectedPlatforms.includes("youtube") ? youtubeVideoType : null,
       youtube_title: youtubeTitle || null,
