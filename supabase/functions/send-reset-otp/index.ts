@@ -68,14 +68,10 @@ serve(async (req) => {
 
     const normalizedEmail = email.toLowerCase();
 
-    // Find the user id by looking up our `profiles` table.
-    // This avoids scanning Auth users (listUsers is paginated and may not include the user).
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("email", normalizedEmail)
-      .maybeSingle();
-
+    // Single safe response we return for almost every non-input-error path.
+    // P1-5: do NOT reveal whether the email matches an account, whether
+    // the account has MFA, or whether email delivery is configured. The
+    // generic message is identical in all these cases.
     const genericSuccess = new Response(
       JSON.stringify({
         success: true,
@@ -84,21 +80,33 @@ serve(async (req) => {
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
+    // P1-5: if email delivery is not configured, refuse silently rather
+    // than (a) returning a config-specific error code or (b) writing an
+    // OTP row we can never deliver. The error is logged for operators only.
+    if (!resendApiKey) {
+      console.error("send-reset-otp: RESEND_API_KEY is not configured; refusing to issue OTP.");
+      return genericSuccess;
+    }
+
+    // Find the user id by looking up our `profiles` table.
+    // This avoids scanning Auth users (listUsers is paginated and may not include the user).
+    const { data: profile, error: profileError } = await supabase
+      .from("profiles")
+      .select("id")
+      .eq("email", normalizedEmail)
+      .maybeSingle();
+
     if (profileError) {
-      console.error("Error looking up profile by email:", profileError);
-      // Don’t reveal anything; for reliability, tell client to try again later.
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "SERVICE_UNAVAILABLE",
-          message: "Reset service temporarily unavailable. Please try again in a few minutes.",
-        }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      // P1-5: do not surface a distinguishable SERVICE_UNAVAILABLE on
+      // lookup failure — that would let an attacker probe DB health and
+      // potentially correlate with valid emails. Log internally and
+      // return the generic success response.
+      console.error("send-reset-otp: profile lookup failed:", profileError);
+      return genericSuccess;
     }
 
     if (!profile?.id) {
-      // Don't reveal if user exists
+      // Account does not exist — silently succeed.
       return genericSuccess;
     }
 
@@ -108,15 +116,9 @@ serve(async (req) => {
     });
 
     if (factorsError) {
-      console.error("Error listing MFA factors:", factorsError);
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "SERVICE_UNAVAILABLE",
-          message: "Reset service temporarily unavailable. Please try again in a few minutes.",
-        }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      // P1-5: same as profile lookup — generic success, internal log only.
+      console.error("send-reset-otp: MFA factor lookup failed:", factorsError);
+      return genericSuccess;
     }
 
     const totpFactors =
@@ -127,23 +129,23 @@ serve(async (req) => {
 
     const hasVerifiedMFA = totpFactors.length > 0;
 
+    // P1-5: previously this branch returned a 400 with `MFA_NOT_ENABLED`,
+    // which let an attacker enumerate registered emails AND learn which
+    // accounts lack MFA (the higher-value targets). We now return the
+    // generic success response in this case. The authenticated /settings
+    // page is the legitimate place to tell users they need to enable MFA.
     if (!hasVerifiedMFA) {
-      return new Response(
-        JSON.stringify({ 
-          success: false, 
-          error: "MFA_NOT_ENABLED",
-          message: "This account does not have MFA enabled. Please use email reset instead." 
-        }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      return genericSuccess;
     }
 
-    // Generate OTP and store hashed version
+    // Generate OTP and store hashed version. The plaintext OTP only
+    // lives in memory long enough to be emailed; it is never logged.
     const otp = generateOTP();
     const otpHash = await hashOTP(otp);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    // Clean up old OTPs for this email first
+    // Clean up old OTPs for this email first — preserves one-time-use
+    // semantics by guaranteeing only the latest code can be redeemed.
     await supabase.from("password_reset_otps").delete().eq("email", normalizedEmail);
 
     // Store the new OTP
@@ -156,12 +158,11 @@ serve(async (req) => {
     });
 
     if (insertError) {
-      console.error("Error storing OTP:", insertError);
-      return new Response(
-        JSON.stringify({ error: "Failed to generate reset code" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      // Internal failure — log and degrade silently to avoid revealing infra state.
+      console.error("send-reset-otp: failed to persist OTP:", insertError);
+      return genericSuccess;
     }
+
 
     // Send OTP via email if Resend is configured
     if (resendApiKey) {
