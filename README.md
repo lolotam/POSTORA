@@ -95,37 +95,37 @@ App credentials manager, OAuth app registry + verification, observability dashbo
 
 ## Supported platforms
 
-| # | Platform | OAuth function | Status |
-|---|----------|----------------|--------|
-| 1 | Facebook (Pages) | `facebook-oauth` | Stable |
-| 2 | Instagram (FB-linked + Business Login) | `instagram-oauth` | Stable |
-| 3 | Threads | `threads-oauth` | Stable (HTTPS-only) |
-| 4 | TikTok | `tiktok-oauth` | Stable (UX-compliant) |
-| 5 | YouTube | `youtube-oauth` | Stable (Testing-mode caveats) |
-| 6 | Pinterest | `pinterest-oauth` + `pinterest-boards` | Stable |
-| 7 | LinkedIn | `linkedin-oauth` | Stable |
-| 8 | Twitter/X | `twitter-oauth` | Stable (Basic tier required) |
-| 9 | Bluesky | `bluesky-oauth` | Partial |
-| 10 | Reddit | `reddit-oauth` | Partial |
-| 11 | WhatsApp (Cloud API) | `whatsapp-oauth` | Partial (hub expanding) |
+| #   | Platform                               | OAuth function                         | Status                        |
+| --- | -------------------------------------- | -------------------------------------- | ----------------------------- |
+| 1   | Facebook (Pages)                       | `facebook-oauth`                       | Stable                        |
+| 2   | Instagram (FB-linked + Business Login) | `instagram-oauth`                      | Stable                        |
+| 3   | Threads                                | `threads-oauth`                        | Stable (HTTPS-only)           |
+| 4   | TikTok                                 | `tiktok-oauth`                         | Stable (UX-compliant)         |
+| 5   | YouTube                                | `youtube-oauth`                        | Stable (Testing-mode caveats) |
+| 6   | Pinterest                              | `pinterest-oauth` + `pinterest-boards` | Stable                        |
+| 7   | LinkedIn                               | `linkedin-oauth`                       | Stable                        |
+| 8   | Twitter/X                              | `twitter-oauth`                        | Stable (Basic tier required)  |
+| 9   | Bluesky                                | `bluesky-oauth`                        | Partial                       |
+| 10  | Reddit                                 | `reddit-oauth`                         | Partial                       |
+| 11  | WhatsApp (Cloud API)                   | `whatsapp-oauth`                       | Partial (hub expanding)       |
 
 ---
 
 ## Platform capability matrix
 
-| Platform | OAuth | Publish | Scheduling | Analytics | Comments / Inbox | Status |
-|----------|:-----:|:-------:|:----------:|:---------:|:----------------:|:------:|
-| Facebook | ✅ | ✅ Page posts, photos, albums, video, Reels, Stories | ✅ | ✅ `brand-scrape` + `ad-analytics` | ✅ Inbox + comments | Stable |
-| Instagram | ✅ | ✅ Feed, carousel (2–10), Reels, Stories | ✅ | ✅ `brand-scrape` | ✅ Inbox + comments | Stable |
-| Threads | ✅ | ✅ Text / image / video, location, share-to-IG, repost, quote, comment, delete | ✅ | ✅ `threads-insights` + discovery | ✅ `threads-comment` | Stable |
-| TikTok | ✅ | ✅ Video + photo slideshow (UX-compliant) | ✅ | ✅ `tiktok-analytics` | ⚠️ Read-only | Stable |
-| YouTube | ✅ | ✅ Videos + Shorts | ✅ | ✅ via brand-scrape | ❌ | Stable |
-| Pinterest | ✅ | ✅ Pins (image + video, async flow) | ✅ | ⚠️ Limited | ❌ | Stable |
-| LinkedIn | ✅ | ✅ Text + image + video | ✅ | ⚠️ Limited | ❌ | Stable |
-| Twitter/X | ✅ | ✅ Tweets + threads | ✅ | ⚠️ Limited | ❌ | Stable (Basic tier) |
-| Bluesky | ✅ | ✅ Text posts | ✅ | ❌ | ❌ | Partial |
-| Reddit | ✅ | ✅ Basic posting | ✅ | ❌ | ❌ | Partial |
-| WhatsApp | ✅ | ✅ Broadcast + scheduled | ⚠️ via `whatsapp-scheduled-sender` | ❌ | ✅ Inbox | Partial |
+| Platform  | OAuth |                                    Publish                                     |             Scheduling             |             Analytics              |   Comments / Inbox   |       Status        |
+| --------- | :---: | :----------------------------------------------------------------------------: | :--------------------------------: | :--------------------------------: | :------------------: | :-----------------: |
+| Facebook  |  ✅   |              ✅ Page posts, photos, albums, video, Reels, Stories              |                 ✅                 | ✅ `brand-scrape` + `ad-analytics` | ✅ Inbox + comments  |       Stable        |
+| Instagram |  ✅   |                    ✅ Feed, carousel (2–10), Reels, Stories                    |                 ✅                 |         ✅ `brand-scrape`          | ✅ Inbox + comments  |       Stable        |
+| Threads   |  ✅   | ✅ Text / image / video, location, share-to-IG, repost, quote, comment, delete |                 ✅                 | ✅ `threads-insights` + discovery  | ✅ `threads-comment` |       Stable        |
+| TikTok    |  ✅   |                   ✅ Video + photo slideshow (UX-compliant)                    |                 ✅                 |       ✅ `tiktok-analytics`        |     ⚠️ Read-only     |       Stable        |
+| YouTube   |  ✅   |                               ✅ Videos + Shorts                               |                 ✅                 |        ✅ via brand-scrape         |          ❌          |       Stable        |
+| Pinterest |  ✅   |                      ✅ Pins (image + video, async flow)                       |                 ✅                 |             ⚠️ Limited             |          ❌          |       Stable        |
+| LinkedIn  |  ✅   |                            ✅ Text + image + video                             |                 ✅                 |             ⚠️ Limited             |          ❌          |       Stable        |
+| Twitter/X |  ✅   |                              ✅ Tweets + threads                               |                 ✅                 |             ⚠️ Limited             |          ❌          | Stable (Basic tier) |
+| Bluesky   |  ✅   |                                 ✅ Text posts                                  |                 ✅                 |                 ❌                 |          ❌          |       Partial       |
+| Reddit    |  ✅   |                                ✅ Basic posting                                |                 ✅                 |                 ❌                 |          ❌          |       Partial       |
+| WhatsApp  |  ✅   |                            ✅ Broadcast + scheduled                            | ⚠️ via `whatsapp-scheduled-sender` |                 ❌                 |       ✅ Inbox       |       Partial       |
 
 ---
 
@@ -249,20 +249,20 @@ Categories (full appendix table near the end):
 
 Postora uses Supabase Auth for app login (email + Google). All platform connections are handled by dedicated edge functions invoked from `src/hooks/oauth/*` and orchestrated by `useProfileOAuth`. The shared callback page is `src/pages/OAuthCallback.tsx`, with `useOAuthRedirectHandler` resolving state + error mapping.
 
-| Platform | Edge function | Notes |
-|----------|---------------|-------|
-| Facebook | `facebook-oauth` | Page selection, Meta Graph **v22.0**, "Relevant Only" scope strategy, phantom-account prevention. |
-| Instagram | `instagram-oauth` | Dual flow: FB-Page-linked **and** direct Instagram Business Login (also v22.0). |
-| Threads | `threads-oauth` | Separate Threads App ID + Secret, **HTTPS-only redirect**, calls `graph.threads.net`. |
-| TikTok | `tiktok-oauth` | PKCE, `THREADS_DEMO_MODE`-style sandbox flag, `creator_info` UX gating, `user.info.basic` + `user.info.profile`. |
-| YouTube | `youtube-oauth` | Google **incremental authorization** (JIT scope escalation). |
-| Pinterest | `pinterest-oauth` + `pinterest-boards` | Boards loaded on demand. Video uses 3-step async upload. |
-| LinkedIn | `linkedin-oauth` | Client `77k0p74fi3zlau`, 24h API caching policy enforced. |
-| Twitter/X | `twitter-oauth` | Requires **Basic** access tier or higher. |
-| Bluesky | `bluesky-oauth` | ATProto + DPoP on every request. |
-| Reddit | `reddit-oauth` | Standard OAuth. |
-| WhatsApp | `whatsapp-oauth` | Cloud API; webhook verified by `WHATSAPP_WEBHOOK_VERIFY_TOKEN`. |
-| Google sign-in | (Supabase Auth) | App-level login only, not platform connection. |
+| Platform       | Edge function                          | Notes                                                                                                            |
+| -------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| Facebook       | `facebook-oauth`                       | Page selection, Meta Graph **v22.0**, "Relevant Only" scope strategy, phantom-account prevention.                |
+| Instagram      | `instagram-oauth`                      | Dual flow: FB-Page-linked **and** direct Instagram Business Login (also v22.0).                                  |
+| Threads        | `threads-oauth`                        | Separate Threads App ID + Secret, **HTTPS-only redirect**, calls `graph.threads.net`.                            |
+| TikTok         | `tiktok-oauth`                         | PKCE, `THREADS_DEMO_MODE`-style sandbox flag, `creator_info` UX gating, `user.info.basic` + `user.info.profile`. |
+| YouTube        | `youtube-oauth`                        | Google **incremental authorization** (JIT scope escalation).                                                     |
+| Pinterest      | `pinterest-oauth` + `pinterest-boards` | Boards loaded on demand. Video uses 3-step async upload.                                                         |
+| LinkedIn       | `linkedin-oauth`                       | Client `77k0p74fi3zlau`, 24h API caching policy enforced.                                                        |
+| Twitter/X      | `twitter-oauth`                        | Requires **Basic** access tier or higher.                                                                        |
+| Bluesky        | `bluesky-oauth`                        | ATProto + DPoP on every request.                                                                                 |
+| Reddit         | `reddit-oauth`                         | Standard OAuth.                                                                                                  |
+| WhatsApp       | `whatsapp-oauth`                       | Cloud API; webhook verified by `WHATSAPP_WEBHOOK_VERIFY_TOKEN`.                                                  |
+| Google sign-in | (Supabase Auth)                        | App-level login only, not platform connection.                                                                   |
 
 Registered redirect URIs (production) are documented in memory `mem://auth/platform-redirect-uris`. Custom OAuth apps registered by users are managed via `manage-oauth-redirects` and reviewed in `/admin/oauth-verification`.
 
@@ -309,12 +309,14 @@ Key rules:
 Threads has the deepest tooling beyond core publishing.
 
 **Publishing surface (`process-post` + helpers):**
+
 - Text, image, video.
 - 500-char backend safety net (frontend mirrors).
 - Location tagging (requires advanced access).
 - Share-to-Instagram, repost, quote, comment, delete (`threads-comment`, `threads-quote`, `threads-repost`, `threads-delete-post`).
 
 **Discovery + intelligence:**
+
 - `threads-discovery` — feed of recent owned + topical posts.
 - `threads-keyword-search` — keyword search across Threads.
 - `threads-insights` — per-post + account insights.
@@ -322,11 +324,13 @@ Threads has the deepest tooling beyond core publishing.
 - `threads-recently-searched` — search history.
 
 **Diagnostics (admin):**
+
 - `threads-debug-publish-check` — surfaces App ID / scope / token state for a given account before publishing.
 
 **Frontend hooks:** `useThreadsCapabilities`, `useThreadsLiveDiscovery`, `useOwnedThreadsAccounts`.
 
 **Operational caveats:**
+
 - **HTTPS-only redirect URI.** Connecting Threads from `http://localhost` triggers Meta error `1349187` ("Insecure Login Blocked"). The frontend now short-circuits this with a toast pointing users to the preview / production URLs (see `src/hooks/oauth/useThreadsOAuth.ts`).
 - Threads uses a **separate App ID / Secret** from the main Facebook app. Mixing them produces Meta error `4476002` ("No app ID was sent with the request"). Always set `THREADS_APP_ID` + `THREADS_APP_SECRET` distinctly.
 - `THREADS_DEMO_MODE` enables a sandbox path for review.
@@ -335,19 +339,19 @@ Threads has the deepest tooling beyond core publishing.
 
 ## AI capabilities
 
-| Function | Use | Credits |
-|----------|-----|---------|
-| `generate-caption` | Captions per platform / tone / language | 1 |
-| `generate-hashtags` | Hashtag suggestions | 1 |
-| `generate-image` | Image generation (Imagen / Gemini 2.5 Flash Image fallback) | 2 |
-| `suggest-best-times` | Best-time recommendations per account | — |
-| `transcribe-media` | 3-tier STT fallback chain | — |
-| `brand-scrape` | Cross-platform brand scraping (IG, Threads, FB, YouTube, TikTok) | — |
-| `ai-email-assistant` | Drafting + reply assistance in the admin inbox | — |
-| `analyze-log` | AI-assisted root cause + Lovable prompt generation per `system_logs` row | — |
-| `test-ai-model` | Provider-specific live test from `/admin/settings` | — |
-| `ai-config` / `fetch-openrouter-models` / `openrouter-models` | Provider + model registry | — |
-| `notify-expiring-ai-overrides` | Cron alert for model overrides | — |
+| Function                                                      | Use                                                                      | Credits |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------ | ------- |
+| `generate-caption`                                            | Captions per platform / tone / language                                  | 1       |
+| `generate-hashtags`                                           | Hashtag suggestions                                                      | 1       |
+| `generate-image`                                              | Image generation (Imagen / Gemini 2.5 Flash Image fallback)              | 2       |
+| `suggest-best-times`                                          | Best-time recommendations per account                                    | —       |
+| `transcribe-media`                                            | 3-tier STT fallback chain                                                | —       |
+| `brand-scrape`                                                | Cross-platform brand scraping (IG, Threads, FB, YouTube, TikTok)         | —       |
+| `ai-email-assistant`                                          | Drafting + reply assistance in the admin inbox                           | —       |
+| `analyze-log`                                                 | AI-assisted root cause + Lovable prompt generation per `system_logs` row | —       |
+| `test-ai-model`                                               | Provider-specific live test from `/admin/settings`                       | —       |
+| `ai-config` / `fetch-openrouter-models` / `openrouter-models` | Provider + model registry                                                | —       |
+| `notify-expiring-ai-overrides`                                | Cron alert for model overrides                                           | —       |
 
 **Provider stack (DB-driven via `ai_providers` + `ai_models`):** Lovable AI Gateway, Google AI Studio (default `gemini-2.5-flash`), OpenRouter, Imagen, Atlas (upscale), Unsplash, ACRCloud (music copyright detection).
 
@@ -359,31 +363,31 @@ Image generation is strictly scoped to dedicated media models — see `mem://fea
 
 All admin pages are RLS-protected and require the `admin` role in `user_roles` (checked by `has_role()` and the `useUserRole` hook).
 
-| Route | Page | Purpose |
-|-------|------|---------|
-| `/admin` | `AdminDashboard` | Overview KPIs |
-| `/admin/users` | `AdminUsers` | User list, search, filters, bulk actions |
-| `/admin/users/:id` | `AdminUserDetail` | Per-user drilldown |
-| `/admin/subscriptions` | `AdminSubscriptions` | Subscription state + MRR |
-| `/admin/plans` | `AdminPlans` | Plans builder |
-| `/admin/plan-quotas` | `AdminPlanQuotas` | Per-plan quota matrix |
-| `/admin/coupons` | `AdminCoupons` | Coupon CRUD |
-| `/admin/messages` | `AdminMessages` | Support tickets |
-| `/admin/inbox` | `AdminInbox` | Resend-backed email inbox |
-| `/admin/notifications` | `AdminNotifications` | System-wide notifications |
-| `/admin/blog` | `AdminBlogPosts` | "What's New" CMS |
-| `/admin/settings` | `AdminSettings` | App credentials manager + AIConfigurationTab |
-| `/admin/oauth-apps` | `AdminOAuthApps` | OAuth 2.1 client registry |
-| `/admin/oauth-verification` | `AdminOAuthVerification` | Custom redirect URI review queue |
-| `/admin/feature-flags` | `AdminFeatureFlags` | Feature flags + Beta-platform tagging |
-| `/admin/logs` | `AdminLogs` | `system_logs` browser + AI analyze |
-| `/admin/observability` | `AdminObservability` | Health scores, charts, alerts |
-| `/admin/rate-limits` | `AdminRateLimits` | Per-user API rate limits |
-| `/admin/token-health` | `AdminTokenHealth` | Token distribution, refresh logs, exports |
-| `/admin/media-cleanup` | `AdminMediaCleanup` | Cloudinary orphan sweep |
-| `/admin/scaling` | `AdminScaling` | Capacity controls |
-| `/admin/launch-checklist` | `AdminLaunchChecklist` | Pre-launch / ongoing ops checklist |
-| `/admin/analytics` | `AdminAnalytics` | Platform-wide analytics |
+| Route                       | Page                     | Purpose                                      |
+| --------------------------- | ------------------------ | -------------------------------------------- |
+| `/admin`                    | `AdminDashboard`         | Overview KPIs                                |
+| `/admin/users`              | `AdminUsers`             | User list, search, filters, bulk actions     |
+| `/admin/users/:id`          | `AdminUserDetail`        | Per-user drilldown                           |
+| `/admin/subscriptions`      | `AdminSubscriptions`     | Subscription state + MRR                     |
+| `/admin/plans`              | `AdminPlans`             | Plans builder                                |
+| `/admin/plan-quotas`        | `AdminPlanQuotas`        | Per-plan quota matrix                        |
+| `/admin/coupons`            | `AdminCoupons`           | Coupon CRUD                                  |
+| `/admin/messages`           | `AdminMessages`          | Support tickets                              |
+| `/admin/inbox`              | `AdminInbox`             | Resend-backed email inbox                    |
+| `/admin/notifications`      | `AdminNotifications`     | System-wide notifications                    |
+| `/admin/blog`               | `AdminBlogPosts`         | "What's New" CMS                             |
+| `/admin/settings`           | `AdminSettings`          | App credentials manager + AIConfigurationTab |
+| `/admin/oauth-apps`         | `AdminOAuthApps`         | OAuth 2.1 client registry                    |
+| `/admin/oauth-verification` | `AdminOAuthVerification` | Custom redirect URI review queue             |
+| `/admin/feature-flags`      | `AdminFeatureFlags`      | Feature flags + Beta-platform tagging        |
+| `/admin/logs`               | `AdminLogs`              | `system_logs` browser + AI analyze           |
+| `/admin/observability`      | `AdminObservability`     | Health scores, charts, alerts                |
+| `/admin/rate-limits`        | `AdminRateLimits`        | Per-user API rate limits                     |
+| `/admin/token-health`       | `AdminTokenHealth`       | Token distribution, refresh logs, exports    |
+| `/admin/media-cleanup`      | `AdminMediaCleanup`      | Cloudinary orphan sweep                      |
+| `/admin/scaling`            | `AdminScaling`           | Capacity controls                            |
+| `/admin/launch-checklist`   | `AdminLaunchChecklist`   | Pre-launch / ongoing ops checklist           |
+| `/admin/analytics`          | `AdminAnalytics`         | Platform-wide analytics                      |
 
 Plus admin "view as user" mode on `/media` (`effectiveUserId`).
 
@@ -393,30 +397,30 @@ Plus admin "view as user" mode on `/media` (`effectiveUserId`).
 
 All tables are RLS-protected. Admin access is granted via the SECURITY DEFINER helper `has_role(uid, 'admin')`.
 
-| Table | Purpose |
-|-------|---------|
-| `profiles` | User profile + API key |
-| `user_roles` | `app_role` enum (`user` / `admin` / `subscriber`) |
-| `social_profiles` | Account groups |
-| `social_accounts` | Connected platform accounts + tokens |
-| `posts` | Authored posts (statuses incl. `scheduled`) |
-| `platform_posts` | Per-target outcome (status, URL, error) |
-| `media_files` / `media_folders` | Cloudinary-backed media |
-| `subscription_plans` / `user_subscriptions` / `coupons` | Billing |
-| `user_quotas` / `user_credits` / `credit_transactions` | Quota + AI credit ledger |
-| `support_tickets` / `ticket_messages` | Support |
-| `system_notifications` / `notification_reads` | In-app notifications |
-| `blog_posts` / `user_blog_post_reads` | "What's New" |
-| `app_settings` / `app_credentials` | Platform-wide config + admin-managed secrets metadata |
-| `ai_providers` / `ai_models` / `ai_model_preferences` | AI registry + per-user/per-feature override |
-| `system_logs` / `system_health_snapshots` / `edge_function_status` | Observability |
-| `token_refresh_history` | Per-account refresh outcomes |
-| `api_logs` | Public API + rate-limit basis |
-| `admin_audit_log` | Admin actions trail |
-| `email_templates` / `email_log` | Resend transactional |
-| `launch_checklist` | Admin operational checklist |
-| `backup_codes` | Hashed 2FA recovery codes |
-| `oauth_apps` / `oauth_redirect_requests` | OAuth 2.1 consent flow |
+| Table                                                              | Purpose                                               |
+| ------------------------------------------------------------------ | ----------------------------------------------------- |
+| `profiles`                                                         | User profile + API key                                |
+| `user_roles`                                                       | `app_role` enum (`user` / `admin` / `subscriber`)     |
+| `social_profiles`                                                  | Account groups                                        |
+| `social_accounts`                                                  | Connected platform accounts + tokens                  |
+| `posts`                                                            | Authored posts (statuses incl. `scheduled`)           |
+| `platform_posts`                                                   | Per-target outcome (status, URL, error)               |
+| `media_files` / `media_folders`                                    | Cloudinary-backed media                               |
+| `subscription_plans` / `user_subscriptions` / `coupons`            | Billing                                               |
+| `user_quotas` / `user_credits` / `credit_transactions`             | Quota + AI credit ledger                              |
+| `support_tickets` / `ticket_messages`                              | Support                                               |
+| `system_notifications` / `notification_reads`                      | In-app notifications                                  |
+| `blog_posts` / `user_blog_post_reads`                              | "What's New"                                          |
+| `app_settings` / `app_credentials`                                 | Platform-wide config + admin-managed secrets metadata |
+| `ai_providers` / `ai_models` / `ai_model_preferences`              | AI registry + per-user/per-feature override           |
+| `system_logs` / `system_health_snapshots` / `edge_function_status` | Observability                                         |
+| `token_refresh_history`                                            | Per-account refresh outcomes                          |
+| `api_logs`                                                         | Public API + rate-limit basis                         |
+| `admin_audit_log`                                                  | Admin actions trail                                   |
+| `email_templates` / `email_log`                                    | Resend transactional                                  |
+| `launch_checklist`                                                 | Admin operational checklist                           |
+| `backup_codes`                                                     | Hashed 2FA recovery codes                             |
+| `oauth_apps` / `oauth_redirect_requests`                           | OAuth 2.1 consent flow                                |
 
 ---
 
@@ -443,6 +447,7 @@ The frontend never reads platform secrets.
 All platform secrets live in **Supabase Edge Function secrets** and are surfaced through the **App Credentials Manager** at `/admin/settings` (backed by `manage-app-secrets`).
 
 ### Supabase
+
 - `SUPABASE_URL`
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
@@ -451,23 +456,28 @@ All platform secrets live in **Supabase Edge Function secrets** and are surfaced
 - `SB_MANAGEMENT_TOKEN`
 
 ### Meta family (separate apps!)
+
 - `FACEBOOK_APP_ID`, `FACEBOOK_APP_SECRET`
 - `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`
 - `THREADS_APP_ID`, `THREADS_APP_SECRET`, `THREADS_DEMO_MODE`
 
 ### TikTok
+
 - `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`
 
 ### Google / YouTube
+
 - `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`
 - `GOOGLE_AI_STUDIO_KEY`
 
 ### LinkedIn / Twitter / Pinterest
+
 - `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET`
 - `TWITTER_CLIENT_ID`, `TWITTER_CLIENT_SECRET`
 - `PINTEREST_CLIENT_ID`, `PINTEREST_CLIENT_SECRET`
 
 ### WhatsApp Cloud API
+
 - `WHATSAPP_ACCESS_TOKEN`
 - `WHATSAPP_PHONE_NUMBER_ID`
 - `WHATSAPP_BUSINESS_ACCOUNT_ID`
@@ -475,6 +485,7 @@ All platform secrets live in **Supabase Edge Function secrets** and are surfaced
 - `WHATSAPP_WEBHOOK_VERIFY_TOKEN`
 
 ### Media + AI
+
 - `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
 - `ATLASCLOUD_API_KEY`
 - `OPENROUTER_API_KEY`
@@ -483,15 +494,18 @@ All platform secrets live in **Supabase Edge Function secrets** and are surfaced
 - `LOVABLE_API_KEY`
 
 ### Email (Resend)
+
 - `RESEND_API_KEY`
 - `RESEND_WEBHOOK_SECRET`
 - `SEND_EMAIL_HOOK_SECRET`
 
 ### Payments (Stripe)
+
 - `STRIPE_SECRET_KEY`
 - `STRIPE_WEBHOOK_SECRET`
 
 ### Connector-managed
+
 - `SLACK_API_KEY` (for observability alerts)
 
 ---
@@ -509,13 +523,13 @@ Visit http://localhost:8081.
 
 Other scripts:
 
-| Command | Purpose |
-|---------|---------|
-| `npm run dev` | Vite dev server |
-| `npm run build` | Production build |
-| `npm run build:dev` | Dev-mode build |
-| `npm run preview` | Preview built bundle |
-| `npm run lint` | ESLint |
+| Command             | Purpose              |
+| ------------------- | -------------------- |
+| `npm run dev`       | Vite dev server      |
+| `npm run build`     | Production build     |
+| `npm run build:dev` | Dev-mode build       |
+| `npm run preview`   | Preview built bundle |
+| `npm run lint`      | ESLint               |
 
 ---
 
@@ -533,6 +547,7 @@ Other scripts:
 `Dockerfile`: multi-stage Node 20 build → `nginx:alpine` serving the SPA on port 80.
 
 `docker-compose.yml`:
+
 ```yaml
 services:
   postora:
@@ -541,7 +556,15 @@ services:
     environment: [NODE_ENV=production]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:80/",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -549,6 +572,7 @@ services:
 ```
 
 `nginx.conf` highlights:
+
 - Gzip + cache headers for static assets.
 - Security headers (CSP-friendly, HSTS, X-Frame-Options).
 - 404 for sensitive paths (`.env`, `.git`, `.php`, `config.php`, etc.) — see `mem://security/architecture-hardening`.
@@ -592,32 +616,32 @@ When something breaks, check in this order:
 
 ## Recommended reconnect / credential procedures
 
-| Symptom | Procedure |
-|---------|-----------|
-| Token expired (any platform) | `/admin/token-health` → trigger `refresh-tokens` for the account; if it still fails, disconnect + reconnect from `/profiles`. |
-| LinkedIn 401 | Disconnect + reconnect (LinkedIn rejects refreshed tokens silently). |
-| YouTube refresh 100 cap | Re-auth the user; long-term fix = move Google project out of Testing. |
-| Threads "Insecure Login Blocked" (`1349187`) | Use HTTPS preview / production URL. |
-| Threads "No app ID" (`4476002`) | Verify `THREADS_APP_ID` ≠ `FACEBOOK_APP_ID` in `/admin/settings`. Redeploy `threads-oauth`, `get-public-config`. |
-| Meta posting failures | Check Page permissions in `/profiles`; rerun `check-connection-health`. |
-| TikTok publish stuck | `tiktok-check-status` for the publish ID; `/admin/logs` for `process-post` errors. |
-| WhatsApp webhook silent | `whatsapp-config-test` + verify `WHATSAPP_WEBHOOK_VERIFY_TOKEN`. |
-| AI model failing | `/admin/settings` → AI Configuration → `test-ai-model`. |
+| Symptom                                      | Procedure                                                                                                                     |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Token expired (any platform)                 | `/admin/token-health` → trigger `refresh-tokens` for the account; if it still fails, disconnect + reconnect from `/profiles`. |
+| LinkedIn 401                                 | Disconnect + reconnect (LinkedIn rejects refreshed tokens silently).                                                          |
+| YouTube refresh 100 cap                      | Re-auth the user; long-term fix = move Google project out of Testing.                                                         |
+| Threads "Insecure Login Blocked" (`1349187`) | Use HTTPS preview / production URL.                                                                                           |
+| Threads "No app ID" (`4476002`)              | Verify `THREADS_APP_ID` ≠ `FACEBOOK_APP_ID` in `/admin/settings`. Redeploy `threads-oauth`, `get-public-config`.              |
+| Meta posting failures                        | Check Page permissions in `/profiles`; rerun `check-connection-health`.                                                       |
+| TikTok publish stuck                         | `tiktok-check-status` for the publish ID; `/admin/logs` for `process-post` errors.                                            |
+| WhatsApp webhook silent                      | `whatsapp-config-test` + verify `WHATSAPP_WEBHOOK_VERIFY_TOKEN`.                                                              |
+| AI model failing                             | `/admin/settings` → AI Configuration → `test-ai-model`.                                                                       |
 
 ---
 
 ## Logging and diagnostics
 
-| Source | Surface |
-|--------|---------|
-| `system_logs` | `/admin/logs` (+ `analyze-log` inline AI) |
-| `system_health_snapshots` | `/admin/observability` charts |
-| `edge_function_status` | `/admin/observability` |
-| `token_refresh_history` | `/admin/token-health` |
-| `admin_audit_log` | `/admin/users/:id` + audit views |
-| `api_logs` | Rate-limit basis + public-API errors |
-| Sentry | Browser + edge runtime |
-| Slack alerts | `observability-alerts` (configurable) |
+| Source                    | Surface                                   |
+| ------------------------- | ----------------------------------------- |
+| `system_logs`             | `/admin/logs` (+ `analyze-log` inline AI) |
+| `system_health_snapshots` | `/admin/observability` charts             |
+| `edge_function_status`    | `/admin/observability`                    |
+| `token_refresh_history`   | `/admin/token-health`                     |
+| `admin_audit_log`         | `/admin/users/:id` + audit views          |
+| `api_logs`                | Rate-limit basis + public-API errors      |
+| Sentry                    | Browser + edge runtime                    |
+| Slack alerts              | `observability-alerts` (configurable)     |
 
 `observability-collector` runs on cron and trims `system_logs` to ~48h to keep storage bounded.
 
@@ -648,105 +672,105 @@ Items there are **planned**, not implemented, unless they appear in the capabili
 
 ## Edge function reference (appendix)
 
-| Function | Category | Purpose | Facing |
-|----------|----------|---------|--------|
-| `facebook-oauth` | Auth | Facebook OAuth + Page selection | User |
-| `instagram-oauth` | Auth | IG (FB-linked + Business Login) | User |
-| `threads-oauth` | Auth | Threads OAuth (HTTPS-only) | User |
-| `tiktok-oauth` | Auth | TikTok OAuth (PKCE, UX-compliant) | User |
-| `youtube-oauth` | Auth | Google incremental OAuth | User |
-| `pinterest-oauth` | Auth | Pinterest OAuth | User |
-| `linkedin-oauth` | Auth | LinkedIn OAuth | User |
-| `twitter-oauth` | Auth | Twitter/X OAuth (Basic+) | User |
-| `bluesky-oauth` | Auth | ATProto + DPoP | User |
-| `reddit-oauth` | Auth | Reddit OAuth | User |
-| `whatsapp-oauth` | Auth | WhatsApp Cloud API onboarding | User |
-| `manage-oauth-redirects` | Auth | Custom redirect URI requests | Admin |
-| `process-post` | Posting | Immediate publish (all platforms) | User |
-| `process-scheduled-posts` | Posting | Cron scheduler with JIT refresh | Cron |
-| `process-scheduled-blog-posts` | Posting | Scheduled "What's New" posts | Cron |
-| `process-scheduled-flags` | Posting | Scheduled feature-flag toggles | Cron |
-| `process-scheduled-emails` | Posting | Scheduled emails | Cron |
-| `cloudinary-upload` | Media | Upload to Cloudinary | User |
-| `cloudinary-delete` | Media | Delete from Cloudinary | User |
-| `cloudinary-rename` | Media | Rename / move in Cloudinary | User |
-| `cloudinary-email-upload` | Media | Inbound email attachment ingest | Internal |
-| `process-video` | Media | Video orchestration | User |
-| `transcode-video` | Media | External transcode wrapper | User |
-| `transcribe-media` | Media | 3-tier STT chain | User |
-| `remove-background` | Media | BG removal | User |
-| `upscale-image` | Media | Cloudinary `c_scale` upscale | User |
-| `upscale-image-atlas` | Media | AtlasCloud 4K upscale | User |
-| `cleanup-media` | Media | Orphan sweep | Admin |
-| `check-music-copyright` | Media | ACRCloud lookup | User |
-| `generate-caption` | AI | Caption generation | User |
-| `generate-hashtags` | AI | Hashtag generation | User |
-| `generate-image` | AI | Imagen / Gemini fallback chain | User |
-| `suggest-best-times` | AI | Best-time recommendations | User |
-| `ai-config` | AI | Provider/model config | Admin |
-| `ai-email-assistant` | AI | Email reply / draft assist | Admin |
-| `analyze-log` | AI | Root cause + Lovable prompt for a log row | Admin |
-| `test-ai-model` | AI | Live provider test | Admin |
-| `fetch-openrouter-models` | AI | Refresh OpenRouter list | Admin |
-| `openrouter-models` | AI | List endpoint | Internal |
-| `threads-discovery` | Threads | Owned + topical feed | User |
-| `threads-keyword-search` | Threads | Keyword search | User |
-| `threads-insights` | Threads | Post + account insights | User |
-| `threads-location-search` | Threads | Location autocomplete | User |
-| `threads-recently-searched` | Threads | Search history | User |
-| `threads-comment` | Threads | Post comment | User |
-| `threads-quote` | Threads | Quote a thread | User |
-| `threads-repost` | Threads | Repost | User |
-| `threads-delete-post` | Threads | Delete a thread | User |
-| `threads-debug-publish-check` | Threads | Pre-flight diagnostic | Admin |
-| `tiktok-analytics` | TikTok | Analytics ingest | User |
-| `tiktok-check-status` | TikTok | Async publish status | User |
-| `tiktok-demo-publish` | TikTok | Sandbox publish | Admin |
-| `tiktok-webhook` | TikTok | Inbound webhook | Internal |
-| `whatsapp-broadcast` | WhatsApp | Broadcast send | User |
-| `whatsapp-config-test` | WhatsApp | Diagnostic | Admin |
-| `whatsapp-profile` | WhatsApp | Profile read/write | User |
-| `whatsapp-scheduled-sender` | WhatsApp | Scheduled outbound | Cron |
-| `whatsapp-webhook` | WhatsApp | Inbound webhook | Internal |
-| `messaging-api` | Messaging | Unified inbox (FB/IG/WA) | User |
-| `comment-manager` | Messaging | Comment CRUD | User |
-| `facebook-places-search` | Messaging | Place lookup for tagging | User |
-| `brand-scrape` | Analytics | Cross-platform scraping | User |
-| `ad-analytics` | Analytics | Meta ad metrics | User |
-| `ad-manager` | Analytics | Meta ad management | User |
-| `leads-api` | Analytics | Meta Lead Forms ingest | User |
-| `refresh-tokens` | Tokens | Refresh OAuth tokens | Cron + Admin |
-| `check-connection-health` | Tokens | Verify connection | User |
-| `send-token-expiry-notifications` | Tokens | User reminders | Cron |
-| `send-token-failure-alert` | Tokens | Admin alert | Cron |
-| `stripe-checkout` | Billing | Create checkout | User |
-| `stripe-manage-subscription` | Billing | Cancel / change plan | User |
-| `stripe-webhook` | Billing | Stripe events | Internal |
-| `create-payment` / `verify-payment` | Billing | One-off payments | User |
-| `backfill-subscription` | Billing | Retro-link Stripe customer | Admin |
-| `check-subscription` | Billing | Status check | User |
-| `send-auth-email` | Email | Auth flows | Internal |
-| `send-inbox-email` | Email | Admin inbox send | Admin |
-| `send-reset-otp` / `verify-reset-otp` | Email/MFA | Password reset OTP | User |
-| `send-subscription-email` | Email | Plan lifecycle | Internal |
-| `send-weekly-analytics` | Email | Weekly digest | Cron |
-| `send-expiry-reminders` | Email | Token/credit reminders | Cron |
-| `sync-resend-delivery-status` | Email | Delivery sync | Cron |
-| `resend-webhook` | Email | Inbound from Resend | Internal |
-| `fetch-email-content` | Email | Pull thread content | Admin |
-| `notify-admin-new-user` | Email | New-signup alert | Internal |
-| `manage-app-secrets` | Admin/Ops | App credentials manager backend | Admin |
-| `manage-cron-jobs` | Admin/Ops | Cron registry | Admin |
-| `observability-alerts` | Admin/Ops | Alert dispatch | Cron |
-| `observability-collector` | Admin/Ops | Snapshot + log retention | Cron |
-| `sync-user-quotas` | Admin/Ops | Quota recalculation | Cron + Admin |
-| `notify-expiring-ai-overrides` | Admin/Ops | AI override alerts | Cron |
-| `get-public-config` | Admin/Ops | Public-safe config (App IDs etc.) | User |
-| `check-user-mfa` | MFA | Enrollment check | User |
-| `verify-mfa-reset` | MFA | MFA-protected reset | User |
-| `n8n-api` | Public API | n8n + Make.com integration | External |
-| `unsplash-proxy` | Misc | Unsplash search proxy | User |
-| `pinterest-boards` | Auth/Aux | Fetch Pinterest boards | User |
+| Function                              | Category   | Purpose                                   | Facing       |
+| ------------------------------------- | ---------- | ----------------------------------------- | ------------ |
+| `facebook-oauth`                      | Auth       | Facebook OAuth + Page selection           | User         |
+| `instagram-oauth`                     | Auth       | IG (FB-linked + Business Login)           | User         |
+| `threads-oauth`                       | Auth       | Threads OAuth (HTTPS-only)                | User         |
+| `tiktok-oauth`                        | Auth       | TikTok OAuth (PKCE, UX-compliant)         | User         |
+| `youtube-oauth`                       | Auth       | Google incremental OAuth                  | User         |
+| `pinterest-oauth`                     | Auth       | Pinterest OAuth                           | User         |
+| `linkedin-oauth`                      | Auth       | LinkedIn OAuth                            | User         |
+| `twitter-oauth`                       | Auth       | Twitter/X OAuth (Basic+)                  | User         |
+| `bluesky-oauth`                       | Auth       | ATProto + DPoP                            | User         |
+| `reddit-oauth`                        | Auth       | Reddit OAuth                              | User         |
+| `whatsapp-oauth`                      | Auth       | WhatsApp Cloud API onboarding             | User         |
+| `manage-oauth-redirects`              | Auth       | Custom redirect URI requests              | Admin        |
+| `process-post`                        | Posting    | Immediate publish (all platforms)         | User         |
+| `process-scheduled-posts`             | Posting    | Cron scheduler with JIT refresh           | Cron         |
+| `process-scheduled-blog-posts`        | Posting    | Scheduled "What's New" posts              | Cron         |
+| `process-scheduled-flags`             | Posting    | Scheduled feature-flag toggles            | Cron         |
+| `process-scheduled-emails`            | Posting    | Scheduled emails                          | Cron         |
+| `cloudinary-upload`                   | Media      | Upload to Cloudinary                      | User         |
+| `cloudinary-delete`                   | Media      | Delete from Cloudinary                    | User         |
+| `cloudinary-rename`                   | Media      | Rename / move in Cloudinary               | User         |
+| `cloudinary-email-upload`             | Media      | Inbound email attachment ingest           | Internal     |
+| `process-video`                       | Media      | Video orchestration                       | User         |
+| `transcode-video`                     | Media      | External transcode wrapper                | User         |
+| `transcribe-media`                    | Media      | 3-tier STT chain                          | User         |
+| `remove-background`                   | Media      | BG removal                                | User         |
+| `upscale-image`                       | Media      | Cloudinary `c_scale` upscale              | User         |
+| `upscale-image-atlas`                 | Media      | AtlasCloud 4K upscale                     | User         |
+| `cleanup-media`                       | Media      | Orphan sweep                              | Admin        |
+| `check-music-copyright`               | Media      | ACRCloud lookup                           | User         |
+| `generate-caption`                    | AI         | Caption generation                        | User         |
+| `generate-hashtags`                   | AI         | Hashtag generation                        | User         |
+| `generate-image`                      | AI         | Imagen / Gemini fallback chain            | User         |
+| `suggest-best-times`                  | AI         | Best-time recommendations                 | User         |
+| `ai-config`                           | AI         | Provider/model config                     | Admin        |
+| `ai-email-assistant`                  | AI         | Email reply / draft assist                | Admin        |
+| `analyze-log`                         | AI         | Root cause + Lovable prompt for a log row | Admin        |
+| `test-ai-model`                       | AI         | Live provider test                        | Admin        |
+| `fetch-openrouter-models`             | AI         | Refresh OpenRouter list                   | Admin        |
+| `openrouter-models`                   | AI         | List endpoint                             | Internal     |
+| `threads-discovery`                   | Threads    | Owned + topical feed                      | User         |
+| `threads-keyword-search`              | Threads    | Keyword search                            | User         |
+| `threads-insights`                    | Threads    | Post + account insights                   | User         |
+| `threads-location-search`             | Threads    | Location autocomplete                     | User         |
+| `threads-recently-searched`           | Threads    | Search history                            | User         |
+| `threads-comment`                     | Threads    | Post comment                              | User         |
+| `threads-quote`                       | Threads    | Quote a thread                            | User         |
+| `threads-repost`                      | Threads    | Repost                                    | User         |
+| `threads-delete-post`                 | Threads    | Delete a thread                           | User         |
+| `threads-debug-publish-check`         | Threads    | Pre-flight diagnostic                     | Admin        |
+| `tiktok-analytics`                    | TikTok     | Analytics ingest                          | User         |
+| `tiktok-check-status`                 | TikTok     | Async publish status                      | User         |
+| `tiktok-demo-publish`                 | TikTok     | Sandbox publish                           | Admin        |
+| `tiktok-webhook`                      | TikTok     | Inbound webhook                           | Internal     |
+| `whatsapp-broadcast`                  | WhatsApp   | Broadcast send                            | User         |
+| `whatsapp-config-test`                | WhatsApp   | Diagnostic                                | Admin        |
+| `whatsapp-profile`                    | WhatsApp   | Profile read/write                        | User         |
+| `whatsapp-scheduled-sender`           | WhatsApp   | Scheduled outbound                        | Cron         |
+| `whatsapp-webhook`                    | WhatsApp   | Inbound webhook                           | Internal     |
+| `messaging-api`                       | Messaging  | Unified inbox (FB/IG/WA)                  | User         |
+| `comment-manager`                     | Messaging  | Comment CRUD                              | User         |
+| `facebook-places-search`              | Messaging  | Place lookup for tagging                  | User         |
+| `brand-scrape`                        | Analytics  | Cross-platform scraping                   | User         |
+| `ad-analytics`                        | Analytics  | Meta ad metrics                           | User         |
+| `ad-manager`                          | Analytics  | Meta ad management                        | User         |
+| `leads-api`                           | Analytics  | Meta Lead Forms ingest                    | User         |
+| `refresh-tokens`                      | Tokens     | Refresh OAuth tokens                      | Cron + Admin |
+| `check-connection-health`             | Tokens     | Verify connection                         | User         |
+| `send-token-expiry-notifications`     | Tokens     | User reminders                            | Cron         |
+| `send-token-failure-alert`            | Tokens     | Admin alert                               | Cron         |
+| `stripe-checkout`                     | Billing    | Create checkout                           | User         |
+| `stripe-manage-subscription`          | Billing    | Cancel / change plan                      | User         |
+| `stripe-webhook`                      | Billing    | Stripe events                             | Internal     |
+| `create-payment` / `verify-payment`   | Billing    | One-off payments                          | User         |
+| `backfill-subscription`               | Billing    | Retro-link Stripe customer                | Admin        |
+| `check-subscription`                  | Billing    | Status check                              | User         |
+| `send-auth-email`                     | Email      | Auth flows                                | Internal     |
+| `send-inbox-email`                    | Email      | Admin inbox send                          | Admin        |
+| `send-reset-otp` / `verify-reset-otp` | Email/MFA  | Password reset OTP                        | User         |
+| `send-subscription-email`             | Email      | Plan lifecycle                            | Internal     |
+| `send-weekly-analytics`               | Email      | Weekly digest                             | Cron         |
+| `send-expiry-reminders`               | Email      | Token/credit reminders                    | Cron         |
+| `sync-resend-delivery-status`         | Email      | Delivery sync                             | Cron         |
+| `resend-webhook`                      | Email      | Inbound from Resend                       | Internal     |
+| `fetch-email-content`                 | Email      | Pull thread content                       | Admin        |
+| `notify-admin-new-user`               | Email      | New-signup alert                          | Internal     |
+| `manage-app-secrets`                  | Admin/Ops  | App credentials manager backend           | Admin        |
+| `manage-cron-jobs`                    | Admin/Ops  | Cron registry                             | Admin        |
+| `observability-alerts`                | Admin/Ops  | Alert dispatch                            | Cron         |
+| `observability-collector`             | Admin/Ops  | Snapshot + log retention                  | Cron         |
+| `sync-user-quotas`                    | Admin/Ops  | Quota recalculation                       | Cron + Admin |
+| `notify-expiring-ai-overrides`        | Admin/Ops  | AI override alerts                        | Cron         |
+| `get-public-config`                   | Admin/Ops  | Public-safe config (App IDs etc.)         | User         |
+| `check-user-mfa`                      | MFA        | Enrollment check                          | User         |
+| `verify-mfa-reset`                    | MFA        | MFA-protected reset                       | User         |
+| `n8n-api`                             | Public API | n8n + Make.com integration                | External     |
+| `unsplash-proxy`                      | Misc       | Unsplash search proxy                     | User         |
+| `pinterest-boards`                    | Auth/Aux   | Fetch Pinterest boards                    | User         |
 
 ---
 
@@ -776,3 +800,55 @@ Compact map for future AI coding assistants:
 ---
 
 © WALEED PROLIFE LLC. Proprietary.
+
+Meta / Facebook Login:
+
+https://api.postora.cloud/functions/v1/facebook-oauth
+
+Meta / Instagram Login:
+
+https://api.postora.cloud/functions/v1/instagram-oauth
+
+Meta / Facebook Login for Instagram Business:
+
+https://api.postora.cloud/functions/v1/instagram-business-oauth
+
+Meta / Threads:
+
+https://api.postora.cloud/functions/v1/threads-oauth
+
+TikTok:
+
+https://api.postora.cloud/functions/v1/tiktok-oauth
+
+Pinterest:
+
+https://api.postora.cloud/functions/v1/pinterest-oauth
+
+Twitter/X:
+
+https://api.postora.cloud/functions/v1/twitter-oauth
+
+LinkedIn:
+
+https://api.postora.cloud/functions/v1/linkedin-oauth
+
+Google/YouTube:
+
+https://api.postora.cloud/functions/v1/youtube-oauth
+
+Reddit:
+
+https://api.postora.cloud/functions/v1/reddit-oauth
+
+Bluesky/ATProto:
+
+https://postora.cloud/client-metadata.json
+
+must include:
+
+https://api.postora.cloud/functions/v1/bluesky-oauth
+
+WhatsApp:
+
+https://api.postora.cloud/functions/v1/whatsapp-webhook
