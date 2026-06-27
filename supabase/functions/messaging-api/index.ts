@@ -25,7 +25,7 @@ function gracefulError(message: string, errorType: string) {
  * Makes the conversation appear in the inbox immediately and auto-saves the contact.
  */
 async function upsertOutboundConversation(
-  adminClient: ReturnType<typeof createClient>,
+  adminClient: any,
   params: {
     user_id: string;
     social_account_id: string;
