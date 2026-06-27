@@ -536,13 +536,13 @@ Deno.serve(async (req) => {
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
       await logWebhookEvent(supabase, "error", "webhook_error", errorMessage);
 
-      // Mark dedupe row failed so Stripe's retry is allowed to re-run the handler.
-      try {
-        // event may be undefined if signature verification failed; guard the access.
-        // deno-lint-ignore no-explicit-any
-        const evId = (typeof (globalThis as any).event !== "undefined" ? null : null);
-        void evId;
-      } catch { /* noop */ }
+      // Mark dedupe row failed so Stripe's retry can re-run the handler.
+      if (currentEventId) {
+        await supabase
+          .from("stripe_webhook_events")
+          .update({ status: "failed", error: errorMessage.slice(0, 1000) })
+          .eq("event_id", currentEventId);
+      }
 
       // Send admin alert for critical failures
       await sendWebhookFailureAlert("webhook_error", errorMessage);
