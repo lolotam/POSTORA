@@ -771,39 +771,38 @@ export default function ScheduledPosts() {
                       </div>
                     )}
 
-                    {/* Accounts */}
-                    <div className="flex flex-wrap items-start gap-4">
-                      {postAccounts.slice(0, 4).map((account: any) => (
-                        <div key={account.id} className="flex flex-col items-center gap-1" title={`@${account.platform_username} (${getPlatformName(account.platform)})`}>
-                          <Avatar className="w-8 h-8 border-2 border-background">
-                            <AvatarImage src={account.avatar_url || undefined} />
-                            <AvatarFallback className="text-xs">
-                              {account.platform_username?.[0]?.toUpperCase() || "?"}
-                            </AvatarFallback>
-                          </Avatar>
-                          <PlatformIcon platform={account.platform} size="xs" />
-                        </div>
+                    {/* Accounts (avatar with integrated platform icon) */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      {postAccounts.slice(0, 6).map((account: any) => (
+                        <AccountAvatar
+                          key={account.id}
+                          platform={account.platform}
+                          avatarUrl={account.avatar_url}
+                          name={account.platform_username}
+                          size="md"
+                          title={`@${account.platform_username} (${getPlatformName(account.platform)})`}
+                        />
                       ))}
-                      {postAccounts.length > 4 && (
-                        <div className="flex flex-col items-center gap-1">
-                          <div className="w-8 h-8 rounded-full bg-muted border-2 border-background flex items-center justify-center text-xs text-muted-foreground">
-                            +{postAccounts.length - 4}
-                          </div>
-                          <span className="text-[10px] text-muted-foreground">more</span>
+                      {postAccounts.length > 6 && (
+                        <div className="w-10 h-10 rounded-full bg-muted border-2 border-background flex items-center justify-center text-xs text-muted-foreground">
+                          +{postAccounts.length - 6}
                         </div>
                       )}
-                      {postAccounts.length === 0 && (
+                      {postAccounts.length === 0 && post.platforms.length > 0 && (
+                        // Fallback: no account avatars — show platform icons only
+                        post.platforms.map((platform) => (
+                          <div
+                            key={platform}
+                            className="w-10 h-10 rounded-full bg-muted/60 border-2 border-background flex items-center justify-center"
+                            title={getPlatformName(platform as Platform)}
+                          >
+                            <PlatformIcon platform={platform as Platform} size="sm" />
+                          </div>
+                        ))
+                      )}
+                      {postAccounts.length === 0 && post.platforms.length === 0 && (
                         <span className="text-xs text-muted-foreground">No accounts</span>
                       )}
-                    </div>
-
-                    {/* Platforms */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      {post.platforms.map((platform) => (
-                        <div key={platform} className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <PlatformIcon platform={platform as Platform} size="sm" />
-                        </div>
-                      ))}
                     </div>
 
                     {/* Schedule Info */}
