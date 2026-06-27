@@ -144,8 +144,42 @@ export function PlatformSettingsSection({
         platform_user_id: a.platform_user_id,
       }));
 
-  const getAccountForPlatform = (platform: Platform) => 
+  const getAccountForPlatform = (platform: Platform) =>
     connectedAccounts.find(a => a.platform === platform && selectedAccountIds.includes(a.id));
+
+  // Platforms that require media (hidden in text-only mode)
+  const mediaRequiredPlatforms: Platform[] = ["instagram", "tiktok", "youtube", "pinterest"];
+  const visiblePlatforms = allPlatformOrder.filter((p) => {
+    if (uploadMethod === "text" && mediaRequiredPlatforms.includes(p)) return false;
+    return isPlatformEligible(p) && isPlatformVisible(p) && hasPlatformSelected(p);
+  });
+
+  // LinkedIn: build the destination avatar stack rendered under the chip
+  const linkedinPagesAvailable = connectedAccounts
+    .filter((a) => a.platform === "linkedin" && selectedAccountIds.includes(a.id))
+    .flatMap(
+      (a) =>
+        (a.account_metadata as { linkedin_pages?: Array<{ id: string; name: string; vanityName?: string; logoUrl?: string }> })
+          ?.linkedin_pages || []
+    );
+  const linkedinPrimaryAccount = getAccountForPlatform("linkedin");
+  const linkedinDestinations = (platformSettings.linkedinSelectedDestinationIds as string[] | undefined ?? ["personal"]).map((id) => {
+    if (id === "personal") {
+      return {
+        id: "personal",
+        name: linkedinPrimaryAccount?.platform_username || "Personal Profile",
+        avatarUrl: linkedinPrimaryAccount?.avatar_url ?? undefined,
+        isPersonal: true,
+      };
+    }
+    const page = linkedinPagesAvailable.find((p) => p.id === id);
+    return {
+      id,
+      name: page?.name || id,
+      avatarUrl: page?.logoUrl,
+      isPersonal: false,
+    };
+  });
 
   return (
     <Collapsible open={isOpen} onOpenChange={onOpenChange}>
