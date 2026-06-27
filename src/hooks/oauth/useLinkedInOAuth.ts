@@ -23,6 +23,7 @@ export function useLinkedInOAuth(
       const { data, error } = await supabase.functions.invoke("linkedin-oauth", {
         body: {
           action: "authorize",
+          user_id: user.id,
           social_profile_id: profileId,
           return_to: `${window.location.origin}/profiles`,
         },
@@ -31,11 +32,17 @@ export function useLinkedInOAuth(
       if (data?.url) {
         window.location.href = data.url;
       } else {
-        throw new Error("No authorization URL received");
+        throw new Error(data?.error || "No authorization URL received");
       }
     } catch (error) {
       setConnectingPlatform(null);
       setConnectingProfile(null);
+      console.error("LinkedIn connect error:", error);
+      toast({
+        title: "LinkedIn connection failed",
+        description: error instanceof Error ? error.message : "Failed to start LinkedIn authorization",
+        variant: "destructive",
+      });
       throw error;
     }
   };
