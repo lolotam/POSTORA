@@ -333,7 +333,7 @@ export default function AdminAnalytics() {
                           cx="50%"
                           cy="50%"
                           outerRadius={100}
-                          label={({ platform, count }) => `${platform}: ${count}`}
+                          label={(props: any) => `${props.platform}: ${props.count}`}
                         >
                           {(platformStats || []).map((_, index) => (
                             <Cell key={`cell-${index}`} fill={CHART_COLORS[index % CHART_COLORS.length]} />
