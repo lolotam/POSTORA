@@ -53,7 +53,13 @@ export function useThreadsOAuth(
       });
       if (error) throw error;
       if (data?.success) {
-        toast({ title: "Threads connected!", description: data.username ? `Connected account: @${data.username}` : "Your Threads account has been connected successfully." });
+        const dedupeKey = `oauth_toast_shown:threads:${data.username ?? ""}:`;
+        if (!sessionStorage.getItem(dedupeKey)) {
+          sessionStorage.setItem(dedupeKey, String(Date.now()));
+          setTimeout(() => sessionStorage.removeItem(dedupeKey), 10_000);
+          toast({ title: "Threads connected!", description: data.username ? `Connected account: @${data.username}` : "Your Threads account has been connected successfully." });
+        }
+
         await new Promise((resolve) => setTimeout(resolve, 1500));
         await queryClient.refetchQueries({ queryKey: ["social_accounts"] });
         await queryClient.refetchQueries({ queryKey: ["social_accounts_by_profile"] });
