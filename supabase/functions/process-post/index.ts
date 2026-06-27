@@ -5467,6 +5467,10 @@ async function postToThreads(
   }
 
   // ── Cross-share to Instagram Story pre-flight guard ───────────────────
+  // Meta's `crossreshare_to_ig` requires renderable media (Stories cannot be
+  // text-only). Sending it on a TEXT thread or with no media triggers
+  // Graph error code=33 ("This object does not exist or does not support
+  // this action"). Videos are also currently blocked by our integration.
   const wantsCrossShare = !!metadata?.threads_cross_share_to_ig;
   let crossShareApplied = false;
   let crossShareCapabilityAtPublish: boolean | null = null;
@@ -5478,11 +5482,16 @@ async function postToThreads(
         "Skipped Share to Instagram — token doesn't include threads_share_to_instagram. Reconnect Threads."
       );
       console.log("Threads: Skipping cross-share — capability=false (stale token)");
+    } else if (mediaUrls.length === 0) {
+      threadsWarnings.push(
+        "Share to Instagram requires an image. Text-only Threads posts cannot be cross-shared to an Instagram Story."
+      );
+      console.log("Threads: Skipping cross-share — text-only post (no media)");
     } else if (hasAnyVideo) {
       threadsWarnings.push(
-        "Share to Instagram only supports image or text posts. Your video was published to Threads only."
+        "Share to Instagram only supports image posts. Your video was published to Threads only."
       );
-      console.log("Threads: Skipping cross-share — video media unsupported by Meta");
+      console.log("Threads: Skipping cross-share — video media unsupported");
     } else {
       // Meta's Threads Graph API parameter is `crossreshare_to_ig` (their spelling).
       // The previous name `crosspost_to_instagram` was silently ignored — Thread
@@ -5502,6 +5511,7 @@ async function postToThreads(
       }
     }
   }
+
 
   // ── Verbose redacted debug log ────────────────────────────────────────
   const tokenPrefix = (accessToken || "").slice(0, 6);
