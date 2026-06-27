@@ -794,74 +794,157 @@ export function SecuritySection() {
       </div>
 
       {/* Password Dialog */}
-      <Dialog open={passwordDialogOpen} onOpenChange={setPasswordDialogOpen}>
+      <Dialog
+        open={passwordDialogOpen}
+        onOpenChange={(open) => {
+          setPasswordDialogOpen(open);
+          if (!open) resetPwState();
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {isGoogleUser ? "Create Password" : "Change Password"}
+              {pwStep === "password"
+                ? isGoogleUser
+                  ? "Create Password"
+                  : "Change Password"
+                : pwStep === "mfa"
+                ? "Confirm with your authenticator"
+                : "Confirm with email code"}
             </DialogTitle>
             <DialogDescription>
-              {isGoogleUser
-                ? "Create a password to sign in with your email address."
-                : "Enter a new password for your account."}
+              {pwStep === "password"
+                ? isGoogleUser
+                  ? "Create a password to sign in with your email address."
+                  : "Enter a new password for your account."
+                : pwStep === "mfa"
+                ? "Enter the 6-digit code from your authenticator app to confirm this change."
+                : pwOtpSending
+                ? "Sending a verification code to your email…"
+                : "Enter the 6-digit code we just emailed to confirm this change."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="newPassword">New Password</Label>
-              <div className="relative">
-                <Input
-                  id="newPassword"
-                  type={showPassword ? "text" : "password"}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
+          {pwStep === "password" && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="newPassword">New Password</Label>
+                <div className="relative">
+                  <Input
+                    id="newPassword"
+                    type={showPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Enter new password"
+                    className="pr-10"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm Password</Label>
-              <Input
-                id="confirmPassword"
-                type={showPassword ? "text" : "password"}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm new password"
-              />
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Input
+                  id="confirmPassword"
+                  type={showPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm new password"
+                  autoComplete="new-password"
+                />
+              </div>
 
-            {passwordError && (
-              <p className="text-sm text-destructive">{passwordError}</p>
-            )}
-          </div>
+              {passwordError && (
+                <p className="text-sm text-destructive">{passwordError}</p>
+              )}
+            </div>
+          )}
+
+          {pwStep === "mfa" && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="pwMfaCode">Authenticator code</Label>
+                <Input
+                  id="pwMfaCode"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  value={pwMfaCode}
+                  onChange={(e) => setPwMfaCode(e.target.value.replace(/\D/g, ""))}
+                  placeholder="123456"
+                  autoComplete="one-time-code"
+                />
+              </div>
+              {passwordError && (
+                <p className="text-sm text-destructive">{passwordError}</p>
+              )}
+            </div>
+          )}
+
+          {pwStep === "otp" && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="pwOtpCode">Email verification code</Label>
+                <Input
+                  id="pwOtpCode"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  value={pwOtpCode}
+                  onChange={(e) => setPwOtpCode(e.target.value.replace(/\D/g, ""))}
+                  placeholder="123456"
+                  autoComplete="one-time-code"
+                  disabled={pwOtpSending}
+                />
+              </div>
+              {passwordError && (
+                <p className="text-sm text-destructive">{passwordError}</p>
+              )}
+            </div>
+          )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPasswordDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setPasswordDialogOpen(false);
+                resetPwState();
+              }}
+            >
               Cancel
             </Button>
-            <Button onClick={handleChangePassword} disabled={isChangingPassword}>
+            <Button
+              onClick={
+                pwStep === "password"
+                  ? handleStartPasswordChange
+                  : pwStep === "mfa"
+                  ? handleConfirmWithMfa
+                  : handleConfirmWithOtp
+              }
+              disabled={isChangingPassword || pwOtpSending}
+            >
               {isChangingPassword ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   Saving...
                 </>
+              ) : pwStep === "password" ? (
+                isGoogleUser ? "Create Password" : "Continue"
               ) : (
-                isGoogleUser ? "Create Password" : "Update Password"
+                "Confirm"
               )}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
 
       {/* 2FA Setup Dialog */}
       <Dialog
