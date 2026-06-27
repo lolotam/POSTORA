@@ -226,8 +226,9 @@ export function useToggleProfilePublic() {
           .single();
           
         if (!profile?.share_token) {
-          // Generate a simple random token (basic implementation)
-          const shareToken = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+          const bytes = new Uint8Array(16);
+          crypto.getRandomValues(bytes);
+          const shareToken = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
           await supabase
             .from("social_profiles")
             .update({ share_token: shareToken })
