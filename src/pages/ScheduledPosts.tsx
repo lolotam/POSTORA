@@ -151,6 +151,9 @@ export default function ScheduledPosts() {
   const [bulkScheduledTime, setBulkScheduledTime] = useState("");
   const [isBulkRescheduling, setIsBulkRescheduling] = useState(false);
 
+  // Media lightbox state
+  const [lightbox, setLightbox] = useState<{ items: ScheduledMediaItem[]; index: number } | null>(null);
+
   // Filter state
   const [platformFilter, setPlatformFilter] = useState<Platform | "all">("all");
   const [profileFilter, setProfileFilter] = useState<string>("all");
