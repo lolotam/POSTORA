@@ -141,10 +141,21 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
 
     const msg = platformMessages[connected];
     if (msg) {
-      toast(msg);
-      refetchSocialQueries(queryClient);
+      // One-shot guard: avoid duplicate toasts when this effect re-runs
+      // (handlers object identity changes on parent re-renders) or when the
+      // legacy code-callback path also fires its own success toast.
+      const dedupeKey = `oauth_toast_shown:${connected}:${accountName ?? ""}:${channel ?? ""}`;
+      const alreadyShown = sessionStorage.getItem(dedupeKey);
+      if (!alreadyShown) {
+        sessionStorage.setItem(dedupeKey, String(Date.now()));
+        // Auto-expire after 10s so a future reconnect can toast again.
+        setTimeout(() => sessionStorage.removeItem(dedupeKey), 10_000);
+        toast(msg);
+        refetchSocialQueries(queryClient);
+      }
       setSearchParams({});
     }
+
   }, [searchParams, toast, setSearchParams, user, handlers, queryClient]);
 
   // Cleanup localStorage on mount
