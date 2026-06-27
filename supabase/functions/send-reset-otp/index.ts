@@ -164,125 +164,104 @@ serve(async (req) => {
     }
 
 
-    // Send OTP via email if Resend is configured
-    if (resendApiKey) {
-      const resend = new Resend(resendApiKey);
+    // Resend is guaranteed configured at this point (early-exit above).
+    const resend = new Resend(resendApiKey);
 
-      const subject = "Your Password Reset Code - Expires in 10 Minutes";
-      const html = `
-             <!DOCTYPE html>
-             <html>
-             <head>
-               <meta charset="utf-8">
-               <meta name="viewport" content="width=device-width, initial-scale=1.0">
-             </head>
-             <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px 20px; background: #f9fafb;">
-               <div style="background: white; border-radius: 16px; padding: 40px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
-                 <div style="text-align: center; margin-bottom: 32px;">
-                   <h1 style="color: #111827; font-size: 24px; font-weight: 700; margin: 0 0 8px 0;">Password Reset Code</h1>
-                   <p style="color: #6b7280; font-size: 14px; margin: 0;">You requested to reset your password using MFA verification.</p>
+    const subject = "Your Password Reset Code - Expires in 10 Minutes";
+    const html = `
+           <!DOCTYPE html>
+           <html>
+           <head>
+             <meta charset="utf-8">
+             <meta name="viewport" content="width=device-width, initial-scale=1.0">
+           </head>
+           <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 40px 20px; background: #f9fafb;">
+             <div style="background: white; border-radius: 16px; padding: 40px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
+               <div style="text-align: center; margin-bottom: 32px;">
+                 <h1 style="color: #111827; font-size: 24px; font-weight: 700; margin: 0 0 8px 0;">Password Reset Code</h1>
+                 <p style="color: #6b7280; font-size: 14px; margin: 0;">You requested to reset your password using MFA verification.</p>
+               </div>
+
+               <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 32px; text-align: center; border-radius: 12px; margin: 24px 0;">
+                 <p style="color: rgba(255,255,255,0.8); font-size: 12px; text-transform: uppercase; letter-spacing: 2px; margin: 0 0 8px 0;">Your One-Time Code</p>
+                 <div style="font-size: 36px; letter-spacing: 12px; font-weight: 700; color: white; font-family: 'Monaco', 'Consolas', monospace;">
+                   ${otp}
                  </div>
-                 
-                 <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 32px; text-align: center; border-radius: 12px; margin: 24px 0;">
-                   <p style="color: rgba(255,255,255,0.8); font-size: 12px; text-transform: uppercase; letter-spacing: 2px; margin: 0 0 8px 0;">Your One-Time Code</p>
-                   <div style="font-size: 36px; letter-spacing: 12px; font-weight: 700; color: white; font-family: 'Monaco', 'Consolas', monospace;">
-                     ${otp}
-                   </div>
-                 </div>
-                 
-                 <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 0 8px 8px 0; margin: 24px 0;">
-                   <p style="color: #92400e; font-size: 14px; margin: 0;">
-                     <strong>⏰ This code expires in 10 minutes.</strong><br>
-                     You'll also need your authenticator app code.
-                   </p>
-                 </div>
-                 
-                 <p style="color: #6b7280; font-size: 13px; text-align: center; margin: 24px 0 0 0;">
-                   If you didn't request this, you can safely ignore this email.
+               </div>
+
+               <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 16px; border-radius: 0 8px 8px 0; margin: 24px 0;">
+                 <p style="color: #92400e; font-size: 14px; margin: 0;">
+                   <strong>⏰ This code expires in 10 minutes.</strong><br>
+                   You'll also need your authenticator app code.
                  </p>
                </div>
-               
-               <p style="color: #9ca3af; font-size: 12px; text-align: center; margin-top: 24px;">
-                 © ${new Date().getFullYear()} Postora. All rights reserved.
+
+               <p style="color: #6b7280; font-size: 13px; text-align: center; margin: 24px 0 0 0;">
+                 If you didn't request this, you can safely ignore this email.
                </p>
-             </body>
-             </html>
-           `;
+             </div>
 
-      const primaryFrom = Deno.env.get("EMAIL_FROM") ?? "Postora <noreply@postora.cloud>";
-      const fallbackFrom = "Postora <onboarding@resend.dev>";
+             <p style="color: #9ca3af; font-size: 12px; text-align: center; margin-top: 24px;">
+               © ${new Date().getFullYear()} Postora. All rights reserved.
+             </p>
+           </body>
+           </html>
+         `;
 
-      const sendEmail = async (from: string) => {
-        const res = await resend.emails.send({
-          from,
-          to: [email],
-          subject,
-          html,
-        });
+    const primaryFrom = Deno.env.get("EMAIL_FROM") ?? "Postora <noreply@postora.cloud>";
+    const fallbackFrom = "Postora <onboarding@resend.dev>";
 
-        const anyRes = res as any;
-        if (anyRes?.error) {
-          return { ok: false as const, error: anyRes.error, raw: anyRes };
-        }
+    const sendEmail = async (from: string) => {
+      const res = await resend.emails.send({
+        from,
+        to: [email],
+        subject,
+        html,
+      });
 
-        return { ok: true as const, raw: anyRes };
-      };
-
-      // 1) Try configured sender (or the default "noreply@postora.app")
-      let attempt = await sendEmail(primaryFrom);
-
-      // 2) If Resend rejects the sender domain, retry with Resend's default sandbox sender
-      if (!attempt.ok) {
-        const rawError = (attempt.raw as any)?.error ?? attempt.error;
-        const message = String((rawError as any)?.message ?? rawError ?? "");
-        const statusCode = Number((rawError as any)?.statusCode ?? 0);
-
-        console.error("Resend email send failed:", attempt.raw);
-
-        if (
-          primaryFrom !== fallbackFrom &&
-          statusCode === 403 &&
-          /(domain (not verified|is not verified))/i.test(message)
-        ) {
-          console.warn(
-            "Resend domain not verified for EMAIL_FROM; retrying with fallback sender.",
-          );
-          attempt = await sendEmail(fallbackFrom);
-        }
+      const anyRes = res as any;
+      if (anyRes?.error) {
+        return { ok: false as const, error: anyRes.error, raw: anyRes };
       }
 
-      if (!attempt.ok) {
-        return new Response(
-          JSON.stringify({
-            success: false,
-            error: "EMAIL_SEND_FAILED",
-            message:
-              "We couldn't send the reset email. If you're using a custom sender (like noreply@postora.app), verify that domain in Resend → Domains, or set EMAIL_FROM to a verified sender.",
-          }),
-          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      return { ok: true as const, raw: anyRes };
+    };
+
+    // 1) Try configured sender (or the default "noreply@postora.cloud")
+    let attempt = await sendEmail(primaryFrom);
+
+    // 2) If Resend rejects the sender domain, retry with Resend's default sandbox sender
+    if (!attempt.ok) {
+      const rawError = (attempt.raw as any)?.error ?? attempt.error;
+      const message = String((rawError as any)?.message ?? rawError ?? "");
+      const statusCode = Number((rawError as any)?.statusCode ?? 0);
+
+      console.error("send-reset-otp: Resend email send failed (code:", statusCode, ")");
+
+      if (
+        primaryFrom !== fallbackFrom &&
+        statusCode === 403 &&
+        /(domain (not verified|is not verified))/i.test(message)
+      ) {
+        console.warn(
+          "send-reset-otp: Resend domain not verified for EMAIL_FROM; retrying with fallback sender.",
         );
+        attempt = await sendEmail(fallbackFrom);
       }
-
-      console.log("OTP email sent successfully to", email);
-    } else {
-      console.error("RESEND_API_KEY is not configured; refusing to issue reset code.");
-      return new Response(
-        JSON.stringify({
-          success: false,
-          error: "EMAIL_NOT_CONFIGURED",
-          message: "Password reset email service is not configured. Please contact support.",
-        }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
     }
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        message: "Reset code sent to your email",
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    if (!attempt.ok) {
+      // P1-5: do not expose Resend/EMAIL_FROM configuration in the response.
+      // Internal log captured above; client sees the same generic success.
+      return genericSuccess;
+    }
+
+    // P1-5: never log the recipient email or the OTP itself.
+    console.log("send-reset-otp: OTP email dispatched.");
+
+    // P1-5: single unified response — identical to the early-exit branches above.
+    return genericSuccess;
+
 
   } catch (error) {
     console.error("Error in send-reset-otp:", error);
