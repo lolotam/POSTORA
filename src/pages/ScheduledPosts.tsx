@@ -135,6 +135,8 @@ export default function ScheduledPosts() {
   const [editCaption, setEditCaption] = useState("");
   const [editScheduledDate, setEditScheduledDate] = useState<Date | undefined>();
   const [editScheduledTime, setEditScheduledTime] = useState("");
+  const [editPlatforms, setEditPlatforms] = useState<Platform[]>([]);
+  const [editAccountIds, setEditAccountIds] = useState<string[]>([]);
   const [isSaving, setIsSaving] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [publishingPostId, setPublishingPostId] = useState<string | null>(null);
