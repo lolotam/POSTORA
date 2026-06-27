@@ -1,78 +1,88 @@
-## Goal
-Fix Instagram inbox and comment fetching after reauthentication, without changing unrelated features.
+# Postora Security Hardening Audit — Phased Plan
 
-## What I found
-Meta now has two different Instagram API paths:
+Postora is large (100+ edge functions, 50+ pages, self-hosted Supabase at `api.postora.cloud`). A single mega-pass would be unsafe and noisy. This plan splits the work into 5 phases, with explicit gates between each.
 
-1. **Instagram API with Instagram Login**
-   - Host: `graph.instagram.com`
-   - Token: Instagram User access token
-   - Permissions: `instagram_business_basic`, `instagram_business_manage_messages`, `instagram_business_manage_comments`
+## Phase 1 — Full security inventory (READ-ONLY, no code changes)
 
-2. **Instagram API with Facebook Login**
-   - Host: `graph.facebook.com`
-   - Token: Facebook Page/User token depending on endpoint
-   - Permissions: `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `pages_read_engagement`, and sometimes `pages_messaging`
+I will produce a single **Risk Register** document at `docs/security/audit-2026-06.md` (new file, documentation only — not code) covering all 11 areas you listed. For each area I will inspect the relevant files in parallel and record findings in the required format:
 
-The app already requests the right Direct Instagram scopes in `instagram-oauth`, but the inbox and comment APIs still treat Instagram mostly like the Facebook/Page flow:
+```
+area | file/function | issue | severity | exploit | recommended fix
+requires SQL | can Lovable fix | needs server/Zed
+```
 
-- `messaging-api` routes Instagram inbox through `graph.facebook.com/{pageId}/conversations`.
-- `comment-manager` routes Instagram comments through `graph.facebook.com/{ig_user_id}/media`.
-- If the user reconnects with **Connect Instagram Directly**, the saved token is an Instagram token, so those Facebook-host Graph calls can return empty data or permission errors.
+Areas and inspection targets:
 
-This matches your report: permissions are granted, SQL is done, app reauthenticated, but inbox/comments still do not show.
+1. **Auth flows** — `src/pages/Auth.tsx`, `ResetPassword.tsx`, `src/hooks/useAuth.tsx`, `send-reset-otp`, `send-auth-email`, `verify-mfa-reset`, `check-user-mfa`
+2. **OAuth flows** — every `*-oauth/index.ts` (facebook, instagram, instagram-business, threads, tiktok, pinterest, linkedin, youtube, twitter, reddit, bluesky) + `manage-oauth-redirects`, `OAuthCallback.tsx`, `*Callback.tsx`
+3. **Webhooks** — `stripe-webhook`, `resend-webhook`, `tiktok-webhook`, `threads-webhook`, `ecommerce-whatsapp-api` (WhatsApp webhook surface), `mcp` (public?)
+4. **Cron / scheduled** — `process-scheduled-posts`, `process-scheduled-emails`, `process-scheduled-blog-posts`, `process-scheduled-flags`, `observability-collector`, `cleanup-media`, `refresh-tokens`, `send-expiry-reminders`, `send-weekly-analytics`, `send-token-expiry-notifications`, `notify-expiring-ai-overrides`, `sync-resend-delivery-status`, `sync-user-quotas`
+5. **Service-role usage** — grep every function for `SUPABASE_SERVICE_ROLE_KEY` and classify: legitimate (admin task) vs leaky (user-callable but uses service role without auth check)
+6. **DB / RLS** — read `supabase/migrations/` index + spot-check sensitive tables: `social_accounts`, `backup_codes`, `app_settings`, `api_logs`, `user_roles`, `user_subscriptions`, storage policies
+7. **Uploads / media** — `cloudinary-upload`, `cloudinary-email-upload`, `cloudinary-delete`, `process-video`, `transcode-video`, `MediaLibrary.tsx`, storage RLS path conventions
+8. **AI providers** — `generate-caption`, `generate-image`, `generate-hashtags`, `ai-config`, `ai-email-assistant`, `test-ai-model`, `fetch-openrouter-models`
+9. **Payments** — `stripe-checkout`, `stripe-webhook`, `stripe-manage-subscription`, `create-payment`, `check-subscription`, `backfill-subscription`
+10. **Secrets / env** — `infra/edge-runtime.required-env.json`, `.env.example`, `scripts/check-edge-env-*`, repo-wide grep for hardcoded URLs / old `efruibswazzuuupgyzmf` refs
+11. **Logging** — grep for `console.log` of tokens/otp/state/code; broad `catch(e)` returning fake success; raw provider error pass-through
+12. **n8n API** — `n8n-api/index.ts` auth header handling only; no contract changes unless confirmed bug
 
-## Implementation plan
+Deliverable: `docs/security/audit-2026-06.md` with full risk register + summary counts by severity.
 
-### 1. Make the backend detect the Instagram auth type
-Use `social_accounts.ig_auth_type` / `account_metadata.flow` / `account_metadata.token_type` to distinguish:
+## Phase 2 — Prioritization roadmap (READ-ONLY)
 
-- `business_login` / `direct` / `long_lived` → use `graph.instagram.com`
-- `facebook_business` / `page_token` → use existing Facebook Page flow
+Append to the same audit doc:
 
-### 2. Fix Instagram Direct inbox fetching
-Update `supabase/functions/messaging-api/index.ts`:
+- **P1 Critical** — OTP/token leakage, unauth cron/webhook, service-role exposure, missing webhook signature verify, public admin endpoints, broken RLS
+- **P2 High** — OAuth redirect fallback, missing rate limits, weak error handling, payment replay/idempotency, upload validation
+- **P3 Medium** — dep vulns, old runtime refs in docs, generic FE errors, missing monitoring
 
-- For Direct Instagram accounts, call:
-  - `https://graph.instagram.com/<version>/<ig_user_id>/conversations?platform=instagram...`
-- Keep the existing Facebook Page flow for Facebook Business-connected IG accounts.
-- Return structured errors for:
-  - missing `instagram_business_manage_messages`
-  - expired token
-  - unsupported/non-professional account
-- Keep the UI reconnect banner behavior.
+For each item: file list, fix sketch, SQL-needed flag, server-action-needed flag.
 
-### 3. Fix Instagram Direct message details
-Update message retrieval in `messaging-api`:
+**Gate:** I stop and show you the audit + roadmap. You approve which P1 items to implement.
 
-- For Direct Instagram accounts, fetch conversation messages through the Instagram host.
-- Keep Facebook/WhatsApp message behavior unchanged.
+## Phase 3 — Implement Priority 1 only
 
-### 4. Fix Instagram Direct comment fetching
-Update `supabase/functions/comment-manager/index.ts`:
+Rules I will follow:
 
-- For Direct Instagram accounts, call `graph.instagram.com` with the Instagram token.
-- For Facebook Business-connected IG accounts, keep `graph.facebook.com`.
-- Preserve fetching of:
-  - media caption/type/permalink/timestamp
-  - `like_count`
-  - `comments_count`
-  - comments
-  - replies
-- Add pagination-safe fetching for media/comments where possible.
+- Small focused diffs per finding, never bundled
+- Preserve behavior; add auth/signature checks rather than refactor
+- Sanitize logs (redact tokens/otp/state)
+- Never print secrets, never add real env values
+- Each new env var: append name only to `infra/edge-runtime.required-env.json` + `.env.example` + a runbook note
+- Each DB change: new file `supabase/migrations/<UTC-timestamp>_<desc>.sql` with rollback notes; **not executed**
+- n8n-api untouched unless Phase 1 confirms a security bug
 
-### 5. Improve frontend error visibility
-Update the Instagram inbox/comment UI only enough to stop silent failures:
+Before editing I will list the exact files per fix and confirm.
 
-- Show a clear reconnect/permission banner when backend returns a structured missing-scope or expired-token response.
-- Show a helpful “no conversations/comments returned by Meta” empty state when the API succeeds but returns no data.
-- Do not change Facebook or WhatsApp UI behavior.
+## Phase 4 — Validation
 
-### 6. Validate locally
-Run TypeScript validation and inspect the changed API paths for compatibility.
+Run (allowing failures):
+```
+npm run check:edge-env || true
+npm run build || true
+npm run lint || true
+npx vitest run || true
+git diff --check || true
+```
+Plus security greps for token/otp/service-role leakage and old Supabase Cloud refs (allowed only in historical migrations & archived docs).
 
-### 7. Manual deployment notes
-Because this is self-hosted Supabase, code changes to edge functions will still require manual deployment/sync to the production functions volume and restarting only the functions container. I will include exact deployment notes after implementation.
+## Phase 5 — Guards & final report
 
-## Expected result
-After deploying the updated edge functions and reconnecting Instagram Direct once, Instagram inbox and comments should load through the correct `graph.instagram.com` endpoints. Facebook Business-connected Instagram accounts should continue using the existing Facebook/Page Graph flow.
+- CleanCodeGuard on production diffs
+- TestGuard only if test files changed (else: "no test files changed; no test-code review required")
+- Final report in your exact 14-section format ending in one of: `audit_completed`, `priority_1_completed_requires_server_sync`, `completed_requires_manual_sql`, `blocked`
+
+## What Lovable cannot do (called out up front)
+
+- SSH to Contabo VPS
+- Edit production `.env` at `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code/.env`
+- Sync edge functions to the self-hosted functions volume
+- Restart the functions container
+- Execute SQL on the self-hosted Postgres
+- Run real production OAuth/webhook tests
+
+These will be listed as explicit server actions in the final report.
+
+## This turn's scope
+
+If you approve this plan, I will execute **Phase 1 only** (read-only inventory → `docs/security/audit-2026-06.md`) and stop at the Phase 2 gate so you can steer which P1 fixes get implemented. No code, SQL, or env changes in this first execution.
