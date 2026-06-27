@@ -250,13 +250,29 @@ Deno.serve(async (req) => {
       const platform = messaging_platform || (account.platform === "instagram" ? "INSTAGRAM" : "MESSENGER");
       const url = `${GRAPH_API}/${pageId}/conversations?platform=${platform}&fields=participants{name,id,username,email},messages.limit(1){message,created_time,from},unread_count,updated_time&limit=25&access_token=${pageToken}`;
 
-      const data = await graphFetch(url);
+      let data: any;
+      try {
+        data = await graphFetch(url);
+      } catch (err) {
+        const msg = (err as Error).message || "";
+        // For Instagram, surface a structured missing-scope payload instead of a
+        // hard error so the inbox can render a "Reconnect Instagram" CTA.
+        if (platform === "INSTAGRAM" && /PERMISSION_ERROR/i.test(msg)) {
+          return jsonResponse({
+            conversations: [],
+            error: "Missing instagram_manage_messages permission. Please reconnect your Instagram account.",
+            error_type: "MISSING_SCOPE",
+            missing_scope: "instagram_manage_messages",
+          });
+        }
+        throw err;
+      }
 
       const conversations = await Promise.all((data.data || []).map(async (conv: any) => {
         const participant = conv.participants?.data?.find((p: any) => p.id !== pageId) || conv.participants?.data?.[0];
         const lastMsg = conv.messages?.data?.[0];
         const participantName = await resolveParticipantName(participant, pageToken, platform);
-        
+
         return {
           id: conv.id,
           participant_name: participantName,
