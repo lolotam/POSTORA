@@ -16,6 +16,13 @@ const API_ORIGIN = Deno.env.get("PUBLIC_API_ORIGIN") ?? "https://api.postora.clo
 const ISSUER = APP_ORIGIN;
 const MCP_RESOURCE = `${API_ORIGIN}/functions/v1/mcp`;
 
+// INTENTIONALLY PERMISSIVE CORS: mcp-oauth is a standards-compliant MCP OAuth 2.0
+// authorization server (RFC 8414/9700). Its clients (Claude Desktop, other MCP hosts)
+// connect from arbitrary localhost origins (http://localhost:<random-port>) that cannot
+// be allow-listed. Restricted CORS here would break MCP client discovery and token
+// exchange. This endpoint issues no Access-Control-Allow-Credentials, so browsers will
+// not attach cookies/auth to cross-origin reads; authentication is via signed PKCE
+// authorization codes and client secrets, not ambient credentials.
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":

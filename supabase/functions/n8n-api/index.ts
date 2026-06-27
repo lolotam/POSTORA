@@ -1,10 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse } from "../_shared/errorSanitizer.ts";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-api-key',
-}
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
 // Rate limiting configuration
 const RATE_LIMITS: Record<string, { requests: number; windowMs: number }> = {
@@ -357,7 +354,8 @@ function parseArrayField(value: any, fieldName: string): string[] {
 }
 
 // Handle POST /api/v1/post - Create a new post with platform-specific metadata
-async function handleCreatePost(supabase: any, userId: string, body: any, userPreferredTimezone?: string | null) {
+async function handleCreatePost(req: Request, supabase: any, userId: string, body: any, userPreferredTimezone?: string | null) {
+  const corsHeaders = restrictedCorsHeaders(req);
   console.log('Creating post for user:', userId, 'with body:', JSON.stringify(body, null, 2));
 
   const {
@@ -1082,6 +1080,7 @@ async function handleCreatePost(supabase: any, userId: string, body: any, userPr
 
 // Handle POST /api/v1/upload-media - Upload single or multiple media files
 async function handleUploadMedia(supabase: any, userId: string, request: Request) {
+  const corsHeaders = restrictedCorsHeaders(request);
   console.log('Uploading media for user:', userId);
 
   const contentType = request.headers.get('content-type') || '';
@@ -1199,7 +1198,8 @@ async function handleUploadMedia(supabase: any, userId: string, request: Request
 }
 
 // Handle GET /api/v1/accounts - List connected accounts with profile info
-async function handleGetAccounts(supabase: any, userId: string, url?: URL) {
+async function handleGetAccounts(req: Request, supabase: any, userId: string, url?: URL) {
+  const corsHeaders = restrictedCorsHeaders(req);
   console.log('Fetching accounts for user:', userId);
 
   const platformFilter = url?.searchParams.get('platform') || null;
@@ -1265,7 +1265,8 @@ async function handleGetAccounts(supabase: any, userId: string, url?: URL) {
 }
 
 // Handle GET /api/v1/posts - Get post history
-async function handleGetPosts(supabase: any, userId: string, url: URL) {
+async function handleGetPosts(req: Request, supabase: any, userId: string, url: URL) {
+  const corsHeaders = restrictedCorsHeaders(req);
   console.log('Fetching posts for user:', userId);
 
   const limit = parseInt(url.searchParams.get('limit') || '50');
@@ -1341,7 +1342,8 @@ async function handleGetPosts(supabase: any, userId: string, url: URL) {
 }
 
 // Handle POST /api/v1/webhooks - Register a webhook for post status updates
-async function handleRegisterWebhook(supabase: any, userId: string, body: any) {
+async function handleRegisterWebhook(req: Request, supabase: any, userId: string, body: any) {
+  const corsHeaders = restrictedCorsHeaders(req);
   console.log('Registering webhook for user:', userId, 'with body:', JSON.stringify(body, null, 2));
 
   const { webhook_url, events } = body;
@@ -1410,7 +1412,8 @@ async function handleRegisterWebhook(supabase: any, userId: string, body: any) {
 }
 
 // Handle GET /api/v1/webhooks - List user's webhooks
-async function handleGetWebhooks(supabase: any, userId: string) {
+async function handleGetWebhooks(req: Request, supabase: any, userId: string) {
+  const corsHeaders = restrictedCorsHeaders(req);
   console.log('Fetching webhooks for user:', userId);
 
   const { data: settings, error } = await supabase
@@ -1441,7 +1444,8 @@ async function handleGetWebhooks(supabase: any, userId: string) {
 }
 
 // Handle DELETE /api/v1/webhooks/:id - Delete a webhook
-async function handleDeleteWebhook(supabase: any, userId: string, webhookId: string) {
+async function handleDeleteWebhook(req: Request, supabase: any, userId: string, webhookId: string) {
+  const corsHeaders = restrictedCorsHeaders(req);
   console.log('Deleting webhook:', webhookId, 'for user:', userId);
 
   const webhookKey = `n8n_webhook_${userId}_${webhookId}`;
@@ -1466,7 +1470,8 @@ async function handleDeleteWebhook(supabase: any, userId: string, webhookId: str
 }
 
 // Handle POST /api/v1/webhooks/test - Test a webhook by sending a sample payload
-async function handleTestWebhook(supabase: any, userId: string, body: any) {
+async function handleTestWebhook(req: Request, supabase: any, userId: string, body: any) {
+  const corsHeaders = restrictedCorsHeaders(req);
   console.log('Testing webhook for user:', userId);
 
   const { webhook_url } = body;
@@ -1531,7 +1536,8 @@ async function handleTestWebhook(supabase: any, userId: string, body: any) {
 }
 
 // Handle GET /api/v1/post/:id - Get single post status with platform results
-async function handleGetPostById(supabase: any, userId: string, postId: string) {
+async function handleGetPostById(req: Request, supabase: any, userId: string, postId: string) {
+  const corsHeaders = restrictedCorsHeaders(req);
   console.log('Fetching post by ID:', postId, 'for user:', userId);
 
   const { data: post, error } = await supabase
@@ -1546,11 +1552,11 @@ async function handleGetPostById(supabase: any, userId: string, postId: string) 
 
   if (error) {
     console.error('Error fetching post:', error);
-    return apiError('Failed to fetch post. Please try again.', 500, 'INTERNAL_ERROR');
+    return apiError(req, 'Failed to fetch post. Please try again.', 500, 'INTERNAL_ERROR');
   }
 
   if (!post) {
-    return apiError('Post not found', 404, 'NOT_FOUND');
+    return apiError(req, 'Post not found', 404, 'NOT_FOUND');
   }
 
   return new Response(
@@ -1581,7 +1587,8 @@ async function handleGetPostById(supabase: any, userId: string, postId: string) 
 }
 
 // Standardized API error helper
-function apiError(message: string, status: number, code?: string, details?: any): Response {
+function apiError(req, message: string, status: number, code?: string, details?: any): Response {
+  const corsHeaders = restrictedCorsHeaders(req);
   return new Response(
     JSON.stringify({
       success: false,
@@ -1658,6 +1665,7 @@ async function sendWebhookNotification(
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = restrictedCorsHeaders(req);
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -1708,7 +1716,7 @@ Deno.serve(async (req) => {
     const authResult = await authenticateApiKey(supabaseAdmin, apiKey);
 
     if (!authResult) {
-      return apiError('Invalid or missing API key', 401, 'UNAUTHORIZED');
+      return apiError(req, 'Invalid or missing API key', 401, 'UNAUTHORIZED');
     }
 
     const userId = authResult.userId;
@@ -1720,7 +1728,7 @@ Deno.serve(async (req) => {
 
     if (!rateLimit.allowed) {
       console.log('Rate limit exceeded for user:', userId, 'on endpoint:', path);
-      return apiError(
+      return apiError(req, 
         `Too many requests. Please try again after ${rateLimit.resetAt.toISOString()}`,
         429,
         'RATE_LIMIT_EXCEEDED',
@@ -1829,30 +1837,30 @@ Deno.serve(async (req) => {
     if (path === '/api/v1/post' && req.method === 'POST') {
       const body = await parseRequestBody(req);
       console.log('Parsed request body:', JSON.stringify(body, null, 2));
-      response = await handleCreatePost(supabaseAdmin, userId, body, userPreferredTimezone);
+      response = await handleCreatePost(req, supabaseAdmin, userId, body, userPreferredTimezone);
     } else if ((path === '/api/v1/upload-media' || path === '/api/v1/media/upload') && req.method === 'POST') {
       response = await handleUploadMedia(supabaseAdmin, userId, req);
     } else if (path === '/api/v1/accounts' && req.method === 'GET') {
-      response = await handleGetAccounts(supabaseAdmin, userId, url);
+      response = await handleGetAccounts(req, supabaseAdmin, userId, url);
     } else if (path === '/api/v1/posts' && req.method === 'GET') {
-      response = await handleGetPosts(supabaseAdmin, userId, url);
+      response = await handleGetPosts(req, supabaseAdmin, userId, url);
     } else if (path.match(/^\/api\/v1\/post\/[^/]+$/) && req.method === 'GET') {
       const postId = path.replace('/api/v1/post/', '');
-      response = await handleGetPostById(supabaseAdmin, userId, postId);
+      response = await handleGetPostById(req, supabaseAdmin, userId, postId);
     } else if (path === '/api/v1/webhooks' && req.method === 'POST') {
       const body = await req.json();
-      response = await handleRegisterWebhook(supabaseAdmin, userId, body);
+      response = await handleRegisterWebhook(req, supabaseAdmin, userId, body);
     } else if (path === '/api/v1/webhooks' && req.method === 'GET') {
-      response = await handleGetWebhooks(supabaseAdmin, userId);
+      response = await handleGetWebhooks(req, supabaseAdmin, userId);
     } else if (path === '/api/v1/webhooks/test' && req.method === 'POST') {
       const body = await req.json();
-      response = await handleTestWebhook(supabaseAdmin, userId, body);
+      response = await handleTestWebhook(req, supabaseAdmin, userId, body);
     } else if (path.startsWith('/api/v1/webhooks/') && req.method === 'DELETE') {
       const webhookId = path.replace('/api/v1/webhooks/', '');
-      response = await handleDeleteWebhook(supabaseAdmin, userId, webhookId);
+      response = await handleDeleteWebhook(req, supabaseAdmin, userId, webhookId);
     } else {
       // 404 for unknown routes
-      response = apiError('Not Found', 404, 'NOT_FOUND', {
+      response = apiError(req, 'Not Found', 404, 'NOT_FOUND', {
         available_endpoints: [
           'POST /api/v1/post',
           'GET /api/v1/post/:id',
