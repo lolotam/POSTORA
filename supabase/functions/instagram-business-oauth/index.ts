@@ -40,12 +40,14 @@ const RETURN_URL_DEFAULT = "https://postora.cloud/profiles";
 const META_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
-  "business_management",
   "pages_manage_metadata",
+  "pages_messaging",
+  "business_management",
   "instagram_basic",
   "instagram_content_publish",
   "instagram_manage_comments",
   "instagram_manage_insights",
+  "instagram_manage_messages",
 ].join(",");
 
 function jsonResponse(body: unknown, status = 200) {
