@@ -121,33 +121,11 @@ serve(async (req) => {
       return genericSuccess;
     }
 
-    // Check if user has MFA enabled
-    const { data: factors, error: factorsError } = await supabase.auth.admin.mfa.listFactors({
-      userId: profile.id,
-    });
-
-    if (factorsError) {
-      // P1-5: same as profile lookup — generic success, internal log only.
-      console.error("send-reset-otp: MFA factor lookup failed:", factorsError);
-      return genericSuccess;
-    }
-
-    const totpFactors =
-      factors?.factors?.filter(
-        (f: { factor_type: string; status: string }) =>
-          f.factor_type === "totp" && f.status === "verified"
-      ) || [];
-
-    const hasVerifiedMFA = totpFactors.length > 0;
-
-    // P1-5: previously this branch returned a 400 with `MFA_NOT_ENABLED`,
-    // which let an attacker enumerate registered emails AND learn which
-    // accounts lack MFA (the higher-value targets). We now return the
-    // generic success response in this case. The authenticated /settings
-    // page is the legitimate place to tell users they need to enable MFA.
-    if (!hasVerifiedMFA) {
-      return genericSuccess;
-    }
+    // NOTE: we no longer gate OTP issuance on MFA enrolment. verify-reset-otp
+    // enforces MFA *after* a valid OTP is presented, which preserves the
+    // generic success response here and still requires the authenticator code
+    // for MFA accounts. Non-MFA accounts can now also use the OTP forgot-
+    // password flow.
 
     // Generate OTP and store hashed version. The plaintext OTP only
     // lives in memory long enough to be emailed; it is never logged.
@@ -155,9 +133,14 @@ serve(async (req) => {
     const otpHash = await hashOTP(otp);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
-    // Clean up old OTPs for this email first — preserves one-time-use
-    // semantics by guaranteeing only the latest code can be redeemed.
-    await supabase.from("password_reset_otps").delete().eq("email", normalizedEmail);
+    // Clean up old reset-purpose OTPs for this email first — preserves one-
+    // time-use semantics by guaranteeing only the latest code can be redeemed.
+    // Change-password-purpose OTPs are left untouched.
+    await supabase
+      .from("password_reset_otps")
+      .delete()
+      .eq("email", normalizedEmail)
+      .eq("purpose", "reset");
 
     // Store the new OTP
     const { error: insertError } = await supabase.from("password_reset_otps").insert({
@@ -166,6 +149,7 @@ serve(async (req) => {
       expires_at: expiresAt.toISOString(),
       attempts: 0,
       used: false,
+      purpose: "reset",
     });
 
     if (insertError) {
