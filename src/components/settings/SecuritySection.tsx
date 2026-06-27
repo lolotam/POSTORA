@@ -43,12 +43,17 @@ export function SecuritySection() {
   const { profile, user } = useAuth();
 
   // Password management
+  type PwStep = "password" | "mfa" | "otp";
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [pwStep, setPwStep] = useState<PwStep>("password");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+  const [pwMfaCode, setPwMfaCode] = useState("");
+  const [pwOtpCode, setPwOtpCode] = useState("");
+  const [pwOtpSending, setPwOtpSending] = useState(false);
   const [isGoogleUser, setIsGoogleUser] = useState(false);
 
   // 2FA management
