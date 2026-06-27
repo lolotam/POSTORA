@@ -5676,9 +5676,10 @@ async function postToThreads(
   // accepted (location_id, is_quote_post, shortcode) — surfaces silent ignores.
   let postUrl = username ? `https://www.threads.com/@${username}` : undefined;
   let verifyData: any = null;
+  let crossShareStatus: string | null = null;
   try {
     const verifyRes = await fetch(
-      `https://graph.threads.net/v1.0/${postId}?fields=id,permalink,shortcode,is_quote_post,media_type,location,location_id,topic_tag&access_token=${accessToken}`
+      `https://graph.threads.net/v1.0/${postId}?fields=id,permalink,shortcode,is_quote_post,media_type,location,location_id,topic_tag,crossreshare_to_ig_status&access_token=${accessToken}`
     );
     verifyData = await verifyRes.json();
     if (verifyData && typeof verifyData === "object" && "topic_tag" in verifyData) {
@@ -5690,12 +5691,15 @@ async function postToThreads(
     } else {
       console.warn("Threads: No permalink returned, using profile fallback");
     }
-    console.log(`Threads: Verification fetch: ${JSON.stringify(verifyData).slice(0, 400)}`);
-
-    // If we attempted cross-share, do a soft IG verification probe (best-effort).
     if (crossShareApplied) {
-      console.log("Threads: Cross-share was sent — IG side will be visible in Stories within ~2 min if accepted by Meta.");
+      const raw = (verifyData as Record<string, unknown> | null)?.crossreshare_to_ig_status;
+      crossShareStatus = typeof raw === "string" ? raw : null;
+      console.log(
+        `Threads: cross-share status from Meta = ${crossShareStatus ?? "unknown"} ` +
+        `(IG Story typically appears within ~2 min when SUCCESS)`
+      );
     }
+    console.log(`Threads: Verification fetch: ${JSON.stringify(verifyData).slice(0, 400)}`);
   } catch (e) {
     console.warn("Threads: Failed to fetch verification fields:", e);
     if (LOCATION_DEBUG_MODE) {
