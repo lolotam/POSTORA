@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Reply, EyeOff, Eye, Trash2, Send, Loader2 } from "lucide-react";
+import { Reply, EyeOff, Eye, Trash2, Send, Loader2, Heart } from "lucide-react";
 import { Comment, useReplyComment, useHideComment, useDeleteComment } from "@/hooks/useCommentInbox";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -73,6 +73,12 @@ export function CommentList({ comments, socialAccountId, hiddenFilter }: Comment
                   <Badge variant="outline" className="text-xs capitalize">
                     {comment.platform}
                   </Badge>
+                  {comment.like_count != null && (
+                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                      <Heart className="h-3 w-3" />
+                      {comment.like_count}
+                    </span>
+                  )}
                 </div>
                 <p className="text-sm">{comment.message}</p>
                 {comment.post_message && (

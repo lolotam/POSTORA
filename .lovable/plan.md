@@ -1,95 +1,78 @@
-## Part 1 — Persist & reuse searches on `/analytics/threads`
+## Goal
+Fix Instagram inbox and comment fetching after reauthentication, without changing unrelated features.
 
-Today only the **Keyword Search** tab saves recent searches (via the existing `threads_recent_searches` table + dropdown). The **Analyze** and **Discovery** tabs both use `BrandSearchBar` (username input) with no history.
+## What I found
+Meta now has two different Instagram API paths:
 
-### Changes
-1. **DB (manual SQL only — per project rules):**
-   `supabase/migrations/<ts>_brand_search_history.sql`
-   - New table `public.brand_search_history`:
-     - `id uuid pk`, `user_id uuid`, `platform text` (`threads` for now, extensible), `scope text` (`analyze` | `discovery`), `query text`, `last_used_at timestamptz`, `use_count int`, `created_at`.
-     - Unique on `(user_id, platform, scope, lower(query))`.
-   - GRANTs to `authenticated` (CRUD) and `service_role` (ALL); RLS = `auth.uid() = user_id`.
-   - Rollback note included.
+1. **Instagram API with Instagram Login**
+   - Host: `graph.instagram.com`
+   - Token: Instagram User access token
+   - Permissions: `instagram_business_basic`, `instagram_business_manage_messages`, `instagram_business_manage_comments`
 
-2. **Frontend — `BrandSearchBar`:**
-   - Accept new optional props `platform` (already passed) and `scope: "analyze" | "discovery"`.
-   - On focus / typing, show a dropdown of the user's previous searches for that (platform, scope), ordered by `last_used_at desc`, with a per-row "×" to delete.
-   - On successful search submit, upsert into `brand_search_history` (increment `use_count`, bump `last_used_at`).
-   - Click a row → fill input and trigger `onSearch`.
+2. **Instagram API with Facebook Login**
+   - Host: `graph.facebook.com`
+   - Token: Facebook Page/User token depending on endpoint
+   - Permissions: `instagram_basic`, `instagram_manage_messages`, `instagram_manage_comments`, `pages_read_engagement`, and sometimes `pages_messaging`
 
-3. **ThreadsAnalytics.tsx:**
-   - Pass `scope="analyze"` to the BrandSearchBar in the Analyze tab and `scope="discovery"` to the one inside `ThreadsDiscoveryPanel`.
+The app already requests the right Direct Instagram scopes in `instagram-oauth`, but the inbox and comment APIs still treat Instagram mostly like the Facebook/Page flow:
 
-4. **Keyword Search tab:** already has saved searches — no change.
+- `messaging-api` routes Instagram inbox through `graph.facebook.com/{pageId}/conversations`.
+- `comment-manager` routes Instagram comments through `graph.facebook.com/{ig_user_id}/media`.
+- If the user reconnects with **Connect Instagram Directly**, the saved token is an Instagram token, so those Facebook-host Graph calls can return empty data or permission errors.
 
-## Part 2 — Instagram messaging/comments audit & debug
+This matches your report: permissions are granted, SQL is done, app reauthenticated, but inbox/comments still do not show.
 
-### A. Scope/permission audit
-Current IG scopes (`instagram-business-oauth/index.ts`):
-`pages_show_list, pages_read_engagement, business_management, pages_manage_metadata, instagram_basic, instagram_content_publish, instagram_manage_comments, instagram_manage_insights`
+## Implementation plan
 
-Findings:
-- ❌ **Missing `instagram_manage_messages`** — required for Instagram DM Inbox (`/{page-id}/conversations?platform=instagram` + sending). This is the primary reason the Instagram Inbox is empty while Facebook works.
-- ⚠️ **`instagram_manage_insights`** is needed for post likes/insights counts; OK.
-- ⚠️ For mentions/comments-on-comments visibility we may also want `instagram_manage_comments` (already present) + the IG account must be **Business or Creator** linked to a FB Page (verify in account metadata at connect time).
+### 1. Make the backend detect the Instagram auth type
+Use `social_accounts.ig_auth_type` / `account_metadata.flow` / `account_metadata.token_type` to distinguish:
 
-Action:
-- Add `instagram_manage_messages` to META_SCOPES.
-- Show a one-time reconnect banner on `/messaging/instagram` when an active IG account is missing this scope (detected via stored `granted_scopes`/account_metadata, or by a 10/200 Graph error code).
+- `business_login` / `direct` / `long_lived` → use `graph.instagram.com`
+- `facebook_business` / `page_token` → use existing Facebook Page flow
 
-### B. Why Instagram comments/messages/likes look incomplete
+### 2. Fix Instagram Direct inbox fetching
+Update `supabase/functions/messaging-api/index.ts`:
 
-`comment-manager`:
-- IG comments are fetched via `/{ig_user_id}/media?fields=...,comments{...}` with `limit=25` (only last 25 media, only the first page of comments per media, no pagination). For active accounts this drops older media and replies-to-replies.
-- IG Graph returns the `from{id,username}` of a comment **only** when the commenter is a Business/Creator account or the post owner. Personal commenters return `from = null` — currently rendered as "Unknown", and on some API errors the whole `comments` edge is dropped silently.
-- Likes are not fetched at all for IG (no `like_count` field requested on media).
+- For Direct Instagram accounts, call:
+  - `https://graph.instagram.com/<version>/<ig_user_id>/conversations?platform=instagram...`
+- Keep the existing Facebook Page flow for Facebook Business-connected IG accounts.
+- Return structured errors for:
+  - missing `instagram_business_manage_messages`
+  - expired token
+  - unsupported/non-professional account
+- Keep the UI reconnect banner behavior.
 
-`messaging-api` (Instagram Inbox):
-- Uses `/{pageId}/conversations?platform=instagram` — this is the correct endpoint, but it requires `instagram_manage_messages` (missing above). Without it the response is empty / 200 with `data: []`, which the UI shows as "no messages".
-- 24-hour messaging window + webhook subscription must be active on the Page → IG account for new DMs to surface in `conversations`.
+### 3. Fix Instagram Direct message details
+Update message retrieval in `messaging-api`:
 
-### Fixes (frontend + edge, no business-logic changes beyond what's needed to fetch)
-1. **`instagram-business-oauth/index.ts`** — add `instagram_manage_messages` to scopes; persist `granted_scopes` from the token exchange into `social_accounts.account_metadata.granted_scopes` so the UI can detect missing scopes.
-2. **`comment-manager/index.ts` — `get_ig_comments`:**
-   - Request fields `id,caption,timestamp,like_count,comments_count,comments.limit(50){id,from{id,username},text,timestamp,hidden,username,replies{id,from{id,username},text,timestamp,hidden,username}}` with `limit=50` on media.
-   - Add `after` pagination param so the UI can load older media.
-   - On per-media `comments` error, return the media item with `comments: []` instead of dropping it.
-3. **`messaging-api/index.ts` — `get_conversations` (IG):**
-   - Detect Graph error subcode `10` / `200` (permission) and return a structured `{ ok:false, reason:"missing_scope", scope:"instagram_manage_messages" }` so the inbox UI can render a "Reconnect Instagram" CTA instead of an empty list.
-4. **UI:**
-   - `CommentManagerPanel` (Instagram): show `like_count`, `comments_count` from the new fields; render replies under each comment; add a "Load more" button using pagination.
-   - `MessagingInbox` (Instagram): when `reason === "missing_scope"`, show reconnect banner targeting `/profiles` → Instagram Business reconnect.
+- For Direct Instagram accounts, fetch conversation messages through the Instagram host.
+- Keep Facebook/WhatsApp message behavior unchanged.
 
-### Known IG platform limitations (will be surfaced in UI, not "fixed" — informational)
-- IG Graph only returns DMs received **after** the IG account was linked to the Page and the webhook subscription was created. Historical DMs predating connection are not retrievable.
-- Comments from non-Business personal accounts appear without `from` (Meta privacy limitation).
-- Likes per post are exposed via `like_count` only (no per-user list).
+### 4. Fix Instagram Direct comment fetching
+Update `supabase/functions/comment-manager/index.ts`:
 
-## Files changed
-- `supabase/migrations/<ts>_brand_search_history.sql` (new, manual)
-- `src/components/brand-intelligence/BrandSearchBar.tsx`
-- `src/hooks/useBrandSearchHistory.ts` (new)
-- `src/pages/analytics/ThreadsAnalytics.tsx` (pass `scope`)
-- `src/components/brand-intelligence/ThreadsDiscoveryPanel.tsx` (pass `scope`)
-- `supabase/functions/instagram-business-oauth/index.ts` (scopes + persist granted scopes)
-- `supabase/functions/comment-manager/index.ts` (IG fields/pagination/likes)
-- `supabase/functions/messaging-api/index.ts` (IG missing-scope structured error)
-- `src/components/comments/CommentManagerPanel.tsx` (likes, replies, load more)
-- `src/components/messaging/MessagingInbox.tsx` (missing-scope CTA)
+- For Direct Instagram accounts, call `graph.instagram.com` with the Instagram token.
+- For Facebook Business-connected IG accounts, keep `graph.facebook.com`.
+- Preserve fetching of:
+  - media caption/type/permalink/timestamp
+  - `like_count`
+  - `comments_count`
+  - comments
+  - replies
+- Add pagination-safe fetching for media/comments where possible.
 
-## Database changes
-Manual SQL file only — `brand_search_history` table + RLS + GRANTs. Owner runs it on self-hosted Postgres.
+### 5. Improve frontend error visibility
+Update the Instagram inbox/comment UI only enough to stop silent failures:
 
-## Env changes
-None.
+- Show a clear reconnect/permission banner when backend returns a structured missing-scope or expired-token response.
+- Show a helpful “no conversations/comments returned by Meta” empty state when the API succeeds but returns no data.
+- Do not change Facebook or WhatsApp UI behavior.
 
-## Deployment notes
-- Sync `instagram-business-oauth`, `comment-manager`, `messaging-api` to the self-hosted `functions` volume and restart only the functions container.
-- After deploy, existing Instagram accounts must **reconnect once** to grant `instagram_manage_messages`. The UI banner will prompt them.
+### 6. Validate locally
+Run TypeScript validation and inspect the changed API paths for compatibility.
 
-## Remaining manual actions
-- Run the new SQL migration on self-hosted Postgres.
-- In Meta App Dashboard, confirm `instagram_manage_messages` is enabled on the app (already part of IG Graph standard permissions; App Review required for non-tester users).
+### 7. Manual deployment notes
+Because this is self-hosted Supabase, code changes to edge functions will still require manual deployment/sync to the production functions volume and restarting only the functions container. I will include exact deployment notes after implementation.
 
-## Final status
-`completed_requires_manual_sql` + `ready_for_provider_console_update` after I implement.
+## Expected result
+After deploying the updated edge functions and reconnecting Instagram Direct once, Instagram inbox and comments should load through the correct `graph.instagram.com` endpoints. Facebook Business-connected Instagram accounts should continue using the existing Facebook/Page Graph flow.

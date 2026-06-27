@@ -8,6 +8,49 @@ const corsHeaders = {
 
 const GRAPH_API_VERSION = "v22.0";
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+const INSTAGRAM_GRAPH_API_BASE = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
+
+function isDirectInstagramAccount(account: { platform?: string; ig_auth_type?: string | null; account_metadata?: Record<string, unknown> | null }) {
+  const meta = account.account_metadata || {};
+  return account.platform === "instagram" && (
+    account.ig_auth_type === "business_login" ||
+    meta.flow === "direct" ||
+    meta.source === "instagram_business_login" ||
+    meta.token_type === "long_lived"
+  );
+}
+
+async function graphJson(url: string) {
+  const res = await fetch(url);
+  const data = await res.json().catch(() => ({ error: { message: res.statusText } }));
+  if (!res.ok || data?.error) {
+    const err = data?.error || {};
+    if (err.code === 190) {
+      return { error_type: "TOKEN_EXPIRED", error: "Instagram connection expired. Please reconnect your account." };
+    }
+    if (err.code === 10 || err.code === 200 || /permission|permissions|scope/i.test(err.message || "")) {
+      return { error_type: "MISSING_SCOPE", error: err.message || "Missing Instagram comments permission." };
+    }
+    return { error_type: "GRAPH_ERROR", error: err.message || "Meta API request failed." };
+  }
+  return data;
+}
+
+async function collectPaged(firstUrl: string, maxPages = 4) {
+  const rows: unknown[] = [];
+  let nextUrl: string | null = firstUrl;
+  let paging: unknown = null;
+
+  for (let page = 0; nextUrl && page < maxPages; page += 1) {
+    const data = await graphJson(nextUrl);
+    if (data?.error_type) return data;
+    if (Array.isArray(data?.data)) rows.push(...data.data);
+    paging = data?.paging || null;
+    nextUrl = data?.paging?.next || null;
+  }
+
+  return { data: rows, paging };
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -42,10 +85,11 @@ Deno.serve(async (req) => {
 
     // Get access token for the social account
     let accessToken: string | null = null;
+    let socialAccount: { access_token: string; platform: string; ig_auth_type?: string | null; account_metadata?: Record<string, unknown> | null } | null = null;
     if (social_account_id) {
       const { data: account } = await supabase
         .from("social_accounts")
-        .select("access_token, platform")
+        .select("access_token, platform, ig_auth_type, account_metadata")
         .eq("id", social_account_id)
         .eq("user_id", user.id)
         .single();
@@ -56,6 +100,7 @@ Deno.serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+      socialAccount = account;
       accessToken = account.access_token;
     }
 
@@ -84,6 +129,9 @@ Deno.serve(async (req) => {
         }
         // Request like_count + comments_count on each media, plus replies under
         // each comment. Higher `limit` so active accounts surface more history.
+        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
+          ? INSTAGRAM_GRAPH_API_BASE
+          : GRAPH_API_BASE;
         const fields = [
           "id",
           "caption",
@@ -94,11 +142,10 @@ Deno.serve(async (req) => {
           "comments_count",
           "comments.limit(50){id,from{id,username},text,timestamp,hidden,username,like_count,replies{id,from{id,username},text,timestamp,hidden,username,like_count}}",
         ].join(",");
-        const url = `${GRAPH_API_BASE}/${ig_user_id}/media?fields=${fields}&limit=50&access_token=${accessToken}`;
-        const res = await fetch(url);
-        const raw = await res.json();
+        const url = `${apiBase}/${ig_user_id}/media?fields=${encodeURIComponent(fields)}&limit=50&access_token=${encodeURIComponent(accessToken)}`;
+        const raw = await collectPaged(url, 4);
         // If the whole call failed, return the error as-is so the client can map it.
-        if (raw?.error) {
+        if (raw?.error || raw?.error_type) {
           result = raw;
           break;
         }
@@ -122,7 +169,10 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const url = `${GRAPH_API_BASE}/${comment_id}/replies`;
+        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
+          ? INSTAGRAM_GRAPH_API_BASE
+          : GRAPH_API_BASE;
+        const url = `${apiBase}/${comment_id}/replies`;
         const res = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -140,7 +190,10 @@ Deno.serve(async (req) => {
           });
         }
         const isHidden = body.is_hidden !== undefined ? body.is_hidden : true;
-        const url = `${GRAPH_API_BASE}/${comment_id}?is_hidden=${isHidden}&access_token=${accessToken}`;
+        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
+          ? INSTAGRAM_GRAPH_API_BASE
+          : GRAPH_API_BASE;
+        const url = `${apiBase}/${comment_id}?is_hidden=${isHidden}&access_token=${encodeURIComponent(accessToken)}`;
         const res = await fetch(url, { method: "POST" });
         result = await res.json();
         break;
@@ -153,7 +206,10 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const url = `${GRAPH_API_BASE}/${comment_id}?access_token=${accessToken}`;
+        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
+          ? INSTAGRAM_GRAPH_API_BASE
+          : GRAPH_API_BASE;
+        const url = `${apiBase}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`;
         const res = await fetch(url, { method: "DELETE" });
         result = await res.json();
         break;

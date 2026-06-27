@@ -5,7 +5,9 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-const GRAPH_API = "https://graph.facebook.com/v22.0";
+const GRAPH_VERSION = "v22.0";
+const GRAPH_API = `https://graph.facebook.com/${GRAPH_VERSION}`;
+const INSTAGRAM_GRAPH_API = `https://graph.instagram.com/${GRAPH_VERSION}`;
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -23,7 +25,7 @@ function gracefulError(message: string, errorType: string) {
  * Makes the conversation appear in the inbox immediately and auto-saves the contact.
  */
 async function upsertOutboundConversation(
-  adminClient: ReturnType<typeof createClient>,
+  adminClient: any,
   params: {
     user_id: string;
     social_account_id: string;
@@ -37,7 +39,7 @@ async function upsertOutboundConversation(
   const nowIso = new Date().toISOString();
 
   // Look up existing contact display name (if any)
-  const { data: existingContact } = await adminClient
+  const { data: existingContact } = await (adminClient as any)
     .from("whatsapp_contacts")
     .select("display_name")
     .eq("user_id", params.user_id)
@@ -47,7 +49,7 @@ async function upsertOutboundConversation(
   const participantName = existingContact?.display_name || `+${normalizedPhone}`;
 
   // Auto-save contact (no-op on conflict)
-  await adminClient.from("whatsapp_contacts").upsert(
+  await (adminClient as any).from("whatsapp_contacts").upsert(
     {
       user_id: params.user_id,
       phone_number: normalizedPhone,
@@ -58,7 +60,7 @@ async function upsertOutboundConversation(
   );
 
   // Upsert messaging_cache so conversation appears in the inbox
-  await adminClient.from("messaging_cache").upsert(
+  await (adminClient as any).from("messaging_cache").upsert(
     {
       user_id: params.user_id,
       social_account_id: params.social_account_id,
@@ -115,12 +117,21 @@ Deno.serve(async (req) => {
     async function getAccountToken(socialAccountId: string) {
       const { data, error } = await adminClient
         .from("social_accounts")
-        .select("access_token, platform_user_id, platform_username, platform, account_metadata")
+        .select("access_token, platform_user_id, platform_username, platform, ig_auth_type, account_metadata")
         .eq("id", socialAccountId)
         .eq("user_id", user!.id)
         .single();
       if (error || !data) throw new Error("Account not found or access denied");
       return data;
+    }
+
+    function isDirectInstagramAccount(account: any): boolean {
+      if (account.platform !== "instagram") return false;
+      const meta = account.account_metadata || {};
+      return account.ig_auth_type === "business_login"
+        || meta.flow === "direct"
+        || meta.source === "instagram_business_login"
+        || meta.token_type === "long_lived";
     }
 
     // Helper: For Instagram accounts, find the linked Facebook Page's token
@@ -129,8 +140,17 @@ Deno.serve(async (req) => {
         return { pageId: account.platform_user_id, pageToken: account.access_token };
       }
 
+      const meta = account.account_metadata || {};
+      const storedPageId = meta.page_id || meta.facebook_page_id;
+      const storedPageToken = account.access_token || meta.page_access_token;
+
+      if (account.platform === "instagram" && storedPageId && storedPageToken) {
+        console.log(`[messaging] Using stored FB page ${storedPageId} for IG account ${account.platform_user_id}`);
+        return { pageId: storedPageId, pageToken: storedPageToken };
+      }
+
       // Check if account_metadata has a stored page_id for quick lookup
-      const storedPageId = account.account_metadata?.page_id;
+      const storedLookupPageId = storedPageId;
 
       const { data: fbAccounts } = await adminClient
         .from("social_accounts")
@@ -144,10 +164,10 @@ Deno.serve(async (req) => {
       }
 
       // If we have a stored page_id, try to find that FB account directly
-      if (storedPageId) {
-        const match = fbAccounts.find((fb: any) => fb.platform_user_id === storedPageId);
+      if (storedLookupPageId) {
+        const match = fbAccounts.find((fb: any) => fb.platform_user_id === storedLookupPageId);
         if (match) {
-          console.log(`[messaging] Using stored page_id ${storedPageId} for IG account ${account.platform_user_id}`);
+          console.log(`[messaging] Using stored page_id ${storedLookupPageId} for IG account ${account.platform_user_id}`);
           return { pageId: match.platform_user_id, pageToken: match.access_token };
         }
       }
@@ -202,6 +222,25 @@ Deno.serve(async (req) => {
       return await res.json();
     }
 
+    async function listDirectInstagramConversations(account: any): Promise<any> {
+      const fields = "participants{username,id,name},messages.limit(1){message,created_time,from},unread_count,updated_time";
+      const url = `${INSTAGRAM_GRAPH_API}/${account.platform_user_id}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=50&access_token=${encodeURIComponent(account.access_token)}`;
+      try {
+        return await graphFetch(url);
+      } catch (err) {
+        const msg = (err as Error).message || "";
+        if (/PERMISSION_ERROR/i.test(msg)) {
+          return {
+            data: [],
+            error: "Missing instagram_business_manage_messages permission. Please reconnect your Instagram account.",
+            error_type: "MISSING_SCOPE",
+            missing_scope: "instagram_business_manage_messages",
+          };
+        }
+        throw err;
+      }
+    }
+
     // Helper: resolve participant name for IG conversations
     async function resolveParticipantName(participant: any, pageToken: string, platform: string): Promise<string> {
       // If name is available, use it
@@ -245,14 +284,23 @@ Deno.serve(async (req) => {
       if (!social_account_id) throw new Error("social_account_id required");
 
       const account = await getAccountToken(social_account_id);
-      const { pageId, pageToken } = await getPageTokenForMessaging(account);
-
       const platform = messaging_platform || (account.platform === "instagram" ? "INSTAGRAM" : "MESSENGER");
-      const url = `${GRAPH_API}/${pageId}/conversations?platform=${platform}&fields=participants{name,id,username,email},messages.limit(1){message,created_time,from},unread_count,updated_time&limit=25&access_token=${pageToken}`;
 
+      let pageId = account.platform_user_id;
+      let pageToken = account.access_token;
       let data: any;
+
       try {
-        data = await graphFetch(url);
+        if (platform === "INSTAGRAM" && isDirectInstagramAccount(account)) {
+          data = await listDirectInstagramConversations(account);
+          if (data.error_type) return jsonResponse({ conversations: [], ...data });
+        } else {
+          const resolved = await getPageTokenForMessaging(account);
+          pageId = resolved.pageId;
+          pageToken = resolved.pageToken;
+          const url = `${GRAPH_API}/${pageId}/conversations?platform=${platform}&fields=participants{name,id,username,email},messages.limit(1){message,created_time,from},unread_count,updated_time&limit=50&access_token=${encodeURIComponent(pageToken)}`;
+          data = await graphFetch(url);
+        }
       } catch (err) {
         const msg = (err as Error).message || "";
         // For Instagram, surface a structured missing-scope payload instead of a
@@ -260,10 +308,13 @@ Deno.serve(async (req) => {
         if (platform === "INSTAGRAM" && /PERMISSION_ERROR/i.test(msg)) {
           return jsonResponse({
             conversations: [],
-            error: "Missing instagram_manage_messages permission. Please reconnect your Instagram account.",
+            error: "Missing Instagram messaging permission. Please reconnect your Instagram account.",
             error_type: "MISSING_SCOPE",
-            missing_scope: "instagram_manage_messages",
+            missing_scope: isDirectInstagramAccount(account) ? "instagram_business_manage_messages" : "instagram_manage_messages",
           });
+        }
+        if (platform === "INSTAGRAM" && /TOKEN_EXPIRED/i.test(msg)) {
+          return jsonResponse({ conversations: [], error: msg, error_type: "TOKEN_EXPIRED" });
         }
         throw err;
       }
@@ -294,10 +345,18 @@ Deno.serve(async (req) => {
       if (!social_account_id || !conversation_id) throw new Error("social_account_id and conversation_id required");
 
       const account = await getAccountToken(social_account_id);
-      const { pageToken } = await getPageTokenForMessaging(account);
-      const url = `${GRAPH_API}/${conversation_id}/messages?fields=message,from,to,created_time,attachments{mime_type,name,size,image_data,video_data,file_url}&limit=50&access_token=${pageToken}`;
+      let data: any;
 
-      const data = await graphFetch(url);
+      if (isDirectInstagramAccount(account)) {
+        const fields = "messages.limit(50){message,from,to,created_time,attachments{mime_type,name,size,image_data,video_data,file_url}}";
+        const url = `${INSTAGRAM_GRAPH_API}/${conversation_id}?fields=${encodeURIComponent(fields)}&access_token=${encodeURIComponent(account.access_token)}`;
+        data = await graphFetch(url);
+        data = data.messages || data;
+      } else {
+        const { pageToken } = await getPageTokenForMessaging(account);
+        const url = `${GRAPH_API}/${conversation_id}/messages?fields=message,from,to,created_time,attachments{mime_type,name,size,image_data,video_data,file_url}&limit=50&access_token=${encodeURIComponent(pageToken)}`;
+        data = await graphFetch(url);
+      }
 
       const messages = (data.data || []).map((msg: any) => ({
         id: msg.id,
@@ -392,13 +451,13 @@ Deno.serve(async (req) => {
     // Helper: mark account as cloud-api-registered in DB
     async function markCloudApiRegistered(socialAccountId: string) {
       try {
-        const { data: acc } = await supabase
+        const { data: acc } = await (adminClient as any)
           .from("social_accounts")
           .select("account_metadata")
           .eq("id", socialAccountId)
           .maybeSingle();
         const meta = (acc?.account_metadata as Record<string, unknown>) || {};
-        await supabase
+        await (adminClient as any)
           .from("social_accounts")
           .update({ account_metadata: { ...meta, cloud_api_registered: true, cloud_api_registered_at: new Date().toISOString() } })
           .eq("id", socialAccountId);

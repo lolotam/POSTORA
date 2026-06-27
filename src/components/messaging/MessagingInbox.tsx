@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Facebook, Camera, MessageSquare, Loader2, Plus, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -35,10 +35,20 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
   const { data: conversations = [], isLoading: convsLoading, error: convsError } = useConversations(selectedAccountId, messagingPlatform);
   const igMissingScope = platformTab === "instagram"
     && convsError instanceof Error
-    && /instagram_manage_messages|MISSING_SCOPE|PERMISSION_ERROR/i.test(convsError.message);
+    && /instagram_manage_messages|instagram_business_manage_messages|MISSING_SCOPE|PERMISSION_ERROR|TOKEN_EXPIRED/i.test(convsError.message);
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
   const pageId = selectedAccount?.platform_user_id || "";
+
+  useEffect(() => {
+    const platformAccounts = accounts.filter((account) => account.platform === platformTab);
+    if (platformAccounts.length === 0) return;
+    const stillValid = selectedAccountId && platformAccounts.some((account) => account.id === selectedAccountId);
+    if (!stillValid) {
+      setSelectedAccountId(platformAccounts[0].id);
+      setSelectedConversation(null);
+    }
+  }, [accounts, platformTab, selectedAccountId]);
 
   const handleAccountChange = (id: string) => {
     setSelectedAccountId(id);
@@ -187,7 +197,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
               <div className="flex-1">
                 <p className="font-medium text-amber-700 dark:text-amber-300">Instagram DMs need an extra permission</p>
                 <p className="text-amber-700/80 dark:text-amber-300/80 mt-0.5">
-                  Reconnect your Instagram account and approve <code className="font-mono text-xs">instagram_manage_messages</code> so we can load your inbox.
+                  Reconnect your Instagram account and approve messaging permissions so we can load your inbox.
                 </p>
               </div>
               <Button asChild size="sm" variant="outline" className="border-amber-500/50">
