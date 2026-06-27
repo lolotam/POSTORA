@@ -1060,6 +1060,14 @@ export default function ScheduledPosts() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Media Lightbox */}
+      <MediaLightboxDialog
+        open={lightbox !== null}
+        onOpenChange={(o) => !o && setLightbox(null)}
+        items={lightbox?.items ?? []}
+        initialIndex={lightbox?.index ?? 0}
+      />
     </DashboardLayout>
   );
 }
