@@ -514,8 +514,8 @@ export function PlatformSettingsSection({
                   setLinkedInTitle={platformSettings.setLinkedinTitle}
                   linkedInDescription={platformSettings.linkedinDescription}
                   setLinkedInDescription={platformSettings.setLinkedinDescription}
-                  selectedPageId={platformSettings.linkedinSelectedPageId}
-                  setSelectedPageId={platformSettings.setLinkedinSelectedPageId}
+                  selectedDestinationIds={platformSettings.linkedinSelectedDestinationIds}
+                  setSelectedDestinationIds={platformSettings.setLinkedinSelectedDestinationIds}
                   availablePages={
                     connectedAccounts
                       .filter(a => a.platform === "linkedin" && selectedAccountIds.includes(a.id))
