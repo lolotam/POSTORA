@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Facebook, Camera, MessageSquare, Loader2, Plus } from "lucide-react";
+import { Facebook, Camera, MessageSquare, Loader2, Plus, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Link } from "react-router-dom";
 import { AccountSelector } from "./AccountSelector";
 import { ConversationList } from "./ConversationList";
 import { ConversationDetail } from "./ConversationDetail";
