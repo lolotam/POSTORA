@@ -364,25 +364,22 @@ export function SecuritySection() {
     }
   };
 
-  // Backup codes functions
-  // Cryptographically secure backup code generator.
-  // Charset length is 32 (a power of two), so masking each random byte with 0x1F
-  // maps uniformly to an index with zero modulo bias.
-  const generateBackupCode = () => {
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    const length = 8;
-    const randomBytes = new Uint8Array(length);
-    crypto.getRandomValues(randomBytes);
-    let code = '';
-    for (let i = 0; i < length; i++) {
-      code += chars.charAt(randomBytes[i] & 0x1f);
-    }
-    return code;
-  };
+  // Backup codes: codes are generated and hashed server-side by the
+  // `manage-backup-codes` edge function. Plaintext codes are returned ONCE
+  // to display to the user; only SHA-256 hashes are persisted.
 
   const checkExistingBackupCodes = async () => {
     if (!user) return;
-    setHasBackupCodes(false);
+    try {
+      const { data, error } = await supabase.functions.invoke("manage-backup-codes", {
+        body: { action: "status" },
+      });
+      if (error) throw error;
+      setHasBackupCodes((data?.count ?? 0) > 0);
+    } catch (error) {
+      console.error("Failed to load backup code status:", error);
+      setHasBackupCodes(false);
+    }
   };
 
   const handleGenerateBackupCodes = async () => {
@@ -390,10 +387,12 @@ export function SecuritySection() {
     setIsGeneratingBackupCodes(true);
 
     try {
-      const codes: string[] = [];
-      for (let i = 0; i < 10; i++) {
-        codes.push(generateBackupCode());
-      }
+      const { data, error } = await supabase.functions.invoke("manage-backup-codes", {
+        body: { action: "generate" },
+      });
+      if (error) throw error;
+      const codes: string[] = Array.isArray(data?.codes) ? data.codes : [];
+      if (codes.length === 0) throw new Error("No codes returned");
 
       setBackupCodes(codes);
       setHasBackupCodes(true);
