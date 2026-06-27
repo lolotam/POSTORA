@@ -365,11 +365,17 @@ export function SecuritySection() {
   };
 
   // Backup codes functions
+  // Cryptographically secure backup code generator.
+  // Charset length is 32 (a power of two), so masking each random byte with 0x1F
+  // maps uniformly to an index with zero modulo bias.
   const generateBackupCode = () => {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const length = 8;
+    const randomBytes = new Uint8Array(length);
+    crypto.getRandomValues(randomBytes);
     let code = '';
-    for (let i = 0; i < 8; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    for (let i = 0; i < length; i++) {
+      code += chars.charAt(randomBytes[i] & 0x1f);
     }
     return code;
   };
