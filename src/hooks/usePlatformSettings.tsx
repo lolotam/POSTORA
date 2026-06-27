@@ -741,7 +741,7 @@ export function usePlatformSettings(userId: string | undefined, selectedAccountI
     linkedinVisibility, setLinkedinVisibility,
     linkedinTitle, setLinkedinTitle,
     linkedinDescription, setLinkedinDescription,
-    linkedinSelectedPageId, setLinkedinSelectedPageId,
+    linkedinSelectedDestinationIds, setLinkedinSelectedDestinationIds,
 
     // YouTube
     youtubeVideoType, setYoutubeVideoType,
