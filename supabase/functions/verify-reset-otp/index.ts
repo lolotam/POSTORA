@@ -1,237 +1,208 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
+// verify-reset-otp
+// ---------------------------------------------------------------------------
+// Verifies a forgot-password OTP issued by send-reset-otp and updates the
+// account password server-side using the service role. MFA code is REQUIRED
+// only when the account has a verified TOTP factor; otherwise the OTP alone
+// proves email control and is accepted.
+//
+// Response is generic ("Invalid or expired reset code") whenever lookup fails
+// to avoid email or MFA-enrollment enumeration.
+// ---------------------------------------------------------------------------
 
 interface VerifyOTPRequest {
-  email: string;
-  otp: string;
-  mfaCode: string;
-  newPassword: string;
+  email?: unknown;
+  otp?: unknown;
+  mfaCode?: unknown;
+  newPassword?: unknown;
 }
 
 async function hashOTP(otp: string): Promise<string> {
-  const encoder = new TextEncoder();
-  const data = encoder.encode(otp);
+  const data = new TextEncoder().encode(otp);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-  const hashArray = Array.from(new Uint8Array(hashBuffer));
-  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
-// MFA verification is handled through Supabase's challenge/verify API
-// We don't need a custom TOTP implementation
+function jsonResponse(
+  body: Record<string, unknown>,
+  status: number,
+  corsHeaders: Record<string, string>,
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
+}
+
+const GENERIC_INVALID = "Invalid or expired reset code";
 
 serve(async (req) => {
+  const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { email, otp, mfaCode, newPassword }: VerifyOTPRequest = await req.json();
+    const body = (await req.json().catch(() => ({}))) as VerifyOTPRequest;
 
-    // Validate inputs
-    if (!email || !otp || !mfaCode || !newPassword) {
-      return new Response(
-        JSON.stringify({ error: "All fields are required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    const email = typeof body.email === "string" ? body.email.toLowerCase().trim() : "";
+    const otp = typeof body.otp === "string" ? body.otp.trim() : "";
+    const mfaCodeRaw = typeof body.mfaCode === "string" ? body.mfaCode.trim() : "";
+    const newPassword = typeof body.newPassword === "string" ? body.newPassword : "";
+
+    if (!email || !email.includes("@") || !/^\d{6}$/.test(otp) || newPassword.length < 8) {
+      return jsonResponse(
+        { error: "Email, 6-digit code and new password (min 8 chars) are required" },
+        400,
+        corsHeaders,
       );
     }
 
-    if (newPassword.length < 6) {
-      return new Response(
-        JSON.stringify({ error: "Password must be at least 6 characters" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    if (mfaCode.length !== 6 || !/^\d+$/.test(mfaCode)) {
-      return new Response(
-        JSON.stringify({ error: "MFA code must be 6 digits" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (mfaCodeRaw && !/^\d{6}$/.test(mfaCodeRaw)) {
+      return jsonResponse({ error: "MFA code must be 6 digits" }, 400, corsHeaders);
     }
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const admin = createClient(supabaseUrl, supabaseServiceKey);
 
-    const normalizedEmail = email.toLowerCase();
-
-    // Find the OTP record
     const otpHash = await hashOTP(otp);
-    const { data: otpRecord, error: otpError } = await supabase
+    const { data: otpRecord, error: otpError } = await admin
       .from("password_reset_otps")
-      .select("*")
-      .eq("email", normalizedEmail)
+      .select("id, expires_at, attempts, used, purpose")
+      .eq("email", email)
+      .eq("purpose", "reset")
       .eq("code_hash", otpHash)
       .eq("used", false)
-      .single();
-
-    if (otpError || !otpRecord) {
-      console.error("OTP lookup error:", otpError);
-      return new Response(
-        JSON.stringify({ error: "Invalid or expired reset code" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Check if OTP is expired
-    if (new Date(otpRecord.expires_at) < new Date()) {
-      await supabase
-        .from("password_reset_otps")
-        .delete()
-        .eq("id", otpRecord.id);
-      
-      return new Response(
-        JSON.stringify({ error: "Reset code has expired. Please request a new one." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Check attempts
-    if (otpRecord.attempts >= 5) {
-      await supabase
-        .from("password_reset_otps")
-        .delete()
-        .eq("id", otpRecord.id);
-      
-      return new Response(
-        JSON.stringify({ error: "Too many failed attempts. Please request a new code." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Increment attempt counter
-    await supabase
-      .from("password_reset_otps")
-      .update({ attempts: (otpRecord.attempts || 0) + 1 })
-      .eq("id", otpRecord.id);
-
-    // Find the user via our profiles table (listUsers is paginated and may miss users)
-    const { data: profile, error: profileError } = await supabase
-      .from("profiles")
-      .select("id")
-      .eq("email", normalizedEmail)
       .maybeSingle();
 
-    if (profileError) {
-      console.error("Profile lookup error:", profileError);
-      return new Response(
-        JSON.stringify({ error: "Reset service temporarily unavailable" }),
-        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    if (otpError || !otpRecord) {
+      return jsonResponse({ error: GENERIC_INVALID }, 400, corsHeaders);
+    }
+
+    if (new Date(otpRecord.expires_at as string) < new Date()) {
+      await admin.from("password_reset_otps").delete().eq("id", otpRecord.id);
+      return jsonResponse({ error: GENERIC_INVALID }, 400, corsHeaders);
+    }
+
+    if ((otpRecord.attempts ?? 0) >= 5) {
+      await admin.from("password_reset_otps").delete().eq("id", otpRecord.id);
+      return jsonResponse(
+        { error: "Too many failed attempts. Request a new code." },
+        400,
+        corsHeaders,
       );
     }
 
-    if (!profile?.id) {
-      return new Response(
-        JSON.stringify({ error: "User not found" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const userId = profile.id;
-
-    // Get MFA factors
-    const { data: factors } = await supabase.auth.admin.mfa.listFactors({ userId });
-    const verifiedFactor = factors?.factors?.find((f: { factor_type: string; status: string }) => 
-      f.factor_type === "totp" && f.status === "verified"
-    );
-
-    if (!verifiedFactor) {
-      return new Response(
-        JSON.stringify({ error: "MFA is not enabled for this account" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Verify MFA using Supabase Auth's factor challenge/verify endpoints.
-    // Note: Supabase's admin SDK doesn't currently expose these calls, so we use the Auth endpoints.
-    const factorId = verifiedFactor.id;
-
-    const challengeResponse = await fetch(`${supabaseUrl}/auth/v1/factors/${factorId}/challenge`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: supabaseServiceKey,
-        Authorization: `Bearer ${supabaseServiceKey}`,
-      },
-      body: JSON.stringify({}),
-    });
-
-    if (!challengeResponse.ok) {
-      const details = await challengeResponse.text();
-      console.error("Failed to create MFA challenge:", challengeResponse.status, details);
-      return new Response(
-        JSON.stringify({ error: "MFA verification is temporarily unavailable" }),
-        { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const challengeData = await challengeResponse.json();
-
-    const verifyResponse = await fetch(`${supabaseUrl}/auth/v1/factors/${factorId}/verify`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: supabaseServiceKey,
-        Authorization: `Bearer ${supabaseServiceKey}`,
-      },
-      body: JSON.stringify({
-        challenge_id: challengeData.id,
-        code: mfaCode,
-      }),
-    });
-
-    if (!verifyResponse.ok) {
-      const details = await verifyResponse.text();
-      console.error("MFA verification failed:", verifyResponse.status, details);
-      return new Response(
-        JSON.stringify({ error: "Invalid MFA code. Please check your authenticator app." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    // Mark OTP as used
-    await supabase
+    await admin
       .from("password_reset_otps")
-      .update({ used: true })
+      .update({ attempts: (otpRecord.attempts ?? 0) + 1 })
       .eq("id", otpRecord.id);
 
-    // Update the user's password
-    const { error: updateError } = await supabase.auth.admin.updateUserById(
-      userId,
-      { password: newPassword }
+    const { data: profile } = await admin
+      .from("profiles")
+      .select("id")
+      .eq("email", email)
+      .maybeSingle();
+
+    if (!profile?.id) {
+      // OTP was valid but account vanished — still keep generic message.
+      return jsonResponse({ error: GENERIC_INVALID }, 400, corsHeaders);
+    }
+    const userId = profile.id;
+
+    const { data: factors } = await admin.auth.admin.mfa.listFactors({ userId });
+    const verifiedFactor = factors?.factors?.find(
+      (f: { factor_type: string; status: string }) =>
+        f.factor_type === "totp" && f.status === "verified",
     );
 
-    if (updateError) {
-      console.error("Error updating password:", updateError);
-      return new Response(
-        JSON.stringify({ error: "Failed to update password" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    if (verifiedFactor) {
+      if (!mfaCodeRaw) {
+        // Tell the frontend to show the authenticator field — but only after a
+        // valid email OTP has been presented, so this does not leak MFA status
+        // to attackers spraying OTPs.
+        return jsonResponse(
+          { error: "MFA code required", code: "mfa_required" },
+          401,
+          corsHeaders,
+        );
+      }
+
+      const challengeResponse = await fetch(
+        `${supabaseUrl}/auth/v1/factors/${verifiedFactor.id}/challenge`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: supabaseServiceKey,
+            Authorization: `Bearer ${supabaseServiceKey}`,
+          },
+          body: JSON.stringify({}),
+        },
       );
+      if (!challengeResponse.ok) {
+        await challengeResponse.text();
+        console.error("verify-reset-otp: MFA challenge failed", challengeResponse.status);
+        return jsonResponse(
+          { error: "MFA verification is temporarily unavailable" },
+          502,
+          corsHeaders,
+        );
+      }
+      const challengeData = await challengeResponse.json();
+      const verifyResponse = await fetch(
+        `${supabaseUrl}/auth/v1/factors/${verifiedFactor.id}/verify`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            apikey: supabaseServiceKey,
+            Authorization: `Bearer ${supabaseServiceKey}`,
+          },
+          body: JSON.stringify({ challenge_id: challengeData.id, code: mfaCodeRaw }),
+        },
+      );
+      if (!verifyResponse.ok) {
+        await verifyResponse.text();
+        return jsonResponse(
+          { error: "Invalid MFA code. Check your authenticator app." },
+          400,
+          corsHeaders,
+        );
+      }
     }
 
-    // Clean up used OTPs
-    await supabase.rpc("cleanup_expired_otps");
+    await admin.from("password_reset_otps").update({ used: true }).eq("id", otpRecord.id);
+    await admin
+      .from("password_reset_otps")
+      .delete()
+      .eq("email", email)
+      .eq("purpose", "reset")
+      .eq("used", false);
 
-    console.log(`Password reset successful for ${email}`);
+    const { error: updateError } = await admin.auth.admin.updateUserById(userId, {
+      password: newPassword,
+    });
+    if (updateError) {
+      console.error("verify-reset-otp: updateUserById failed:", updateError.message);
+      return jsonResponse({ error: "Failed to update password" }, 500, corsHeaders);
+    }
 
-    return new Response(
-      JSON.stringify({ 
-        success: true, 
-        message: "Password reset successfully. You can now sign in with your new password." 
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    await admin.rpc("cleanup_expired_otps").catch(() => undefined);
+
+    return jsonResponse(
+      { success: true, message: "Password reset successfully." },
+      200,
+      corsHeaders,
     );
-
-  } catch (error) {
-    console.error("Error in verify-reset-otp:", error);
-    return new Response(
-      JSON.stringify({ error: "Internal server error" }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+  } catch (err) {
+    console.error("verify-reset-otp: unexpected error:", err);
+    return jsonResponse({ error: "Internal server error" }, 500, corsHeaders);
   }
 });

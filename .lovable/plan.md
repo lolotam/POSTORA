@@ -1,88 +1,60 @@
-# Postora Security Hardening Audit — Phased Plan
+## Goal
 
-Postora is large (100+ edge functions, 50+ pages, self-hosted Supabase at `api.postora.cloud`). A single mega-pass would be unsafe and noisy. This plan splits the work into 5 phases, with explicit gates between each.
+Fix "AAL2 session required" error when MFA-enabled users change their password, and harden both password-change flows so they always go through proper verification (MFA challenge or email OTP) and a server-side update — never a raw client-side `auth.updateUser({ password })`.
 
-## Phase 1 — Full security inventory (READ-ONLY, no code changes)
+## Current state (audit)
 
-I will produce a single **Risk Register** document at `docs/security/audit-2026-06.md` (new file, documentation only — not code) covering all 11 areas you listed. For each area I will inspect the relevant files in parallel and record findings in the required format:
+- **Logged-in change** (`src/components/settings/SecuritySection.tsx` + `src/components/profile/PasswordSection.tsx`) calls `supabase.auth.updateUser({ password })` directly from the browser. This is what fails with `AAL2 session is required…` when the user has a verified TOTP factor.
+- **Forgot-password (outside app)** uses `send-reset-otp` → `verify-reset-otp` edge functions and a `password_reset_otps` table. `verify-reset-otp` already updates the password server-side with the service-role key, but the contract requires `mfaCode` for every user and the frontend (`ResetPassword.tsx`) currently only collects email + sends a magic link — the OTP UI path isn't actually wired in. `verify-mfa-reset` is disabled (HTTP 410).
+- `check-user-mfa` exists and can report whether an email has a verified factor.
+- OTP code hashing + `used` flag exist; need to confirm rate-limit + single-use + expiry are enforced and the response stays generic.
 
-```
-area | file/function | issue | severity | exploit | recommended fix
-requires SQL | can Lovable fix | needs server/Zed
-```
+## Implementation plan
 
-Areas and inspection targets:
+### A. New shared edge function: `change-password`
+Single service-role endpoint that performs the final `supabase.auth.admin.updateUserById(userId, { password })`. It requires a valid user JWT and one of:
+1. **AAL2 session** — caller's JWT already has `aal: "aal2"` from a fresh `mfa.challengeAndVerify`. Verified server-side via `getUser(jwt)` + decoding the AAL claim.
+2. **Email-OTP proof** — `{ otp }` body, looked up in `password_reset_otps` (reused table, scoped by `purpose = 'change_password'` column added via migration) and matched against the caller's email. Only allowed when the user has **no verified MFA factor**.
 
-1. **Auth flows** — `src/pages/Auth.tsx`, `ResetPassword.tsx`, `src/hooks/useAuth.tsx`, `send-reset-otp`, `send-auth-email`, `verify-mfa-reset`, `check-user-mfa`
-2. **OAuth flows** — every `*-oauth/index.ts` (facebook, instagram, instagram-business, threads, tiktok, pinterest, linkedin, youtube, twitter, reddit, bluesky) + `manage-oauth-redirects`, `OAuthCallback.tsx`, `*Callback.tsx`
-3. **Webhooks** — `stripe-webhook`, `resend-webhook`, `tiktok-webhook`, `threads-webhook`, `ecommerce-whatsapp-api` (WhatsApp webhook surface), `mcp` (public?)
-4. **Cron / scheduled** — `process-scheduled-posts`, `process-scheduled-emails`, `process-scheduled-blog-posts`, `process-scheduled-flags`, `observability-collector`, `cleanup-media`, `refresh-tokens`, `send-expiry-reminders`, `send-weekly-analytics`, `send-token-expiry-notifications`, `notify-expiring-ai-overrides`, `sync-resend-delivery-status`, `sync-user-quotas`
-5. **Service-role usage** — grep every function for `SUPABASE_SERVICE_ROLE_KEY` and classify: legitimate (admin task) vs leaky (user-callable but uses service role without auth check)
-6. **DB / RLS** — read `supabase/migrations/` index + spot-check sensitive tables: `social_accounts`, `backup_codes`, `app_settings`, `api_logs`, `user_roles`, `user_subscriptions`, storage policies
-7. **Uploads / media** — `cloudinary-upload`, `cloudinary-email-upload`, `cloudinary-delete`, `process-video`, `transcode-video`, `MediaLibrary.tsx`, storage RLS path conventions
-8. **AI providers** — `generate-caption`, `generate-image`, `generate-hashtags`, `ai-config`, `ai-email-assistant`, `test-ai-model`, `fetch-openrouter-models`
-9. **Payments** — `stripe-checkout`, `stripe-webhook`, `stripe-manage-subscription`, `create-payment`, `check-subscription`, `backfill-subscription`
-10. **Secrets / env** — `infra/edge-runtime.required-env.json`, `.env.example`, `scripts/check-edge-env-*`, repo-wide grep for hardcoded URLs / old `efruibswazzuuupgyzmf` refs
-11. **Logging** — grep for `console.log` of tokens/otp/state/code; broad `catch(e)` returning fake success; raw provider error pass-through
-12. **n8n API** — `n8n-api/index.ts` auth header handling only; no contract changes unless confirmed bug
+Rate-limited via the existing `rate_limit_buckets` RPC (5/hour/user). Generic error responses. No password/OTP/token logging.
 
-Deliverable: `docs/security/audit-2026-06.md` with full risk register + summary counts by severity.
+### B. Logged-in flow — `SecuritySection.tsx` & `PasswordSection.tsx`
+Replace the direct `updateUser` call with a pre-flight that:
+1. Calls `supabase.auth.mfa.listFactors()`.
+2. **If a verified TOTP factor exists** → open a "Confirm with authenticator code" step → `mfa.challenge` + `mfa.verify` to upgrade the session to AAL2 → then POST to `change-password` with the new password.
+3. **If no MFA factor** → POST to `send-change-password-otp` (new tiny wrapper around existing OTP issuance, scoped `purpose='change_password'`, sent to the user's own verified email) → user enters OTP → POST `change-password` with `{ otp, newPassword }`.
+4. Google-only users with no password keep the same branching (they will always go via email-OTP since they can't have MFA without a password).
 
-## Phase 2 — Prioritization roadmap (READ-ONLY)
+### C. Forgot-password flow — `ResetPassword.tsx` + `PasswordResetOptions.tsx`
+Wire the existing UI to actually use the OTP edge functions instead of `resetPasswordForEmail`:
+1. Email input → `send-reset-otp` → generic "If an account exists…" message.
+2. OTP + new-password screen → `verify-reset-otp`.
+3. Adjust `verify-reset-otp` so `mfaCode` is **only required when the account has a verified MFA factor** (call `check-user-mfa` internally). If MFA exists, prompt for TOTP code in the same screen and verify via admin MFA API; otherwise skip. Keeps MFA enforcement without leaking enrollment status (response is generic until OTP is valid).
+4. Mark OTP `used=true`, delete sibling unused OTPs for that email atomically.
 
-Append to the same audit doc:
+### D. SQL (only if missing — to be confirmed before writing)
+Likely already exists, but if `password_reset_otps` lacks a `purpose text not null default 'reset'` column, add one **manual** migration file at `supabase/manual-sql/20260627xxxxxx_otp_purpose.sql`. No automatic execution. No other schema changes.
 
-- **P1 Critical** — OTP/token leakage, unauth cron/webhook, service-role exposure, missing webhook signature verify, public admin endpoints, broken RLS
-- **P2 High** — OAuth redirect fallback, missing rate limits, weak error handling, payment replay/idempotency, upload validation
-- **P3 Medium** — dep vulns, old runtime refs in docs, generic FE errors, missing monitoring
+### E. Tests
+- `src/lib/__tests__/passwordChangeFlow.test.ts` — assert frontend never calls `supabase.auth.updateUser({ password })` directly (regression guard).
+- Edge function unit test for `change-password`: AAL1 + no OTP → 401; AAL2 → 200; OTP path with MFA-enrolled user → 403; valid OTP, no MFA → 200; reused OTP → 400; rate-limit exceeded → 429.
+- Update `verify-reset-otp` test for conditional `mfaCode`.
 
-For each item: file list, fix sketch, SQL-needed flag, server-action-needed flag.
+### F. Validation
+Run `npm run check:edge-env`, `npm run build`, `npm run lint`, `npx vitest run`, `git diff --check`, CleanCodeGuard, TestGuard.
 
-**Gate:** I stop and show you the audit + roadmap. You approve which P1 items to implement.
+## Out of scope
 
-## Phase 3 — Implement Priority 1 only
+- Removing/altering `verify-mfa-reset` (stays disabled).
+- Any change to n8n, OAuth, or unrelated edge functions.
+- Direct SQL writes to `auth.users`.
+- Restructuring the existing `rate_limit_buckets` or MFA enrollment flows.
 
-Rules I will follow:
+## Deliverables
 
-- Small focused diffs per finding, never bundled
-- Preserve behavior; add auth/signature checks rather than refactor
-- Sanitize logs (redact tokens/otp/state)
-- Never print secrets, never add real env values
-- Each new env var: append name only to `infra/edge-runtime.required-env.json` + `.env.example` + a runbook note
-- Each DB change: new file `supabase/migrations/<UTC-timestamp>_<desc>.sql` with rollback notes; **not executed**
-- n8n-api untouched unless Phase 1 confirms a security bug
-
-Before editing I will list the exact files per fix and confirm.
-
-## Phase 4 — Validation
-
-Run (allowing failures):
-```
-npm run check:edge-env || true
-npm run build || true
-npm run lint || true
-npx vitest run || true
-git diff --check || true
-```
-Plus security greps for token/otp/service-role leakage and old Supabase Cloud refs (allowed only in historical migrations & archived docs).
-
-## Phase 5 — Guards & final report
-
-- CleanCodeGuard on production diffs
-- TestGuard only if test files changed (else: "no test files changed; no test-code review required")
-- Final report in your exact 14-section format ending in one of: `audit_completed`, `priority_1_completed_requires_server_sync`, `completed_requires_manual_sql`, `blocked`
-
-## What Lovable cannot do (called out up front)
-
-- SSH to Contabo VPS
-- Edit production `.env` at `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code/.env`
-- Sync edge functions to the self-hosted functions volume
-- Restart the functions container
-- Execute SQL on the self-hosted Postgres
-- Run real production OAuth/webhook tests
-
-These will be listed as explicit server actions in the final report.
-
-## This turn's scope
-
-If you approve this plan, I will execute **Phase 1 only** (read-only inventory → `docs/security/audit-2026-06.md`) and stop at the Phase 2 gate so you can steer which P1 fixes get implemented. No code, SQL, or env changes in this first execution.
+- New edge function `supabase/functions/change-password/index.ts` (+ test).
+- New edge function `supabase/functions/send-change-password-otp/index.ts`.
+- Updated `supabase/functions/verify-reset-otp/index.ts` (conditional MFA).
+- Updated `src/components/settings/SecuritySection.tsx`, `src/components/profile/PasswordSection.tsx`, `src/pages/ResetPassword.tsx`, `src/components/auth/PasswordResetOptions.tsx`.
+- Optional manual SQL file (only if `purpose` column missing).
+- Final report with status `completed_requires_server_sync` (edge functions need volume sync + functions container restart on the VPS).

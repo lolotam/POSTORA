@@ -43,12 +43,17 @@ export function SecuritySection() {
   const { profile, user } = useAuth();
 
   // Password management
+  type PwStep = "password" | "mfa" | "otp";
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
+  const [pwStep, setPwStep] = useState<PwStep>("password");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [passwordError, setPasswordError] = useState("");
+  const [pwMfaCode, setPwMfaCode] = useState("");
+  const [pwOtpCode, setPwOtpCode] = useState("");
+  const [pwOtpSending, setPwOtpSending] = useState(false);
   const [isGoogleUser, setIsGoogleUser] = useState(false);
 
   // 2FA management
@@ -125,30 +130,61 @@ export function SecuritySection() {
   // Password validation schema
   const passwordSchema = z.string().min(8, "Password must be at least 8 characters");
 
-  const handleChangePassword = async () => {
+  const resetPwState = () => {
+    setNewPassword("");
+    setConfirmPassword("");
     setPasswordError("");
+    setPwStep("password");
+    setPwMfaCode("");
+    setPwOtpCode("");
+  };
 
+  const callChangePassword = async (body: { newPassword: string; otp?: string }) => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const accessToken = sessionData.session?.access_token;
+    if (!accessToken) throw new Error("Not signed in");
+
+    const { data, error } = await supabase.functions.invoke<{
+      success?: boolean;
+      error?: string;
+      code?: string;
+    }>("change-password", {
+      body,
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (error) {
+      // supabase.functions.invoke buries the JSON body in `context.response`.
+      const ctx = (error as { context?: { response?: Response } }).context;
+      if (ctx?.response) {
+        const payload = await ctx.response.json().catch(() => null);
+        if (payload?.code) return { code: payload.code as string, error: payload.error as string };
+        throw new Error(payload?.error ?? error.message);
+      }
+      throw new Error(error.message);
+    }
+    if (data?.code) return { code: data.code, error: data.error ?? "" };
+    if (!data?.success) throw new Error(data?.error ?? "Failed to update password");
+    return { success: true as const };
+  };
+
+  const handleStartPasswordChange = async () => {
+    setPasswordError("");
     const validation = passwordSchema.safeParse(newPassword);
     if (!validation.success) {
       setPasswordError(validation.error.errors[0].message);
       return;
     }
-
     if (newPassword !== confirmPassword) {
       setPasswordError("Passwords do not match");
       return;
     }
 
     setIsChangingPassword(true);
-
     try {
-      const { error } = await supabase.auth.updateUser({
-        password: newPassword,
-      });
-
-      if (error) {
-        setPasswordError(error.message);
-      } else {
+      // First attempt — if MFA is enrolled the edge function returns
+      // mfa_required; if not, otp_required.
+      const result = await callChangePassword({ newPassword });
+      if ("success" in result) {
         toast({
           title: isGoogleUser ? "Password created!" : "Password changed!",
           description: isGoogleUser
@@ -156,11 +192,93 @@ export function SecuritySection() {
             : "Your password has been updated successfully.",
         });
         setPasswordDialogOpen(false);
-        setNewPassword("");
-        setConfirmPassword("");
+        resetPwState();
+        return;
       }
-    } catch (error) {
-      setPasswordError("Failed to update password. Please try again.");
+      if (result.code === "mfa_required") {
+        setPwStep("mfa");
+      } else if (result.code === "otp_required") {
+        // Issue an OTP straight away so the user just enters the code.
+        setPwStep("otp");
+        setPwOtpSending(true);
+        const { error: sendError } = await supabase.functions.invoke(
+          "send-change-password-otp",
+          { body: {} },
+        );
+        if (sendError) {
+          setPasswordError("Could not send verification email. Try again shortly.");
+        }
+        setPwOtpSending(false);
+      } else {
+        setPasswordError(result.error || "Unable to start password change");
+      }
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Failed to update password");
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleConfirmWithMfa = async () => {
+    setPasswordError("");
+    if (!/^\d{6}$/.test(pwMfaCode.trim())) {
+      setPasswordError("Enter the 6-digit code from your authenticator app");
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      // Upgrade the current session to AAL2.
+      const verified = mfaFactors.find((f) => f.status === "verified");
+      if (!verified) throw new Error("No verified authenticator factor");
+      const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({
+        factorId: verified.id,
+      });
+      if (challengeError) throw challengeError;
+      const { error: verifyError } = await supabase.auth.mfa.verify({
+        factorId: verified.id,
+        challengeId: challenge.id,
+        code: pwMfaCode.trim(),
+      });
+      if (verifyError) throw verifyError;
+
+      const result = await callChangePassword({ newPassword });
+      if ("success" in result) {
+        toast({ title: "Password changed!", description: "Your password has been updated." });
+        setPasswordDialogOpen(false);
+        resetPwState();
+      } else {
+        setPasswordError(result.error || "Failed to update password");
+      }
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Verification failed");
+    } finally {
+      setIsChangingPassword(false);
+    }
+  };
+
+  const handleConfirmWithOtp = async () => {
+    setPasswordError("");
+    if (!/^\d{6}$/.test(pwOtpCode.trim())) {
+      setPasswordError("Enter the 6-digit code from the email we just sent");
+      return;
+    }
+    setIsChangingPassword(true);
+    try {
+      const result = await callChangePassword({ newPassword, otp: pwOtpCode.trim() });
+      if ("success" in result) {
+        toast({
+          title: isGoogleUser ? "Password created!" : "Password changed!",
+          description: isGoogleUser
+            ? "You can now sign in with email and password."
+            : "Your password has been updated successfully.",
+        });
+        setPasswordDialogOpen(false);
+        resetPwState();
+      } else {
+        setPasswordError(result.error || "Invalid verification code");
+      }
+    } catch (err) {
+      setPasswordError(err instanceof Error ? err.message : "Failed to update password");
     } finally {
       setIsChangingPassword(false);
     }
@@ -676,74 +794,157 @@ export function SecuritySection() {
       </div>
 
       {/* Password Dialog */}
-      <Dialog open={passwordDialogOpen} onOpenChange={setPasswordDialogOpen}>
+      <Dialog
+        open={passwordDialogOpen}
+        onOpenChange={(open) => {
+          setPasswordDialogOpen(open);
+          if (!open) resetPwState();
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {isGoogleUser ? "Create Password" : "Change Password"}
+              {pwStep === "password"
+                ? isGoogleUser
+                  ? "Create Password"
+                  : "Change Password"
+                : pwStep === "mfa"
+                ? "Confirm with your authenticator"
+                : "Confirm with email code"}
             </DialogTitle>
             <DialogDescription>
-              {isGoogleUser
-                ? "Create a password to sign in with your email address."
-                : "Enter a new password for your account."}
+              {pwStep === "password"
+                ? isGoogleUser
+                  ? "Create a password to sign in with your email address."
+                  : "Enter a new password for your account."
+                : pwStep === "mfa"
+                ? "Enter the 6-digit code from your authenticator app to confirm this change."
+                : pwOtpSending
+                ? "Sending a verification code to your email…"
+                : "Enter the 6-digit code we just emailed to confirm this change."}
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="newPassword">New Password</Label>
-              <div className="relative">
-                <Input
-                  id="newPassword"
-                  type={showPassword ? "text" : "password"}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Enter new password"
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
+          {pwStep === "password" && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="newPassword">New Password</Label>
+                <div className="relative">
+                  <Input
+                    id="newPassword"
+                    type={showPassword ? "text" : "password"}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="Enter new password"
+                    className="pr-10"
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm Password</Label>
-              <Input
-                id="confirmPassword"
-                type={showPassword ? "text" : "password"}
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Confirm new password"
-              />
-            </div>
+              <div className="space-y-2">
+                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Input
+                  id="confirmPassword"
+                  type={showPassword ? "text" : "password"}
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Confirm new password"
+                  autoComplete="new-password"
+                />
+              </div>
 
-            {passwordError && (
-              <p className="text-sm text-destructive">{passwordError}</p>
-            )}
-          </div>
+              {passwordError && (
+                <p className="text-sm text-destructive">{passwordError}</p>
+              )}
+            </div>
+          )}
+
+          {pwStep === "mfa" && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="pwMfaCode">Authenticator code</Label>
+                <Input
+                  id="pwMfaCode"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  value={pwMfaCode}
+                  onChange={(e) => setPwMfaCode(e.target.value.replace(/\D/g, ""))}
+                  placeholder="123456"
+                  autoComplete="one-time-code"
+                />
+              </div>
+              {passwordError && (
+                <p className="text-sm text-destructive">{passwordError}</p>
+              )}
+            </div>
+          )}
+
+          {pwStep === "otp" && (
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="pwOtpCode">Email verification code</Label>
+                <Input
+                  id="pwOtpCode"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                  maxLength={6}
+                  value={pwOtpCode}
+                  onChange={(e) => setPwOtpCode(e.target.value.replace(/\D/g, ""))}
+                  placeholder="123456"
+                  autoComplete="one-time-code"
+                  disabled={pwOtpSending}
+                />
+              </div>
+              {passwordError && (
+                <p className="text-sm text-destructive">{passwordError}</p>
+              )}
+            </div>
+          )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => setPasswordDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setPasswordDialogOpen(false);
+                resetPwState();
+              }}
+            >
               Cancel
             </Button>
-            <Button onClick={handleChangePassword} disabled={isChangingPassword}>
+            <Button
+              onClick={
+                pwStep === "password"
+                  ? handleStartPasswordChange
+                  : pwStep === "mfa"
+                  ? handleConfirmWithMfa
+                  : handleConfirmWithOtp
+              }
+              disabled={isChangingPassword || pwOtpSending}
+            >
               {isChangingPassword ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                   Saving...
                 </>
+              ) : pwStep === "password" ? (
+                isGoogleUser ? "Create Password" : "Continue"
               ) : (
-                isGoogleUser ? "Create Password" : "Update Password"
+                "Confirm"
               )}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
 
       {/* 2FA Setup Dialog */}
       <Dialog

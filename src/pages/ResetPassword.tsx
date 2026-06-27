@@ -9,33 +9,33 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
-type ResetView = "email" | "email-sent" | "success";
+type ResetView = "email" | "verify" | "success";
 
 export default function ResetPassword() {
   const [view, setView] = useState<ResetView>("email");
   const [email, setEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [mfaCode, setMfaCode] = useState("");
+  const [needsMfa, setNeedsMfa] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const validateEmail = (value: string) => z.string().email().safeParse(value).success;
-
-  const handleSendEmailReset = async () => {
+  const sendReset = async () => {
     setIsLoading(true);
-
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: window.location.origin + "/auth?mode=reset-password",
+      const { error } = await supabase.functions.invoke("send-reset-otp", {
+        body: { email: email.trim().toLowerCase() },
       });
-
       if (error) throw error;
-
-      setView("email-sent");
+      // Generic response — backend always returns success even if account doesn't exist.
+      setView("verify");
     } catch {
       toast({
         title: "Error",
-        description: "Failed to send reset email. Please try again.",
+        description: "Failed to send reset code. Please try again.",
         variant: "destructive",
       });
     } finally {
@@ -43,16 +43,72 @@ export default function ResetPassword() {
     }
   };
 
-  const handleSubmit = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const verifyAndReset = async () => {
     setErrors({});
-
-    if (!validateEmail(email)) {
-      setErrors({ email: "Please enter a valid email address" });
+    if (!/^\d{6}$/.test(otp.trim())) {
+      setErrors({ otp: "Enter the 6-digit code from your email" });
+      return;
+    }
+    if (newPassword.length < 8) {
+      setErrors({ newPassword: "Password must be at least 8 characters" });
+      return;
+    }
+    if (needsMfa && !/^\d{6}$/.test(mfaCode.trim())) {
+      setErrors({ mfaCode: "Enter the 6-digit code from your authenticator app" });
       return;
     }
 
-    await handleSendEmailReset();
+    setIsLoading(true);
+    try {
+      const body: Record<string, string> = {
+        email: email.trim().toLowerCase(),
+        otp: otp.trim(),
+        newPassword,
+      };
+      if (needsMfa) body.mfaCode = mfaCode.trim();
+
+      const { data, error } = await supabase.functions.invoke<{
+        success?: boolean;
+        error?: string;
+        code?: string;
+      }>("verify-reset-otp", { body });
+
+      if (error) {
+        const ctx = (error as { context?: { response?: Response } }).context;
+        const payload = ctx?.response ? await ctx.response.json().catch(() => null) : null;
+        if (payload?.code === "mfa_required") {
+          setNeedsMfa(true);
+          setErrors({ mfaCode: "Enter your authenticator code" });
+          return;
+        }
+        setErrors({ otp: payload?.error ?? error.message });
+        return;
+      }
+      if (data?.code === "mfa_required") {
+        setNeedsMfa(true);
+        setErrors({ mfaCode: "Enter your authenticator code" });
+        return;
+      }
+      if (!data?.success) {
+        setErrors({ otp: data?.error ?? "Could not reset password" });
+        return;
+      }
+      setView("success");
+    } catch (err) {
+      setErrors({ otp: err instanceof Error ? err.message : "Could not reset password" });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleEmailSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setErrors({});
+    if (!z.string().email().safeParse(email).success) {
+      setErrors({ email: "Please enter a valid email address" });
+      return;
+    }
+    await sendReset();
   };
 
   return (
@@ -72,13 +128,11 @@ export default function ResetPassword() {
           <Logo size="lg" className="mb-8" />
           <h1 className="text-4xl font-bold mb-4">Reset your password</h1>
           <p className="text-muted-foreground text-lg">
-            We'll send you a link to reset your password.
+            We'll email you a 6-digit code to confirm it's you.
           </p>
         </div>
 
-        <p className="text-sm text-muted-foreground">
-          Secure password reset
-        </p>
+        <p className="text-sm text-muted-foreground">Secure password reset</p>
       </div>
 
       <div className="flex-1 flex items-center justify-center p-6 lg:p-12 relative z-10">
@@ -98,11 +152,11 @@ export default function ResetPassword() {
                   </div>
                   <h2 className="text-2xl font-bold mb-2">Forgot password?</h2>
                   <p className="text-muted-foreground">
-                    Enter your email and we'll help you reset it
+                    Enter your email and we'll send a reset code
                   </p>
                 </div>
 
-                <form onSubmit={handleSubmit} className="space-y-5">
+                <form onSubmit={handleEmailSubmit} className="space-y-5">
                   <div className="space-y-2">
                     <Label htmlFor="email">Email address</Label>
                     <Input
@@ -120,20 +174,14 @@ export default function ResetPassword() {
                     )}
                   </div>
 
-                  <Button
-                    type="submit"
-                    variant="gradient"
-                    className="w-full"
-                    size="lg"
-                    disabled={isLoading}
-                  >
+                  <Button type="submit" variant="gradient" className="w-full" size="lg" disabled={isLoading}>
                     {isLoading ? (
                       <>
                         <Loader2 className="w-4 h-4 animate-spin" />
                         Sending...
                       </>
                     ) : (
-                      "Continue"
+                      "Send reset code"
                     )}
                   </Button>
 
@@ -146,35 +194,99 @@ export default function ResetPassword() {
               </>
             )}
 
-            {view === "email-sent" && (
+            {view === "verify" && (
               <>
-                <div className="text-center mb-8">
-                  <div className="w-16 h-16 rounded-full bg-green-500/10 flex items-center justify-center mx-auto mb-4">
-                    <Check className="w-8 h-8 text-green-500" />
+                <div className="text-center mb-6">
+                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
+                    <Mail className="w-8 h-8 text-primary" />
                   </div>
                   <h2 className="text-2xl font-bold mb-2">Check your email</h2>
-                  <p className="text-muted-foreground">
-                    If an account exists for <strong>{email}</strong>, you'll receive a password reset link shortly.
+                  <p className="text-muted-foreground text-sm">
+                    If an account exists for <strong>{email}</strong>, a 6-digit code is on its way.
                   </p>
                 </div>
 
                 <div className="space-y-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="otp">Reset code</Label>
+                    <Input
+                      id="otp"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      maxLength={6}
+                      value={otp}
+                      onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
+                      placeholder="123456"
+                      autoComplete="one-time-code"
+                      className={errors.otp ? "border-destructive" : ""}
+                    />
+                    {errors.otp && <p className="text-xs text-destructive">{errors.otp}</p>}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="newPassword">New password</Label>
+                    <Input
+                      id="newPassword"
+                      type="password"
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="At least 8 characters"
+                      autoComplete="new-password"
+                      className={errors.newPassword ? "border-destructive" : ""}
+                    />
+                    {errors.newPassword && (
+                      <p className="text-xs text-destructive">{errors.newPassword}</p>
+                    )}
+                  </div>
+
+                  {needsMfa && (
+                    <div className="space-y-2">
+                      <Label htmlFor="mfaCode">Authenticator code</Label>
+                      <Input
+                        id="mfaCode"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
+                        maxLength={6}
+                        value={mfaCode}
+                        onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ""))}
+                        placeholder="123456"
+                        autoComplete="one-time-code"
+                        className={errors.mfaCode ? "border-destructive" : ""}
+                      />
+                      {errors.mfaCode && (
+                        <p className="text-xs text-destructive">{errors.mfaCode}</p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Two-factor authentication is enabled on this account.
+                      </p>
+                    </div>
+                  )}
+
                   <Button
-                    variant="outline"
+                    variant="gradient"
                     className="w-full"
-                    onClick={() => navigate("/auth")}
+                    size="lg"
+                    onClick={verifyAndReset}
+                    disabled={isLoading}
                   >
-                    Back to sign in
+                    {isLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Verifying...
+                      </>
+                    ) : (
+                      "Reset password"
+                    )}
                   </Button>
 
                   <p className="text-center text-sm text-muted-foreground">
                     Didn't receive the email?{" "}
                     <button
-                      onClick={handleSendEmailReset}
+                      onClick={sendReset}
                       className="text-primary hover:underline"
                       disabled={isLoading}
                     >
-                      Resend
+                      Resend code
                     </button>
                   </p>
                 </div>
