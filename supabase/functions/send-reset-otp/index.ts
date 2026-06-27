@@ -174,7 +174,7 @@ serve(async (req) => {
              <div style="background: white; border-radius: 16px; padding: 40px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
                <div style="text-align: center; margin-bottom: 32px;">
                  <h1 style="color: #111827; font-size: 24px; font-weight: 700; margin: 0 0 8px 0;">Password Reset Code</h1>
-                 <p style="color: #6b7280; font-size: 14px; margin: 0;">You requested to reset your password using MFA verification.</p>
+                 <p style="color: #6b7280; font-size: 14px; margin: 0;">You requested to reset your Postora password.</p>
                </div>
 
                <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 32px; text-align: center; border-radius: 12px; margin: 24px 0;">
