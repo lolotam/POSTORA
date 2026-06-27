@@ -5835,6 +5835,7 @@ async function postToThreads(
           attempted: crossShareApplied,
           capability_at_publish: crossShareCapabilityAtPublish,
           dark_mode: !!metadata?.threads_cross_share_to_ig_dark_mode,
+          status: crossShareApplied ? (crossShareStatus ?? "unknown") : "skipped",
         }
       : undefined,
     ...(threadsWarnings.length > 0 ? { warnings: threadsWarnings } : {}),
