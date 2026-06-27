@@ -4,6 +4,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  getAuthenticatedFunctionHeaders,
+  readFunctionError,
+} from "@/lib/authenticatedFunction";
 import { Lock, Eye, EyeOff, Loader2 } from "lucide-react";
 
 interface PasswordSectionProps {
@@ -35,9 +39,7 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
   };
 
   const callChangePassword = async (body: { newPassword: string; otp?: string }) => {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const accessToken = sessionData.session?.access_token;
-    if (!accessToken) throw new Error("Not signed in");
+    const headers = await getAuthenticatedFunctionHeaders();
 
     const { data, error } = await supabase.functions.invoke<{
       success?: boolean;
@@ -45,17 +47,13 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
       code?: string;
     }>("change-password", {
       body,
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers,
     });
 
     if (error) {
-      const ctx = (error as { context?: { response?: Response } }).context;
-      if (ctx?.response) {
-        const payload = await ctx.response.json().catch(() => null);
-        if (payload?.code) return { code: payload.code as string, error: payload.error as string };
-        throw new Error(payload?.error ?? error.message);
-      }
-      throw new Error(error.message);
+      const result = await readFunctionError(error);
+      if (result.code) return result;
+      throw new Error(result.error);
     }
     if (data?.code) return { code: data.code, error: data.error ?? "" };
     if (!data?.success) throw new Error(data?.error ?? "Failed to update password");
@@ -88,11 +86,16 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
         setStep("mfa");
       } else if (result.code === "otp_required") {
         setStep("otp");
-        const { error: sendError } = await supabase.functions.invoke("send-change-password-otp", { body: {} });
+        const headers = await getAuthenticatedFunctionHeaders();
+        const { error: sendError } = await supabase.functions.invoke("send-change-password-otp", { body: {}, headers });
         if (sendError) {
+          const result = await readFunctionError(sendError);
+          if (result.code === "mfa_required") {
+            setStep("mfa");
+          }
           toast({
             title: "Could not send verification email",
-            description: "Try again in a moment.",
+            description: result.error || "Try again in a moment.",
             variant: "destructive",
           });
         }

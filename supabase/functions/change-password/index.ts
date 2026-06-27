@@ -68,7 +68,7 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
     if (!authHeader.toLowerCase().startsWith("bearer ")) {
-      return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
     }
     const jwt = authHeader.slice(7).trim();
 
@@ -79,7 +79,7 @@ Deno.serve(async (req) => {
     // Validate token server-side. getUser also rejects expired/forged tokens.
     const { data: userData, error: userError } = await admin.auth.getUser(jwt);
     if (userError || !userData?.user) {
-      return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
     }
     const user = userData.user;
 
@@ -161,7 +161,7 @@ Deno.serve(async (req) => {
 
       if (!otpRecord) {
         return jsonResponse(
-          { error: "Invalid or expired verification code" },
+          { error: "Invalid or expired verification code", code: "invalid_otp" },
           400,
           corsHeaders,
         );
@@ -170,7 +170,7 @@ Deno.serve(async (req) => {
       if (new Date(otpRecord.expires_at as string) < new Date()) {
         await admin.from("password_reset_otps").delete().eq("id", otpRecord.id);
         return jsonResponse(
-          { error: "Verification code has expired. Request a new one." },
+          { error: "Verification code has expired. Request a new one.", code: "invalid_otp" },
           400,
           corsHeaders,
         );
@@ -179,7 +179,7 @@ Deno.serve(async (req) => {
       if ((otpRecord.attempts ?? 0) >= 5) {
         await admin.from("password_reset_otps").delete().eq("id", otpRecord.id);
         return jsonResponse(
-          { error: "Too many failed attempts. Request a new code." },
+          { error: "Too many failed attempts. Request a new code.", code: "invalid_otp" },
           400,
           corsHeaders,
         );

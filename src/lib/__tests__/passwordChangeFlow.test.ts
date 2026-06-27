@@ -31,7 +31,48 @@ for (const file of watchedFiles) {
       throw new Error(`${file} must invoke the change-password edge function`);
     }
   });
+
+  it(`${file} invokes password edge functions with an explicit refreshed user token`, () => {
+    const source = read(file);
+    if (!source.includes("getAuthenticatedFunctionHeaders")) {
+      throw new Error(`${file} must use getAuthenticatedFunctionHeaders before password edge calls`);
+    }
+    if (!source.includes('"send-change-password-otp"')) {
+      throw new Error(`${file} must invoke send-change-password-otp for non-MFA users`);
+    }
+  });
 }
+
+it("authenticated function helper refreshes sessions before returning Authorization", () => {
+  const src = read("src/lib/authenticatedFunction.ts");
+  if (!src.includes("refreshSession")) {
+    throw new Error("authenticatedFunction helper must refresh stale or missing sessions");
+  }
+  if (!src.includes("Authorization: `Bearer ${session.access_token}`")) {
+    throw new Error("authenticatedFunction helper must return the user JWT Authorization header");
+  }
+  if (!src.includes("Please sign in again before changing your password.")) {
+    throw new Error("authenticatedFunction helper must expose the password-flow sign-in message");
+  }
+});
+
+it("password edge functions return structured auth and verification codes", () => {
+  const changePassword = read("supabase/functions/change-password/index.ts");
+  const sendOtp = read("supabase/functions/send-change-password-otp/index.ts");
+  const rateLimiter = read("supabase/functions/_shared/rate-limiter.ts");
+
+  for (const code of ["unauthorized", "mfa_required", "otp_required", "invalid_otp"]) {
+    if (!changePassword.includes(`code: "${code}"`)) {
+      throw new Error(`change-password must return code: ${code}`);
+    }
+  }
+  if (!sendOtp.includes('code: "unauthorized"') || !sendOtp.includes('code: "mfa_required"')) {
+    throw new Error("send-change-password-otp must return structured unauthorized and mfa_required codes");
+  }
+  if (!rateLimiter.includes('code: "rate_limited"')) {
+    throw new Error("rateLimitExceededResponse must return code: rate_limited");
+  }
+});
 
 it("ResetPassword uses the OTP edge functions instead of resetPasswordForEmail", () => {
   const src = read("src/pages/ResetPassword.tsx");

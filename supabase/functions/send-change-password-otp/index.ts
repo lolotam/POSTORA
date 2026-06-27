@@ -56,7 +56,7 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
     if (!authHeader.toLowerCase().startsWith("bearer ")) {
-      return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
     }
     const jwt = authHeader.slice(7).trim();
 
@@ -67,7 +67,7 @@ Deno.serve(async (req) => {
 
     const { data: userData, error: userError } = await admin.auth.getUser(jwt);
     if (userError || !userData?.user?.email) {
-      return jsonResponse({ error: "Unauthorized" }, 401, corsHeaders);
+      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
     }
     const user = userData.user;
 
