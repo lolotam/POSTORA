@@ -32,7 +32,10 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
   const { assignments } = useWhatsAppLabels();
 
   const messagingPlatform = platformTab === "facebook" ? "MESSENGER" : platformTab === "instagram" ? "INSTAGRAM" : "WHATSAPP";
-  const { data: conversations = [], isLoading: convsLoading } = useConversations(selectedAccountId, messagingPlatform);
+  const { data: conversations = [], isLoading: convsLoading, error: convsError } = useConversations(selectedAccountId, messagingPlatform);
+  const igMissingScope = platformTab === "instagram"
+    && convsError instanceof Error
+    && /instagram_manage_messages|MISSING_SCOPE|PERMISSION_ERROR/i.test(convsError.message);
 
   const selectedAccount = accounts.find((a) => a.id === selectedAccountId);
   const pageId = selectedAccount?.platform_user_id || "";
