@@ -1,10 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
 const PROJECT_REF = Deno.env.get("SUPABASE_PROJECT_REF") ?? "self-hosted";
 const MANAGEMENT_API = Deno.env.get("SUPABASE_MANAGEMENT_API") ?? "https://api.supabase.com";
@@ -270,6 +266,7 @@ async function testPlatform(
 }
 
 Deno.serve(async (req) => {
+  const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
