@@ -55,20 +55,40 @@ function parseIgComments(data: any): Comment[] {
   if (!data?.data) return comments;
 
   for (const media of data.data) {
+    const postLabel = media.caption || (media.like_count != null || media.comments_count != null
+      ? `[${media.media_type || "media"}] ${media.like_count ?? 0} likes · ${media.comments_count ?? 0} comments`
+      : "");
     if (!media.comments?.data) continue;
     for (const c of media.comments.data) {
       comments.push({
         id: c.id,
-        author_name: c.username || c.from?.username || "Unknown",
+        author_name: c.from?.username || c.username || "Unknown",
         author_id: c.from?.id,
         message: c.text || "",
         created_time: c.timestamp,
         is_hidden: c.hidden || false,
         is_reply: false,
         post_id: media.id,
-        post_message: media.caption || "",
+        post_message: postLabel,
         platform: "instagram",
       });
+      // Flatten replies so they show in the inbox as well.
+      const replies = c.replies?.data || [];
+      for (const r of replies) {
+        comments.push({
+          id: r.id,
+          author_name: r.from?.username || r.username || "Unknown",
+          author_id: r.from?.id,
+          message: r.text || "",
+          created_time: r.timestamp,
+          is_hidden: r.hidden || false,
+          is_reply: true,
+          parent_id: c.id,
+          post_id: media.id,
+          post_message: postLabel,
+          platform: "instagram",
+        });
+      }
     }
   }
   return comments.sort((a, b) => new Date(b.created_time).getTime() - new Date(a.created_time).getTime());
