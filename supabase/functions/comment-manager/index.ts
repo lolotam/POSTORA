@@ -8,6 +8,49 @@ const corsHeaders = {
 
 const GRAPH_API_VERSION = "v22.0";
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+const INSTAGRAM_GRAPH_API_BASE = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
+
+function isDirectInstagramAccount(account: { platform?: string; ig_auth_type?: string | null; account_metadata?: Record<string, unknown> | null }) {
+  const meta = account.account_metadata || {};
+  return account.platform === "instagram" && (
+    account.ig_auth_type === "business_login" ||
+    meta.flow === "direct" ||
+    meta.source === "instagram_business_login" ||
+    meta.token_type === "long_lived"
+  );
+}
+
+async function graphJson(url: string) {
+  const res = await fetch(url);
+  const data = await res.json().catch(() => ({ error: { message: res.statusText } }));
+  if (!res.ok || data?.error) {
+    const err = data?.error || {};
+    if (err.code === 190) {
+      return { error_type: "TOKEN_EXPIRED", error: "Instagram connection expired. Please reconnect your account." };
+    }
+    if (err.code === 10 || err.code === 200 || /permission|permissions|scope/i.test(err.message || "")) {
+      return { error_type: "MISSING_SCOPE", error: err.message || "Missing Instagram comments permission." };
+    }
+    return { error_type: "GRAPH_ERROR", error: err.message || "Meta API request failed." };
+  }
+  return data;
+}
+
+async function collectPaged(firstUrl: string, maxPages = 4) {
+  const rows: unknown[] = [];
+  let nextUrl: string | null = firstUrl;
+  let paging: unknown = null;
+
+  for (let page = 0; nextUrl && page < maxPages; page += 1) {
+    const data = await graphJson(nextUrl);
+    if (data?.error_type) return data;
+    if (Array.isArray(data?.data)) rows.push(...data.data);
+    paging = data?.paging || null;
+    nextUrl = data?.paging?.next || null;
+  }
+
+  return { data: rows, paging };
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
