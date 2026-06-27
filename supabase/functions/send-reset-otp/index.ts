@@ -11,7 +11,7 @@ interface SendOTPRequest {
   email: string;
 }
 
-// Simple hash function for OTP (in production, use a proper crypto library)
+// SHA-256 hash of the OTP. We never store or log the plaintext code.
 async function hashOTP(otp: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(otp);
@@ -20,10 +20,29 @@ async function hashOTP(otp: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+// P1-4: cryptographically secure 6-digit OTP using Web Crypto's CSPRNG.
+// Math.random() is a non-cryptographic PRNG and was predictable across
+// sequential calls — replaced with crypto.getRandomValues + rejection
+// sampling so every 6-digit value in [0, 999_999] is uniformly likely.
 function generateOTP(): string {
-  // Generate a 6-digit OTP
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  // 900_000 distinct values are needed for a 6-digit code (100000..999999).
+  // We sample uint32s and reject any value at or above the largest multiple
+  // of 900_000 that fits in uint32 to avoid modulo bias.
+  const RANGE = 900_000;
+  const MAX = Math.floor(0xFFFFFFFF / RANGE) * RANGE;
+  const buf = new Uint32Array(1);
+  // Bounded retry: in practice the first sample is accepted >99.99% of the time.
+  for (let i = 0; i < 16; i++) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < MAX) {
+      return (100_000 + (buf[0] % RANGE)).toString();
+    }
+  }
+  // Extremely unlikely fallback — still CSPRNG, accepts modest bias rather than loop forever.
+  crypto.getRandomValues(buf);
+  return (100_000 + (buf[0] % RANGE)).toString();
 }
+
 
 serve(async (req) => {
   // Handle CORS preflight
