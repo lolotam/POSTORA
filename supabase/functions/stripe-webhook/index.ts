@@ -165,6 +165,7 @@ Deno.serve(async (req) => {
     return new Response(null, { status: 200 });
   }
 
+  let currentEventId: string | undefined;
   try {
     logStep("Webhook received");
 
@@ -197,6 +198,37 @@ Deno.serve(async (req) => {
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    // Idempotency: insert a dedupe row keyed by event.id BEFORE running any
+    // side effects. If Stripe retries the same event, the PK conflict means
+    // we've already processed (or attempted) it — return 200 immediately so
+    // Stripe stops retrying, and skip re-running handlers.
+    currentEventId = event.id;
+    const { error: dedupeErr } = await supabase
+      .from("stripe_webhook_events")
+      .insert({ event_id: event.id, event_type: event.type, status: "received" });
+
+    if (dedupeErr) {
+      const code = (dedupeErr as { code?: string }).code;
+      if (code === "23505") {
+        // Already seen. If a prior attempt succeeded, skip. If it failed,
+        // allow Stripe's retry to re-run the handler.
+        const { data: prior } = await supabase
+          .from("stripe_webhook_events")
+          .select("status")
+          .eq("event_id", event.id)
+          .maybeSingle();
+        if (prior?.status === "processed") {
+          logStep("Duplicate event already processed, skipping", { eventId: event.id });
+          return new Response(JSON.stringify({ received: true, duplicate: true }), {
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        logStep("Retrying previously failed event", { eventId: event.id, priorStatus: prior?.status });
+      } else {
+        logStep("Dedupe insert failed (non-conflict)", { error: dedupeErr });
+      }
+    }
 
     // Track resolved user_id across event handling for final logging
     let resolvedUserId: string | undefined;
@@ -486,6 +518,12 @@ Deno.serve(async (req) => {
     // Log successful processing
     await logWebhookEvent(supabase, "info", event.type, `Successfully processed`, { eventId: event.id }, resolvedUserId);
 
+    // Mark dedupe row processed.
+    await supabase
+      .from("stripe_webhook_events")
+      .update({ status: "processed", processed_at: new Date().toISOString() })
+      .eq("event_id", event.id);
+
     return new Response(JSON.stringify({ received: true }), {
       headers: { "Content-Type": "application/json" },
     });
@@ -497,7 +535,15 @@ Deno.serve(async (req) => {
     try {
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
       await logWebhookEvent(supabase, "error", "webhook_error", errorMessage);
-      
+
+      // Mark dedupe row failed so Stripe's retry can re-run the handler.
+      if (currentEventId) {
+        await supabase
+          .from("stripe_webhook_events")
+          .update({ status: "failed", error: errorMessage.slice(0, 1000) })
+          .eq("event_id", currentEventId);
+      }
+
       // Send admin alert for critical failures
       await sendWebhookFailureAlert("webhook_error", errorMessage);
     } catch (logError) {
