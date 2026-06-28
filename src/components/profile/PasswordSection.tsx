@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   getAuthenticatedFunctionHeaders,
   readFunctionError,
+  PASSWORD_SIGN_IN_MESSAGE,
 } from "@/lib/authenticatedFunction";
 import { Lock, Eye, EyeOff, Loader2 } from "lucide-react";
 
@@ -38,8 +39,10 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
     setOtpCode("");
   };
 
-  const callChangePassword = async (body: { newPassword: string; otp?: string }) => {
-    const headers = await getAuthenticatedFunctionHeaders();
+  const callChangePassword = async (body: { newPassword: string; otp?: string }, explicitToken?: string) => {
+    const headers = explicitToken
+      ? { Authorization: `Bearer ${explicitToken}` }
+      : await getAuthenticatedFunctionHeaders();
 
     const { data, error } = await supabase.functions.invoke<{
       success?: boolean;
@@ -76,7 +79,12 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
 
     setIsBusy(true);
     try {
-      const result = await callChangePassword({ newPassword });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userToken = sessionData.session?.access_token;
+      if (!userToken) {
+        throw new Error(PASSWORD_SIGN_IN_MESSAGE);
+      }
+      const result = await callChangePassword({ newPassword }, userToken);
       if ("success" in result) {
         toast({ title: "Password updated!", description: "Your password has been changed successfully." });
         reset();
@@ -86,8 +94,17 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
         setStep("mfa");
       } else if (result.code === "otp_required") {
         setStep("otp");
-        const headers = await getAuthenticatedFunctionHeaders();
-        const { error: sendError } = await supabase.functions.invoke("send-change-password-otp", { body: {}, headers });
+        const { data: sessionData } = await supabase.auth.getSession();
+        const userToken = sessionData.session?.access_token;
+        if (!userToken) {
+          throw new Error(PASSWORD_SIGN_IN_MESSAGE);
+        }
+        const { error: sendError } = await supabase.functions.invoke("send-change-password-otp", {
+          body: {},
+          headers: {
+            Authorization: `Bearer ${userToken}`,
+          },
+        });
         if (sendError) {
           const result = await readFunctionError(sendError);
           if (result.code === "mfa_required") {
@@ -134,7 +151,13 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
       });
       if (verifyError) throw verifyError;
 
-      const result = await callChangePassword({ newPassword });
+      const { data: refreshedSession } = await supabase.auth.getSession();
+      const aal2Token = refreshedSession.session?.access_token;
+      if (!aal2Token) {
+        throw new Error("Could not retrieve upgraded session token after MFA verification.");
+      }
+
+      const result = await callChangePassword({ newPassword }, aal2Token);
       if ("success" in result) {
         toast({ title: "Password updated!", description: "Your password has been changed successfully." });
         reset();
@@ -159,7 +182,12 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
     }
     setIsBusy(true);
     try {
-      const result = await callChangePassword({ newPassword, otp: otpCode.trim() });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userToken = sessionData.session?.access_token;
+      if (!userToken) {
+        throw new Error(PASSWORD_SIGN_IN_MESSAGE);
+      }
+      const result = await callChangePassword({ newPassword, otp: otpCode.trim() }, userToken);
       if ("success" in result) {
         toast({ title: "Password updated!", description: "Your password has been changed successfully." });
         reset();

@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   getAuthenticatedFunctionHeaders,
   readFunctionError,
+  PASSWORD_SIGN_IN_MESSAGE,
 } from "@/lib/authenticatedFunction";
 import {
   Dialog,
@@ -143,8 +144,10 @@ export function SecuritySection() {
     setPwOtpCode("");
   };
 
-  const callChangePassword = async (body: { newPassword: string; otp?: string }) => {
-    const headers = await getAuthenticatedFunctionHeaders();
+  const callChangePassword = async (body: { newPassword: string; otp?: string }, explicitToken?: string) => {
+    const headers = explicitToken
+      ? { Authorization: `Bearer ${explicitToken}` }
+      : await getAuthenticatedFunctionHeaders();
 
     const { data, error } = await supabase.functions.invoke<{
       success?: boolean;
@@ -180,7 +183,12 @@ export function SecuritySection() {
     try {
       // First attempt — if MFA is enrolled the edge function returns
       // mfa_required; if not, otp_required.
-      const result = await callChangePassword({ newPassword });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userToken = sessionData.session?.access_token;
+      if (!userToken) {
+        throw new Error(PASSWORD_SIGN_IN_MESSAGE);
+      }
+      const result = await callChangePassword({ newPassword }, userToken);
       if ("success" in result) {
         toast({
           title: isGoogleUser ? "Password created!" : "Password changed!",
@@ -198,10 +206,19 @@ export function SecuritySection() {
         // Issue an OTP straight away so the user just enters the code.
         setPwStep("otp");
         setPwOtpSending(true);
-        const headers = await getAuthenticatedFunctionHeaders();
+        const { data: sessionData } = await supabase.auth.getSession();
+        const userToken = sessionData.session?.access_token;
+        if (!userToken) {
+          throw new Error(PASSWORD_SIGN_IN_MESSAGE);
+        }
         const { error: sendError } = await supabase.functions.invoke(
           "send-change-password-otp",
-          { body: {}, headers },
+          {
+            body: {},
+            headers: {
+              Authorization: `Bearer ${userToken}`,
+            },
+          },
         );
         if (sendError) {
           const result = await readFunctionError(sendError);
@@ -243,7 +260,13 @@ export function SecuritySection() {
       });
       if (verifyError) throw verifyError;
 
-      const result = await callChangePassword({ newPassword });
+      const { data: refreshedSession } = await supabase.auth.getSession();
+      const aal2Token = refreshedSession.session?.access_token;
+      if (!aal2Token) {
+        throw new Error("Could not retrieve upgraded session token after MFA verification.");
+      }
+
+      const result = await callChangePassword({ newPassword }, aal2Token);
       if ("success" in result) {
         toast({ title: "Password changed!", description: "Your password has been updated." });
         setPasswordDialogOpen(false);
@@ -266,7 +289,12 @@ export function SecuritySection() {
     }
     setIsChangingPassword(true);
     try {
-      const result = await callChangePassword({ newPassword, otp: pwOtpCode.trim() });
+      const { data: sessionData } = await supabase.auth.getSession();
+      const userToken = sessionData.session?.access_token;
+      if (!userToken) {
+        throw new Error(PASSWORD_SIGN_IN_MESSAGE);
+      }
+      const result = await callChangePassword({ newPassword, otp: pwOtpCode.trim() }, userToken);
       if ("success" in result) {
         toast({
           title: isGoogleUser ? "Password created!" : "Password changed!",

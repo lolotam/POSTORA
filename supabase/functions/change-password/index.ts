@@ -68,6 +68,7 @@ Deno.serve(async (req) => {
   try {
     const authHeader = req.headers.get("Authorization") ?? "";
     if (!authHeader.toLowerCase().startsWith("bearer ")) {
+      console.warn("change-password: 401 unauthorized - missing_authorization");
       return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
     }
     const jwt = authHeader.slice(7).trim();
@@ -78,7 +79,12 @@ Deno.serve(async (req) => {
 
     // Validate token server-side. getUser also rejects expired/forged tokens.
     const { data: userData, error: userError } = await admin.auth.getUser(jwt);
-    if (userError || !userData?.user) {
+    if (userError) {
+      console.warn("change-password: 401 unauthorized - invalid_user_jwt");
+      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
+    }
+    if (!userData?.user) {
+      console.warn("change-password: 401 unauthorized - session_not_found");
       return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
     }
     const user = userData.user;

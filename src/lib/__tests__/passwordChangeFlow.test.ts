@@ -40,6 +40,30 @@ for (const file of watchedFiles) {
     if (!source.includes('"send-change-password-otp"')) {
       throw new Error(`${file} must invoke send-change-password-otp for non-MFA users`);
     }
+    if (!source.includes("explicitToken?: string")) {
+      throw new Error(`${file} callChangePassword must accept an optional explicit token`);
+    }
+    if (!/explicitToken\s*\?\s*\{\s*Authorization:\s*`Bearer \$\{explicitToken\}`\s*\}\s*:\s*await getAuthenticatedFunctionHeaders\(\)/s.test(source)) {
+      throw new Error(`${file} must prefer the explicit token and retain the authenticated-header fallback`);
+    }
+    if ((source.match(/supabase\.auth\.getSession\(\)/g) ?? []).length < 4) {
+      throw new Error(`${file} must read the latest session before each password auth step`);
+    }
+    if (!/callChangePassword\(\{\s*newPassword\s*\},\s*userToken\)/s.test(source)) {
+      throw new Error(`${file} must pass the current user token to the initial password request`);
+    }
+    if (!/mfa\.verify\([\s\S]*?getSession\(\)[\s\S]*?callChangePassword\(\{\s*newPassword\s*\},\s*aal2Token\)/s.test(source)) {
+      throw new Error(`${file} must pass the refreshed AAL2 token after MFA verification`);
+    }
+    if (!/callChangePassword\(\{\s*newPassword,\s*otp:[^}]+\},\s*userToken\)/s.test(source)) {
+      throw new Error(`${file} must pass the current user token when confirming an email OTP`);
+    }
+    if (!/"send-change-password-otp"[\s\S]*?Authorization:\s*`Bearer \$\{userToken\}`/s.test(source)) {
+      throw new Error(`${file} must pass the current user token when sending an email OTP`);
+    }
+    if (!source.includes("PASSWORD_SIGN_IN_MESSAGE")) {
+      throw new Error(`${file} must use the friendly sign-in error when the session token is missing`);
+    }
   });
 }
 
@@ -71,6 +95,19 @@ it("password edge functions return structured auth and verification codes", () =
   }
   if (!rateLimiter.includes('code: "rate_limited"')) {
     throw new Error("rateLimitExceededResponse must return code: rate_limited");
+  }
+});
+
+it("change-password logs sanitized 401 reasons without credential data", () => {
+  const source = read("supabase/functions/change-password/index.ts");
+  for (const reason of [
+    "change-password: 401 unauthorized - missing_authorization",
+    "change-password: 401 unauthorized - invalid_user_jwt",
+    "change-password: 401 unauthorized - session_not_found",
+  ]) {
+    if (!source.includes(`console.warn("${reason}")`)) {
+      throw new Error(`change-password must log sanitized reason: ${reason}`);
+    }
   }
 });
 
