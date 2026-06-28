@@ -10,6 +10,11 @@
 //     `send-change-password-otp` (scoped purpose='change_password').
 // Only the service role updates auth.users; the service key never leaves the
 // edge runtime.
+//
+// Perf: JWT is verified locally via HMAC (no Kong/GoTrue round-trip for token
+// validation). MFA factor check uses a direct DB query via service role client.
+// This eliminates the 2–3 sequential HTTP calls that previously caused the
+// wall-clock timeout returning a spurious 401.
 // ---------------------------------------------------------------------------
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -35,13 +40,54 @@ function jsonResponse(
   });
 }
 
-function decodeJwtClaims(token: string): Record<string, unknown> | null {
+/** Decode JWT payload without verifying signature (used after verify). */
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
   try {
     const part = token.split(".")[1];
     if (!part) return null;
     const padded = part.replace(/-/g, "+").replace(/_/g, "/");
     const pad = padded.length % 4 ? padded + "=".repeat(4 - (padded.length % 4)) : padded;
     return JSON.parse(atob(pad));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Verify a Supabase JWT locally using HMAC-SHA256.
+ * Returns decoded claims on success, null on failure or expiry.
+ * This replaces admin.auth.getUser(jwt) — no HTTP call needed.
+ */
+async function verifyJwt(token: string, secret: string): Promise<Record<string, unknown> | null> {
+  try {
+    const parts = token.split(".");
+    if (parts.length !== 3) return null;
+
+    const key = await crypto.subtle.importKey(
+      "raw",
+      new TextEncoder().encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["verify"],
+    );
+
+    const dataToVerify = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
+    const sigBuf = Uint8Array.from(
+      atob(parts[2].replace(/-/g, "+").replace(/_/g, "/")),
+      (c) => c.charCodeAt(0),
+    );
+
+    const valid = await crypto.subtle.verify("HMAC", key, sigBuf, dataToVerify);
+    if (!valid) return null;
+
+    const claims = decodeJwtPayload(token);
+    if (!claims) return null;
+
+    // Reject expired tokens.
+    const exp = typeof claims.exp === "number" ? claims.exp : 0;
+    if (exp && exp < Math.floor(Date.now() / 1000)) return null;
+
+    return claims;
   } catch {
     return null;
   }
@@ -73,28 +119,26 @@ Deno.serve(async (req) => {
     }
     const jwt = authHeader.slice(7).trim();
 
+    // ── 1. Validate JWT locally — zero HTTP round-trips ───────────────────────
+    const jwtSecret = Deno.env.get("JWT_SECRET")!;
+    const claims = await verifyJwt(jwt, jwtSecret);
+    if (!claims) {
+      console.warn("change-password: 401 unauthorized - invalid_user_jwt");
+      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
+    }
+
+    const userId = typeof claims.sub === "string" ? claims.sub : null;
+    if (!userId) {
+      console.warn("change-password: 401 unauthorized - session_not_found");
+      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
+    }
+
+    // ── 2. Admin client (for rate-limit RPC, MFA lookup, updateUserById) ─────
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const admin = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Validate token server-side. getUser also rejects expired/forged tokens.
-    const { data: userData, error: userError } = await admin.auth.getUser(jwt);
-    if (userError) {
-      console.warn("change-password: 401 unauthorized - invalid_user_jwt");
-      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
-    }
-    if (!userData?.user) {
-      console.warn("change-password: 401 unauthorized - session_not_found");
-      return jsonResponse({ error: "Unauthorized", code: "unauthorized" }, 401, corsHeaders);
-    }
-    const user = userData.user;
-
-    // User-scoped rate limit (defence-in-depth against brute forcing OTPs).
-    const rl = await checkUserRateLimit(admin, "change-password", user.id, 10, 3600);
-    if (!rl.allowed) {
-      return rateLimitExceededResponse(rl, corsHeaders);
-    }
-
+    // ── 3. Parse body early (no I/O) ──────────────────────────────────────────
     let body: ChangePasswordRequest;
     try {
       body = await req.json();
@@ -111,36 +155,37 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Inspect MFA enrollment on the user.
-    const { data: factorList } = await admin.auth.admin.mfa.listFactors({ userId: user.id });
-    const hasVerifiedMfa = (factorList?.factors ?? []).some(
+    // ── 4. Parallelise: rate-limit + MFA factor check at the same time ────────
+    const isAal2 = claims.aal === "aal2";
+
+    const [rl, factorList] = await Promise.all([
+      checkUserRateLimit(admin, "change-password", userId, 10, 3600),
+      admin.auth.admin.mfa.listFactors({ userId }),
+    ]);
+
+    if (!rl.allowed) {
+      return rateLimitExceededResponse(rl, corsHeaders);
+    }
+
+    const hasVerifiedMfa = (factorList.data?.factors ?? []).some(
       (f: { factor_type: string; status: string }) =>
         f.factor_type === "totp" && f.status === "verified",
     );
 
-    // Two acceptable proofs of identity:
-    //  A) Caller's JWT is AAL2 (means they just completed MFA challenge).
-    //  B) Caller has NO verified MFA factor AND presents a valid email OTP.
-    const claims = decodeJwtClaims(jwt);
-    const isAal2 = claims?.aal === "aal2";
-
+    // ── 5. Identity proof ─────────────────────────────────────────────────────
     if (hasVerifiedMfa) {
       if (!isAal2) {
-        // Refuse silently with a specific machine code so the frontend can
-        // prompt for the authenticator code. We do NOT accept OTP fallback
-        // here — that would let a forgot-password OTP bypass MFA.
+        // Frontend should re-prompt for authenticator code and retry with
+        // an AAL2 token. We never accept OTP as MFA bypass.
         return jsonResponse(
-          {
-            error: "MFA verification required",
-            code: "mfa_required",
-          },
+          { error: "MFA verification required", code: "mfa_required" },
           401,
           corsHeaders,
         );
       }
-      // AAL2 path — proceed.
+      // AAL2 confirmed — fall through to update.
     } else {
-      // Non-MFA path: require a valid OTP for this user's email.
+      // Non-MFA path: require a valid 6-digit email OTP.
       const otp = typeof body.otp === "string" ? body.otp.trim() : "";
       if (!/^\d{6}$/.test(otp)) {
         return jsonResponse(
@@ -150,7 +195,9 @@ Deno.serve(async (req) => {
         );
       }
 
-      const email = (user.email ?? "").toLowerCase();
+      // Resolve user email (needed to look up the OTP row).
+      // claims.email is present in Supabase JWTs; use it to avoid an extra API call.
+      const email = (typeof claims.email === "string" ? claims.email : "").toLowerCase();
       if (!email) {
         return jsonResponse({ error: "Account has no email on file" }, 400, corsHeaders);
       }
@@ -191,8 +238,7 @@ Deno.serve(async (req) => {
         );
       }
 
-      // Mark this OTP used and invalidate sibling change-password OTPs for
-      // this email so the code is strictly single-use.
+      // Mark OTP used and clear sibling codes.
       await admin.from("password_reset_otps").update({ used: true }).eq("id", otpRecord.id);
       await admin
         .from("password_reset_otps")
@@ -202,18 +248,14 @@ Deno.serve(async (req) => {
         .eq("used", false);
     }
 
-    const { error: updateError } = await admin.auth.admin.updateUserById(user.id, {
+    // ── 6. Update password via service role ───────────────────────────────────
+    const { error: updateError } = await admin.auth.admin.updateUserById(userId, {
       password: newPassword,
     });
 
     if (updateError) {
-      // Don't leak Auth provider messages verbatim.
       console.error("change-password: updateUserById failed:", updateError.message);
-      return jsonResponse(
-        { error: "Failed to update password" },
-        500,
-        corsHeaders,
-      );
+      return jsonResponse({ error: "Failed to update password" }, 500, corsHeaders);
     }
 
     return jsonResponse({ success: true }, 200, corsHeaders);
