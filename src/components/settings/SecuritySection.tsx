@@ -695,21 +695,24 @@ export function SecuritySection() {
                 >
                   <RefreshCw className={`w-4 h-4 ${isLoadingMfa ? 'animate-spin' : ''}`} />
                 </Button>
-                {!mfaFactors.some(f => f.status === 'verified') && (
-                  <Button onClick={handleStartMfaEnrollment} disabled={isEnrollingMfa} size="sm">
-                    {isEnrollingMfa ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Setting up...
-                      </>
-                    ) : (
-                      <>
-                        <Smartphone className="w-4 h-4 mr-2" />
-                        Enable 2FA
-                      </>
-                    )}
-                  </Button>
-                )}
+                <Button onClick={handleStartMfaEnrollment} disabled={isEnrollingMfa} size="sm">
+                  {isEnrollingMfa ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Setting up...
+                    </>
+                  ) : mfaFactors.some(f => f.status === 'verified') ? (
+                    <>
+                      <Smartphone className="w-4 h-4 mr-2" />
+                      Add authenticator
+                    </>
+                  ) : (
+                    <>
+                      <Smartphone className="w-4 h-4 mr-2" />
+                      Enable 2FA
+                    </>
+                  )}
+                </Button>
               </div>
             </div>
 
