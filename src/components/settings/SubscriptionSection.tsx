@@ -161,23 +161,59 @@ export function SubscriptionSection() {
 
   if (isAdmin) {
     return (
-      <div className="rounded-xl border border-border bg-card/50 p-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
-            <Crown className="w-5 h-5 text-amber-500" />
+      <div className="space-y-6">
+        <div className="rounded-xl border border-border bg-card/50 p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center">
+              <Crown className="w-5 h-5 text-amber-500" />
+            </div>
+            <div>
+              <h2 className="font-semibold">Subscription</h2>
+              <p className="text-sm text-muted-foreground">Manage your subscription and billing</p>
+            </div>
           </div>
-          <div>
-            <h2 className="font-semibold">Subscription</h2>
-            <p className="text-sm text-muted-foreground">Manage your subscription and billing</p>
+          <div className="flex items-center gap-3 mb-4">
+            <Badge className="bg-gradient-to-r from-amber-500 to-orange-500 text-white">
+              Admin
+            </Badge>
+            <span className="text-sm text-muted-foreground">
+              Full access to all features — billing checkout is hidden for admin accounts.
+            </span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => navigate("/pricing")} className="gap-2">
+              <Sparkles className="w-4 h-4" />
+              Preview pricing page
+            </Button>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <Badge className="bg-gradient-to-r from-amber-500 to-orange-500 text-white">
-            Admin
-          </Badge>
-          <span className="text-sm text-muted-foreground">
-            Full access to all features
-          </span>
+
+        {/* Admin plan management shortcut */}
+        <div className="rounded-xl border border-border bg-card/50 p-6">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+              <Receipt className="w-5 h-5 text-primary" />
+            </div>
+            <div>
+              <h2 className="font-semibold">Plan Management</h2>
+              <p className="text-sm text-muted-foreground">
+                Create, edit, and reorder subscription plans available to users.
+              </p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => navigate("/admin/plans")} className="gap-2">
+              <ArrowRight className="w-4 h-4" />
+              Manage subscription plans
+            </Button>
+            <Button variant="outline" onClick={() => navigate("/admin/coupons")} className="gap-2">
+              <Receipt className="w-4 h-4" />
+              Manage coupons
+            </Button>
+            <Button variant="ghost" onClick={() => navigate("/admin/subscriptions")} className="gap-2">
+              View customer subscriptions
+            </Button>
+          </div>
         </div>
       </div>
     );

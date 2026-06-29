@@ -1,70 +1,66 @@
-## Root cause
+## Scope
 
-The Threads publish path in `supabase/functions/process-post/index.ts` (lines ~5486-5490) sends the wrong field names to Meta when the user checks "Share to Instagram Story":
+Fix the 7 issues surfaced by the automated test run. Group by area, smallest-impact changes first, UI/presentation only where possible.
 
-```ts
-containerParams.crosspost_to_instagram = "true";
-containerParams.crosspost_to_instagram_dark_mode = "true";
-```
+---
 
-Meta's Threads Graph API (`POST /{threads-user-id}/threads`) expects:
+## 1. Instagram comments show `[object Object]`
 
-```
-crossreshare_to_ig=true
-crossreshare_to_ig_dark_mode=true
-```
+**File:** `src/components/comments/CommentManagerPanel.tsx` (+ light touch in `src/hooks/useCommentInbox.ts`)
 
-(Yes, "crossreshare" — that is Meta's actual spelling.) Confirmed by:
-- Meta docs: https://developers.facebook.com/docs/threads/reference/publishing/
-- meta-mcp PR #152 ("feat: cross-share Threads posts to Instagram Stories") which forwards exactly `crossreshare_to_ig` / `crossreshare_to_ig_dark_mode`.
-- Our own `supabase/functions/threads-debug-publish-check/index.ts` already uses the correct name `crossreshare_to_ig` in its sample payload — so the debug panel and the real publisher disagree, and the real publisher is wrong.
+- The error render path stringifies `commentsError instanceof Error ? .message : "..."`, but `useCommentInbox` throws `new Error(String(data.error || ...))` where `data.error` can be an object → becomes `[object Object]`.
+- Fix: in `useCommentInbox.ts`, serialize non-string errors with `JSON.stringify` (or extract `.message`/`.error_user_msg`) before constructing the `Error`.
+- Add a friendly fallback in `CommentManagerPanel` for the most common Meta errors (missing permission, token expired) — reuse existing amber reconnect banner.
 
-Because `crosspost_to_instagram` is not a recognized parameter, Meta accepts the request, publishes the Thread, and silently drops the cross-share — exactly the symptom you described: "publishes to Threads only, no IG Story", despite the `threads_share_to_instagram` permission and test user being correctly set up.
+## 2. 2FA — no "Add authenticator" once one exists
 
-## Changes
+**File:** `src/components/settings/SecuritySection.tsx`
 
-### 1. `supabase/functions/process-post/index.ts` (~lines 5486-5490)
-Rename the two container params:
+- Always render an "Add authenticator" button (not hidden after first enrollment). Clicking it opens the existing enroll flow (QR + verify) and supports a friendly name so multiple TOTP factors can coexist.
+- Keep existing list of factors with remove/verify actions.
 
-- `crosspost_to_instagram` → `crossreshare_to_ig`
-- `crosspost_to_instagram_dark_mode` → `crossreshare_to_ig_dark_mode`
+## 3. Billing — admin sees no checkout CTA
 
-Keep the existing pre-flight guard (capability check, video-block, warnings) unchanged.
+**Files:** `src/pages/Pricing.tsx`, `src/components/settings/SubscriptionSection.tsx`
 
-### 2. Capture Meta's cross-share result for diagnostics
-After publish, Meta returns `crossreshare_to_ig_status` (`"SUCCESS"` or `"FAILED"`) on the published media. When `wantsCrossShare` is true, fetch this field on the published thread id and:
-- log it in the verbose Threads log line,
-- include it in the existing `cross_share` block of the platform response (alongside `attempted`, `capability_at_publish`, `dark_mode`) so the History/Debug surface can show whether Meta actually delivered the Story.
+- Replace disabled "You have admin access" CTA with a clear admin badge + a secondary "Preview checkout as user" / "Simulate upgrade" link, so the flow is reachable.
+- For non-admin users the standard checkout CTA stays unchanged.
+- Make copy explicit: "Admins have full access — billing controls are hidden. Switch to a test account to run checkout."
 
-If the field cannot be fetched (e.g. transient error), record `status: "unknown"` — never fail the post.
+## 4. Admin plan management not discoverable
 
-### 3. No DB, env, or frontend changes
-- Frontend toggle, settings persistence (`threads_cross_share_to_ig` / `_dark_mode`), and capability gating stay as-is.
-- No new secrets, no schema migration.
+**Files:** `src/components/settings/SubscriptionSection.tsx` (+ link to existing `/admin/plans` if present, otherwise expose it)
 
-## Validation
+- When `useUserRole` returns `admin`, render an "Manage subscription plans" panel with a direct link/button to `/admin/plans` and inline Create/Edit shortcuts.
+- No new backend; reuses existing `useSubscriptionPlans` CRUD hooks.
 
-- Unit/regression: add a small test asserting that when `metadata.threads_cross_share_to_ig === true` and capability is not `false` and media is not video, the outgoing `containerParams` includes `crossreshare_to_ig: "true"` (and `_dark_mode` when requested), and does NOT include the legacy `crosspost_to_instagram` keys.
-- Manual on VPS after edge deploy:
-  1. With a test user that has `threads_share_to_instagram` granted and IG linked in Accounts Center, publish a text or image post from Postora with the "Share to Instagram Story" toggle on.
-  2. Confirm the platform response now contains `cross_share.status: "SUCCESS"` and the Story appears in the linked IG account within a few seconds.
-  3. Repeat with dark mode on; confirm `crossreshare_to_ig_dark_mode=true` is sent (verbose log) and the Story uses dark styling.
+## 5. `/threads` returns 404
 
-## Deployment (self-hosted)
+**Files:** `src/App.tsx` (route), possibly new `src/pages/ThreadsDiscovery.tsx`
 
-Edge function only — sync `supabase/functions/process-post/index.ts` to the self-hosted functions volume and restart the functions container:
+- Option A (preferred, minimal): add a `/threads` route that renders the existing Threads discovery panel (the same one Analyze uses via `useThreadsLiveDiscovery`).
+- Option B: remove the dead nav link if one exists. We'll do A so the feature is reachable.
 
-```
-docker compose up -d --no-deps functions
-```
+## 6 & 7. Facebook analytics — credentials not configured
 
-No SQL, no .env changes, no provider-console changes.
+**Files:** analytics page(s) under `src/pages/analytics/` and the credential-check component
+
+- This is environment, not code — `FACEBOOK_APP_ID`/`FACEBOOK_APP_SECRET` aren't set in this env.
+- UI change: replace the blunt "Contact support" text + disabled Analyze with a setup callout that explains the missing config and (for admins) links to `/admin/settings` or the App Credentials Manager so the keys can be added. Non-admins see a clearer "feature unavailable in this environment" message.
+- No secrets are added by this plan — owner must set them in production `.env` per project rules.
+
+---
 
 ## Out of scope
 
-- Re-enabling cross-share for video/carousel (Meta PR #152 shows it's now allowed for all four types, but lifting the current video guard is a separate decision and not what's blocking you today).
-- Changing the capability probe / OAuth scopes.
-- Updating `threads-debug-publish-check` (already correct).
+- Backend/edge-function changes (none required).
+- Database migrations (none required).
+- Actually provisioning Facebook credentials (owner action).
 
-## Final status target
-`completed_requires_server_sync` — code fix only; needs the functions volume sync + container restart on the VPS.
+## Validation
+
+After build, rerun the 7 named tests. Manually verify in preview: comment error renders readable text, Security shows "Add authenticator", Pricing/Subscription admin copy is clear, `/admin/plans` reachable from Subscription, `/threads` loads discovery, FB analytics shows setup callout instead of dead text.
+
+## Final status
+
+`completed` for items 1–6; item 7 will be `completed_requires_env_update` because the Facebook credentials must be added to the self-hosted `.env` by the owner.

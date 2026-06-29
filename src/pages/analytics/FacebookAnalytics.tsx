@@ -2,10 +2,11 @@ import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useAuth } from "@/hooks/useAuth";
+import { useUserRole } from "@/hooks/useUserRole";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Facebook, Loader2, SearchCheck } from "lucide-react";
+import { Facebook, Loader2, SearchCheck, Settings, AlertTriangle } from "lucide-react";
 import { BrandSearchBar } from "@/components/brand-intelligence/BrandSearchBar";
 import { ProfileCard } from "@/components/brand-intelligence/ProfileCard";
 import { FilterToolbar } from "@/components/brand-intelligence/FilterToolbar";
@@ -27,9 +28,11 @@ const EXAMPLE_BRANDS = ["@nike", "@cocacola", "@redbull", "@apple"];
 export default function FacebookAnalytics() {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const { isAdmin } = useUserRole();
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
   const { profile, posts, totalPosts, hasMore, isLoading, error, search, loadMore, reset } = useBrandScrape();
+  const isCredentialError = typeof error === "string" && /credential|not configured|app id|app secret/i.test(error);
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
     queryKey: ["bi-content-post-ids", session?.user?.id],
@@ -102,9 +105,32 @@ export default function FacebookAnalytics() {
 
         {error && (
           <Reveal delay={120}>
-            <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4">
-              <p className="text-sm text-rose-500">{error}</p>
-            </GradientRingCard>
+            {isCredentialError ? (
+              <GradientRingCard variant="amber" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex-1 space-y-2">
+                    <p className="text-sm font-medium">Facebook analytics needs setup</p>
+                    <p className="text-sm text-muted-foreground">
+                      The Facebook app credentials (App ID and App Secret) are not configured in this environment, so brand analysis cannot run yet.
+                      {isAdmin
+                        ? " As an admin you can add them in App Credentials."
+                        : " Please contact your workspace admin to configure them."}
+                    </p>
+                    {isAdmin && (
+                      <Button size="sm" variant="outline" onClick={() => navigate("/admin/settings")} className="gap-2 mt-1">
+                        <Settings className="w-4 h-4" />
+                        Open App Credentials
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </GradientRingCard>
+            ) : (
+              <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4">
+                <p className="text-sm text-rose-500">{error}</p>
+              </GradientRingCard>
+            )}
           </Reveal>
         )}
 
