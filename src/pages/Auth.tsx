@@ -314,46 +314,6 @@ export default function Auth() {
     }
   };
 
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrors({});
-
-    if (!email || !z.string().email().safeParse(email).success) {
-      setErrors({ email: "Please enter a valid email address" });
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email, {
-        redirectTo: `${window.location.origin}/auth?mode=reset-password`,
-      });
-
-      if (error) {
-        toast({
-          title: "Error",
-          description: error.message,
-          variant: "destructive",
-        });
-      } else {
-        toast({
-          title: "Check your email",
-          description: "We've sent you a password reset link. Please check your inbox.",
-        });
-        setView("login");
-      }
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Something went wrong. Please try again.",
-        variant: "destructive",
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrors({});

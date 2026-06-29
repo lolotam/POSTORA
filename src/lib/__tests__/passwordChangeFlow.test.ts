@@ -120,3 +120,13 @@ it("ResetPassword uses the OTP edge functions instead of resetPasswordForEmail",
     throw new Error("ResetPassword.tsx must invoke send-reset-otp and verify-reset-otp");
   }
 });
+
+it("Auth page does not use the broken GoTrue resetPasswordForEmail path", () => {
+  const src = read("src/pages/Auth.tsx");
+  if (src.includes("resetPasswordForEmail")) {
+    throw new Error("Auth.tsx must not use supabase.auth.resetPasswordForEmail; the forgot-password flow must use the OTP edge functions via PasswordResetOptions");
+  }
+  if (src.includes("handleForgotPassword")) {
+    throw new Error("Auth.tsx must not define the dead handleForgotPassword handler");
+  }
+});
