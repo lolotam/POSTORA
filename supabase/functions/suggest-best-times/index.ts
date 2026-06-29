@@ -9,8 +9,31 @@ serve(async (req) => {
   }
 
   try {
-    const { platforms, historicalData } = await req.json();
-    
+    // Parse + validate body before touching any field. Previously this
+    // function crashed with "Cannot read properties of undefined (reading
+    // 'join')" when `platforms` or `historicalData` was missing.
+    let body: { platforms?: unknown; historicalData?: unknown } = {};
+    try {
+      const text = await req.text();
+      body = text ? JSON.parse(text) : {};
+    } catch {
+      return errorResponse('Malformed JSON body', 400);
+    }
+
+    const platforms = Array.isArray(body.platforms)
+      ? body.platforms.filter((p): p is string => typeof p === 'string' && p.length > 0)
+      : [];
+    if (platforms.length === 0) {
+      return errorResponse('platforms is required and must be a non-empty array of strings', 400);
+    }
+
+    const hd = (body.historicalData ?? {}) as Record<string, unknown>;
+    const historicalData = {
+      hourCounts: (hd.hourCounts as Record<string, number> | undefined) ?? {},
+      dayCounts: (hd.dayCounts as Record<string, number> | undefined) ?? {},
+      totalPosts: typeof hd.totalPosts === 'number' ? hd.totalPosts : 0,
+    };
+
     const supabaseAdmin = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''

@@ -1,4 +1,11 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { authenticateCaller } from "../_shared/auth-helper.ts";
+import {
+  forbidden,
+  invalidBody,
+  providerUnavailable,
+  unauthorized,
+} from "../_shared/auth-responses.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -13,80 +20,127 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Parse body safely. Empty/invalid JSON must NOT crash the function.
+  let body: { user_id?: string } = {};
   try {
-    const { user_id } = await req.json();
-
-    if (!user_id) {
-      throw new Error("Missing user_id");
-    }
-
-    console.log("Fetching Pinterest boards for user:", user_id);
-
-    const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
-
-    // Get the user's Pinterest account(s) - handle multiple accounts
-    const { data: accounts, error: accountError } = await supabase
-      .from("social_accounts")
-      .select("access_token, platform_username")
-      .eq("user_id", user_id)
-      .eq("platform", "pinterest")
-      .eq("is_active", true);
-
-    if (accountError) {
-      console.error("Database error:", accountError);
-      throw new Error("Failed to fetch Pinterest account");
-    }
-
-    if (!accounts || accounts.length === 0) {
-      return new Response(JSON.stringify({ boards: [], error: "No Pinterest account connected" }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Use the first active account (or could aggregate from all)
-    const account = accounts[0];
-
-    // Fetch boards from Pinterest API
-    const boardsResponse = await fetch("https://api.pinterest.com/v5/boards", {
-      headers: {
-        "Authorization": `Bearer ${account.access_token}`,
-      },
-    });
-
-    const boardsData = await boardsResponse.json();
-    console.log("Pinterest boards response:", boardsResponse.status);
-
-    if (!boardsResponse.ok) {
-      console.error("Pinterest API error:", boardsData);
-      
-      if (boardsResponse.status === 401) {
-        throw new Error("Pinterest token expired. Please reconnect your account.");
-      }
-      
-      throw new Error(boardsData.message || "Failed to fetch Pinterest boards");
-    }
-
-    const boards = (boardsData.items || []).map((board: any) => ({
-      id: board.id,
-      name: board.name,
-      description: board.description,
-      privacy: board.privacy,
-      pin_count: board.pin_count,
-      image_url: board.media?.image_cover_url || null,
-    }));
-
-    console.log(`Found ${boards.length} Pinterest boards`);
-
-    return new Response(JSON.stringify({ boards, username: account.platform_username }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-
-  } catch (error: unknown) {
-    console.error("Pinterest boards error:", error);
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return new Response(JSON.stringify({ error: message, boards: [] }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    const text = await req.text();
+    body = text ? JSON.parse(text) : {};
+  } catch {
+    return invalidBody({ reason: "Malformed JSON body" }, "INVALID_JSON");
   }
+
+  // Authenticate caller from the Authorization header. Derive user_id from
+  // the verified JWT — body.user_id is only honored when it matches `sub`
+  // (or the caller is the service role).
+  let authedUserId: string;
+  let isServiceRole = false;
+  try {
+    const result = await authenticateCaller(req, body.user_id ?? null);
+    authedUserId = result.userId;
+    isServiceRole = result.isServiceRole;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Unauthorized";
+    return unauthorized(msg);
+  }
+
+  // If the body asks for a different user, only service-role may impersonate.
+  if (body.user_id && body.user_id !== authedUserId && !isServiceRole) {
+    return forbidden("Cannot read another user's Pinterest accounts");
+  }
+
+  console.log("Fetching Pinterest boards for user:", authedUserId);
+
+  const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!);
+
+  // Get the user's Pinterest account(s) - handle multiple accounts
+  const { data: accounts, error: accountError } = await supabase
+    .from("social_accounts")
+    .select("access_token, platform_username")
+    .eq("user_id", authedUserId)
+    .eq("platform", "pinterest")
+    .eq("is_active", true);
+
+  if (accountError) {
+    console.error("Database error:", accountError);
+    return providerUnavailable("pinterest", "DB_ERROR");
+  }
+
+  if (!accounts || accounts.length === 0) {
+    return new Response(
+      JSON.stringify({
+        boards: [],
+        error: "No Pinterest account connected",
+        code: "ACCOUNT_NOT_CONNECTED",
+      }),
+      {
+        status: 409,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  // Use the first active account (or could aggregate from all)
+  const account = accounts[0];
+
+  // Fetch boards from Pinterest API
+  let boardsResponse: Response;
+  try {
+    boardsResponse = await fetch("https://api.pinterest.com/v5/boards", {
+      headers: { "Authorization": `Bearer ${account.access_token}` },
+    });
+  } catch (err) {
+    console.error("Pinterest fetch error:", err);
+    return providerUnavailable("pinterest", "PROVIDER_FETCH_ERROR");
+  }
+
+  // Read body as text first so we can safely handle empty/non-JSON responses
+  // (the original code crashed with "Unexpected end of JSON input").
+  const rawBody = await boardsResponse.text();
+  console.log("Pinterest boards response:", boardsResponse.status);
+
+  let boardsData: { items?: unknown[]; message?: string } = {};
+  if (rawBody.trim().length > 0) {
+    try {
+      boardsData = JSON.parse(rawBody);
+    } catch {
+      console.error("Pinterest returned non-JSON response");
+      return providerUnavailable("pinterest", "PROVIDER_EMPTY_RESPONSE");
+    }
+  } else if (!boardsResponse.ok) {
+    return providerUnavailable("pinterest", "PROVIDER_EMPTY_RESPONSE");
+  }
+
+  if (!boardsResponse.ok) {
+    if (boardsResponse.status === 401) {
+      return new Response(
+        JSON.stringify({
+          error: "Pinterest token expired. Please reconnect your account.",
+          code: "ACCOUNT_REAUTH_REQUIRED",
+          boards: [],
+        }),
+        {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        },
+      );
+    }
+    return providerUnavailable("pinterest", "PROVIDER_ERROR");
+  }
+
+  const items = Array.isArray(boardsData.items) ? boardsData.items : [];
+  const boards = items.map((board: any) => ({
+    id: board.id,
+    name: board.name,
+    description: board.description,
+    privacy: board.privacy,
+    pin_count: board.pin_count,
+    image_url: board.media?.image_cover_url || null,
+  }));
+
+  console.log(`Found ${boards.length} Pinterest boards`);
+
+  return new Response(
+    JSON.stringify({ boards, username: account.platform_username }),
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+  );
 });
