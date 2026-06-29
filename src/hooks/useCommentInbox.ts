@@ -120,10 +120,17 @@ export function useComments({ platform, socialAccountId, pageId, igUserId, enabl
         if (typeof rawErr === "string") {
           message = rawErr;
         } else if (rawErr && typeof rawErr === "object") {
+          const e = rawErr as {
+            error_user_msg?: string;
+            message?: string;
+            error?: { message?: string };
+            error_description?: string;
+          };
           message =
-            (rawErr as { message?: string; error_user_msg?: string; error_user_title?: string }).message ||
-            (rawErr as { error_user_msg?: string }).error_user_msg ||
-            (rawErr as { error_user_title?: string }).error_user_title ||
+            e.error_user_msg ||
+            e.message ||
+            e.error?.message ||
+            e.error_description ||
             JSON.stringify(rawErr);
         } else {
           message = "Unable to load comments";

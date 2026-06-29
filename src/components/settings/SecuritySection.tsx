@@ -986,10 +986,18 @@ export function SecuritySection() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <QrCode className="w-5 h-5 text-primary" />
-              Set Up Two-Factor Authentication
+              {mfaFactors.some((f) => f.status === "verified")
+                ? "Add another authenticator app"
+                : "Set Up Two-Factor Authentication"}
             </DialogTitle>
             <DialogDescription>
               Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.)
+              {mfaFactors.filter((f) => f.status === "verified").length > 0 && (
+                <span className="block mt-1 text-xs">
+                  You already have {mfaFactors.filter((f) => f.status === "verified").length} verified authenticator
+                  {mfaFactors.filter((f) => f.status === "verified").length === 1 ? "" : "s"}.
+                </span>
+              )}
             </DialogDescription>
           </DialogHeader>
 

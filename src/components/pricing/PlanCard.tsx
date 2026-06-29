@@ -95,31 +95,42 @@ export function PlanCard({ plan, isYearly, isAdmin, planSlug, isSubscribed, load
         ))}
       </ul>
 
-      <Button
-        className="mt-6 w-full"
-        variant={plan.is_popular ? "default" : "outline"}
-        onClick={() => onSelect(plan)}
-        disabled={plan.slug === planSlug || loadingPlanId === plan.id}
-      >
-        {loadingPlanId === plan.id ? (
-          <>
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            Processing...
-          </>
-        ) : plan.slug === planSlug ? (
-          "Current Plan"
-        ) : plan.slug === "free" ? (
-          isSubscribed ? "Downgrade" : "Current Plan"
-        ) : isAdmin ? (
-          "Preview checkout (admin)"
-        ) : (
-          "Upgrade Now"
-        )}
-      </Button>
-      {isAdmin && (
-        <p className="mt-2 text-xs text-muted-foreground text-center">
-          Admins have full access — checkout opens in test mode.
-        </p>
+      {isAdmin && plan.slug !== "free" && plan.slug !== planSlug ? (
+        <div className="mt-6 space-y-2">
+          <div className="w-full rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-center">
+            <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30">
+              Admin — full access
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground text-center">
+            To test checkout, sign in with a non-admin test account.
+          </p>
+          <p className="text-xs text-center">
+            <a href="/admin/plans" className="text-primary hover:underline">
+              Manage subscription plans
+            </a>
+          </p>
+        </div>
+      ) : (
+        <Button
+          className="mt-6 w-full"
+          variant={plan.is_popular ? "default" : "outline"}
+          onClick={() => onSelect(plan)}
+          disabled={plan.slug === planSlug || loadingPlanId === plan.id}
+        >
+          {loadingPlanId === plan.id ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              Processing...
+            </>
+          ) : plan.slug === planSlug ? (
+            "Current Plan"
+          ) : plan.slug === "free" ? (
+            isSubscribed ? "Downgrade" : "Current Plan"
+          ) : (
+            "Upgrade Now"
+          )}
+        </Button>
       )}
     </GradientRingCard>
   );
