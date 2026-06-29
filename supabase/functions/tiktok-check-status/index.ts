@@ -22,11 +22,25 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    const { publish_id, account_id } = await req.json();
+    // Parse body safely. Empty / malformed JSON previously crashed this
+    // handler with "Unexpected end of JSON input".
+    let publish_id: string | undefined;
+    let account_id: string | undefined;
+    try {
+      const text = await req.text();
+      const parsed = text ? JSON.parse(text) : {};
+      publish_id = parsed.publish_id;
+      account_id = parsed.account_id;
+    } catch {
+      return new Response(
+        JSON.stringify({ success: false, error: "Malformed JSON body", code: "INVALID_JSON" }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     if (!publish_id) {
       return new Response(
-        JSON.stringify({ success: false, error: "Missing publish_id" }),
+        JSON.stringify({ success: false, error: "Missing publish_id", code: "MISSING_PUBLISH_ID" }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
