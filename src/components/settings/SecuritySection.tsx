@@ -320,16 +320,9 @@ export function SecuritySection() {
       const { data: existingFactors, error: listError } = await supabase.auth.mfa.listFactors();
       if (listError) throw listError;
 
-      const verified = existingFactors?.totp?.find((f) => f.status === "verified");
-      if (verified) {
-        toast({
-          title: "2FA already enabled",
-          description: "Two-factor authentication is already active on your account.",
-        });
-        return;
-      }
-
-      // Try to clean up any unverified factors
+      // Clean up any unverified factors left over from a previous attempt so
+      // we can start a fresh enrollment. Verified factors are preserved so the
+      // user can register additional devices.
       if (existingFactors?.totp) {
         for (const factor of existingFactors.totp) {
           if (factor.status !== "verified") {
