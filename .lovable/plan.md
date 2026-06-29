@@ -1,66 +1,63 @@
 ## Scope
 
-Fix the 7 issues surfaced by the automated test run. Group by area, smallest-impact changes first, UI/presentation only where possible.
+Close the four remaining gaps from the refined E2E plan. UI/frontend/test only. No SQL, no Edge Function changes, no n8n changes, no secrets.
 
 ---
 
-## 1. Instagram comments show `[object Object]`
+### 1. Safe admin checkout — `src/components/pricing/PlanCard.tsx`
 
-**File:** `src/components/comments/CommentManagerPanel.tsx` (+ light touch in `src/hooks/useCommentInbox.ts`)
+Replace the active "Preview checkout (admin)" CTA on paid plans with a non-clickable admin state:
 
-- The error render path stringifies `commentsError instanceof Error ? .message : "..."`, but `useCommentInbox` throws `new Error(String(data.error || ...))` where `data.error` can be an object → becomes `[object Object]`.
-- Fix: in `useCommentInbox.ts`, serialize non-string errors with `JSON.stringify` (or extract `.message`/`.error_user_msg`) before constructing the `Error`.
-- Add a friendly fallback in `CommentManagerPanel` for the most common Meta errors (missing permission, token expired) — reuse existing amber reconnect banner.
+- Disabled badge: **"Admin — full access"** in place of the upgrade button.
+- Helper copy: *"To test checkout, sign in with a non-admin test account."*
+- Small admin-only text link to `/admin/plans`.
+- Free plan and non-admin users keep the existing CTA + `onSelect` flow unchanged — no behavioral change for real customers, and no path for an admin to trigger a real `stripe-checkout` invocation from the pricing card.
 
-## 2. 2FA — no "Add authenticator" once one exists
+### 2. Instagram comments error regression — `src/hooks/useCommentInbox.ts` + new `src/hooks/__tests__/useCommentInbox.test.ts`
 
-**File:** `src/components/settings/SecuritySection.tsx`
+Update the object-shaped error extraction in `useCommentInbox.ts` to the order:
+`error_user_msg → message → error.message → error_description → JSON.stringify` (currently `message → error_user_msg → error_user_title → JSON.stringify`).
 
-- Always render an "Add authenticator" button (not hidden after first enrollment). Clicking it opens the existing enroll flow (QR + verify) and supports a friendly name so multiple TOTP factors can coexist.
-- Keep existing list of factors with remove/verify actions.
+Add a Vitest test file mocking `supabase.functions.invoke` with four payloads:
 
-## 3. Billing — admin sees no checkout CTA
+1. `{ error: { error_user_msg: "Reconnect required" } }` → thrown `.message === "Reconnect required"`.
+2. `{ error: { message: "Token expired" } }` → `"Token expired"`.
+3. `{ error: { error_description: "Bad scope" } }` → `"Bad scope"`.
+4. `{ error: { weird: "shape" } }` → JSON string fallback, asserts not equal to `"[object Object]"`.
 
-**Files:** `src/pages/Pricing.tsx`, `src/components/settings/SubscriptionSection.tsx`
+Test must not log or assert against tokens/auth headers.
 
-- Replace disabled "You have admin access" CTA with a clear admin badge + a secondary "Preview checkout as user" / "Simulate upgrade" link, so the flow is reachable.
-- For non-admin users the standard checkout CTA stays unchanged.
-- Make copy explicit: "Admins have full access — billing controls are hidden. Switch to a test account to run checkout."
+### 3. 2FA add-authenticator clarity — `src/components/settings/SecuritySection.tsx`
 
-## 4. Admin plan management not discoverable
+- Change the enrollment dialog title from `Set Up Two-Factor Authentication` to a dynamic value: `Add another authenticator app` when at least one **verified** factor exists, otherwise keep `Set Up Two-Factor Authentication`.
+- Add a small line under the dialog description showing the count of verified factors when ≥1 (e.g. *"You already have 1 verified authenticator."*).
+- Keep existing QR + verify flow, backup-code behavior, unenroll guardrails, and the existing unverified-only cleanup in `handleStartMfaEnrollment` untouched.
 
-**Files:** `src/components/settings/SubscriptionSection.tsx` (+ link to existing `/admin/plans` if present, otherwise expose it)
+### 4. Validation + final report
 
-- When `useUserRole` returns `admin`, render an "Manage subscription plans" panel with a direct link/button to `/admin/plans` and inline Create/Edit shortcuts.
-- No new backend; reuses existing `useSubscriptionPlans` CRUD hooks.
-
-## 5. `/threads` returns 404
-
-**Files:** `src/App.tsx` (route), possibly new `src/pages/ThreadsDiscovery.tsx`
-
-- Option A (preferred, minimal): add a `/threads` route that renders the existing Threads discovery panel (the same one Analyze uses via `useThreadsLiveDiscovery`).
-- Option B: remove the dead nav link if one exists. We'll do A so the feature is reachable.
-
-## 6 & 7. Facebook analytics — credentials not configured
-
-**Files:** analytics page(s) under `src/pages/analytics/` and the credential-check component
-
-- This is environment, not code — `FACEBOOK_APP_ID`/`FACEBOOK_APP_SECRET` aren't set in this env.
-- UI change: replace the blunt "Contact support" text + disabled Analyze with a setup callout that explains the missing config and (for admins) links to `/admin/settings` or the App Credentials Manager so the keys can be added. Non-admins see a clearer "feature unavailable in this environment" message.
-- No secrets are added by this plan — owner must set them in production `.env` per project rules.
+- Run `npm run build || true`, `npm run lint || true`, `npx vitest run || true`, `git diff --check || true`.
+- Greps for `[object Object]` and for `access_token|refresh_token|service_role|SUPABASE_SERVICE_ROLE_KEY|Authorization` across `src` and `supabase/functions`.
+- CleanCodeGuard pass on the three production files; TestGuard on the new test file.
+- Produce the **E2E Findings Fix Report** with all 15 sections. Section 11 will be marked *not run — external runner unavailable* and list the 7 E2E test names exactly.
+- Final status: **`e2e_findings_fixed_requires_frontend_deploy_and_env_update`**, and explicitly mention `facebook_analytics_requires_env_update` because `FACEBOOK_APP_ID` / `FACEBOOK_APP_SECRET` are still owner-action.
 
 ---
+
+## Files changed
+
+- `src/components/pricing/PlanCard.tsx`
+- `src/hooks/useCommentInbox.ts`
+- `src/hooks/__tests__/useCommentInbox.test.ts` (new)
+- `src/components/settings/SecuritySection.tsx`
+
+## SQL changes
+
+None expected. If any surface, I stop and report before writing a migration.
+
+## Security
+
+No secrets, tokens, OTPs, service-role keys, passwords, or provider credentials read, printed, logged, or committed. Restricted CORS, redactor, rate limiting, MFA/backup-code logic untouched.
 
 ## Out of scope
 
-- Backend/edge-function changes (none required).
-- Database migrations (none required).
-- Actually provisioning Facebook credentials (owner action).
-
-## Validation
-
-After build, rerun the 7 named tests. Manually verify in preview: comment error renders readable text, Security shows "Add authenticator", Pricing/Subscription admin copy is clear, `/admin/plans` reachable from Subscription, `/threads` loads discovery, FB analytics shows setup callout instead of dead text.
-
-## Final status
-
-`completed` for items 1–6; item 7 will be `completed_requires_env_update` because the Facebook credentials must be added to the self-hosted `.env` by the owner.
+Edge Function changes, n8n changes, real Stripe simulation, Facebook credentials provisioning, executing the external E2E runner.
