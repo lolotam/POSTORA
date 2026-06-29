@@ -99,23 +99,28 @@ export function PlanCard({ plan, isYearly, isAdmin, planSlug, isSubscribed, load
         className="mt-6 w-full"
         variant={plan.is_popular ? "default" : "outline"}
         onClick={() => onSelect(plan)}
-        disabled={isAdmin || plan.slug === planSlug || loadingPlanId === plan.id}
+        disabled={plan.slug === planSlug || loadingPlanId === plan.id}
       >
         {loadingPlanId === plan.id ? (
           <>
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
             Processing...
           </>
-        ) : isAdmin ? (
-          "You have admin access"
         ) : plan.slug === planSlug ? (
           "Current Plan"
         ) : plan.slug === "free" ? (
           isSubscribed ? "Downgrade" : "Current Plan"
+        ) : isAdmin ? (
+          "Preview checkout (admin)"
         ) : (
           "Upgrade Now"
         )}
       </Button>
+      {isAdmin && (
+        <p className="mt-2 text-xs text-muted-foreground text-center">
+          Admins have full access — checkout opens in test mode.
+        </p>
+      )}
     </GradientRingCard>
   );
 }
