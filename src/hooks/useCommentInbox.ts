@@ -115,7 +115,20 @@ export function useComments({ platform, socialAccountId, pageId, igUserId, enabl
       });
       if (error) throw error;
       if (data?.error_type || data?.error) {
-        const err = new Error(String(data.error || "Unable to load comments")) as Error & { errorType?: string };
+        const rawErr = data.error;
+        let message: string;
+        if (typeof rawErr === "string") {
+          message = rawErr;
+        } else if (rawErr && typeof rawErr === "object") {
+          message =
+            (rawErr as { message?: string; error_user_msg?: string; error_user_title?: string }).message ||
+            (rawErr as { error_user_msg?: string }).error_user_msg ||
+            (rawErr as { error_user_title?: string }).error_user_title ||
+            JSON.stringify(rawErr);
+        } else {
+          message = "Unable to load comments";
+        }
+        const err = new Error(message) as Error & { errorType?: string };
         err.errorType = data.error_type;
         throw err;
       }
