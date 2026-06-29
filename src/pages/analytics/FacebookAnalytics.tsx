@@ -105,9 +105,32 @@ export default function FacebookAnalytics() {
 
         {error && (
           <Reveal delay={120}>
-            <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4">
-              <p className="text-sm text-rose-500">{error}</p>
-            </GradientRingCard>
+            {isCredentialError ? (
+              <GradientRingCard variant="amber" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                  <div className="flex-1 space-y-2">
+                    <p className="text-sm font-medium">Facebook analytics needs setup</p>
+                    <p className="text-sm text-muted-foreground">
+                      The Facebook app credentials (App ID and App Secret) are not configured in this environment, so brand analysis cannot run yet.
+                      {isAdmin
+                        ? " As an admin you can add them in App Credentials."
+                        : " Please contact your workspace admin to configure them."}
+                    </p>
+                    {isAdmin && (
+                      <Button size="sm" variant="outline" onClick={() => navigate("/admin/settings")} className="gap-2 mt-1">
+                        <Settings className="w-4 h-4" />
+                        Open App Credentials
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </GradientRingCard>
+            ) : (
+              <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4">
+                <p className="text-sm text-rose-500">{error}</p>
+              </GradientRingCard>
+            )}
           </Reveal>
         )}
 
