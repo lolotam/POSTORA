@@ -28,9 +28,11 @@ const EXAMPLE_BRANDS = ["@nike", "@cocacola", "@redbull", "@apple"];
 export default function FacebookAnalytics() {
   const navigate = useNavigate();
   const { session } = useAuth();
+  const { isAdmin } = useUserRole();
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
   const [selectedPost, setSelectedPost] = useState<BrandPost | null>(null);
   const { profile, posts, totalPosts, hasMore, isLoading, error, search, loadMore, reset } = useBrandScrape();
+  const isCredentialError = typeof error === "string" && /credential|not configured|app id|app secret/i.test(error);
 
   const { data: contentPostIds = new Set<string>() } = useQuery({
     queryKey: ["bi-content-post-ids", session?.user?.id],
