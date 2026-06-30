@@ -280,8 +280,8 @@ export default function Profiles() {
                       }
                     }}
                     onDisconnect={setDisconnectAccount}
-                    onReconnect={(platform) => {
-                      if (defaultProfileId) handleConnectPlatform(defaultProfileId, platform);
+                    onReconnect={(platform, socialAccountId) => {
+                      if (defaultProfileId) handleReconnectPlatform(defaultProfileId, platform, socialAccountId);
                     }}
                     isConnecting={connectingPlatform === config.platform}
                     />
