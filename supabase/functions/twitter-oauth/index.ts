@@ -68,6 +68,8 @@ async function verifyAndParseState(state: string) {
     social_profile_id: string | null;
     return_to: string;
     code_verifier: string;
+    mode?: string;
+    social_account_id?: string;
   };
 }
 
