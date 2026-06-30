@@ -443,6 +443,20 @@ Deno.serve(async (req) => {
 
       const tokenData = await exchangeCodeForToken(code, redirect_uri);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+      if (mode === "reconnect" && social_account_id) {
+        const { username } = await reconnectTikTokAccount(
+          supabase,
+          social_account_id,
+          user_id,
+          tokenData,
+        );
+        return new Response(
+          JSON.stringify({ success: true, username, reconnected: true }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       const { username } = await saveTikTokAccount(
         supabase,
         user_id,
