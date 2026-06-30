@@ -13,7 +13,11 @@ export function useTikTokOAuth(
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const handleTikTokConnect = async (profileId: string) => {
+  const handleTikTokConnect = async (
+    profileId: string,
+    options: { mode?: "connect" | "reconnect"; socialAccountId?: string } = {},
+  ) => {
+    const isReconnect = options.mode === "reconnect" && !!options.socialAccountId;
     // Unified backend callback. profile_id + return_to travel in the signed
     // state, not in the registered redirect URI.
     sessionStorage.setItem("tiktok_profile_id", profileId);
@@ -23,6 +27,9 @@ export function useTikTokOAuth(
         action: "authorize",
         social_profile_id: profileId,
         return_to: buildReturnUrl("tiktok"),
+        ...(isReconnect
+          ? { mode: "reconnect", social_account_id: options.socialAccountId }
+          : {}),
       },
     });
 
