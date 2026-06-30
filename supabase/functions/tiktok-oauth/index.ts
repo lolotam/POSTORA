@@ -288,24 +288,45 @@ Deno.serve(async (req) => {
       const payload = await verifyOAuthState(state, {
         expectedPlatform: "tiktok",
       });
+      const stateMode = (payload as Record<string, unknown>).mode as
+        | string
+        | undefined;
+      const stateAccountId = (payload as Record<string, unknown>)
+        .social_account_id as string | undefined;
+
       const tokenData = await exchangeCodeForToken(code, TIKTOK_REDIRECT_URI);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      await saveTikTokAccount(
-        supabase,
-        payload.user_id,
-        payload.profile_id ?? null,
-        tokenData,
-      );
+
+      const isReconnect = stateMode === "reconnect" && !!stateAccountId;
+      if (isReconnect) {
+        await reconnectTikTokAccount(
+          supabase,
+          stateAccountId!,
+          payload.user_id,
+          tokenData,
+        );
+      } else {
+        await saveTikTokAccount(
+          supabase,
+          payload.user_id,
+          payload.profile_id ?? null,
+          tokenData,
+        );
+      }
 
       const ret = new URL(payload.return_to ?? RETURN_URL_DEFAULT);
       ret.searchParams.set("connected", "tiktok");
+      if (isReconnect) ret.searchParams.set("reconnected", "1");
       if (payload.profile_id) ret.searchParams.set("profile_id", payload.profile_id);
       return Response.redirect(ret.toString(), 302);
     } catch (err) {
       console.error("TikTok GET callback error:", err);
       const ret = new URL(RETURN_URL_DEFAULT);
       ret.searchParams.set("connected", "tiktok");
-      ret.searchParams.set("error", "tiktok_callback_failed");
+      ret.searchParams.set(
+        "error",
+        reconnectErrorParam(err instanceof Error ? err.message : ""),
+      );
       return Response.redirect(ret.toString(), 302);
     }
   }
