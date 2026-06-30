@@ -428,8 +428,6 @@ async function completeOAuth(params: {
   const largerAvatarUrl = rawAvatarUrl?.replace("_normal", "_400x400") ?? null;
   const avatarUrl = await cacheAvatarToCloudinary(largerAvatarUrl, params.user_id, "twitter", twitterUserId);
 
-  const { error: dbError } = await supabase
-    .from("social_accounts")
   const isReconnect = params.mode === "reconnect" && !!params.social_account_id;
 
   if (isReconnect) {
