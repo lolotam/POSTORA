@@ -87,6 +87,7 @@ export default function Profiles() {
     selectingPage,
     blueskyDialogData,
     handleConnectPlatform: originalHandleConnectPlatform,
+    handleReconnectPlatform,
     handleSelectPage,
     handleSelectStandaloneInstagram,
     handleBlueskyConnect,
