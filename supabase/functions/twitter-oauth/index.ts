@@ -129,7 +129,9 @@ Deno.serve(async (req) => {
         return new Response("Missing code/state", { status: 400 });
       }
 
-      const { user_id, social_profile_id, return_to, code_verifier } = await verifyAndParseState(state);
+      const parsed = await verifyAndParseState(state);
+      const { user_id, social_profile_id, return_to, code_verifier, mode, social_account_id } = parsed;
+      const isReconnect = mode === "reconnect" && !!social_account_id;
 
       const result = await completeOAuth({
         code,
@@ -137,11 +139,14 @@ Deno.serve(async (req) => {
         social_profile_id,
         redirect_uri: redirectUri,
         code_verifier,
+        mode: isReconnect ? "reconnect" : "connect",
+        social_account_id: isReconnect ? social_account_id : null,
       });
 
       // Redirect back to app
       const returnUrl = new URL(return_to);
       returnUrl.searchParams.set("connected", "twitter");
+      if (isReconnect) returnUrl.searchParams.set("reconnected", "1");
       if (social_profile_id) returnUrl.searchParams.set("profile_id", social_profile_id);
       returnUrl.searchParams.set("account_name", result.username);
 
