@@ -57,6 +57,32 @@ async function exchangeCodeForToken(
   return await tokenResponse.json();
 }
 
+async function fetchPinterestUser(accessToken: string) {
+  const userResponse = await fetch(
+    "https://api.pinterest.com/v5/user_account",
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  const userData = await userResponse.json();
+  if (!userResponse.ok) {
+    throw new Error(userData.message || "Failed to get user info");
+  }
+  return userData;
+}
+
+function pinterestMetadata(userData: {
+  account_type?: string;
+}, grantedScopes: string) {
+  const hasWriteAccess =
+    grantedScopes.includes("pins:write") ||
+    grantedScopes.includes("boards:write");
+  return {
+    business_type: userData.account_type,
+    has_write_access: hasWriteAccess,
+    access_level: hasWriteAccess ? "standard" : "trial",
+    granted_scopes: grantedScopes,
+  };
+}
+
 async function savePinterestAccount(
   supabase: SupabaseClient,
   user_id: string,
@@ -73,29 +99,14 @@ async function savePinterestAccount(
   }
 
   const { access_token, refresh_token, expires_in } = tokenData;
-
-  const userResponse = await fetch(
-    "https://api.pinterest.com/v5/user_account",
-    { headers: { Authorization: `Bearer ${access_token}` } },
-  );
-  const userData = await userResponse.json();
-  if (!userResponse.ok) {
-    throw new Error(userData.message || "Failed to get user info");
-  }
-
+  const userData = await fetchPinterestUser(access_token);
   const username = userData.username || userData.id;
-  const rawAvatarUrl = userData.profile_image;
   const grantedScopes = tokenData.scope || tokenData.scopes || "";
-  const hasWriteAccess =
-    grantedScopes.includes("pins:write") ||
-    grantedScopes.includes("boards:write");
-  const accessLevel = hasWriteAccess ? "standard" : "trial";
-
   const tokenExpiresAt = new Date(
     Date.now() + (expires_in ?? 2592000) * 1000,
   ).toISOString();
   const avatarUrl = await cacheAvatarToCloudinary(
-    rawAvatarUrl,
+    userData.profile_image,
     user_id,
     "pinterest",
     userData.id,
@@ -118,12 +129,7 @@ async function savePinterestAccount(
       connected_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       social_profile_id: social_profile_id || null,
-      account_metadata: {
-        business_type: userData.account_type,
-        has_write_access: hasWriteAccess,
-        access_level: accessLevel,
-        granted_scopes: grantedScopes,
-      },
+      account_metadata: pinterestMetadata(userData, grantedScopes),
     },
     { onConflict: "user_id,platform,platform_user_id" },
   );
@@ -134,6 +140,101 @@ async function savePinterestAccount(
   }
 
   return { username };
+}
+
+/**
+ * Reconnect mode: update the existing social_accounts row IN PLACE.
+ * - Verifies ownership and platform.
+ * - Rejects if Pinterest returns a different platform_user_id (no silent
+ *   identity swap).
+ * - Resets all health/expiry fields so the red "Connection Expired" banner
+ *   clears immediately.
+ */
+async function reconnectPinterestAccount(
+  supabase: SupabaseClient,
+  social_account_id: string,
+  expected_user_id: string,
+  tokenData: PinterestTokenData,
+): Promise<{ username: string }> {
+  if (tokenData.error || !tokenData.access_token) {
+    throw new Error(
+      tokenData.message ||
+        tokenData.error_description ||
+        tokenData.error ||
+        "Pinterest token exchange failed",
+    );
+  }
+
+  const { data: row, error: fetchError } = await supabase
+    .from("social_accounts")
+    .select(
+      "id, user_id, platform, platform_user_id, social_profile_id, account_metadata",
+    )
+    .eq("id", social_account_id)
+    .maybeSingle();
+
+  if (fetchError || !row) throw new Error("RECONNECT_ACCOUNT_NOT_FOUND");
+  if (row.user_id !== expected_user_id) throw new Error("RECONNECT_FORBIDDEN");
+  if (row.platform !== "pinterest") {
+    throw new Error("RECONNECT_PLATFORM_MISMATCH");
+  }
+
+  const { access_token, refresh_token, expires_in } = tokenData;
+  const userData = await fetchPinterestUser(access_token);
+
+  if (String(userData.id) !== String(row.platform_user_id)) {
+    throw new Error("RECONNECT_ACCOUNT_MISMATCH");
+  }
+
+  const username = userData.username || userData.id;
+  const grantedScopes = tokenData.scope || tokenData.scopes || "";
+  const tokenExpiresAt = new Date(
+    Date.now() + (expires_in ?? 2592000) * 1000,
+  ).toISOString();
+  const avatarUrl = await cacheAvatarToCloudinary(
+    userData.profile_image,
+    expected_user_id,
+    "pinterest",
+    userData.id,
+  );
+
+  const merged = {
+    ...((row.account_metadata as Record<string, unknown> | null) ?? {}),
+    ...pinterestMetadata(userData, grantedScopes),
+  };
+
+  const { error: updateError } = await supabase
+    .from("social_accounts")
+    .update({
+      platform_username: username,
+      access_token,
+      refresh_token,
+      token_expires_at: tokenExpiresAt,
+      avatar_url: avatarUrl,
+      is_active: true,
+      needs_reauth: false,
+      failure_count: 0,
+      last_refresh_error: null,
+      updated_at: new Date().toISOString(),
+      account_metadata: merged,
+    })
+    .eq("id", row.id)
+    .eq("user_id", expected_user_id);
+
+  if (updateError) {
+    console.error("Database error (reconnect):", updateError);
+    throw new Error("Failed to update Pinterest account");
+  }
+
+  return { username };
+}
+
+function reconnectErrorParam(message: string): string {
+  if (message === "RECONNECT_ACCOUNT_NOT_FOUND") return "reconnect_account_not_found";
+  if (message === "RECONNECT_FORBIDDEN") return "reconnect_forbidden";
+  if (message === "RECONNECT_PLATFORM_MISMATCH") return "reconnect_platform_mismatch";
+  if (message === "RECONNECT_ACCOUNT_MISMATCH") return "reconnect_account_mismatch";
+  return "pinterest_callback_failed";
 }
 
 Deno.serve(async (req) => {
@@ -168,24 +269,45 @@ Deno.serve(async (req) => {
       const payload = await verifyOAuthState(state, {
         expectedPlatform: "pinterest",
       });
+      const mode = (payload as Record<string, unknown>).mode as
+        | string
+        | undefined;
+      const socialAccountId = (payload as Record<string, unknown>)
+        .social_account_id as string | undefined;
+
       const tokenData = await exchangeCodeForToken(code, PINTEREST_REDIRECT_URI);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      await savePinterestAccount(
-        supabase,
-        payload.user_id,
-        payload.profile_id ?? null,
-        tokenData,
-      );
+
+      const isReconnect = mode === "reconnect" && !!socialAccountId;
+      if (isReconnect) {
+        await reconnectPinterestAccount(
+          supabase,
+          socialAccountId!,
+          payload.user_id,
+          tokenData,
+        );
+      } else {
+        await savePinterestAccount(
+          supabase,
+          payload.user_id,
+          payload.profile_id ?? null,
+          tokenData,
+        );
+      }
 
       const ret = new URL(payload.return_to ?? RETURN_URL_DEFAULT);
       ret.searchParams.set("connected", "pinterest");
+      if (isReconnect) ret.searchParams.set("reconnected", "1");
       if (payload.profile_id) ret.searchParams.set("profile_id", payload.profile_id);
       return Response.redirect(ret.toString(), 302);
     } catch (err) {
       console.error("Pinterest GET callback error:", err);
       const ret = new URL(RETURN_URL_DEFAULT);
       ret.searchParams.set("connected", "pinterest");
-      ret.searchParams.set("error", "pinterest_callback_failed");
+      ret.searchParams.set(
+        "error",
+        reconnectErrorParam(err instanceof Error ? err.message : ""),
+      );
       return Response.redirect(ret.toString(), 302);
     }
   }
@@ -195,7 +317,15 @@ Deno.serve(async (req) => {
   // ============================================================
   try {
     const body = await req.json().catch(() => ({}));
-    const { action, code, redirect_uri, social_profile_id, return_to } = body;
+    const {
+      action,
+      code,
+      redirect_uri,
+      social_profile_id,
+      return_to,
+      mode,
+      social_account_id,
+    } = body;
 
     console.log("Pinterest OAuth action:", action);
 
@@ -205,11 +335,19 @@ Deno.serve(async (req) => {
       const { userId: user_id } = await authenticateCaller(req, body.user_id);
       const effectiveRedirect = PINTEREST_REDIRECT_URI;
 
+      const isReconnect = mode === "reconnect" && !!social_account_id;
+      const extra: Record<string, unknown> = {};
+      if (isReconnect) {
+        extra.mode = "reconnect";
+        extra.social_account_id = social_account_id;
+      }
+
       const state = await createOAuthState({
         platform: "pinterest",
         user_id,
         profile_id: social_profile_id ?? null,
         return_to: return_to ?? RETURN_URL_DEFAULT,
+        extra,
       });
 
       const authUrl =
@@ -223,8 +361,6 @@ Deno.serve(async (req) => {
         JSON.stringify({
           url: authUrl,
           redirect_uri: effectiveRedirect,
-          // Frontend-supplied value retained in response for observability;
-          // backend ignores it for the actual flow.
           requested_redirect_uri: redirect_uri ?? null,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
@@ -242,6 +378,20 @@ Deno.serve(async (req) => {
 
       const tokenData = await exchangeCodeForToken(code, redirect_uri);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+      if (mode === "reconnect" && social_account_id) {
+        const { username } = await reconnectPinterestAccount(
+          supabase,
+          social_account_id,
+          user_id,
+          tokenData,
+        );
+        return new Response(
+          JSON.stringify({ success: true, username, reconnected: true }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       const { username } = await savePinterestAccount(
         supabase,
         user_id,
