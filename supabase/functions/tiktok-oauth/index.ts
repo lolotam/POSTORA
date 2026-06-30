@@ -344,6 +344,7 @@ Deno.serve(async (req) => {
       account_id: rawAccountId,
       social_account_id,
       return_to,
+      mode,
     } = body;
     const account_id = rawAccountId || social_account_id;
 
