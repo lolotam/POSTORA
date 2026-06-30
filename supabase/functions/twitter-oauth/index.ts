@@ -342,6 +342,8 @@ async function completeOAuth(params: {
   social_profile_id: string | null;
   redirect_uri: string;
   code_verifier: string;
+  mode?: "connect" | "reconnect";
+  social_account_id?: string | null;
 }) {
   if (!TWITTER_CLIENT_ID || !TWITTER_CLIENT_SECRET) {
     throw new Error("Twitter credentials not configured");
