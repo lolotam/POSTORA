@@ -167,6 +167,9 @@ Deno.serve(async (req) => {
       const userId = body?.user_id as string | undefined;
       const socialProfileId = (body?.social_profile_id as string | null | undefined) ?? null;
       const returnTo = body?.return_to as string | undefined;
+      const reqMode = body?.mode as string | undefined;
+      const reqAccountId = body?.social_account_id as string | undefined;
+      const isReconnect = reqMode === "reconnect" && !!reqAccountId;
 
       if (!userId) throw new Error("Missing user_id");
       if (!returnTo) throw new Error("Missing return_to");
@@ -191,6 +194,9 @@ Deno.serve(async (req) => {
         social_profile_id: socialProfileId,
         return_to: returnTo,
         code_verifier: codeVerifier,
+        ...(isReconnect
+          ? { mode: "reconnect", social_account_id: reqAccountId }
+          : {}),
       });
 
       const params = new URLSearchParams({
