@@ -390,11 +390,19 @@ Deno.serve(async (req) => {
       // for security/consistency: must match provider console exactly.
       const effectiveRedirect = TIKTOK_REDIRECT_URI;
 
+      const isReconnect = mode === "reconnect" && !!social_account_id;
+      const extra: Record<string, unknown> = {};
+      if (isReconnect) {
+        extra.mode = "reconnect";
+        extra.social_account_id = social_account_id;
+      }
+
       const state = await createOAuthState({
         platform: "tiktok",
         user_id,
         profile_id: social_profile_id ?? null,
         return_to: return_to ?? RETURN_URL_DEFAULT,
+        extra,
       });
 
       const authUrl =
