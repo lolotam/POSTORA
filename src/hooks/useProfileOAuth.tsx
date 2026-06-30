@@ -140,6 +140,7 @@ export function useProfileOAuth() {
     selectingPage,
     blueskyDialogData,
     handleConnectPlatform,
+    handleReconnectPlatform,
     handleSelectPage,
     handleSelectStandaloneInstagram,
     handleBlueskyConnect,
