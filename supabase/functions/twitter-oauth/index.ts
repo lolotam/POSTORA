@@ -430,6 +430,57 @@ async function completeOAuth(params: {
 
   const { error: dbError } = await supabase
     .from("social_accounts")
+  const isReconnect = params.mode === "reconnect" && !!params.social_account_id;
+
+  if (isReconnect) {
+    const { data: row, error: fetchError } = await supabase
+      .from("social_accounts")
+      .select("id, user_id, platform, platform_user_id, account_metadata")
+      .eq("id", params.social_account_id!)
+      .maybeSingle();
+
+    if (fetchError || !row) throw new Error("RECONNECT_ACCOUNT_NOT_FOUND");
+    if (row.user_id !== params.user_id) throw new Error("RECONNECT_FORBIDDEN");
+    if (row.platform !== "twitter") throw new Error("RECONNECT_PLATFORM_MISMATCH");
+    if (String(twitterUserId) !== String(row.platform_user_id)) {
+      throw new Error("RECONNECT_ACCOUNT_MISMATCH");
+    }
+
+    const merged = {
+      ...((row.account_metadata as Record<string, unknown> | null) ?? {}),
+      twitter_id: twitterUserId,
+      name,
+    };
+
+    const { error: updateError } = await supabase
+      .from("social_accounts")
+      .update({
+        platform_username: username,
+        access_token,
+        refresh_token: refresh_token ?? null,
+        token_expires_at: tokenExpiresAt,
+        avatar_url: avatarUrl,
+        is_active: true,
+        needs_reauth: false,
+        failure_count: 0,
+        last_refresh_error: null,
+        updated_at: new Date().toISOString(),
+        account_metadata: merged,
+      })
+      .eq("id", row.id)
+      .eq("user_id", params.user_id);
+
+    if (updateError) {
+      console.error("Database error (reconnect):", updateError);
+      throw new Error("Failed to update Twitter account");
+    }
+
+    console.log("Twitter account reconnected successfully");
+    return { username };
+  }
+
+  const { error: dbError } = await supabase
+    .from("social_accounts")
     .upsert(
       {
         user_id: params.user_id,
