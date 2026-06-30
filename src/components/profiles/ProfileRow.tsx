@@ -127,7 +127,7 @@ interface ProfileRowProps {
   onConnectPlatform: (profileId: string, platform: Platform) => void;
   onDeleteProfile: () => void;
   onDisconnectAccount: (account: SocialAccountWithProfile) => void;
-  onReconnectAccount: (profileId: string, platform: Platform) => void;
+  onReconnectAccount: (profileId: string, platform: Platform, socialAccountId: string) => void;
   onRenameProfile: (profileId: string, newName: string) => void;
   connectingProfile: string | null;
   connectingPlatform: Platform | null;
@@ -400,7 +400,7 @@ export function ProfileRow({
                             if (isConnected && account) {
                               // If needs reauth, clicking should reconnect instead of disconnecting
                               if (needsReauth) {
-                                onReconnectAccount(profile.id, config.platform);
+                                onReconnectAccount(profile.id, config.platform, account.id);
                               } else {
                                 onDisconnectAccount(account);
                               }
@@ -699,7 +699,7 @@ export function ProfileRow({
                                   className={`h-7 text-xs gap-1 ${needsReauth ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground" : ""}`}
                                   onClick={(e) => {
                                     e.stopPropagation();
-                                    onReconnectAccount(profile.id, account.platform);
+                                    onReconnectAccount(profile.id, account.platform, account.id);
                                   }}
                                   disabled={isReconnecting}
                                 >
