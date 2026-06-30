@@ -68,6 +68,31 @@ export function useProfileOAuth() {
   });
 
   const handleConnectPlatform = async (profileId: string, platform: Platform) => {
+    return invokePlatform(profileId, platform);
+  };
+
+  /**
+   * Reconnect mode: identical OAuth flow but passes the existing
+   * social_account_id so the backend updates the row in place instead of
+   * (re)inserting. Used by the dashboard expired-token banner and the
+   * profile "Reconnect" button.
+   */
+  const handleReconnectPlatform = async (
+    profileId: string,
+    platform: Platform,
+    socialAccountId: string,
+  ) => {
+    return invokePlatform(profileId, platform, {
+      mode: "reconnect",
+      socialAccountId,
+    });
+  };
+
+  async function invokePlatform(
+    profileId: string,
+    platform: Platform,
+    options: { mode?: "connect" | "reconnect"; socialAccountId?: string } = {},
+  ) {
     if (!user) {
       toast({ title: "Not authenticated", description: "Please log in to connect accounts.", variant: "destructive" });
       return;
@@ -78,7 +103,7 @@ export function useProfileOAuth() {
 
     try {
       if (platform === "tiktok") {
-        await handleTikTokConnect(profileId);
+        await handleTikTokConnect(profileId, options);
       } else if (platform === "instagram") {
         setConnectingPlatform(null);
         setConnectingProfile(null);
@@ -88,11 +113,11 @@ export function useProfileOAuth() {
       } else if ((platform as ExtendedPlatform) === "youtube") {
         await handleYouTubeConnect(profileId);
       } else if ((platform as ExtendedPlatform) === "pinterest") {
-        await handlePinterestConnect(profileId);
+        await handlePinterestConnect(profileId, options);
       } else if (platform === "linkedin") {
         await handleLinkedInConnect(profileId);
       } else if (platform === "twitter") {
-        await handleTwitterConnect(profileId);
+        await handleTwitterConnect(profileId, options);
       } else if (platform === "threads") {
         await handleThreadsConnect(profileId);
       } else if (platform === "bluesky") {
@@ -106,7 +131,7 @@ export function useProfileOAuth() {
       setConnectingProfile(null);
       setConnectingPlatform(null);
     }
-  };
+  }
 
   return {
     connectingProfile,
@@ -115,6 +140,7 @@ export function useProfileOAuth() {
     selectingPage,
     blueskyDialogData,
     handleConnectPlatform,
+    handleReconnectPlatform,
     handleSelectPage,
     handleSelectStandaloneInstagram,
     handleBlueskyConnect,

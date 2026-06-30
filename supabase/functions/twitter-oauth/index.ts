@@ -68,6 +68,8 @@ async function verifyAndParseState(state: string) {
     social_profile_id: string | null;
     return_to: string;
     code_verifier: string;
+    mode?: string;
+    social_account_id?: string;
   };
 }
 
@@ -127,7 +129,9 @@ Deno.serve(async (req) => {
         return new Response("Missing code/state", { status: 400 });
       }
 
-      const { user_id, social_profile_id, return_to, code_verifier } = await verifyAndParseState(state);
+      const parsed = await verifyAndParseState(state);
+      const { user_id, social_profile_id, return_to, code_verifier, mode, social_account_id } = parsed;
+      const isReconnect = mode === "reconnect" && !!social_account_id;
 
       const result = await completeOAuth({
         code,
@@ -135,11 +139,14 @@ Deno.serve(async (req) => {
         social_profile_id,
         redirect_uri: redirectUri,
         code_verifier,
+        mode: isReconnect ? "reconnect" : "connect",
+        social_account_id: isReconnect ? social_account_id : null,
       });
 
       // Redirect back to app
       const returnUrl = new URL(return_to);
       returnUrl.searchParams.set("connected", "twitter");
+      if (isReconnect) returnUrl.searchParams.set("reconnected", "1");
       if (social_profile_id) returnUrl.searchParams.set("profile_id", social_profile_id);
       returnUrl.searchParams.set("account_name", result.username);
 
@@ -160,6 +167,9 @@ Deno.serve(async (req) => {
       const userId = body?.user_id as string | undefined;
       const socialProfileId = (body?.social_profile_id as string | null | undefined) ?? null;
       const returnTo = body?.return_to as string | undefined;
+      const reqMode = body?.mode as string | undefined;
+      const reqAccountId = body?.social_account_id as string | undefined;
+      const isReconnect = reqMode === "reconnect" && !!reqAccountId;
 
       if (!userId) throw new Error("Missing user_id");
       if (!returnTo) throw new Error("Missing return_to");
@@ -184,6 +194,9 @@ Deno.serve(async (req) => {
         social_profile_id: socialProfileId,
         return_to: returnTo,
         code_verifier: codeVerifier,
+        ...(isReconnect
+          ? { mode: "reconnect", social_account_id: reqAccountId }
+          : {}),
       });
 
       const params = new URLSearchParams({
@@ -296,7 +309,16 @@ Deno.serve(async (req) => {
     });
   } catch (error: unknown) {
     console.error("Twitter OAuth error:", error);
-    // Sanitized error message to prevent schema leakage
+    const rawMsg = error instanceof Error ? error.message : "";
+    const reconnectErrors = new Set([
+      "RECONNECT_ACCOUNT_NOT_FOUND",
+      "RECONNECT_FORBIDDEN",
+      "RECONNECT_PLATFORM_MISMATCH",
+      "RECONNECT_ACCOUNT_MISMATCH",
+    ]);
+    const errorCode = reconnectErrors.has(rawMsg)
+      ? rawMsg.toLowerCase()
+      : "twitter_oauth_failed";
     const safeMessage = "Authentication failed. Please try again.";
 
     // If this was a GET callback, redirect back with error so user doesn't get stuck on a blank page
@@ -307,7 +329,7 @@ Deno.serve(async (req) => {
         if (state) {
           const parsed = await verifyAndParseState(state);
           const returnUrl = new URL(parsed.return_to);
-          returnUrl.searchParams.set("error", "twitter_oauth_failed");
+          returnUrl.searchParams.set("error", errorCode);
           returnUrl.searchParams.set("error_description", safeMessage);
           return Response.redirect(returnUrl.toString(), 302);
         }
@@ -329,6 +351,8 @@ async function completeOAuth(params: {
   social_profile_id: string | null;
   redirect_uri: string;
   code_verifier: string;
+  mode?: "connect" | "reconnect";
+  social_account_id?: string | null;
 }) {
   if (!TWITTER_CLIENT_ID || !TWITTER_CLIENT_SECRET) {
     throw new Error("Twitter credentials not configured");
@@ -412,6 +436,55 @@ async function completeOAuth(params: {
   // Cache avatar to Cloudinary for permanent storage
   const largerAvatarUrl = rawAvatarUrl?.replace("_normal", "_400x400") ?? null;
   const avatarUrl = await cacheAvatarToCloudinary(largerAvatarUrl, params.user_id, "twitter", twitterUserId);
+
+  const isReconnect = params.mode === "reconnect" && !!params.social_account_id;
+
+  if (isReconnect) {
+    const { data: row, error: fetchError } = await supabase
+      .from("social_accounts")
+      .select("id, user_id, platform, platform_user_id, account_metadata")
+      .eq("id", params.social_account_id!)
+      .maybeSingle();
+
+    if (fetchError || !row) throw new Error("RECONNECT_ACCOUNT_NOT_FOUND");
+    if (row.user_id !== params.user_id) throw new Error("RECONNECT_FORBIDDEN");
+    if (row.platform !== "twitter") throw new Error("RECONNECT_PLATFORM_MISMATCH");
+    if (String(twitterUserId) !== String(row.platform_user_id)) {
+      throw new Error("RECONNECT_ACCOUNT_MISMATCH");
+    }
+
+    const merged = {
+      ...((row.account_metadata as Record<string, unknown> | null) ?? {}),
+      twitter_id: twitterUserId,
+      name,
+    };
+
+    const { error: updateError } = await supabase
+      .from("social_accounts")
+      .update({
+        platform_username: username,
+        access_token,
+        refresh_token: refresh_token ?? null,
+        token_expires_at: tokenExpiresAt,
+        avatar_url: avatarUrl,
+        is_active: true,
+        needs_reauth: false,
+        failure_count: 0,
+        last_refresh_error: null,
+        updated_at: new Date().toISOString(),
+        account_metadata: merged,
+      })
+      .eq("id", row.id)
+      .eq("user_id", params.user_id);
+
+    if (updateError) {
+      console.error("Database error (reconnect):", updateError);
+      throw new Error("Failed to update Twitter account");
+    }
+
+    console.log("Twitter account reconnected successfully");
+    return { username };
+  }
 
   const { error: dbError } = await supabase
     .from("social_accounts")

@@ -129,6 +129,8 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
 
 
 
+    const isReconnect = searchParams.get("reconnected") === "1";
+
     const platformMessages: Record<string, { title: string; description: string }> = {
       youtube: { title: "YouTube connected!", description: channel ? `Connected channel: ${channel}` : "Your YouTube channel has been connected successfully." },
       pinterest: { title: "Pinterest connected!", description: "Your Pinterest account has been connected successfully." },
@@ -137,14 +139,18 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
       bluesky: { title: "Bluesky connected!", description: accountName ? `Connected account: @${accountName}` : "Your Bluesky account has been connected successfully via OAuth." },
       threads: { title: "Threads connected!", description: accountName ? `Connected account: @${accountName}` : "Your Threads account has been connected successfully." },
       reddit: { title: "Reddit connected!", description: accountName ? `Connected account: u/${accountName}` : "Your Reddit account has been connected successfully." },
+      tiktok: { title: "TikTok connected!", description: accountName ? `Connected account: @${accountName}` : "Your TikTok account has been connected successfully." },
     };
 
-    const msg = platformMessages[connected];
+    const baseMsg = platformMessages[connected];
+    const msg = isReconnect && baseMsg
+      ? { title: "Connection refreshed", description: `Your ${connected} account is reconnected and active.` }
+      : baseMsg;
     if (msg) {
       // One-shot guard: avoid duplicate toasts when this effect re-runs
       // (handlers object identity changes on parent re-renders) or when the
       // legacy code-callback path also fires its own success toast.
-      const dedupeKey = `oauth_toast_shown:${connected}:${accountName ?? ""}:${channel ?? ""}`;
+      const dedupeKey = `oauth_toast_shown:${connected}:${isReconnect ? "reconnect" : "connect"}:${accountName ?? ""}:${channel ?? ""}`;
       const alreadyShown = sessionStorage.getItem(dedupeKey);
       if (!alreadyShown) {
         sessionStorage.setItem(dedupeKey, String(Date.now()));

@@ -147,6 +147,115 @@ async function saveTikTokAccount(
   return { username: usernameForDisplay };
 }
 
+/**
+ * Reconnect mode: update the existing social_accounts row IN PLACE.
+ * Verifies ownership + platform, rejects if open_id changes (no silent
+ * identity swap), resets health/expiry fields so the red banner clears.
+ */
+async function reconnectTikTokAccount(
+  supabase: SupabaseClient,
+  social_account_id: string,
+  expected_user_id: string,
+  tokenData: TikTokTokenData,
+): Promise<{ username: string }> {
+  if (tokenData.error || !tokenData.access_token || !tokenData.open_id) {
+    throw new Error(
+      tokenData.message ||
+        tokenData.error_description ||
+        tokenData.error ||
+        "TikTok token exchange failed",
+    );
+  }
+
+  const { data: row, error: fetchError } = await supabase
+    .from("social_accounts")
+    .select(
+      "id, user_id, platform, platform_user_id, platform_username, avatar_url, account_metadata",
+    )
+    .eq("id", social_account_id)
+    .maybeSingle();
+
+  if (fetchError || !row) throw new Error("RECONNECT_ACCOUNT_NOT_FOUND");
+  if (row.user_id !== expected_user_id) throw new Error("RECONNECT_FORBIDDEN");
+  if (row.platform !== "tiktok") throw new Error("RECONNECT_PLATFORM_MISMATCH");
+
+  const { access_token, refresh_token, expires_in, open_id } = tokenData;
+  if (String(open_id) !== String(row.platform_user_id)) {
+    throw new Error("RECONNECT_ACCOUNT_MISMATCH");
+  }
+
+  // Fetch fresh user info (tolerate scope_not_authorized like initial connect).
+  const userResponse = await fetch(
+    "https://open.tiktokapis.com/v2/user/info/?fields=open_id,union_id,avatar_url,display_name,username",
+    { headers: { Authorization: `Bearer ${access_token}` } },
+  );
+  const userData = await userResponse.json();
+
+  let tiktokUsername: string | undefined;
+  let displayName: string | undefined;
+  let rawAvatarUrl: string | undefined;
+
+  if (userData.error?.code === "scope_not_authorized") {
+    const meta = (row.account_metadata as Record<string, unknown> | null) ?? {};
+    displayName = row.platform_username ||
+      (meta.display_name as string | undefined);
+    tiktokUsername = meta.tiktok_username as string | undefined;
+    rawAvatarUrl = row.avatar_url as string | undefined;
+  } else {
+    tiktokUsername = userData.data?.user?.username;
+    displayName = userData.data?.user?.display_name;
+    rawAvatarUrl = userData.data?.user?.avatar_url;
+  }
+
+  const usernameForDisplay = displayName || tiktokUsername || open_id;
+  const avatarUrl = rawAvatarUrl
+    ? await cacheAvatarToCloudinary(rawAvatarUrl, expected_user_id, "tiktok", open_id)
+    : row.avatar_url ?? null;
+  const tokenExpiresAt = new Date(
+    Date.now() + (expires_in ?? 86400) * 1000,
+  ).toISOString();
+
+  const merged = {
+    ...((row.account_metadata as Record<string, unknown> | null) ?? {}),
+    tiktok_username: tiktokUsername,
+    display_name: displayName,
+    open_id,
+  };
+
+  const { error: updateError } = await supabase
+    .from("social_accounts")
+    .update({
+      platform_username: usernameForDisplay,
+      access_token,
+      refresh_token,
+      token_expires_at: tokenExpiresAt,
+      avatar_url: avatarUrl,
+      is_active: true,
+      needs_reauth: false,
+      failure_count: 0,
+      last_refresh_error: null,
+      updated_at: new Date().toISOString(),
+      account_metadata: merged,
+    })
+    .eq("id", row.id)
+    .eq("user_id", expected_user_id);
+
+  if (updateError) {
+    console.error("Database error (reconnect):", updateError);
+    throw new Error("Failed to update TikTok account");
+  }
+
+  return { username: usernameForDisplay };
+}
+
+function reconnectErrorParam(message: string): string {
+  if (message === "RECONNECT_ACCOUNT_NOT_FOUND") return "reconnect_account_not_found";
+  if (message === "RECONNECT_FORBIDDEN") return "reconnect_forbidden";
+  if (message === "RECONNECT_PLATFORM_MISMATCH") return "reconnect_platform_mismatch";
+  if (message === "RECONNECT_ACCOUNT_MISMATCH") return "reconnect_account_mismatch";
+  return "tiktok_callback_failed";
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === "OPTIONS") {
@@ -179,24 +288,45 @@ Deno.serve(async (req) => {
       const payload = await verifyOAuthState(state, {
         expectedPlatform: "tiktok",
       });
+      const stateMode = (payload as Record<string, unknown>).mode as
+        | string
+        | undefined;
+      const stateAccountId = (payload as Record<string, unknown>)
+        .social_account_id as string | undefined;
+
       const tokenData = await exchangeCodeForToken(code, TIKTOK_REDIRECT_URI);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      await saveTikTokAccount(
-        supabase,
-        payload.user_id,
-        payload.profile_id ?? null,
-        tokenData,
-      );
+
+      const isReconnect = stateMode === "reconnect" && !!stateAccountId;
+      if (isReconnect) {
+        await reconnectTikTokAccount(
+          supabase,
+          stateAccountId!,
+          payload.user_id,
+          tokenData,
+        );
+      } else {
+        await saveTikTokAccount(
+          supabase,
+          payload.user_id,
+          payload.profile_id ?? null,
+          tokenData,
+        );
+      }
 
       const ret = new URL(payload.return_to ?? RETURN_URL_DEFAULT);
       ret.searchParams.set("connected", "tiktok");
+      if (isReconnect) ret.searchParams.set("reconnected", "1");
       if (payload.profile_id) ret.searchParams.set("profile_id", payload.profile_id);
       return Response.redirect(ret.toString(), 302);
     } catch (err) {
       console.error("TikTok GET callback error:", err);
       const ret = new URL(RETURN_URL_DEFAULT);
       ret.searchParams.set("connected", "tiktok");
-      ret.searchParams.set("error", "tiktok_callback_failed");
+      ret.searchParams.set(
+        "error",
+        reconnectErrorParam(err instanceof Error ? err.message : ""),
+      );
       return Response.redirect(ret.toString(), 302);
     }
   }
@@ -214,6 +344,7 @@ Deno.serve(async (req) => {
       account_id: rawAccountId,
       social_account_id,
       return_to,
+      mode,
     } = body;
     const account_id = rawAccountId || social_account_id;
 
@@ -259,11 +390,19 @@ Deno.serve(async (req) => {
       // for security/consistency: must match provider console exactly.
       const effectiveRedirect = TIKTOK_REDIRECT_URI;
 
+      const isReconnect = mode === "reconnect" && !!social_account_id;
+      const extra: Record<string, unknown> = {};
+      if (isReconnect) {
+        extra.mode = "reconnect";
+        extra.social_account_id = social_account_id;
+      }
+
       const state = await createOAuthState({
         platform: "tiktok",
         user_id,
         profile_id: social_profile_id ?? null,
         return_to: return_to ?? RETURN_URL_DEFAULT,
+        extra,
       });
 
       const authUrl =
@@ -304,6 +443,20 @@ Deno.serve(async (req) => {
 
       const tokenData = await exchangeCodeForToken(code, redirect_uri);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+      if (mode === "reconnect" && social_account_id) {
+        const { username } = await reconnectTikTokAccount(
+          supabase,
+          social_account_id,
+          user_id,
+          tokenData,
+        );
+        return new Response(
+          JSON.stringify({ success: true, username, reconnected: true }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       const { username } = await saveTikTokAccount(
         supabase,
         user_id,

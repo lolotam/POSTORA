@@ -97,7 +97,7 @@ interface PlatformAccountsTabProps {
   accounts: SocialAccountWithProfile[];
   onConnect: () => void;
   onDisconnect: (account: SocialAccountWithProfile) => void;
-  onReconnect: (platform: Platform) => void;
+  onReconnect: (platform: Platform, socialAccountId: string) => void;
   isConnecting: boolean;
 }
 
@@ -318,7 +318,7 @@ export function PlatformAccountsTab({
                               variant={needsReauth ? "default" : "outline"}
                               size="sm"
                               className={`h-7 text-xs gap-1 ${needsReauth ? "bg-destructive hover:bg-destructive/90 text-destructive-foreground" : ""}`}
-                              onClick={() => onReconnect(account.platform)}
+                              onClick={() => onReconnect(account.platform, account.id)}
                             >
                               <RefreshCw className="w-3 h-3" />
                               Reconnect

@@ -21,7 +21,7 @@ interface AccountNeedingReauth {
 export function TokenReauthBanner() {
   const { user } = useAuth();
   const [dismissedAccounts, setDismissedAccounts] = useState<Set<string>>(new Set());
-  const { handleConnectPlatform, connectingPlatform } = useProfileOAuth();
+  const { handleReconnectPlatform, connectingPlatform } = useProfileOAuth();
 
   const { data: accountsNeedingReauth = [] } = useQuery({
     queryKey: ["accounts-needing-reauth", user?.id],
@@ -52,10 +52,13 @@ export function TokenReauthBanner() {
   }
 
   const handleReconnect = async (account: AccountNeedingReauth) => {
-    // handleConnectPlatform expects (profileId, platform)
-    await handleConnectPlatform(
+    // Reconnect mode: backend updates the existing social_accounts row in
+    // place using account.id, then redirects with `?reconnected=1` so the
+    // banner clears immediately via query invalidation.
+    await handleReconnectPlatform(
       account.social_profile_id || "",
-      account.platform as Platform
+      account.platform as Platform,
+      account.id,
     );
   };
 

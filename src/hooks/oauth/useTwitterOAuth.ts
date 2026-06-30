@@ -12,10 +12,22 @@ export function useTwitterOAuth(
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const handleTwitterConnect = async (profileId: string) => {
+  const handleTwitterConnect = async (
+    profileId: string,
+    options: { mode?: "connect" | "reconnect"; socialAccountId?: string } = {},
+  ) => {
     if (!user) throw new Error("Not authenticated");
+    const isReconnect = options.mode === "reconnect" && !!options.socialAccountId;
     const { data, error } = await supabase.functions.invoke("twitter-oauth", {
-      body: { action: "authorize", user_id: user.id, social_profile_id: profileId, return_to: `${window.location.origin}/profiles` },
+      body: {
+        action: "authorize",
+        user_id: user.id,
+        social_profile_id: profileId,
+        return_to: `${window.location.origin}/profiles`,
+        ...(isReconnect
+          ? { mode: "reconnect", social_account_id: options.socialAccountId }
+          : {}),
+      },
     });
     if (error) throw error;
     if (data?.url) { window.location.href = data.url; } else { throw new Error("No authorization URL received"); }
