@@ -309,7 +309,16 @@ Deno.serve(async (req) => {
     });
   } catch (error: unknown) {
     console.error("Twitter OAuth error:", error);
-    // Sanitized error message to prevent schema leakage
+    const rawMsg = error instanceof Error ? error.message : "";
+    const reconnectErrors = new Set([
+      "RECONNECT_ACCOUNT_NOT_FOUND",
+      "RECONNECT_FORBIDDEN",
+      "RECONNECT_PLATFORM_MISMATCH",
+      "RECONNECT_ACCOUNT_MISMATCH",
+    ]);
+    const errorCode = reconnectErrors.has(rawMsg)
+      ? rawMsg.toLowerCase()
+      : "twitter_oauth_failed";
     const safeMessage = "Authentication failed. Please try again.";
 
     // If this was a GET callback, redirect back with error so user doesn't get stuck on a blank page
@@ -320,7 +329,7 @@ Deno.serve(async (req) => {
         if (state) {
           const parsed = await verifyAndParseState(state);
           const returnUrl = new URL(parsed.return_to);
-          returnUrl.searchParams.set("error", "twitter_oauth_failed");
+          returnUrl.searchParams.set("error", errorCode);
           returnUrl.searchParams.set("error_description", safeMessage);
           return Response.redirect(returnUrl.toString(), 302);
         }
