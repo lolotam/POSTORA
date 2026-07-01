@@ -90,12 +90,22 @@ export function ProfileSection({
         throw new Error(uploadData?.error || uploadError?.message || "Upload failed");
       }
 
-      const { error: updateError } = await supabase
+      // Use .select() to detect silent 0-row updates (e.g. profile row
+      // missing). If no row matched, upsert to guarantee the avatar is saved.
+      const { data: updatedRows, error: updateError } = await supabase
         .from("profiles")
         .update({ avatar_url: uploadData.url })
-        .eq("id", user.id);
+        .eq("id", user.id)
+        .select("id");
 
       if (updateError) throw updateError;
+
+      if (!updatedRows || updatedRows.length === 0) {
+        const { error: upsertError } = await supabase
+          .from("profiles")
+          .upsert({ id: user.id, email: user.email ?? "", avatar_url: uploadData.url });
+        if (upsertError) throw upsertError;
+      }
 
       await refreshProfile();
 
@@ -125,7 +135,8 @@ export function ProfileSection({
       const { error } = await supabase
         .from("profiles")
         .update({ avatar_url: null })
-        .eq("id", user.id);
+        .eq("id", user.id)
+        .select("id");
 
       if (error) throw error;
 

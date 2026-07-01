@@ -18,7 +18,7 @@ const authSchema = z.object({
   fullName: z.string().optional(),
 });
 
-type AuthView = "login" | "signup" | "forgot-password" | "reset-password" | "mfa-verify" | "otp-verify";
+type AuthView = "login" | "signup" | "forgot-password" | "reset-password" | "mfa-verify" | "otp-verify" | "verify-email";
 
 export default function Auth() {
   const [searchParams] = useSearchParams();
@@ -37,6 +37,7 @@ export default function Auth() {
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [mfaCode, setMfaCode] = useState("");
   const [mfaFactorId, setMfaFactorId] = useState<string | null>(null);
+  const [resendCooldown, setResendCooldown] = useState(0);
   const navigate = useNavigate();
   const { toast } = useToast();
   const { signUp, signIn, signInWithGoogle, user, isLoading: authLoading } = useAuth();
@@ -200,11 +201,16 @@ export default function Auth() {
             console.error("Sign up error:", error);
           }
         } else {
+          // Email confirmation is required (ENABLE_EMAIL_AUTOCONFIRM=false):
+          // GoTrue returns the user but NO session, so we must not treat this
+          // as a login. Clear any stale/partial local session and hold the
+          // user on a "verify your email" screen until they confirm.
+          await supabase.auth.signOut();
+          setView("verify-email");
           toast({
             title: "Account created!",
-            description: "Please choose your plan to get started.",
+            description: `We sent a verification link to ${email}. Please confirm your email to sign in.`,
           });
-          navigate("/pricing");
         }
       } else {
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -213,11 +219,23 @@ export default function Auth() {
         });
         
         if (error) {
-          toast({
-            title: "Sign in failed",
-            description: error.message,
-            variant: "destructive",
-          });
+          const msg = (error.message || "").toLowerCase();
+          if (msg.includes("email") && msg.includes("confirm")) {
+            // User tried to sign in before confirming their email — guide
+            // them back to verification instead of a generic failure toast.
+            setView("verify-email");
+            toast({
+              title: "Email not confirmed",
+              description: "Please click the verification link in your email before signing in.",
+              variant: "destructive",
+            });
+          } else {
+            toast({
+              title: "Sign in failed",
+              description: error.message,
+              variant: "destructive",
+            });
+          }
         } else {
           // Check if MFA is required
           const { data: factorsData } = await supabase.auth.mfa.listFactors();
@@ -384,12 +402,45 @@ export default function Auth() {
     }
   };
 
+  const handleResendVerification = async () => {
+    if (resendCooldown > 0 || isLoading) return;
+    setIsLoading(true);
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: "signup",
+        email,
+        options: { emailRedirectTo: `${window.location.origin}/dashboard` },
+      });
+      if (resendError) throw resendError;
+      toast({
+        title: "Verification email sent",
+        description: `Check ${email} for a new confirmation link.`,
+      });
+      setResendCooldown(60);
+    } catch (err) {
+      toast({
+        title: "Couldn't resend email",
+        description: err instanceof Error ? err.message : "Please try again in a moment.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setTimeout(() => setResendCooldown((s) => Math.max(0, s - 1)), 1000);
+    return () => clearTimeout(t);
+  }, [resendCooldown]);
+
   const isSignUp = view === "signup";
   const isForgotPassword = view === "forgot-password";
   const isResetPassword = view === "reset-password";
   const isMfaVerify = view === "mfa-verify";
+  const isVerifyEmail = view === "verify-email";
 
-  if (authLoading || isRedirecting || (user && !isResetPassword && !isMfaVerify)) {
+  if (authLoading || isRedirecting || (user && !isResetPassword && !isMfaVerify && !isVerifyEmail)) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
@@ -440,30 +491,81 @@ export default function Auth() {
           <div className="bg-card/50 backdrop-blur-xl border border-border rounded-2xl p-8">
             <div className="text-center mb-8">
               <h2 className="text-2xl font-bold mb-2">
-                {isMfaVerify
-                  ? "Two-factor authentication"
-                  : isResetPassword
-                    ? "Set new password"
-                    : isForgotPassword
-                      ? "Reset your password"
-                      : isSignUp
-                        ? "Create your account"
-                        : "Welcome back"}
+                {isVerifyEmail
+                  ? "Verify your email"
+                  : isMfaVerify
+                    ? "Two-factor authentication"
+                    : isResetPassword
+                      ? "Set new password"
+                      : isForgotPassword
+                        ? "Reset your password"
+                        : isSignUp
+                          ? "Create your account"
+                          : "Welcome back"}
               </h2>
               <p className="text-muted-foreground">
-                {isMfaVerify
-                  ? "Enter an authenticator code or backup code"
-                  : isResetPassword
-                    ? "Enter your new password below"
-                    : isForgotPassword
-                      ? "Enter your email to receive a reset link"
-                      : isSignUp
-                        ? "Start your social media journey today"
-                        : "Sign in to continue to Postora"}
+                {isVerifyEmail
+                  ? "Confirm your email to activate your account"
+                  : isMfaVerify
+                    ? "Enter an authenticator code or backup code"
+                    : isResetPassword
+                      ? "Enter your new password below"
+                      : isForgotPassword
+                        ? "Enter your email to receive a reset link"
+                        : isSignUp
+                          ? "Start your social media journey today"
+                          : "Sign in to continue to Postora"}
               </p>
             </div>
 
-            {isMfaVerify ? (
+            {isVerifyEmail ? (
+              <div className="space-y-5 text-center">
+                <div className="flex justify-center mb-2">
+                  <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
+                    <Mail className="w-8 h-8 text-primary" />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <p className="text-sm text-muted-foreground">We sent a verification link to</p>
+                  <p className="font-medium text-foreground break-all">{email}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Click the link in the email to activate your account, then sign in.
+                    Check your spam folder if you don&apos;t see it within a minute.
+                  </p>
+                </div>
+
+                <Button
+                  type="button"
+                  variant="gradient"
+                  className="w-full"
+                  size="lg"
+                  onClick={handleResendVerification}
+                  disabled={isLoading || resendCooldown > 0}
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : resendCooldown > 0 ? (
+                    `Resend in ${resendCooldown}s`
+                  ) : (
+                    "Resend verification email"
+                  )}
+                </Button>
+
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => setView("login")}
+                    className="text-sm text-primary hover:underline"
+                  >
+                    Back to sign in
+                  </button>
+                </div>
+              </div>
+            ) : isMfaVerify ? (
               <form onSubmit={handleMfaVerify} className="space-y-5">
                 <div className="flex justify-center mb-4">
                   <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center">
