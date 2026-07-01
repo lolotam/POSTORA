@@ -57,15 +57,16 @@ export function useSubscription() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["user-subscription", user?.id],
-    queryFn: async (): Promise<SubscriptionResult & { stripeAuthError?: boolean }> => {
+    queryFn: async (): Promise<SubscriptionResult & { stripeAuthError?: boolean; stripeUnavailable?: boolean }> => {
       // Double-check we have valid auth before proceeding
       if (!user?.id || !session?.access_token) {
-        return { dbSubscription: null, stripeData: null, stripeAuthError: false };
+        return { dbSubscription: null, stripeData: null, stripeAuthError: false, stripeUnavailable: false };
       }
 
       // Check Stripe directly for real-time status
       let stripeData = null;
       let stripeAuthError = false;
+      let stripeUnavailable = false;
       
       try {
         const { data: stripeResponse, error: stripeError } = await supabase.functions.invoke("check-subscription");
@@ -76,6 +77,8 @@ export function useSubscription() {
           if (stripeError.message?.includes("401") || stripeError.message?.includes("Unauthorized") || stripeError.message?.includes("Auth")) {
             stripeAuthError = true;
           }
+        } else if (stripeResponse?.stripe_unavailable) {
+          stripeUnavailable = true;
         } else if (stripeResponse?.error) {
           console.error("Stripe response error:", stripeResponse.error);
           if (stripeResponse.error.includes("Auth") || stripeResponse.error.includes("Unauthorized")) {
@@ -98,7 +101,7 @@ export function useSubscription() {
 
       if (subError) {
         console.error("Error fetching subscription:", subError);
-        return { dbSubscription: null, stripeData, stripeAuthError };
+        return { dbSubscription: null, stripeData, stripeAuthError, stripeUnavailable };
       }
 
       if (!subscriptionData) return { dbSubscription: null, stripeData, stripeAuthError };
@@ -112,7 +115,7 @@ export function useSubscription() {
 
       if (planError) {
         console.error("Error fetching plan:", planError);
-        return { dbSubscription: subscriptionData as UserSubscription, stripeData, stripeAuthError };
+        return { dbSubscription: subscriptionData as UserSubscription, stripeData, stripeAuthError, stripeUnavailable };
       }
 
       return {
@@ -125,6 +128,7 @@ export function useSubscription() {
         } as UserSubscription,
         stripeData,
         stripeAuthError,
+        stripeUnavailable,
       };
     },
     enabled: isReady,
@@ -147,6 +151,7 @@ export function useSubscription() {
   const dbSubscription = data?.dbSubscription ?? null;
   const stripeData = data?.stripeData ?? null;
   const stripeAuthError = data?.stripeAuthError ?? false;
+  const stripeUnavailable = data?.stripeUnavailable ?? false;
 
   // Determine subscription status - prefer Stripe data, fall back to database
   const isSubscribedViaStripe = stripeData?.subscribed === true;
@@ -181,6 +186,7 @@ export function useSubscription() {
     subscription: dbSubscription,
     stripeData,
     stripeAuthError,
+    stripeUnavailable,
     isLoading,
     isSubscribed,
     planName,

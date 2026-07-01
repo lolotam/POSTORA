@@ -92,6 +92,14 @@
       "description": "Public API gateway origin. Defaults to the Supabase URL when unset."
     },
     {
+      "name": "ALLOWED_ORIGINS",
+      "category": "supabase",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Optional comma-separated list of allowed CORS origins for edge functions (supabase/functions/_shared/cors.ts). Lets ops grant a new origin (e.g. a staging domain) without a redeploy. When unset, the hardcoded production + development origin list is used."
+    },
+    {
       "name": "SUPABASE_PROJECT_REF",
       "category": "supabase",
       "required": false,

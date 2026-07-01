@@ -155,7 +155,44 @@ injecting it.
 ## Dokploy persistence warning
 
 If you redeploy the Supabase stack from the Dokploy UI, **verify** the
-`env_file:` directive (or your explicit mappings) survive under the `functions`
+`env_file:` directive (or your explicit mappings) survives under the `functions`
 service. Dokploy may regenerate the compose file from its stored template. If it
 does, re-apply the `env_file:` line to the functions service and restart only
 that container.
+
+---
+
+## Self-healing reconciliation (automatic, host-level)
+
+Because Dokploy redeploys strip `env_file:` (see warning above), a host-level
+cron now self-heals the regression without any manual intervention:
+
+- **Script**: `/usr/local/sbin/reconcile-edge-functions-env.sh` on the production
+  VPS (repo source of truth: `scripts/reconcile-edge-functions-env.sh`; a compact
+  host-cron copy is deployed because the repo file is not cloned on the VPS).
+- **Schedule**: every 5 minutes via root crontab.
+- **Log**: `/var/log/postora-edge-reconcile.log` (rotated weekly via
+  `/etc/logrotate.d/postora-edge-reconcile`).
+- **Behaviour**: if the `functions` service in
+  `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code/docker-compose.yml`
+  lacks `env_file:`, the script backs up the compose, re-inserts
+  `env_file: [./.env]`, validates, and recreates **only** the functions
+  container. If `env_file:` is already present it exits 0 silently. Max degraded
+  window after any Dokploy redeploy = 5 minutes.
+
+This runs outside Dokploy's control, so it survives every stack regeneration.
+
+---
+
+## Graceful degradation (defense in depth)
+
+Even with the self-healer, the two functions that historically 500'd on missing
+secrets now degrade gracefully so a transient env gap never produces a hard 500:
+
+- **`check-subscription`** validates the JWT **first**. If `STRIPE_SECRET_KEY` is
+  absent it returns `200 { subscribed: null, stripe_unavailable: true }` instead
+  of throwing. `useSubscription()` treats `stripe_unavailable` as a silent skip
+  (no `console.error`, falls back to DB + role data).
+- **`cloudinary-upload`** returns `503 { success: false, error: "Cloudinary
+  temporarily unavailable", retryable: true }` instead of `500` when Cloudinary
+  credentials are missing, so the client can retry cleanly.

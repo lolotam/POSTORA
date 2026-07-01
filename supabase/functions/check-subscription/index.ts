@@ -23,14 +23,6 @@ Deno.serve(async (req) => {
   try {
     logStep("Function started");
 
-    if (!STRIPE_SECRET_KEY) {
-      throw new Error("Stripe is not configured");
-    }
-
-    const stripe = new Stripe(STRIPE_SECRET_KEY, {
-      apiVersion: "2025-08-27.basil",
-    });
-
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       logStep("Missing or invalid Authorization header");
@@ -82,7 +74,18 @@ Deno.serve(async (req) => {
 
     logStep("User authenticated", { userId, email: userEmail });
 
-    // Check Stripe for customer and subscription
+    if (!STRIPE_SECRET_KEY) {
+      logStep("Stripe not configured, returning stripe_unavailable");
+      return new Response(
+        JSON.stringify({ subscribed: null, stripe_unavailable: true }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+      );
+    }
+
+    const stripe = new Stripe(STRIPE_SECRET_KEY, {
+      apiVersion: "2025-08-27.basil",
+    });
+
     const customers = await stripe.customers.list({ email: userEmail, limit: 1 });
 
     if (customers.data.length === 0) {

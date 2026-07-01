@@ -148,8 +148,8 @@ Deno.serve(async (req) => {
     if (!cloudName || !apiKey || !apiSecret) {
       console.error("Missing Cloudinary credentials");
       return new Response(
-        JSON.stringify({ success: false, error: "Cloudinary not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: false, error: "Cloudinary temporarily unavailable", retryable: true }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
