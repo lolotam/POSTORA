@@ -48,8 +48,19 @@ export function friendlyPasswordFunctionMessage(code: string | undefined, fallba
   }
 }
 
+/**
+ * supabase-js throws `FunctionsHttpError(response)`, so `error.context` IS the
+ * `Response`. Also accept a nested `context.response` for wrapped error shapes.
+ */
+function extractFunctionResponse(error: unknown): Response | undefined {
+  const context = (error as { context?: unknown }).context;
+  if (context instanceof Response) return context;
+  const nested = (context as { response?: unknown } | undefined)?.response;
+  return nested instanceof Response ? nested : undefined;
+}
+
 export async function readFunctionError(error: unknown): Promise<FunctionErrorResult> {
-  const response = (error as { context?: { response?: Response } }).context?.response;
+  const response = extractFunctionResponse(error);
   if (!response) {
     const message = error instanceof Error ? error.message : undefined;
     return { error: friendlyPasswordFunctionMessage(undefined, message) };

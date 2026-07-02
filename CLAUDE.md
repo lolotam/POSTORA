@@ -4,6 +4,29 @@
 
 This document provides comprehensive context for AI coding assistants (Claude, GPT, Gemini) to understand and work with the Postora codebase.
 
+## Task Execution Workflow (MANDATORY)
+
+Follow these steps for every task, in order:
+
+### Before starting any task
+1. **Recall prior history**: search the `mem0` MCP for previous fixes/debugging of the same or similar issue (`search_memories` with the feature/bug keywords). Old solutions and gotchas are stored there — use them.
+2. **Brainstorm first**: run the `brainstorming` skill before any creative/implementation work to pin down intent, requirements, and design.
+3. **Confirm root cause with evidence** before writing any fix. No speculative patches — reproduce, inspect DB state / logs / code paths, and state the proven cause first.
+
+### While working
+4. Backend note: the Supabase stack (Postgres + edge functions) is **self-hosted on the same Contabo server** (`86.48.2.205`). The SSH MCP for this project is **`ssh-contabo-mcp`** (host access) and **`dokploy-contaboo-mcp`** (Dokploy deployments). Never use the musalam/Abdelaziz/curemed MCPs for Postora.
+
+### After the task, before committing
+5. **Guard pass (always)**: run `clean-code-guard` on changed production code and `test-guard` on changed/added tests.
+6. **Commit locally, always**: commit scoped to the task's files only (`git commit -- <files>`). Never commit `b64.txt`, logs, backups, `.env*`, or any secret files.
+
+### Deployment
+7. If any edge function under `supabase/functions/*` changed, **redeploy it via `ssh-contabo-mcp`**: copy the changed files into the functions volume `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`, verify hashes, then `docker compose up -d --no-deps functions` from the stack dir (see `docs/runbooks/deploy-edge-function.md`). Frontend deploys automatically when `main` is pushed (Dokploy).
+
+### Wrap-up (always)
+8. **Save to memory**: store a task summary in the `mem0` MCP (`add_memory`): the issue, root cause, how it was solved, and files changed — so future sessions can retrieve the fix history.
+9. **Final report**: end every task with a full summary report to the user: what the issue was, what was done, files changed, test/validation results, and any deploy/follow-up actions required.
+
 ## Project Overview
 
 **Postora** is a social media management platform that allows users to:

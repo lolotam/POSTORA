@@ -1,5 +1,6 @@
 import {
   IAllExecuteFunctions,
+  IDataObject,
   IExecuteFunctions,
   ILoadOptionsFunctions,
   INodeExecutionData,
@@ -8,6 +9,13 @@ import {
   INodeTypeDescription,
   INodeProperties,
 } from "n8n-workflow";
+
+interface PostoraAccount {
+  id: string;
+  name?: string;
+  platform?: string;
+  platform_username?: string;
+}
 
 const platformOptions = [
   { name: "1. Facebook", value: "facebook" },
@@ -578,7 +586,7 @@ export class Postora implements INodeType {
           return [];
         }
 
-        return response.accounts.map((account: any, index: number) => {
+        return (response.accounts as PostoraAccount[]).map((account, index) => {
           const displayName = account.name || account.platform_username || "Unknown";
           return {
             name: `${index + 1}. ${displayName}`,
@@ -610,7 +618,7 @@ export class Postora implements INodeType {
         const options: INodePropertyOptions[] = [{ name: "All", value: "" }];
 
         if (response?.accounts && Array.isArray(response.accounts)) {
-          for (const account of response.accounts) {
+          for (const account of response.accounts as PostoraAccount[]) {
             const displayName = account.name || account.platform_username || "Unknown";
             options.push({
               name: `${displayName} (${account.platform})`,
@@ -634,7 +642,7 @@ export class Postora implements INodeType {
 
     for (let i = 0; i < items.length; i++) {
       try {
-        let responseData: any;
+        let responseData: IDataObject | IDataObject[] | undefined;
 
         // ── Account → List ──
         if (resource === "account" && operation === "list") {
@@ -702,9 +710,9 @@ export class Postora implements INodeType {
             );
           }
           const scheduledAt = this.getNodeParameter("scheduledAt", i, "") as string;
-          const additionalOptions = this.getNodeParameter("additionalOptions", i, {}) as Record<string, any>;
+          const additionalOptions = this.getNodeParameter("additionalOptions", i, {}) as IDataObject;
 
-          const body: Record<string, any> = {
+          const body: IDataObject = {
             caption,
             platforms: [platform],
           };
@@ -823,8 +831,8 @@ export class Postora implements INodeType {
           const binaryPropertyName = this.getNodeParameter("binaryPropertyName", i) as string;
           const propertyNames = binaryPropertyName.split(',').map((name: string) => name.trim()).filter((name: string) => name.length > 0);
 
-          const uploadResults: any[] = [];
-          const uploadErrors: any[] = [];
+          const uploadResults: IDataObject[] = [];
+          const uploadErrors: IDataObject[] = [];
 
           for (const prop of propertyNames) {
             try {
@@ -858,9 +866,13 @@ export class Postora implements INodeType {
                 try { result = JSON.parse(result); } catch (_) { /* keep as-is */ }
               }
 
-              uploadResults.push({ field: prop, success: true, ...(result as object) });
-            } catch (err: any) {
-              uploadErrors.push({ field: prop, success: false, error: err.message });
+              uploadResults.push({ field: prop, success: true, ...(result as IDataObject) });
+            } catch (err) {
+              uploadErrors.push({
+                field: prop,
+                success: false,
+                error: err instanceof Error ? err.message : String(err),
+              });
             }
           }
 
@@ -873,14 +885,14 @@ export class Postora implements INodeType {
         }
 
         if (Array.isArray(responseData)) {
-          returnData.push(...responseData.map((item: any) => ({ json: item })));
+          returnData.push(...responseData.map((item) => ({ json: item })));
         } else {
           returnData.push({ json: responseData ?? {} });
         }
-      } catch (error: any) {
+      } catch (error) {
         if (this.continueOnFail()) {
           returnData.push({
-            json: { error: error.message },
+            json: { error: error instanceof Error ? error.message : String(error) },
             pairedItem: { item: i },
           });
           continue;

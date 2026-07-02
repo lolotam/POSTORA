@@ -19,6 +19,31 @@ This document provides comprehensive context for AI coding assistants (Codex, GP
 
 ---
 
+## Task Execution Workflow (MANDATORY)
+
+Follow these steps for every task, in order.
+
+### Before starting any task
+1. **Recall prior history** — search the `mem0` MCP (`search_memories` with `user_id="HP"`, `app_id="lolotam-postora"`) for previous fixes/debugging of the same feature or bug. Old solutions and gotchas are stored there — use them before re-deriving.
+2. **Brainstorm first** — run the `brainstorming` skill before any creative/implementation work to pin down intent, requirements, and design.
+3. **Confirm root cause with evidence** before writing any fix. No speculative patches — reproduce, inspect DB state / logs / code paths, and state the proven cause first.
+
+### While working
+4. **Backend access** — the Supabase stack (Postgres + edge functions) is self-hosted on the Contabo server documented in the [Supabase Project (Self-hosted)](#supabase-project-self-hosted) section below. The SSH MCP for this project is **`ssh-contabo-mcp`** (host access); Dokploy operations use **`dokploy-contaboo-mcp`**. Never use the musalam/Abdelaziz/curemed MCPs for Postora.
+
+### After the task, before committing
+5. **Guard pass (always)** — run `clean-code-guard` on changed production code and `test-guard` on changed/added tests.
+6. **Commit locally, always** — commit scoped to the task's files only (`git commit -- <files>`). Never commit `b64.txt`, logs, backups, `.env*`, or any secret files.
+
+### Deployment
+7. **Edge functions** — if any file under `supabase/functions/*` changed, redeploy via `ssh-contabo-mcp`: copy the changed files into the functions volume, verify SHA256 hashes, then `docker compose up -d --no-deps functions` from the stack dir. See `docs/runbooks/deploy-edge-function.md` for exact paths. Frontend deploys automatically when `main` is pushed (Dokploy).
+
+### Wrap-up (always)
+8. **Save to memory** — store a task summary in `mem0` (`add_memory`): the issue, root cause, how it was solved, and files changed — so future sessions can retrieve the fix history.
+9. **Final report** — end every task with a full summary: what the issue was, what was done, files changed, test/validation results, and any deploy/follow-up actions required.
+
+---
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -450,9 +475,7 @@ OPENAI_API_KEY
 ## Common Tasks
 
 ### Deploy Edge Function
-```bash
-npx supabase functions deploy [function-name] --project-ref efruibswazzuuupgyzmf
-```
+Self-hosted — do **not** use `npx supabase functions deploy` (that targets Supabase Cloud and fails here). Follow the procedure in **Task Execution Workflow → step 7** above, or see `docs/runbooks/deploy-edge-function.md` for exact paths and SHA256 verification.
 
 ### Run Locally
 ```bash

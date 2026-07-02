@@ -2,7 +2,10 @@ import { test as base, Page } from "@playwright/test";
 
 // Extend base test with authentication fixture
 export const test = base.extend<{ authenticatedPage: Page }>({
-  authenticatedPage: async ({ page }, use) => {
+  // Playwright passes the fixture provider as the second argument, conventionally
+  // named `use` — renamed to `provide` so react-hooks/rules-of-hooks doesn't
+  // mistake it for React 19's `use` hook.
+  authenticatedPage: async ({ page }, provide) => {
     // Navigate to auth page
     await page.goto("/auth");
 
@@ -32,7 +35,7 @@ export const test = base.extend<{ authenticatedPage: Page }>({
       console.log("Login may have failed - continuing with test");
     });
 
-    await use(page);
+    await provide(page);
   },
 });
 
