@@ -464,7 +464,9 @@ async function completeOAuth(params: {
       .update({
         platform_username: username,
         access_token,
-        refresh_token: refresh_token ?? null,
+        // Omit refresh_token when the provider doesn't return one so the
+        // stored token is preserved (a NULL overwrite breaks future refreshes)
+        ...(refresh_token ? { refresh_token } : {}),
         token_expires_at: tokenExpiresAt,
         avatar_url: avatarUrl,
         is_active: true,

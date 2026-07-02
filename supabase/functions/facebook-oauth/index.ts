@@ -182,7 +182,7 @@ async function exchangeForLongLivedToken(shortLivedToken: string): Promise<{ tok
   return { token: shortLivedToken, expiresAt: expiresDate.toISOString() };
 }
 
-const PAGE_FIELDS = "id,name,access_token,category,picture,instagram_business_account{id,username}";
+const PAGE_FIELDS = "id,name,access_token,category,picture.type(large),instagram_business_account{id,username}";
 
 async function fetchFacebookPages(providerToken: string, fbUserId?: string): Promise<FacebookPage[]> {
   const candidates: Array<{ label: string; url: string }> = [
@@ -437,6 +437,7 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
         id: p.id,
         name: p.name,
         has_instagram: igViaFbEnabled ? !!p.instagram_business_account : false,
+        picture_url: p.picture?.data?.url ?? null,
       })),
       ig_standalone_json: standaloneIg,
     })
@@ -694,7 +695,7 @@ Deno.serve(async (req) => {
       }
 
       const pictureResponse = await fetch(
-        `https://graph.facebook.com/v18.0/${page_id}/picture?redirect=false&access_token=${selectedPage.access_token}`
+        `https://graph.facebook.com/v18.0/${page_id}/picture?redirect=false&type=large&access_token=${selectedPage.access_token}`
       );
       const pictureData = await pictureResponse.json();
       const rawAvatarUrl = pictureData.data?.url || null;
@@ -796,7 +797,7 @@ Deno.serve(async (req) => {
       console.log("store_account - fetching user info and pages");
 
       const fbUserResponse = await fetch(
-        `https://graph.facebook.com/v18.0/me?fields=id,name,picture&access_token=${provider_token}`
+        `https://graph.facebook.com/v18.0/me?fields=id,name,picture.type(large)&access_token=${provider_token}`
       );
       const fbUser = await fbUserResponse.json();
 
@@ -880,7 +881,7 @@ Deno.serve(async (req) => {
         console.log("Auto-selecting single page:", page.name);
 
         const pictureResponse = await fetch(
-          `https://graph.facebook.com/v18.0/${page.id}/picture?redirect=false&access_token=${page.access_token}`
+          `https://graph.facebook.com/v18.0/${page.id}/picture?redirect=false&type=large&access_token=${page.access_token}`
         );
         const pictureData = await pictureResponse.json();
         const avatarUrl = pictureData.data?.url || null;

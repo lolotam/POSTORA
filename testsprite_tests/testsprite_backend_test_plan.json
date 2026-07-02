@@ -1,0 +1,7 @@
+[
+  {
+    "id": "TC001",
+    "title": "test_cors_preflight_options_request",
+    "description": "Verify that sending an OPTIONS request to any /functions/v1/* endpoint returns a 200 status with appropriate CORS headers allowing the browser/client to proceed with authorized requests."
+  }
+]

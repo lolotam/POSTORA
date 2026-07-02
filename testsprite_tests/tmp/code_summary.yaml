@@ -1,0 +1,617 @@
+version: "2"
+type: backend
+tech_stack:
+  - TypeScript
+  - Deno Supabase Edge Functions
+  - Supabase PostgreSQL Auth Storage
+  - React Vite frontend invokes functions through supabase-js
+  - Self-hosted Supabase Kong gateway at https://api.postora.cloud
+features:
+  - name: Supabase Edge Function Gateway
+    description: Backend is implemented as Supabase Edge Functions under /functions/v1/<function-name> with CORS preflight handling and JSON responses.
+    files:
+      - supabase/functions/*/index.ts
+      - supabase/functions/_shared/*.ts
+      - supabase/config.toml
+      - API_REFERENCE.md
+    endpoints:
+      - method: OPTIONS
+        path: /functions/v1/*
+        description: CORS preflight for edge functions.
+        auth_required: false
+        response_schema:
+          "200": CORS headers
+      - method: POST
+        path: /functions/v1/get-public-config
+        description: Returns public-safe frontend configuration.
+        auth_required: false
+        response_schema:
+          "200": Public config object
+      - method: GET
+        path: /functions/v1/unsplash-proxy
+        description: Proxies Unsplash search requests with rate limiting.
+        auth_required: true
+        response_schema:
+          "200": Unsplash search response
+          "401": Unauthorized
+    depends_on:
+      - Supabase environment variables
+      - Shared CORS helpers
+
+  - name: OAuth Connection APIs
+    description: Social platform OAuth and account connection functions for Facebook, Instagram, Threads, TikTok, YouTube, Pinterest, LinkedIn, Twitter, Bluesky, Reddit, and WhatsApp.
+    files:
+      - supabase/functions/facebook-oauth/index.ts
+      - supabase/functions/instagram-oauth/index.ts
+      - supabase/functions/instagram-business-oauth/index.ts
+      - supabase/functions/threads-oauth/index.ts
+      - supabase/functions/tiktok-oauth/index.ts
+      - supabase/functions/youtube-oauth/index.ts
+      - supabase/functions/pinterest-oauth/index.ts
+      - supabase/functions/linkedin-oauth/index.ts
+      - supabase/functions/twitter-oauth/index.ts
+      - supabase/functions/bluesky-oauth/index.ts
+      - supabase/functions/reddit-oauth/index.ts
+      - supabase/functions/whatsapp-oauth/index.ts
+      - supabase/functions/manage-oauth-redirects/index.ts
+    endpoints:
+      - method: POST
+        path: /functions/v1/facebook-oauth
+        description: Facebook OAuth URL generation, callback exchange, and account connection management.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/instagram-oauth
+        description: Instagram OAuth URL generation and account connection.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/instagram-business-oauth
+        description: Instagram Business OAuth flow.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/threads-oauth
+        description: Threads OAuth URL generation and callback exchange.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/tiktok-oauth
+        description: TikTok OAuth URL generation and token exchange.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/youtube-oauth
+        description: YouTube OAuth and channel selection.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/pinterest-oauth
+        description: Pinterest OAuth flow.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/linkedin-oauth
+        description: LinkedIn OAuth flow.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/twitter-oauth
+        description: Twitter/X OAuth 2.0 PKCE flow.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/bluesky-oauth
+        description: Bluesky ATProto OAuth flow.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/reddit-oauth
+        description: Reddit OAuth 2.0 flow.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/whatsapp-oauth
+        description: WhatsApp embedded signup OAuth flow.
+        auth_required: true
+        request_schema:
+          body:
+            action: string
+        response_schema:
+          "200": OAuth action result
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/manage-oauth-redirects
+        description: Admin CRUD for OAuth redirect requests.
+        auth_required: true
+        response_schema:
+          "200": Admin action result
+          "403": Admin only
+    depends_on:
+      - Supabase Auth JWT
+      - Social provider credentials
+      - OAuth state signing secret
+
+  - name: Public n8n API
+    description: Third-party REST API surface for automation workflows using user API keys.
+    files:
+      - supabase/functions/n8n-api/index.ts
+      - n8n-community-node/README.md
+      - public/n8n-complete-workflow.json
+    endpoints:
+      - method: GET
+        path: /functions/v1/n8n-api/api/v1/profiles
+        description: List social profiles for an API key owner.
+        auth_required: true
+        response_schema:
+          "200": Profiles list with usage
+          "401": Invalid API key
+      - method: GET
+        path: /functions/v1/n8n-api/api/v1/accounts
+        description: List connected social accounts.
+        auth_required: true
+        response_schema:
+          "200": Accounts list with usage
+          "401": Invalid API key
+      - method: POST
+        path: /functions/v1/n8n-api/api/v1/upload-media
+        description: Upload media by URL, multipart file, or base64 payload.
+        auth_required: true
+        response_schema:
+          "200": Uploaded media ids and usage
+          "400": Invalid upload payload
+      - method: POST
+        path: /functions/v1/n8n-api/api/v1/create-post
+        description: Create a post for selected social accounts and platforms.
+        auth_required: true
+        response_schema:
+          "200": Created post object with usage
+          "400": Validation error
+      - method: POST
+        path: /functions/v1/n8n-api/api/v1/schedule-post
+        description: Schedule a post for future publishing.
+        auth_required: true
+        response_schema:
+          "200": Scheduled post object with usage
+          "400": Validation error
+      - method: GET
+        path: /functions/v1/n8n-api/api/v1/posts
+        description: List posts for the API key owner.
+        auth_required: true
+        response_schema:
+          "200": Posts list with usage
+      - method: GET
+        path: /functions/v1/n8n-api/api/v1/post-status/:id
+        description: Get post status and per-platform results.
+        auth_required: true
+        response_schema:
+          "200": Post status
+          "404": Post not found
+    depends_on:
+      - profiles.api_key
+      - api_logs rate limiting
+      - media_files
+      - posts
+      - social_accounts
+
+  - name: Posting And Scheduling Pipeline
+    description: Internal posting pipeline and cron processors for scheduled content.
+    files:
+      - supabase/functions/process-post/index.ts
+      - supabase/functions/process-scheduled-posts/index.ts
+      - supabase/functions/process-scheduled-blog-posts/index.ts
+      - supabase/functions/process-scheduled-flags/index.ts
+      - supabase/functions/process-scheduled-emails/index.ts
+      - supabase/functions/whatsapp-scheduled-sender/index.ts
+    endpoints:
+      - method: POST
+        path: /functions/v1/process-post
+        description: Publish one post to platform-specific social APIs.
+        auth_required: true
+        response_schema:
+          "200": Per-platform publish results
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/process-scheduled-posts
+        description: Cron job to find due posts and invoke process-post.
+        auth_required: true
+        response_schema:
+          "200": Processing summary
+          "401": Unauthorized
+      - method: POST
+        path: /functions/v1/process-scheduled-blog-posts
+        description: Publish scheduled blog posts.
+        auth_required: true
+        response_schema:
+          "200": Processing summary
+      - method: POST
+        path: /functions/v1/process-scheduled-flags
+        description: Apply scheduled feature flag state changes.
+        auth_required: true
+        response_schema:
+          "200": Processing summary
+      - method: POST
+        path: /functions/v1/process-scheduled-emails
+        description: Send queued scheduled emails.
+        auth_required: true
+        response_schema:
+          "200": Processing summary
+    depends_on:
+      - Supabase service role key
+      - Cron secret
+      - External social APIs
+
+  - name: Media APIs
+    description: Media upload, deletion, transformation, transcription, and cleanup operations.
+    files:
+      - supabase/functions/cloudinary-upload/index.ts
+      - supabase/functions/cloudinary-delete/index.ts
+      - supabase/functions/cloudinary-rename/index.ts
+      - supabase/functions/cloudinary-email-upload/index.ts
+      - supabase/functions/process-video/index.ts
+      - supabase/functions/transcode-video/index.ts
+      - supabase/functions/transcribe-media/index.ts
+      - supabase/functions/remove-background/index.ts
+      - supabase/functions/upscale-image/index.ts
+      - supabase/functions/upscale-image-atlas/index.ts
+      - supabase/functions/cleanup-media/index.ts
+      - supabase/functions/check-music-copyright/index.ts
+    endpoints:
+      - method: POST
+        path: /functions/v1/cloudinary-upload
+        description: Sign and upload media to Cloudinary.
+        auth_required: true
+        response_schema:
+          "200": Uploaded asset metadata
+      - method: POST
+        path: /functions/v1/cloudinary-delete
+        description: Delete a Cloudinary asset.
+        auth_required: true
+        response_schema:
+          "200": Delete result
+      - method: POST
+        path: /functions/v1/cloudinary-rename
+        description: Rename a Cloudinary asset.
+        auth_required: true
+        response_schema:
+          "200": Rename result
+      - method: POST
+        path: /functions/v1/process-video
+        description: Process video metadata and readiness.
+        auth_required: true
+        response_schema:
+          "200": Processed video result
+      - method: POST
+        path: /functions/v1/remove-background
+        description: Remove image background using Cloudinary.
+        auth_required: true
+        response_schema:
+          "200": Transformed image result
+      - method: POST
+        path: /functions/v1/upscale-image
+        description: Upscale an image.
+        auth_required: true
+        response_schema:
+          "200": Upscaled image result
+      - method: POST
+        path: /functions/v1/check-music-copyright
+        description: Check media against ACRCloud for copyright matches.
+        auth_required: true
+        response_schema:
+          "200": Copyright check result
+    depends_on:
+      - Supabase Auth JWT
+      - Cloudinary credentials
+      - ACRCloud credentials
+      - AtlasCloud credentials
+
+  - name: AI Generation APIs
+    description: AI caption, hashtag, image, best-time, model config, and model catalog endpoints.
+    files:
+      - supabase/functions/generate-caption/index.ts
+      - supabase/functions/generate-hashtags/index.ts
+      - supabase/functions/generate-image/index.ts
+      - supabase/functions/suggest-best-times/index.ts
+      - supabase/functions/ai-config/index.ts
+      - supabase/functions/ai-email-assistant/index.ts
+      - supabase/functions/analyze-log/index.ts
+      - supabase/functions/test-ai-model/index.ts
+      - supabase/functions/fetch-openrouter-models/index.ts
+      - supabase/functions/openrouter-models/index.ts
+    endpoints:
+      - method: POST
+        path: /functions/v1/generate-caption
+        description: Generate social media captions and debit credits.
+        auth_required: true
+        response_schema:
+          "200": Caption generation result
+      - method: POST
+        path: /functions/v1/generate-hashtags
+        description: Generate hashtags and debit credits.
+        auth_required: true
+        response_schema:
+          "200": Hashtag generation result
+      - method: POST
+        path: /functions/v1/generate-image
+        description: Generate images and debit credits.
+        auth_required: true
+        response_schema:
+          "200": Image generation result
+      - method: POST
+        path: /functions/v1/suggest-best-times
+        description: Suggest optimal posting times.
+        auth_required: true
+        response_schema:
+          "200": Best-time suggestions
+      - method: POST
+        path: /functions/v1/ai-config
+        description: Admin read/write AI provider configuration.
+        auth_required: true
+        response_schema:
+          "200": AI config result
+          "403": Admin only
+      - method: GET
+        path: /functions/v1/openrouter-models
+        description: Return cached OpenRouter model catalog.
+        auth_required: true
+        response_schema:
+          "200": Model list
+    depends_on:
+      - Supabase Auth JWT
+      - AI provider keys
+      - User credits and quotas
+
+  - name: Webhooks
+    description: Public platform webhook receivers that validate upstream signatures or verification tokens in code.
+    files:
+      - supabase/functions/stripe-webhook/index.ts
+      - supabase/functions/resend-webhook/index.ts
+      - supabase/functions/whatsapp-webhook/index.ts
+      - supabase/functions/tiktok-webhook/index.ts
+    endpoints:
+      - method: POST
+        path: /functions/v1/stripe-webhook
+        description: Stripe subscription and payment event receiver.
+        auth_required: false
+        response_schema:
+          "200": Webhook accepted
+          "400": Signature or payload error
+      - method: POST
+        path: /functions/v1/resend-webhook
+        description: Resend delivery status webhook receiver.
+        auth_required: false
+        response_schema:
+          "200": Webhook accepted
+      - method: GET
+        path: /functions/v1/whatsapp-webhook
+        description: Meta webhook verification challenge endpoint.
+        auth_required: false
+        response_schema:
+          "200": Verification challenge response
+      - method: POST
+        path: /functions/v1/whatsapp-webhook
+        description: WhatsApp inbound messages and status events.
+        auth_required: false
+        response_schema:
+          "200": Webhook accepted
+      - method: POST
+        path: /functions/v1/tiktok-webhook
+        description: TikTok event webhook receiver.
+        auth_required: false
+        response_schema:
+          "200": Webhook accepted
+    depends_on:
+      - Webhook signing secrets
+      - Supabase service role key
+
+  - name: Billing And Subscription APIs
+    description: Stripe checkout, portal, webhook, payment verification, and subscription repair endpoints.
+    files:
+      - supabase/functions/stripe-checkout/index.ts
+      - supabase/functions/stripe-manage-subscription/index.ts
+      - supabase/functions/stripe-webhook/index.ts
+      - supabase/functions/create-payment/index.ts
+      - supabase/functions/verify-payment/index.ts
+      - supabase/functions/backfill-subscription/index.ts
+      - supabase/functions/check-subscription/index.ts
+    endpoints:
+      - method: POST
+        path: /functions/v1/stripe-checkout
+        description: Create a Stripe checkout session.
+        auth_required: true
+        response_schema:
+          "200": Checkout session URL
+      - method: POST
+        path: /functions/v1/stripe-manage-subscription
+        description: Manage active Stripe subscription or billing portal.
+        auth_required: true
+        response_schema:
+          "200": Subscription management result
+      - method: POST
+        path: /functions/v1/create-payment
+        description: Create one-off payment intent.
+        auth_required: true
+        response_schema:
+          "200": Payment intent result
+      - method: POST
+        path: /functions/v1/verify-payment
+        description: Verify payment session after checkout.
+        auth_required: true
+        response_schema:
+          "200": Verification result
+      - method: POST
+        path: /functions/v1/check-subscription
+        description: Sync user subscription state with Stripe.
+        auth_required: true
+        response_schema:
+          "200": Subscription status
+    depends_on:
+      - Stripe API keys
+      - Stripe webhook secret
+      - Supabase Auth JWT
+
+  - name: Admin Operations And Observability
+    description: Admin-gated operations for secrets, cron, logs, alerts, quotas, and health collection.
+    files:
+      - supabase/functions/manage-app-secrets/index.ts
+      - supabase/functions/manage-cron-jobs/index.ts
+      - supabase/functions/observability-alerts/index.ts
+      - supabase/functions/observability-collector/index.ts
+      - supabase/functions/sync-user-quotas/index.ts
+      - supabase/functions/notify-admin-new-user/index.ts
+      - supabase/functions/notify-expiring-ai-overrides/index.ts
+      - supabase/functions/analyze-log/index.ts
+    endpoints:
+      - method: POST
+        path: /functions/v1/manage-app-secrets
+        description: Admin read/write app credentials and vault-backed secrets.
+        auth_required: true
+        response_schema:
+          "200": Secret management result
+          "403": Admin only
+      - method: POST
+        path: /functions/v1/manage-cron-jobs
+        description: Admin manage pg_cron jobs.
+        auth_required: true
+        response_schema:
+          "200": Cron management result
+          "403": Admin only
+      - method: POST
+        path: /functions/v1/observability-alerts
+        description: Evaluate observability alert configurations.
+        auth_required: true
+        response_schema:
+          "200": Alert evaluation result
+      - method: POST
+        path: /functions/v1/observability-collector
+        description: Collect edge function health snapshots.
+        auth_required: true
+        response_schema:
+          "200": Health collection result
+      - method: POST
+        path: /functions/v1/sync-user-quotas
+        description: Reapply quotas from active plans.
+        auth_required: true
+        response_schema:
+          "200": Quota sync result
+    depends_on:
+      - Admin role checks
+      - Supabase service role key
+      - Cron secret
+
+  - name: Account Security APIs
+    description: Password reset, MFA reset, MFA status, backup-code management, and password change endpoints.
+    files:
+      - supabase/functions/check-user-mfa/index.ts
+      - supabase/functions/verify-mfa-reset/index.ts
+      - supabase/functions/verify-reset-otp/index.ts
+      - supabase/functions/send-reset-otp/index.ts
+      - supabase/functions/send-change-password-otp/index.ts
+      - supabase/functions/change-password/index.ts
+      - supabase/functions/manage-backup-codes/index.ts
+    endpoints:
+      - method: POST
+        path: /functions/v1/check-user-mfa
+        description: Return MFA factors for the authenticated user.
+        auth_required: true
+        response_schema:
+          "200": MFA factor status
+      - method: POST
+        path: /functions/v1/send-reset-otp
+        description: Send password reset OTP.
+        auth_required: false
+        response_schema:
+          "200": OTP send result
+      - method: POST
+        path: /functions/v1/verify-reset-otp
+        description: Verify password reset OTP.
+        auth_required: false
+        response_schema:
+          "200": OTP verification result
+      - method: POST
+        path: /functions/v1/verify-mfa-reset
+        description: Verify OTP to reset MFA.
+        auth_required: false
+        response_schema:
+          "200": MFA reset verification result
+      - method: POST
+        path: /functions/v1/change-password
+        description: Change an authenticated user's password.
+        auth_required: true
+        response_schema:
+          "200": Password change result
+      - method: POST
+        path: /functions/v1/manage-backup-codes
+        description: Generate, list, or consume MFA backup codes.
+        auth_required: true
+        response_schema:
+          "200": Backup code action result
+    depends_on:
+      - Supabase Auth
+      - Resend email delivery
+      - Backup code pepper
+known_limitations:
+  - issue: Most endpoints require real Supabase JWTs, admin roles, API keys, cron secrets, webhook signatures, or third-party provider credentials, so unauthenticated black-box tests can only assert security boundaries and public endpoints.
+    location: API_REFERENCE.md:86
+    impact: Full happy-path backend testing needs seeded local auth users, API keys, database rows, and external API test credentials.
+  - issue: The repository does not include a committed TestSprite configuration yet.
+    location: .testsprite/config.json
+    impact: First TestSprite run must bootstrap configuration before execution.
+  - issue: Local Supabase ports are not declared in supabase/config.toml.
+    location: supabase/config.toml
+    impact: Local tests assume the Supabase CLI default API port 54321 unless a running service reports otherwise.

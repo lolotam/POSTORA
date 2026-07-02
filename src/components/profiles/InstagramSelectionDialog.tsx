@@ -79,7 +79,7 @@ export function InstagramSelectionDialog({
             No Instagram accounts match your search.
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 max-h-[60vh] overflow-y-auto">
+          <div className="grid max-h-[60vh] grid-cols-2 gap-2.5 overflow-y-auto sm:grid-cols-3">
             {filtered.map((acc) => {
               const isSelecting = selectingId === acc.ig_user_id;
               const isConnected = connectedIds.includes(acc.ig_user_id);
@@ -91,19 +91,19 @@ export function InstagramSelectionDialog({
                   disabled={disabled}
                   onClick={() => onSelect(acc.ig_user_id)}
                   className={cn(
-                    "group relative aspect-square rounded-xl border p-3 text-left transition-all",
-                    "flex flex-col items-center justify-center gap-2",
+                    "group relative rounded-lg border border-input p-2.5 text-center transition-all",
+                    "flex w-full flex-col items-center gap-2.5",
                     "hover:border-primary hover:bg-accent/50",
                     "disabled:cursor-not-allowed",
                     isConnected && "border-green-500/50 bg-green-500/5",
                   )}
                 >
                   {isSelecting && (
-                    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/70 backdrop-blur-sm">
+                    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/70 backdrop-blur-sm">
                       <Loader2 className="h-6 w-6 animate-spin text-primary" />
                     </div>
                   )}
-                  <div className="relative h-16 w-16 overflow-hidden rounded-full bg-gradient-to-br from-pink-500 to-purple-600">
+                  <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-gradient-to-br from-pink-500 to-purple-600">
                     {acc.ig_profile_picture_url ? (
                       <img
                         src={acc.ig_profile_picture_url}
@@ -112,7 +112,7 @@ export function InstagramSelectionDialog({
                         loading="lazy"
                       />
                     ) : (
-                      <Instagram className="absolute inset-0 m-auto h-8 w-8 text-white" />
+                      <Instagram className="absolute inset-0 m-auto h-10 w-10 text-white" />
                     )}
                   </div>
                   <div className="w-full truncate text-center text-sm font-medium">

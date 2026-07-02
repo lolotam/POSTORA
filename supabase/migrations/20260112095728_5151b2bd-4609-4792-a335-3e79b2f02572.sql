@@ -1,8 +1,11 @@
 -- Update the cron job to run hourly instead of daily
 -- This is needed for platforms with short-lived tokens (Twitter 2h, YouTube 1h, Reddit 1h)
 
--- First, delete the existing daily cron job
-SELECT cron.unschedule('refresh-social-tokens-daily');
+-- First, delete the existing daily cron job when present. Fresh local databases
+-- may not have this legacy job, and cron.unschedule errors for missing names.
+SELECT cron.unschedule(jobid)
+FROM cron.job
+WHERE jobname = 'refresh-social-tokens-daily';
 
 -- Create a new hourly cron job
 SELECT cron.schedule(

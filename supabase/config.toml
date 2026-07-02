@@ -1,6 +1,25 @@
 # Local CLI namespace only — does not affect runtime. Runtime host is set via VITE_SUPABASE_URL / SUPABASE_URL.
 project_id = "postora-self-hosted"
 
+[api]
+port = 54321
+
+[db]
+port = 55432
+shadow_port = 55430
+
+[db.pooler]
+port = 55439
+
+[studio]
+port = 55433
+
+[inbucket]
+port = 55434
+
+[analytics]
+port = 55437
+
 [functions.threads-webhook]
 verify_jwt = false
 

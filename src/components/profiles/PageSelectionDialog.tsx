@@ -39,10 +39,10 @@ interface PageSelectionDialogProps {
 
 function PageLogo({ page }: { page: FacebookPage }) {
   const src =
-    page.picture_url || `https://graph.facebook.com/${page.id}/picture?type=square`;
+    page.picture_url || `https://graph.facebook.com/${page.id}/picture?type=large`;
   const [errored, setErrored] = useState(false);
   return (
-    <div className="relative h-24 w-24 overflow-hidden rounded-2xl bg-gradient-to-br from-blue-500 to-blue-700">
+    <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-gradient-to-br from-blue-500 to-blue-700">
       {!errored ? (
         <img
           src={src}
@@ -123,7 +123,7 @@ export function PageSelectionDialog({
         ) : (
           <div className="max-h-[60vh] space-y-6 overflow-y-auto pr-1">
             {filteredPages.length > 0 && (
-              <div className="grid grid-cols-3 gap-6">
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                 {filteredPages.map((page) => {
                   const isSelecting = selectingPage === page.id;
                   const disabled = !!selectingPage;
@@ -134,15 +134,15 @@ export function PageSelectionDialog({
                       disabled={disabled}
                       onClick={() => onSelectPage(page.id)}
                       className={cn(
-                        "group flex flex-col items-center gap-2 rounded-lg p-1 text-center transition-all",
-                        "hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                        "group flex w-full flex-col items-center gap-2.5 rounded-lg border border-input p-2.5 text-center transition-all",
+                        "hover:bg-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                         "disabled:cursor-not-allowed",
                       )}
                     >
-                      <div className="relative">
+                      <div className="relative w-full">
                         <PageLogo page={page} />
                         {isSelecting && (
-                          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-background/70 backdrop-blur-sm">
+                          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/70 backdrop-blur-sm">
                             <Loader2 className="h-6 w-6 animate-spin text-primary" />
                           </div>
                         )}
@@ -169,7 +169,7 @@ export function PageSelectionDialog({
                     Standalone Instagram Accounts
                   </span>
                 </div>
-                <div className="grid grid-cols-3 gap-6">
+                <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                   {filteredIg.map((ig) => {
                     const isSelecting = selectingPage === ig.id;
                     const disabled = !!selectingPage;
@@ -180,13 +180,13 @@ export function PageSelectionDialog({
                         disabled={disabled}
                         onClick={() => onSelectStandaloneInstagram?.(ig)}
                         className={cn(
-                          "group flex flex-col items-center gap-2 rounded-lg p-1 text-center transition-all",
-                          "hover:opacity-90 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
+                          "group flex w-full flex-col items-center gap-2.5 rounded-lg border border-input p-2.5 text-center transition-all",
+                          "hover:bg-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
                           "disabled:cursor-not-allowed",
                         )}
                       >
-                        <div className="relative">
-                          <div className="relative h-24 w-24 overflow-hidden rounded-2xl bg-gradient-to-br from-pink-500 to-purple-600">
+                        <div className="relative w-full">
+                          <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-gradient-to-br from-pink-500 to-purple-600">
                             {ig.profile_picture_url ? (
                               <img
                                 src={ig.profile_picture_url}
@@ -199,7 +199,7 @@ export function PageSelectionDialog({
                             )}
                           </div>
                           {isSelecting && (
-                            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-background/70 backdrop-blur-sm">
+                            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/70 backdrop-blur-sm">
                               <Loader2 className="h-6 w-6 animate-spin text-primary" />
                             </div>
                           )}

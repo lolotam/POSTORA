@@ -106,7 +106,7 @@ export async function cacheAvatarToCloudinary(
 export async function fetchFacebookAvatarUrl(accessToken: string, pageId: string): Promise<string | null> {
   try {
     const response = await fetch(
-      `https://graph.facebook.com/v18.0/${pageId}/picture?redirect=false&access_token=${accessToken}`
+      `https://graph.facebook.com/v18.0/${pageId}/picture?redirect=false&type=large&access_token=${accessToken}`
     );
     const data = await response.json();
     return data.data?.url || null;

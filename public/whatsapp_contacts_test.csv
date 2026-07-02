@@ -1,0 +1,4 @@
+phone_number,display_name,email,company,tags
++15550199281,Alice Johnson,alice@example.com,Acme Corp,"vip,leads"
++15550199282,Bob Smith,bob@example.com,Beta Industries,"client,newsletter"
++15550199283,Charlie Brown,charlie@example.com,Delta LLC,"follow-up"
