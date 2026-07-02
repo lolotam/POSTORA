@@ -86,9 +86,9 @@ export default function Auth() {
     }
   }, [searchParams, toast]);
 
-  // Redirect if already logged in (except for reset-password)
+  // Redirect if already logged in (except for reset-password / MFA / active form submit)
   useEffect(() => {
-    if (user && view !== "reset-password") {
+    if (user && view !== "reset-password" && view !== "mfa-verify" && !isLoading) {
       // Check for pending OAuth consent redirect
       const oauthRedirect = sessionStorage.getItem("oauth_redirect_after_login");
       if (oauthRedirect) {
@@ -128,7 +128,7 @@ export default function Auth() {
         checkSubscription();
       }
     }
-  }, [user, navigate, view, searchParams]);
+  }, [user, navigate, view, searchParams, isLoading]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
