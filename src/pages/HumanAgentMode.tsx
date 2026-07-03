@@ -1,50 +1,106 @@
-import { useState } from "react";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { useAuth } from "@/hooks/useAuth";
 import { Navigate } from "react-router-dom";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Headphones, Bot, UserRound, MessageSquare, Clock, Settings } from "lucide-react";
+import { Headphones, Bot, UserRound, MessageSquare, Clock, Settings, Inbox } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
 import type { GradientKey } from "@/components/fx";
+import { useWhatsAppAgents, useConversationAssignments, useAssignmentHistory } from "@/hooks/useWhatsAppAgents";
+import { useMessagingAccounts, useConversations, type Conversation } from "@/hooks/useMessaging";
+import { formatDistanceToNow, isToday } from "date-fns";
 
-interface AgentSession {
-  id: string;
-  customerName: string;
-  startedAt: Date;
-  status: "active" | "waiting" | "resolved";
-  platform: string;
-  lastMessage: string;
+type Platform = "whatsapp" | "facebook" | "instagram";
+
+// Conversations expose a different join key per platform: WhatsApp's own id is already stable,
+// while Facebook/Instagram use assignment_key (see useMessaging.ts) since Meta's conversation id
+// never appears in inbound webhook payloads.
+function keyFor(conv: Conversation): string {
+  return conv.assignment_key || conv.id;
 }
 
-// This is a UI-only feature for now — will connect to WhatsApp API in production
 export default function HumanAgentMode() {
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
-  const [autoAssign, setAutoAssign] = useState(true);
-  const [awayMessage, setAwayMessage] = useState("Thanks for reaching out! A human agent will be with you shortly.");
-  const [maxConcurrent, setMaxConcurrent] = useState("5");
-  const [isOnline, setIsOnline] = useState(false);
+  const { session } = useAuth();
+  const { myAgent, registerAgent, updateStatus, updateMaxConversations } = useWhatsAppAgents();
+  const { assignments, assignConversation, unassignConversation } = useConversationAssignments();
+  const { data: history = [] } = useAssignmentHistory();
+  const { accounts } = useMessagingAccounts();
+
+  const platformAccounts: Record<Platform, { id: string } | undefined> = {
+    whatsapp: accounts.find((a) => a.platform === "whatsapp"),
+    facebook: accounts.find((a) => a.platform === "facebook"),
+    instagram: accounts.find((a) => a.platform === "instagram"),
+  };
+  const { data: waConversations = [] } = useConversations(platformAccounts.whatsapp?.id || null, "WHATSAPP", { silent: true });
+  const { data: fbConversations = [] } = useConversations(platformAccounts.facebook?.id || null, "MESSENGER", { silent: true });
+  const { data: igConversations = [] } = useConversations(platformAccounts.instagram?.id || null, "INSTAGRAM", { silent: true });
+
+  const conversationsByPlatform: Record<Platform, Conversation[]> = {
+    whatsapp: waConversations,
+    facebook: fbConversations,
+    instagram: igConversations,
+  };
+  const allConversations = (Object.keys(conversationsByPlatform) as Platform[]).flatMap((platform) =>
+    conversationsByPlatform[platform].map((conv) => ({ platform, conv, key: keyFor(conv) }))
+  );
 
   if (!flagsLoading && !flags.humanAgent) {
     return <Navigate to="/dashboard" replace />;
   }
 
-  // Demo sessions
-  const sessions: AgentSession[] = [];
+  const isOnline = myAgent?.status === "online";
+  const assignedKeys = new Set(assignments.map((a) => a.conversation_id));
 
-  const handleToggleOnline = (checked: boolean) => {
-    setIsOnline(checked);
+  const myQueue = assignments
+    .filter((a) => a.agent_id === myAgent?.id)
+    .map((a) => ({ assignment: a, match: allConversations.find((c) => c.key === a.conversation_id) }));
+
+  const waitingQueue = allConversations.filter((c) => !assignedKeys.has(c.key));
+
+  const resolvedToday = history.filter(
+    (h) => h.action === "unassigned" && h.from_agent_id === myAgent?.id && isToday(new Date(h.created_at))
+  ).length;
+
+  const handleToggleOnline = async (checked: boolean) => {
+    if (!myAgent) {
+      if (!checked) return;
+      const displayName = session?.user?.user_metadata?.full_name || session?.user?.email || "Agent";
+      await registerAgent.mutateAsync({ display_name: displayName });
+    } else {
+      await updateStatus.mutateAsync(checked ? "online" : "offline");
+    }
     toast({
       title: checked ? "You're now online" : "You're now offline",
       description: checked
-        ? "New conversations will be routed to you."
+        ? "You can now claim conversations from the queue."
         : "Auto-replies will handle incoming messages.",
     });
+  };
+
+  const handleClaim = (conversationKey: string) => {
+    if (!myAgent) return;
+    assignConversation.mutate(
+      { conversationId: conversationKey, agentId: myAgent.id },
+      {
+        onSuccess: () => toast({ title: "Conversation claimed" }),
+        onError: (e) => toast({ title: "Failed to claim conversation", description: e.message, variant: "destructive" }),
+      }
+    );
+  };
+
+  const handleResolve = (conversationKey: string) => {
+    unassignConversation.mutate(
+      { conversationId: conversationKey },
+      {
+        onSuccess: () => toast({ title: "Marked as resolved" }),
+        onError: (e) => toast({ title: "Failed to resolve", description: e.message, variant: "destructive" }),
+      }
+    );
   };
 
   return (
@@ -76,9 +132,9 @@ export default function HumanAgentMode() {
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {([
-            { label: "Active Chats", value: sessions.filter(s => s.status === "active").length, icon: MessageSquare, variant: "amber" as GradientKey },
-            { label: "Waiting", value: sessions.filter(s => s.status === "waiting").length, icon: Clock, variant: "rose" as GradientKey },
-            { label: "Resolved Today", value: 0, icon: UserRound, variant: "violet" as GradientKey },
+            { label: "My Active Chats", value: myQueue.length, icon: MessageSquare, variant: "amber" as GradientKey },
+            { label: "Waiting", value: waitingQueue.length, icon: Clock, variant: "rose" as GradientKey },
+            { label: "Resolved Today", value: resolvedToday, icon: UserRound, variant: "violet" as GradientKey },
             { label: "Avg Response", value: "—", icon: Clock, variant: "sky" as GradientKey },
           ]).map((stat, i) => (
             <Reveal key={stat.label} delay={i * 60}>
@@ -93,53 +149,102 @@ export default function HumanAgentMode() {
           ))}
         </div>
 
-        {/* Queue */}
+        {/* My active chats */}
         <Reveal delay={120}>
           <GradientRingCard variant="amber" hoverLift={false} ringIntensity="subtle">
             <div className="space-y-1 mb-4">
               <div className="flex items-center gap-2 text-base font-semibold">
                 <MessageSquare className="h-5 w-5 text-amber-500" />
-                Conversation Queue
+                My Active Conversations
               </div>
               <p className="text-sm text-muted-foreground">
-                {isOnline
-                  ? "Waiting for incoming conversations..."
-                  : "Go online to start receiving conversations."}
+                {isOnline ? "Conversations you're currently handling." : "Go online to claim conversations from the queue."}
               </p>
             </div>
-            {sessions.length === 0 ? (
+            {myQueue.length === 0 ? (
               <div className="text-center py-6 text-muted-foreground">
                 <div className="group inline-flex mb-3"><Icon3D icon={Bot} variant="amber" size="lg" /></div>
                 <p className="font-medium mt-2">No active conversations</p>
-                <p className="text-sm mt-1">
-                  {isOnline
-                    ? "Conversations will appear here when customers need human assistance."
-                    : "Toggle your status to Online to start receiving conversations."}
-                </p>
+                <p className="text-sm mt-1">Claim a conversation from the waiting queue below to get started.</p>
               </div>
-            ) : null}
+            ) : (
+              <div className="space-y-2">
+                {myQueue.map(({ assignment, match }) => (
+                  <div key={assignment.id} className="flex items-center justify-between gap-3 rounded-xl border border-border/40 bg-card/40 p-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium truncate">{match?.conv.participant_name || "Unknown"}</p>
+                        {match && <Badge variant="outline" className="text-xs shrink-0">{match.platform}</Badge>}
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate">{match?.conv.last_message || ""}</p>
+                      <p className="text-xs text-muted-foreground">
+                        Claimed {formatDistanceToNow(new Date(assignment.assigned_at), { addSuffix: true })}
+                      </p>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => handleResolve(assignment.conversation_id)}>
+                      Resolve
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </GradientRingCard>
+        </Reveal>
+
+        {/* Waiting queue */}
+        <Reveal delay={160}>
+          <GradientRingCard variant="rose" hoverLift={false} ringIntensity="subtle">
+            <div className="space-y-1 mb-4">
+              <div className="flex items-center gap-2 text-base font-semibold">
+                <Inbox className="h-5 w-5 text-rose-500" />
+                Waiting Queue
+              </div>
+              <p className="text-sm text-muted-foreground">Unclaimed conversations across WhatsApp, Facebook, and Instagram.</p>
+            </div>
+            {waitingQueue.length === 0 ? (
+              <div className="text-center py-6 text-muted-foreground">
+                <p className="font-medium">Nothing waiting</p>
+                <p className="text-sm mt-1">All conversations are either claimed or handled by auto-reply.</p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {waitingQueue.map(({ platform, conv, key }) => (
+                  <div key={key} className="flex items-center justify-between gap-3 rounded-xl border border-border/40 bg-card/40 p-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-medium truncate">{conv.participant_name}</p>
+                        <Badge variant="outline" className="text-xs shrink-0">{platform}</Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground truncate">{conv.last_message}</p>
+                    </div>
+                    <Button size="sm" disabled={!isOnline || !myAgent} onClick={() => handleClaim(key)}>
+                      Claim
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
           </GradientRingCard>
         </Reveal>
 
         {/* Settings */}
-        <Reveal delay={180}>
+        <Reveal delay={200}>
           <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-6">
             <div className="flex items-center gap-2 text-base font-semibold mb-4">
               <Settings className="h-5 w-5 text-amber-500" />
               Agent Settings
             </div>
             <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">Auto-assign conversations</p>
-                <p className="text-xs text-muted-foreground">Automatically assign new conversations to available agents</p>
-              </div>
-              <Switch checked={autoAssign} onCheckedChange={setAutoAssign} />
-            </div>
-
             <div className="space-y-1.5">
               <label className="text-sm font-medium">Max concurrent chats</label>
-              <Select value={maxConcurrent} onValueChange={setMaxConcurrent}>
+              <Select
+                value={String(myAgent?.max_conversations ?? 10)}
+                onValueChange={(v) => updateMaxConversations.mutate(Number(v), {
+                  onSuccess: () => toast({ title: "Settings saved" }),
+                  onError: (e) => toast({ title: "Failed to save", description: e.message, variant: "destructive" }),
+                })}
+                disabled={!myAgent}
+              >
                 <SelectTrigger className="w-[120px]">
                   <SelectValue />
                 </SelectTrigger>
@@ -149,25 +254,10 @@ export default function HumanAgentMode() {
                   ))}
                 </SelectContent>
               </Select>
+              {!myAgent && (
+                <p className="text-xs text-muted-foreground">Go online to register as an agent before adjusting this.</p>
+              )}
             </div>
-
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Away message</label>
-              <Textarea
-                value={awayMessage}
-                onChange={(e) => setAwayMessage(e.target.value)}
-                placeholder="Message shown when no agents are available..."
-                className="min-h-[80px]"
-              />
-            </div>
-
-            <Button
-              onClick={() => toast({ title: "Settings saved" })}
-              size="sm"
-              className="bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-white hover:opacity-90"
-            >
-              Save Settings
-            </Button>
             </div>
           </div>
         </Reveal>

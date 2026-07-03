@@ -1,0 +1,294 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+// Anti-loop: track last auto-reply time per conversation
+const lastAutoReplyMap = new Map<string, number>();
+const AUTO_REPLY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+
+const ACCOUNT_SELECT = "id, user_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token";
+
+// Finds the social_accounts row for a webhook entry.id. Tries the stored platform_user_id
+// first; Instagram accounts connected via direct login have been observed to expose a
+// different id inside webhook/conversation payloads than the one stored at connect time, so
+// this also checks account_metadata.ig_user_id as a fallback before giving up.
+async function findAccountForRecipient(
+  adminClient: any,
+  platform: "facebook" | "instagram",
+  recipientId: string,
+): Promise<SocialAccountForMessaging | null> {
+  const { data: byPlatformUserId } = await adminClient
+    .from("social_accounts")
+    .select(ACCOUNT_SELECT)
+    .eq("platform", platform)
+    .eq("platform_user_id", recipientId)
+    .eq("is_active", true)
+    .limit(1);
+  if (byPlatformUserId && byPlatformUserId.length > 0) return byPlatformUserId[0];
+
+  if (platform !== "instagram") return null;
+
+  const { data: byMetadataId } = await adminClient
+    .from("social_accounts")
+    .select(ACCOUNT_SELECT)
+    .eq("platform", "instagram")
+    .eq("is_active", true)
+    .eq("account_metadata->>ig_user_id", recipientId)
+    .limit(1);
+  return byMetadataId && byMetadataId.length > 0 ? byMetadataId[0] : null;
+}
+
+function constantTimeEqual(left: string, right: string): boolean {
+  const leftBytes = new TextEncoder().encode(left);
+  const rightBytes = new TextEncoder().encode(right);
+  const length = Math.max(leftBytes.length, rightBytes.length);
+  let difference = leftBytes.length ^ rightBytes.length;
+
+  for (let index = 0; index < length; index += 1) {
+    difference |= (leftBytes[index] ?? 0) ^ (rightBytes[index] ?? 0);
+  }
+
+  return difference === 0;
+}
+
+async function hasValidMetaSignature(rawBody: string, signature: string, secret: string): Promise<boolean> {
+  try {
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const digest = await crypto.subtle.sign("HMAC", key, encoder.encode(rawBody));
+    const hexDigest = Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+
+    return constantTimeEqual(signature, `sha256=${hexDigest}`);
+  } catch {
+    return false;
+  }
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  const url = new URL(req.url);
+
+  // GET: Meta webhook verification challenge
+  if (req.method === "GET") {
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
+    const verifyToken = Deno.env.get("META_MESSAGING_WEBHOOK_VERIFY_TOKEN");
+
+    if (mode === "subscribe" && token === verifyToken) {
+      console.log("[fb-ig-webhook] Verification successful");
+      return new Response(challenge, { status: 200 });
+    }
+    console.warn("[fb-ig-webhook] Verification failed - token mismatch");
+    return new Response("Forbidden", { status: 403 });
+  }
+
+  // POST: Incoming webhook events from Meta
+  if (req.method === "POST") {
+    const appSecret = Deno.env.get("FACEBOOK_APP_SECRET");
+    const signature = req.headers.get("x-hub-signature-256");
+
+    if (!appSecret || !signature) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const rawBody = await req.text();
+    if (!(await hasValidMetaSignature(rawBody, signature, appSecret))) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    try {
+      const body = JSON.parse(rawBody);
+      const platform = body.object === "instagram" ? "instagram" : "facebook";
+      console.log(`[fb-ig-webhook] Received verified ${platform} event`);
+
+      const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+      const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+      const adminClient = createClient(supabaseUrl, supabaseKey);
+
+      const entries = body?.entry || [];
+      for (const entry of entries) {
+        const recipientId = entry.id;
+        const events = entry?.messaging || [];
+
+        for (const event of events) {
+          // Only handle actual inbound messages, not delivery/read receipts or echoes of our own sends.
+          if (!event.message || event.message.is_echo) continue;
+
+          const account = await findAccountForRecipient(adminClient, platform, recipientId);
+          if (!account) {
+            console.warn(`[fb-ig-webhook] No matching ${platform} account found for recipient ${recipientId}`);
+            continue;
+          }
+
+          const senderId: string = event.sender?.id;
+          const messageText: string = event.message.text || (event.message.attachments ? "[Attachment]" : "");
+
+          // Keyed by this account's stable internal id rather than any Meta-supplied id: Meta
+          // represents the same account/conversation with different external ids depending on
+          // which API surface produced them (confirmed for direct-login Instagram accounts,
+          // where the id inside conversation payloads differs from platform_user_id). The
+          // internal id is the one thing both this webhook and list_conversations agree on.
+          const conversationId = `${account.id}_${senderId}`;
+
+          console.log(`[fb-ig-webhook] Received inbound ${platform} message`);
+
+          await processAutoReplies(adminClient, account, platform, conversationId, senderId, messageText);
+        }
+      }
+
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    } catch (err) {
+      console.error("[fb-ig-webhook] Webhook processing failed:", err);
+      return new Response(JSON.stringify({ error: "Webhook processing failed" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+  }
+
+  return new Response("Method not allowed", { status: 405 });
+});
+
+async function processAutoReplies(
+  adminClient: any,
+  account: SocialAccountForMessaging,
+  platform: "facebook" | "instagram",
+  conversationId: string,
+  recipientId: string,
+  inboundText: string,
+) {
+  try {
+    const lastReply = lastAutoReplyMap.get(conversationId);
+    if (lastReply && Date.now() - lastReply < AUTO_REPLY_COOLDOWN_MS) {
+      console.log("[fb-ig-webhook] Auto-reply cooldown active");
+      return;
+    }
+
+    const { data: rules, error } = await adminClient
+      .from("messenger_auto_replies")
+      .select("*")
+      .eq("user_id", account.user_id)
+      .eq("platform", platform)
+      .eq("is_active", true);
+
+    if (error || !rules || rules.length === 0) return;
+
+    const now = new Date();
+    const currentDay = now.getDay(); // 0=Sun
+    const currentTime = now.toTimeString().slice(0, 5); // HH:MM
+
+    let matchedReply: string | null = null;
+    let matchedRuleId: string | null = null;
+
+    // Check away rules first
+    for (const rule of rules) {
+      if (rule.rule_type !== "away") continue;
+      if (rule.schedule_days && !rule.schedule_days.includes(currentDay)) continue;
+
+      if (rule.schedule_start && rule.schedule_end) {
+        const start = rule.schedule_start.slice(0, 5);
+        const end = rule.schedule_end.slice(0, 5);
+
+        if (start <= end) {
+          if (currentTime < start || currentTime > end) continue;
+        } else {
+          if (currentTime < start && currentTime > end) continue;
+        }
+      }
+
+      matchedReply = rule.reply_message;
+      matchedRuleId = rule.id;
+      console.log("[fb-ig-webhook] Away rule matched");
+      break;
+    }
+
+    // If no away rule matched, check keyword rules
+    if (!matchedReply) {
+      const lowerText = inboundText.toLowerCase();
+      for (const rule of rules) {
+        if (rule.rule_type !== "keyword" || !rule.keywords) continue;
+        const matched = rule.keywords.some((kw: string) => lowerText.includes(kw.toLowerCase()));
+        if (matched) {
+          matchedReply = rule.reply_message;
+          matchedRuleId = rule.id;
+          console.log("[fb-ig-webhook] Keyword rule matched");
+          break;
+        }
+      }
+    }
+
+    if (!matchedReply) return;
+
+    // Skip auto-reply while a human agent is actively assigned to this conversation.
+    const { data: assignment } = await adminClient
+      .from("whatsapp_conversation_assignments")
+      .select("id")
+      .eq("conversation_id", conversationId)
+      .is("unassigned_at", null)
+      .maybeSingle();
+    if (assignment) {
+      console.log("[fb-ig-webhook] Conversation has an active human agent, skipping auto-reply");
+      return;
+    }
+
+    const { graphBase, pageId, pageToken } = await getSendCredentials(adminClient, account);
+    const sendUrl = `${graphBase}/${pageId}/messages?access_token=${encodeURIComponent(pageToken)}`;
+
+    const sendRes = await fetch(sendUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        recipient: { id: recipientId },
+        message: { text: matchedReply },
+      }),
+    });
+
+    const sendData = await sendRes.json();
+    console.log("[fb-ig-webhook] Auto-reply request completed");
+
+    if (sendRes.ok) {
+      lastAutoReplyMap.set(conversationId, Date.now());
+
+      if (matchedRuleId) {
+        await adminClient.from("messenger_auto_reply_usage").insert({
+          user_id: account.user_id,
+          auto_reply_rule_id: matchedRuleId,
+          conversation_id: conversationId,
+        }).then(() => {
+          console.log(`[fb-ig-webhook] Auto-reply usage logged for rule ${matchedRuleId}`);
+        }).catch((e: unknown) => {
+          console.warn("[fb-ig-webhook] Failed to log auto-reply usage:", e);
+        });
+      }
+    } else {
+      console.error("[fb-ig-webhook] Auto-reply send failed:", sendData);
+    }
+  } catch (err) {
+    console.error("[fb-ig-webhook] Auto-reply failed:", err);
+  }
+}

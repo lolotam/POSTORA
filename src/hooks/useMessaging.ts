@@ -16,6 +16,10 @@ export interface Conversation {
   id: string;
   participant_name: string;
   participant_id: string;
+  // Present for Facebook/Instagram conversations only: a stable key for agent-assignment and
+  // auto-reply lookups, since Meta's own conversation id (`id` above) never appears in webhook
+  // payloads and can't be matched against there.
+  assignment_key?: string;
   last_message: string;
   last_message_time: string;
   last_message_from: string;

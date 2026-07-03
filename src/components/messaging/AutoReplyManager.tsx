@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Plus, Pencil, Trash2, Clock, MessageSquare, Loader2 } from "lucide-react";
 import { useWhatsAppAutoReplies, type AutoReplyInput } from "@/hooks/useWhatsAppAutoReplies";
+import { useMessengerAutoReplies, type MessengerPlatform } from "@/hooks/useMessengerAutoReplies";
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -114,8 +115,10 @@ function RuleForm({
   );
 }
 
-export function AutoReplyManager() {
-  const { rules, isLoading, createRule, updateRule, deleteRule, toggleRule } = useWhatsAppAutoReplies();
+export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } = {}) {
+  const whatsapp = useWhatsAppAutoReplies(!platform);
+  const messenger = useMessengerAutoReplies(platform ?? "facebook", !!platform);
+  const { rules, isLoading, createRule, updateRule, deleteRule, toggleRule } = platform ? messenger : whatsapp;
   const [showAdd, setShowAdd] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 

@@ -26,13 +26,17 @@ const statusLabels: Record<string, string> = {
   offline: "Offline",
 };
 
-export function AgentManager() {
+export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" | "facebook" | "instagram" } = {}) {
   const { agents, agentsLoading, myAgent, registerAgent, updateStatus } = useWhatsAppAgents();
   const { assignments, assignConversation, unassignConversation } = useConversationAssignments();
   const { data: history = [] } = useAssignmentHistory();
   const { accounts } = useMessagingAccounts();
-  const waAccount = accounts.find((a) => a.platform === "whatsapp");
-  const { data: conversations = [] } = useConversations(waAccount?.id || null, "WHATSAPP", { silent: true });
+  const account = accounts.find((a) => a.platform === platform);
+  const messagingPlatform = platform === "whatsapp" ? "WHATSAPP" : platform === "instagram" ? "INSTAGRAM" : "MESSENGER";
+  const { data: conversations = [] } = useConversations(account?.id || null, messagingPlatform, { silent: true });
+  // Facebook/Instagram conversations use assignment_key (stable across the inbound webhook and
+  // this list) instead of Meta's own conversation id, which isn't present in webhook payloads.
+  const conversationKey = (c: { id: string; assignment_key?: string }) => c.assignment_key || c.id;
 
   const [registerOpen, setRegisterOpen] = useState(false);
   const [displayName, setDisplayName] = useState("");
@@ -81,7 +85,7 @@ export function AgentManager() {
   };
 
   const getConversationName = (convId: string) => {
-    const conv = conversations.find((c) => c.id === convId);
+    const conv = conversations.find((c) => conversationKey(c) === convId);
     return conv?.participant_name || convId.slice(0, 20);
   };
 
@@ -181,7 +185,7 @@ export function AgentManager() {
                       </SelectTrigger>
                       <SelectContent>
                         {conversations.map((c) => (
-                          <SelectItem key={c.id} value={c.id}>
+                          <SelectItem key={c.id} value={conversationKey(c)}>
                             {c.participant_name}
                           </SelectItem>
                         ))}

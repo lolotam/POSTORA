@@ -1,10 +1,12 @@
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MessagingInbox } from "@/components/messaging/MessagingInbox";
-import { Camera, Inbox, MessageCircle } from "lucide-react";
+import { Camera, Inbox, MessageCircle, Bot, UserCog } from "lucide-react";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Navigate } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
+import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
+import { AgentManager } from "@/components/messaging/AgentManager";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
 
 export default function InstagramMessaging() {
@@ -40,6 +42,16 @@ export default function InstagramMessaging() {
                   Comment Manager
                 </TabsTrigger>
               )}
+              <TabsTrigger value="auto-replies" className="gap-1.5 rounded-lg">
+                <Bot className="w-4 h-4" />
+                Auto Replies
+              </TabsTrigger>
+              {flags.humanAgent && (
+                <TabsTrigger value="agents" className="gap-1.5 rounded-lg">
+                  <UserCog className="w-4 h-4" />
+                  Agents
+                </TabsTrigger>
+              )}
             </TabsList>
             <TabsContent value="inbox" className="mt-4">
               <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
@@ -50,6 +62,18 @@ export default function InstagramMessaging() {
               <TabsContent value="comments" className="mt-4">
                 <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
                   <CommentManagerPanel platform="instagram" />
+                </GradientRingCard>
+              </TabsContent>
+            )}
+            <TabsContent value="auto-replies" className="mt-4">
+              <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
+                <AutoReplyManager platform="instagram" />
+              </GradientRingCard>
+            </TabsContent>
+            {flags.humanAgent && (
+              <TabsContent value="agents" className="mt-4">
+                <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
+                  <AgentManager platform="instagram" />
                 </GradientRingCard>
               </TabsContent>
             )}

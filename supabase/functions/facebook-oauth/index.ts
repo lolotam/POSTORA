@@ -182,6 +182,25 @@ async function exchangeForLongLivedToken(shortLivedToken: string): Promise<{ tok
   return { token: shortLivedToken, expiresAt: expiresDate.toISOString() };
 }
 
+// Subscribes a connected Page to the webhook fields the messaging inbox needs (messages,
+// messaging_postbacks). Best-effort: without this, the Page never sends any webhook events,
+// but a failure here shouldn't block the page connection itself.
+async function subscribePageToWebhooks(pageId: string, pageToken: string): Promise<void> {
+  try {
+    const res = await fetch(
+      `https://graph.facebook.com/v18.0/${pageId}/subscribed_apps?subscribed_fields=messages,messaging_postbacks&access_token=${pageToken}`,
+      { method: "POST" },
+    );
+    if (!res.ok) {
+      console.warn("Failed to subscribe page to webhooks:", pageId, await res.text());
+      return;
+    }
+    console.log("Subscribed page to webhooks:", pageId);
+  } catch (e) {
+    console.warn("Error subscribing page to webhooks:", pageId, e);
+  }
+}
+
 const PAGE_FIELDS = "id,name,access_token,category,picture.type(large),instagram_business_account{id,username}";
 
 async function fetchFacebookPages(providerToken: string, fbUserId?: string): Promise<FacebookPage[]> {
@@ -732,6 +751,8 @@ Deno.serve(async (req) => {
         throw fbError;
       }
 
+      await subscribePageToWebhooks(selectedPage.id, longLivedPageToken);
+
       console.log("Facebook Page stored successfully:", selectedPage.name);
 
       // Only store Instagram if feature flag is enabled
@@ -913,6 +934,8 @@ Deno.serve(async (req) => {
         });
 
         if (fbError) throw fbError;
+
+        await subscribePageToWebhooks(page.id, longLivedToken);
 
         // Only store Instagram if feature flag is enabled
         let hasInstagram = false;

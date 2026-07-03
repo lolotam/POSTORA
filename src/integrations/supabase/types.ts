@@ -1825,6 +1825,78 @@ export type Database = {
         }
         Relationships: []
       }
+      messenger_auto_replies: {
+        Row: {
+          created_at: string | null
+          id: string
+          is_active: boolean | null
+          keywords: string[] | null
+          name: string
+          platform: string
+          reply_message: string
+          rule_type: string
+          schedule_days: number[] | null
+          schedule_end: string | null
+          schedule_start: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          keywords?: string[] | null
+          name: string
+          platform: string
+          reply_message: string
+          rule_type: string
+          schedule_days?: number[] | null
+          schedule_end?: string | null
+          schedule_start?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          is_active?: boolean | null
+          keywords?: string[] | null
+          name?: string
+          platform?: string
+          reply_message?: string
+          rule_type?: string
+          schedule_days?: number[] | null
+          schedule_end?: string | null
+          schedule_start?: string | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      messenger_auto_reply_usage: {
+        Row: {
+          auto_reply_rule_id: string
+          conversation_id: string | null
+          id: string
+          triggered_at: string
+          user_id: string
+        }
+        Insert: {
+          auto_reply_rule_id: string
+          conversation_id?: string | null
+          id?: string
+          triggered_at?: string
+          user_id: string
+        }
+        Update: {
+          auto_reply_rule_id?: string
+          conversation_id?: string | null
+          id?: string
+          triggered_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       node_execution_logs: {
         Row: {
           completed_at: string | null

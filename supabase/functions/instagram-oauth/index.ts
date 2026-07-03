@@ -39,6 +39,26 @@ const IG_SCOPES = [
   "instagram_business_manage_insights",
 ].join(",");
 
+// Best-effort: subscribes a direct-login Instagram account (no linked Facebook Page) to
+// messaging webhooks via the Instagram Graph API's own subscribed_apps endpoint. Unverified
+// against live traffic — direct-login accounts are a newer product surface and Meta's docs are
+// thinner here than for Page-linked subscriptions. A failure here doesn't block the connection.
+async function subscribeDirectAccountToWebhooks(igUserId: string, accessToken: string): Promise<void> {
+  try {
+    const res = await fetch(
+      `https://graph.instagram.com/v22.0/${igUserId}/subscribed_apps?subscribed_fields=messages&access_token=${accessToken}`,
+      { method: "POST" },
+    );
+    if (!res.ok) {
+      console.warn("Failed to subscribe direct Instagram account to webhooks:", igUserId, await res.text());
+      return;
+    }
+    console.log("Subscribed direct Instagram account to webhooks:", igUserId);
+  } catch (e) {
+    console.warn("Error subscribing direct Instagram account to webhooks:", igUserId, e);
+  }
+}
+
 function normalizeUsername(raw: string | null | undefined): string {
   if (!raw) return "";
   return raw.toLowerCase().replace(/^@/, "").trim();
@@ -206,6 +226,8 @@ async function exchangeAndPersist(
       .upsert(accountData, { onConflict: "user_id,platform,platform_user_id" });
     if (error) return { kind: "error", message: "Failed to save Instagram account" };
   }
+
+  await subscribeDirectAccountToWebhooks(igUserId, finalAccessToken);
 
   return { kind: "ok", username };
 }

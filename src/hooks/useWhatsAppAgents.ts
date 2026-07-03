@@ -94,6 +94,19 @@ export function useWhatsAppAgents() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["whatsapp-agents"] }),
   });
 
+  // Update max concurrent conversations
+  const updateMaxConversations = useMutation({
+    mutationFn: async (maxConversations: number) => {
+      if (!myAgent) throw new Error("Not registered as agent");
+      const { error } = await supabase
+        .from("whatsapp_agents")
+        .update({ max_conversations: maxConversations })
+        .eq("id", myAgent.id);
+      if (error) throw error;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["whatsapp-agents"] }),
+  });
+
   // Heartbeat - update last_seen every 60s when online
   useEffect(() => {
     if (!myAgent || myAgent.status === "offline") return;
@@ -106,7 +119,7 @@ export function useWhatsAppAgents() {
     return () => clearInterval(interval);
   }, [myAgent?.id, myAgent?.status]);
 
-  return { agents, agentsLoading, myAgent, registerAgent, updateStatus };
+  return { agents, agentsLoading, myAgent, registerAgent, updateStatus, updateMaxConversations };
 }
 
 export function useConversationAssignments() {

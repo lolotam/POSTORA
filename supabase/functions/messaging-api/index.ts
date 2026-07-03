@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isDirectInstagramAccount, getPageTokenForMessaging, getSendCredentials } from "../_shared/messengerCredentials.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -117,86 +118,12 @@ Deno.serve(async (req) => {
     async function getAccountToken(socialAccountId: string) {
       const { data, error } = await adminClient
         .from("social_accounts")
-        .select("access_token, platform_user_id, platform_username, platform, ig_auth_type, account_metadata")
+        .select("id, user_id, access_token, platform_user_id, platform_username, platform, ig_auth_type, account_metadata")
         .eq("id", socialAccountId)
         .eq("user_id", user!.id)
         .single();
       if (error || !data) throw new Error("Account not found or access denied");
       return data;
-    }
-
-    function isDirectInstagramAccount(account: any): boolean {
-      if (account.platform !== "instagram") return false;
-      const meta = account.account_metadata || {};
-      return account.ig_auth_type === "business_login"
-        || meta.flow === "direct"
-        || meta.source === "instagram_business_login"
-        || meta.token_type === "long_lived";
-    }
-
-    // Helper: For Instagram accounts, find the linked Facebook Page's token
-    async function getPageTokenForMessaging(account: any): Promise<{ pageId: string; pageToken: string }> {
-      if (account.platform === "facebook") {
-        return { pageId: account.platform_user_id, pageToken: account.access_token };
-      }
-
-      const meta = account.account_metadata || {};
-      const storedPageId = meta.page_id || meta.facebook_page_id;
-      const storedPageToken = account.access_token || meta.page_access_token;
-
-      if (account.platform === "instagram" && storedPageId && storedPageToken) {
-        console.log(`[messaging] Using stored FB page ${storedPageId} for IG account ${account.platform_user_id}`);
-        return { pageId: storedPageId, pageToken: storedPageToken };
-      }
-
-      // Check if account_metadata has a stored page_id for quick lookup
-      const storedLookupPageId = storedPageId;
-
-      const { data: fbAccounts } = await adminClient
-        .from("social_accounts")
-        .select("id, access_token, platform_user_id, platform_username, account_metadata")
-        .eq("user_id", user!.id)
-        .eq("platform", "facebook")
-        .eq("is_active", true);
-
-      if (!fbAccounts || fbAccounts.length === 0) {
-        throw new Error("NO_LINKED_PAGE: No Facebook Page found. Instagram DMs require a linked Facebook Page with pages_messaging permission.");
-      }
-
-      // If we have a stored page_id, try to find that FB account directly
-      if (storedLookupPageId) {
-        const match = fbAccounts.find((fb: any) => fb.platform_user_id === storedLookupPageId);
-        if (match) {
-          console.log(`[messaging] Using stored page_id ${storedLookupPageId} for IG account ${account.platform_user_id}`);
-          return { pageId: match.platform_user_id, pageToken: match.access_token };
-        }
-      }
-
-      const igUserId = account.platform_user_id;
-
-      // Try each Facebook Page to find which one is linked to this Instagram account
-      for (const fb of fbAccounts) {
-        try {
-          const checkUrl = `${GRAPH_API}/${fb.platform_user_id}?fields=instagram_business_account&access_token=${fb.access_token}`;
-          const checkRes = await fetch(checkUrl);
-          if (!checkRes.ok) {
-            await checkRes.text();
-            continue;
-          }
-          const checkData = await checkRes.json();
-          const linkedIgId = checkData.instagram_business_account?.id;
-          if (linkedIgId === igUserId) {
-            console.log(`[messaging] Found linked FB page ${fb.platform_user_id} for IG ${igUserId}`);
-            return { pageId: fb.platform_user_id, pageToken: fb.access_token };
-          }
-        } catch {
-          continue;
-        }
-      }
-
-      // Fallback: use the first Facebook page
-      console.warn(`[messaging] Could not find linked FB page for IG account ${igUserId}, using first available FB page ${fbAccounts[0].platform_user_id}`);
-      return { pageId: fbAccounts[0].platform_user_id, pageToken: fbAccounts[0].access_token };
     }
 
     // Helper: call Graph API with graceful error handling
@@ -295,7 +222,7 @@ Deno.serve(async (req) => {
           data = await listDirectInstagramConversations(account);
           if (data.error_type) return jsonResponse({ conversations: [], ...data });
         } else {
-          const resolved = await getPageTokenForMessaging(account);
+          const resolved = await getPageTokenForMessaging(adminClient, account);
           pageId = resolved.pageId;
           pageToken = resolved.pageToken;
           const url = `${GRAPH_API}/${pageId}/conversations?platform=${platform}&fields=participants{name,id,username,email},messages.limit(1){message,created_time,from},unread_count,updated_time&limit=50&access_token=${encodeURIComponent(pageToken)}`;
@@ -316,11 +243,24 @@ Deno.serve(async (req) => {
         if (platform === "INSTAGRAM" && /TOKEN_EXPIRED/i.test(msg)) {
           return jsonResponse({ conversations: [], error: msg, error_type: "TOKEN_EXPIRED" });
         }
+        if (/NO_LINKED_PAGE_MATCH/i.test(msg)) {
+          return jsonResponse({
+            conversations: [],
+            error: "Could not find the Facebook Page linked to this Instagram account. Please reconnect your Instagram account.",
+            error_type: "MISSING_SCOPE",
+            missing_scope: "instagram_manage_messages",
+          });
+        }
         throw err;
       }
 
       const conversations = await Promise.all((data.data || []).map(async (conv: any) => {
-        const participant = conv.participants?.data?.find((p: any) => p.id !== pageId) || conv.participants?.data?.[0];
+        // Self-exclusion by id alone is unreliable for direct-login Instagram accounts: Meta
+        // reports a different id for "self" inside conversation payloads than the platform_user_id
+        // stored at connect time. Also exclude by username, which is stable across both paths.
+        const participant = conv.participants?.data?.find(
+          (p: any) => p.id !== pageId && p.username !== account.platform_username
+        ) || conv.participants?.data?.[0];
         const lastMsg = conv.messages?.data?.[0];
         const participantName = await resolveParticipantName(participant, pageToken, platform);
 
@@ -328,6 +268,11 @@ Deno.serve(async (req) => {
           id: conv.id,
           participant_name: participantName,
           participant_id: participant?.id || "",
+          // Stable key for agent-assignment/auto-reply lookups, matching what
+          // facebook-instagram-webhook computes for the same conversation. Meta's own
+          // conversation id (conv.id) isn't usable for this: it isn't present in webhook
+          // payloads at all, only in this Graph API response.
+          assignment_key: participant?.id ? `${account.id}_${participant.id}` : "",
           last_message: lastMsg?.message || "",
           last_message_time: lastMsg?.created_time || conv.updated_time,
           last_message_from: lastMsg?.from?.name || "",
@@ -353,7 +298,7 @@ Deno.serve(async (req) => {
         data = await graphFetch(url);
         data = data.messages || data;
       } else {
-        const { pageToken } = await getPageTokenForMessaging(account);
+        const { pageToken } = await getPageTokenForMessaging(adminClient, account);
         const url = `${GRAPH_API}/${conversation_id}/messages?fields=message,from,to,created_time,attachments{mime_type,name,size,image_data,video_data,file_url}&limit=50&access_token=${encodeURIComponent(pageToken)}`;
         data = await graphFetch(url);
       }
@@ -372,19 +317,37 @@ Deno.serve(async (req) => {
 
     // ACTION: send_message
     if (action === "send_message") {
-      const { social_account_id, conversation_id, message } = body;
+      const { social_account_id, conversation_id, message, recipient_id, use_human_agent_tag } = body;
       if (!social_account_id || !conversation_id || !message) throw new Error("social_account_id, conversation_id, and message required");
 
       const account = await getAccountToken(social_account_id);
-      const { pageToken } = await getPageTokenForMessaging(account);
-      const url = `${GRAPH_API}/${conversation_id}/messages?access_token=${pageToken}`;
+      const { graphBase, pageId, pageToken } = await getSendCredentials(adminClient, account);
+
+      // A human agent replying outside the standard messaging window needs Meta's HUMAN_AGENT
+      // message tag, which requires the standard Send API (recipient + messaging_type) rather
+      // than the conversation-reply shortcut used for ordinary in-window replies.
+      let url: string;
+      let payload: Record<string, unknown>;
+      if (use_human_agent_tag) {
+        if (!recipient_id) throw new Error("recipient_id required when use_human_agent_tag is set");
+        url = `${graphBase}/${pageId}/messages?access_token=${encodeURIComponent(pageToken)}`;
+        payload = {
+          recipient: { id: recipient_id },
+          messaging_type: "MESSAGE_TAG",
+          tag: "HUMAN_AGENT",
+          message: { text: message },
+        };
+      } else {
+        url = `${graphBase}/${conversation_id}/messages?access_token=${encodeURIComponent(pageToken)}`;
+        payload = { message };
+      }
 
       const data = await graphFetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify(payload),
       });
-      return jsonResponse({ success: true, message_id: data.id });
+      return jsonResponse({ success: true, message_id: data.id || data.message_id });
     }
 
     // ACTION: send_media
@@ -393,8 +356,8 @@ Deno.serve(async (req) => {
       if (!social_account_id || !recipient_id || !media_url) throw new Error("social_account_id, recipient_id, and media_url required");
 
       const account = await getAccountToken(social_account_id);
-      const { pageId, pageToken } = await getPageTokenForMessaging(account);
-      const url = `${GRAPH_API}/${pageId}/messages?access_token=${pageToken}`;
+      const { graphBase, pageId, pageToken } = await getSendCredentials(adminClient, account);
+      const url = `${graphBase}/${pageId}/messages?access_token=${encodeURIComponent(pageToken)}`;
 
       const payload = {
         recipient: { id: recipient_id },
@@ -420,8 +383,8 @@ Deno.serve(async (req) => {
       if (!social_account_id || !message_id) throw new Error("social_account_id and message_id required");
 
       const account = await getAccountToken(social_account_id);
-      const { pageToken } = await getPageTokenForMessaging(account);
-      const url = `${GRAPH_API}/${message_id}?access_token=${pageToken}`;
+      const { graphBase, pageToken } = await getSendCredentials(adminClient, account);
+      const url = `${graphBase}/${message_id}?access_token=${encodeURIComponent(pageToken)}`;
 
       const res = await fetch(url, { method: "DELETE" });
       const data = await res.json();
