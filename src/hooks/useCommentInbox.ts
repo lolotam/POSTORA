@@ -7,6 +7,7 @@ export interface Comment {
   id: string;
   author_name: string;
   author_id?: string;
+  author_avatar?: string | null;
   message: string;
   created_time: string;
   is_hidden?: boolean;
@@ -34,10 +35,15 @@ function parsePageComments(data: any): Comment[] {
   for (const post of data.data) {
     if (!post.comments?.data) continue;
     for (const c of post.comments.data) {
+      // Facebook's picture field returns { data: { url, is_silhouette } }. A
+      // silhouette is Meta's placeholder for "no real photo available", not a
+      // usable image, so treat it the same as no avatar.
+      const picture = c.from?.picture?.data;
       comments.push({
         id: c.id,
         author_name: c.from?.name || "Unknown",
         author_id: c.from?.id,
+        author_avatar: picture && !picture.is_silhouette ? picture.url : null,
         message: c.message || "",
         created_time: c.created_time,
         is_hidden: c.is_hidden || false,
