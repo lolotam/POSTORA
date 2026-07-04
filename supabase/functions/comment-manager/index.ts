@@ -114,7 +114,7 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const url = `${GRAPH_API_BASE}/${page_id}/feed?fields=id,message,created_time,comments{id,from,message,created_time,is_hidden,comment_count,parent}&limit=25&access_token=${accessToken}`;
+        const url = `${GRAPH_API_BASE}/${page_id}/feed?fields=id,message,created_time,comments{id,from{id,name,picture},message,created_time,is_hidden,comment_count,parent}&limit=25&access_token=${accessToken}`;
         const res = await fetch(url);
         result = await res.json();
         break;
