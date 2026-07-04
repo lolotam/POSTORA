@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Search, MessageCircle } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Conversation } from "@/hooks/useMessaging";
@@ -63,6 +63,7 @@ export function ConversationList({ conversations, selectedId, onSelect, isLoadin
               )}
             >
               <Avatar className="h-10 w-10 shrink-0">
+                <AvatarImage src={conv.participant_avatar || undefined} alt={conv.participant_name} />
                 <AvatarFallback className="bg-primary/10 text-primary text-sm">
                   {conv.participant_name?.charAt(0)?.toUpperCase() || "?"}
                 </AvatarFallback>

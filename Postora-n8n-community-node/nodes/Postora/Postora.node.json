@@ -1,0 +1,19 @@
+{
+  "node": "n8n-nodes-postora.nodes.Postora",
+  "nodeVersion": "1.0",
+  "codexVersion": "1.0",
+  "categories": ["Marketing & Content"],
+  "resources": {
+    "credentialDocumentation": [
+      {
+        "url": "https://postora.cloud/docs/api"
+      }
+    ],
+    "primaryDocumentation": [
+      {
+        "url": "https://postora.cloud/docs/api"
+      }
+    ]
+  },
+  "alias": ["postora", "social media", "publish", "facebook", "instagram", "tiktok", "twitter", "linkedin", "pinterest", "youtube", "threads", "bluesky", "reddit"]
+}

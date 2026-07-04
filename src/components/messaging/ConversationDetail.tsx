@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Send, Paperclip, Loader2, MessageCircle, Image, FileIcon, Mic, Video, X } from "lucide-react";
 import { MessageBubble } from "./MessageBubble";
 import { useMessages, useSendMessage, useDeleteMessage } from "@/hooks/useMessaging";
@@ -231,9 +232,12 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
 
       {/* Header */}
       <div className="p-4 border-b flex items-center gap-3">
-        <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-primary text-sm font-semibold">
-          {conversation.participant_name?.charAt(0)?.toUpperCase() || "?"}
-        </div>
+        <Avatar className="w-8 h-8">
+          <AvatarImage src={conversation.participant_avatar || undefined} alt={conversation.participant_name} />
+          <AvatarFallback className="bg-primary/10 text-primary text-sm font-semibold">
+            {conversation.participant_name?.charAt(0)?.toUpperCase() || "?"}
+          </AvatarFallback>
+        </Avatar>
         <div>
           <p className="text-sm font-semibold">{conversation.participant_name}</p>
           <p className="text-xs text-muted-foreground">

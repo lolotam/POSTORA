@@ -417,6 +417,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     tiktok_brand_content,
 
     // Instagram metadata - ENHANCED
+    instagram_post_type, // 'feed', 'story', or 'reel'
     instagram_media_type, // 'feed' or 'stories'
     instagram_collaborators,
     instagram_user_tags,
@@ -528,8 +529,29 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
   }
 
   // Process media_urls if provided - download and upload each URL
-  let finalMediaFileIds: string[] = Array.isArray(media_file_ids) ? [...media_file_ids] :
+  // Validate that every media_file_id is a proper UUID — the posts.media_file_ids
+  // column is UUID[] and a non-UUID value (e.g. a Cloudinary URL from a wrong n8n
+  // expression) would cause a 22P02 "invalid input syntax for type uuid" at insert.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  let rawMediaFileIds: string[] = Array.isArray(media_file_ids) ? [...media_file_ids] :
     (media_file_ids ? [media_file_ids] : []);
+
+  if (rawMediaFileIds.length > 0) {
+    const invalid = rawMediaFileIds.filter((id: string) => typeof id !== 'string' || !UUID_RE.test(id.trim()));
+    if (invalid.length > 0) {
+      const sample = invalid[0];
+      const hint = /^https?:\/\//i.test(String(sample).trim())
+        ? ' It looks like you passed a URL. Use the "media_urls" field (Media Source = URL) instead of "media_file_ids" (Media Source = Media File ID), or use the Media → Upload node first and reference the returned id (UUID), not file_path (URL).'
+        : '';
+      return new Response(
+        JSON.stringify({
+          error: `Invalid media_file_ids: every ID must be a UUID. Got "${String(sample).slice(0, 120)}".${hint}`,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+  }
+  let finalMediaFileIds: string[] = rawMediaFileIds.map((id: string) => id.trim());
 
   // Combine media_url (singular) and media_urls (plural) - accept both formats
   const combinedMediaUrls = media_urls || media_url;
@@ -780,6 +802,9 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
 
   // Instagram metadata - ENHANCED with all n8n fields
   if (platforms.includes('instagram')) {
+    const normalizedInstagramPostType = instagram_post_type
+      || (instagram_media_type === 'stories' ? 'story' : 'feed');
+
     metadata.instagram = {
       mediaType: instagram_media_type || 'feed', // 'feed' or 'stories'
       collaborators: instagram_collaborators || [],
@@ -791,6 +816,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       audioName: instagram_audio_name,
       shareToFeed: instagram_share_to_feed ?? true,
     };
+    metadata.instagram_post_type = normalizedInstagramPostType;
     metadata.instagram_first_comment = instagram_first_comment || first_comment || null;
   }
 
@@ -1586,6 +1612,53 @@ async function handleGetPostById(req: Request, supabase: any, userId: string, po
   );
 }
 
+// Handle GET /api/v1/media/:id — Look up a media file by UUID (scoped to the
+// authenticated API key's user). Used by the n8n node's "Media File ID" upload
+// source to resolve and re-attach previously-uploaded media without re-uploading.
+async function handleGetMediaById(req: Request, supabase: any, userId: string, mediaId: string) {
+  const corsHeaders = restrictedCorsHeaders(req);
+
+  // Malformed UUID → 400 (do this before any DB query)
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  if (!UUID_RE.test(mediaId)) {
+    return apiError(req, `'${mediaId}' is not a valid UUID.`, 400, 'INVALID_UUID');
+  }
+
+  const { data: media, error } = await supabase
+    .from('media_files')
+    .select('id, user_id, file_path, file_type, file_size, mime_type, storage_bucket, metadata, created_at')
+    .eq('id', mediaId)
+    .maybeSingle();
+
+  if (error) {
+    console.error('Error fetching media:', error);
+    return apiError(req, 'Failed to fetch media. Please try again.', 500, 'INTERNAL_ERROR');
+  }
+
+  // No row OR row owned by a different user → single 404.
+  // (We never reveal whether an ID exists vs. is just not-owned, to avoid enumeration.)
+  if (!media || media.user_id !== userId) {
+    return apiError(req, 'Media file not found or not owned by the authenticated user.', 404, 'MEDIA_NOT_FOUND');
+  }
+
+  return new Response(
+    JSON.stringify({
+      success: true,
+      media: {
+        id: media.id,
+        file_path: media.file_path,
+        file_type: media.file_type,
+        file_size: media.file_size,
+        mime_type: media.mime_type,
+        storage_bucket: media.storage_bucket,
+        metadata: media.metadata,
+        created_at: media.created_at,
+      },
+    }),
+    { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+  );
+}
+
 // Standardized API error helper
 function apiError(req, message: string, status: number, code?: string, details?: any): Response {
   const corsHeaders = restrictedCorsHeaders(req);
@@ -1858,6 +1931,9 @@ Deno.serve(async (req) => {
     } else if (path.startsWith('/api/v1/webhooks/') && req.method === 'DELETE') {
       const webhookId = path.replace('/api/v1/webhooks/', '');
       response = await handleDeleteWebhook(req, supabaseAdmin, userId, webhookId);
+    } else if (path.match(/^\/api\/v1\/media\/[^/]+$/) && req.method === 'GET') {
+      const mediaId = path.replace('/api/v1/media/', '');
+      response = await handleGetMediaById(req, supabaseAdmin, userId, mediaId);
     } else {
       // 404 for unknown routes
       response = apiError(req, 'Not Found', 404, 'NOT_FOUND', {
@@ -1865,6 +1941,7 @@ Deno.serve(async (req) => {
           'POST /api/v1/post',
           'GET /api/v1/post/:id',
           'POST /api/v1/upload-media',
+          'GET /api/v1/media/:id',
           'GET /api/v1/accounts',
           'GET /api/v1/posts',
           'POST /api/v1/webhooks',

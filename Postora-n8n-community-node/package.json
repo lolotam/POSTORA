@@ -1,0 +1,56 @@
+{
+  "name": "n8n-nodes-postora",
+  "version": "1.1.11",
+  "description": "n8n community node for Postora — publish to social media platforms (Instagram, Facebook, TikTok, YouTube, Pinterest, Twitter/X, LinkedIn, Threads, Bluesky, Reddit)",
+  "keywords": [
+    "n8n-community-node-package",
+    "n8n",
+    "postora",
+    "social-media",
+    "automation"
+  ],
+  "license": "MIT",
+  "homepage": "https://postora.cloud",
+  "author": {
+    "name": "Postora",
+    "url": "https://postora.cloud",
+    "email": "postora.cloud@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lolotam/postora-n8n-community-node.git"
+  },
+  "main": "dist/nodes/Postora/Postora.node.js",
+  "scripts": {
+    "build": "tsc && gulp build:icons",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build",
+    "lint": "tsc --noEmit",
+    "test": "jest"
+  },
+  "files": [
+    "dist"
+  ],
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "credentials": [
+      "dist/credentials/PostoraApi.credentials.js"
+    ],
+    "nodes": [
+      "dist/nodes/Postora/Postora.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@n8n/node-cli": "^0.23.1",
+    "@types/jest": "^29.5.0",
+    "@types/node": "^22.0.0",
+    "gulp": "^4.0.2",
+    "jest": "^29.7.0",
+    "n8n-workflow": "^1.0.0",
+    "ts-jest": "^29.1.0",
+    "typescript": "^5.5.0"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  }
+}

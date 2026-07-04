@@ -1,5 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isDirectInstagramAccount, getPageTokenForMessaging, getSendCredentials } from "../_shared/messengerCredentials.ts";
+import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+
+// Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
+// before that window closes rather than serving a dead link from messaging_cache.
+const AVATAR_CACHE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -150,7 +155,7 @@ Deno.serve(async (req) => {
     }
 
     async function listDirectInstagramConversations(account: any): Promise<any> {
-      const fields = "participants{username,id,name},messages.limit(1){message,created_time,from},unread_count,updated_time";
+      const fields = "participants{username,id,name,profile_pic},messages.limit(1){message,created_time,from},unread_count,updated_time";
       const url = `${INSTAGRAM_GRAPH_API}/${account.platform_user_id}/conversations?platform=instagram&fields=${encodeURIComponent(fields)}&limit=50&access_token=${encodeURIComponent(account.access_token)}`;
       try {
         return await graphFetch(url);
@@ -168,29 +173,112 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Helper: fetch a conversation participant's profile (name + avatar) from Meta.
+    // Direct-login Instagram accounts must be queried via graph.instagram.com with the
+    // IG user's own token; Facebook Pages and business-login IG go through graph.facebook.com
+    // with the page token. Never throws: a missing/blocked profile just yields nulls.
+    async function fetchParticipantProfile(
+      participantId: string,
+      account: any,
+      pageToken: string,
+      platform: string
+    ): Promise<{ name: string | null; profilePic: string | null }> {
+      const isDirect = platform === "INSTAGRAM" && isDirectInstagramAccount(account);
+      const base = isDirect ? INSTAGRAM_GRAPH_API : GRAPH_API;
+      const token = isDirect ? account.access_token : pageToken;
+      try {
+        const url = `${base}/${participantId}?fields=name,username,profile_pic&access_token=${encodeURIComponent(token)}`;
+        const res = await fetch(url);
+        if (!res.ok) return { name: null, profilePic: null };
+        const data = await res.json();
+        const name = data.name || (data.username ? `@${data.username}` : null);
+        return { name, profilePic: data.profile_pic || null };
+      } catch {
+        // Silently fail - privacy restrictions, blocked user, or missing App Review feature
+        return { name: null, profilePic: null };
+      }
+    }
+
     // Helper: resolve participant name for IG conversations
-    async function resolveParticipantName(participant: any, pageToken: string, platform: string): Promise<string> {
+    async function resolveParticipantName(participant: any, pageToken: string, platform: string, account: any): Promise<string> {
       // If name is available, use it
       if (participant?.name && participant.name !== "") return participant.name;
       // If username available (IG), use it
       if (participant?.username) return `@${participant.username}`;
-      
+
       // For Instagram, try fetching user info
       if (platform === "INSTAGRAM" && participant?.id) {
-        try {
-          const profileUrl = `${GRAPH_API}/${participant.id}?fields=name,username&access_token=${pageToken}`;
-          const profileRes = await fetch(profileUrl);
-          if (profileRes.ok) {
-            const profileData = await profileRes.json();
-            if (profileData.name) return profileData.name;
-            if (profileData.username) return `@${profileData.username}`;
-          }
-        } catch {
-          // Silently fail - privacy restrictions
-        }
+        const { name } = await fetchParticipantProfile(participant.id, account, pageToken, platform);
+        if (name) return name;
       }
-      
+
       return participant?.id ? `User ${participant.id.slice(-6)}` : "Unknown";
+    }
+
+    interface ParticipantAvatarRequest {
+      account: any;
+      pageToken: string;
+      platform: string;
+      conversationId: string;
+      participant: any;
+      participantName: string;
+    }
+
+    // Reads a still-fresh cached avatar for a conversation, if one exists.
+    // Meta's profile_pic URLs expire after a few days, so anything older than
+    // AVATAR_CACHE_TTL_MS is treated as a miss and re-fetched.
+    async function getCachedParticipantAvatar(conversationId: string): Promise<string | null> {
+      const { data: cached } = await adminClient
+        .from("messaging_cache")
+        .select("participant_avatar, updated_at")
+        .eq("user_id", user.id)
+        .eq("conversation_id", conversationId)
+        .maybeSingle();
+
+      const isFresh = !!cached?.updated_at
+        && Date.now() - new Date(cached.updated_at).getTime() < AVATAR_CACHE_TTL_MS;
+      return isFresh ? (cached?.participant_avatar || null) : null;
+    }
+
+    // Uploads a freshly-fetched profile_pic to Cloudinary for permanent storage,
+    // then records it in messaging_cache so getCachedParticipantAvatar can serve it
+    // without hitting Meta again until the TTL expires.
+    async function cacheParticipantAvatar(req: ParticipantAvatarRequest, profilePic: string): Promise<string | null> {
+      const cachedUrl = await cacheAvatarToCloudinary(profilePic, user.id, req.account.platform, req.participant.id);
+
+      await adminClient.from("messaging_cache").upsert(
+        {
+          user_id: user.id,
+          social_account_id: req.account.id,
+          platform: req.account.platform,
+          conversation_id: req.conversationId,
+          participant_name: req.participantName,
+          participant_avatar: cachedUrl,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "user_id,conversation_id" }
+      );
+
+      return cachedUrl;
+    }
+
+    // Helper: resolve (and permanently cache) a conversation participant's avatar.
+    // profile_pic isn't included in the bulk participants{} payload, so this checks
+    // messaging_cache first and only calls Meta + Cloudinary once the cache is stale.
+    async function resolveParticipantAvatar(req: ParticipantAvatarRequest): Promise<string | null> {
+      const participantId = req.participant?.id;
+      if (!participantId) return null;
+
+      const fresh = await getCachedParticipantAvatar(req.conversationId);
+      if (fresh) return fresh;
+
+      // Opportunistic: some Conversations API responses already include profile_pic
+      // inline on the participant, saving a per-participant Graph round trip.
+      const profilePic = req.participant?.profile_pic
+        || (await fetchParticipantProfile(participantId, req.account, req.pageToken, req.platform)).profilePic;
+      if (!profilePic) return null;
+
+      return cacheParticipantAvatar(req, profilePic);
     }
 
     // ACTION: list_accounts
@@ -225,7 +313,7 @@ Deno.serve(async (req) => {
           const resolved = await getPageTokenForMessaging(adminClient, account);
           pageId = resolved.pageId;
           pageToken = resolved.pageToken;
-          const url = `${GRAPH_API}/${pageId}/conversations?platform=${platform}&fields=participants{name,id,username,email},messages.limit(1){message,created_time,from},unread_count,updated_time&limit=50&access_token=${encodeURIComponent(pageToken)}`;
+          const url = `${GRAPH_API}/${pageId}/conversations?platform=${platform}&fields=participants{name,id,username,email,profile_pic},messages.limit(1){message,created_time,from},unread_count,updated_time&limit=50&access_token=${encodeURIComponent(pageToken)}`;
           data = await graphFetch(url);
         }
       } catch (err) {
@@ -262,12 +350,16 @@ Deno.serve(async (req) => {
           (p: any) => p.id !== pageId && p.username !== account.platform_username
         ) || conv.participants?.data?.[0];
         const lastMsg = conv.messages?.data?.[0];
-        const participantName = await resolveParticipantName(participant, pageToken, platform);
+        const participantName = await resolveParticipantName(participant, pageToken, platform, account);
+        const participantAvatar = await resolveParticipantAvatar({
+          account, pageToken, platform, conversationId: conv.id, participant, participantName,
+        });
 
         return {
           id: conv.id,
           participant_name: participantName,
           participant_id: participant?.id || "",
+          participant_avatar: participantAvatar,
           // Stable key for agent-assignment/auto-reply lookups, matching what
           // facebook-instagram-webhook computes for the same conversation. Meta's own
           // conversation id (conv.id) isn't usable for this: it isn't present in webhook
@@ -744,6 +836,7 @@ Deno.serve(async (req) => {
         id: c.conversation_id,
         participant_name: c.participant_name || "Unknown",
         participant_id: c.conversation_id.replace(`wa_${social_account_id}_`, "").replace(/^wa_\d+_/, ""),
+        participant_avatar: c.participant_avatar || null,
         last_message: c.last_message_preview || "",
         last_message_time: c.last_message_at,
         last_message_from: c.participant_name || "",
