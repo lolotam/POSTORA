@@ -52,6 +52,55 @@ async function collectPaged(firstUrl: string, maxPages = 4) {
   return { data: rows, paging };
 }
 
+// Best-effort commenter avatars for Instagram: Meta gives businesses no direct
+// way to get a commenter's photo (IG comments carry no picture field, and the
+// profile-lookup API only unlocks for users who have messaged the business, not
+// merely commented — confirmed against Meta's docs). If a commenter has also
+// DM'd this account, messaging-api will already have cached their avatar in
+// messaging_cache, so we reuse it for free instead of guessing at a live call
+// that would fail for almost everyone.
+function collectCommenterIds(mediaList: any[]): string[] {
+  const ids = new Set<string>();
+  for (const media of mediaList) {
+    for (const comment of media?.comments?.data || []) {
+      if (comment?.from?.id) ids.add(comment.from.id);
+      for (const reply of comment?.replies?.data || []) {
+        if (reply?.from?.id) ids.add(reply.from.id);
+      }
+    }
+  }
+  return Array.from(ids);
+}
+
+async function fetchDmOverlapAvatars(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  commenterIds: string[]
+): Promise<Map<string, string>> {
+  const { data: cached } = await supabase
+    .from("messaging_cache")
+    .select("participant_id, participant_avatar")
+    .eq("user_id", userId)
+    .in("participant_id", commenterIds);
+
+  return new Map(
+    (cached || [])
+      .filter((row: any) => row.participant_avatar)
+      .map((row: any) => [row.participant_id as string, row.participant_avatar as string])
+  );
+}
+
+function applyCommenterAvatars(mediaList: any[], avatarByParticipant: Map<string, string>): void {
+  for (const media of mediaList) {
+    for (const comment of media?.comments?.data || []) {
+      comment.author_avatar = avatarByParticipant.get(comment?.from?.id) || null;
+      for (const reply of comment?.replies?.data || []) {
+        reply.author_avatar = avatarByParticipant.get(reply?.from?.id) || null;
+      }
+    }
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -114,7 +163,7 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const url = `${GRAPH_API_BASE}/${page_id}/feed?fields=id,message,created_time,comments{id,from,message,created_time,is_hidden,comment_count,parent}&limit=25&access_token=${accessToken}`;
+        const url = `${GRAPH_API_BASE}/${page_id}/feed?fields=id,message,created_time,comments{id,from{id,name,picture},message,created_time,is_hidden,comment_count,parent}&limit=25&access_token=${accessToken}`;
         const res = await fetch(url);
         result = await res.json();
         break;
@@ -156,6 +205,11 @@ Deno.serve(async (req) => {
             if (media && media.comments && (media.comments as { error?: unknown }).error) {
               media.comments = { data: [] };
             }
+          }
+          const commenterIds = collectCommenterIds(raw.data);
+          if (commenterIds.length > 0) {
+            const avatarByParticipant = await fetchDmOverlapAvatars(supabase, user.id, commenterIds);
+            if (avatarByParticipant.size > 0) applyCommenterAvatars(raw.data, avatarByParticipant);
           }
         }
         result = raw;

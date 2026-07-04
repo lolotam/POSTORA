@@ -177,6 +177,12 @@ Deno.serve(async (req) => {
     // Direct-login Instagram accounts must be queried via graph.instagram.com with the
     // IG user's own token; Facebook Pages and business-login IG go through graph.facebook.com
     // with the page token. Never throws: a missing/blocked profile just yields nulls.
+    //
+    // Field names are NOT interchangeable between platforms: Facebook's Messenger User
+    // Profile API only recognizes first_name/last_name/profile_pic and fails the entire
+    // request (error 100/33 "Object does not exist") if given Instagram-only fields like
+    // name/username. Confirmed live against production: requesting the wrong fields for
+    // Facebook silently zeroed out every Facebook avatar while Instagram kept working.
     async function fetchParticipantProfile(
       participantId: string,
       account: any,
@@ -186,12 +192,16 @@ Deno.serve(async (req) => {
       const isDirect = platform === "INSTAGRAM" && isDirectInstagramAccount(account);
       const base = isDirect ? INSTAGRAM_GRAPH_API : GRAPH_API;
       const token = isDirect ? account.access_token : pageToken;
+      const isFacebookMessenger = platform !== "INSTAGRAM";
+      const fields = isFacebookMessenger ? "first_name,last_name,profile_pic" : "name,username,profile_pic";
       try {
-        const url = `${base}/${participantId}?fields=name,username,profile_pic&access_token=${encodeURIComponent(token)}`;
+        const url = `${base}/${participantId}?fields=${fields}&access_token=${encodeURIComponent(token)}`;
         const res = await fetch(url);
         if (!res.ok) return { name: null, profilePic: null };
         const data = await res.json();
-        const name = data.name || (data.username ? `@${data.username}` : null);
+        const name = isFacebookMessenger
+          ? [data.first_name, data.last_name].filter(Boolean).join(" ") || null
+          : data.name || (data.username ? `@${data.username}` : null);
         return { name, profilePic: data.profile_pic || null };
       } catch {
         // Silently fail - privacy restrictions, blocked user, or missing App Review feature
@@ -252,6 +262,7 @@ Deno.serve(async (req) => {
           social_account_id: req.account.id,
           platform: req.account.platform,
           conversation_id: req.conversationId,
+          participant_id: req.participant.id,
           participant_name: req.participantName,
           participant_avatar: cachedUrl,
           updated_at: new Date().toISOString(),

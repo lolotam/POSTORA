@@ -4,6 +4,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Reply, EyeOff, Eye, Trash2, Send, Loader2, Heart } from "lucide-react";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Comment, useReplyComment, useHideComment, useDeleteComment } from "@/hooks/useCommentInbox";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -61,31 +62,39 @@ export function CommentList({ comments, socialAccountId, hiddenFilter }: Comment
         <Card key={comment.id} className={comment.is_hidden ? "opacity-60 border-dashed" : ""}>
           <CardContent className="p-4">
             <div className="flex items-start justify-between gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-sm">{comment.author_name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {formatDistanceToNow(new Date(comment.created_time), { addSuffix: true })}
-                  </span>
-                  {comment.is_hidden && (
-                    <Badge variant="secondary" className="text-xs">Hidden</Badge>
-                  )}
-                  <Badge variant="outline" className="text-xs capitalize">
-                    {comment.platform}
-                  </Badge>
-                  {comment.like_count != null && (
-                    <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                      <Heart className="h-3 w-3" />
-                      {comment.like_count}
+              <div className="flex items-start gap-3 flex-1 min-w-0">
+                <Avatar className="h-9 w-9 shrink-0">
+                  <AvatarImage src={comment.author_avatar || undefined} alt={comment.author_name} />
+                  <AvatarFallback className="bg-primary/10 text-primary text-xs font-semibold">
+                    {comment.author_name?.charAt(0)?.toUpperCase() || "?"}
+                  </AvatarFallback>
+                </Avatar>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-medium text-sm">{comment.author_name}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {formatDistanceToNow(new Date(comment.created_time), { addSuffix: true })}
                     </span>
+                    {comment.is_hidden && (
+                      <Badge variant="secondary" className="text-xs">Hidden</Badge>
+                    )}
+                    <Badge variant="outline" className="text-xs capitalize">
+                      {comment.platform}
+                    </Badge>
+                    {comment.like_count != null && (
+                      <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                        <Heart className="h-3 w-3" />
+                        {comment.like_count}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-sm">{comment.message}</p>
+                  {comment.post_message && (
+                    <p className="text-xs text-muted-foreground mt-1 truncate">
+                      On: {comment.post_message}
+                    </p>
                   )}
                 </div>
-                <p className="text-sm">{comment.message}</p>
-                {comment.post_message && (
-                  <p className="text-xs text-muted-foreground mt-1 truncate">
-                    On: {comment.post_message}
-                  </p>
-                )}
               </div>
 
               <div className="flex items-center gap-1 shrink-0">
