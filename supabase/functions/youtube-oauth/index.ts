@@ -21,6 +21,17 @@ const YOUTUBE_REDIRECT_URI =
   Deno.env.get("YOUTUBE_REDIRECT_URI") ??
   `${PUBLIC_API_ORIGIN}/functions/v1/youtube-oauth`;
 
+// OAuth itself succeeded but the Google account has no YouTube channel.
+// Unlike other failures, this message is intentionally user-facing and must
+// not be sanitized away — the user needs to know to pick a different account.
+class NoYouTubeChannelError extends Error {
+  constructor() {
+    super(
+      "The Google account you selected has no YouTube channel. Please sign in with a Google account that has an active YouTube channel.",
+    );
+  }
+}
+
 function base64UrlEncode(input: string) {
   return btoa(input)
     .replace(/\+/g, "-")
@@ -269,8 +280,12 @@ Deno.serve(async (req) => {
     });
   } catch (error: unknown) {
     console.error("YouTube OAuth error:", error);
-    // Sanitized error message to prevent schema leakage
-    const safeMessage = "Authentication failed. Please try again.";
+    const isNoChannel = error instanceof NoYouTubeChannelError;
+    // Sanitized error message to prevent schema leakage; the no-channel
+    // message is deliberately exempt (see NoYouTubeChannelError).
+    const safeMessage = isNoChannel
+      ? error.message
+      : "Authentication failed. Please try again.";
 
     // If this was a GET callback, redirect back with error so user doesn't get stuck on a blank page
     if (req.method === "GET") {
@@ -280,7 +295,10 @@ Deno.serve(async (req) => {
         if (state) {
           const parsed = await verifyAndParseState(state);
           const returnUrl = new URL(parsed.return_to);
-          returnUrl.searchParams.set("error", "youtube_oauth_failed");
+          returnUrl.searchParams.set(
+            "error",
+            isNoChannel ? "NO_YOUTUBE_CHANNEL" : "youtube_oauth_failed",
+          );
           returnUrl.searchParams.set("error_description", safeMessage);
           return Response.redirect(returnUrl.toString(), 302);
         }
@@ -289,10 +307,17 @@ Deno.serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ error: safeMessage }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify(
+        isNoChannel
+          ? { error: safeMessage, code: "NO_YOUTUBE_CHANNEL" }
+          : { error: safeMessage },
+      ),
+      {
+        status: isNoChannel ? 400 : 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
   }
 });
 
@@ -355,7 +380,7 @@ async function completeOAuth(params: {
   }
 
   const channel = channelData.items?.[0];
-  if (!channel) throw new Error("No YouTube channel found for this account");
+  if (!channel) throw new NoYouTubeChannelError();
 
   const channelId = channel.id as string;
   const channelTitle = (channel.snippet?.title as string | undefined) ?? "YouTube";

@@ -33,8 +33,12 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
     const errorType = searchParams.get("error_type");
 
     if (error) {
+      let errorTitle = "Connection cancelled";
       let errorMessage = "Failed to connect account";
-      if (error === "access_denied" || errorReason === "user_denied") {
+      if (error === "NO_YOUTUBE_CHANNEL") {
+        errorTitle = "No YouTube channel found";
+        errorMessage = "The Google account you used has no YouTube channel. Please try again with a different Google account that has an active YouTube channel.";
+      } else if (error === "access_denied" || errorReason === "user_denied") {
         errorMessage = "You denied the required permissions. Please try again and accept all permissions to connect your account.";
       } else if (error === "invalid_scope") {
         errorMessage = `Invalid scope requested. ${errorType ? `Type: ${errorType}` : ""} This usually means the app doesn't have permission for video.upload/video.publish scopes.`;
@@ -46,7 +50,7 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
       sessionStorage.setItem("tiktok_last_error", fullError);
       sessionStorage.setItem("tiktok_last_error_timestamp", new Date().toISOString());
 
-      toast({ title: "Connection cancelled", description: errorMessage, variant: "destructive" });
+      toast({ title: errorTitle, description: errorMessage, variant: "destructive" });
       setSearchParams({});
     }
   }, [searchParams, toast, setSearchParams]);
