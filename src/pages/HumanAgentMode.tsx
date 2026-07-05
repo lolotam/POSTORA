@@ -11,7 +11,9 @@ import { toast } from "@/hooks/use-toast";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
 import type { GradientKey } from "@/components/fx";
 import { useWhatsAppAgents, useConversationAssignments, useAssignmentHistory } from "@/hooks/useWhatsAppAgents";
-import { useMessagingAccounts, useConversations, type Conversation } from "@/hooks/useMessaging";
+import { useMessagingAccounts, useConversations, type Conversation, type MessagingAccount } from "@/hooks/useMessaging";
+import { AccountSelector } from "@/components/messaging/AccountSelector";
+import { useState } from "react";
 import { formatDistanceToNow, isToday } from "date-fns";
 
 type Platform = "whatsapp" | "facebook" | "instagram";
@@ -31,10 +33,22 @@ export default function HumanAgentMode() {
   const { data: history = [] } = useAssignmentHistory();
   const { accounts } = useMessagingAccounts();
 
-  const platformAccounts: Record<Platform, { id: string } | undefined> = {
-    whatsapp: accounts.find((a) => a.platform === "whatsapp"),
-    facebook: accounts.find((a) => a.platform === "facebook"),
-    instagram: accounts.find((a) => a.platform === "instagram"),
+  // Which connected account feeds each platform's queue below. Defaults to the
+  // first connected account per platform, but a user with multiple Pages/IG
+  // accounts can switch — otherwise the queue silently only ever showed
+  // whichever account happened to be first, with no way to see the others.
+  const [selectedAccountIds, setSelectedAccountIds] = useState<Partial<Record<Platform, string>>>({});
+
+  const accountFor = (platform: Platform): MessagingAccount | undefined => {
+    const matchingAccounts = accounts.filter((a) => a.platform === platform);
+    const selectedId = selectedAccountIds[platform];
+    return matchingAccounts.find((a) => a.id === selectedId) || matchingAccounts[0];
+  };
+
+  const platformAccounts: Record<Platform, MessagingAccount | undefined> = {
+    whatsapp: accountFor("whatsapp"),
+    facebook: accountFor("facebook"),
+    instagram: accountFor("instagram"),
   };
   const { data: waConversations = [] } = useConversations(platformAccounts.whatsapp?.id || null, "WHATSAPP", { silent: true });
   const { data: fbConversations = [] } = useConversations(platformAccounts.facebook?.id || null, "MESSENGER", { silent: true });
@@ -128,6 +142,28 @@ export default function HumanAgentMode() {
           </div>
         </Reveal>
         <GradientDivider tone="rose" />
+
+        {/* Account selectors: which connected Page/IG/WhatsApp account feeds the queue below */}
+        {accounts.length > 0 && (
+          <Reveal delay={40}>
+            <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-4">
+              {(["facebook", "instagram", "whatsapp"] as Platform[]).map((platform) => {
+                if (!accounts.some((a) => a.platform === platform)) return null;
+                return (
+                  <div key={platform} className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs font-medium text-muted-foreground capitalize shrink-0">{platform}</span>
+                    <AccountSelector
+                      accounts={accounts}
+                      platformFilter={platform}
+                      selectedId={platformAccounts[platform]?.id || null}
+                      onSelect={(id) => setSelectedAccountIds((prev) => ({ ...prev, [platform]: id }))}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </Reveal>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
