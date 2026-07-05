@@ -3421,6 +3421,33 @@ async function postToInstagram(
     }
   };
 
+  // Helper: post the configured first comment on the published IG media.
+  // Mirrors disableIgComments — uses the Facebook Graph API with the Page access
+  // token and NEVER throws: a comment failure must not mark already-published
+  // media as failed. No-op when no instagram_first_comment is configured.
+  const postInstagramFirstComment = async (mediaId: string) => {
+    const firstComment = metadata?.instagram_first_comment;
+    if (!firstComment) return;
+    try {
+      const commentRes = await fetch(
+        `https://graph.facebook.com/v18.0/${mediaId}/comments`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: firstComment, access_token: accessToken }),
+        }
+      );
+      const commentData = await commentRes.json();
+      if (commentData.error) {
+        console.error("Instagram first comment error:", commentData.error.message);
+        warnings.push(`Instagram first comment failed: ${commentData.error.message}`);
+      }
+    } catch (e) {
+      console.error("Instagram first comment failed:", e);
+      warnings.push(`Instagram first comment failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+    }
+  };
+
   // Helper: publish first photo/video of a feed/reel post as a Story (mirror toggle)
   const publishIgStoryFromMedia = async (): Promise<void> => {
     try {
