@@ -70,10 +70,22 @@ const ThreadsAnalytics = lazyWithRetry(() => import("@/pages/analytics/ThreadsAn
 const TikTokAnalytics = lazyWithRetry(() => import("@/pages/analytics/TikTokAnalytics"), "TikTokAnalytics");
 const FacebookMessaging = lazyWithRetry(() => import("@/pages/messaging/FacebookMessaging"), "FacebookMessaging");
 const InstagramMessaging = lazyWithRetry(() => import("@/pages/messaging/InstagramMessaging"), "InstagramMessaging");
-const WhatsAppMessaging = lazyWithRetry(() => import("@/pages/messaging/WhatsAppMessaging"), "WhatsAppMessaging");
-const WhatsAppTemplates = lazyWithRetry(() => import("@/pages/messaging/WhatsAppTemplates"), "WhatsAppTemplates");
-const WhatsAppAnalytics = lazyWithRetry(() => import("@/pages/messaging/WhatsAppAnalytics"), "WhatsAppAnalytics");
-const WhatsAppContacts = lazyWithRetry(() => import("@/pages/messaging/WhatsAppContacts"), "WhatsAppContacts");
+const WhatsAppLayout = lazyWithRetry(() => import("@/components/whatsapp/WhatsAppLayout"), "WhatsAppLayout");
+const WhatsAppDashboard = lazyWithRetry(() => import("@/pages/whatsapp/WhatsAppDashboard"), "WhatsAppDashboard");
+const WhatsAppConversations = lazyWithRetry(() => import("@/pages/whatsapp/Conversations"), "WhatsAppConversations");
+const WhatsAppContacts = lazyWithRetry(() => import("@/pages/whatsapp/Contacts"), "WhatsAppContacts");
+const WhatsAppTemplates = lazyWithRetry(() => import("@/pages/whatsapp/Templates"), "WhatsAppTemplates");
+const WhatsAppAnalytics = lazyWithRetry(() => import("@/pages/whatsapp/Analytics"), "WhatsAppAnalytics");
+const WhatsAppQuickReplies = lazyWithRetry(() => import("@/pages/whatsapp/QuickReplies"), "WhatsAppQuickReplies");
+const WhatsAppAutoReplies = lazyWithRetry(() => import("@/pages/whatsapp/AutoReplies"), "WhatsAppAutoReplies");
+const WhatsAppBroadcasts = lazyWithRetry(() => import("@/pages/whatsapp/Broadcasts"), "WhatsAppBroadcasts");
+const WhatsAppAgents = lazyWithRetry(() => import("@/pages/whatsapp/Agents"), "WhatsAppAgents");
+const WhatsAppBusinessProfile = lazyWithRetry(() => import("@/pages/whatsapp/BusinessProfile"), "WhatsAppBusinessProfile");
+const WhatsAppWebhooks = lazyWithRetry(() => import("@/pages/whatsapp/Webhooks"), "WhatsAppWebhooks");
+const WhatsAppScheduled = lazyWithRetry(() => import("@/pages/whatsapp/Scheduled"), "WhatsAppScheduled");
+const WhatsAppResponseStats = lazyWithRetry(() => import("@/pages/whatsapp/ResponseStats"), "WhatsAppResponseStats");
+const WhatsAppCatalog = lazyWithRetry(() => import("@/pages/whatsapp/Catalog"), "WhatsAppCatalog");
+const WhatsAppSetup = lazyWithRetry(() => import("@/pages/whatsapp/Setup"), "WhatsAppSetup");
 const ThreadsMentions = lazyWithRetry(() => import("@/pages/messaging/ThreadsMentions"), "ThreadsMentions");
 const LeadsCRM = lazyWithRetry(() => import("@/pages/LeadsCRM"), "LeadsCRM");
 const AdAnalytics = lazyWithRetry(() => import("@/pages/AdAnalytics"), "AdAnalytics");
@@ -239,10 +251,23 @@ export function AnimatedRoutes() {
         <Route path="/analytics/tiktok" element={<ProtectedRoute><AnimatedPage><TikTokAnalytics /></AnimatedPage></ProtectedRoute>} />
         <Route path="/messaging/facebook" element={<ProtectedRoute><AnimatedPage><FacebookMessaging /></AnimatedPage></ProtectedRoute>} />
         <Route path="/messaging/instagram" element={<ProtectedRoute><AnimatedPage><InstagramMessaging /></AnimatedPage></ProtectedRoute>} />
-        <Route path="/messaging/whatsapp" element={<ProtectedRoute><AnimatedPage><WhatsAppMessaging /></AnimatedPage></ProtectedRoute>} />
-        <Route path="/messaging/whatsapp/templates" element={<ProtectedRoute><AnimatedPage><WhatsAppTemplates /></AnimatedPage></ProtectedRoute>} />
-        <Route path="/messaging/whatsapp/analytics" element={<ProtectedRoute><AnimatedPage><WhatsAppAnalytics /></AnimatedPage></ProtectedRoute>} />
-        <Route path="/messaging/whatsapp/contacts" element={<ProtectedRoute><AnimatedPage><WhatsAppContacts /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/messaging/whatsapp" element={<ProtectedRoute><WhatsAppLayout /></ProtectedRoute>}>
+          <Route index element={<AnimatedPage><WhatsAppDashboard /></AnimatedPage>} />
+          <Route path="conversations" element={<AnimatedPage><WhatsAppConversations /></AnimatedPage>} />
+          <Route path="contacts" element={<AnimatedPage><WhatsAppContacts /></AnimatedPage>} />
+          <Route path="templates" element={<AnimatedPage><WhatsAppTemplates /></AnimatedPage>} />
+          <Route path="analytics" element={<AnimatedPage><WhatsAppAnalytics /></AnimatedPage>} />
+          <Route path="quick-replies" element={<AnimatedPage><WhatsAppQuickReplies /></AnimatedPage>} />
+          <Route path="auto-replies" element={<AnimatedPage><WhatsAppAutoReplies /></AnimatedPage>} />
+          <Route path="broadcasts" element={<AnimatedPage><WhatsAppBroadcasts /></AnimatedPage>} />
+          <Route path="agents" element={<AnimatedPage><WhatsAppAgents /></AnimatedPage>} />
+          <Route path="profile" element={<AnimatedPage><WhatsAppBusinessProfile /></AnimatedPage>} />
+          <Route path="webhooks" element={<AnimatedPage><WhatsAppWebhooks /></AnimatedPage>} />
+          <Route path="scheduled" element={<AnimatedPage><WhatsAppScheduled /></AnimatedPage>} />
+          <Route path="response-stats" element={<AnimatedPage><WhatsAppResponseStats /></AnimatedPage>} />
+          <Route path="catalog" element={<AnimatedPage><WhatsAppCatalog /></AnimatedPage>} />
+          <Route path="setup" element={<AnimatedPage><WhatsAppSetup /></AnimatedPage>} />
+        </Route>
         <Route path="/messaging/thread" element={<ProtectedRoute><AnimatedPage><ThreadsMentions /></AnimatedPage></ProtectedRoute>} />
         <Route path="/leads-crm" element={<ProtectedRoute><AnimatedPage><LeadsCRM /></AnimatedPage></ProtectedRoute>} />
         <Route path="/leads" element={<Navigate to="/leads-crm" replace />} />
