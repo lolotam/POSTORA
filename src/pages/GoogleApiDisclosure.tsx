@@ -82,14 +82,16 @@ const GoogleApiDisclosure = () => {
               </p>
               <ul className="list-disc list-inside text-muted-foreground space-y-2">
                 <li>
-                  <strong>Single YouTube scope:</strong> We request only <code className="bg-muted px-1 rounded">https://www.googleapis.com/auth/youtube</code>.
-                  This one scope covers every YouTube operation we perform — uploading videos, setting custom thumbnails,
-                  posting the first comment on a new video, and reading basic channel info to display your account.
+                  <strong>Two narrow YouTube scopes only:</strong> We request exactly{" "}
+                  <code className="bg-muted px-1 rounded">https://www.googleapis.com/auth/youtube.readonly</code> and{" "}
+                  <code className="bg-muted px-1 rounded">https://www.googleapis.com/auth/youtube.upload</code>.
+                  Together they cover the YouTube operations we perform — uploading videos with your chosen metadata and
+                  thumbnail, and reading basic channel info to display your connected account.
                 </li>
                 <li>
-                  <strong>No redundant subset scopes:</strong> We intentionally do not request <code className="bg-muted px-1 rounded">youtube.readonly</code>
-                  or <code className="bg-muted px-1 rounded">youtube.upload</code> because they are strict subsets of the
-                  <code className="bg-muted px-1 rounded">youtube</code> scope and would only add noise to your consent screen.
+                  <strong>No broad management scope:</strong> We intentionally do not request the full{" "}
+                  <code className="bg-muted px-1 rounded">youtube</code> scope, because it would grant far more access
+                  (managing playlists, editing or deleting existing videos, channel settings) than Postora needs.
                 </li>
                 <li>
                   <strong>No analytics, monetization, or membership data:</strong> We never request scopes that would let us
@@ -99,9 +101,8 @@ const GoogleApiDisclosure = () => {
               <div className="border rounded-lg p-4 bg-muted/30">
                 <h3 className="font-semibold mb-2">Scopes We Intentionally Do NOT Request:</h3>
                 <ul className="list-disc list-inside text-muted-foreground text-sm space-y-1">
-                  <li><code className="bg-muted px-1 rounded">youtube.readonly</code> — Subset of youtube; redundant</li>
-                  <li><code className="bg-muted px-1 rounded">youtube.upload</code> — Subset of youtube; redundant</li>
-                  <li><code className="bg-muted px-1 rounded">youtube.force-ssl</code> — Redundant with youtube scope</li>
+                  <li><code className="bg-muted px-1 rounded">youtube</code> (broad) — Full channel management is not needed for publishing</li>
+                  <li><code className="bg-muted px-1 rounded">youtube.force-ssl</code> — We don't manage or moderate your existing videos and comments</li>
                   <li><code className="bg-muted px-1 rounded">youtube.channel-memberships.creator</code> — We don't access membership data</li>
                   <li><code className="bg-muted px-1 rounded">yt-analytics.readonly</code> — We don't access your YouTube analytics</li>
                   <li><code className="bg-muted px-1 rounded">youtube.partner</code> — We don't access monetization data</li>
@@ -120,50 +121,58 @@ const GoogleApiDisclosure = () => {
               
               <div className="space-y-4">
                 <div className="border rounded-lg p-4">
-                  <h3 className="font-semibold text-lg mb-2">YouTube Data API Scope</h3>
+                  <h3 className="font-semibold text-lg mb-2">YouTube Data API Scopes</h3>
 
                   <div className="space-y-4 mt-4">
                     <div className="border-l-4 border-primary pl-4">
                       <h4 className="font-semibold text-base">
-                        <code className="bg-muted px-2 py-1 rounded text-sm">https://www.googleapis.com/auth/youtube</code>
+                        <code className="bg-muted px-2 py-1 rounded text-sm">https://www.googleapis.com/auth/youtube.upload</code>
                       </h4>
                       <p className="text-muted-foreground text-sm mt-2">
-                        <strong>Purpose:</strong> Postora requests this single YouTube scope to perform all YouTube
-                        publishing operations on your behalf. We deliberately request only this one scope instead of the
-                        narrower <code className="bg-muted px-1 rounded">youtube.upload</code> and
-                        <code className="bg-muted px-1 rounded">youtube.readonly</code> scopes, because those are strict
-                        subsets and would unnecessarily duplicate the consent screen.
+                        <strong>Purpose:</strong> Lets Postora publish the videos you create or schedule to your own
+                        YouTube channel, on your explicit instruction.
                       </p>
                       <p className="text-muted-foreground text-sm mt-2">
                         <strong>Justification — what we actually do with this scope:</strong>
                       </p>
                       <ul className="list-disc list-inside text-muted-foreground text-sm mt-2 space-y-1 ml-4">
                         <li>
-                          <strong>Upload videos</strong> to your channel with the title, description, tags, category and
-                          privacy setting (public / unlisted / private) you choose in Postora.
+                          <strong>Upload videos and Shorts</strong> to your channel with the title, description, tags,
+                          category and privacy setting (public / unlisted / private) you choose in Postora.
                         </li>
                         <li>
                           <strong>Set a custom thumbnail</strong> on the video you just uploaded
-                          (<code className="bg-muted px-1 rounded">thumbnails.set</code>) — this requires the broader
-                          <code className="bg-muted px-1 rounded">youtube</code> scope and is not covered by
-                          <code className="bg-muted px-1 rounded">youtube.upload</code> alone.
-                        </li>
-                        <li>
-                          <strong>Post the first comment</strong> on the new video on your behalf when you opt in to the
-                          "first comment" feature (<code className="bg-muted px-1 rounded">commentThreads.insert</code>) —
-                          also requires the <code className="bg-muted px-1 rounded">youtube</code> scope.
-                        </li>
-                        <li>
-                          <strong>Read basic channel info</strong> (channel name, channel ID, profile picture) so we can
-                          display your connected YouTube account inside Postora and confirm the correct channel before
-                          publishing.
+                          (<code className="bg-muted px-1 rounded">thumbnails.set</code>), when you provide one.
                         </li>
                       </ul>
                       <p className="text-muted-foreground text-sm mt-2">
                         <strong>User-facing feature:</strong> When you create a post with video content and select YouTube
-                        as a target platform, Postora uploads the video, optionally sets your custom thumbnail, and
-                        optionally posts a first comment — all under your explicit instruction.
+                        as a target platform, Postora uploads the video and optionally sets your custom thumbnail — all
+                        under your explicit instruction. This scope does not allow us to edit or delete your existing videos.
                       </p>
+                    </div>
+
+                    <div className="border-l-4 border-primary pl-4">
+                      <h4 className="font-semibold text-base">
+                        <code className="bg-muted px-2 py-1 rounded text-sm">https://www.googleapis.com/auth/youtube.readonly</code>
+                      </h4>
+                      <p className="text-muted-foreground text-sm mt-2">
+                        <strong>Purpose:</strong> Read-only access used to identify and display your connected channel.
+                      </p>
+                      <p className="text-muted-foreground text-sm mt-2">
+                        <strong>Justification — what we actually do with this scope:</strong>
+                      </p>
+                      <ul className="list-disc list-inside text-muted-foreground text-sm mt-2 space-y-1 ml-4">
+                        <li>
+                          <strong>Read basic channel info</strong> (channel name, channel ID, profile picture) at
+                          connection time so we can show which YouTube account you connected and confirm the correct
+                          channel before publishing.
+                        </li>
+                        <li>
+                          <strong>Verify the connection stays healthy</strong> so we can warn you if the channel needs to
+                          be reconnected before a scheduled post fails.
+                        </li>
+                      </ul>
                     </div>
 
                     <div className="border-l-4 border-muted pl-4">
@@ -175,9 +184,8 @@ const GoogleApiDisclosure = () => {
                         to identify your Google account.
                       </p>
                       <p className="text-muted-foreground text-sm mt-2">
-                        <strong>Note:</strong> When connecting YouTube separately, only the single
-                        <code className="bg-muted px-1 rounded">youtube</code> scope above is requested.
-                        The userinfo scopes are handled by the initial Google login flow.
+                        <strong>Note:</strong> When connecting YouTube separately, only the two YouTube scopes above are
+                        requested. The userinfo scopes are handled by the initial Google login flow.
                       </p>
                     </div>
                   </div>

@@ -52,16 +52,23 @@ export const googleChecklistItems: ChecklistItem[] = [
   },
   // Scope Justification
   {
-    id: "scope_youtube",
-    title: "youtube Scope Justification",
-    description: "Single sensitive scope (https://www.googleapis.com/auth/youtube) covers upload, custom thumbnails, first comments, and channel info read. Replaces redundant youtube.readonly + youtube.upload.",
+    id: "scope_youtube_upload",
+    title: "youtube.upload Scope Justification",
+    description: "Sensitive scope (https://www.googleapis.com/auth/youtube.upload) used to upload user-created videos and Shorts to the user's own channel with the title, description, tags, category, and privacy setting they chose in Postora, and to set the custom thumbnail on the just-uploaded video (thumbnails.set).",
+    category: "scopes",
+    required: true,
+  },
+  {
+    id: "scope_youtube_readonly",
+    title: "youtube.readonly Scope Justification",
+    description: "Sensitive scope (https://www.googleapis.com/auth/youtube.readonly) used at connection time to read the user's channel name, ID, and avatar (channels.list mine=true) so the user can confirm the correct channel, and to periodically verify the connection is still healthy.",
     category: "scopes",
     required: true,
   },
   {
     id: "minimum_scopes",
     title: "Minimum Scopes Principle",
-    description: "Only one YouTube scope requested. Subsets (youtube.readonly, youtube.upload) intentionally omitted to avoid over-asking.",
+    description: "Exactly two narrow YouTube scopes requested (youtube.readonly, youtube.upload) — matching the OAuth request in code byte-for-byte. The broad youtube scope is intentionally not requested.",
     category: "scopes",
     link: "https://support.google.com/cloud/answer/13807380",
     required: true,
