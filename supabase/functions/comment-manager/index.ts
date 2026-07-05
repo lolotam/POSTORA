@@ -247,7 +247,13 @@ Deno.serve(async (req) => {
         const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
           ? INSTAGRAM_GRAPH_API_BASE
           : GRAPH_API_BASE;
-        const url = `${apiBase}/${comment_id}?is_hidden=${isHidden}&access_token=${encodeURIComponent(accessToken)}`;
+        // Instagram's Graph API rejects `is_hidden` on comment objects (confirmed
+        // live: IGApiException "The parameter hide is required") — it uses `hide`
+        // instead. Facebook comment objects use `is_hidden`. This must key off the
+        // comment's platform, not the account's login flow: business-login IG
+        // comments still live on graph.facebook.com but are IG comment objects.
+        const hideParam = socialAccount?.platform === "instagram" ? "hide" : "is_hidden";
+        const url = `${apiBase}/${comment_id}?${hideParam}=${isHidden}&access_token=${encodeURIComponent(accessToken)}`;
         const res = await fetch(url, { method: "POST" });
         result = await res.json();
         break;
