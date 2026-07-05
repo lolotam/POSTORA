@@ -172,8 +172,6 @@ Deno.serve(async (req) => {
     const folder = `media/${userFolder}/${dailyFolder}`;
     const timestamp = Math.floor(Date.now() / 1000);
     const cleanFileName = fileName.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
-    const shortFileBase = cleanFileName.substring(0, 40) || "file";
-    const fileNameHash = Array.from(cleanFileName).reduce((acc, char) => ((acc * 31) + char.charCodeAt(0)) >>> 0, 7).toString(36);
     
     // Compute incoming file size for collision-proof dedupe
     let incomingFileSize: number | null = null;
@@ -196,17 +194,18 @@ Deno.serve(async (req) => {
       console.warn(`[cloudinary-upload] Could not compute incoming file size:`, e);
     }
 
-    console.log(`Checking for recent duplicate: ${folder}/${cleanFileName} (size=${incomingFileSize ?? "unknown"})`);
+    console.log(`Checking for recent duplicate of original filename: ${cleanFileName} (size=${incomingFileSize ?? "unknown"})`);
 
     // Dedupe window: last 5 minutes only (catches accidental double-clicks, not yesterday's file)
     const dedupeWindowStart = new Date(Date.now() - 5 * 60 * 1000).toISOString();
 
-    // Find ANY recent uploads with the same cleaned filename, then match on size in code
+    // Find ANY recent uploads with the same original filename, then match on size in code
+    // (files are stored under generated postora_* names, so the original name lives in metadata)
     const { data: recentCandidates } = await dbClient
       .from("media_files")
       .select("id, file_path, cloudinary_public_id, file_size, platforms, social_account_ids")
       .eq("user_id", userId)
-      .ilike("cloudinary_public_id", `${folder}/${cleanFileName}%`)
+      .eq("metadata->>original_filename", cleanFileName)
       .gt("created_at", dedupeWindowStart)
       .order("created_at", { ascending: false })
       .limit(5);
@@ -262,8 +261,18 @@ Deno.serve(async (req) => {
       });
     }
     
-    // Add unique suffix to avoid any collision
-    const uniquePublicId = `${shortFileBase}_${fileNameHash}_${Date.now()}`;
+    // Postora naming convention: postora_<date>_<userId>_<seq>
+    // Sequence numbers are allocated atomically per user per day, so concurrent
+    // uploads never collide (Cloudinary uploads run with overwrite=true).
+    const { data: seq, error: seqError } = await dbClient.rpc("next_media_seq", {
+      p_user_id: userId,
+      p_upload_date: todayDate,
+    });
+    if (seqError || seq == null) {
+      console.warn(`[cloudinary-upload] next_media_seq failed (${seqError?.message}); falling back to timestamp suffix`);
+    }
+    const sequencePart = seqError || seq == null ? Date.now() : seq;
+    const uniquePublicId = `postora_${dailyFolder}_${userId}_${sequencePart}`;
     
     console.log(`Uploading ${fileType}: ${fileName} to folder: ${folder}/${uniquePublicId}`);
 
@@ -341,6 +350,7 @@ Deno.serve(async (req) => {
           height: result.height || null,
           format: result.format || null,
           duration: result.duration || null,
+          original_filename: cleanFileName,
         },
       })
       .select("id")

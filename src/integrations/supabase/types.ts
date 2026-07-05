@@ -5574,6 +5574,10 @@ export type Database = {
         Args: { p_notification_id: string }
         Returns: boolean
       }
+      next_media_seq: {
+        Args: { p_user_id: string; p_upload_date: string }
+        Returns: number
+      }
       redeem_coupon: {
         Args: { p_code: string; p_subscription_id?: string; p_user_id: string }
         Returns: string

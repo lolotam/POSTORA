@@ -11,6 +11,7 @@ import { QuickReplyPicker, SlashCommandSuggestions } from "./QuickReplyPicker";
 import { InteractiveMessageBuilder } from "./InteractiveMessageBuilder";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
+import { buildPostoraFileName } from "@/lib/postoraFileName";
 
 interface ConversationDetailProps {
   conversation: Conversation | null;
@@ -100,8 +101,10 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
     setSendingMedia(true);
     try {
       // Upload to Supabase storage first
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
       const ext = mediaPreview.file.name.split(".").pop() || "bin";
-      const path = `whatsapp-media/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+      const path = `whatsapp-media/${await buildPostoraFileName(user.id, ext)}`;
       const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(path, mediaPreview.file);
       if (uploadError) throw uploadError;
 
