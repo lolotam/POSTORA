@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 import { CommentList } from "@/components/comments/CommentList";
@@ -69,7 +70,15 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
               <SelectContent>
                 {platformAccounts.map((a) => (
                   <SelectItem key={a.id} value={a.id}>
-                    {a.platform_username || a.platform_user_id}
+                    <div className="flex items-center gap-2">
+                      <Avatar className="h-5 w-5">
+                        <AvatarImage src={a.avatar_url || ""} />
+                        <AvatarFallback>
+                          <EmptyIcon className="w-3 h-3" />
+                        </AvatarFallback>
+                      </Avatar>
+                      <span className="truncate">{a.platform_username || a.platform_user_id}</span>
+                    </div>
                   </SelectItem>
                 ))}
               </SelectContent>

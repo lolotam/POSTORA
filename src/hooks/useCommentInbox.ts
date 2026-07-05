@@ -108,6 +108,37 @@ function parseIgComments(data: any): Comment[] {
   return comments.sort((a, b) => new Date(b.created_time).getTime() - new Date(a.created_time).getTime());
 }
 
+// comment-manager returns Meta-side failures as a 200 response with an
+// error/error_type field in the body, not a transport-level error — every
+// caller must check this or a rejected Meta call (e.g. a hide/reply Meta
+// rejects) gets reported as a false success.
+function throwIfCommentManagerError(data: any): void {
+  if (!data?.error_type && !data?.error) return;
+  const rawErr = data.error;
+  let message: string;
+  if (typeof rawErr === "string") {
+    message = rawErr;
+  } else if (rawErr && typeof rawErr === "object") {
+    const e = rawErr as {
+      error_user_msg?: string;
+      message?: string;
+      error?: { message?: string };
+      error_description?: string;
+    };
+    message =
+      e.error_user_msg ||
+      e.message ||
+      e.error?.message ||
+      e.error_description ||
+      JSON.stringify(rawErr);
+  } else {
+    message = "Comment manager request failed";
+  }
+  const err = new Error(message) as Error & { errorType?: string };
+  err.errorType = data.error_type;
+  throw err;
+}
+
 export function useComments({ platform, socialAccountId, pageId, igUserId, enabled = true }: UseCommentsOptions) {
   return useQuery({
     queryKey: ["comments", platform, socialAccountId],
@@ -122,31 +153,7 @@ export function useComments({ platform, socialAccountId, pageId, igUserId, enabl
         },
       });
       if (error) throw error;
-      if (data?.error_type || data?.error) {
-        const rawErr = data.error;
-        let message: string;
-        if (typeof rawErr === "string") {
-          message = rawErr;
-        } else if (rawErr && typeof rawErr === "object") {
-          const e = rawErr as {
-            error_user_msg?: string;
-            message?: string;
-            error?: { message?: string };
-            error_description?: string;
-          };
-          message =
-            e.error_user_msg ||
-            e.message ||
-            e.error?.message ||
-            e.error_description ||
-            JSON.stringify(rawErr);
-        } else {
-          message = "Unable to load comments";
-        }
-        const err = new Error(message) as Error & { errorType?: string };
-        err.errorType = data.error_type;
-        throw err;
-      }
+      throwIfCommentManagerError(data);
       return platform === "facebook" ? parsePageComments(data) : parseIgComments(data);
     },
     enabled: enabled && !!socialAccountId && (!!pageId || !!igUserId),
@@ -162,6 +169,7 @@ export function useReplyComment() {
         body: { action: "reply_comment", comment_id: commentId, message, social_account_id: socialAccountId },
       });
       if (error) throw error;
+      throwIfCommentManagerError(data);
       return data;
     },
     onSuccess: () => {
@@ -182,6 +190,7 @@ export function useHideComment() {
         body: { action: "hide_comment", comment_id: commentId, social_account_id: socialAccountId, is_hidden: isHidden },
       });
       if (error) throw error;
+      throwIfCommentManagerError(data);
       return data;
     },
     onSuccess: () => {
@@ -202,6 +211,7 @@ export function useDeleteComment() {
         body: { action: "delete_comment", comment_id: commentId, social_account_id: socialAccountId },
       });
       if (error) throw error;
+      throwIfCommentManagerError(data);
       return data;
     },
     onSuccess: () => {
