@@ -438,6 +438,14 @@
       "aliases": [],
       "description": "Meta app secret for general webhook signature verification (may be shared with WHATSAPP_APP_SECRET)."
     },
+    {
+      "name": "META_MESSAGING_WEBHOOK_VERIFY_TOKEN",
+      "category": "webhook",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Meta verify token for the Facebook/Instagram messaging webhook subscription handshake (facebook-instagram-webhook)."
+    },
 
     {
       "name": "RESEND_API_KEY",
