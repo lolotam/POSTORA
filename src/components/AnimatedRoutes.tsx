@@ -86,6 +86,7 @@ const WhatsAppScheduled = lazyWithRetry(() => import("@/pages/whatsapp/Scheduled
 const WhatsAppResponseStats = lazyWithRetry(() => import("@/pages/whatsapp/ResponseStats"), "WhatsAppResponseStats");
 const WhatsAppCatalog = lazyWithRetry(() => import("@/pages/whatsapp/Catalog"), "WhatsAppCatalog");
 const WhatsAppSetup = lazyWithRetry(() => import("@/pages/whatsapp/Setup"), "WhatsAppSetup");
+const WhatsAppDocs = lazyWithRetry(() => import("@/pages/whatsapp/Docs"), "WhatsAppDocs");
 const ThreadsMentions = lazyWithRetry(() => import("@/pages/messaging/ThreadsMentions"), "ThreadsMentions");
 const LeadsCRM = lazyWithRetry(() => import("@/pages/LeadsCRM"), "LeadsCRM");
 const AdAnalytics = lazyWithRetry(() => import("@/pages/AdAnalytics"), "AdAnalytics");
@@ -267,6 +268,7 @@ export function AnimatedRoutes() {
           <Route path="response-stats" element={<AnimatedPage><WhatsAppResponseStats /></AnimatedPage>} />
           <Route path="catalog" element={<AnimatedPage><WhatsAppCatalog /></AnimatedPage>} />
           <Route path="setup" element={<AnimatedPage><WhatsAppSetup /></AnimatedPage>} />
+          <Route path="docs" element={<AnimatedPage><WhatsAppDocs /></AnimatedPage>} />
         </Route>
         <Route path="/messaging/thread" element={<ProtectedRoute><AnimatedPage><ThreadsMentions /></AnimatedPage></ProtectedRoute>} />
         <Route path="/leads-crm" element={<ProtectedRoute><AnimatedPage><LeadsCRM /></AnimatedPage></ProtectedRoute>} />

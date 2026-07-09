@@ -21,6 +21,7 @@ describe("whatsappNavItems", () => {
       "response-stats",
       "catalog",
       "setup",
+      "docs",
     ]);
   });
 

@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
+  BookOpen,
   Bot,
   Building2,
   Clock,
@@ -46,4 +47,23 @@ export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "response-stats", label: "Response Stats", icon: PieChart },
   { path: "catalog", label: "Catalog", icon: ShoppingBag },
   { path: "setup", label: "Setup", icon: Settings2 },
+  { path: "docs", label: "Docs", icon: BookOpen },
 ];
+
+export const whatsappSectionDescriptions: Record<string, string> = {
+  conversations: "Handle live customer conversations from the WhatsApp inbox.",
+  contacts: "Manage saved contacts, uploads, tags, and customer records.",
+  templates: "Review approved message templates and send compliant outreach.",
+  analytics: "Track conversation activity, unread messages, and response trends.",
+  "quick-replies": "Keep reusable replies ready for agents and common questions.",
+  "auto-replies": "Automate inbound responses based on keywords and availability.",
+  broadcasts: "Plan and send WhatsApp broadcast campaigns to opted-in contacts.",
+  agents: "Manage assignments, ownership, and handoff for WhatsApp conversations.",
+  profile: "Update business identity details shown through WhatsApp.",
+  webhooks: "Inspect webhook behavior and connected automation endpoints.",
+  scheduled: "Review queued WhatsApp messages before they are delivered.",
+  "response-stats": "Measure canned response usage and team response performance.",
+  catalog: "Maintain catalog items for WhatsApp commerce conversations.",
+  setup: "Connect WhatsApp Business numbers and run diagnostics.",
+  docs: "Learn how to connect, configure, and troubleshoot WhatsApp in Postora.",
+};

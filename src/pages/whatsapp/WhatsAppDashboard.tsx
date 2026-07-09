@@ -5,25 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
-import { whatsappNavItems, whatsappSectionRoute } from "@/components/whatsapp/waNav";
+import {
+  whatsappNavItems,
+  whatsappSectionDescriptions,
+  whatsappSectionRoute,
+} from "@/components/whatsapp/waNav";
 import { useMessagingAccounts, type MessagingAccount } from "@/hooks/useMessaging";
-
-const sectionDescriptions: Record<string, string> = {
-  conversations: "Handle live customer conversations from the WhatsApp inbox.",
-  contacts: "Manage saved contacts, uploads, tags, and customer records.",
-  templates: "Review approved message templates and send compliant outreach.",
-  analytics: "Track conversation activity, unread messages, and response trends.",
-  "quick-replies": "Keep reusable replies ready for agents and common questions.",
-  "auto-replies": "Automate inbound responses based on keywords and availability.",
-  broadcasts: "Plan and send WhatsApp broadcast campaigns to opted-in contacts.",
-  agents: "Manage assignments, ownership, and handoff for WhatsApp conversations.",
-  profile: "Update business identity details shown through WhatsApp.",
-  webhooks: "Inspect webhook behavior and connected automation endpoints.",
-  scheduled: "Review queued WhatsApp messages before they are delivered.",
-  "response-stats": "Measure canned response usage and team response performance.",
-  catalog: "Maintain catalog items for WhatsApp commerce conversations.",
-  setup: "Connect WhatsApp Business numbers and run diagnostics.",
-};
 
 const dashboardSectionItems = whatsappNavItems.filter((item) => item.path !== "");
 
@@ -200,7 +187,7 @@ function SectionCard({ item }: { item: (typeof dashboardSectionItems)[number] })
           <div>
             <h2 className="font-semibold text-foreground">{item.label}</h2>
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              {sectionDescriptions[item.path]}
+              {whatsappSectionDescriptions[item.path]}
             </p>
           </div>
         </CardContent>
