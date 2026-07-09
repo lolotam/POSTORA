@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Checkbox } from "@/components/ui/checkbox";
 import { InboxMessage } from "@/hooks/useAdminInbox";
 import { cn } from "@/lib/utils";
 import { format } from "date-fns";
@@ -92,14 +93,24 @@ interface ThreadedMessageListProps {
   messages: InboxMessage[];
   selectedThreadId?: string;
   onSelectThread: (thread: MessageThread) => void;
+  selectedThreadIds?: Set<string>;
+  onToggleThread?: (threadId: string) => void;
+  onToggleAll?: (threadIds: string[], select: boolean) => void;
 }
 
 export function ThreadedMessageList({
   messages,
   selectedThreadId,
   onSelectThread,
+  selectedThreadIds,
+  onToggleThread,
+  onToggleAll,
 }: ThreadedMessageListProps) {
   const threads = useMemo(() => groupMessagesIntoThreads(messages), [messages]);
+
+  const visibleSelectedCount = threads.filter((t) => selectedThreadIds?.has(t.id)).length;
+  const allSelected = threads.length > 0 && visibleSelectedCount === threads.length;
+  const someSelected = visibleSelectedCount > 0;
 
   if (threads.length === 0) {
     return (
@@ -112,112 +123,146 @@ export function ThreadedMessageList({
 
   return (
     <ScrollArea className="h-full">
+      {onToggleAll && threads.length > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 sticky top-0 z-10">
+          <Checkbox
+            checked={allSelected}
+            onCheckedChange={() => onToggleAll(threads.map((t) => t.id), !allSelected)}
+            aria-label="Select all visible conversations"
+          />
+          <span className="text-xs text-muted-foreground select-none">
+            {someSelected && !allSelected
+              ? `${visibleSelectedCount} of ${threads.length} selected`
+              : allSelected
+                ? `All ${threads.length} selected`
+                : "Select all"}
+          </span>
+        </div>
+      )}
       <div className="divide-y">
         {threads.map((thread) => {
           const latest = thread.latestMessage;
           const isSelected = selectedThreadId === thread.id;
+          const isChecked = selectedThreadIds?.has(thread.id) ?? false;
 
           return (
-            <button
+            <div
               key={thread.id}
-              onClick={() => onSelectThread(thread)}
               className={cn(
-                "w-full text-left p-4 hover:bg-muted/50 transition-colors",
+                "flex items-stretch transition-colors",
                 isSelected && "bg-muted",
-                thread.hasUnread && "bg-primary/5"
+                thread.hasUnread && "bg-primary/5",
+                isChecked && !isSelected && "bg-primary/10"
               )}
             >
-              <div className="flex items-start gap-3">
-                {/* Direction indicator */}
+              {onToggleThread && (
                 <div
-                  className={cn(
-                    "mt-1 p-1 rounded-full",
-                    latest.direction === "inbound"
-                      ? "bg-blue-500/10 text-blue-500"
-                      : "bg-green-500/10 text-green-500"
-                  )}
+                  className="flex items-center pl-3 cursor-pointer flex-shrink-0"
+                  onClick={(e) => e.stopPropagation()}
                 >
-                  {latest.direction === "inbound" ? (
-                    <ArrowDownLeft className="w-3 h-3" />
-                  ) : (
-                    <ArrowUpRight className="w-3 h-3" />
-                  )}
+                  <Checkbox
+                    checked={isChecked}
+                    onCheckedChange={() => onToggleThread(thread.id)}
+                    aria-label={`Select conversation: ${thread.subject}`}
+                  />
                 </div>
-
-                <div className="flex-1 min-w-0">
-                  {/* From/To and Unread indicator */}
-                  <div className="flex items-center gap-2">
-                    {thread.hasUnread && (
-                      <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
-                    )}
-                    <span
-                      className={cn(
-                        "text-sm truncate flex-1",
-                        thread.hasUnread ? "font-semibold" : "font-medium"
-                      )}
-                    >
-                      {latest.direction === "inbound"
-                        ? latest.from_email
-                        : `To: ${latest.to_email}`}
-                    </span>
-                    {/* Thread count badge */}
-                    {thread.messageCount > 1 && (
-                      <span className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium bg-muted rounded-full text-muted-foreground">
-                        <MessageSquare className="w-3 h-3" />
-                        {thread.messageCount}
-                      </span>
-                    )}
-                    {/* Delivery status for outbound */}
-                    {latest.direction === "outbound" && (
-                      <DeliveryStatusBadge
-                        status={latest.status}
-                        direction={latest.direction}
-                        metadata={
-                          latest.metadata as {
-                            open_count?: number;
-                            first_opened_at?: string;
-                            click_count?: number;
-                            first_clicked_at?: string;
-                          } | null
-                        }
-                      />
-                    )}
-                  </div>
-
-                  {/* Subject */}
-                  <p
+              )}
+              <button
+                onClick={() => onSelectThread(thread)}
+                className="flex-1 text-left p-4 hover:bg-muted/50 transition-colors"
+              >
+                <div className="flex items-start gap-3">
+                  {/* Direction indicator */}
+                  <div
                     className={cn(
-                      "text-sm truncate mt-0.5",
-                      thread.hasUnread ? "text-foreground" : "text-muted-foreground"
+                      "mt-1 p-1 rounded-full",
+                      latest.direction === "inbound"
+                        ? "bg-blue-500/10 text-blue-500"
+                        : "bg-green-500/10 text-green-500"
                     )}
                   >
-                    {thread.subject}
-                  </p>
+                    {latest.direction === "inbound" ? (
+                      <ArrowDownLeft className="w-3 h-3" />
+                    ) : (
+                      <ArrowUpRight className="w-3 h-3" />
+                    )}
+                  </div>
 
-                  {/* Preview and Meta */}
-                  <div className="flex items-center justify-between mt-1 gap-2">
-                    <p className="text-xs text-muted-foreground truncate flex-1">
-                      {latest.body?.substring(0, 60) || "No content"}
-                      {(latest.body?.length || 0) > 60 && "..."}
-                    </p>
-                    <div className="flex items-center gap-2 flex-shrink-0">
-                      {Array.isArray(latest.attachments) &&
-                        latest.attachments.length > 0 && (
-                          <Paperclip className="w-3 h-3 text-muted-foreground" />
+                  <div className="flex-1 min-w-0">
+                    {/* From/To and Unread indicator */}
+                    <div className="flex items-center gap-2">
+                      {thread.hasUnread && (
+                        <span className="w-2 h-2 rounded-full bg-primary flex-shrink-0" />
+                      )}
+                      <span
+                        className={cn(
+                          "text-sm truncate flex-1",
+                          thread.hasUnread ? "font-semibold" : "font-medium"
                         )}
-                      <span className="text-xs text-muted-foreground">
-                        {format(new Date(latest.created_at), "MMM d")}
+                      >
+                        {latest.direction === "inbound"
+                          ? latest.from_email
+                          : `To: ${latest.to_email}`}
                       </span>
+                      {/* Thread count badge */}
+                      {thread.messageCount > 1 && (
+                        <span className="flex items-center gap-1 px-1.5 py-0.5 text-xs font-medium bg-muted rounded-full text-muted-foreground">
+                          <MessageSquare className="w-3 h-3" />
+                          {thread.messageCount}
+                        </span>
+                      )}
+                      {/* Delivery status for outbound */}
+                      {latest.direction === "outbound" && (
+                        <DeliveryStatusBadge
+                          status={latest.status}
+                          direction={latest.direction}
+                          metadata={
+                            latest.metadata as {
+                              open_count?: number;
+                              first_opened_at?: string;
+                              click_count?: number;
+                              first_clicked_at?: string;
+                            } | null
+                          }
+                        />
+                      )}
+                    </div>
+
+                    {/* Subject */}
+                    <p
+                      className={cn(
+                        "text-sm truncate mt-0.5",
+                        thread.hasUnread ? "text-foreground" : "text-muted-foreground"
+                      )}
+                    >
+                      {thread.subject}
+                    </p>
+
+                    {/* Preview and Meta */}
+                    <div className="flex items-center justify-between mt-1 gap-2">
+                      <p className="text-xs text-muted-foreground truncate flex-1">
+                        {latest.body?.substring(0, 60) || "No content"}
+                        {(latest.body?.length || 0) > 60 && "..."}
+                      </p>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {Array.isArray(latest.attachments) &&
+                          latest.attachments.length > 0 && (
+                            <Paperclip className="w-3 h-3 text-muted-foreground" />
+                          )}
+                        <span className="text-xs text-muted-foreground">
+                          {format(new Date(latest.created_at), "MMM d")}
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Chevron for threads */}
-                {thread.messageCount > 1 && (
-                  <ChevronRight className="w-4 h-4 text-muted-foreground mt-1" />
-                )}
-              </div>
-            </button>
+                  {/* Chevron for threads */}
+                  {thread.messageCount > 1 && (
+                    <ChevronRight className="w-4 h-4 text-muted-foreground mt-1" />
+                  )}
+                </div>
+              </button>
+            </div>
           );
         })}
       </div>
