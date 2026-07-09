@@ -14,6 +14,46 @@ interface CleanupResult {
   deletedFiles: string[];
 }
 
+interface OrphanedFilePayload {
+  id: string;
+  publicId: string | null;
+  path: string;
+  createdAt: string;
+  fileType: string;
+  storageBucket: string;
+  thumbnailUrl: string;
+}
+
+/**
+ * Build a small preview URL for an orphaned media file.
+ * - Cloudinary images/videos: use a c_fill,w_200,h_200 transformation.
+ * - Supabase storage or already-absolute URLs: return the path as-is.
+ */
+function buildThumbnailUrl(args: {
+  storageBucket: string;
+  fileType: string;
+  publicId: string | null;
+  filePath: string;
+}): string {
+  const { storageBucket, fileType, publicId, filePath } = args;
+  const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
+
+  // Cloudinary-backed file with a public id -> transformed thumbnail
+  if (storageBucket === "cloudinary" && publicId && cloudName) {
+    const resourceType = fileType === "video" ? "video" : "image";
+    const ext = resourceType === "video" ? ".mp4" : "";
+    return `https://res.cloudinary.com/${cloudName}/${resourceType}/upload/c_fill,w_200,h_200/${publicId}${ext}`;
+  }
+
+  // Already an absolute URL (Cloudinary file_path stored as full URL, or other host)
+  if (filePath && /^https?:\/\//i.test(filePath)) {
+    return filePath;
+  }
+
+  // Supabase storage path - returned verbatim; the browser resolves via the public URL helper
+  return filePath;
+}
+
 async function deleteFromCloudinary(publicId: string): Promise<boolean> {
   const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
   const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
@@ -101,7 +141,7 @@ Deno.serve(async (req) => {
     // Get all media files older than cutoff date
     const { data: allMediaFiles, error: mediaError } = await supabase
       .from("media_files")
-      .select("id, cloudinary_public_id, file_path, created_at, user_id")
+      .select("id, cloudinary_public_id, file_path, created_at, user_id, file_type, storage_bucket")
       .lt("created_at", cutoffDate.toISOString())
       .not("cloudinary_public_id", "is", null)
       .limit(maxFiles * 2); // Get more to account for used files
@@ -170,18 +210,27 @@ Deno.serve(async (req) => {
     if (dryRun) {
       console.log("DRY RUN - No files will be deleted");
       result.deletedFiles = filesToProcess.map((f) => f.cloudinary_public_id || f.file_path);
+      const filesToDelete: OrphanedFilePayload[] = filesToProcess.map((f) => ({
+        id: f.id,
+        publicId: f.cloudinary_public_id,
+        path: f.file_path,
+        createdAt: f.created_at,
+        fileType: f.file_type ?? "image",
+        storageBucket: f.storage_bucket ?? "cloudinary",
+        thumbnailUrl: buildThumbnailUrl({
+          storageBucket: f.storage_bucket ?? "cloudinary",
+          fileType: f.file_type ?? "image",
+          publicId: f.cloudinary_public_id,
+          filePath: f.file_path,
+        }),
+      }));
       return new Response(
         JSON.stringify({
           success: true,
           dryRun: true,
           message: `Found ${orphanedFiles.length} orphaned files. Set dryRun: false to delete.`,
           result,
-          filesToDelete: filesToProcess.map((f) => ({
-            id: f.id,
-            publicId: f.cloudinary_public_id,
-            path: f.file_path,
-            createdAt: f.created_at,
-          })),
+          filesToDelete,
         }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );

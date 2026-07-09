@@ -6,12 +6,18 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, Trash2, Search, AlertTriangle, CheckCircle2, Image, Video, FileWarning, RefreshCw } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Loader2, Trash2, Search, AlertTriangle, CheckCircle2, Image, Video, FileWarning, RefreshCw, Columns } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
 import { format } from "date-fns";
 
 interface OrphanedFile {
@@ -19,6 +25,9 @@ interface OrphanedFile {
   publicId: string;
   path: string;
   createdAt: string;
+  fileType?: string;
+  storageBucket?: string;
+  thumbnailUrl?: string;
 }
 
 interface CleanupResult {
@@ -39,6 +48,10 @@ export default function AdminMediaCleanup() {
   const [maxFiles, setMaxFiles] = useState(100);
   const [olderThanDays, setOlderThanDays] = useState(7);
   const [hasScanned, setHasScanned] = useState(false);
+  const [columnsPerRow, setColumnsPerRow] = useState(() => {
+    const saved = localStorage.getItem("adminMediaCleanupColumnsPerRow");
+    return saved ? parseInt(saved, 10) : 5;
+  });
 
   const scanForOrphanedFiles = async () => {
     setIsLoading(true);
@@ -116,13 +129,6 @@ export default function AdminMediaCleanup() {
     } finally {
       setIsDeleting(false);
     }
-  };
-
-  const getFileIcon = (path: string) => {
-    if (path.match(/\.(mp4|mov|avi|webm)$/i)) {
-      return <Video className="w-4 h-4 text-blue-500" />;
-    }
-    return <Image className="w-4 h-4 text-green-500" />;
   };
 
   return (
@@ -283,47 +289,107 @@ export default function AdminMediaCleanup() {
           </Card>
         )}
 
-        {/* Orphaned Files Table */}
+        {/* Orphaned Files Grid */}
         {orphanedFiles.length > 0 && (
           <Card>
             <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <FileWarning className="w-5 h-5 text-yellow-500" />
-                Orphaned Files Preview
-                <Badge variant="secondary">{orphanedFiles.length}</Badge>
-              </CardTitle>
-              <CardDescription>
-                These files are not referenced by any posts and can be safely deleted
-              </CardDescription>
+              <div className="flex items-center justify-between gap-3 flex-wrap">
+                <div className="space-y-1">
+                  <CardTitle className="flex items-center gap-2">
+                    <FileWarning className="w-5 h-5 text-yellow-500" />
+                    Orphaned Files Preview
+                    <Badge variant="secondary">{orphanedFiles.length}</Badge>
+                  </CardTitle>
+                  <CardDescription>
+                    These files are not referenced by any posts and can be safely deleted
+                  </CardDescription>
+                </div>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="sm" className="gap-2">
+                      <Columns className="w-4 h-4" />
+                      {columnsPerRow} per row
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {[3, 4, 5, 6, 7, 8, 10].map((cols) => (
+                      <DropdownMenuItem
+                        key={cols}
+                        className={cn(columnsPerRow === cols && "bg-secondary")}
+                        onClick={() => {
+                          setColumnsPerRow(cols);
+                          localStorage.setItem("adminMediaCleanupColumnsPerRow", cols.toString());
+                        }}
+                      >
+                        {cols} per row
+                      </DropdownMenuItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
             </CardHeader>
             <CardContent>
-              <ScrollArea className="h-[400px]">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Cloudinary ID</TableHead>
-                      <TableHead>Path</TableHead>
-                      <TableHead>Created</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {orphanedFiles.map((file) => (
-                      <TableRow key={file.id}>
-                        <TableCell>{getFileIcon(file.path)}</TableCell>
-                        <TableCell className="font-mono text-xs max-w-[200px] truncate">
-                          {file.publicId}
-                        </TableCell>
-                        <TableCell className="max-w-[300px] truncate text-muted-foreground">
-                          {file.path}
-                        </TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {file.createdAt ? format(new Date(file.createdAt), "MMM d, yyyy") : "-"}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+              <ScrollArea className="h-[500px]">
+                <div
+                  className="grid gap-3"
+                  style={{ gridTemplateColumns: `repeat(${columnsPerRow}, minmax(0, 1fr))` }}
+                >
+                  {orphanedFiles.map((file) => {
+                    const isVideo = file.fileType === "video" || file.path.match(/\.(mp4|mov|avi|webm)$/i);
+                    const thumb = file.thumbnailUrl;
+                    return (
+                      <div
+                        key={file.id}
+                        className="group relative rounded-xl overflow-hidden border border-border bg-muted"
+                      >
+                        <div className="relative aspect-square">
+                          {thumb ? (
+                            isVideo ? (
+                              <video
+                                src={thumb}
+                                className="w-full h-full object-cover"
+                                muted
+                                playsInline
+                              />
+                            ) : (
+                              <img
+                                src={thumb}
+                                alt={file.publicId || file.path}
+                                className="w-full h-full object-cover"
+                                loading="lazy"
+                                onError={(e) => {
+                                  const target = e.currentTarget;
+                                  target.style.display = "none";
+                                  const fallback = target.parentElement?.querySelector("[data-fallback]");
+                                  if (fallback) (fallback as HTMLElement).style.display = "flex";
+                                }}
+                              />
+                            )
+                          ) : null}
+                          <div
+                            data-fallback
+                            className="absolute inset-0 hidden items-center justify-center bg-muted text-muted-foreground"
+                          >
+                            {isVideo ? <Video className="w-8 h-8" /> : <Image className="w-8 h-8" />}
+                          </div>
+                          <div className="absolute bottom-1 left-1 flex gap-0.5">
+                            <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-90">
+                              {isVideo ? "Video" : "Image"}
+                            </Badge>
+                          </div>
+                        </div>
+                        <div className="p-2 space-y-1">
+                          <div className="font-mono text-[10px] truncate text-foreground" title={file.publicId || file.path}>
+                            {file.publicId || file.path}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">
+                            {file.createdAt ? format(new Date(file.createdAt), "MMM d, yyyy") : "-"}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </ScrollArea>
             </CardContent>
           </Card>
