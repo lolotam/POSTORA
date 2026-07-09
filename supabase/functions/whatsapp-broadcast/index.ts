@@ -13,14 +13,6 @@ Deno.serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const whatsappToken = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
-    const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
-
-    if (!whatsappToken || !phoneNumberId) {
-      return new Response(JSON.stringify({ error: "WhatsApp credentials not configured" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
 
     // Verify auth
     const authHeader = req.headers.get("Authorization");
@@ -65,6 +57,27 @@ Deno.serve(async (req) => {
 
     if (broadcast.status !== "pending") {
       return new Response(JSON.stringify({ error: `Broadcast already ${broadcast.status}` }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Multi-tenant: send with the user's own connected WhatsApp account.
+    // The shared env credentials are only a fallback for legacy admin setups.
+    const { data: waAccount } = await supabaseAdmin
+      .from("social_accounts")
+      .select("platform_user_id, access_token")
+      .eq("user_id", user.id)
+      .eq("platform", "whatsapp")
+      .eq("is_active", true)
+      .order("connected_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const whatsappToken = waAccount?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+    const phoneNumberId = waAccount?.platform_user_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+
+    if (!whatsappToken || !phoneNumberId) {
+      return new Response(JSON.stringify({ error: "No connected WhatsApp Business account" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
