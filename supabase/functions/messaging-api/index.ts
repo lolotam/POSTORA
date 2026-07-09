@@ -496,22 +496,21 @@ Deno.serve(async (req) => {
 
     // ===== WhatsApp Cloud API Actions =====
 
-    // Helper: get WhatsApp token. Coexistence accounts MUST use the per-user
-    // token from the DB (the shared admin secret would point to a different number).
-    // For Cloud API mode we still prefer the env secret if available (legacy admin setup).
+    // Helper: get WhatsApp token. Multi-tenant: each account sends with its own
+    // per-user token from the DB. The shared WHATSAPP_ACCESS_TOKEN env secret is
+    // only a fallback for legacy admin accounts that never stored a token.
     function getWhatsAppToken(account: any): string {
-      const mode = account?.account_metadata?.connection_mode;
-      if (mode === "coexistence") {
-        console.log("[messaging] Coexistence account — using per-user token from DB");
+      if (account?.access_token) {
+        console.log("[messaging] Using per-user token from DB");
         return account.access_token;
       }
       const envToken = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
       if (envToken) {
-        console.log("[messaging] Using WHATSAPP_ACCESS_TOKEN env secret");
+        console.log("[messaging] No per-user token — falling back to WHATSAPP_ACCESS_TOKEN env secret");
         return envToken;
       }
-      console.log("[messaging] Falling back to account.access_token from DB");
-      return account.access_token;
+      console.log("[messaging] No token available for this account");
+      return account?.access_token;
     }
 
     // Helper: mark account as cloud-api-registered in DB

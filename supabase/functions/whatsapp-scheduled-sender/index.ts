@@ -53,7 +53,8 @@ Deno.serve(async (req) => {
           continue;
         }
 
-        const token = accessToken || (msg as any).social_accounts?.access_token;
+        // Multi-tenant: the account's own token first, shared env secret as fallback
+        const token = (msg as any).social_accounts?.access_token || accessToken;
         if (!token) {
           await adminClient.from("whatsapp_scheduled_messages").update({
             status: "failed",
@@ -127,7 +128,7 @@ Deno.serve(async (req) => {
         console.error(`[scheduled-sender] Error processing msg ${msg.id}:`, err);
         await adminClient.from("whatsapp_scheduled_messages").update({
           status: "failed",
-          error_message: err.message || "Unknown error",
+          error_message: (err as Error).message || "Unknown error",
         }).eq("id", msg.id);
       }
     }
@@ -138,7 +139,7 @@ Deno.serve(async (req) => {
     });
   } catch (err) {
     console.error("[scheduled-sender] Fatal error:", err);
-    return new Response(JSON.stringify({ error: err.message }), {
+    return new Response(JSON.stringify({ error: (err as Error).message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
