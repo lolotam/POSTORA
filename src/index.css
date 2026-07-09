@@ -349,6 +349,83 @@
     --sidebar-border: 120 18% 16%;
     --sidebar-ring: 100 80% 50%;
   }
+
+  /* App Theme: WhatsApp Green (admin-controlled via app_settings key "app_theme").
+     Palette from the /messaging/whatsapp mini-app:
+     #075E54 = 174 86% 20%, #128C7E = 173 77% 31%, #25D366 = 142 70% 49%, #DCF8C6 = 94 78% 87% */
+  html:not(.dark)[data-app-theme="whatsapp-green"] {
+    --primary: 142 70% 49%;
+    --primary-foreground: 174 86% 20%;
+    --ring: 173 77% 31%;
+    --accent: 94 78% 87%;
+    --accent-foreground: 174 86% 20%;
+    --secondary: 94 45% 94%;
+    --secondary-foreground: 174 86% 20%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(173 77% 31%) 0%, hsl(142 70% 49%) 100%);
+    --gradient-subtle: linear-gradient(135deg, hsl(94 78% 95%) 0%, hsl(0 0% 100%) 100%);
+    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(142 70% 49% / 0.15) 0%, transparent 50%);
+    --shadow-glow: 0 0 60px -15px hsl(142 70% 49% / 0.4);
+
+    --sidebar-primary: 173 77% 31%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-ring: 142 70% 49%;
+  }
+
+  /* Dark mode keeps the active dark variant's backgrounds; only accents go green,
+     matching how the WhatsApp mini-app composes with dark mode today. */
+  html.dark[data-app-theme="whatsapp-green"] {
+    --primary: 142 70% 49%;
+    --primary-foreground: 174 86% 12%;
+    --ring: 142 70% 49%;
+    --accent: 173 77% 16%;
+    --accent-foreground: 94 78% 87%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(142 70% 49%) 0%, hsl(173 77% 40%) 100%);
+    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(142 70% 49% / 0.2) 0%, transparent 50%);
+    --shadow-glow: 0 0 80px -20px hsl(142 70% 49% / 0.5);
+
+    --sidebar-primary: 142 70% 49%;
+    --sidebar-primary-foreground: 174 86% 12%;
+    --sidebar-ring: 142 70% 49%;
+  }
+
+  /* Solid #075E54 top-nav chrome (same in light and dark, like the WhatsApp header).
+     Token re-map keeps nav items, hover states, mobile menu, and logo readable on teal. */
+  [data-app-theme="whatsapp-green"] .app-topnav {
+    background-color: hsl(174 86% 20%);
+    --background: 174 86% 20%;
+    --foreground: 0 0% 100%;
+    --muted-foreground: 160 25% 82%;
+    --border: 173 60% 28%;
+    --primary: 142 70% 49%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 173 66% 26%;
+    --secondary-foreground: 0 0% 100%;
+    --accent: 173 77% 31%;
+    --accent-foreground: 0 0% 100%;
+    --gradient-primary: linear-gradient(135deg, hsl(0 0% 100%), hsl(94 78% 87%));
+  }
+
+  /* Page background gradient: from-[#DCF8C6]/25 via-background to-background
+     (dark: from-[#075E54]/25), cloned from the WhatsApp mini-app main area. */
+  [data-app-theme="whatsapp-green"] .app-main {
+    background-image: linear-gradient(
+      to bottom,
+      hsl(94 78% 87% / 0.25),
+      hsl(var(--background)) 50%,
+      hsl(var(--background))
+    );
+  }
+
+  .dark[data-app-theme="whatsapp-green"] .app-main {
+    background-image: linear-gradient(
+      to bottom,
+      hsl(174 86% 20% / 0.25),
+      hsl(var(--background)) 50%,
+      hsl(var(--background))
+    );
+  }
 }
 
 @layer base {
