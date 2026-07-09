@@ -133,11 +133,66 @@ curl -s "https://api.postora.cloud/auth/v1/authorize?provider=google&redirect_to
   | python3 -c "import sys,base64,json; d=base64.urlsafe_b64decode(sys.stdin.read().strip()+'=='); print(json.loads(d))"
 ```
 
-## 8. Notes
+## 8. CRITICAL — Dokploy is the source of truth (config does NOT persist on disk)
+
+Editing `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code/docker-compose.yml` or `.env` directly is **insufficient**. Dokploy stores the compose config in its Postgres DB (`compose` table, `composeId=YrlABDQZh5Z2fw8-gvTIv`, `autoDeploy=true`) and **rewrites those on-disk files on every redeploy**, discarding manual edits. This is exactly why the first fix (disk-only) reverted and the error returned.
+
+**The persistent fix must be applied to the Dokploy DB, not the disk files.**
+
+### 8.1 Apply the fix in Dokploy's Postgres (persists across redeploys)
+
+```bash
+# Dokploy Postgres credentials
+DOKP_HOST=dokploy-postgres.1.<swarm-id>
+DOKP_USER=dokploy
+DOKP_DB=dokploy
+DOKP_PASS=$(docker exec dokploy.<id> cat /run/secrets/postgres_password)
+
+docker exec -e PGPASSWORD="$DOKP_PASS" "$DOKP_HOST" psql -U "$DOKP_USER" -d "$DOKP_DB" -c "
+UPDATE compose
+SET \"composeFile\" = REPLACE(
+  \"composeFile\",
+  'GOTRUE_EXTERNAL_PHONE_ENABLED: \${ENABLE_PHONE_SIGNUP}' || CHR(10) || '      GOTRUE_SMS_AUTOCONFIRM',
+  'GOTRUE_EXTERNAL_PHONE_ENABLED: \${ENABLE_PHONE_SIGNUP}' || CHR(10) ||
+  '      GOTRUE_EXTERNAL_GOOGLE_ENABLED: \${GOOGLE_ENABLED}' || CHR(10) ||
+  '      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: \${GOOGLE_CLIENT_ID}' || CHR(10) ||
+  '      GOTRUE_EXTERNAL_GOOGLE_SECRET: \${GOOGLE_CLIENT_SECRET}' || CHR(10) ||
+  '      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: \${GOOGLE_REDIRECT_URI}' || CHR(10) ||
+  '      GOTRUE_SMS_AUTOCONFIRM')
+WHERE \"composeId\"='YrlABDQZh5Z2fw8-gvTIv';"
+
+docker exec -e PGPASSWORD="$DOKP_PASS" "$DOKP_HOST" psql -U "$DOKP_USER" -d "$DOKP_DB" -c "
+UPDATE compose
+SET env = REPLACE(REPLACE(env,
+  'ADDITIONAL_REDIRECT_URLS=https://api.postora.cloud/*,http://localhost:3000/*',
+  'ADDITIONAL_REDIRECT_URLS=https://api.postora.cloud/*,https://postora.cloud/*'),
+  'GOOGLE_CLIENT_SECRET=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' || CHR(10),
+  'GOOGLE_CLIENT_SECRET=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' || CHR(10) || 'GOOGLE_REDIRECT_URI=https://api.postora.cloud/auth/v1/callback' || CHR(10))
+WHERE \"composeId\"='YrlABDQZh5Z2fw8-gvTIv';"
+```
+
+### 8.2 Sync the on-disk files (so the immediate redeploy reads the same config) + redeploy
+
+```bash
+cd /etc/dokploy/compose/postorasupabase-supabase-j8axyh/code
+# docker-compose.yml: insert the 4 google lines after GOTRUE_EXTERNAL_PHONE_ENABLED
+sed -i '/GOTRUE_EXTERNAL_PHONE_ENABLED: ${ENABLE_PHONE_SIGNUP}/a\      GOTRUE_EXTERNAL_GOOGLE_ENABLED: ${GOOGLE_ENABLED}\n      GOTRUE_EXTERNAL_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}\n      GOTRUE_EXTERNAL_GOOGLE_SECRET: ${GOOGLE_CLIENT_SECRET}\n      GOTRUE_EXTERNAL_GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI}' docker-compose.yml
+# .env: fix redirect allow-list + add GOOGLE_REDIRECT_URI
+sed -i 's|ADDITIONAL_REDIRECT_URLS=https://api.postora.cloud/\*,http://localhost:3000/\*|ADDITIONAL_REDIRECT_URLS=https://api.postora.cloud/*,https://postora.cloud/*|' .env
+sed -i '/^GOOGLE_CLIENT_SECRET=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$/a GOOGLE_REDIRECT_URI=https://api.postora.cloud/auth/v1/callback' .env
+# Redeploy with the EXACT Dokploy project name (do not omit -p or it duplicates containers)
+docker compose -p postorasupabase-supabase-j8axyh -f docker-compose.yml up -d --no-deps auth
+```
+
+### 8.3 Why the disk-only edit reverted
+
+The DB `compose` row is the canonical config. Any Dokploy redeploy (`autoDeploy=true`, or a manual redeploy from the dashboard) regenerates the on-disk `docker-compose.yml`/`.env` from the DB, overwriting hand edits. Always edit the DB row (section 8.1) so the change survives.
+
+## 9. Notes
 
 - The same `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` is used for both **YouTube API OAuth** (edge functions) and **Google sign-in** (GoTrue). A separate OAuth client is not required.
 - The YouTube OAuth uses `https://api.postora.cloud/functions/v1/youtube-oauth` as its redirect URI. Both URIs must be registered on the same Google Cloud client.
-- Dokploy auto-deployments **do not** affect GoTrue configuration. This file documents the manual server-side config.
+- GoTrue is `supabase/gotrue:v2.171.0` — provider config is **env-var only** (no `auth.configs` table in this version), so the `GOTRUE_EXTERNAL_GOOGLE_*` vars are mandatory.
 
 ## Final status
 
