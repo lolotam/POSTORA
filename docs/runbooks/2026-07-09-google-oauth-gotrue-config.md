@@ -89,7 +89,51 @@ Add the GoTrue callback URL as an **Authorized redirect URI** in the Google OAut
 
 Without this step, Google will reject the callback after the user consents (redirect_uri_mismatch).
 
-## 7. Notes
+## 7. Symptom 2 — bad_oauth_state after consent
+
+After Google consent, the callback redirects to:
+
+```
+http://localhost:3000/?error=invalid_request&error_code=bad_oauth_state&error_description=OAuth+callback+with+invalid+state
+```
+
+### 7.1 Root cause
+
+`SITE_URL=http://localhost:3000` in `.env`. GoTrue encodes `site_url` into the state JWT cookie. When the callback arrives at `api.postora.cloud/auth/v1/callback`, GoTrue validates the state — and the domain mismatch between the cookie's `site_url` (`localhost:3000`) and the live redirect causes the `bad_oauth_state` error.
+
+Additionally, the redirect to `localhost` means no real users can complete sign-in.
+
+### 7.2 Fix — update SITE_URL and ADDITIONAL_REDIRECT_URLS
+
+```bash
+# Change from:
+SITE_URL=http://localhost:3000
+ADDITIONAL_REDIRECT_URLS=https://api.postora.cloud/*,http://localhost:3000/*
+
+# To:
+SITE_URL=https://postora.cloud
+ADDITIONAL_REDIRECT_URLS=https://api.postora.cloud/*,https://postora.cloud/*
+```
+
+Redeploy auth:
+
+```bash
+cd /etc/dokploy/compose/postorasupabase-supabase-j8axyh/code
+docker compose up -d --no-deps auth
+```
+
+### 7.3 Validation
+
+Inspect the state JWT in the authorize redirect — it should encode `"site_url":"https://postora.cloud"`:
+
+```bash
+curl -s "https://api.postora.cloud/auth/v1/authorize?provider=google&redirect_to=https://postora.cloud/dashboard&scopes=openid%20email%20profile&include_granted_scopes=true" \
+  -o /dev/null -w "%{redirect_url}" \
+  | grep -o 'state=[^&]*' | cut -d= -f2 \
+  | python3 -c "import sys,base64,json; d=base64.urlsafe_b64decode(sys.stdin.read().strip()+'=='); print(json.loads(d))"
+```
+
+## 8. Notes
 
 - The same `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` is used for both **YouTube API OAuth** (edge functions) and **Google sign-in** (GoTrue). A separate OAuth client is not required.
 - The YouTube OAuth uses `https://api.postora.cloud/functions/v1/youtube-oauth` as its redirect URI. Both URIs must be registered on the same Google Cloud client.
