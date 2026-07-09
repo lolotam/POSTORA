@@ -1,8 +1,8 @@
-import { useState, useMemo, useRef } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAdminInbox, InboxMessage } from "@/hooks/useAdminInbox";
 import { supabase } from "@/integrations/supabase/client";
-import { ThreadedMessageList, type MessageThread } from "./ThreadedMessageList";
+import { ThreadedMessageList, groupMessagesIntoThreads, type MessageThread } from "./ThreadedMessageList";
 import { ThreadDetail } from "./ThreadDetail";
 import { ComposeEmail, type ComposeEmailRef, type DraftData } from "./ComposeEmail";
 import { ScheduledEmailsManager } from "./ScheduledEmailsManager";
@@ -18,7 +18,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, RefreshCw, CheckCheck, Mail, Clock, ArrowDownLeft, ArrowUpRight, Inbox, Search, X, FileEdit, RotateCcw } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+import { Loader2, RefreshCw, CheckCheck, Mail, Clock, ArrowDownLeft, ArrowUpRight, Inbox, Search, X, FileEdit, RotateCcw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type MessageFilter = "all" | "received" | "sent";
@@ -33,6 +44,8 @@ export function AdminInbox() {
     markAsRead,
     markAllAsRead,
     deleteMessage,
+    deleteMessages,
+    isDeletingMessages,
     syncDeliveryStatuses,
     isSyncingDeliveryStatuses,
     refetch,
@@ -43,6 +56,7 @@ export function AdminInbox() {
   const [activeTab, setActiveTab] = useState("inbox");
   const [messageFilter, setMessageFilter] = useState<MessageFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
 
   // Fetch draft count
   const { data: draftCount = 0 } = useQuery({
@@ -91,6 +105,47 @@ export function AdminInbox() {
 
   const handleThreadDeleted = () => {
     setSelectedThread(null);
+  };
+
+  // Map thread id -> all message ids in that thread (from full message set, so
+  // selected threads that get filtered out of view still resolve on delete).
+  const threadMessageMap = useMemo(() => {
+    const allThreads = groupMessagesIntoThreads(messages);
+    const map = new Map<string, string[]>();
+    allThreads.forEach((t) => map.set(t.id, t.messages.map((m) => m.id)));
+    return map;
+  }, [messages]);
+
+  const handleToggleThread = useCallback((threadId: string) => {
+    setSelectedThreadIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(threadId)) next.delete(threadId);
+      else next.add(threadId);
+      return next;
+    });
+  }, []);
+
+  const handleToggleAll = useCallback((threadIds: string[], select: boolean) => {
+    setSelectedThreadIds((prev) => {
+      const next = new Set(prev);
+      if (select) threadIds.forEach((id) => next.add(id));
+      else threadIds.forEach((id) => next.delete(id));
+      return next;
+    });
+  }, []);
+
+  const handleBulkDelete = () => {
+    const ids: string[] = [];
+    selectedThreadIds.forEach((tid) => {
+      const msgIds = threadMessageMap.get(tid);
+      if (msgIds) ids.push(...msgIds);
+    });
+    const wasSelectedThreadDeleted = selectedThread
+      ? selectedThreadIds.has(selectedThread.id)
+      : false;
+    deleteMessages(ids);
+    setSelectedThreadIds(new Set());
+    if (wasSelectedThreadDeleted) handleThreadDeleted();
   };
 
   if (isLoading) {
@@ -143,6 +198,36 @@ export function AdminInbox() {
         
         {activeTab === "inbox" && (
           <div className="flex items-center gap-2">
+            {selectedThreadIds.size > 0 && (
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="destructive" size="sm">
+                    <Trash2 className="w-4 h-4 mr-2" />
+                    Delete {selectedThreadIds.size}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>
+                      Delete {selectedThreadIds.size} conversation{selectedThreadIds.size > 1 ? "s" : ""}?
+                    </AlertDialogTitle>
+                    <AlertDialogDescription>
+                      This will permanently delete all messages in the selected conversation{selectedThreadIds.size > 1 ? "s" : ""}. This action cannot be undone.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={handleBulkDelete}
+                      className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      disabled={isDeletingMessages}
+                    >
+                      {isDeletingMessages ? "Deleting..." : "Delete All"}
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            )}
             {/* Message Filter */}
             <Select value={messageFilter} onValueChange={(v) => setMessageFilter(v as MessageFilter)}>
               <SelectTrigger className="w-auto min-w-[150px] h-9 whitespace-nowrap">
@@ -228,6 +313,9 @@ export function AdminInbox() {
               messages={filteredMessages}
               selectedThreadId={selectedThread?.id}
               onSelectThread={handleSelectThread}
+              selectedThreadIds={selectedThreadIds}
+              onToggleThread={handleToggleThread}
+              onToggleAll={handleToggleAll}
             />
           </div>
           <div className="flex-1 border rounded-lg overflow-hidden bg-card">

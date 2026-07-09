@@ -100,6 +100,28 @@ export function useAdminInbox() {
     },
   });
 
+  // Bulk delete messages (by thread)
+  const deleteMessagesMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      if (ids.length === 0) return;
+      const { error } = await supabase
+        .from("admin_inbox_messages")
+        .delete()
+        .in("id", ids);
+
+      if (error) throw error;
+    },
+    onSuccess: (_data, ids) => {
+      queryClient.invalidateQueries({ queryKey: ["admin-inbox-messages"] });
+      toast.success(
+        `Deleted ${ids.length} message${ids.length === 1 ? "" : "s"}`
+      );
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to delete messages");
+    },
+  });
+
   // Fallback: Sync delivery statuses directly from Resend (useful if webhooks aren't configured)
   const syncDeliveryStatusesMutation = useMutation({
     mutationFn: async () => {
@@ -116,8 +138,8 @@ export function useAdminInbox() {
         `Synced delivery statuses (updated ${data?.updated ?? 0}/${data?.checked ?? 0})`
       );
     },
-    onError: (err: any) => {
-      toast.error(err?.message || "Failed to sync delivery statuses");
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Failed to sync delivery statuses");
     },
   });
 
@@ -196,6 +218,11 @@ export function useAdminInbox() {
     [deleteMessageMutation]
   );
 
+  const deleteMessages = useCallback(
+    (ids: string[]) => deleteMessagesMutation.mutate(ids),
+    [deleteMessagesMutation]
+  );
+
   const syncDeliveryStatuses = useCallback(
     () => syncDeliveryStatusesMutation.mutate(),
     [syncDeliveryStatusesMutation]
@@ -210,6 +237,8 @@ export function useAdminInbox() {
     markAsRead,
     markAllAsRead,
     deleteMessage,
+    deleteMessages,
+    isDeletingMessages: deleteMessagesMutation.isPending,
     syncDeliveryStatuses,
     isSyncingDeliveryStatuses: syncDeliveryStatusesMutation.isPending,
     refetch,
