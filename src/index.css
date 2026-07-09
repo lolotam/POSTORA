@@ -130,6 +130,22 @@
     --sidebar-ring: 280 80% 60%;
   }
 
+  .wa-app {
+    --primary: 142 70% 49%;
+    --primary-foreground: 174 86% 20%;
+    --ring: 173 77% 31%;
+    --accent: 94 78% 87%;
+    --accent-foreground: 174 86% 20%;
+  }
+
+  .dark .wa-app {
+    --primary: 142 70% 49%;
+    --primary-foreground: 174 86% 12%;
+    --ring: 142 70% 49%;
+    --accent: 173 77% 16%;
+    --accent-foreground: 94 78% 87%;
+  }
+
   /* Theme Variant 1: Dark Black */
   .dark[data-dark-theme="dark-black"],
   [data-dark-theme="dark-black"] .dark {

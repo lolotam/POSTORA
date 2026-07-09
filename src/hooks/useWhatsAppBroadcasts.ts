@@ -37,11 +37,11 @@ export function useWhatsAppBroadcasts() {
     queryKey,
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("whatsapp_broadcasts" as any)
+        .from("whatsapp_broadcasts")
         .select("*")
         .order("created_at", { ascending: false });
       if (error) throw error;
-      return (data || []) as unknown as WhatsAppBroadcast[];
+      return (data || []) as WhatsAppBroadcast[];
     },
   });
 
@@ -57,31 +57,31 @@ export function useWhatsAppBroadcasts() {
 
       // Create broadcast
       const { data: broadcast, error } = await supabase
-        .from("whatsapp_broadcasts" as any)
+        .from("whatsapp_broadcasts")
         .insert({
           user_id: user.id,
           name: input.name,
           template_name: input.template_name,
           template_components: input.template_components || null,
           recipient_count: input.contact_ids.length,
-        } as any)
+        })
         .select()
         .single();
       if (error) throw error;
 
       // Insert recipients
       const recipients = input.contact_ids.map((c) => ({
-        broadcast_id: (broadcast as any).id,
+        broadcast_id: broadcast.id,
         contact_id: c.id,
         phone_number: c.phone,
       }));
 
       const { error: rErr } = await supabase
-        .from("whatsapp_broadcast_recipients" as any)
-        .insert(recipients as any);
+        .from("whatsapp_broadcast_recipients")
+        .insert(recipients);
       if (rErr) throw rErr;
 
-      return broadcast as unknown as WhatsAppBroadcast;
+      return broadcast as WhatsAppBroadcast;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey });
@@ -129,7 +129,7 @@ export function useWhatsAppBroadcasts() {
   const deleteBroadcast = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase
-        .from("whatsapp_broadcasts" as any)
+        .from("whatsapp_broadcasts")
         .delete()
         .eq("id", id);
       if (error) throw error;
@@ -156,12 +156,12 @@ export function useWhatsAppBroadcastRecipients(broadcastId: string | null) {
     queryFn: async () => {
       if (!broadcastId) return [];
       const { data, error } = await supabase
-        .from("whatsapp_broadcast_recipients" as any)
+        .from("whatsapp_broadcast_recipients")
         .select("*")
         .eq("broadcast_id", broadcastId)
         .order("created_at", { ascending: true });
       if (error) throw error;
-      return (data || []) as unknown as BroadcastRecipient[];
+      return (data || []) as BroadcastRecipient[];
     },
     enabled: !!broadcastId,
   });
