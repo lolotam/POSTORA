@@ -24,11 +24,11 @@ export function useWhatsAppWebhooks() {
     queryKey: ["whatsapp-webhooks"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("whatsapp_webhooks" as any)
+        .from("whatsapp_webhooks")
         .select("*")
         .order("created_at", { ascending: false });
       if (error) throw error;
-      return (data || []) as unknown as WhatsAppWebhook[];
+      return (data || []) as WhatsAppWebhook[];
     },
   });
 
@@ -36,13 +36,13 @@ export function useWhatsAppWebhooks() {
     mutationFn: async (webhook: { name: string; url: string; secret?: string; events?: string[] }) => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
-      const { error } = await supabase.from("whatsapp_webhooks" as any).insert({
+      const { error } = await supabase.from("whatsapp_webhooks").insert({
         user_id: user.id,
         name: webhook.name,
         url: webhook.url,
         secret: webhook.secret || null,
         events: webhook.events || ["message.received"],
-      } as any);
+      });
       if (error) throw error;
     },
     onSuccess: () => {
@@ -54,7 +54,7 @@ export function useWhatsAppWebhooks() {
 
   const updateWebhook = useMutation({
     mutationFn: async ({ id, ...updates }: Partial<WhatsAppWebhook> & { id: string }) => {
-      const { error } = await supabase.from("whatsapp_webhooks" as any).update(updates as any).eq("id", id);
+      const { error } = await supabase.from("whatsapp_webhooks").update(updates).eq("id", id);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -66,7 +66,7 @@ export function useWhatsAppWebhooks() {
 
   const deleteWebhook = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("whatsapp_webhooks" as any).delete().eq("id", id);
+      const { error } = await supabase.from("whatsapp_webhooks").delete().eq("id", id);
       if (error) throw error;
     },
     onSuccess: () => {

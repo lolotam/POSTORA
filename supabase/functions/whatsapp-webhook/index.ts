@@ -105,9 +105,27 @@ Deno.serve(async (req) => {
           const phoneNumberId = value?.metadata?.phone_number_id;
           const displayPhone = value?.metadata?.display_phone_number;
 
+          // Find the social account up front: embedded-signup accounts carry
+          // their own access token, needed for media resolution and auto-replies.
+          const { data: accounts } = await adminClient
+            .from("social_accounts")
+            .select("id, user_id, access_token")
+            .eq("platform", "whatsapp")
+            .eq("platform_user_id", phoneNumberId)
+            .eq("is_active", true)
+            .limit(1);
+          const account = accounts?.[0] ?? null;
+          const accessToken: string | null =
+            account?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN") || null;
+
           // Process incoming messages
           const messages = value?.messages || [];
           for (const msg of messages) {
+            if (!account) {
+              console.warn("[whatsapp-webhook] No matching account found");
+              break;
+            }
+
             const from = msg.from;
             const msgType = msg.type;
             const timestamp = msg.timestamp;
@@ -125,27 +143,27 @@ Deno.serve(async (req) => {
               inboundMediaType = "image";
               mediaMetadata = { mime_type: msg.image?.mime_type, sha256: msg.image?.sha256, media_id: msg.image?.id };
               // Resolve media URL from Meta
-              mediaUrl = await resolveMediaUrl(msg.image?.id);
+              mediaUrl = await resolveMediaUrl(msg.image?.id, accessToken);
             } else if (msgType === "video") {
               messageText = msg.video?.caption || `[Video]`;
               inboundMediaType = "video";
               mediaMetadata = { mime_type: msg.video?.mime_type, sha256: msg.video?.sha256, media_id: msg.video?.id };
-              mediaUrl = await resolveMediaUrl(msg.video?.id);
+              mediaUrl = await resolveMediaUrl(msg.video?.id, accessToken);
             } else if (msgType === "document") {
               messageText = `[Document] ${msg.document?.filename || ""}`;
               inboundMediaType = "document";
               mediaMetadata = { mime_type: msg.document?.mime_type, sha256: msg.document?.sha256, filename: msg.document?.filename, media_id: msg.document?.id };
-              mediaUrl = await resolveMediaUrl(msg.document?.id);
+              mediaUrl = await resolveMediaUrl(msg.document?.id, accessToken);
             } else if (msgType === "audio") {
               messageText = "[Audio message]";
               inboundMediaType = "audio";
               mediaMetadata = { mime_type: msg.audio?.mime_type, media_id: msg.audio?.id };
-              mediaUrl = await resolveMediaUrl(msg.audio?.id);
+              mediaUrl = await resolveMediaUrl(msg.audio?.id, accessToken);
             } else if (msgType === "sticker") {
               messageText = "[Sticker]";
               inboundMediaType = "sticker";
               mediaMetadata = { mime_type: msg.sticker?.mime_type, media_id: msg.sticker?.id };
-              mediaUrl = await resolveMediaUrl(msg.sticker?.id);
+              mediaUrl = await resolveMediaUrl(msg.sticker?.id, accessToken);
             } else if (msgType === "location") {
               messageText = `[Location] ${msg.location?.latitude}, ${msg.location?.longitude}`;
             } else if (msgType === "contacts") {
@@ -158,21 +176,6 @@ Deno.serve(async (req) => {
               messageText = `[${msgType}]`;
             }
 
-            // Find the social account
-            const { data: accounts } = await adminClient
-              .from("social_accounts")
-              .select("id, user_id")
-              .eq("platform", "whatsapp")
-              .eq("platform_user_id", phoneNumberId)
-              .eq("is_active", true)
-              .limit(1);
-
-            if (!accounts || accounts.length === 0) {
-              console.warn("[whatsapp-webhook] No matching account found");
-              continue;
-            }
-
-            const account = accounts[0];
             const conversationId = `wa_${phoneNumberId}_${from}`;
 
             const contacts = value?.contacts || [];
@@ -198,7 +201,14 @@ Deno.serve(async (req) => {
               timestamp: msgTimestamp,
             });
 
-            // Upsert messaging_cache
+            // Upsert messaging_cache, incrementing the unread counter
+            const { data: cachedConversation } = await adminClient
+              .from("messaging_cache")
+              .select("unread_count")
+              .eq("user_id", account.user_id)
+              .eq("conversation_id", conversationId)
+              .maybeSingle();
+
             await adminClient
               .from("messaging_cache")
               .upsert({
@@ -210,7 +220,7 @@ Deno.serve(async (req) => {
                 participant_avatar: null,
                 last_message_preview: messageText.slice(0, 200),
                 last_message_at: msgTimestamp,
-                unread_count: 1,
+                unread_count: (cachedConversation?.unread_count || 0) + 1,
                 updated_at: new Date().toISOString(),
               }, {
                 onConflict: "user_id,conversation_id",
@@ -219,7 +229,7 @@ Deno.serve(async (req) => {
             console.log("[whatsapp-webhook] Stored inbound message");
 
             // === AUTO-REPLY LOGIC ===
-            await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText);
+            await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken);
 
             // === EXTERNAL WEBHOOK DISPATCH (fire-and-forget) ===
             dispatchToWebhooks(adminClient, account.user_id, {
@@ -314,7 +324,8 @@ async function processAutoReplies(
   conversationId: string,
   phoneNumberId: string,
   recipientPhone: string,
-  inboundText: string
+  inboundText: string,
+  accessToken: string | null
 ) {
   try {
     // Check cooldown
@@ -380,10 +391,10 @@ async function processAutoReplies(
 
     if (!matchedReply) return;
 
-    // Send auto-reply via WhatsApp Cloud API
-    const accessToken = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+    // Send auto-reply via WhatsApp Cloud API using the account's own token
+    // (env WHATSAPP_ACCESS_TOKEN fallback happens at the call site)
     if (!accessToken) {
-      console.error("[whatsapp-webhook] WHATSAPP_ACCESS_TOKEN not set, cannot send auto-reply");
+      console.error("[whatsapp-webhook] No access token for this account and WHATSAPP_ACCESS_TOKEN not set, cannot send auto-reply");
       return;
     }
 
@@ -510,10 +521,8 @@ async function dispatchToWebhooks(
   }
 }
 
-async function resolveMediaUrl(mediaId: string | undefined): Promise<string | null> {
-  if (!mediaId) return null;
-  const token = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
-  if (!token) return null;
+async function resolveMediaUrl(mediaId: string | undefined, token: string | null): Promise<string | null> {
+  if (!mediaId || !token) return null;
   try {
     const res = await fetch(`https://graph.facebook.com/v22.0/${mediaId}`, {
       headers: { Authorization: `Bearer ${token}` },
