@@ -701,6 +701,17 @@ export default function ScheduledPosts() {
                     Currently signed in as <span className="font-medium">{user.email}</span>
                   </p>
                 )}
+                {!search && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 rounded-full mt-2"
+                    onClick={() => window.location.href = "/history"}
+                  >
+                    <Clock className="w-4 h-4" />
+                    View Published History
+                  </Button>
+                )}
               </div>
             </GradientRingCard>
           </Reveal>
