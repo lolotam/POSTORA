@@ -9,6 +9,19 @@ const corsHeaders = {
 const lastAutoReplyMap = new Map<string, number>();
 const AUTO_REPLY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
+interface WhatsAppAccount {
+  id: string;
+  user_id: string;
+  access_token: string | null;
+}
+
+interface MessageContent {
+  messageText: string;
+  mediaUrl: string | null;
+  mediaType: string | null;
+  mediaMetadata: Record<string, unknown> | null;
+}
+
 function constantTimeEqual(left: string, right: string): boolean {
   const leftBytes = new TextEncoder().encode(left);
   const rightBytes = new TextEncoder().encode(right);
@@ -99,205 +112,30 @@ Deno.serve(async (req) => {
       for (const entry of entries) {
         const changes = entry?.changes || [];
         for (const change of changes) {
-          if (change.field !== "messages") continue;
-
           const value = change.value;
           const phoneNumberId = value?.metadata?.phone_number_id;
-          const displayPhone = value?.metadata?.display_phone_number;
+          if (!phoneNumberId) continue;
 
           // Find the social account up front: embedded-signup accounts carry
           // their own access token, needed for media resolution and auto-replies.
-          const { data: accounts } = await adminClient
-            .from("social_accounts")
-            .select("id, user_id, access_token")
-            .eq("platform", "whatsapp")
-            .eq("platform_user_id", phoneNumberId)
-            .eq("is_active", true)
-            .limit(1);
-          const account = accounts?.[0] ?? null;
+          const account = await findWhatsAppAccount(adminClient, phoneNumberId);
           const accessToken: string | null =
             account?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN") || null;
 
-          // Process incoming messages
-          const messages = value?.messages || [];
-          for (const msg of messages) {
-            if (!account) {
-              console.warn("[whatsapp-webhook] No matching account found");
-              break;
-            }
-
-            const from = msg.from;
-            const msgType = msg.type;
-            const timestamp = msg.timestamp;
-            const messageId = msg.id;
-
-            let messageText = "";
-            let mediaUrl: string | null = null;
-            let inboundMediaType: string | null = null;
-            let mediaMetadata: Record<string, unknown> | null = null;
-
-            if (msgType === "text") {
-              messageText = msg.text?.body || "";
-            } else if (msgType === "image") {
-              messageText = msg.image?.caption || `[Image]`;
-              inboundMediaType = "image";
-              mediaMetadata = { mime_type: msg.image?.mime_type, sha256: msg.image?.sha256, media_id: msg.image?.id };
-              // Resolve media URL from Meta
-              mediaUrl = await resolveMediaUrl(msg.image?.id, accessToken);
-            } else if (msgType === "video") {
-              messageText = msg.video?.caption || `[Video]`;
-              inboundMediaType = "video";
-              mediaMetadata = { mime_type: msg.video?.mime_type, sha256: msg.video?.sha256, media_id: msg.video?.id };
-              mediaUrl = await resolveMediaUrl(msg.video?.id, accessToken);
-            } else if (msgType === "document") {
-              messageText = `[Document] ${msg.document?.filename || ""}`;
-              inboundMediaType = "document";
-              mediaMetadata = { mime_type: msg.document?.mime_type, sha256: msg.document?.sha256, filename: msg.document?.filename, media_id: msg.document?.id };
-              mediaUrl = await resolveMediaUrl(msg.document?.id, accessToken);
-            } else if (msgType === "audio") {
-              messageText = "[Audio message]";
-              inboundMediaType = "audio";
-              mediaMetadata = { mime_type: msg.audio?.mime_type, media_id: msg.audio?.id };
-              mediaUrl = await resolveMediaUrl(msg.audio?.id, accessToken);
-            } else if (msgType === "sticker") {
-              messageText = "[Sticker]";
-              inboundMediaType = "sticker";
-              mediaMetadata = { mime_type: msg.sticker?.mime_type, media_id: msg.sticker?.id };
-              mediaUrl = await resolveMediaUrl(msg.sticker?.id, accessToken);
-            } else if (msgType === "location") {
-              messageText = `[Location] ${msg.location?.latitude}, ${msg.location?.longitude}`;
-            } else if (msgType === "contacts") {
-              messageText = `[Contact] ${msg.contacts?.[0]?.name?.formatted_name || ""}`;
-            } else if (msgType === "interactive") {
-              messageText = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || "[Interactive]";
-            } else if (msgType === "reaction") {
-              messageText = `[Reaction] ${msg.reaction?.emoji || ""}`;
-            } else {
-              messageText = `[${msgType}]`;
-            }
-
-            const conversationId = `wa_${phoneNumberId}_${from}`;
-
-            const contacts = value?.contacts || [];
-            const contactName = contacts.find((c: any) => c.wa_id === from)?.profile?.name || from;
-            const msgTimestamp = new Date(parseInt(timestamp) * 1000).toISOString();
-
-            // Store individual message with media info
-            await adminClient.from("whatsapp_messages").insert({
-              user_id: account.user_id,
-              social_account_id: account.id,
-              conversation_id: conversationId,
-              message_id: messageId,
-              from_phone: from,
-              from_name: contactName,
-              to_phone: displayPhone,
-              message_text: messageText,
-              message_type: msgType,
-              media_url: mediaUrl,
-              media_type: inboundMediaType,
-              media_metadata: mediaMetadata,
-              direction: "inbound",
-              status: "received",
-              timestamp: msgTimestamp,
-            });
-
-            // Upsert messaging_cache, incrementing the unread counter
-            const { data: cachedConversation } = await adminClient
-              .from("messaging_cache")
-              .select("unread_count")
-              .eq("user_id", account.user_id)
-              .eq("conversation_id", conversationId)
-              .maybeSingle();
-
-            await adminClient
-              .from("messaging_cache")
-              .upsert({
-                user_id: account.user_id,
-                social_account_id: account.id,
-                conversation_id: conversationId,
-                platform: "whatsapp",
-                participant_name: contactName,
-                participant_avatar: null,
-                last_message_preview: messageText.slice(0, 200),
-                last_message_at: msgTimestamp,
-                unread_count: (cachedConversation?.unread_count || 0) + 1,
-                updated_at: new Date().toISOString(),
-              }, {
-                onConflict: "user_id,conversation_id",
-              });
-
-            console.log("[whatsapp-webhook] Stored inbound message");
-
-            // === AUTO-REPLY LOGIC ===
-            await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken);
-
-            // === EXTERNAL WEBHOOK DISPATCH (fire-and-forget) ===
-            dispatchToWebhooks(adminClient, account.user_id, {
-              event: "message.received",
-              timestamp: msgTimestamp,
-              data: {
-                from,
-                contact_name: contactName,
-                message: messageText,
-                message_type: msgType,
-                conversation_id: conversationId,
-                phone_number_id: phoneNumberId,
-              },
-            }).catch(() => console.error("[whatsapp-webhook] Webhook dispatch failed"));
-          }
-
-          // Process status updates — write back to whatsapp_messages and surface failures
-          const statuses = value?.statuses || [];
-          for (const status of statuses) {
-            const wamid: string | undefined = status.id;
-            const newStatus: string = status.status; // sent | delivered | read | failed
-            const errObj = Array.isArray(status.errors) && status.errors.length ? status.errors[0] : null;
-            const errorCode: string | null = errObj ? String(errObj.code ?? "") : null;
-            const rawErrorMessage: string | null = errObj?.message || errObj?.title || null;
-
-            // Friendly mapping for common codes
-            let friendlyError = rawErrorMessage;
-            if (errorCode === "131047") {
-              friendlyError = "Recipient hasn't messaged you in the last 24h — send an approved Template Message instead.";
-            } else if (errorCode === "131026") {
-              friendlyError = "Message undeliverable — recipient may not have WhatsApp.";
-            } else if (errorCode === "131051") {
-              friendlyError = "Unsupported message type for this recipient.";
-            }
-
-            console.log(`[whatsapp-webhook] Received ${newStatus} status update`);
-
-            if (!wamid) continue;
-
-            // Update the original message row
-            const updatePayload: Record<string, unknown> = { status: newStatus };
-            if (errorCode) updatePayload.error_code = errorCode;
-            if (friendlyError) updatePayload.error_message = friendlyError;
-
-            const { data: updatedRows } = await adminClient
-              .from("whatsapp_messages")
-              .update(updatePayload)
-              .eq("message_id", wamid)
-              .select("conversation_id, user_id, social_account_id, message_text");
-
-            // On failure, mark the conversation preview with a warning
-            if (newStatus === "failed" && updatedRows && updatedRows.length > 0) {
-              const row = updatedRows[0] as {
-                conversation_id: string;
-                user_id: string;
-                social_account_id: string;
-                message_text: string | null;
-              };
-              const warnPreview = `⚠️ ${row.message_text || "(send failed)"}`.slice(0, 200);
-              await adminClient
-                .from("messaging_cache")
-                .update({
-                  last_message_preview: warnPreview,
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("user_id", row.user_id)
-                .eq("conversation_id", row.conversation_id);
-            }
+          if (change.field === "messages") {
+            // Status updates resolve by wamid, not account, so they are
+            // processed even when no active account matches.
+            await handleLiveMessages(adminClient, account, value, accessToken);
+          } else if (!account) {
+            console.warn("[whatsapp-webhook] No matching account found");
+            continue;
+          } else if (change.field === "history") {
+            await handleHistorySync(adminClient, account, value);
+          } else if (change.field === "smb_message_echoes") {
+            await handleEchoes(adminClient, account, value, accessToken);
+          } else if (change.field === "smb_app_state_sync") {
+            // Coexistence contact/app-state sync — not ingested yet.
+            console.log("[whatsapp-webhook] Skipping smb_app_state_sync event");
           }
         }
       }
@@ -317,6 +155,436 @@ Deno.serve(async (req) => {
 
   return new Response("Method not allowed", { status: 405 });
 });
+
+async function findWhatsAppAccount(adminClient: any, phoneNumberId: string): Promise<WhatsAppAccount | null> {
+  const { data: accounts } = await adminClient
+    .from("social_accounts")
+    .select("id, user_id, access_token")
+    .eq("platform", "whatsapp")
+    .eq("platform_user_id", phoneNumberId)
+    .eq("is_active", true)
+    .limit(1);
+  return accounts?.[0] ?? null;
+}
+
+// Maps a Cloud API message object (live, history, or echo — all share the same
+// per-type content shape) to display text + media info. Media URL resolution is
+// optional so bulk history imports don't fan out one Graph call per media message.
+async function extractMessageContent(
+  msg: any,
+  accessToken: string | null,
+  resolveMedia: boolean,
+): Promise<MessageContent> {
+  const msgType = msg.type;
+  let messageText = "";
+  let mediaUrl: string | null = null;
+  let mediaType: string | null = null;
+  let mediaMetadata: Record<string, unknown> | null = null;
+
+  if (msgType === "text") {
+    messageText = msg.text?.body || "";
+  } else if (msgType === "image") {
+    messageText = msg.image?.caption || `[Image]`;
+    mediaType = "image";
+    mediaMetadata = { mime_type: msg.image?.mime_type, sha256: msg.image?.sha256, media_id: msg.image?.id };
+    if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.image?.id, accessToken);
+  } else if (msgType === "video") {
+    messageText = msg.video?.caption || `[Video]`;
+    mediaType = "video";
+    mediaMetadata = { mime_type: msg.video?.mime_type, sha256: msg.video?.sha256, media_id: msg.video?.id };
+    if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.video?.id, accessToken);
+  } else if (msgType === "document") {
+    messageText = `[Document] ${msg.document?.filename || ""}`;
+    mediaType = "document";
+    mediaMetadata = { mime_type: msg.document?.mime_type, sha256: msg.document?.sha256, filename: msg.document?.filename, media_id: msg.document?.id };
+    if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.document?.id, accessToken);
+  } else if (msgType === "audio") {
+    messageText = "[Audio message]";
+    mediaType = "audio";
+    mediaMetadata = { mime_type: msg.audio?.mime_type, media_id: msg.audio?.id };
+    if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.audio?.id, accessToken);
+  } else if (msgType === "sticker") {
+    messageText = "[Sticker]";
+    mediaType = "sticker";
+    mediaMetadata = { mime_type: msg.sticker?.mime_type, media_id: msg.sticker?.id };
+    if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.sticker?.id, accessToken);
+  } else if (msgType === "location") {
+    messageText = `[Location] ${msg.location?.latitude}, ${msg.location?.longitude}`;
+  } else if (msgType === "contacts") {
+    messageText = `[Contact] ${msg.contacts?.[0]?.name?.formatted_name || ""}`;
+  } else if (msgType === "interactive") {
+    messageText = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || "[Interactive]";
+  } else if (msgType === "reaction") {
+    messageText = `[Reaction] ${msg.reaction?.emoji || ""}`;
+  } else {
+    messageText = `[${msgType}]`;
+  }
+
+  return { messageText, mediaUrl, mediaType, mediaMetadata };
+}
+
+function toIsoTimestamp(timestamp: unknown): string {
+  const seconds = parseInt(String(timestamp), 10);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return new Date(seconds * 1000).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+// Surfaces/refreshes a conversation row in the inbox list. Never touches
+// participant_name or unread_count of an existing row unless resetUnread is set
+// (an outbound reply from the phone implies the thread was seen).
+async function touchConversation(
+  adminClient: any,
+  account: WhatsAppAccount,
+  conversationId: string,
+  fallbackName: string,
+  preview: string,
+  timestampIso: string,
+  opts: { onlyIfNewer: boolean; resetUnread: boolean },
+): Promise<void> {
+  const { data: cached } = await adminClient
+    .from("messaging_cache")
+    .select("last_message_at")
+    .eq("user_id", account.user_id)
+    .eq("conversation_id", conversationId)
+    .maybeSingle();
+
+  if (cached) {
+    const isNewer = !cached.last_message_at ||
+      new Date(timestampIso).getTime() > new Date(cached.last_message_at).getTime();
+    if (opts.onlyIfNewer && !isNewer) return;
+
+    const update: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (isNewer) {
+      update.last_message_preview = preview.slice(0, 200);
+      update.last_message_at = timestampIso;
+    }
+    if (opts.resetUnread) update.unread_count = 0;
+
+    await adminClient
+      .from("messaging_cache")
+      .update(update)
+      .eq("user_id", account.user_id)
+      .eq("conversation_id", conversationId);
+    return;
+  }
+
+  await adminClient.from("messaging_cache").insert({
+    user_id: account.user_id,
+    social_account_id: account.id,
+    conversation_id: conversationId,
+    platform: "whatsapp",
+    participant_name: fallbackName,
+    participant_avatar: null,
+    last_message_preview: preview.slice(0, 200),
+    last_message_at: timestampIso,
+    unread_count: 0,
+    updated_at: new Date().toISOString(),
+  });
+}
+
+async function handleLiveMessages(
+  adminClient: any,
+  account: WhatsAppAccount | null,
+  value: any,
+  accessToken: string | null,
+) {
+  const phoneNumberId = value.metadata.phone_number_id;
+  const displayPhone = value?.metadata?.display_phone_number;
+
+  // Process incoming messages
+  const messages = value?.messages || [];
+  for (const msg of messages) {
+    if (!account) {
+      console.warn("[whatsapp-webhook] No matching account found");
+      break;
+    }
+    const from = msg.from;
+    const msgType = msg.type;
+    const messageId = msg.id;
+
+    const { messageText, mediaUrl, mediaType, mediaMetadata } =
+      await extractMessageContent(msg, accessToken, true);
+
+    const conversationId = `wa_${phoneNumberId}_${from}`;
+
+    const contacts = value?.contacts || [];
+    const contactName = contacts.find((c: any) => c.wa_id === from)?.profile?.name || from;
+    const msgTimestamp = toIsoTimestamp(msg.timestamp);
+
+    // Store individual message with media info; ignoreDuplicates makes Meta's
+    // webhook redeliveries no-ops instead of double rows.
+    const { data: insertedRows } = await adminClient
+      .from("whatsapp_messages")
+      .upsert({
+        user_id: account.user_id,
+        social_account_id: account.id,
+        conversation_id: conversationId,
+        message_id: messageId,
+        from_phone: from,
+        from_name: contactName,
+        to_phone: displayPhone,
+        message_text: messageText,
+        message_type: msgType,
+        media_url: mediaUrl,
+        media_type: mediaType,
+        media_metadata: mediaMetadata,
+        direction: "inbound",
+        status: "received",
+        timestamp: msgTimestamp,
+      }, { onConflict: "user_id,message_id", ignoreDuplicates: true })
+      .select("id");
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.log("[whatsapp-webhook] Duplicate inbound message skipped");
+      continue;
+    }
+
+    // Upsert messaging_cache, incrementing the unread counter
+    const { data: cachedConversation } = await adminClient
+      .from("messaging_cache")
+      .select("unread_count")
+      .eq("user_id", account.user_id)
+      .eq("conversation_id", conversationId)
+      .maybeSingle();
+
+    await adminClient
+      .from("messaging_cache")
+      .upsert({
+        user_id: account.user_id,
+        social_account_id: account.id,
+        conversation_id: conversationId,
+        platform: "whatsapp",
+        participant_name: contactName,
+        participant_avatar: null,
+        last_message_preview: messageText.slice(0, 200),
+        last_message_at: msgTimestamp,
+        unread_count: (cachedConversation?.unread_count || 0) + 1,
+        updated_at: new Date().toISOString(),
+      }, {
+        onConflict: "user_id,conversation_id",
+      });
+
+    console.log("[whatsapp-webhook] Stored inbound message");
+
+    // === AUTO-REPLY LOGIC ===
+    await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken);
+
+    // === EXTERNAL WEBHOOK DISPATCH (fire-and-forget) ===
+    dispatchToWebhooks(adminClient, account.user_id, {
+      event: "message.received",
+      timestamp: msgTimestamp,
+      data: {
+        from,
+        contact_name: contactName,
+        message: messageText,
+        message_type: msgType,
+        conversation_id: conversationId,
+        phone_number_id: phoneNumberId,
+      },
+    }).catch(() => console.error("[whatsapp-webhook] Webhook dispatch failed"));
+  }
+
+  // Process status updates — write back to whatsapp_messages and surface failures
+  const statuses = value?.statuses || [];
+  for (const status of statuses) {
+    const wamid: string | undefined = status.id;
+    const newStatus: string = status.status; // sent | delivered | read | failed
+    const errObj = Array.isArray(status.errors) && status.errors.length ? status.errors[0] : null;
+    const errorCode: string | null = errObj ? String(errObj.code ?? "") : null;
+    const rawErrorMessage: string | null = errObj?.message || errObj?.title || null;
+
+    // Friendly mapping for common codes
+    let friendlyError = rawErrorMessage;
+    if (errorCode === "131047") {
+      friendlyError = "Recipient hasn't messaged you in the last 24h — send an approved Template Message instead.";
+    } else if (errorCode === "131026") {
+      friendlyError = "Message undeliverable — recipient may not have WhatsApp.";
+    } else if (errorCode === "131051") {
+      friendlyError = "Unsupported message type for this recipient.";
+    }
+
+    console.log(`[whatsapp-webhook] Received ${newStatus} status update`);
+
+    if (!wamid) continue;
+
+    // Update the original message row
+    const updatePayload: Record<string, unknown> = { status: newStatus };
+    if (errorCode) updatePayload.error_code = errorCode;
+    if (friendlyError) updatePayload.error_message = friendlyError;
+
+    const { data: updatedRows } = await adminClient
+      .from("whatsapp_messages")
+      .update(updatePayload)
+      .eq("message_id", wamid)
+      .select("conversation_id, user_id, social_account_id, message_text");
+
+    // On failure, mark the conversation preview with a warning
+    if (newStatus === "failed" && updatedRows && updatedRows.length > 0) {
+      const row = updatedRows[0] as {
+        conversation_id: string;
+        user_id: string;
+        social_account_id: string;
+        message_text: string | null;
+      };
+      const warnPreview = `⚠️ ${row.message_text || "(send failed)"}`.slice(0, 200);
+      await adminClient
+        .from("messaging_cache")
+        .update({
+          last_message_preview: warnPreview,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", row.user_id)
+        .eq("conversation_id", row.conversation_id);
+    }
+  }
+}
+
+// Coexistence one-time history push: Meta sends recent phone threads in chunks
+// minutes after an onboarding where the user approved chat-history sharing.
+// Imported messages must never trigger auto-replies, external webhook dispatch,
+// or unread badges — they were already handled on the phone.
+async function handleHistorySync(
+  adminClient: any,
+  account: WhatsAppAccount,
+  value: any,
+) {
+  const phoneNumberId = value.metadata.phone_number_id;
+  const chunks = value?.history || [];
+  let imported = 0;
+
+  for (const chunk of chunks) {
+    const threads = chunk?.threads || [];
+    for (const thread of threads) {
+      const contactWaId: string | undefined = thread?.id;
+      if (!contactWaId) continue;
+
+      const conversationId = `wa_${phoneNumberId}_${contactWaId}`;
+      const rows: Record<string, unknown>[] = [];
+      let latestTs: string | null = null;
+      let latestPreview = "";
+
+      for (const msg of thread?.messages || []) {
+        if (!msg?.id) continue;
+
+        const isInbound = msg.from === contactWaId;
+        // Media URLs are not resolved for history (media_id kept in metadata):
+        // old media is often expired and per-message Graph calls would blow the
+        // function budget on large imports.
+        const { messageText, mediaType, mediaMetadata } =
+          await extractMessageContent(msg, null, false);
+        const msgTimestamp = toIsoTimestamp(msg.timestamp);
+
+        rows.push({
+          user_id: account.user_id,
+          social_account_id: account.id,
+          conversation_id: conversationId,
+          message_id: msg.id,
+          from_phone: isInbound ? contactWaId : phoneNumberId,
+          from_name: isInbound ? contactWaId : "You",
+          to_phone: isInbound ? phoneNumberId : contactWaId,
+          message_text: messageText,
+          message_type: msg.type || "text",
+          media_url: null,
+          media_type: mediaType,
+          media_metadata: mediaMetadata,
+          direction: isInbound ? "inbound" : "outbound",
+          status: msg.history_context?.status || (isInbound ? "received" : "sent"),
+          timestamp: msgTimestamp,
+        });
+
+        if (!latestTs || new Date(msgTimestamp).getTime() > new Date(latestTs).getTime()) {
+          latestTs = msgTimestamp;
+          latestPreview = messageText;
+        }
+      }
+
+      if (rows.length === 0) continue;
+
+      const { error } = await adminClient
+        .from("whatsapp_messages")
+        .upsert(rows, { onConflict: "user_id,message_id", ignoreDuplicates: true });
+      if (error) {
+        console.error("[whatsapp-webhook] History batch insert failed:", error.message);
+        continue;
+      }
+      imported += rows.length;
+
+      await touchConversation(
+        adminClient,
+        account,
+        conversationId,
+        `+${contactWaId}`,
+        latestPreview,
+        latestTs!,
+        { onlyIfNewer: true, resetUnread: false },
+      );
+    }
+  }
+
+  console.log(`[whatsapp-webhook] History sync stored ${imported} messages`);
+}
+
+// Coexistence echo: a message the business sent from the WhatsApp Business app.
+// Mirrors it into the web inbox as outbound; no auto-replies or dispatch.
+async function handleEchoes(
+  adminClient: any,
+  account: WhatsAppAccount,
+  value: any,
+  accessToken: string | null,
+) {
+  const phoneNumberId = value.metadata.phone_number_id;
+  const echoes = value?.message_echoes || [];
+
+  for (const msg of echoes) {
+    if (!msg?.id || !msg?.to) continue;
+
+    const recipient = String(msg.to).replace(/\D/g, "");
+    const conversationId = `wa_${phoneNumberId}_${recipient}`;
+    const { messageText, mediaUrl, mediaType, mediaMetadata } =
+      await extractMessageContent(msg, accessToken, true);
+    const msgTimestamp = toIsoTimestamp(msg.timestamp);
+
+    const { data: insertedRows } = await adminClient
+      .from("whatsapp_messages")
+      .upsert({
+        user_id: account.user_id,
+        social_account_id: account.id,
+        conversation_id: conversationId,
+        message_id: msg.id,
+        from_phone: phoneNumberId,
+        from_name: "You",
+        to_phone: recipient,
+        message_text: messageText,
+        message_type: msg.type || "text",
+        media_url: mediaUrl,
+        media_type: mediaType,
+        media_metadata: mediaMetadata,
+        direction: "outbound",
+        status: "sent",
+        timestamp: msgTimestamp,
+      }, { onConflict: "user_id,message_id", ignoreDuplicates: true })
+      .select("id");
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.log("[whatsapp-webhook] Duplicate echo skipped");
+      continue;
+    }
+
+    await touchConversation(
+      adminClient,
+      account,
+      conversationId,
+      `+${recipient}`,
+      messageText,
+      msgTimestamp,
+      { onlyIfNewer: false, resetUnread: true },
+    );
+
+    console.log("[whatsapp-webhook] Stored phone-sent echo");
+  }
+}
 
 async function processAutoReplies(
   adminClient: any,
@@ -354,20 +622,20 @@ async function processAutoReplies(
     // Check away rules first
     for (const rule of rules) {
       if (rule.rule_type !== "away") continue;
-      
+
       if (rule.schedule_days && !rule.schedule_days.includes(currentDay)) continue;
-      
+
       if (rule.schedule_start && rule.schedule_end) {
         const start = rule.schedule_start.slice(0, 5);
         const end = rule.schedule_end.slice(0, 5);
-        
+
         if (start <= end) {
           if (currentTime < start || currentTime > end) continue;
         } else {
           if (currentTime < start && currentTime > end) continue;
         }
       }
-      
+
       matchedReply = rule.reply_message;
       matchedRuleId = rule.id;
       console.log("[whatsapp-webhook] Away rule matched");

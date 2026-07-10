@@ -14,6 +14,74 @@ const FACEBOOK_APP_SECRET = Deno.env.get("FACEBOOK_APP_SECRET");
 
 const GRAPH_VERSION = "v22.0";
 
+// Coexistence needs history/smb_* on top of messages; these are subscribed at the
+// app level (App Dashboard → WhatsApp → Configuration → Webhook fields), not per WABA.
+const REQUIRED_WEBHOOK_FIELDS = [
+  "messages",
+  "history",
+  "smb_message_echoes",
+  "smb_app_state_sync",
+];
+
+interface WebhookFieldsCheck {
+  valid: boolean;
+  callback_url?: string;
+  active?: boolean;
+  subscribed_fields?: string[];
+  missing_fields?: string[];
+  error?: string;
+  hint?: string;
+}
+
+async function checkWebhookFields(appId: string, appToken: string): Promise<WebhookFieldsCheck> {
+  try {
+    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(
+      appId,
+    )}/subscriptions?access_token=${encodeURIComponent(appToken)}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      return {
+        valid: false,
+        error: data?.error?.message || `Meta returned HTTP ${res.status}`,
+      };
+    }
+
+    const waba = (data?.data || []).find(
+      (s: { object?: string }) => s.object === "whatsapp_business_account",
+    );
+    if (!waba) {
+      return {
+        valid: false,
+        error: "No whatsapp_business_account webhook subscription found on this app",
+        hint: "In Meta App Dashboard → WhatsApp → Configuration, set the Callback URL and subscribe to webhook fields.",
+      };
+    }
+
+    const subscribed: string[] = (waba.fields || [])
+      .map((f: unknown) => (typeof f === "string" ? f : (f as { name?: string })?.name))
+      .filter(Boolean);
+    const missing = REQUIRED_WEBHOOK_FIELDS.filter((f) => !subscribed.includes(f));
+
+    return {
+      valid: missing.length === 0 && waba.active !== false,
+      callback_url: waba.callback_url,
+      active: waba.active,
+      subscribed_fields: subscribed,
+      missing_fields: missing,
+      hint: missing.length
+        ? `Subscribe the missing fields in Meta App Dashboard → WhatsApp → Configuration → Webhook fields: ${missing.join(", ")}. Without history and smb_message_echoes, coexistence chat history and phone-sent messages never reach Postora.`
+        : undefined,
+    };
+  } catch (e) {
+    return {
+      valid: false,
+      error: e instanceof Error ? e.message : "Network error contacting Meta",
+    };
+  }
+}
+
 interface ConfigCheck {
   mode: "cloud_api" | "coexistence";
   setting_key: string;
@@ -175,7 +243,7 @@ Deno.serve(async (req) => {
 
     const appToken = `${FACEBOOK_APP_ID}|${FACEBOOK_APP_SECRET}`;
 
-    const [cloudResult, coexResult] = await Promise.all([
+    const [cloudResult, coexResult, webhookFieldsResult] = await Promise.all([
       checkConfig("cloud_api", "META_WHATSAPP_CONFIG_ID", cloudId, appToken),
       checkConfig(
         "coexistence",
@@ -183,12 +251,14 @@ Deno.serve(async (req) => {
         coexId,
         appToken,
       ),
+      checkWebhookFields(FACEBOOK_APP_ID, appToken),
     ]);
 
     return new Response(
       JSON.stringify({
         cloud_api: cloudResult,
         coexistence: coexResult,
+        webhook_fields: webhookFieldsResult,
         all_valid: cloudResult.valid && coexResult.valid,
         facebook_app_id: FACEBOOK_APP_ID,
       }),

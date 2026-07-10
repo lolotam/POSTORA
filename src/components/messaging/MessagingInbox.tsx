@@ -7,7 +7,6 @@ import { AccountSelector } from "./AccountSelector";
 import { ConversationList } from "./ConversationList";
 import { ConversationDetail } from "./ConversationDetail";
 import { WhatsAppSetup } from "./WhatsAppSetup";
-import { WhatsAppDiagnostics } from "./WhatsAppDiagnostics";
 import { NewConversationDialog } from "./NewConversationDialog";
 import { LabelFilter } from "./ConversationLabels";
 import { useMessagingAccounts, useConversations } from "@/hooks/useMessaging";
@@ -145,10 +144,6 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                       />
                     </div>
                   </div>
-                  <WhatsAppDiagnostics
-                    socialAccountId={selectedAccountId}
-                    phoneNumberId={selectedAccount?.platform_user_id || ""}
-                  />
                 </>
               )}
             </>
