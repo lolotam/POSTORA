@@ -153,7 +153,7 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
                   .sort((a, b) => a.full_path.localeCompare(b.full_path))
                   .map((folder) => (
                     <SelectItem key={folder.full_path} value={folder.full_path}>
-                      {folder.full_path}
+                      {folder.name}
                     </SelectItem>
                   ))}
               </SelectContent>
