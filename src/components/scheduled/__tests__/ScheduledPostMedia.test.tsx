@@ -19,11 +19,15 @@ vi.mock("@/components/ui/tooltip", () => ({
   TooltipContent: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 vi.mock("@/components/ui/select", () => ({
-  Select: ({ children, onValueChange, disabled }: any) => (
-    <div>
-      {children}
-      <button disabled={disabled} onClick={() => onValueChange("/Campaign")}>Move to Campaign</button>
-    </div>
+  Select: ({ value, onValueChange, disabled }: any) => (
+    <button
+      aria-label="Media folder"
+      data-folder-value={value}
+      disabled={disabled}
+      onClick={() => onValueChange("/Campaign")}
+    >
+      {value}
+    </button>
   ),
   SelectTrigger: ({ children, ...props }: any) => <div {...props}>{children}</div>,
   SelectValue: ({ placeholder }: any) => <span>{placeholder}</span>,
@@ -39,14 +43,19 @@ const rows = Array.from({ length: 5 }, (_, index) => ({
   folder_path: "/",
 }));
 
-function mockMediaLoad(updateResult = { error: null as null | Error }, mediaRows = rows) {
-  const inUpdate = vi.fn().mockResolvedValue(updateResult);
+function mockMediaLoad(
+  updateResult = { data: rows.map(({ id }) => ({ id })), error: null as null | Error },
+  mediaRows = rows,
+) {
+  const selectUpdate = vi.fn().mockResolvedValue(updateResult);
+  const inUpdate = vi.fn().mockReturnValue({ select: selectUpdate });
   const eqUpdate = vi.fn().mockReturnValue({ in: inUpdate });
   const update = vi.fn().mockReturnValue({ eq: eqUpdate });
   const inSelect = vi.fn().mockResolvedValue({ data: mediaRows, error: null });
-  const select = vi.fn().mockReturnValue({ in: inSelect });
+  const eqSelect = vi.fn().mockReturnValue({ in: inSelect });
+  const select = vi.fn().mockReturnValue({ eq: eqSelect });
   (supabase.from as any).mockReturnValue({ select, update });
-  return { update, eqUpdate, inUpdate };
+  return { update, eqUpdate, inUpdate, selectUpdate };
 }
 
 describe("ScheduledPostMedia", () => {
@@ -80,18 +89,18 @@ describe("ScheduledPostMedia", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveTextContent("Media Library"));
-    fireEvent.click(screen.getByRole("button", { name: "Move to Campaign" }));
+    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/"));
+    fireEvent.click(screen.getByLabelText("Media folder"));
 
     await waitFor(() => expect(update).toHaveBeenCalledWith({ folder_path: "/Campaign" }));
     expect(eqUpdate).toHaveBeenCalledWith("user_id", "user-1");
     expect(inUpdate).toHaveBeenCalledWith("id", rows.map((row) => row.id));
-    expect(screen.getByLabelText("Media folder")).toHaveTextContent("Campaign");
+    expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/Campaign");
   });
 
   it("preserves the previous folder label when moving media fails", async () => {
     const failureRows = rows.map((row) => ({ ...row, id: `failure-${row.id}` }));
-    mockMediaLoad({ error: new Error("move failed") }, failureRows);
+    mockMediaLoad({ data: null, error: new Error("move failed") }, failureRows);
     render(
       <ScheduledPostMedia
         mediaFileIds={failureRows.map((row) => row.id)}
@@ -101,10 +110,57 @@ describe("ScheduledPostMedia", () => {
       />,
     );
 
-    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveTextContent("Media Library"));
-    fireEvent.click(screen.getByRole("button", { name: "Move to Campaign" }));
+    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/"));
+    fireEvent.click(screen.getByLabelText("Media folder"));
 
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" })));
-    expect(screen.getByLabelText("Media folder")).toHaveTextContent("Media Library");
+    expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/");
+  });
+
+  it("preserves folder state when only some expected media rows are updated", async () => {
+    const partialRows = rows.map((row) => ({ ...row, id: `partial-${row.id}` }));
+    mockMediaLoad({ data: [{ id: partialRows[0].id }], error: null }, partialRows);
+    render(
+      <ScheduledPostMedia
+        mediaFileIds={partialRows.map((row) => row.id)}
+        mediaFolders={[{ id: "folder-1", name: "Campaign", full_path: "/Campaign" }]}
+        userId="user-1"
+        onOpen={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/"));
+    fireEvent.click(screen.getByLabelText("Media folder"));
+
+    await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" })));
+    expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/");
+  });
+
+  it("reloads folder paths from the database when cached URLs are reused", async () => {
+    const freshRows = rows.map((row) => ({ ...row, id: `fresh-${row.id}` }));
+    mockMediaLoad(undefined, freshRows);
+    const { unmount } = render(
+      <ScheduledPostMedia
+        mediaFileIds={freshRows.map((row) => row.id)}
+        mediaFolders={[{ id: "folder-1", name: "Campaign", full_path: "/Campaign" }]}
+        userId="user-1"
+        onOpen={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/"));
+    unmount();
+
+    const movedRows = freshRows.map((row) => ({ ...row, folder_path: "/Campaign" }));
+    mockMediaLoad(undefined, movedRows);
+    render(
+      <ScheduledPostMedia
+        mediaFileIds={freshRows.map((row) => row.id)}
+        mediaFolders={[{ id: "folder-1", name: "Campaign", full_path: "/Campaign" }]}
+        userId="user-1"
+        onOpen={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/Campaign"));
   });
 });

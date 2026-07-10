@@ -12,24 +12,27 @@ function values(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [value];
 }
 
+function normalizedTypes(value: unknown): ScheduledPostType[] {
+  return values(value).flatMap((candidate) => {
+    if (typeof candidate !== "string") return [];
+    const normalized = candidate.toLowerCase() === "stories" ? "story" : candidate.toLowerCase();
+    return TYPE_ORDER.includes(normalized as ScheduledPostType)
+      ? [normalized as ScheduledPostType]
+      : [];
+  });
+}
+
 export function getScheduledPostTypes(
   metadata: Record<string, any> | null | undefined,
   platforms: string[],
 ): ScheduledPostType[] {
   const found = new Set<ScheduledPostType>();
-  const candidates = [
-    metadata?.facebook_post_type,
-    metadata?.instagram_post_type,
-    metadata?.instagram?.mediaType,
-  ];
-
-  for (const candidate of candidates.flatMap(values)) {
-    if (typeof candidate !== "string") continue;
-    const normalized = candidate.toLowerCase() === "stories" ? "story" : candidate.toLowerCase();
-    if (TYPE_ORDER.includes(normalized as ScheduledPostType)) {
-      found.add(normalized as ScheduledPostType);
-    }
-  }
+  normalizedTypes(metadata?.facebook_post_type).forEach((type) => found.add(type));
+  const instagramTypes = normalizedTypes(metadata?.instagram_post_type);
+  const effectiveInstagramTypes = instagramTypes.length > 0
+    ? instagramTypes
+    : normalizedTypes(metadata?.instagram?.mediaType);
+  effectiveInstagramTypes.forEach((type) => found.add(type));
 
   if (found.size === 0 && platforms.some((platform) => platform === "facebook" || platform === "instagram")) {
     found.add("feed");

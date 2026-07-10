@@ -25,6 +25,18 @@ describe("getScheduledPostTypes", () => {
     expect(getScheduledPostTypes({}, ["facebook"])).toEqual(["feed"]);
     expect(getScheduledPostTypes({}, ["linkedin"])).toEqual([]);
   });
+
+  it("ignores legacy Instagram media type when the current field has a recognized value", () => {
+    expect(
+      getScheduledPostTypes(
+        {
+          instagram_post_type: "reel",
+          instagram: { mediaType: "stories" },
+        },
+        ["instagram"],
+      ),
+    ).toEqual(["reel"]);
+  });
 });
 
 describe("getMediaFolderLabel", () => {

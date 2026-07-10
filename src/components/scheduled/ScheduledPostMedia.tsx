@@ -14,6 +14,8 @@ export interface ScheduledMediaItem {
   folderPath: string;
 }
 
+type CachedMediaUrl = Pick<ScheduledMediaItem, "url" | "kind">;
+
 interface ScheduledPostMediaProps {
   mediaFileIds: string[];
   mediaFolders: MediaFolderOption[];
@@ -22,7 +24,7 @@ interface ScheduledPostMediaProps {
 }
 
 // Module-level cache to avoid re-signing on re-renders / card revisits.
-const urlCache = new Map<string, ScheduledMediaItem>();
+const urlCache = new Map<string, CachedMediaUrl>();
 
 export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen }: ScheduledPostMediaProps) {
   const [items, setItems] = useState<ScheduledMediaItem[]>([]);
@@ -38,38 +40,39 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
       return;
     }
 
-    // Serve from cache immediately when possible.
-    const cached = ids.map((id) => urlCache.get(id)).filter(Boolean) as ScheduledMediaItem[];
-    if (cached.length === ids.length) {
-      setItems(cached);
-      return;
-    }
-
     (async () => {
       setLoading(true);
-      const missing = ids.filter((id) => !urlCache.has(id));
       const { data: rows, error } = await supabase
         .from("media_files")
         .select("id, file_path, file_type, storage_bucket, folder_path")
-        .in("id", missing);
+        .eq("user_id", userId)
+        .in("id", ids);
 
+      const resolvedById = new Map<string, ScheduledMediaItem>();
       if (!error && rows) {
         for (const m of rows) {
           if (!m.file_path) continue;
-          let url: string | null = null;
-          if (m.storage_bucket === "cloudinary") {
+          const cacheKey = `${userId}:${m.id}`;
+          const cached = urlCache.get(cacheKey);
+          let url = cached?.url ?? null;
+          if (!url && m.storage_bucket === "cloudinary") {
             url = m.file_path;
-          } else if (m.storage_bucket) {
+          } else if (!url && m.storage_bucket) {
             const { data: signed } = await supabase.storage
               .from(m.storage_bucket)
               .createSignedUrl(m.file_path, 3600);
             url = signed?.signedUrl ?? null;
           }
           if (url) {
-            urlCache.set(m.id, {
+            const kind = m.file_type === "video" ? "video" : "image";
+            urlCache.set(cacheKey, {
+              url,
+              kind,
+            });
+            resolvedById.set(m.id, {
               id: m.id,
               url,
-              kind: m.file_type === "video" ? "video" : "image",
+              kind,
               folderPath: m.folder_path || "/",
             });
           }
@@ -77,7 +80,7 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
       }
 
       if (cancelled) return;
-      const resolved = ids.map((id) => urlCache.get(id)).filter(Boolean) as ScheduledMediaItem[];
+      const resolved = ids.map((id) => resolvedById.get(id)).filter(Boolean) as ScheduledMediaItem[];
       setItems(resolved);
       setLoading(false);
     })();
@@ -85,32 +88,39 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
     return () => {
       cancelled = true;
     };
-  }, [mediaFileIds.join("|")]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mediaFileIds.join("|"), userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const count = items.length || mediaFileIds?.length || 0;
   if (count === 0) return null;
 
   const single = count === 1;
   const folderLabel = getMediaFolderLabel(items.map((item) => item.folderPath), mediaFolders);
+  const folderPaths = new Set(items.map((item) => item.folderPath));
+  const folderValue = folderPaths.size === 1 ? [...folderPaths][0] : "__mixed__";
 
   const handleFolderChange = async (folderPath: string) => {
     setSavingFolder(true);
     const ids = mediaFileIds.filter((id) => typeof id === "string");
-    const { error } = await supabase
+    const { data: updatedRows, error } = await supabase
       .from("media_files")
       .update({ folder_path: folderPath })
       .eq("user_id", userId)
-      .in("id", ids);
+      .in("id", ids)
+      .select("id");
 
-    if (error) {
+    const expectedIds = new Set(ids);
+    const returnedIds = new Set((updatedRows ?? []).map((row) => row.id));
+    const fullyUpdated = expectedIds.size === returnedIds.size
+      && [...expectedIds].every((id) => returnedIds.has(id));
+
+    if (error || !fullyUpdated) {
       toast({
         title: "Folder update failed",
-        description: error.message || "Failed to move media",
+        description: error?.message || "Not all media files could be moved.",
         variant: "destructive",
       });
     } else {
       const updated = items.map((item) => ({ ...item, folderPath }));
-      updated.forEach((item) => urlCache.set(item.id, item));
       setItems(updated);
       toast({ title: "Media moved", description: "All post media were moved successfully." });
     }
@@ -130,11 +140,14 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
             {count} {count === 1 ? "media" : "media"}
           </span>
           {!loading && items.length > 0 && (
-            <Select onValueChange={handleFolderChange} disabled={savingFolder}>
+            <Select value={folderValue} onValueChange={handleFolderChange} disabled={savingFolder}>
               <SelectTrigger className="h-8 w-[160px] text-xs" aria-label="Media folder">
                 <SelectValue placeholder={folderLabel} />
               </SelectTrigger>
               <SelectContent>
+                {folderValue === "__mixed__" && (
+                  <SelectItem value="__mixed__" disabled>Multiple folders</SelectItem>
+                )}
                 <SelectItem value="/">Media Library</SelectItem>
                 {[...mediaFolders]
                   .sort((a, b) => a.full_path.localeCompare(b.full_path))
