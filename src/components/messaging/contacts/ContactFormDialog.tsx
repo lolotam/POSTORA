@@ -152,6 +152,7 @@ export function ContactFormDialog({ open, onOpenChange, contact }: ContactFormDi
               className="relative"
               onClick={() => fileRef.current?.click()}
               disabled={uploading}
+              aria-label={uploading ? "Uploading photo" : "Upload contact photo"}
             >
               <Avatar className="h-20 w-20">
                 <AvatarImage src={form.avatar_url || undefined} />

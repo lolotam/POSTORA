@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -112,7 +112,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
     });
   };
 
-  const buildContacts = (): {
+  const buildContacts = useMemo((): {
     valid: (ContactInput & { _rawPhone: string })[];
     invalidCount: number;
     cleanedCount: number;
@@ -180,35 +180,31 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
     }
 
     return { valid, invalidCount, cleanedCount };
-  };
+  }, [parsed, columnMap, defaultDial]);
 
   const previewData = (() => {
     if (!parsed || step !== "map") return [];
-    const { valid } = buildContacts();
-    return valid.slice(0, 10);
+    return buildContacts.valid.slice(0, 10);
   })();
 
-  const previewInvalid = parsed ? parsed.rows.length - buildContacts().valid.length - 0 : 0;
+  const previewInvalid = parsed ? parsed.rows.length - buildContacts.valid.length : 0;
 
   const runImport = async () => {
     if (!session?.user?.id || !parsed) return;
     setStep("running");
     setProgress(0);
 
-    const { valid, invalidCount, cleanedCount } = buildContacts();
+    const { valid, invalidCount, cleanedCount } = buildContacts;
     const BATCH = 500;
     let imported = 0;
     const fails: FailRow[] = [];
 
     for (let i = 0; i < valid.length; i += BATCH) {
       const batch = valid.slice(i, i + BATCH);
-      const { _rawPhone, ...rest } = batch[0];
-      void _rawPhone;
       const payload = batch.map(({ _rawPhone: _rp, ...c }) => ({
         ...c,
         user_id: session.user.id,
       }));
-      void rest;
       const { error } = await supabase
         .from("whatsapp_contacts")
         .upsert(payload, { onConflict: "user_id,phone_number" });
@@ -357,7 +353,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
               <Label className="text-xs font-semibold uppercase text-muted-foreground">
                 Column mapping
               </Label>
-              {CSV_FIELDS.filter((f) => f === "phone_number" || columnMap[f] !== undefined || true).slice(0, 8).map((field) => (
+              {CSV_FIELDS.map((field) => (
                 <div key={field} className="flex items-center gap-2">
                   <span className="w-32 text-sm capitalize shrink-0">
                     {field.replace(/_/g, " ")}
@@ -417,7 +413,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
               )}
               <Badge variant="default" className="gap-1">
                 <CheckCircle2 className="h-3 w-3" />
-                {buildContacts().valid.length} valid
+                {buildContacts.valid.length} valid
               </Badge>
             </div>
 
@@ -427,9 +423,9 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
               </Button>
               <Button
                 onClick={runImport}
-                disabled={buildContacts().valid.length === 0}
+                disabled={buildContacts.valid.length === 0}
               >
-                Import {buildContacts().valid.length} contacts
+                Import {buildContacts.valid.length} contacts
               </Button>
             </div>
           </div>

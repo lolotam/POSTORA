@@ -198,6 +198,8 @@ export function GroupsBar({ selectedGroup, onSelect }: GroupsBarProps) {
                     onClick={() =>
                       setEditingGroup((p) => ({ ...(p || emptyGroup()), color }))
                     }
+                    aria-label={`Select color ${color}`}
+                    aria-pressed={(editingGroup?.color || GROUP_COLORS[0]) === color}
                     className={`h-7 w-7 rounded-full border-2 ${
                       (editingGroup?.color || GROUP_COLORS[0]) === color
                         ? "border-foreground"

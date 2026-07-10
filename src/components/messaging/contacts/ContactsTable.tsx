@@ -136,6 +136,7 @@ export function ContactsTable({
                               : false
                         }
                         onCheckedChange={togglePage}
+                        aria-label="Select all contacts on page"
                       />
                     </TableHead>
                     <TableHead>Name</TableHead>
@@ -291,8 +292,8 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
     const tag = tagInput.trim();
     if (!tag) return;
     try {
-      await addTag.mutateAsync({ tag, contacts: selectedContacts });
-      toast({ title: `Tag "${tag}" added to ${selectedContacts.length} contacts` });
+      await addTag.mutateAsync({ tag, contactIds: ids });
+      toast({ title: `Tag "${tag}" added to ${ids.length} contacts` });
       setTagInput("");
     } catch (e) {
       toast({ title: "Failed", description: (e as Error).message, variant: "destructive" });
