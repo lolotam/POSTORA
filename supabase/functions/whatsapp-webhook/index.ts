@@ -134,8 +134,7 @@ Deno.serve(async (req) => {
           } else if (change.field === "smb_message_echoes") {
             await handleEchoes(adminClient, account, value, accessToken);
           } else if (change.field === "smb_app_state_sync") {
-            // Coexistence contact/app-state sync — not ingested yet.
-            console.log("[whatsapp-webhook] Skipping smb_app_state_sync event");
+            await handleContactSync(adminClient, account, value);
           }
         }
       }
@@ -231,6 +230,22 @@ function toIsoTimestamp(timestamp: unknown): string {
   return new Date().toISOString();
 }
 
+// The name the business saved for this contact on their phone, if the
+// coexistence contact sync has delivered it. Falls back to null.
+async function findSavedContactName(
+  adminClient: any,
+  userId: string,
+  participantWaId: string,
+): Promise<string | null> {
+  const { data: contact } = await adminClient
+    .from("whatsapp_contacts")
+    .select("display_name")
+    .eq("user_id", userId)
+    .eq("phone_number", participantWaId.replace(/\D/g, ""))
+    .maybeSingle();
+  return contact?.display_name || null;
+}
+
 // Surfaces/refreshes a conversation row in the inbox list. Never touches
 // participant_name or unread_count of an existing row unless resetUnread is set
 // (an outbound reply from the phone implies the thread was seen).
@@ -238,7 +253,7 @@ async function touchConversation(
   adminClient: any,
   account: WhatsAppAccount,
   conversationId: string,
-  fallbackName: string,
+  participantWaId: string,
   preview: string,
   timestampIso: string,
   opts: { onlyIfNewer: boolean; resetUnread: boolean },
@@ -270,12 +285,14 @@ async function touchConversation(
     return;
   }
 
+  const savedName = await findSavedContactName(adminClient, account.user_id, participantWaId);
+
   await adminClient.from("messaging_cache").insert({
     user_id: account.user_id,
     social_account_id: account.id,
     conversation_id: conversationId,
     platform: "whatsapp",
-    participant_name: fallbackName,
+    participant_name: savedName || `+${participantWaId}`,
     participant_avatar: null,
     last_message_preview: preview.slice(0, 200),
     last_message_at: timestampIso,
@@ -312,6 +329,11 @@ async function handleLiveMessages(
     const contacts = value?.contacts || [];
     const contactName = contacts.find((c: any) => c.wa_id === from)?.profile?.name || from;
     const msgTimestamp = toIsoTimestamp(msg.timestamp);
+
+    // Inbox list name: the business's saved phone contact beats the customer's
+    // self-chosen push name; the per-message from_name keeps the push name.
+    const savedName = await findSavedContactName(adminClient, account.user_id, from);
+    const participantName = savedName || contactName;
 
     // Store individual message with media info; ignoreDuplicates makes Meta's
     // webhook redeliveries no-ops instead of double rows.
@@ -356,7 +378,7 @@ async function handleLiveMessages(
         social_account_id: account.id,
         conversation_id: conversationId,
         platform: "whatsapp",
-        participant_name: contactName,
+        participant_name: participantName,
         participant_avatar: null,
         last_message_preview: messageText.slice(0, 200),
         last_message_at: msgTimestamp,
@@ -515,7 +537,7 @@ async function handleHistorySync(
         adminClient,
         account,
         conversationId,
-        `+${contactWaId}`,
+        contactWaId,
         latestPreview,
         latestTs!,
         { onlyIfNewer: true, resetUnread: false },
@@ -576,7 +598,7 @@ async function handleEchoes(
       adminClient,
       account,
       conversationId,
-      `+${recipient}`,
+      recipient,
       messageText,
       msgTimestamp,
       { onlyIfNewer: false, resetUnread: true },
@@ -584,6 +606,43 @@ async function handleEchoes(
 
     console.log("[whatsapp-webhook] Stored phone-sent echo");
   }
+}
+
+// Coexistence contact sync: the business's saved phone contacts, pushed once
+// after onboarding and again on every add/edit/remove in the WhatsApp Business
+// app. Saved names are mirrored into whatsapp_contacts and onto existing
+// conversation rows so the inbox shows names instead of raw numbers.
+async function handleContactSync(
+  adminClient: any,
+  account: WhatsAppAccount,
+  value: any,
+) {
+  const phoneNumberId = value.metadata.phone_number_id;
+  let synced = 0;
+
+  for (const entry of value?.state_sync || []) {
+    if (entry?.type !== "contact" || entry?.action === "remove") continue;
+
+    const phone = String(entry?.contact?.phone_number || "").replace(/\D/g, "");
+    const displayName = entry?.contact?.full_name || entry?.contact?.first_name;
+    if (!phone || !displayName) continue;
+
+    await adminClient.from("whatsapp_contacts").upsert({
+      user_id: account.user_id,
+      phone_number: phone,
+      display_name: displayName,
+    }, { onConflict: "user_id,phone_number" });
+
+    await adminClient
+      .from("messaging_cache")
+      .update({ participant_name: displayName, updated_at: new Date().toISOString() })
+      .eq("user_id", account.user_id)
+      .eq("conversation_id", `wa_${phoneNumberId}_${phone}`);
+
+    synced++;
+  }
+
+  console.log(`[whatsapp-webhook] Contact sync stored ${synced} contacts`);
 }
 
 async function processAutoReplies(
