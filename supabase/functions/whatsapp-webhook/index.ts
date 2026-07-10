@@ -127,7 +127,7 @@ Deno.serve(async (req) => {
             // processed even when no active account matches.
             await handleLiveMessages(adminClient, account, value, accessToken);
           } else if (!account) {
-            console.warn("[whatsapp-webhook] No matching account found");
+            console.warn(`[whatsapp-webhook] No matching account found for field: ${change.field}, phone_number_id: ${value?.metadata?.phone_number_id}`);
             continue;
           } else if (change.field === "history") {
             await handleHistorySync(adminClient, account, value);
@@ -324,7 +324,7 @@ async function handleLiveMessages(
     const { messageText, mediaUrl, mediaType, mediaMetadata } =
       await extractMessageContent(msg, accessToken, true);
 
-    const conversationId = `wa_${phoneNumberId}_${from}`;
+    const conversationId = `wa_${phoneNumberId}_${from.replace(/\D/g, "")}`;
 
     const contacts = value?.contacts || [];
     const contactName = contacts.find((c: any) => c.wa_id === from)?.profile?.name || from;
@@ -482,7 +482,7 @@ async function handleHistorySync(
       const contactWaId: string | undefined = thread?.id;
       if (!contactWaId) continue;
 
-      const conversationId = `wa_${phoneNumberId}_${contactWaId}`;
+      const conversationId = `wa_${phoneNumberId}_${contactWaId.replace(/\D/g, "")}`;
       const rows: Record<string, unknown>[] = [];
       let latestTs: string | null = null;
       let latestPreview = "";

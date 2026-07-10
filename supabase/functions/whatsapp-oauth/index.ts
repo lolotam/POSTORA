@@ -143,6 +143,45 @@ Deno.serve(async (req) => {
       // Don't fail hard — user can still send messages even if webhook isn't subscribed
     }
 
+    // 2b. Subscribe app-level coexistence webhook fields (required for
+    // history/echoes/contact-sync delivery). These must be subscribed at the
+    // app level, not per-WABA.
+    const META_APP_ID = Deno.env.get("META_APP_ID") || Deno.env.get("FACEBOOK_APP_ID");
+    const appVerifyToken = Deno.env.get("WHATSAPP_WEBHOOK_VERIFY_TOKEN") ||
+      Deno.env.get("META_WEBHOOK_VERIFY_TOKEN");
+    const appUrl = Deno.env.get("APP_URL") ||
+      Deno.env.get("VITE_SUPABASE_URL") || "";
+
+    if (META_APP_ID && appVerifyToken && appUrl) {
+      const COEXISTENCE_FIELDS = [
+        "messages", "history", "smb_message_echoes", "smb_app_state_sync",
+        "account_update", "phone_number_name_update", "phone_number_quality_update",
+        "message_template_status_update", "template_category_update",
+      ];
+      try {
+        const subRes = await fetch(
+          `${GRAPH_API}/${META_APP_ID}/subscriptions?access_token=${accessToken}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              object: "whatsapp_business_account",
+              callback_url: `${appUrl.replace(/\/$/, "")}/functions/v1/whatsapp-webhook`,
+              verify_token: appVerifyToken,
+              fields: COEXISTENCE_FIELDS,
+              include_values: true,
+            }),
+          },
+        );
+        const subData = await subRes.json();
+        console.log("[whatsapp-oauth] App-level subscription result:", JSON.stringify(subData));
+      } catch (subErr) {
+        console.warn("[whatsapp-oauth] App-level subscription failed (non-fatal):", subErr);
+      }
+    } else {
+      console.warn("[whatsapp-oauth] Missing META_APP_ID, WHATSAPP_WEBHOOK_VERIFY_TOKEN, or APP_URL — skipping app-level subscription");
+    }
+
     // 3. For Cloud API mode, register the phone number. Skip for Coexistence.
     let registrationStatus: "registered" | "skipped_coexistence" | "failed" = "skipped_coexistence";
     if (mode === "cloud_api") {

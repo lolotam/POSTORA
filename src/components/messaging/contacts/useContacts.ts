@@ -100,6 +100,7 @@ export function useContactMutations() {
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] });
     qc.invalidateQueries({ queryKey: ["whatsapp-group-members"] });
+    qc.invalidateQueries({ queryKey: ["messaging-conversations"] });
   };
 
   const createContact = useMutation({
@@ -228,7 +229,7 @@ export function useGroupMutations() {
   return { createGroup, updateGroup, deleteGroup };
 }
 
-export async function uploadContactAvatar(file: File, userId: string): Promise<string> {
+export async function uploadContactAvatar(file: File, userEmail: string): Promise<string> {
   const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
   if (file.size > MAX_AVATAR_SIZE) {
     throw new Error("Image must be 5\u202fMB or smaller");
@@ -247,10 +248,22 @@ export async function uploadContactAvatar(file: File, userId: string): Promise<s
       0.85,
     ),
   );
-  const path = `whatsapp-contact-avatars/${userId}_${Date.now()}.jpg`;
-  const { data, error } = await supabase.storage
-    .from("media")
-    .upload(path, blob, { contentType: "image/jpeg" });
+  const base64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("Failed to read image"));
+    reader.readAsDataURL(blob);
+  });
+  const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
+    body: {
+      fileData: base64,
+      fileName: `contact_avatar_${Date.now()}.jpg`,
+      fileType: "image",
+      subfolder: "whatsapp-assets",
+      skipMediaFiles: true,
+    },
+  });
   if (error) throw error;
-  return supabase.storage.from("media").getPublicUrl(data.path).data.publicUrl;
+  if (!data?.url) throw new Error("Upload failed - no URL returned");
+  return data.url as string;
 }

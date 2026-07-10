@@ -13,6 +13,8 @@ interface UploadRequest {
   fileType: "image" | "video" | "gif";
   platforms?: string[]; // Platforms this media is being posted to
   socialAccountIds?: string[]; // Social account IDs involved
+  subfolder?: string; // Override daily folder with a custom subfolder
+  skipMediaFiles?: boolean; // Skip media_files DB insert (for non-media assets like avatars)
 }
 
 interface UploadResponse {
@@ -155,7 +157,7 @@ Deno.serve(async (req) => {
 
     // Use pre-parsed body if available (service-role path already consumed req.text())
     const parsedBody = (req as any)._parsedBody || await req.json();
-    const { fileData, externalUrl, fileName, fileType, platforms = [], socialAccountIds = [] }: UploadRequest = parsedBody;
+    const { fileData, externalUrl, fileName, fileType, platforms = [], socialAccountIds = [], subfolder, skipMediaFiles = false }: UploadRequest = parsedBody;
 
     // Require either fileData OR externalUrl
     if ((!fileData && !externalUrl) || !fileName || !fileType) {
@@ -169,7 +171,9 @@ Deno.serve(async (req) => {
     const uploadSource = externalUrl || fileData;
 
     // Folder structure: media/{user_email_sanitized}/{YYYY-MM-DD}/
-    const folder = `media/${userFolder}/${dailyFolder}`;
+    const folder = subfolder
+      ? `media/${userFolder}/${subfolder}`
+      : `media/${userFolder}/${dailyFolder}`;
     const timestamp = Math.floor(Date.now() / 1000);
     const cleanFileName = fileName.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
     
@@ -327,51 +331,55 @@ Deno.serve(async (req) => {
     console.log(`Cloudinary upload successful: ${result.secure_url}`);
 
     // Store reference in database with platform/account tracking
-    const { data: mediaRecord, error: dbError } = await dbClient
-      .from("media_files")
-      .insert({
-        user_id: userId,
-        file_path: result.secure_url,
-        file_type: fileType,
-        file_size: result.bytes,
-        mime_type:
-          fileType === "video"
-            ? "video/mp4"
-            : fileType === "gif"
-              ? "image/gif"
-              : `image/${result.format}`,
-        storage_bucket: "cloudinary",
-        cloudinary_public_id: result.public_id,
-        platforms: platforms,
-        social_account_ids: socialAccountIds,
-        upload_date: todayDate,
-        metadata: {
-          width: result.width || null,
-          height: result.height || null,
-          format: result.format || null,
-          duration: result.duration || null,
-          original_filename: cleanFileName,
-        },
-      })
-      .select("id")
-      .single();
+    let mediaFileId: string | null = null;
+    if (!skipMediaFiles) {
+      const { data: mediaRecord, error: dbError } = await dbClient
+        .from("media_files")
+        .insert({
+          user_id: userId,
+          file_path: result.secure_url,
+          file_type: fileType,
+          file_size: result.bytes,
+          mime_type:
+            fileType === "video"
+              ? "video/mp4"
+              : fileType === "gif"
+                ? "image/gif"
+                : `image/${result.format}`,
+          storage_bucket: "cloudinary",
+          cloudinary_public_id: result.public_id,
+          platforms: platforms,
+          social_account_ids: socialAccountIds,
+          upload_date: todayDate,
+          metadata: {
+            width: result.width || null,
+            height: result.height || null,
+            format: result.format || null,
+            duration: result.duration || null,
+            original_filename: cleanFileName,
+          },
+        })
+        .select("id")
+        .single();
 
-    if (dbError) {
-      console.error("Database insert error:", dbError);
-      return new Response(
-        JSON.stringify({ success: false, error: `Database error: ${dbError.message}` }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      if (dbError) {
+        console.error("Database insert error:", dbError);
+        return new Response(
+          JSON.stringify({ success: false, error: `Database error: ${dbError.message}` }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      mediaFileId = mediaRecord.id;
+      console.log(`Media file record created with ID: ${mediaFileId}`);
     }
-
-    console.log(`Media file record created with ID: ${mediaRecord.id}`);
 
     const response: UploadResponse = {
       success: true,
       url: result.secure_url,
       publicId: result.public_id,
       cloudName: cloudName,
-      mediaFileId: mediaRecord.id, // Return the database UUID
+      mediaFileId: mediaFileId, // Return the database UUID (null if skipped)
       width: result.width,
       height: result.height,
       format: result.format,

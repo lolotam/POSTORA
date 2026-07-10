@@ -78,10 +78,10 @@ export function ContactFormDialog({ open, onOpenChange, contact }: ContactFormDi
     setForm((f) => ({ ...f, [k]: v }));
 
   const pickAvatar = async (file: File) => {
-    if (!session?.user?.id) return;
+    if (!session?.user?.email) return;
     setUploading(true);
     try {
-      const url = await uploadContactAvatar(file, session.user.id);
+      const url = await uploadContactAvatar(file, session.user.email);
       set("avatar_url")(url);
     } catch (e) {
       toast({

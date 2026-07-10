@@ -142,7 +142,7 @@ export default function ScheduledPosts() {
   const [isSaving, setIsSaving] = useState(false);
   const [isCancelling, setIsCancelling] = useState(false);
   const [publishingPostId, setPublishingPostId] = useState<string | null>(null);
-  const { data: posts = [], isLoading, refetch, isFetching } = usePosts();
+  const { data: posts = [], isLoading, error: postsError, refetch, isFetching } = usePosts();
   const { data: socialAccounts = [] } = useSocialAccounts();
   const { data: socialProfiles = [] } = useSocialProfiles();
   const { user } = useAuth();
@@ -649,6 +649,29 @@ export default function ScheduledPosts() {
           <div className="flex items-center justify-center py-16">
             <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
           </div>
+        ) : postsError ? (
+          <Reveal delay={80}>
+            <GradientRingCard variant="rose" hoverLift={false} innerClassName="py-16 text-center">
+              <div className="group inline-flex flex-col items-center gap-4">
+                <Icon3D icon={AlertTriangle} variant="rose" size="lg" />
+                <h3 className="text-lg font-semibold">Failed to load scheduled posts</h3>
+                <p className="text-muted-foreground max-w-md text-sm">
+                  {postsError.message?.includes("JWT") || postsError.message?.includes("auth") || postsError.message?.includes("session")
+                    ? "Your session may have expired. Please refresh the page or log in again."
+                    : postsError.message || "An unexpected error occurred while fetching your posts."}
+                </p>
+                <div className="flex gap-3">
+                  <Button variant="outline" size="sm" className="gap-2 rounded-full" onClick={() => refetch()}>
+                    <RefreshCw className="w-4 h-4" />
+                    Try Again
+                  </Button>
+                  <Button size="sm" className="gap-2 rounded-full" onClick={() => window.location.href = "/auth"}>
+                    Log In Again
+                  </Button>
+                </div>
+              </div>
+            </GradientRingCard>
+          </Reveal>
         ) : scheduledPosts.length === 0 ? (
           <Reveal delay={120}>
             <GradientRingCard variant="sky" hoverLift={false} innerClassName="py-16 text-center">
