@@ -46,12 +46,15 @@ const rows = Array.from({ length: 5 }, (_, index) => ({
 function mockMediaLoad(
   updateResult = { data: rows.map(({ id }) => ({ id })), error: null as null | Error },
   mediaRows = rows,
+  authoritativeRows = mediaRows,
 ) {
   const selectUpdate = vi.fn().mockResolvedValue(updateResult);
   const inUpdate = vi.fn().mockReturnValue({ select: selectUpdate });
   const eqUpdate = vi.fn().mockReturnValue({ in: inUpdate });
   const update = vi.fn().mockReturnValue({ eq: eqUpdate });
-  const inSelect = vi.fn().mockResolvedValue({ data: mediaRows, error: null });
+  const inSelect = vi.fn()
+    .mockResolvedValueOnce({ data: mediaRows, error: null })
+    .mockResolvedValue({ data: authoritativeRows, error: null });
   const eqSelect = vi.fn().mockReturnValue({ in: inSelect });
   const select = vi.fn().mockReturnValue({ eq: eqSelect });
   (supabase.from as any).mockReturnValue({ select, update });
@@ -76,6 +79,38 @@ describe("ScheduledPostMedia", () => {
 
     expect(await screen.findAllByRole("button", { name: "View image" })).toHaveLength(5);
     expect(screen.queryByText("+1")).not.toBeInTheDocument();
+  });
+
+  it("blocks folder updates when the initial owned media set is incomplete", async () => {
+    const requestedRows = rows.slice(0, 2);
+    const { update } = mockMediaLoad(undefined, requestedRows.slice(0, 1));
+    render(
+      <ScheduledPostMedia
+        mediaFileIds={requestedRows.map((row) => row.id)}
+        mediaFolders={[{ id: "folder-1", name: "Campaign", full_path: "/Campaign" }]}
+        userId="user-1"
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByText("Some media unavailable")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Media folder")).not.toBeInTheDocument();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it("renders one resolved item at the large single-media size", async () => {
+    const requestedRows = rows.slice(0, 2);
+    mockMediaLoad(undefined, requestedRows.slice(0, 1));
+    render(
+      <ScheduledPostMedia
+        mediaFileIds={requestedRows.map((row) => row.id)}
+        mediaFolders={[]}
+        userId="user-1"
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByRole("button", { name: "View image" })).toHaveClass("w-28", "h-28");
   });
 
   it("updates every media ID and changes local folder state only on success", async () => {
@@ -134,6 +169,34 @@ describe("ScheduledPostMedia", () => {
 
     await waitFor(() => expect(toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" })));
     expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/");
+  });
+
+  it("reloads authoritative folder paths when an update returns an incomplete ID set", async () => {
+    const raceRows = rows.slice(0, 2).map((row) => ({ ...row, id: `race-${row.id}` }));
+    const authoritativeRows = [
+      { ...raceRows[0], folder_path: "/Campaign" },
+      { ...raceRows[1], folder_path: "/" },
+    ];
+    mockMediaLoad(
+      { data: [{ id: raceRows[0].id }], error: null },
+      raceRows,
+      authoritativeRows,
+    );
+    render(
+      <ScheduledPostMedia
+        mediaFileIds={raceRows.map((row) => row.id)}
+        mediaFolders={[{ id: "folder-1", name: "Campaign", full_path: "/Campaign" }]}
+        userId="user-1"
+        onOpen={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "/"));
+    fireEvent.click(screen.getByLabelText("Media folder"));
+
+    await waitFor(() => expect(screen.getByLabelText("Media folder")).toHaveAttribute("data-folder-value", "__mixed__"));
+    expect(toast).toHaveBeenCalledWith(expect.objectContaining({ variant: "destructive" }));
+    expect(toast).not.toHaveBeenCalledWith(expect.objectContaining({ title: "Media moved" }));
   });
 
   it("reloads folder paths from the database when cached URLs are reused", async () => {

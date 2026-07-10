@@ -26,10 +26,54 @@ interface ScheduledPostMediaProps {
 // Module-level cache to avoid re-signing on re-renders / card revisits.
 const urlCache = new Map<string, CachedMediaUrl>();
 
+async function loadOwnedMediaItems(mediaFileIds: string[], userId: string) {
+  const uniqueIds = [...new Set(mediaFileIds)];
+  const { data: rows, error } = await supabase
+    .from("media_files")
+    .select("id, file_path, file_type, storage_bucket, folder_path")
+    .eq("user_id", userId)
+    .in("id", uniqueIds);
+
+  if (error || !rows) return { items: [], complete: false };
+
+  const resolvedById = new Map<string, ScheduledMediaItem>();
+  for (const mediaRow of rows) {
+    if (!mediaRow.file_path) continue;
+    const cacheKey = `${userId}:${mediaRow.id}`;
+    let cached = urlCache.get(cacheKey);
+    if (!cached) {
+      let url: string | null = mediaRow.storage_bucket === "cloudinary" ? mediaRow.file_path : null;
+      if (!url && mediaRow.storage_bucket) {
+        const { data: signed } = await supabase.storage
+          .from(mediaRow.storage_bucket)
+          .createSignedUrl(mediaRow.file_path, 3600);
+        url = signed?.signedUrl ?? null;
+      }
+      if (url) {
+        cached = { url, kind: mediaRow.file_type === "video" ? "video" : "image" };
+        urlCache.set(cacheKey, cached);
+      }
+    }
+    if (cached) {
+      resolvedById.set(mediaRow.id, {
+        id: mediaRow.id,
+        ...cached,
+        folderPath: mediaRow.folder_path || "/",
+      });
+    }
+  }
+
+  const ownedIds = new Set(rows.map((row) => row.id));
+  const complete = uniqueIds.every((id) => ownedIds.has(id) && resolvedById.has(id));
+  const items = mediaFileIds.map((id) => resolvedById.get(id)).filter(Boolean) as ScheduledMediaItem[];
+  return { items, complete };
+}
+
 export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen }: ScheduledPostMediaProps) {
   const [items, setItems] = useState<ScheduledMediaItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [savingFolder, setSavingFolder] = useState(false);
+  const [mediaSetComplete, setMediaSetComplete] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -42,46 +86,11 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
 
     (async () => {
       setLoading(true);
-      const { data: rows, error } = await supabase
-        .from("media_files")
-        .select("id, file_path, file_type, storage_bucket, folder_path")
-        .eq("user_id", userId)
-        .in("id", ids);
-
-      const resolvedById = new Map<string, ScheduledMediaItem>();
-      if (!error && rows) {
-        for (const m of rows) {
-          if (!m.file_path) continue;
-          const cacheKey = `${userId}:${m.id}`;
-          const cached = urlCache.get(cacheKey);
-          let url = cached?.url ?? null;
-          if (!url && m.storage_bucket === "cloudinary") {
-            url = m.file_path;
-          } else if (!url && m.storage_bucket) {
-            const { data: signed } = await supabase.storage
-              .from(m.storage_bucket)
-              .createSignedUrl(m.file_path, 3600);
-            url = signed?.signedUrl ?? null;
-          }
-          if (url) {
-            const kind = m.file_type === "video" ? "video" : "image";
-            urlCache.set(cacheKey, {
-              url,
-              kind,
-            });
-            resolvedById.set(m.id, {
-              id: m.id,
-              url,
-              kind,
-              folderPath: m.folder_path || "/",
-            });
-          }
-        }
-      }
+      const loaded = await loadOwnedMediaItems(ids, userId);
 
       if (cancelled) return;
-      const resolved = ids.map((id) => resolvedById.get(id)).filter(Boolean) as ScheduledMediaItem[];
-      setItems(resolved);
+      setItems(loaded.items);
+      setMediaSetComplete(loaded.complete);
       setLoading(false);
     })();
 
@@ -90,8 +99,8 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
     };
   }, [mediaFileIds.join("|"), userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const count = items.length || mediaFileIds?.length || 0;
-  if (count === 0) return null;
+  const count = loading ? mediaFileIds.length : items.length;
+  if (mediaFileIds.length === 0) return null;
 
   const single = count === 1;
   const folderLabel = getMediaFolderLabel(items.map((item) => item.folderPath), mediaFolders);
@@ -99,6 +108,7 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
   const folderValue = folderPaths.size === 1 ? [...folderPaths][0] : "__mixed__";
 
   const handleFolderChange = async (folderPath: string) => {
+    if (!mediaSetComplete) return;
     setSavingFolder(true);
     const ids = mediaFileIds.filter((id) => typeof id === "string");
     const { data: updatedRows, error } = await supabase
@@ -114,6 +124,9 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
       && [...expectedIds].every((id) => returnedIds.has(id));
 
     if (error || !fullyUpdated) {
+      const authoritative = await loadOwnedMediaItems(ids, userId);
+      setItems(authoritative.items);
+      setMediaSetComplete(authoritative.complete);
       toast({
         title: "Folder update failed",
         description: error?.message || "Not all media files could be moved.",
@@ -139,7 +152,7 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
             <ImageIcon className="w-3 h-3" />
             {count} {count === 1 ? "media" : "media"}
           </span>
-          {!loading && items.length > 0 && (
+          {!loading && mediaSetComplete && items.length > 0 && (
             <Select value={folderValue} onValueChange={handleFolderChange} disabled={savingFolder}>
               <SelectTrigger className="h-8 w-[160px] text-xs" aria-label="Media folder">
                 <SelectValue placeholder={folderLabel} />
@@ -158,6 +171,9 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
                   ))}
               </SelectContent>
             </Select>
+          )}
+          {!loading && !mediaSetComplete && (
+            <span className="text-xs text-muted-foreground">Some media unavailable</span>
           )}
         </div>
 
