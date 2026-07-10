@@ -81,6 +81,7 @@ import { MediaLightboxDialog } from "@/components/scheduled/MediaLightboxDialog"
 import { AccountAvatar } from "@/components/AccountAvatar";
 import { PlatformAccountMultiSelect } from "@/components/post/PlatformAccountMultiSelect";
 import { useAuth } from "@/hooks/useAuth";
+import { useUserRole } from "@/hooks/useUserRole";
 import { getScheduledPostTypes } from "@/components/scheduled/scheduledMediaControls";
 
 // Countdown timer component
@@ -146,6 +147,7 @@ export default function ScheduledPosts() {
   const { data: socialAccounts = [] } = useSocialAccounts();
   const { data: socialProfiles = [] } = useSocialProfiles();
   const { user } = useAuth();
+  const { isAdmin } = useUserRole();
   const { data: mediaFolders = [] } = useQuery({
     queryKey: ["media-folders", user?.id],
     queryFn: async () => {
@@ -530,6 +532,15 @@ export default function ScheduledPosts() {
                   {overdueCount} overdue
                 </span>
               )}
+              {user?.email && (
+                <span
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-border/60 bg-card/60 backdrop-blur-md text-muted-foreground"
+                  title={`Currently viewing posts for ${user.email}`}
+                >
+                  <User className="w-3.5 h-3.5" />
+                  <span className="max-w-[200px] truncate">{user.email}</span>
+                </span>
+              )}
             </div>
           </div>
         </Reveal>
@@ -679,8 +690,17 @@ export default function ScheduledPosts() {
                 <Icon3D icon={CalendarClock} variant="sky" size="lg" />
                 <h3 className="text-lg font-semibold">No scheduled posts</h3>
                 <p className="text-muted-foreground max-w-md">
-                  {search ? "No posts match your search" : "You don't have any upcoming scheduled posts."}
+                  {search
+                    ? "No posts match your search"
+                    : posts.length === 0 && !isAdmin
+                      ? <>You don't have any scheduled posts under this account. If you expected to see posts here, make sure you're logged in with the account that created them.</>
+                      : "You don't have any upcoming scheduled posts."}
                 </p>
+                {posts.length === 0 && !isAdmin && user?.email && (
+                  <p className="text-xs text-muted-foreground/70 max-w-md">
+                    Currently signed in as <span className="font-medium">{user.email}</span>
+                  </p>
+                )}
               </div>
             </GradientRingCard>
           </Reveal>
