@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Textarea } from "@/components/ui/textarea";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -80,6 +80,8 @@ import { ScheduledPostMedia, type ScheduledMediaItem } from "@/components/schedu
 import { MediaLightboxDialog } from "@/components/scheduled/MediaLightboxDialog";
 import { AccountAvatar } from "@/components/AccountAvatar";
 import { PlatformAccountMultiSelect } from "@/components/post/PlatformAccountMultiSelect";
+import { useAuth } from "@/hooks/useAuth";
+import { getScheduledPostTypes } from "@/components/scheduled/scheduledMediaControls";
 
 // Countdown timer component
 function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
@@ -143,6 +145,21 @@ export default function ScheduledPosts() {
   const { data: posts = [], isLoading, refetch, isFetching } = usePosts();
   const { data: socialAccounts = [] } = useSocialAccounts();
   const { data: socialProfiles = [] } = useSocialProfiles();
+  const { user } = useAuth();
+  const { data: mediaFolders = [] } = useQuery({
+    queryKey: ["media-folders", user?.id],
+    queryFn: async () => {
+      if (!user) return [];
+      const { data, error } = await supabase
+        .from("media_folders")
+        .select("id, name, full_path")
+        .eq("user_id", user.id)
+        .order("full_path", { ascending: true });
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!user,
+  });
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
@@ -652,6 +669,7 @@ export default function ScheduledPosts() {
               const postAccounts = getPostAccounts(post);
               const postProfiles = getPostProfiles(post);
               const postType = post.source === "api" ? "API" : "Manual";
+              const contentTypes = getScheduledPostTypes(post.metadata, post.platforms);
               const index = scheduledPosts.indexOf(post);
 
               return (
@@ -689,6 +707,11 @@ export default function ScheduledPosts() {
                             {postType === "API" ? <Zap className="w-3 h-3" /> : <User className="w-3 h-3" />}
                             {postType}
                           </Badge>
+                          {contentTypes.map((type) => (
+                            <Badge key={type} variant="outline" className="text-xs capitalize">
+                              {type}
+                            </Badge>
+                          ))}
                         </div>
                       </div>
                       <DropdownMenu>
@@ -749,9 +772,11 @@ export default function ScheduledPosts() {
                     </div>
 
                     {/* Media thumbnails */}
-                    {post.media_file_ids && post.media_file_ids.length > 0 && (
+                    {user && post.media_file_ids && post.media_file_ids.length > 0 && (
                       <ScheduledPostMedia
                         mediaFileIds={post.media_file_ids}
+                        mediaFolders={mediaFolders}
+                        userId={user.id}
                         onOpen={(items, index) => setLightbox({ items, index })}
                       />
                     )}
