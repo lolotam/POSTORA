@@ -89,6 +89,26 @@ async function setFailed(admin: AdminClient, sourceId: string, error: unknown) {
     .eq("id", sourceId);
 }
 
+// Mirrors knowledge operations into system_logs so /admin/logs can track
+// all AI agent calls (category "ai") alongside ai-agent-reply entries.
+async function logKnowledgeEvent(
+  admin: AdminClient,
+  userId: string,
+  action: string,
+  ok: boolean,
+  detail: Record<string, unknown>,
+) {
+  const { error } = await (admin as any).from("system_logs").insert({
+    source: "ai-knowledge-ingest",
+    category: "ai",
+    level: ok ? "info" : "error",
+    message: `AI knowledge ${action} ${ok ? "succeeded" : "failed"}${detail.error ? `: ${detail.error}` : ""}`,
+    user_id: userId,
+    metadata: { action, ...detail },
+  });
+  if (error) console.error("[ai-knowledge-ingest] Failed to write system log:", error.message);
+}
+
 function toBase64(bytes: Uint8Array): string {
   let binary = "";
   const step = 0x8000;
@@ -225,6 +245,11 @@ Deno.serve(async (req) => {
         .delete()
         .eq("id", source.id);
       if (error) throw error;
+      await logKnowledgeEvent(admin, user.id, "delete_source", true, {
+        source_id: source.id,
+        source_type: source.source_type,
+        file_name: source.file_name,
+      });
       return jsonResponse({ ok: true });
     }
     if (action === "ingest_source") {
@@ -257,9 +282,20 @@ Deno.serve(async (req) => {
           .from("ai_knowledge_sources")
           .update({ status: "ready", chunk_count: chunks.length, error: null })
           .eq("id", source.id);
+        await logKnowledgeEvent(admin, user.id, "ingest_source", true, {
+          source_id: source.id,
+          source_type: source.source_type,
+          file_name: source.file_name,
+          chunk_count: chunks.length,
+        });
         return jsonResponse({ ok: true, chunk_count: chunks.length });
       } catch (error) {
         await setFailed(admin, source.id, error);
+        await logKnowledgeEvent(admin, user.id, "ingest_source", false, {
+          source_id: source.id,
+          source_type: source.source_type,
+          error: message(error).slice(0, 500),
+        });
         return errorResponse(message(error));
       }
     }
@@ -313,9 +349,19 @@ Deno.serve(async (req) => {
           .from("ai_knowledge_sources")
           .update({ status: "ready", chunk_count: chunks.length, error: null })
           .eq("id", source.id);
+        await logKnowledgeEvent(admin, user.id, "ingest_profile_text", true, {
+          source_id: source.id,
+          platform,
+          chunk_count: chunks.length,
+        });
         return jsonResponse({ ok: true, chunk_count: chunks.length });
       } catch (error) {
         await setFailed(admin, source.id, error);
+        await logKnowledgeEvent(admin, user.id, "ingest_profile_text", false, {
+          source_id: source.id,
+          platform,
+          error: message(error).slice(0, 500),
+        });
         return errorResponse(message(error));
       }
     }
@@ -385,9 +431,19 @@ Deno.serve(async (req) => {
           .from("ai_knowledge_sources")
           .update({ status: "ready", chunk_count: chunks.length, error: null })
           .eq("id", source.id);
+        await logKnowledgeEvent(admin, user.id, "sync_catalog", true, {
+          source_id: source.id,
+          catalog_id: body.catalog_id,
+          chunk_count: chunks.length,
+        });
         return jsonResponse({ ok: true, chunk_count: chunks.length });
       } catch (error) {
         await setFailed(admin, source.id, error);
+        await logKnowledgeEvent(admin, user.id, "sync_catalog", false, {
+          source_id: source.id,
+          catalog_id: body.catalog_id,
+          error: message(error).slice(0, 500),
+        });
         return errorResponse(message(error));
       }
     }

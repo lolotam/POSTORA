@@ -6,6 +6,8 @@ import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestRespon
 import {
   buildSystemPrompt,
   detectReplyLanguage,
+  formatModelRef,
+  parseModelRef,
   resolveEngagementMode,
   shouldAiReply,
   waRecipient,
@@ -58,10 +60,22 @@ async function embed(texts: string[]): Promise<number[][]> {
   return data.data.map((item: { embedding: number[] }) => item.embedding);
 }
 
-async function chatCompletion(payload: Record<string, unknown>): Promise<any> {
-  const key = Deno.env.get("OPENAI_API_KEY");
-  if (!key) throw new Error("OPENAI_API_KEY is not configured");
-  const response = await fetch(`${OPENAI_API}/chat/completions`, {
+// OpenAI-compatible chat-completion endpoints per provider. Providers here
+// must stay in sync with the choices offered in AdminAiAgentSection.tsx.
+const GOOGLE_ENDPOINT = { url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", keyEnv: "GOOGLE_AI_STUDIO_KEY" };
+const PROVIDER_ENDPOINTS: Record<string, { url: string; keyEnv: string }> = {
+  openai: { url: `${OPENAI_API}/chat/completions`, keyEnv: "OPENAI_API_KEY" },
+  openrouter: { url: "https://openrouter.ai/api/v1/chat/completions", keyEnv: "OPENROUTER_API_KEY" },
+  // The admin model catalog (ai_providers) codes Google as "gemini"; accept both.
+  google: GOOGLE_ENDPOINT,
+  gemini: GOOGLE_ENDPOINT,
+};
+
+async function chatCompletion(provider: string, payload: Record<string, unknown>): Promise<any> {
+  const endpoint = PROVIDER_ENDPOINTS[provider] ?? PROVIDER_ENDPOINTS.openai;
+  const key = Deno.env.get(endpoint.keyEnv);
+  if (!key) throw new Error(`${endpoint.keyEnv} is not configured`);
+  const response = await fetch(endpoint.url, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
@@ -131,9 +145,36 @@ async function isDailyCapReached(admin: any, userId: string, conversationId: str
   return (count || 0) >= cap;
 }
 
-async function logOutcome(admin: any, entry: Record<string, unknown>): Promise<void> {
+// Every outcome is written twice: to ai_agent_logs (user-facing Logs tab,
+// RLS-scoped) and mirrored into system_logs so the /admin/logs page can
+// track all AI agent chats and calls under the "ai" category.
+async function logOutcome(
+  admin: any,
+  entry: Record<string, unknown>,
+  meta: Record<string, unknown> = {},
+): Promise<void> {
   const { error } = await admin.from("ai_agent_logs").insert(entry);
   if (error) console.error("[ai-agent-reply] Failed to write log:", error.message);
+
+  const status = String(entry.status || "unknown");
+  const { error: systemLogError } = await admin.from("system_logs").insert({
+    source: "ai-agent-reply",
+    category: "ai",
+    level: status === "error" ? "error" : "info",
+    message: `AI agent reply ${status} (${entry.platform})${entry.error ? `: ${entry.error}` : ""}`,
+    user_id: entry.user_id,
+    metadata: {
+      platform: entry.platform,
+      conversation_id: entry.conversation_id,
+      status,
+      error: entry.error || null,
+      prompt_tokens: entry.prompt_tokens ?? null,
+      completion_tokens: entry.completion_tokens ?? null,
+      latency_ms: entry.latency_ms ?? null,
+      ...meta,
+    },
+  });
+  if (systemLogError) console.error("[ai-agent-reply] Failed to write system log:", systemLogError.message);
 }
 
 async function resolveWhatsAppToken(admin: any, request: ReplyRequest): Promise<string> {
@@ -301,6 +342,11 @@ Deno.serve(async (req) => {
     inbound_text: request.inbound_text.slice(0, 2000),
   };
 
+  // Hoisted so the catch block can report which models were attempted.
+  let usedModel: string | null = null;
+  let usedFallbackLevel = 0;
+  const modelErrors: Array<{ model: string; error: string }> = [];
+
   try {
     const { data: config } = await admin
       .from("ai_agent_configs")
@@ -452,25 +498,17 @@ Deno.serve(async (req) => {
     let replyText = "";
 
     const maxIterations = Math.max(1, config.max_tool_iterations || 5);
-    // Primary + fallback chain. Legacy configs may store bare model ids
-    // (e.g. "gpt-4o-mini") — take the segment after the last "/" so both
-    // "openai/gpt-4o-mini" and "gpt-4o-mini" reach OpenAI as "gpt-4o-mini".
+    // Primary + fallback chain, each entry resolved to its provider endpoint.
     const rawChain = [config.model, config.fallback_model_1, config.fallback_model_2]
       .filter((m): m is string => typeof m === "string" && m.length > 0);
-    const modelChain = (rawChain.length ? rawChain : ["gpt-4o-mini"]).map((m) => {
-      const idx = m.lastIndexOf("/");
-      return idx >= 0 ? m.slice(idx + 1) : m;
-    });
-    let usedModel: string | null = null;
-    let usedFallbackLevel = 0;
-    const modelErrors: Array<{ model: string; error: string }> = [];
+    const modelChain = (rawChain.length ? rawChain : ["gpt-4o-mini"]).map(parseModelRef);
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       let completion: any = null;
       let lastError: unknown = null;
       for (let mi = 0; mi < modelChain.length; mi++) {
         try {
-          completion = await chatCompletion({
-            model: modelChain[mi],
+          completion = await chatCompletion(modelChain[mi].provider, {
+            model: modelChain[mi].model,
             temperature: config.temperature ?? 0.4,
             messages,
             tools: [
@@ -480,12 +518,12 @@ Deno.serve(async (req) => {
             ],
             tool_choice: "auto",
           });
-          usedModel = modelChain[mi];
+          usedModel = formatModelRef(modelChain[mi]);
           usedFallbackLevel = mi;
           break;
         } catch (err) {
           lastError = err;
-          modelErrors.push({ model: modelChain[mi], error: errorMessage(err) });
+          modelErrors.push({ model: formatModelRef(modelChain[mi]), error: errorMessage(err) });
         }
       }
       if (!completion) throw lastError instanceof Error ? lastError : new Error("All AI models failed");
@@ -534,7 +572,7 @@ Deno.serve(async (req) => {
           platform: request.platform,
           used_model: usedModel,
           fallback_level: usedFallbackLevel,
-          model_chain: modelChain,
+          model_chain: modelChain.map(formatModelRef),
           model_errors: modelErrors.length ? modelErrors : null,
           tool_calls: executedToolCalls.map((t) => t.name),
           escalated,
@@ -554,6 +592,11 @@ Deno.serve(async (req) => {
         prompt_tokens: promptTokens,
         completion_tokens: completionTokens,
         latency_ms: Date.now() - startedAt,
+      }, {
+        used_model: usedModel,
+        fallback_level: usedFallbackLevel,
+        model_errors: modelErrors.length ? modelErrors : null,
+        dry_run: dryRun,
       });
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
@@ -602,6 +645,13 @@ Deno.serve(async (req) => {
       completion_tokens: completionTokens,
       latency_ms: Date.now() - startedAt,
       status: dryRun ? "test" : "sent",
+    }, {
+      used_model: usedModel,
+      fallback_level: usedFallbackLevel,
+      model_errors: modelErrors.length ? modelErrors : null,
+      tool_calls: executedToolCalls.length ? executedToolCalls.map((t) => t.name) : null,
+      escalated,
+      dry_run: dryRun,
     });
 
     return jsonResponse({ ok: true, reply: replyText, escalated, tool_calls: executedToolCalls, is_admin: isAdmin });
@@ -612,6 +662,10 @@ Deno.serve(async (req) => {
       status: "error",
       error: errorMessage(error).slice(0, 500),
       latency_ms: Date.now() - startedAt,
+    }, {
+      used_model: usedModel,
+      fallback_level: usedFallbackLevel,
+      model_errors: modelErrors.length ? modelErrors : null,
     });
     return jsonResponse({ ok: false, error: errorMessage(error) });
   }

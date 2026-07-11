@@ -6,6 +6,7 @@ import {
   Building2,
   Clock,
   FileText,
+  Headphones,
   LayoutDashboard,
   MessageSquare,
   PieChart,
@@ -52,6 +53,8 @@ export interface AutomationTabItem {
   path: string;
   label: string;
   icon: LucideIcon;
+  /** Absolute app route outside /messaging/whatsapp (e.g. the Ad Manager's Human Agent page). */
+  absolute?: boolean;
 }
 
 export const whatsappAutomationTabs: AutomationTabItem[] = [
@@ -60,7 +63,7 @@ export const whatsappAutomationTabs: AutomationTabItem[] = [
   { path: "auto-replies", label: "Auto Replies", icon: Bot },
   { path: "agents", label: "Agents", icon: UserCog },
   { path: "broadcasts", label: "Broadcasting", icon: Radio },
-  { path: "human-agent", label: "Human Agent", icon: UserCog },
+  { path: "/human-agent", label: "Human Agent", icon: Headphones, absolute: true },
 ];
 
 export const whatsappSectionDescriptions: Record<string, string> = {

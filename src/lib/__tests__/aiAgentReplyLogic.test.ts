@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   buildSystemPrompt,
   detectReplyLanguage,
+  formatModelRef,
+  parseModelRef,
   pickEscalationAgent,
   resolveEngagementMode,
   shouldAiReply,
@@ -135,5 +137,30 @@ describe("buildSystemPrompt", () => {
     const prompt = buildSystemPrompt({ persona: null, language: "en", knowledgeBlocks: [], nowIso: "2026-07-11T00:00:00.000Z" });
     expect(prompt).toContain("no business knowledge matched");
     expect(prompt).toContain("Reply in English");
+  });
+});
+
+describe("parseModelRef", () => {
+  it.each([
+    ["gpt-4o-mini", "openai", "gpt-4o-mini"],
+    ["openai/gpt-4o-mini", "openai", "gpt-4o-mini"],
+    ["openrouter/anthropic/claude-3.5-haiku", "openrouter", "anthropic/claude-3.5-haiku"],
+    ["gemini/gemini-3-flash-preview", "gemini", "gemini-3-flash-preview"],
+    ["google/gemini-3-flash-preview", "google", "gemini-3-flash-preview"],
+  ])("resolves %s to provider %s and model %s", (value, provider, model) => {
+    expect(parseModelRef(value)).toEqual({ provider, model });
+  });
+
+  it("treats an unknown prefix as a bare OpenAI model id, not a provider", () => {
+    expect(parseModelRef("anthropic/claude-3.5-haiku")).toEqual({
+      provider: "openai",
+      model: "anthropic/claude-3.5-haiku",
+    });
+  });
+
+  it("round-trips through formatModelRef", () => {
+    expect(formatModelRef(parseModelRef("openrouter/meta-llama/llama-3.3-70b"))).toBe(
+      "openrouter/meta-llama/llama-3.3-70b",
+    );
   });
 });

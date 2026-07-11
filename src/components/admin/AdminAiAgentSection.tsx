@@ -1,24 +1,66 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { Loader2, Plus, Trash2, Bot } from "lucide-react";
+import { Check, ChevronsUpDown, Loader2, Plus, Trash2, Bot } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { useAIConfiguration } from "@/hooks/useAIConfiguration";
+import { useOpenRouterModels, extractSeries, formatPrice } from "@/hooks/useOpenRouterModels";
 import type { AllowedAiModel } from "@/hooks/useAllowedAiAgentModels";
 
-const PROVIDER_PLACEHOLDERS = "openai, anthropic, google, openrouter, xai …";
+// Must stay in sync with PROVIDER_ENDPOINTS in supabase/functions/ai-agent-reply/index.ts —
+// the reply engine can only call providers it has an endpoint and API key for.
+const SUPPORTED_PROVIDERS = [
+  { code: "openai", label: "OpenAI" },
+  { code: "openrouter", label: "OpenRouter" },
+  { code: "gemini", label: "Google (Gemini)" },
+];
 
 export function AdminAiAgentSection() {
   const qc = useQueryClient();
   const [provider, setProvider] = useState("");
   const [modelId, setModelId] = useState("");
   const [label, setLabel] = useState("");
+  const [orOpen, setOrOpen] = useState(false);
+  const [orSearch, setOrSearch] = useState("");
+
+  const { data: aiConfig } = useAIConfiguration();
+  const { data: openRouterModels, isLoading: orLoading } = useOpenRouterModels();
+
+  // Chat-capable models from the admin catalog for the selected provider
+  // (OpenRouter uses its live model list instead).
+  const catalogModels = useMemo(() => {
+    if (!provider || provider === "openrouter" || !aiConfig) return [];
+    const providerRow = aiConfig.providers.find((p: any) => p.provider_code === provider);
+    if (!providerRow) return [];
+    return aiConfig.models
+      .filter((m: any) => m.provider_id === providerRow.id && m.is_active && m.capabilities?.includes("chat"))
+      .sort((a: any, b: any) => a.name.localeCompare(b.name));
+  }, [provider, aiConfig]);
+
+  const visibleOrModels = useMemo(() => {
+    const chatModels = (openRouterModels || [])
+      .filter((m) => m.architecture.output_modalities?.includes("text"))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (!orSearch) return chatModels.slice(0, 100);
+    const q = orSearch.toLowerCase();
+    return chatModels.filter((m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)).slice(0, 100);
+  }, [openRouterModels, orSearch]);
+
+  const pickModel = (id: string, name: string) => {
+    setModelId(id);
+    // Pre-fill the display label from the catalog name; admin can still edit it.
+    setLabel((current) => current.trim() ? current : name);
+  };
 
   const { data: models = [], isLoading } = useQuery({
     queryKey: ["admin-ai-agent-allowed-models"],
@@ -32,15 +74,18 @@ export function AdminAiAgentSection() {
     },
   });
 
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-ai-agent-allowed-models"] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["admin-ai-agent-allowed-models"] });
+    qc.invalidateQueries({ queryKey: ["ai-agent-allowed-models"] });
+  };
 
   const addModel = useMutation({
     mutationFn: async () => {
-      if (!provider.trim() || !modelId.trim() || !label.trim()) {
-        throw new Error("Provider, model id, and label are required");
+      if (!provider || !modelId.trim() || !label.trim()) {
+        throw new Error("Provider, model, and label are required");
       }
       const { error } = await (supabase as any).from("ai_agent_allowed_models").insert({
-        provider: provider.trim(),
+        provider,
         model_id: modelId.trim(),
         label: label.trim(),
       });
@@ -85,8 +130,75 @@ export function AdminAiAgentSection() {
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="grid gap-3 md:grid-cols-4">
-          <div className="space-y-1"><Label>Provider</Label><Input value={provider} onChange={(e) => setProvider(e.target.value)} placeholder={PROVIDER_PLACEHOLDERS} /></div>
-          <div className="space-y-1"><Label>Model ID</Label><Input value={modelId} onChange={(e) => setModelId(e.target.value)} placeholder="gpt-4o-mini" /></div>
+          <div className="space-y-1">
+            <Label>Provider</Label>
+            <Select
+              value={provider || undefined}
+              onValueChange={(value) => { setProvider(value); setModelId(""); setOrSearch(""); }}
+            >
+              <SelectTrigger><SelectValue placeholder="Choose a provider" /></SelectTrigger>
+              <SelectContent>
+                {SUPPORTED_PROVIDERS.map((p) => (
+                  <SelectItem key={p.code} value={p.code}>{p.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label>Model</Label>
+            {provider === "openrouter" ? (
+              <Popover open={orOpen} onOpenChange={setOrOpen}>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" role="combobox" aria-expanded={orOpen} className="w-full justify-between font-normal" disabled={orLoading}>
+                    {orLoading ? (
+                      <span className="flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> Loading…</span>
+                    ) : modelId ? (
+                      <span className="truncate">{modelId}</span>
+                    ) : "Choose a model"}
+                    <ChevronsUpDown className="ms-1 h-3 w-3 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[400px] p-0" align="start">
+                  <Command shouldFilter={false}>
+                    <CommandInput placeholder="Search models…" value={orSearch} onValueChange={setOrSearch} />
+                    <CommandList className="max-h-[300px]">
+                      <CommandEmpty>No models found.</CommandEmpty>
+                      <CommandGroup>
+                        {visibleOrModels.map((m) => (
+                          <CommandItem key={m.id} value={m.id} onSelect={() => { pickModel(m.id, m.name); setOrOpen(false); setOrSearch(""); }}>
+                            <div className="flex w-full min-w-0 items-center gap-2">
+                              <Check className={`h-3 w-3 shrink-0 ${modelId === m.id ? "opacity-100" : "opacity-0"}`} />
+                              <span className="flex-1 truncate">{m.name}</span>
+                              <Badge variant="outline" className="shrink-0 py-0 text-[10px]">{extractSeries(m.id)}</Badge>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">{formatPrice(m.pricing.prompt)}</span>
+                            </div>
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            ) : (
+              <Select
+                value={modelId || undefined}
+                onValueChange={(value) => {
+                  const row = catalogModels.find((m: any) => m.model_id === value);
+                  pickModel(value, row?.name || value);
+                }}
+                disabled={!provider}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={!provider ? "Pick a provider first" : catalogModels.length ? "Choose a model" : "No chat models in catalog"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {catalogModels.map((m: any) => (
+                    <SelectItem key={m.id} value={m.model_id}>{m.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           <div className="space-y-1"><Label>Label</Label><Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="GPT-4o mini (OpenAI)" /></div>
           <div className="flex items-end">
             <Button onClick={() => addModel.mutate()} disabled={addModel.isPending} className="w-full">

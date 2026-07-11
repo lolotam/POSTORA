@@ -22,6 +22,35 @@ export function resolveEngagementMode(override: string | null | undefined, defau
   return "human_then_ai";
 }
 
+// Providers the reply engine has chat-completion endpoints for (see
+// PROVIDER_ENDPOINTS in index.ts). "gemini" is the ai_providers catalog
+// code for Google; "google" is kept for values stored before that mapping.
+export const KNOWN_MODEL_PROVIDERS = ["openai", "openrouter", "google", "gemini"] as const;
+
+export interface ModelRef {
+  provider: string;
+  model: string;
+}
+
+// Allow-list values are stored as "provider/model_id"; legacy configs hold
+// bare OpenAI model ids. OpenRouter model ids contain "/" themselves
+// (e.g. "openrouter/anthropic/claude-3.5-haiku"), so only the first segment
+// is treated as a provider — and only when it names a known provider.
+export function parseModelRef(value: string): ModelRef {
+  const separator = value.indexOf("/");
+  if (separator > 0) {
+    const prefix = value.slice(0, separator);
+    if ((KNOWN_MODEL_PROVIDERS as readonly string[]).includes(prefix)) {
+      return { provider: prefix, model: value.slice(separator + 1) };
+    }
+  }
+  return { provider: "openai", model: value };
+}
+
+export function formatModelRef(ref: ModelRef): string {
+  return `${ref.provider}/${ref.model}`;
+}
+
 export interface ReplyGateParams {
   mode: EngagementMode;
   humanAssignedAndOnline: boolean;

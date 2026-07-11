@@ -351,6 +351,35 @@ Deno.serve(async (req) => {
         updates.admin_phone_numbers = normalized as string[];
       }
 
+      // Model fields must come from the admin-curated allow-list. Values are
+      // stored as "provider/model_id"; bare "model_id" is accepted for legacy
+      // configs. Empty-string fallbacks clear the slot.
+      const modelFields = ["model", "fallback_model_1", "fallback_model_2"] as const;
+      const modelFieldsPresent = modelFields.filter((field) => field in updates);
+      if (modelFieldsPresent.length > 0) {
+        const { data: allowedModels, error: allowedError } = await adminClient
+          .from("ai_agent_allowed_models")
+          .select("provider, model_id")
+          .eq("is_active", true);
+        if (allowedError) throw allowedError;
+        const validValues = new Set<string>();
+        for (const row of allowedModels || []) {
+          validValues.add(row.model_id);
+          validValues.add(`${row.provider}/${row.model_id}`);
+        }
+        for (const field of modelFieldsPresent) {
+          const value = updates[field];
+          if (value === null || value === "") {
+            if (field === "model") return jsonResponse({ error: "model is required" }, 400);
+            updates[field] = null;
+            continue;
+          }
+          if (typeof value !== "string" || !validValues.has(value)) {
+            return jsonResponse({ error: `${field} is not an allowed model` }, 400);
+          }
+        }
+      }
+
       const { data, error } = await adminClient
         .from("ai_agent_configs")
         .upsert({ user_id: user.id, platform, ...updates }, { onConflict: "user_id,platform" })

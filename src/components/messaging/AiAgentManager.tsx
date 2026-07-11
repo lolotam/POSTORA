@@ -38,7 +38,17 @@ const modeDescriptions: Record<AiAgentMode, string> = {
   human_then_ai: "A team member gets the first chance, then AI handles the fallback.",
 };
 
-export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPlatform } = {}) {
+export const AI_AGENT_TABS = ["settings", "knowledge", "tools", "test", "logs"] as const;
+export type AiAgentTab = (typeof AI_AGENT_TABS)[number];
+
+interface AiAgentManagerProps {
+  platform?: AiAgentPlatform;
+  /** When provided (with onTabChange), the tab bar is URL-controlled for deep links. */
+  activeTab?: AiAgentTab;
+  onTabChange?: (tab: AiAgentTab) => void;
+}
+
+export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }: AiAgentManagerProps = {}) {
   const { config, isLoading, upsertConfig } = useAiAgentConfig(platform);
   const { data: allowedModels = [] } = useAllowedAiAgentModels();
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
@@ -104,7 +114,12 @@ export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPl
   const selectedMode = (form.default_mode || "human_then_ai") as AiAgentMode;
 
   return (
-    <Tabs defaultValue="settings" className="space-y-4">
+    <Tabs
+      defaultValue="settings"
+      value={activeTab}
+      onValueChange={onTabChange ? (value) => onTabChange(value as AiAgentTab) : undefined}
+      className="space-y-4"
+    >
       <TabsList className="h-auto flex-wrap justify-start">
         <TabsTrigger value="settings">Settings</TabsTrigger>
         <TabsTrigger value="knowledge">Knowledge</TabsTrigger>
@@ -196,7 +211,14 @@ export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPl
                   { key: "fallback_model_1", label: "Fallback #1", required: false },
                   { key: "fallback_model_2", label: "Fallback #2", required: false },
                 ] as const).map((slot) => {
-                  const value = (form[slot.key as keyof AiAgentConfigInput] as string) || "";
+                  const stored = (form[slot.key as keyof AiAgentConfigInput] as string) || "";
+                  // Configs saved before the allow-list hold bare model ids
+                  // (e.g. "gpt-4o-mini"); map them onto the "provider/model_id"
+                  // option values so the current selection still displays.
+                  const matched = allowedModels.find(
+                    (m) => formatAllowedModelValue(m) === stored || m.model_id === stored,
+                  );
+                  const value = matched ? formatAllowedModelValue(matched) : stored;
                   return (
                     <div key={slot.key} className="space-y-2">
                       <Label>{slot.label}</Label>

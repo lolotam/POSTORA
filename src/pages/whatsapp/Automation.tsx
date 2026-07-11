@@ -21,9 +21,7 @@ export default function Automation() {
       >
         {whatsappAutomationTabs.map((tab) => {
           const Icon = tab.icon;
-          const target = tab.path === "human-agent"
-            ? whatsappSectionRoute("agents")
-            : whatsappSectionRoute(tab.path);
+          const target = tab.absolute ? tab.path : whatsappSectionRoute(tab.path);
           return (
             <NavLink
               key={tab.path}

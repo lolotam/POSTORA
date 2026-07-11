@@ -1,12 +1,19 @@
 import { ArrowLeft, MessageCircle } from "lucide-react";
-import { Link, NavLink, Navigate, Outlet } from "react-router-dom";
+import { Link, NavLink, Navigate, Outlet, useLocation } from "react-router-dom";
 import { WhatsAppCoexistenceSetupBanner } from "@/components/messaging/WhatsAppCoexistenceSetupBanner";
 import { cn } from "@/lib/utils";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
-import { whatsappNavItems, whatsappSectionRoute } from "./waNav";
+import { whatsappAutomationTabs, whatsappNavItems, whatsappSectionRoute } from "./waNav";
+
+// Sub-sections grouped under the Automation hub keep its nav pill highlighted.
+const automationSubRoutes = whatsappAutomationTabs
+  .filter((tab) => !tab.absolute)
+  .map((tab) => whatsappSectionRoute(tab.path));
 
 export default function WhatsAppLayout() {
   const { flags, isLoading } = useFeatureFlags();
+  const { pathname } = useLocation();
+  const onAutomationSubRoute = automationSubRoutes.some((route) => pathname.startsWith(route));
 
   if (!isLoading && !flags.msgWhatsapp) {
     return <Navigate to="/dashboard" replace />;
@@ -50,7 +57,7 @@ export default function WhatsAppLayout() {
                 className={({ isActive }) =>
                   cn(
                     "flex shrink-0 items-center gap-2 rounded-full px-3 py-2 text-sm font-medium transition-colors",
-                    isActive
+                    isActive || (item.path === "automation" && onAutomationSubRoute)
                       ? "bg-[#128C7E] text-white shadow-sm shadow-[#128C7E]/20"
                       : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"
                   )
