@@ -215,3 +215,84 @@ export async function executeTool(
   if (name === "notify_admin") return notifyAdmin(context, String(args.message || ""));
   return { output: `Unknown tool: ${name}` };
 }
+
+// User-defined connector tools (rows in ai_agent_tools). Each one maps to an
+// external webhook — typically an n8n workflow holding the real credentials
+// (Gmail, Calendar, CRM, ...) so Postora never stores them.
+export interface CustomTool {
+  name: string;
+  description: string;
+  url: string;
+  secret: string | null;
+  admin_only: boolean;
+}
+
+export function customToolDefinitions(tools: CustomTool[]) {
+  return tools.map((tool) => ({
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: {
+        type: "object",
+        properties: {
+          input: {
+            type: "string",
+            description: "The request to send to this connector, in plain language with all needed details",
+          },
+        },
+        required: ["input"],
+      },
+    },
+  }));
+}
+
+const CUSTOM_TOOL_TIMEOUT_MS = 10_000;
+const CUSTOM_TOOL_OUTPUT_LIMIT = 2000;
+
+export async function executeCustomTool(
+  context: ToolContext,
+  tool: CustomTool,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const input = String(args.input || "");
+  if (context.dryRun) {
+    return {
+      output: `(test mode — connector not called) Would call "${tool.name}" with: ${input.slice(0, 200)}`,
+    };
+  }
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (tool.secret) headers["X-Webhook-Secret"] = tool.secret;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), CUSTOM_TOOL_TIMEOUT_MS);
+  try {
+    const response = await fetch(tool.url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        tool: tool.name,
+        input,
+        conversation_id: context.conversationId,
+        platform: context.platform,
+        customer_name: context.customerName,
+      }),
+      signal: controller.signal,
+    });
+    const text = (await response.text()).slice(0, CUSTOM_TOOL_OUTPUT_LIMIT);
+    if (!response.ok) {
+      return { output: `Connector "${tool.name}" failed (${response.status}): ${text || "no details"}` };
+    }
+    return { output: text || `Connector "${tool.name}" completed with no output.` };
+  } catch (error) {
+    const reason = error instanceof DOMException && error.name === "AbortError"
+      ? "timed out"
+      : error instanceof Error
+        ? error.message
+        : String(error);
+    return { output: `Connector "${tool.name}" failed: ${reason}` };
+  } finally {
+    clearTimeout(timeout);
+  }
+}

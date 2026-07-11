@@ -19,6 +19,7 @@ import {
 import { useAiKnowledge } from "@/hooks/useAiKnowledge";
 import { useWhatsAppCatalog } from "@/hooks/useWhatsAppCatalog";
 import {
+  AI_KNOWLEDGE_ACCEPT,
   buildAiKnowledgeStoragePath,
   getKnowledgeSourceType,
 } from "@/lib/aiKnowledge";
@@ -69,7 +70,7 @@ export function AiKnowledgeManager({
     if (!file || !user) return;
     const type = getKnowledgeSourceType(file.name);
     if (!type) {
-      toast.error("Only CSV, XLSX, and XLS files are supported.");
+      toast.error("Supported files: CSV, XLSX, XLS, PDF, TXT, MD, PNG, JPG, WEBP.");
       return;
     }
     setUploading(true);
@@ -137,7 +138,8 @@ export function AiKnowledgeManager({
         <CardHeader>
           <CardTitle>Upload knowledge file</CardTitle>
           <CardDescription>
-            CSV, XLSX, and XLS files are supported.
+            Spreadsheets (CSV/XLSX/XLS), PDFs, text files (TXT/MD), and images
+            (PNG/JPG/WEBP — text is extracted automatically).
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -160,7 +162,7 @@ export function AiKnowledgeManager({
             <input
               className="sr-only"
               type="file"
-              accept=".csv,.xlsx,.xls"
+              accept={AI_KNOWLEDGE_ACCEPT}
               onChange={(event) => {
                 const file = event.target.files?.[0];
                 event.target.value = "";

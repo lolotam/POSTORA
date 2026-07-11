@@ -10,7 +10,15 @@ import {
   shouldAiReply,
   waRecipient,
 } from "./logic.ts";
-import { executeTool, toolDefinitions, type ToolContext, type ToolResult } from "./tools.ts";
+import {
+  customToolDefinitions,
+  executeCustomTool,
+  executeTool,
+  toolDefinitions,
+  type CustomTool,
+  type ToolContext,
+  type ToolResult,
+} from "./tools.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 
@@ -421,6 +429,17 @@ Deno.serve(async (req) => {
       },
     };
 
+    // User-defined connector tools; admin_only ones stay hidden from customers.
+    const { data: customToolRows } = await admin
+      .from("ai_agent_tools")
+      .select("name, description, url, secret, admin_only")
+      .eq("user_id", request.user_id)
+      .eq("is_enabled", true);
+    const customTools: CustomTool[] = (customToolRows || []).filter(
+      (tool: CustomTool) => isAdmin || !tool.admin_only,
+    );
+    const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
+
     const messages: any[] = [
       { role: "system", content: systemPrompt },
       ...history,
@@ -438,7 +457,11 @@ Deno.serve(async (req) => {
         model: config.model || "gpt-4o-mini",
         temperature: config.temperature ?? 0.4,
         messages,
-        tools: isAdmin ? [...toolDefinitions, ...adminToolDefinitions] : toolDefinitions,
+        tools: [
+          ...toolDefinitions,
+          ...(isAdmin ? adminToolDefinitions : []),
+          ...customToolDefinitions(customTools),
+        ],
         tool_choice: "auto",
       });
       promptTokens += completion.usage?.prompt_tokens || 0;
@@ -460,11 +483,14 @@ Deno.serve(async (req) => {
           // leave args empty; the executor handles missing fields
         }
         executedToolCalls.push({ name: toolCall.function.name, arguments: args });
-        // Admin tools are only dispatched for verified admin senders; for
-        // everyone else unknown names fall through to executeTool's rejection.
-        const result: ToolResult =
-          (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
-          (await executeTool(toolContext, toolCall.function.name, args));
+        // Dispatch order: user-defined connectors (names validated to never
+        // shadow builtins), then admin tools for verified admins only, then
+        // builtin safe tools; unknown names get executeTool's rejection.
+        const customTool = customToolByName.get(toolCall.function.name);
+        const result: ToolResult = customTool
+          ? await executeCustomTool(toolContext, customTool, args)
+          : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
+            (await executeTool(toolContext, toolCall.function.name, args));
         if (result.escalated) escalated = true;
         if (result.retrievedChunkIds) retrievedChunkIds.push(...result.retrievedChunkIds);
         messages.push({

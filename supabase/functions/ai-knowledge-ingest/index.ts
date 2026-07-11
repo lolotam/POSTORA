@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as XLSX from "npm:xlsx@0.18.5";
+import { extractText, getDocumentProxy } from "https://esm.sh/unpdf@0.12.1";
 import {
   chunkProfileText,
   chunkRows,
@@ -88,6 +89,106 @@ async function setFailed(admin: AdminClient, sourceId: string, error: unknown) {
     .eq("id", sourceId);
 }
 
+function toBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const step = 0x8000;
+  for (let index = 0; index < bytes.length; index += step) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + step));
+  }
+  return btoa(binary);
+}
+
+const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+};
+
+// Images become text via a vision model: menus, price lists, and product
+// photos get described/transcribed so they are searchable like any document.
+async function extractImageText(bytes: Uint8Array, fileName: string): Promise<string> {
+  const key = Deno.env.get("OPENAI_API_KEY");
+  if (!key)
+    throw new Error("OPENAI_API_KEY is not configured; knowledge cannot be indexed.");
+  const extension = fileName.split(".").pop()?.toLowerCase() || "";
+  const mime = IMAGE_MIME_BY_EXTENSION[extension];
+  if (!mime) throw new Error(`Unsupported image type: .${extension}`);
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${key}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Extract ALL business-relevant information from this image (product names, prices, descriptions, policies, contact details, menu items). Transcribe visible text verbatim. Output plain text only.",
+            },
+            {
+              type: "image_url",
+              image_url: { url: `data:${mime};base64,${toBase64(bytes)}` },
+            },
+          ],
+        },
+      ],
+      max_tokens: 1500,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok)
+    throw new Error(data?.error?.message || "Image extraction failed");
+  const text = (data.choices?.[0]?.message?.content || "").trim();
+  if (!text) throw new Error("No text could be extracted from the image");
+  return text;
+}
+
+async function parseSourceFile(
+  sourceType: string,
+  fileName: string,
+  file: Blob,
+): Promise<KnowledgeChunk[]> {
+  if (sourceType === "csv" || sourceType === "excel") {
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const rows: Array<{ text: string; sheet: string; row: number }> = [];
+    for (const sheet of workbook.SheetNames) {
+      XLSX.utils
+        .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], {
+          defval: "",
+        })
+        .forEach((row, index) =>
+          rows.push({ text: rowToText(row), sheet, row: index + 2 }),
+        );
+    }
+    return chunkRows(rows);
+  }
+  if (sourceType === "pdf") {
+    const pdf = await getDocumentProxy(new Uint8Array(await file.arrayBuffer()));
+    const { text } = await extractText(pdf, { mergePages: true });
+    if (!text?.trim())
+      throw new Error("No extractable text found in the PDF (scanned PDFs are not supported yet)");
+    return chunkProfileText(text);
+  }
+  if (sourceType === "doc") {
+    const text = (await file.text()).trim();
+    if (!text) throw new Error("The document is empty");
+    return chunkProfileText(text);
+  }
+  if (sourceType === "image") {
+    const text = await extractImageText(
+      new Uint8Array(await file.arrayBuffer()),
+      fileName,
+    );
+    return chunkProfileText(text);
+  }
+  throw new Error(`Source type not supported: ${sourceType}`);
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return handleCorsOptions();
   try {
@@ -134,8 +235,8 @@ Deno.serve(async (req) => {
         .eq("user_id", user.id)
         .maybeSingle();
       if (!source) return errorResponse("Knowledge source not found", 404);
-      if (!["csv", "excel"].includes(source.source_type))
-        return errorResponse("Source type not supported yet", 400);
+      if (!["csv", "excel", "pdf", "doc", "image"].includes(source.source_type))
+        return errorResponse("Source type not supported", 400);
       try {
         await (admin as any)
           .from("ai_knowledge_sources")
@@ -146,17 +247,11 @@ Deno.serve(async (req) => {
           .download(source.file_path);
         if (downloadError || !file)
           throw downloadError || new Error("Knowledge file not found");
-        const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-        const rows: Array<{ text: string; sheet: string; row: number }> = [];
-        for (const sheet of workbook.SheetNames)
-          XLSX.utils
-            .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], {
-              defval: "",
-            })
-            .forEach((row, index) =>
-              rows.push({ text: rowToText(row), sheet, row: index + 2 }),
-            );
-        const chunks = chunkRows(rows);
+        const chunks = await parseSourceFile(
+          source.source_type,
+          source.file_name || source.file_path,
+          file,
+        );
         await replaceChunks(admin, source.id, user.id, chunks);
         await (admin as any)
           .from("ai_knowledge_sources")

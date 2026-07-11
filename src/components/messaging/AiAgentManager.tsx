@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Bot, Loader2, Plus, Sparkles, X } from "lucide-react";
+import { Bot, Loader2, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import { normalizeE164Phone } from "@/lib/phone";
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
 import { AiAgentTestChat } from "@/components/messaging/AiAgentTestChat";
+import { AiToolsManager } from "@/components/messaging/AiToolsManager";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
   "is_enabled" | "default_mode" | "language_mode" | "model" | "daily_message_cap" | "reply_cooldown_seconds"
@@ -35,18 +36,6 @@ const modeDescriptions: Record<AiAgentMode, string> = {
   human_first: "A team member replies first; the assistant stays on standby.",
   human_then_ai: "A team member gets the first chance, then AI handles the fallback.",
 };
-
-function ComingSoonCard({ title }: { title: string }) {
-  return (
-    <Card>
-      <CardContent className="flex min-h-48 flex-col items-center justify-center text-center">
-        <Sparkles className="mb-3 h-9 w-9 text-muted-foreground/50" />
-        <p className="font-medium">{title}</p>
-        <p className="mt-1 text-sm text-muted-foreground">Coming soon</p>
-      </CardContent>
-    </Card>
-  );
-}
 
 export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPlatform } = {}) {
   const { config, isLoading, upsertConfig } = useAiAgentConfig(platform);
@@ -204,7 +193,7 @@ export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPl
         </div>
       </TabsContent>
       <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} /></TabsContent>
-      <TabsContent value="tools" className="mt-0"><ComingSoonCard title="Operational tools" /></TabsContent>
+      <TabsContent value="tools" className="mt-0"><AiToolsManager /></TabsContent>
       <TabsContent value="test" className="mt-0"><AiAgentTestChat platform={platform} /></TabsContent>
       <TabsContent value="logs" className="mt-0"><AiAgentLogsView platform={platform} /></TabsContent>
     </Tabs>

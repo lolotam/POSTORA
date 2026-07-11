@@ -418,6 +418,75 @@ Deno.serve(async (req) => {
       return jsonResponse({ modes: data || [] });
     }
 
+    // ACTION: ai_list_tools
+    if (action === "ai_list_tools") {
+      const { data, error } = await adminClient
+        .from("ai_agent_tools")
+        .select("*")
+        .eq("user_id", user.id)
+        .order("name");
+      if (error) throw error;
+      return jsonResponse({ tools: data || [] });
+    }
+
+    // ACTION: ai_upsert_tool
+    if (action === "ai_upsert_tool") {
+      const { tool } = body;
+      if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+        return jsonResponse({ error: "tool must be an object" }, 400);
+      }
+      const name = String(tool.name || "").trim();
+      const description = String(tool.description || "").trim();
+      const toolUrl = String(tool.url || "").trim();
+      // Reserved names are the builtin tools the AI agent already exposes.
+      const reservedToolNames = [
+        "search_knowledge", "escalate_to_human", "notify_admin",
+        "list_connected_accounts", "search_posts", "get_posting_summary", "create_scheduled_post",
+      ];
+      if (!/^[a-z][a-z0-9_]{2,40}$/.test(name)) {
+        return jsonResponse({ error: "Tool name must be snake_case (3-41 chars, letters/digits/underscores)" }, 400);
+      }
+      if (reservedToolNames.includes(name)) {
+        return jsonResponse({ error: `"${name}" is a reserved builtin tool name` }, 400);
+      }
+      if (!description) return jsonResponse({ error: "Tool description is required" }, 400);
+      if (!/^https:\/\//.test(toolUrl)) {
+        return jsonResponse({ error: "Tool URL must start with https://" }, 400);
+      }
+      const row = {
+        user_id: user.id,
+        name,
+        description: description.slice(0, 500),
+        tool_type: "n8n_webhook",
+        url: toolUrl,
+        secret: tool.secret ? String(tool.secret) : null,
+        is_enabled: tool.is_enabled !== false,
+        admin_only: tool.admin_only === true,
+      };
+      const { data, error } = await adminClient
+        .from("ai_agent_tools")
+        .upsert(row, { onConflict: "user_id,name" })
+        .select()
+        .single();
+      if (error) throw error;
+      return jsonResponse({ tool: data });
+    }
+
+    // ACTION: ai_delete_tool
+    if (action === "ai_delete_tool") {
+      const { tool_id } = body;
+      if (!tool_id || typeof tool_id !== "string") {
+        return jsonResponse({ error: "tool_id is required" }, 400);
+      }
+      const { error } = await adminClient
+        .from("ai_agent_tools")
+        .delete()
+        .eq("id", tool_id)
+        .eq("user_id", user.id);
+      if (error) throw error;
+      return jsonResponse({ ok: true });
+    }
+
     // ACTION: list_accounts
     if (action === "list_accounts") {
       const { data, error } = await adminClient
