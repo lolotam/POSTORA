@@ -329,7 +329,8 @@ Deno.serve(async (req) => {
 
       const allowedFields = [
         "is_enabled", "default_mode", "persona_instructions", "business_profile_text",
-        "language_mode", "model", "temperature", "admin_phone_numbers",
+        "language_mode", "model", "fallback_model_1", "fallback_model_2",
+        "temperature", "admin_phone_numbers",
         "daily_message_cap", "reply_cooldown_seconds", "max_tool_iterations",
         "handoff_on_request", "handoff_on_low_confidence",
       ];

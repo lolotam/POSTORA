@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
+import { useAllowedAiAgentModels, formatAllowedModelValue } from "@/hooks/useAllowedAiAgentModels";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
@@ -39,6 +40,7 @@ const modeDescriptions: Record<AiAgentMode, string> = {
 
 export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPlatform } = {}) {
   const { config, isLoading, upsertConfig } = useAiAgentConfig(platform);
+  const { data: allowedModels = [] } = useAllowedAiAgentModels();
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -52,6 +54,8 @@ export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPl
       business_profile_text: config.business_profile_text || "",
       language_mode: config.language_mode,
       model: config.model,
+      fallback_model_1: config.fallback_model_1 || null,
+      fallback_model_2: config.fallback_model_2 || null,
       temperature: config.temperature,
       admin_phone_numbers: config.admin_phone_numbers || [],
       daily_message_cap: config.daily_message_cap,
@@ -181,11 +185,41 @@ export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPl
           </Card>
 
           <Card>
-            <CardHeader><CardTitle className="text-base">Advanced</CardTitle></CardHeader>
-            <CardContent className="grid gap-5 md:grid-cols-3">
-              <div className="space-y-2"><Label htmlFor="ai-model">Model</Label><Input id="ai-model" value={form.model || "gpt-4o-mini"} onChange={(event) => update("model", event.target.value)} /></div>
-              <div className="space-y-2"><Label htmlFor="daily-cap">Daily message cap</Label><Input id="daily-cap" type="number" min={1} value={form.daily_message_cap ?? 50} onChange={(event) => update("daily_message_cap", Number(event.target.value))} /></div>
-              <div className="space-y-2"><Label htmlFor="cooldown">Reply cooldown (seconds)</Label><Input id="cooldown" type="number" min={0} value={form.reply_cooldown_seconds ?? 60} onChange={(event) => update("reply_cooldown_seconds", Number(event.target.value))} /></div>
+            <CardHeader>
+              <CardTitle className="text-base">Advanced</CardTitle>
+              <CardDescription>Models are curated by your admin. Choose a primary and up to two fallbacks.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="grid gap-5 md:grid-cols-3">
+                {([
+                  { key: "model", label: "Primary model", required: true },
+                  { key: "fallback_model_1", label: "Fallback #1", required: false },
+                  { key: "fallback_model_2", label: "Fallback #2", required: false },
+                ] as const).map((slot) => {
+                  const value = (form[slot.key as keyof AiAgentConfigInput] as string) || "";
+                  return (
+                    <div key={slot.key} className="space-y-2">
+                      <Label>{slot.label}</Label>
+                      <Select
+                        value={value || (slot.required ? undefined : "__none__")}
+                        onValueChange={(v) => update(slot.key as keyof AiAgentConfigInput, (v === "__none__" ? null : v) as any)}
+                      >
+                        <SelectTrigger><SelectValue placeholder={allowedModels.length ? "Choose a model" : "No models configured"} /></SelectTrigger>
+                        <SelectContent>
+                          {!slot.required && <SelectItem value="__none__">— None —</SelectItem>}
+                          {allowedModels.map((m) => (
+                            <SelectItem key={m.id} value={formatAllowedModelValue(m)}>{m.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="grid gap-5 md:grid-cols-2">
+                <div className="space-y-2"><Label htmlFor="daily-cap">Daily message cap</Label><Input id="daily-cap" type="number" min={1} value={form.daily_message_cap ?? 50} onChange={(event) => update("daily_message_cap", Number(event.target.value))} /></div>
+                <div className="space-y-2"><Label htmlFor="cooldown">Reply cooldown (seconds)</Label><Input id="cooldown" type="number" min={0} value={form.reply_cooldown_seconds ?? 60} onChange={(event) => update("reply_cooldown_seconds", Number(event.target.value))} /></div>
+              </div>
             </CardContent>
           </Card>
 

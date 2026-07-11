@@ -19,6 +19,7 @@ import { BrandIntelligenceSettings } from "@/components/admin/BrandIntelligenceS
 import { ScrapingServicesSettings } from "@/components/admin/ScrapingServicesSettings";
 import { AppCredentialsSettings } from "@/components/admin/AppCredentialsSettings";
 import { TikTokAnalyticsSourceCard } from "@/components/admin/settings/TikTokAnalyticsSourceCard";
+import { AdminAiAgentSection } from "@/components/admin/AdminAiAgentSection";
 import { useFeatureFlags, FLAG_KEY_MAP, DEFAULT_FLAGS } from "@/hooks/useFeatureFlags";
 
 interface AppSetting {
@@ -407,6 +408,10 @@ export default function AdminSettings() {
 
             {/* User AI Model Overrides */}
             <UserAiModelOverrides />
+
+            {/* AI Agent (messaging) Models */}
+            <AdminAiAgentSection />
+
 
             {/* Email Templates */}
             <Card>

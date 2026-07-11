@@ -17,6 +17,8 @@ export interface AiAgentConfig {
   business_profile_text: string | null;
   language_mode: AiAgentLanguageMode;
   model: string;
+  fallback_model_1: string | null;
+  fallback_model_2: string | null;
   temperature: number;
   admin_phone_numbers: string[];
   daily_message_cap: number;
@@ -37,6 +39,8 @@ const CONFIG_FIELDS = [
   "business_profile_text",
   "language_mode",
   "model",
+  "fallback_model_1",
+  "fallback_model_2",
   "temperature",
   "admin_phone_numbers",
   "daily_message_cap",

@@ -1,71 +1,82 @@
-# Social Reconnect Workflow Fix — Phased Plan
+# Plan
 
-Goal: clicking **Reconnect** on Pinterest, X/Twitter, or TikTok expired warnings runs an OAuth flow that updates the existing `social_accounts` row, clears warnings, and never creates a duplicate — without weakening auth, leaking tokens, or requiring manual delete.
+## Task 1 — Knowledge tab flashing / not loading (Facebook + WhatsApp + Instagram)
 
-## Phase 1 — Map current flow (read-only)
-Inspect and document:
-- Frontend: dashboard/profile warning + Reconnect handlers, `src/hooks/oauth/{usePinterestOAuth,useTwitterOAuth,useTikTokOAuth}.ts`, `useProfileOAuth`, `useOAuthRedirectHandler`, social-account/health/dashboard query hooks, `src/pages/PinterestCallback.tsx`, `OAuthCallback.tsx`.
-- Backend: `supabase/functions/{pinterest-oauth,twitter-oauth,tiktok-oauth}/index.ts`, `_shared/oauthState.ts`, `_shared/auth-helper.ts`, `_shared/auth-responses.ts`, `refresh-tokens`, `check-connection-health`.
-- Answer the 7 mapping questions (which handler runs, does state carry `social_account_id`, does callback update vs insert, are queries invalidated, where warning is derived).
+**Cause hypotheses (to confirm at start of implementation):**
+- `AiKnowledgeManager` always calls `useWhatsAppCatalog()` even when `platform === "facebook" | "instagram"`, which triggers WhatsApp-scoped queries/subscriptions that repeatedly fail/refetch → visible "flash".
+- `useAiKnowledge` uses a `refetchInterval` that re-evaluates while `status` transitions, causing the sources list to re-mount if `sources` is destructured unstably.
+- `useEffect(() => setProfile(config?.business_profile_text || ""), [config])` reruns whenever the query returns a new object reference, wiping local textarea state → looks like flashing.
 
-## Phase 2 — Reproduce safely
-For each of the 3 platforms: click Reconnect on an expired account, trace redirect, callback, and row diff. Report only presence/absence of fields (never values). Confirm whether duplicates appear and whether UI cache refreshes.
+**Fixes:**
+1. Gate `useWhatsAppCatalog` behind `platform === "whatsapp"` and only render the WhatsApp catalog card in that case.
+2. Change the profile-sync effect to depend on `config?.business_profile_text` (primitive) instead of the whole `config` object.
+3. Stabilize `sources` from `useAiKnowledge` (default `[]` only once) and set `refetchInterval` to `false` unless a source is actively `pending|processing` (already close — verify no infinite refetch loop when the query errors).
+4. Add a proper loading skeleton + empty state so the tab paints once instead of flickering between spinner and content.
 
-## Phase 3 — Reconnect state propagation (frontend + shared state)
-- Extend `_shared/oauthState.ts` payload to include `mode?: "connect" | "reconnect"` and `social_account_id?: string` (already supports `extra`).
-- Pinterest/Twitter/TikTok authorize hooks accept optional `{ mode, socialAccountId }`. Reconnect handlers pass `mode="reconnect"` + existing `social_account_id`. CSRF nonce + HMAC signature preserved.
-- Add a single `useReconnectAccount(account)` hook used by both the dashboard warning and the profile platform card so behavior is identical.
+Files: `src/components/messaging/AiKnowledgeManager.tsx`, `src/hooks/useAiKnowledge.ts`.
 
-## Phase 4 — Backend callback update-in-place
-In each of `pinterest-oauth`, `twitter-oauth`, `tiktok-oauth` callback handlers:
-1. Verify HMAC state via `verifyOAuthState` (existing).
-2. If `state.mode === "reconnect"` and `state.social_account_id`:
-   - Service-role fetch the row; **403** unless `row.user_id === state.user_id` AND `row.platform === <this provider>`.
-   - Exchange code → tokens.
-   - **UPDATE** the existing row: `access_token`, `refresh_token`, `token_expires_at`, `is_active=true`, `needs_reauth=false`, clear `failure_count`/`last_refresh_error` (where columns exist), merge `account_metadata`, `updated_at=now()`. Keep `social_profile_id` linkage.
-   - Never INSERT a new row in reconnect mode. If the platform-user-id from the new token differs from the stored one, return a clear error code (`RECONNECT_ACCOUNT_MISMATCH`) — do not silently swap identities.
-3. If not reconnect mode → existing connect behavior unchanged.
-4. Use `auth-responses.ts` helpers; never log tokens, codes, refresh tokens, or Authorization headers.
+## Task 2 — Move model selection to Admin, allow multi-model + fallbacks per user
 
-## Phase 5 — Clear expired warning
-- Ensure the fields the dashboard warning reads (`needs_reauth`, `is_active`, `token_expires_at`, `last_refresh_error`, `failure_count`) are reset by callback.
-- After successful return to `/profiles?reconnected=<platform>`, invalidate queries: social accounts, connection health, dashboard stats, token warnings, profile accounts.
-- If warning is sourced from `token_refresh_history`, ensure latest successful entry supersedes failures (insert a success row in callback if such table is used).
+**Admin side (new): `/admin/settings` → new "AI Agent" section**
+- New page/section `src/pages/admin/AdminAiAgent.tsx` (or a card in existing settings) listing allowed chat models. Admin can add rows: `{ provider, model_id, label, is_active, sort_order }`.
+- Backed by a new table `ai_agent_allowed_models` (manual SQL migration, RLS: admins full, authenticated read active).
+- Admin can toggle active, reorder, and set a global default (used as final fallback if the user picks nothing).
 
-## Phase 6 — User feedback
-Reconnect button shows "Connecting…" only during redirect. Success toast "Connection refreshed successfully". Failure toast with readable message (no `[object Object]`). Stale "Could not refresh token" cleared via query invalidation.
+**User side: `/messaging/whatsapp/ai-agent` → Advanced card**
+- Remove the free-text Model `<Input>`.
+- Replace with three `<Select>`s fed by the admin allow-list: **Primary model**, **Fallback #1**, **Fallback #2** (Fallback options include a "None" entry).
+- Persist as new columns on `ai_agent_configs`: `model` (primary, existing), `model_fallback_1`, `model_fallback_2` (nullable text).
 
-## Phase 7 — Per-platform checks
-- **Pinterest**: callback updates existing row, board metadata preserved, `PinterestCallback.tsx` forwards `state` unchanged so backend mode propagates.
-- **Twitter/X**: OAuth2 PKCE — verifier must round-trip with reconnect mode; no duplicate username row.
-- **TikTok**: legacy `/tiktok-callback` path and unified backend redirect both honor reconnect mode; creator metadata preserved.
+**Backend (edge functions that call the model, e.g. `ai-agent-reply`):**
+- Try `model` → on failure/timeout, try `model_fallback_1` → then `model_fallback_2`.
+- Preserve current OpenAI-compatible gateway pattern; do not change tool schemas.
 
-## Phase 8 — Tests
-Vitest additions:
-- `oauthState` round-trips `mode` + `social_account_id`.
-- Each provider's authorize hook includes reconnect fields when invoked in reconnect mode.
-- Each callback (mocked token exchange + mocked supabase) UPDATEs existing row, never INSERTs, in reconnect mode.
-- Cross-user reconnect rejected with 403.
-- Mismatched provider platform rejected.
-- Query invalidation fires after reconnect.
-- Grep guard: no `console.log` of `access_token`/`refresh_token`/`Authorization` in changed files.
+**Admin logs / tracking:**
+- Every AI agent chat call writes a row to `admin_audit_log` (already exists) with `action='ai_agent_reply'`, `resource_type='ai_agent'`, `resource_id=conversation_id`, `details={ platform, model_used, fallback_level, prompt_tokens, completion_tokens, latency_ms, status, error }`.
+- Existing `ai_agent_logs` remains for the user-facing Logs tab; `admin_audit_log` writes give admins a global view.
+- Add an "AI Agent Calls" tab in `/admin` (or reuse the audit log page with a filter) — read-only.
 
-## Phase 9 — Validation
-`npm run build`, `npm run lint`, `npx vitest run`, `git diff --check`, plus the two security greps from the brief (all `|| true`).
+**Manual SQL (self-hosted; user runs it):**
 
-## Phase 10 — Deployment notes
-Edge Function sync list to `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`:
-- `_shared/` (oauthState extension)
-- `pinterest-oauth/`
-- `twitter-oauth/`
-- `tiktok-oauth/`
-Then `docker compose up -d --no-deps functions`. Frontend deploy for hook/UI changes. No SQL expected; if a column is missing (`needs_reauth`, `failure_count`, `last_refresh_error`), create a manual SQL file under `supabase/manual-sql/` and **stop** for owner review.
+```text
+supabase/manual-sql/20260712120000_ai_agent_allowed_models.sql
+  - CREATE TABLE public.ai_agent_allowed_models(...)
+  - GRANT SELECT to authenticated (only WHERE is_active), full to service_role
+  - RLS: admins full via has_role(auth.uid(),'admin'); authenticated SELECT is_active=true
+supabase/manual-sql/20260712120500_ai_agent_configs_fallback_models.sql
+  - ALTER TABLE public.ai_agent_configs ADD COLUMN model_fallback_1 text, model_fallback_2 text
+```
 
-## Phase 11 — Final 18-section report
-Sections 1–18 as specified, ending with one of: `social_reconnect_workflow_fixed` | `social_reconnect_requires_function_sync` | `social_reconnect_requires_frontend_deploy` | `social_reconnect_partial` | `blocked`.
+Files:
+- New: `src/pages/admin/AdminAiAgent.tsx`, `src/hooks/useAdminAiAgentModels.ts`, `src/hooks/useAllowedAiModels.ts`.
+- Edited: `src/components/messaging/AiAgentManager.tsx` (Advanced card), `src/hooks/useAiAgentConfig.ts` (extend type + payload fields), `supabase/functions/ai-agent-reply/index.ts` (fallback chain + audit-log insert), admin routes in `src/components/AnimatedRoutes.tsx`.
 
-## Out of scope
-n8n, Supabase MCP DB writes, old Cloud project, RLS/auth weakening, deleting accounts as a workaround, any secret/token logging or commits.
+## Task 3 — WhatsApp nav restructure: add "Automation" group (UI only)
 
-## Execution
-Delegated to Codex phase-by-phase. After Codex completes, run CleanCodeGuard on touched edge functions + frontend hooks, TestGuard on changed tests, and fix or re-delegate findings before final report.
+Update `src/components/whatsapp/waNav.ts` + `src/components/whatsapp/WhatsAppLayout.tsx`:
+
+- Introduce a two-level nav model. Top-level tabs become:
+  `Dashboard, Conversations, Contacts, Templates, Analytics, Automation, Broadcasts→(moved under Automation), Profile, Webhooks, Scheduled, Response Stats, Catalog, Setup, Docs`.
+- New **Automation** parent tab whose sub-tabs are:
+  1. AI Agent (existing `ai-agent`)
+  2. Quick Replies (existing `quick-replies`)
+  3. Auto Replies (existing `auto-replies`)
+  4. Agents (existing `agents`)
+  5. Broadcasting (existing `broadcasts`)
+  6. Human Agent (new — points to existing `/human-agent-mode` embed or reuses `AgentManager` in "human handoff" mode)
+- Routes stay the same to avoid breaking bookmarks; the Automation tab is a wrapper page at `/messaging/whatsapp/automation` that renders a secondary Tabs bar and lazy-loads each existing page component. Sub-URLs like `/messaging/whatsapp/automation/ai-agent` also work and highlight both the parent and child.
+- No backend/logic changes.
+
+Files: `src/components/whatsapp/waNav.ts`, `src/components/whatsapp/WhatsAppLayout.tsx`, new `src/pages/whatsapp/Automation.tsx`, `src/components/AnimatedRoutes.tsx` (add nested routes).
+
+## Deliverables checklist
+- Fix flashing on Knowledge tab across FB/IG/WA.
+- Admin AI Agent settings page with multi-model allow-list.
+- User Advanced: 3 dependent model selects (primary + 2 fallbacks) sourced from admin.
+- `ai-agent-reply` uses fallback chain + writes to `admin_audit_log`.
+- Two manual SQL files for the user to run on the self-hosted DB.
+- WhatsApp nav grouped under an "Automation" tab with the 6 requested sub-tabs.
+- No logic changes to non-AI features; nav restructure is UI only.
+
+## Final status target
+`completed_requires_manual_sql` (2 SQL files) + edge-function redeploy for `ai-agent-reply`.

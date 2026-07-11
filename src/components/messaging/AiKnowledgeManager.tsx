@@ -32,10 +32,14 @@ export function AiKnowledgeManager({
 }) {
   const { config, upsertConfig } = useAiAgentConfig(platform);
   const { user, sources, isLoading, invoke } = useAiKnowledge();
-  const { waAccount, catalog } = useWhatsAppCatalog();
+  const isWhatsApp = platform === "whatsapp";
+  const catalogHook = useWhatsAppCatalog();
+  const waAccount = isWhatsApp ? catalogHook.waAccount : null;
+  const catalog = isWhatsApp ? catalogHook.catalog : null;
   const [profile, setProfile] = useState("");
   const [uploading, setUploading] = useState(false);
-  useEffect(() => setProfile(config?.business_profile_text || ""), [config]);
+  const profileText = config?.business_profile_text || "";
+  useEffect(() => setProfile(profileText), [profileText]);
   const run = async (
     action: string,
     body: Record<string, unknown>,
@@ -172,33 +176,35 @@ export function AiKnowledgeManager({
           </label>
         </CardContent>
       </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>WhatsApp catalog</CardTitle>
-          <CardDescription>
-            {waAccount && catalog?.catalog_id
-              ? "Sync products for AI product answers."
-              : "Connect a WhatsApp account with a catalog to sync products."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button
-            onClick={() =>
-              run(
-                "sync_catalog",
-                {
-                  social_account_id: waAccount!.id,
-                  catalog_id: catalog!.catalog_id,
-                },
-                "Catalog synced",
-              )
-            }
-            disabled={!waAccount || !catalog?.catalog_id || invoke.isPending}
-          >
-            Sync catalog
-          </Button>
-        </CardContent>
-      </Card>
+      {isWhatsApp && (
+        <Card>
+          <CardHeader>
+            <CardTitle>WhatsApp catalog</CardTitle>
+            <CardDescription>
+              {waAccount && catalog?.catalog_id
+                ? "Sync products for AI product answers."
+                : "Connect a WhatsApp account with a catalog to sync products."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              onClick={() =>
+                run(
+                  "sync_catalog",
+                  {
+                    social_account_id: waAccount!.id,
+                    catalog_id: catalog!.catalog_id,
+                  },
+                  "Catalog synced",
+                )
+              }
+              disabled={!waAccount || !catalog?.catalog_id || invoke.isPending}
+            >
+              Sync catalog
+            </Button>
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Sources</CardTitle>

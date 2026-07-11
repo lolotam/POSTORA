@@ -452,18 +452,43 @@ Deno.serve(async (req) => {
     let replyText = "";
 
     const maxIterations = Math.max(1, config.max_tool_iterations || 5);
+    // Primary + fallback chain. Legacy configs may store bare model ids
+    // (e.g. "gpt-4o-mini") — take the segment after the last "/" so both
+    // "openai/gpt-4o-mini" and "gpt-4o-mini" reach OpenAI as "gpt-4o-mini".
+    const rawChain = [config.model, config.fallback_model_1, config.fallback_model_2]
+      .filter((m): m is string => typeof m === "string" && m.length > 0);
+    const modelChain = (rawChain.length ? rawChain : ["gpt-4o-mini"]).map((m) => {
+      const idx = m.lastIndexOf("/");
+      return idx >= 0 ? m.slice(idx + 1) : m;
+    });
+    let usedModel: string | null = null;
+    let usedFallbackLevel = 0;
+    const modelErrors: Array<{ model: string; error: string }> = [];
     for (let iteration = 0; iteration < maxIterations; iteration++) {
-      const completion = await chatCompletion({
-        model: config.model || "gpt-4o-mini",
-        temperature: config.temperature ?? 0.4,
-        messages,
-        tools: [
-          ...toolDefinitions,
-          ...(isAdmin ? adminToolDefinitions : []),
-          ...customToolDefinitions(customTools),
-        ],
-        tool_choice: "auto",
-      });
+      let completion: any = null;
+      let lastError: unknown = null;
+      for (let mi = 0; mi < modelChain.length; mi++) {
+        try {
+          completion = await chatCompletion({
+            model: modelChain[mi],
+            temperature: config.temperature ?? 0.4,
+            messages,
+            tools: [
+              ...toolDefinitions,
+              ...(isAdmin ? adminToolDefinitions : []),
+              ...customToolDefinitions(customTools),
+            ],
+            tool_choice: "auto",
+          });
+          usedModel = modelChain[mi];
+          usedFallbackLevel = mi;
+          break;
+        } catch (err) {
+          lastError = err;
+          modelErrors.push({ model: modelChain[mi], error: errorMessage(err) });
+        }
+      }
+      if (!completion) throw lastError instanceof Error ? lastError : new Error("All AI models failed");
       promptTokens += completion.usage?.prompt_tokens || 0;
       completionTokens += completion.usage?.completion_tokens || 0;
       const choice = completion.choices?.[0]?.message;
@@ -483,9 +508,6 @@ Deno.serve(async (req) => {
           // leave args empty; the executor handles missing fields
         }
         executedToolCalls.push({ name: toolCall.function.name, arguments: args });
-        // Dispatch order: user-defined connectors (names validated to never
-        // shadow builtins), then admin tools for verified admins only, then
-        // builtin safe tools; unknown names get executeTool's rejection.
         const customTool = customToolByName.get(toolCall.function.name);
         const result: ToolResult = customTool
           ? await executeCustomTool(toolContext, customTool, args)
@@ -499,6 +521,28 @@ Deno.serve(async (req) => {
           content: result.output,
         });
       }
+    }
+
+    // Fire-and-forget audit trail for AI agent calls (admin-visible logs).
+    try {
+      await admin.from("admin_audit_log").insert({
+        admin_id: request.user_id,
+        action: "ai_agent_reply",
+        resource_type: "ai_agent",
+        resource_id: request.conversation_id,
+        details: {
+          platform: request.platform,
+          used_model: usedModel,
+          fallback_level: usedFallbackLevel,
+          model_chain: modelChain,
+          model_errors: modelErrors.length ? modelErrors : null,
+          tool_calls: executedToolCalls.map((t) => t.name),
+          escalated,
+          dry_run: dryRun,
+        },
+      });
+    } catch (e) {
+      console.error("[ai-agent-reply] audit log insert failed:", errorMessage(e));
     }
 
     if (!replyText) {
