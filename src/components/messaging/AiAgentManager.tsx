@@ -40,6 +40,7 @@ const modeDescriptions: Record<AiAgentMode, string> = {
 
 export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPlatform } = {}) {
   const { config, isLoading, upsertConfig } = useAiAgentConfig(platform);
+  const { data: allowedModels = [] } = useAllowedAiAgentModels();
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -53,6 +54,8 @@ export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPl
       business_profile_text: config.business_profile_text || "",
       language_mode: config.language_mode,
       model: config.model,
+      fallback_model_1: config.fallback_model_1 || null,
+      fallback_model_2: config.fallback_model_2 || null,
       temperature: config.temperature,
       admin_phone_numbers: config.admin_phone_numbers || [],
       daily_message_cap: config.daily_message_cap,
