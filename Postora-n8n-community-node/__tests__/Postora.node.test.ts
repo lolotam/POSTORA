@@ -117,6 +117,78 @@ describe("Postora node — Instagram/Facebook Story caption fix (regression)", (
   });
 });
 
+describe("Postora node — Post → Create published URLs", () => {
+  const createParams = {
+    resource: "post",
+    operation: "create",
+    platform: "facebook",
+    socialAccounts_facebook: ["facebook-account"],
+    caption: "Published from n8n",
+    mediaSource: "none",
+    postType: "feed",
+  };
+
+  it("returns fresh platform results with published URLs for immediate posts", async () => {
+    const { result, callLog } = await run({
+      params: createParams,
+      http: (opts) => {
+        if (opts.method === "POST") {
+          return { success: true, scheduled: false, post: { id: "post-1", status: "pending" } };
+        }
+        return {
+          success: true,
+          post: {
+            id: "post-1",
+            status: "completed",
+            platform_results: [
+              { platform: "facebook", status: "success", post_url: "https://facebook.com/posts/1" },
+              { platform: "instagram", status: "success", post_url: "https://instagram.com/p/1" },
+            ],
+          },
+        };
+      },
+    });
+
+    expect(callLog.map((call) => `${call.method} ${call.url}`)).toEqual([
+      "POST https://example.test/api/v1/post",
+      "GET https://example.test/api/v1/post/post-1",
+    ]);
+    expect(result[0].json.scheduled).toBe(false);
+    expect(result[0].json.post.status).toBe("completed");
+    expect(result[0].json.post.platform_results.map((entry: any) => entry.post_url)).toEqual([
+      "https://facebook.com/posts/1",
+      "https://instagram.com/p/1",
+    ]);
+  });
+
+  it("does not look up status for scheduled posts", async () => {
+    const scheduled = { success: true, scheduled: true, post: { id: "post-2", status: "scheduled" } };
+    const { result, callLog } = await run({
+      params: { ...createParams, scheduledAt: "2026-08-01T10:00:00Z" },
+      http: () => scheduled,
+    });
+
+    expect(callLog).toHaveLength(1);
+    expect(result[0].json).toEqual(scheduled);
+  });
+
+  it("keeps the create response when the immediate status lookup fails", async () => {
+    const created = { success: true, scheduled: false, post: { id: "post-3", status: "pending" } };
+    const { result } = await run({
+      params: createParams,
+      http: (opts) => {
+        if (opts.method === "POST") return created;
+        throw new Error("Status lookup timed out");
+      },
+    });
+
+    expect(result[0].json).toMatchObject({
+      ...created,
+      post_status_lookup_error: "Status lookup timed out",
+    });
+  });
+});
+
 describe("Postora node — Media → Upload backward compat (legacy binaryPropertyName)", () => {
   it("uploads from legacy binaryPropertyName when uploadMediaSource is unset", async () => {
     const buf = Buffer.from("hello");

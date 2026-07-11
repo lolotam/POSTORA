@@ -1136,6 +1136,31 @@ export class Postora implements INodeType {
               json: true,
             },
           );
+
+          // The create endpoint returns the original pending row after processing.
+          // Fetch the status record so immediate posts expose per-platform post URLs.
+          if (!responseData?.scheduled && responseData?.post?.id) {
+            try {
+              const statusResponse = await this.helpers.httpRequestWithAuthentication.call(
+                this as unknown as IAllExecuteFunctions,
+                "postoraApi",
+                {
+                  method: "GET",
+                  url: `${baseUrl}/api/v1/post/${responseData.post.id}`,
+                  json: true,
+                },
+              );
+
+              if (statusResponse?.post) {
+                responseData = { ...responseData, post: statusResponse.post };
+              }
+            } catch (error: any) {
+              responseData = {
+                ...responseData,
+                post_status_lookup_error: error?.message || String(error),
+              };
+            }
+          }
         }
 
         // ── Post → Get Status ──

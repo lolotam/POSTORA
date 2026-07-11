@@ -54,7 +54,21 @@ You need a Postora API key to use this node:
 8. Set **Media Source** to `URL` and paste a direct image or video URL (e.g. `https://example.com/photo.jpg`).
 9. (Optional) Set **Schedule At** to a future date/time to publish later. Leave empty to post immediately.
 10. (Optional) Expand **Additional Options** and add a **First Comment**.
-11. Execute the node. The response includes a `post_id` you can use to check status later.
+11. Execute the node. Since v1.1.13, immediate posts return their completed `post` record, including one entry per account in `post.platform_results`; use each `post_url` to open the published post. Scheduled posts return before publishing, so use **Post → Get Status** after the scheduled time to retrieve their URLs. If the status lookup fails after creation, the response includes `post_status_lookup_error` and retains the created post ID for a later status check.
+
+For example, an immediate post can return:
+
+```json
+{
+  "post": {
+    "id": "post-uuid",
+    "status": "completed",
+    "platform_results": [
+      { "platform": "instagram", "status": "success", "post_url": "https://instagram.com/p/..." }
+    ]
+  }
+}
+```
 
 ### List Connected Accounts
 
