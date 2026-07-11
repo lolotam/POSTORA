@@ -409,6 +409,10 @@ export default function AdminSettings() {
             {/* User AI Model Overrides */}
             <UserAiModelOverrides />
 
+            {/* AI Agent (messaging) Models */}
+            <AdminAiAgentSection />
+
+
             {/* Email Templates */}
             <Card>
               <CardContent className="p-4">
