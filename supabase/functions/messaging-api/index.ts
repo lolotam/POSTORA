@@ -292,6 +292,132 @@ Deno.serve(async (req) => {
       return cacheParticipantAvatar(req, profilePic);
     }
 
+    const supportedAiAgentPlatforms = ["whatsapp", "facebook", "instagram"];
+    const supportedAiAgentModes = ["ai_first", "human_first", "human_then_ai"];
+
+    function isAiAgentPlatform(value: unknown): value is string {
+      return typeof value === "string" && supportedAiAgentPlatforms.includes(value);
+    }
+
+    function normalizeAdminPhoneNumber(value: unknown): string | null {
+      if (typeof value !== "string" || !value.trim().startsWith("+")) return null;
+      const normalized = `+${value.trim().slice(1).replace(/[\s-]/g, "")}`;
+      return /^\+[1-9]\d{1,14}$/.test(normalized) ? normalized : null;
+    }
+
+    // ACTION: ai_get_config
+    if (action === "ai_get_config") {
+      const { platform } = body;
+      if (!isAiAgentPlatform(platform)) return jsonResponse({ error: "Invalid AI agent platform" }, 400);
+      const { data, error } = await adminClient
+        .from("ai_agent_configs")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("platform", platform)
+        .maybeSingle();
+      if (error) throw error;
+      return jsonResponse({ config: data || null });
+    }
+
+    // ACTION: ai_upsert_config
+    if (action === "ai_upsert_config") {
+      const { platform, config } = body;
+      if (!isAiAgentPlatform(platform)) return jsonResponse({ error: "Invalid AI agent platform" }, 400);
+      if (!config || typeof config !== "object" || Array.isArray(config)) {
+        return jsonResponse({ error: "config must be an object" }, 400);
+      }
+
+      const allowedFields = [
+        "is_enabled", "default_mode", "persona_instructions", "business_profile_text",
+        "language_mode", "model", "temperature", "admin_phone_numbers",
+        "daily_message_cap", "reply_cooldown_seconds", "max_tool_iterations",
+        "handoff_on_request", "handoff_on_low_confidence",
+      ];
+      const updates: Record<string, unknown> = {};
+      for (const field of allowedFields) {
+        if (field in config) updates[field] = config[field];
+      }
+
+      if ("admin_phone_numbers" in updates) {
+        if (!Array.isArray(updates.admin_phone_numbers)) {
+          return jsonResponse({ error: "admin_phone_numbers must be an array" }, 400);
+        }
+        const normalized = updates.admin_phone_numbers.map(normalizeAdminPhoneNumber);
+        const invalid = updates.admin_phone_numbers.filter((_: unknown, index: number) => !normalized[index]);
+        if (invalid.length > 0) {
+          return jsonResponse({ error: `Invalid admin phone numbers: ${invalid.join(", ")}` }, 400);
+        }
+        updates.admin_phone_numbers = normalized as string[];
+      }
+
+      const { data, error } = await adminClient
+        .from("ai_agent_configs")
+        .upsert({ user_id: user.id, platform, ...updates }, { onConflict: "user_id,platform" })
+        .select()
+        .single();
+      if (error) throw error;
+      return jsonResponse({ config: data });
+    }
+
+    // ACTION: ai_get_conversation_mode
+    if (action === "ai_get_conversation_mode") {
+      const { platform, conversation_id } = body;
+      if (!isAiAgentPlatform(platform) || typeof conversation_id !== "string" || !conversation_id.trim()) {
+        return jsonResponse({ error: "platform and conversation_id are required" }, 400);
+      }
+      const { data, error } = await adminClient
+        .from("ai_conversation_modes")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("platform", platform)
+        .eq("conversation_id", conversation_id)
+        .maybeSingle();
+      if (error) throw error;
+      return jsonResponse({ mode: data || null });
+    }
+
+    // ACTION: ai_set_conversation_mode
+    if (action === "ai_set_conversation_mode") {
+      const { platform, conversation_id, mode } = body;
+      if (!isAiAgentPlatform(platform) || typeof conversation_id !== "string" || !conversation_id.trim()) {
+        return jsonResponse({ error: "platform and conversation_id are required" }, 400);
+      }
+      if (mode === null || mode === "default") {
+        const { error } = await adminClient
+          .from("ai_conversation_modes")
+          .delete()
+          .eq("user_id", user.id)
+          .eq("platform", platform)
+          .eq("conversation_id", conversation_id);
+        if (error) throw error;
+        return jsonResponse({ mode: null });
+      }
+      if (typeof mode !== "string" || !supportedAiAgentModes.includes(mode)) {
+        return jsonResponse({ error: "Invalid AI conversation mode" }, 400);
+      }
+      const { data, error } = await adminClient
+        .from("ai_conversation_modes")
+        .upsert({ user_id: user.id, platform, conversation_id, mode }, { onConflict: "user_id,platform,conversation_id" })
+        .select()
+        .single();
+      if (error) throw error;
+      return jsonResponse({ mode: data });
+    }
+
+    // ACTION: ai_list_conversation_modes
+    if (action === "ai_list_conversation_modes") {
+      const { platform } = body;
+      if (!isAiAgentPlatform(platform)) return jsonResponse({ error: "Invalid AI agent platform" }, 400);
+      const { data, error } = await adminClient
+        .from("ai_conversation_modes")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("platform", platform)
+        .order("updated_at", { ascending: false });
+      if (error) throw error;
+      return jsonResponse({ modes: data || [] });
+    }
+
     // ACTION: list_accounts
     if (action === "list_accounts") {
       const { data, error } = await adminClient
