@@ -248,9 +248,14 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
             {conversation.unread_count > 0 ? `${conversation.unread_count} unread` : "Active"}
           </p>
         </div>
-        {platform === "whatsapp" && (
+        {platform && (
           <div className="ml-auto">
-            <AiConversationModeSelect platform="whatsapp" conversationId={conversation.id} />
+            {/* FB/IG use assignment_key: the webhook (which resolves the AI mode)
+                never sees Meta's own conversation id. */}
+            <AiConversationModeSelect
+              platform={platform}
+              conversationId={conversation.assignment_key || conversation.id}
+            />
           </div>
         )}
       </div>

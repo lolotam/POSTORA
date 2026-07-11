@@ -12,6 +12,7 @@ import {
 } from "./logic.ts";
 import { executeTool, toolDefinitions, type ToolContext, type ToolResult } from "./tools.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
+import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 const OPENAI_API = "https://api.openai.com/v1";
@@ -19,12 +20,15 @@ const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 const HISTORY_LIMIT = 10;
 const SIMILARITY_FLOOR = 0.15;
 
+// For WhatsApp, recipient_phone is the customer's phone and phone_number_id
+// the business number. For Facebook/Instagram, recipient_phone carries the
+// sender PSID and phone_number_id is unused.
 interface ReplyRequest {
   user_id: string;
   platform: string;
   social_account_id: string;
   conversation_id: string;
-  phone_number_id: string;
+  phone_number_id?: string;
   recipient_phone: string;
   inbound_text: string;
 }
@@ -157,6 +161,73 @@ async function sendWhatsAppText(
   return data?.messages?.[0]?.id || `ai_${Date.now()}`;
 }
 
+type TextSender = (recipientId: string, text: string) => Promise<string>;
+
+// Resolves how to deliver the reply for the request's platform. WhatsApp uses
+// the Cloud API messages endpoint; Facebook/Instagram use the page Send API
+// (shared credential resolution with the fb-ig webhook).
+async function buildReplySender(admin: any, request: ReplyRequest): Promise<TextSender> {
+  if (request.platform === "whatsapp") {
+    const accessToken = await resolveWhatsAppToken(admin, request);
+    return (recipientId, text) =>
+      sendWhatsAppText(accessToken, request.phone_number_id!, recipientId, text);
+  }
+
+  const { data: account, error } = await admin
+    .from("social_accounts")
+    .select("*")
+    .eq("id", request.social_account_id)
+    .eq("user_id", request.user_id)
+    .maybeSingle();
+  if (error || !account) throw new Error("Messaging account not found for AI reply");
+  const { graphBase, pageId, pageToken } = await getSendCredentials(admin, account);
+  return async (recipientId, text) => {
+    const response = await fetch(
+      `${graphBase}/${pageId}/messages?access_token=${encodeURIComponent(pageToken)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipient: { id: recipientId }, message: { text } }),
+      },
+    );
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      throw new Error(data?.error?.message || "Messenger send failed");
+    }
+    return data.message_id || `ai_${Date.now()}`;
+  };
+}
+
+// Admin notifications always go out over WhatsApp, regardless of which
+// platform the customer wrote on. On FB/IG we look up the user's connected
+// WhatsApp account; without one, each notify attempt fails per-recipient
+// (logged by the tool layer) instead of failing the whole reply.
+async function buildAdminNotifier(admin: any, request: ReplyRequest): Promise<TextSender> {
+  if (request.platform === "whatsapp") {
+    const accessToken = await resolveWhatsAppToken(admin, request);
+    return (recipientId, text) =>
+      sendWhatsAppText(accessToken, request.phone_number_id!, recipientId, text);
+  }
+
+  const { data: waAccount } = await admin
+    .from("social_accounts")
+    .select("access_token, account_metadata")
+    .eq("user_id", request.user_id)
+    .eq("platform", "whatsapp")
+    .eq("is_active", true)
+    .limit(1)
+    .maybeSingle();
+  const accessToken = waAccount?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+  const phoneNumberId = waAccount?.account_metadata?.phone_number_id ||
+    Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+  return (recipientId, text) => {
+    if (!accessToken || !phoneNumberId) {
+      throw new Error("No WhatsApp account available for admin notifications");
+    }
+    return sendWhatsAppText(accessToken, phoneNumberId, recipientId, text);
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return handleCorsOptions();
 
@@ -183,10 +254,13 @@ Deno.serve(async (req) => {
     request = body as unknown as ReplyRequest;
     const requiredFields: Array<keyof ReplyRequest> = [
       "user_id", "platform", "social_account_id", "conversation_id",
-      "phone_number_id", "recipient_phone", "inbound_text",
+      "recipient_phone", "inbound_text",
     ];
     for (const field of requiredFields) {
       if (!request[field]) return badRequestResponse(`Missing field: ${field}`);
+    }
+    if (request.platform === "whatsapp" && !request.phone_number_id) {
+      return badRequestResponse("Missing field: phone_number_id");
     }
   } else {
     const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
@@ -257,10 +331,16 @@ Deno.serve(async (req) => {
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state.
     if (!dryRun) {
+      // FB/IG replies happen inside the live webhook turnaround, so the
+      // messaging window is open by definition; only WhatsApp needs the
+      // stored-history check.
+      const withinServiceWindow = request.platform === "whatsapp"
+        ? await isWithinServiceWindow(admin, request.user_id, request.conversation_id)
+        : true;
       const gate = shouldAiReply({
         mode,
         humanAssignedAndOnline: await isHumanAssignedAndOnline(admin, request.conversation_id),
-        withinServiceWindow: await isWithinServiceWindow(admin, request.user_id, request.conversation_id),
+        withinServiceWindow,
         cooldownActive: await isCooldownActive(admin, thread.id, config.reply_cooldown_seconds),
         dailyCapReached: await isDailyCapReached(
           admin,
@@ -301,11 +381,12 @@ Deno.serve(async (req) => {
 
     // Operational tools unlock only for verified admin senders (or the
     // sandbox's explicit act-as-admin switch). Numbers are compared as bare
-    // digits because webhook senders arrive without the leading plus.
+    // digits because webhook senders arrive without the leading plus. FB/IG
+    // senders are PSIDs, not phone numbers, so they can never match.
     const adminNumbers: string[] = (config.admin_phone_numbers || []).map(waRecipient);
     const isAdmin = dryRun
       ? actAsAdmin
-      : adminNumbers.includes(waRecipient(request.recipient_phone));
+      : request.platform === "whatsapp" && adminNumbers.includes(waRecipient(request.recipient_phone));
 
     const language = detectReplyLanguage(request.inbound_text, config.language_mode);
     const systemPrompt = buildSystemPrompt({
@@ -316,7 +397,8 @@ Deno.serve(async (req) => {
       isAdmin,
     });
 
-    const accessToken = dryRun ? "" : await resolveWhatsAppToken(admin, request);
+    const replySender = dryRun ? null : await buildReplySender(admin, request);
+    const adminNotifier = dryRun ? null : await buildAdminNotifier(admin, request);
     const { data: cachedConversation } = await admin
       .from("messaging_cache")
       .select("participant_name")
@@ -334,8 +416,8 @@ Deno.serve(async (req) => {
       dryRun,
       embed,
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
-        if (dryRun) return;
-        await sendWhatsAppText(accessToken, request.phone_number_id, recipientPhone, text);
+        if (!adminNotifier) return;
+        await adminNotifier(recipientPhone, text);
       },
     };
 
@@ -406,28 +488,27 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
-    if (!dryRun) {
-      const outboundMessageId = await sendWhatsAppText(
-        accessToken,
-        request.phone_number_id,
-        request.recipient_phone,
-        replyText,
-      );
+    if (!dryRun && replySender) {
+      const outboundMessageId = await replySender(request.recipient_phone, replyText);
 
-      await admin.from("whatsapp_messages").insert({
-        user_id: request.user_id,
-        social_account_id: request.social_account_id,
-        conversation_id: request.conversation_id,
-        message_id: outboundMessageId,
-        from_phone: request.phone_number_id,
-        from_name: "AI Agent",
-        to_phone: request.recipient_phone,
-        message_text: replyText,
-        message_type: "text",
-        direction: "outbound",
-        status: "sent",
-        timestamp: new Date().toISOString(),
-      });
+      // Local message storage exists only for WhatsApp; FB/IG conversations
+      // are read live from the Graph API.
+      if (request.platform === "whatsapp") {
+        await admin.from("whatsapp_messages").insert({
+          user_id: request.user_id,
+          social_account_id: request.social_account_id,
+          conversation_id: request.conversation_id,
+          message_id: outboundMessageId,
+          from_phone: request.phone_number_id,
+          from_name: "AI Agent",
+          to_phone: request.recipient_phone,
+          message_text: replyText,
+          message_type: "text",
+          direction: "outbound",
+          status: "sent",
+          timestamp: new Date().toISOString(),
+        });
+      }
     }
 
     const { error: threadWriteError } = await admin.from("ai_thread_messages").insert([

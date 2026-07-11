@@ -154,7 +154,14 @@ Deno.serve(async (req) => {
 
           console.log(`[fb-ig-webhook] Received inbound ${platform} message`);
 
-          await processAutoReplies(adminClient, account, platform, conversationId, senderId, messageText);
+          const ruleReplied = await processAutoReplies(adminClient, account, platform, conversationId, senderId, messageText);
+
+          // Deterministic rules outrank the AI; only unclaimed messages reach
+          // the agent. Echoes/receipts never get here (filtered above).
+          if (!ruleReplied) {
+            triggerAiAgentReply(account, platform, conversationId, senderId, messageText)
+              .catch((e) => console.error("[fb-ig-webhook] AI agent dispatch failed:", e?.message || e));
+          }
         }
       }
 
@@ -174,6 +181,9 @@ Deno.serve(async (req) => {
   return new Response("Method not allowed", { status: 405 });
 });
 
+// Returns true when auto-reply rules own this message (a rule matched, or a
+// rule replied recently and the anti-spam cooldown is active), so the AI
+// agent should stay silent. Returns false when no rule claimed the message.
 async function processAutoReplies(
   adminClient: any,
   account: SocialAccountForMessaging,
@@ -181,12 +191,12 @@ async function processAutoReplies(
   conversationId: string,
   recipientId: string,
   inboundText: string,
-) {
+): Promise<boolean> {
   try {
     const lastReply = lastAutoReplyMap.get(conversationId);
     if (lastReply && Date.now() - lastReply < AUTO_REPLY_COOLDOWN_MS) {
       console.log("[fb-ig-webhook] Auto-reply cooldown active");
-      return;
+      return true;
     }
 
     const { data: rules, error } = await adminClient
@@ -196,7 +206,7 @@ async function processAutoReplies(
       .eq("platform", platform)
       .eq("is_active", true);
 
-    if (error || !rules || rules.length === 0) return;
+    if (error || !rules || rules.length === 0) return false;
 
     const now = new Date();
     const currentDay = now.getDay(); // 0=Sun
@@ -242,9 +252,11 @@ async function processAutoReplies(
       }
     }
 
-    if (!matchedReply) return;
+    if (!matchedReply) return false;
 
-    // Skip auto-reply while a human agent is actively assigned to this conversation.
+    // Skip auto-reply while a human agent is actively assigned to this
+    // conversation. The rule still "claims" the message (return true): a
+    // human-owned conversation must not fall through to the AI either.
     const { data: assignment } = await adminClient
       .from("whatsapp_conversation_assignments")
       .select("id")
@@ -253,7 +265,7 @@ async function processAutoReplies(
       .maybeSingle();
     if (assignment) {
       console.log("[fb-ig-webhook] Conversation has an active human agent, skipping auto-reply");
-      return;
+      return true;
     }
 
     const { graphBase, pageId, pageToken } = await getSendCredentials(adminClient, account);
@@ -288,7 +300,45 @@ async function processAutoReplies(
     } else {
       console.error("[fb-ig-webhook] Auto-reply send failed:", sendData);
     }
+    // A rule matched; precedence is decided by the match, not the send result.
+    return true;
   } catch (err) {
     console.error("[fb-ig-webhook] Auto-reply failed:", err);
+    // Rule evaluation failed before a match was established; the AI agent may
+    // still answer as a fallback.
+    return false;
+  }
+}
+
+// Fire-and-forget hand-off to the internal AI agent reply engine. The
+// ai-agent-reply function enforces its own gates (enabled flag, engagement
+// mode, human assignment, cooldown, daily cap).
+async function triggerAiAgentReply(
+  account: SocialAccountForMessaging,
+  platform: "facebook" | "instagram",
+  conversationId: string,
+  senderId: string,
+  inboundText: string,
+) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const response = await fetch(`${supabaseUrl}/functions/v1/ai-agent-reply`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: account.user_id,
+      platform,
+      social_account_id: account.id,
+      conversation_id: conversationId,
+      recipient_phone: senderId,
+      inbound_text: inboundText,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    console.error(`[fb-ig-webhook] ai-agent-reply returned ${response.status}: ${text.slice(0, 200)}`);
   }
 }

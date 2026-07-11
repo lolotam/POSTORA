@@ -1,12 +1,13 @@
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MessagingInbox } from "@/components/messaging/MessagingInbox";
-import { Camera, Inbox, MessageCircle, Bot, UserCog } from "lucide-react";
+import { Camera, Inbox, MessageCircle, Bot, UserCog, Sparkles } from "lucide-react";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Navigate } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { AgentManager } from "@/components/messaging/AgentManager";
+import { AiAgentManager } from "@/components/messaging/AiAgentManager";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
 
 export default function InstagramMessaging() {
@@ -52,6 +53,10 @@ export default function InstagramMessaging() {
                   Agents
                 </TabsTrigger>
               )}
+              <TabsTrigger value="ai-agent" className="gap-1.5 rounded-lg">
+                <Sparkles className="w-4 h-4" />
+                AI Agent
+              </TabsTrigger>
             </TabsList>
             <TabsContent value="inbox" className="mt-4">
               <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
@@ -77,6 +82,11 @@ export default function InstagramMessaging() {
                 </GradientRingCard>
               </TabsContent>
             )}
+            <TabsContent value="ai-agent" className="mt-4">
+              <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
+                <AiAgentManager platform="instagram" />
+              </GradientRingCard>
+            </TabsContent>
           </Tabs>
         </Reveal>
       </div>
