@@ -9,6 +9,9 @@ export interface ToolContext {
   conversationId: string;
   customerName: string;
   adminPhoneNumbers: string[];
+  // Test-sandbox runs: read-only tools work normally, but nothing is sent,
+  // assigned, or written outside the test conversation.
+  dryRun: boolean;
   embed: (texts: string[]) => Promise<number[][]>;
   sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
 }
@@ -102,6 +105,14 @@ async function notifyAdmins(context: ToolContext, text: string): Promise<number>
 }
 
 async function escalateToHuman(context: ToolContext, reason: string): Promise<ToolResult> {
+  if (context.dryRun) {
+    return {
+      output:
+        "(test mode — no side effects) Escalation would be recorded, an online agent assigned, and admins notified. Tell the customer a team member will follow up.",
+      escalated: true,
+    };
+  }
+
   // The AI goes silent for this conversation from the next message on.
   const { error: modeError } = await context.admin
     .from("ai_conversation_modes")
@@ -179,6 +190,9 @@ async function escalateToHuman(context: ToolContext, reason: string): Promise<To
 async function notifyAdmin(context: ToolContext, messageText: string): Promise<ToolResult> {
   if (!context.adminPhoneNumbers.length) {
     return { output: "No admin phone numbers are configured; the admin could not be notified." };
+  }
+  if (context.dryRun) {
+    return { output: `(test mode — nothing sent) Admin would be notified: ${messageText.slice(0, 200)}` };
   }
   const delivered = await notifyAdmins(
     context,

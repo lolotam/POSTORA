@@ -74,6 +74,7 @@ export interface SystemPromptParams {
   language: ReplyLanguage;
   knowledgeBlocks: string[];
   nowIso: string;
+  isAdmin?: boolean;
 }
 
 export function buildSystemPrompt(params: SystemPromptParams): string {
@@ -84,9 +85,18 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     ? params.knowledgeBlocks.map((block, index) => `[${index + 1}] ${block}`).join("\n\n")
     : "(no business knowledge matched this message)";
 
+  const adminInstruction = params.isAdmin
+    ? [
+      "IMPORTANT: You are talking to the BUSINESS ADMIN (verified number), not a customer.",
+      "You may use the operational tools: list_connected_accounts, search_posts, get_posting_summary, create_scheduled_post.",
+      "Before create_scheduled_post, always confirm the exact caption, platforms, and time with the admin and wait for their yes.",
+    ].join("\n")
+    : "";
+
   return [
     `Current date/time (UTC): ${params.nowIso}`,
     "You are a customer-service assistant answering on WhatsApp for a business.",
+    adminInstruction,
     params.persona ? `Business persona and instructions:\n${params.persona}` : "",
     languageInstruction,
     "Rules:",

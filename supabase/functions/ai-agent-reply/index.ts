@@ -8,8 +8,10 @@ import {
   detectReplyLanguage,
   resolveEngagementMode,
   shouldAiReply,
+  waRecipient,
 } from "./logic.ts";
-import { executeTool, toolDefinitions, type ToolContext } from "./tools.ts";
+import { executeTool, toolDefinitions, type ToolContext, type ToolResult } from "./tools.ts";
+import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 const OPENAI_API = "https://api.openai.com/v1";
@@ -159,23 +161,55 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return handleCorsOptions();
 
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const bearer = (req.headers.get("Authorization") || "").replace("Bearer ", "");
-  if (!bearer || bearer !== serviceKey) return unauthorizedResponse();
+  if (!bearer) return unauthorizedResponse();
 
-  const admin = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
+  const admin = createClient(supabaseUrl, serviceKey);
   const startedAt = Date.now();
-  let request: ReplyRequest;
+  let body: Record<string, unknown>;
   try {
-    request = await req.json();
+    body = await req.json();
   } catch {
     return badRequestResponse("Invalid JSON body");
   }
-  const requiredFields: Array<keyof ReplyRequest> = [
-    "user_id", "platform", "social_account_id", "conversation_id",
-    "phone_number_id", "recipient_phone", "inbound_text",
-  ];
-  for (const field of requiredFields) {
-    if (!request[field]) return badRequestResponse(`Missing field: ${field}`);
+
+  // Two callers: platform webhooks (service-role bearer, full request body)
+  // and the in-app Test sandbox (user JWT, dry run against a test thread).
+  let request: ReplyRequest;
+  let dryRun = false;
+  let actAsAdmin = false;
+  if (bearer === serviceKey) {
+    request = body as unknown as ReplyRequest;
+    const requiredFields: Array<keyof ReplyRequest> = [
+      "user_id", "platform", "social_account_id", "conversation_id",
+      "phone_number_id", "recipient_phone", "inbound_text",
+    ];
+    for (const field of requiredFields) {
+      if (!request[field]) return badRequestResponse(`Missing field: ${field}`);
+    }
+  } else {
+    const anonKey = Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
+    const anon = createClient(supabaseUrl, anonKey, {
+      global: { headers: { Authorization: `Bearer ${bearer}` } },
+    });
+    const { data: { user } } = await anon.auth.getUser(bearer);
+    if (!user) return unauthorizedResponse();
+    if (!body.inbound_text || typeof body.inbound_text !== "string") {
+      return badRequestResponse("Missing field: inbound_text");
+    }
+    const platform = typeof body.platform === "string" ? body.platform : "whatsapp";
+    dryRun = true;
+    actAsAdmin = body.act_as_admin === true;
+    request = {
+      user_id: user.id,
+      platform,
+      social_account_id: "test",
+      conversation_id: `test_${platform}_${user.id}`,
+      phone_number_id: "test",
+      recipient_phone: "test",
+      inbound_text: body.inbound_text,
+    };
   }
 
   const baseLog = {
@@ -192,7 +226,10 @@ Deno.serve(async (req) => {
       .eq("user_id", request.user_id)
       .eq("platform", request.platform)
       .maybeSingle();
-    if (!config?.is_enabled) return jsonResponse({ ok: true, skipped: "agent_disabled" });
+    if (!config) return jsonResponse({ ok: true, skipped: "agent_not_configured" });
+    // The Test sandbox works while the agent is still disabled, so users can
+    // tune it before switching it on for real customers.
+    if (!config.is_enabled && !dryRun) return jsonResponse({ ok: true, skipped: "agent_disabled" });
 
     const { data: modeOverride } = await admin
       .from("ai_conversation_modes")
@@ -217,21 +254,25 @@ Deno.serve(async (req) => {
       .single();
     if (threadError) throw threadError;
 
-    const gate = shouldAiReply({
-      mode,
-      humanAssignedAndOnline: await isHumanAssignedAndOnline(admin, request.conversation_id),
-      withinServiceWindow: await isWithinServiceWindow(admin, request.user_id, request.conversation_id),
-      cooldownActive: await isCooldownActive(admin, thread.id, config.reply_cooldown_seconds),
-      dailyCapReached: await isDailyCapReached(
-        admin,
-        request.user_id,
-        request.conversation_id,
-        config.daily_message_cap,
-      ),
-    });
-    if (!gate.reply) {
-      await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
-      return jsonResponse({ ok: true, skipped: gate.reason });
+    // Sandbox runs bypass the delivery gates — they test the agent's brain,
+    // not the conversation's delivery state.
+    if (!dryRun) {
+      const gate = shouldAiReply({
+        mode,
+        humanAssignedAndOnline: await isHumanAssignedAndOnline(admin, request.conversation_id),
+        withinServiceWindow: await isWithinServiceWindow(admin, request.user_id, request.conversation_id),
+        cooldownActive: await isCooldownActive(admin, thread.id, config.reply_cooldown_seconds),
+        dailyCapReached: await isDailyCapReached(
+          admin,
+          request.user_id,
+          request.conversation_id,
+          config.daily_message_cap,
+        ),
+      });
+      if (!gate.reply) {
+        await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
+        return jsonResponse({ ok: true, skipped: gate.reason });
+      }
     }
 
     const { data: historyRows } = await admin
@@ -258,15 +299,24 @@ Deno.serve(async (req) => {
     );
     const retrievedChunkIds: string[] = relevantChunks.map((chunk: { id: string }) => chunk.id);
 
+    // Operational tools unlock only for verified admin senders (or the
+    // sandbox's explicit act-as-admin switch). Numbers are compared as bare
+    // digits because webhook senders arrive without the leading plus.
+    const adminNumbers: string[] = (config.admin_phone_numbers || []).map(waRecipient);
+    const isAdmin = dryRun
+      ? actAsAdmin
+      : adminNumbers.includes(waRecipient(request.recipient_phone));
+
     const language = detectReplyLanguage(request.inbound_text, config.language_mode);
     const systemPrompt = buildSystemPrompt({
       persona: config.persona_instructions,
       language,
       knowledgeBlocks: relevantChunks.map((chunk: { content: string }) => chunk.content),
       nowIso: new Date().toISOString(),
+      isAdmin,
     });
 
-    const accessToken = await resolveWhatsAppToken(admin, request);
+    const accessToken = dryRun ? "" : await resolveWhatsAppToken(admin, request);
     const { data: cachedConversation } = await admin
       .from("messaging_cache")
       .select("participant_name")
@@ -281,8 +331,10 @@ Deno.serve(async (req) => {
       conversationId: request.conversation_id,
       customerName: cachedConversation?.participant_name || request.recipient_phone,
       adminPhoneNumbers: config.admin_phone_numbers || [],
+      dryRun,
       embed,
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
+        if (dryRun) return;
         await sendWhatsAppText(accessToken, request.phone_number_id, recipientPhone, text);
       },
     };
@@ -304,7 +356,7 @@ Deno.serve(async (req) => {
         model: config.model || "gpt-4o-mini",
         temperature: config.temperature ?? 0.4,
         messages,
-        tools: toolDefinitions,
+        tools: isAdmin ? [...toolDefinitions, ...adminToolDefinitions] : toolDefinitions,
         tool_choice: "auto",
       });
       promptTokens += completion.usage?.prompt_tokens || 0;
@@ -326,7 +378,11 @@ Deno.serve(async (req) => {
           // leave args empty; the executor handles missing fields
         }
         executedToolCalls.push({ name: toolCall.function.name, arguments: args });
-        const result = await executeTool(toolContext, toolCall.function.name, args);
+        // Admin tools are only dispatched for verified admin senders; for
+        // everyone else unknown names fall through to executeTool's rejection.
+        const result: ToolResult =
+          (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
+          (await executeTool(toolContext, toolCall.function.name, args));
         if (result.escalated) escalated = true;
         if (result.retrievedChunkIds) retrievedChunkIds.push(...result.retrievedChunkIds);
         messages.push({
@@ -350,27 +406,29 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
-    const outboundMessageId = await sendWhatsAppText(
-      accessToken,
-      request.phone_number_id,
-      request.recipient_phone,
-      replyText,
-    );
+    if (!dryRun) {
+      const outboundMessageId = await sendWhatsAppText(
+        accessToken,
+        request.phone_number_id,
+        request.recipient_phone,
+        replyText,
+      );
 
-    await admin.from("whatsapp_messages").insert({
-      user_id: request.user_id,
-      social_account_id: request.social_account_id,
-      conversation_id: request.conversation_id,
-      message_id: outboundMessageId,
-      from_phone: request.phone_number_id,
-      from_name: "AI Agent",
-      to_phone: request.recipient_phone,
-      message_text: replyText,
-      message_type: "text",
-      direction: "outbound",
-      status: "sent",
-      timestamp: new Date().toISOString(),
-    });
+      await admin.from("whatsapp_messages").insert({
+        user_id: request.user_id,
+        social_account_id: request.social_account_id,
+        conversation_id: request.conversation_id,
+        message_id: outboundMessageId,
+        from_phone: request.phone_number_id,
+        from_name: "AI Agent",
+        to_phone: request.recipient_phone,
+        message_text: replyText,
+        message_type: "text",
+        direction: "outbound",
+        status: "sent",
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     const { error: threadWriteError } = await admin.from("ai_thread_messages").insert([
       { thread_id: thread.id, user_id: request.user_id, role: "user", content: request.inbound_text },
@@ -392,10 +450,10 @@ Deno.serve(async (req) => {
       prompt_tokens: promptTokens,
       completion_tokens: completionTokens,
       latency_ms: Date.now() - startedAt,
-      status: "sent",
+      status: dryRun ? "test" : "sent",
     });
 
-    return jsonResponse({ ok: true, reply: replyText, escalated });
+    return jsonResponse({ ok: true, reply: replyText, escalated, tool_calls: executedToolCalls, is_admin: isAdmin });
   } catch (error) {
     console.error("[ai-agent-reply] Failed:", errorMessage(error));
     await logOutcome(admin, {
