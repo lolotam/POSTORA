@@ -87,6 +87,28 @@ function getSecret(): string {
   return s;
 }
 
+/**
+ * Validate a user-supplied post-OAuth return_to URL.
+ * Only allows https URLs whose hostname ends with postora.cloud.
+ * Prevents open-redirect abuse via signed state.
+ */
+export function safeReturnTo(
+  candidate: unknown,
+  fallback = "https://postora.cloud/profiles",
+): string {
+  if (typeof candidate === "string" && candidate.length > 0) {
+    try {
+      const u = new URL(candidate);
+      if (u.protocol === "https:" && u.hostname.endsWith("postora.cloud")) {
+        return candidate;
+      }
+    } catch {
+      /* fall through */
+    }
+  }
+  return fallback;
+}
+
 export async function createOAuthState(input: CreateStateInput): Promise<string> {
   const nonceBytes = new Uint8Array(16);
   crypto.getRandomValues(nonceBytes);
@@ -95,7 +117,7 @@ export async function createOAuthState(input: CreateStateInput): Promise<string>
     flow: input.flow,
     user_id: input.user_id,
     profile_id: input.profile_id ?? null,
-    return_to: input.return_to,
+    return_to: input.return_to ? safeReturnTo(input.return_to) : undefined,
     nonce: base64UrlEncode(nonceBytes),
     iat: Math.floor(Date.now() / 1000),
     ...(input.extra ?? {}),
@@ -104,6 +126,7 @@ export async function createOAuthState(input: CreateStateInput): Promise<string>
   const sig = await hmacSign(raw, getSecret());
   return `${base64UrlEncode(raw)}.${sig}`;
 }
+
 
 export async function verifyOAuthState(
   state: string,
