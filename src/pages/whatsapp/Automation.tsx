@@ -7,9 +7,6 @@ import { cn } from "@/lib/utils";
 // UI-only hub that groups Automation sub-features. Each tab links to its
 // existing WhatsApp sub-route so no backend/logic changes are needed.
 export default function Automation() {
-  // Default landing tab
-  const defaultTab = whatsappAutomationTabs[0];
-
   return (
     <div className="space-y-6">
       <WhatsAppPageHeader
@@ -24,7 +21,6 @@ export default function Automation() {
       >
         {whatsappAutomationTabs.map((tab) => {
           const Icon = tab.icon;
-          // "human-agent" doesn't have its own page yet — alias to /agents.
           const target = tab.path === "human-agent"
             ? whatsappSectionRoute("agents")
             : whatsappSectionRoute(tab.path);
@@ -48,8 +44,10 @@ export default function Automation() {
         })}
       </nav>
 
-      {/* Landing on /automation redirects into the first tab. */}
-      <Navigate to={whatsappSectionRoute(defaultTab.path)} replace />
+      <p className="text-sm text-muted-foreground">
+        Choose a sub-section above to configure it.
+      </p>
     </div>
   );
 }
+
