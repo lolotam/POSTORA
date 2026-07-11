@@ -391,7 +391,16 @@ async function handleLiveMessages(
     console.log("[whatsapp-webhook] Stored inbound message");
 
     // === AUTO-REPLY LOGIC ===
-    await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken);
+    const ruleReplied = await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken);
+
+    // === AI AGENT DISPATCH (fire-and-forget) ===
+    // Deterministic keyword/away rules outrank the AI; only unanswered
+    // messages reach the agent. Imported/history/echo messages never get
+    // here (see handleHistorySync guard), so the AI cannot reply to them.
+    if (!ruleReplied) {
+      triggerAiAgentReply(account, conversationId, phoneNumberId, from, messageText)
+        .catch((e) => console.error("[whatsapp-webhook] AI agent dispatch failed:", e?.message || e));
+    }
 
     // === EXTERNAL WEBHOOK DISPATCH (fire-and-forget) ===
     dispatchToWebhooks(adminClient, account.user_id, {
@@ -655,6 +664,9 @@ async function handleContactSync(
   console.log(`[whatsapp-webhook] Contact sync stored ${synced} contacts`);
 }
 
+// Returns true when auto-reply rules own this message (a rule replied, or a
+// rule replied recently and the anti-spam cooldown is active), so the AI
+// agent should stay silent. Returns false when no rule claimed the message.
 async function processAutoReplies(
   adminClient: any,
   account: { id: string; user_id: string },
@@ -663,13 +675,14 @@ async function processAutoReplies(
   recipientPhone: string,
   inboundText: string,
   accessToken: string | null
-) {
+): Promise<boolean> {
   try {
-    // Check cooldown
+    // Check cooldown — set only after a rule reply, so "active" means a rule
+    // answered this conversation within the window and still owns it.
     const lastReply = lastAutoReplyMap.get(conversationId);
     if (lastReply && Date.now() - lastReply < AUTO_REPLY_COOLDOWN_MS) {
       console.log("[whatsapp-webhook] Auto-reply cooldown active");
-      return;
+      return true;
     }
 
     // Fetch active auto-reply rules for this user
@@ -679,7 +692,7 @@ async function processAutoReplies(
       .eq("user_id", account.user_id)
       .eq("is_active", true);
 
-    if (error || !rules || rules.length === 0) return;
+    if (error || !rules || rules.length === 0) return false;
 
     const now = new Date();
     const currentDay = now.getDay(); // 0=Sun
@@ -726,13 +739,15 @@ async function processAutoReplies(
       }
     }
 
-    if (!matchedReply) return;
+    if (!matchedReply) return false;
 
     // Send auto-reply via WhatsApp Cloud API using the account's own token
     // (env WHATSAPP_ACCESS_TOKEN fallback happens at the call site)
     if (!accessToken) {
       console.error("[whatsapp-webhook] No access token for this account and WHATSAPP_ACCESS_TOKEN not set, cannot send auto-reply");
-      return;
+      // A rule matched: keep AI out even though the send failed, so the AI
+      // never overrides a deterministic answer the business configured.
+      return true;
     }
 
     const sendRes = await fetch(
@@ -789,8 +804,48 @@ async function processAutoReplies(
         });
       }
     }
+    // A rule matched; the AI must not answer on top of it even if the Graph
+    // send was rejected — precedence is decided by the match, not the send.
+    return true;
   } catch {
     console.error("[whatsapp-webhook] Auto-reply failed");
+    // Rule evaluation itself failed before any match was established, so the
+    // AI agent may still answer as a fallback.
+    return false;
+  }
+}
+
+// Fire-and-forget hand-off to the internal AI agent reply engine. The
+// ai-agent-reply function enforces its own gates (enabled flag, engagement
+// mode, human assignment, 24h window, cooldown, daily cap).
+async function triggerAiAgentReply(
+  account: { id: string; user_id: string },
+  conversationId: string,
+  phoneNumberId: string,
+  recipientPhone: string,
+  inboundText: string
+) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const response = await fetch(`${supabaseUrl}/functions/v1/ai-agent-reply`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: account.user_id,
+      platform: "whatsapp",
+      social_account_id: account.id,
+      conversation_id: conversationId,
+      phone_number_id: phoneNumberId,
+      recipient_phone: recipientPhone,
+      inbound_text: inboundText,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    console.error(`[whatsapp-webhook] ai-agent-reply returned ${response.status}: ${text.slice(0, 200)}`);
   }
 }
 

@@ -1,0 +1,384 @@
+// Internal AI agent reply engine. Called service-to-service by platform
+// webhooks (whatsapp-webhook) after auto-reply rules found no match.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestResponse } from "../_shared/cors.ts";
+import {
+  buildSystemPrompt,
+  detectReplyLanguage,
+  resolveEngagementMode,
+  shouldAiReply,
+} from "./logic.ts";
+import { executeTool, toolDefinitions, type ToolContext } from "./tools.ts";
+
+const GRAPH_API = "https://graph.facebook.com/v21.0";
+const OPENAI_API = "https://api.openai.com/v1";
+const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const HISTORY_LIMIT = 10;
+const SIMILARITY_FLOOR = 0.15;
+
+interface ReplyRequest {
+  user_id: string;
+  platform: string;
+  social_account_id: string;
+  conversation_id: string;
+  phone_number_id: string;
+  recipient_phone: string;
+  inbound_text: string;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+async function embed(texts: string[]): Promise<number[][]> {
+  const key = Deno.env.get("OPENAI_API_KEY");
+  if (!key) throw new Error("OPENAI_API_KEY is not configured");
+  const response = await fetch(`${OPENAI_API}/embeddings`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "text-embedding-3-small", input: texts }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.error?.message || "Embedding request failed");
+  return data.data.map((item: { embedding: number[] }) => item.embedding);
+}
+
+async function chatCompletion(payload: Record<string, unknown>): Promise<any> {
+  const key = Deno.env.get("OPENAI_API_KEY");
+  if (!key) throw new Error("OPENAI_API_KEY is not configured");
+  const response = await fetch(`${OPENAI_API}/chat/completions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.error?.message || "Chat completion failed");
+  return data;
+}
+
+async function isHumanAssignedAndOnline(admin: any, conversationId: string): Promise<boolean> {
+  const { data: assignment } = await admin
+    .from("whatsapp_conversation_assignments")
+    .select("agent_id")
+    .eq("conversation_id", conversationId)
+    .maybeSingle();
+  if (!assignment?.agent_id) return false;
+  const { data: agent } = await admin
+    .from("whatsapp_agents")
+    .select("status")
+    .eq("id", assignment.agent_id)
+    .maybeSingle();
+  return agent?.status === "online";
+}
+
+async function isWithinServiceWindow(admin: any, userId: string, conversationId: string): Promise<boolean> {
+  const { data: lastInbound } = await admin
+    .from("whatsapp_messages")
+    .select("timestamp")
+    .eq("user_id", userId)
+    .eq("conversation_id", conversationId)
+    .eq("direction", "inbound")
+    .order("timestamp", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!lastInbound?.timestamp) return false;
+  return Date.now() - new Date(lastInbound.timestamp).getTime() < SERVICE_WINDOW_MS;
+}
+
+async function isCooldownActive(admin: any, threadId: string, cooldownSeconds: number): Promise<boolean> {
+  if (cooldownSeconds <= 0) return false;
+  const { data: lastAssistant } = await admin
+    .from("ai_thread_messages")
+    .select("created_at")
+    .eq("thread_id", threadId)
+    .eq("role", "assistant")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!lastAssistant?.created_at) return false;
+  return Date.now() - new Date(lastAssistant.created_at).getTime() < cooldownSeconds * 1000;
+}
+
+async function isDailyCapReached(admin: any, userId: string, conversationId: string, cap: number): Promise<boolean> {
+  if (cap <= 0) return false;
+  const midnightUtc = new Date();
+  midnightUtc.setUTCHours(0, 0, 0, 0);
+  const { count } = await admin
+    .from("ai_agent_logs")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("conversation_id", conversationId)
+    .eq("status", "sent")
+    .gte("created_at", midnightUtc.toISOString());
+  return (count || 0) >= cap;
+}
+
+async function logOutcome(admin: any, entry: Record<string, unknown>): Promise<void> {
+  const { error } = await admin.from("ai_agent_logs").insert(entry);
+  if (error) console.error("[ai-agent-reply] Failed to write log:", error.message);
+}
+
+async function sendWhatsAppText(
+  admin: any,
+  request: ReplyRequest,
+  replyText: string,
+): Promise<string> {
+  const { data: account } = await admin
+    .from("social_accounts")
+    .select("access_token")
+    .eq("id", request.social_account_id)
+    .eq("user_id", request.user_id)
+    .maybeSingle();
+  const accessToken = account?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+  if (!accessToken) throw new Error("No WhatsApp access token available for this account");
+
+  const response = await fetch(`${GRAPH_API}/${request.phone_number_id}/messages`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: request.recipient_phone,
+      type: "text",
+      text: { body: replyText },
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.error?.message || "WhatsApp send failed");
+  return data?.messages?.[0]?.id || `ai_${Date.now()}`;
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return handleCorsOptions();
+
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const bearer = (req.headers.get("Authorization") || "").replace("Bearer ", "");
+  if (!bearer || bearer !== serviceKey) return unauthorizedResponse();
+
+  const admin = createClient(Deno.env.get("SUPABASE_URL")!, serviceKey);
+  const startedAt = Date.now();
+  let request: ReplyRequest;
+  try {
+    request = await req.json();
+  } catch {
+    return badRequestResponse("Invalid JSON body");
+  }
+  const requiredFields: Array<keyof ReplyRequest> = [
+    "user_id", "platform", "social_account_id", "conversation_id",
+    "phone_number_id", "recipient_phone", "inbound_text",
+  ];
+  for (const field of requiredFields) {
+    if (!request[field]) return badRequestResponse(`Missing field: ${field}`);
+  }
+
+  const baseLog = {
+    user_id: request.user_id,
+    platform: request.platform,
+    conversation_id: request.conversation_id,
+    inbound_text: request.inbound_text.slice(0, 2000),
+  };
+
+  try {
+    const { data: config } = await admin
+      .from("ai_agent_configs")
+      .select("*")
+      .eq("user_id", request.user_id)
+      .eq("platform", request.platform)
+      .maybeSingle();
+    if (!config?.is_enabled) return jsonResponse({ ok: true, skipped: "agent_disabled" });
+
+    const { data: modeOverride } = await admin
+      .from("ai_conversation_modes")
+      .select("mode")
+      .eq("user_id", request.user_id)
+      .eq("platform", request.platform)
+      .eq("conversation_id", request.conversation_id)
+      .maybeSingle();
+    const mode = resolveEngagementMode(modeOverride?.mode, config.default_mode);
+
+    const { data: thread, error: threadError } = await admin
+      .from("ai_threads")
+      .upsert(
+        {
+          user_id: request.user_id,
+          platform: request.platform,
+          conversation_id: request.conversation_id,
+        },
+        { onConflict: "user_id,platform,conversation_id" },
+      )
+      .select()
+      .single();
+    if (threadError) throw threadError;
+
+    const gate = shouldAiReply({
+      mode,
+      humanAssignedAndOnline: await isHumanAssignedAndOnline(admin, request.conversation_id),
+      withinServiceWindow: await isWithinServiceWindow(admin, request.user_id, request.conversation_id),
+      cooldownActive: await isCooldownActive(admin, thread.id, config.reply_cooldown_seconds),
+      dailyCapReached: await isDailyCapReached(
+        admin,
+        request.user_id,
+        request.conversation_id,
+        config.daily_message_cap,
+      ),
+    });
+    if (!gate.reply) {
+      await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
+      return jsonResponse({ ok: true, skipped: gate.reason });
+    }
+
+    const { data: historyRows } = await admin
+      .from("ai_thread_messages")
+      .select("role, content")
+      .eq("thread_id", thread.id)
+      .in("role", ["user", "assistant"])
+      .order("created_at", { ascending: false })
+      .limit(HISTORY_LIMIT);
+    const history = (historyRows || []).reverse().map((row: { role: string; content: string | null }) => ({
+      role: row.role,
+      content: row.content || "",
+    }));
+
+    const [inboundEmbedding] = await embed([request.inbound_text]);
+    const { data: matchedChunks, error: matchError } = await admin.rpc("match_ai_knowledge_chunks", {
+      query_embedding: inboundEmbedding,
+      p_user_id: request.user_id,
+      match_count: 6,
+    });
+    if (matchError) throw matchError;
+    const relevantChunks = (matchedChunks || []).filter(
+      (chunk: { similarity: number }) => chunk.similarity > SIMILARITY_FLOOR,
+    );
+    const retrievedChunkIds: string[] = relevantChunks.map((chunk: { id: string }) => chunk.id);
+
+    const language = detectReplyLanguage(request.inbound_text, config.language_mode);
+    const systemPrompt = buildSystemPrompt({
+      persona: config.persona_instructions,
+      language,
+      knowledgeBlocks: relevantChunks.map((chunk: { content: string }) => chunk.content),
+      nowIso: new Date().toISOString(),
+    });
+
+    const toolContext: ToolContext = {
+      admin,
+      userId: request.user_id,
+      platform: request.platform,
+      conversationId: request.conversation_id,
+      embed,
+    };
+
+    const messages: any[] = [
+      { role: "system", content: systemPrompt },
+      ...history,
+      { role: "user", content: request.inbound_text },
+    ];
+    const executedToolCalls: Array<{ name: string; arguments: unknown }> = [];
+    let escalated = false;
+    let promptTokens = 0;
+    let completionTokens = 0;
+    let replyText = "";
+
+    const maxIterations = Math.max(1, config.max_tool_iterations || 5);
+    for (let iteration = 0; iteration < maxIterations; iteration++) {
+      const completion = await chatCompletion({
+        model: config.model || "gpt-4o-mini",
+        temperature: config.temperature ?? 0.4,
+        messages,
+        tools: toolDefinitions,
+        tool_choice: "auto",
+      });
+      promptTokens += completion.usage?.prompt_tokens || 0;
+      completionTokens += completion.usage?.completion_tokens || 0;
+      const choice = completion.choices?.[0]?.message;
+      if (!choice) throw new Error("Chat completion returned no choices");
+
+      if (!choice.tool_calls?.length) {
+        replyText = (choice.content || "").trim();
+        break;
+      }
+
+      messages.push(choice);
+      for (const toolCall of choice.tool_calls) {
+        let args: Record<string, unknown> = {};
+        try {
+          args = JSON.parse(toolCall.function.arguments || "{}");
+        } catch {
+          // leave args empty; the executor handles missing fields
+        }
+        executedToolCalls.push({ name: toolCall.function.name, arguments: args });
+        const result = await executeTool(toolContext, toolCall.function.name, args);
+        if (result.escalated) escalated = true;
+        if (result.retrievedChunkIds) retrievedChunkIds.push(...result.retrievedChunkIds);
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCall.id,
+          content: result.output,
+        });
+      }
+    }
+
+    if (!replyText) {
+      await logOutcome(admin, {
+        ...baseLog,
+        status: "skipped",
+        error: "no_reply_generated",
+        tool_calls: executedToolCalls.length ? executedToolCalls : null,
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        latency_ms: Date.now() - startedAt,
+      });
+      return jsonResponse({ ok: true, skipped: "no_reply_generated" });
+    }
+
+    const outboundMessageId = await sendWhatsAppText(admin, request, replyText);
+
+    await admin.from("whatsapp_messages").insert({
+      user_id: request.user_id,
+      social_account_id: request.social_account_id,
+      conversation_id: request.conversation_id,
+      message_id: outboundMessageId,
+      from_phone: request.phone_number_id,
+      from_name: "AI Agent",
+      to_phone: request.recipient_phone,
+      message_text: replyText,
+      message_type: "text",
+      direction: "outbound",
+      status: "sent",
+      timestamp: new Date().toISOString(),
+    });
+
+    const { error: threadWriteError } = await admin.from("ai_thread_messages").insert([
+      { thread_id: thread.id, user_id: request.user_id, role: "user", content: request.inbound_text },
+      {
+        thread_id: thread.id,
+        user_id: request.user_id,
+        role: "assistant",
+        content: replyText,
+        tool_calls: executedToolCalls.length ? executedToolCalls : null,
+      },
+    ]);
+    if (threadWriteError) console.error("[ai-agent-reply] Thread write failed:", threadWriteError.message);
+
+    await logOutcome(admin, {
+      ...baseLog,
+      reply_text: replyText.slice(0, 4000),
+      retrieved_chunk_ids: retrievedChunkIds.length ? [...new Set(retrievedChunkIds)] : null,
+      tool_calls: executedToolCalls.length ? executedToolCalls : null,
+      prompt_tokens: promptTokens,
+      completion_tokens: completionTokens,
+      latency_ms: Date.now() - startedAt,
+      status: "sent",
+    });
+
+    return jsonResponse({ ok: true, reply: replyText, escalated });
+  } catch (error) {
+    console.error("[ai-agent-reply] Failed:", errorMessage(error));
+    await logOutcome(admin, {
+      ...baseLog,
+      status: "error",
+      error: errorMessage(error).slice(0, 500),
+      latency_ms: Date.now() - startedAt,
+    });
+    return jsonResponse({ ok: false, error: errorMessage(error) });
+  }
+});
