@@ -15,6 +15,7 @@ describe("whatsappNavItems", () => {
       "auto-replies",
       "broadcasts",
       "agents",
+      "ai-agent",
       "profile",
       "webhooks",
       "scheduled",

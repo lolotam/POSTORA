@@ -12,6 +12,7 @@ import { InteractiveMessageBuilder } from "./InteractiveMessageBuilder";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
+import { AiConversationModeSelect } from "./AiConversationModeSelect";
 
 interface ConversationDetailProps {
   conversation: Conversation | null;
@@ -247,6 +248,16 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
             {conversation.unread_count > 0 ? `${conversation.unread_count} unread` : "Active"}
           </p>
         </div>
+        {platform && (
+          <div className="ml-auto">
+            {/* FB/IG use assignment_key: the webhook (which resolves the AI mode)
+                never sees Meta's own conversation id. */}
+            <AiConversationModeSelect
+              platform={platform}
+              conversationId={conversation.assignment_key || conversation.id}
+            />
+          </div>
+        )}
       </div>
 
       {/* Messages */}

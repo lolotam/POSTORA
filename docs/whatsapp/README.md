@@ -3,6 +3,7 @@
 Postora's WhatsApp Business module is a standalone mini-app at `/messaging/whatsapp`. It replaces the shared dashboard shell with its own WhatsApp-branded layout (`src/components/whatsapp/WhatsAppLayout.tsx`) and gives every section its own route. Access is gated by the `feature_msg_whatsapp` feature flag; users without the flag are redirected to `/dashboard`.
 
 - **Setup and platform configuration:** [setup-guide.md](./setup-guide.md)
+- **Automation and AI-agent guide:** [automation-ai-agent-guide.md](./automation-ai-agent-guide.md)
 - **Feature comparison vs MazBot:** [mazbot-comparison.md](./mazbot-comparison.md)
 
 ## Routes

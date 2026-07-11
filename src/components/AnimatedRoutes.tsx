@@ -80,6 +80,7 @@ const WhatsAppQuickReplies = lazyWithRetry(() => import("@/pages/whatsapp/QuickR
 const WhatsAppAutoReplies = lazyWithRetry(() => import("@/pages/whatsapp/AutoReplies"), "WhatsAppAutoReplies");
 const WhatsAppBroadcasts = lazyWithRetry(() => import("@/pages/whatsapp/Broadcasts"), "WhatsAppBroadcasts");
 const WhatsAppAgents = lazyWithRetry(() => import("@/pages/whatsapp/Agents"), "WhatsAppAgents");
+const WhatsAppAiAgent = lazyWithRetry(() => import("@/pages/whatsapp/AiAgent"), "WhatsAppAiAgent");
 const WhatsAppBusinessProfile = lazyWithRetry(() => import("@/pages/whatsapp/BusinessProfile"), "WhatsAppBusinessProfile");
 const WhatsAppWebhooks = lazyWithRetry(() => import("@/pages/whatsapp/Webhooks"), "WhatsAppWebhooks");
 const WhatsAppScheduled = lazyWithRetry(() => import("@/pages/whatsapp/Scheduled"), "WhatsAppScheduled");
@@ -262,6 +263,7 @@ export function AnimatedRoutes() {
           <Route path="auto-replies" element={<AnimatedPage><WhatsAppAutoReplies /></AnimatedPage>} />
           <Route path="broadcasts" element={<AnimatedPage><WhatsAppBroadcasts /></AnimatedPage>} />
           <Route path="agents" element={<AnimatedPage><WhatsAppAgents /></AnimatedPage>} />
+          <Route path="ai-agent" element={<AnimatedPage><WhatsAppAiAgent /></AnimatedPage>} />
           <Route path="profile" element={<AnimatedPage><WhatsAppBusinessProfile /></AnimatedPage>} />
           <Route path="webhooks" element={<AnimatedPage><WhatsAppWebhooks /></AnimatedPage>} />
           <Route path="scheduled" element={<AnimatedPage><WhatsAppScheduled /></AnimatedPage>} />
