@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
+import { useAllowedAiAgentModels, formatAllowedModelValue } from "@/hooks/useAllowedAiAgentModels";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
