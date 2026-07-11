@@ -39,6 +39,8 @@ const CONFIG_FIELDS = [
   "business_profile_text",
   "language_mode",
   "model",
+  "fallback_model_1",
+  "fallback_model_2",
   "temperature",
   "admin_phone_numbers",
   "daily_message_cap",
