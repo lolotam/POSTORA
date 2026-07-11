@@ -250,6 +250,49 @@ export function customToolDefinitions(tools: CustomTool[]) {
 const CUSTOM_TOOL_TIMEOUT_MS = 10_000;
 const CUSTOM_TOOL_OUTPUT_LIMIT = 2000;
 
+// SSRF guard: connector URLs are user-supplied and this function runs with
+// service-role credentials inside the stack's Docker network. Resolve the
+// hostname and refuse loopback/private/link-local targets before fetching.
+// Known limit (same as the n8n node's safeFetch): DNS rebinding between this
+// check and the fetch is not fully preventable at this layer.
+function isPrivateIp(address: string): boolean {
+  if (address === "0.0.0.0" || address === "::" || address === "::1") return true;
+  const v4 = address.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 0 || a === 10 || a === 127 ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168)
+    );
+  }
+  const lower = address.toLowerCase();
+  return lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe80");
+}
+
+export async function assertPublicHttpsUrl(rawUrl: string): Promise<URL> {
+  const url = new URL(rawUrl);
+  if (url.protocol !== "https:") throw new Error("Connector URL must use https");
+  const host = url.hostname.toLowerCase();
+  if (host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") || !host.includes(".")) {
+    throw new Error("Connector URL host is not allowed");
+  }
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":")) {
+    if (isPrivateIp(host.replace(/^\[|\]$/g, ""))) throw new Error("Connector URL resolves to a private address");
+    return url;
+  }
+  const records = await Promise.allSettled([
+    Deno.resolveDns(host, "A"),
+    Deno.resolveDns(host, "AAAA"),
+  ]);
+  const addresses = records.flatMap((result) => (result.status === "fulfilled" ? result.value : []));
+  if (!addresses.length) throw new Error("Connector URL host does not resolve");
+  if (addresses.some(isPrivateIp)) throw new Error("Connector URL resolves to a private address");
+  return url;
+}
+
 export async function executeCustomTool(
   context: ToolContext,
   tool: CustomTool,
@@ -268,7 +311,10 @@ export async function executeCustomTool(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CUSTOM_TOOL_TIMEOUT_MS);
   try {
-    const response = await fetch(tool.url, {
+    const url = await assertPublicHttpsUrl(tool.url);
+    // redirect: "manual" so a 3xx can't bounce the request to an unvalidated
+    // (e.g. internal) host; connectors must respond directly.
+    const response = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify({
@@ -279,7 +325,11 @@ export async function executeCustomTool(
         customer_name: context.customerName,
       }),
       signal: controller.signal,
+      redirect: "manual",
     });
+    if (response.status >= 300 && response.status < 400) {
+      return { output: `Connector "${tool.name}" responded with a redirect, which is not allowed.` };
+    }
     const text = (await response.text()).slice(0, CUSTOM_TOOL_OUTPUT_LIMIT);
     if (!response.ok) {
       return { output: `Connector "${tool.name}" failed (${response.status}): ${text || "no details"}` };

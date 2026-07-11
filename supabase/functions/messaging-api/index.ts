@@ -453,6 +453,21 @@ Deno.serve(async (req) => {
       if (!/^https:\/\//.test(toolUrl)) {
         return jsonResponse({ error: "Tool URL must start with https://" }, 400);
       }
+      // SSRF defense in depth: refuse obviously internal targets at save time.
+      // ai-agent-reply re-validates (with DNS resolution) on every call.
+      try {
+        const parsedUrl = new URL(toolUrl);
+        const host = parsedUrl.hostname.toLowerCase();
+        const privateIpLiteral = /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
+        if (
+          host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") ||
+          !host.includes(".") || privateIpLiteral.test(host) || host.includes(":")
+        ) {
+          return jsonResponse({ error: "Tool URL must point to a public host" }, 400);
+        }
+      } catch {
+        return jsonResponse({ error: "Tool URL is not a valid URL" }, 400);
+      }
       const row = {
         user_id: user.id,
         name,
