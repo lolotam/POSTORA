@@ -44,10 +44,10 @@ import {
   autoMapHeaders,
   deriveDisplayName,
   normalizePhone,
-  type ContactInput,
   type CsvField,
 } from "./contactCodecs";
-import { useContactGroups } from "./useContacts";
+import { useContactGroups, type ContactInput } from "./useContacts";
+
 
 interface ContactImportDialogProps {
   open: boolean;
@@ -207,7 +207,8 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
       }));
       const { error } = await supabase
         .from("whatsapp_contacts")
-        .upsert(payload, { onConflict: "user_id,phone_number" });
+        .upsert(payload as never, { onConflict: "user_id,phone_number" });
+
       if (error) {
         batch.forEach((b) =>
           fails.push({ row: { phone: b._rawPhone, name: b.display_name || "" }, reason: error.message }),

@@ -41,12 +41,14 @@ export function NewConversationDialog({ open, onOpenChange, socialAccountId, onS
       id: conversationId,
       participant_name: contact.display_name || contact.phone_number,
       participant_id: contact.phone_number,
+      participant_avatar: contact.avatar_url ?? null,
       last_message: "",
       last_message_time: new Date().toISOString(),
       last_message_from: "",
       unread_count: 0,
       updated_time: new Date().toISOString(),
     };
+
     onSelectContact(conversation);
     onOpenChange(false);
     setSearch("");

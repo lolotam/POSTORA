@@ -108,7 +108,7 @@ export function useContactMutations() {
       if (!session?.user?.id) throw new Error("Not authenticated");
       const { error } = await supabase
         .from("whatsapp_contacts")
-        .insert({ ...input, user_id: session.user.id });
+        .insert({ ...input, user_id: session.user.id } as never);
       if (error) throw error;
     },
     onSuccess: invalidate,
@@ -117,7 +117,8 @@ export function useContactMutations() {
   const updateContact = useMutation({
     mutationFn: async ({ id, ...input }: ContactRecord) => {
       if (!session?.user?.id) throw new Error("Not authenticated");
-      const { error } = await supabase.from("whatsapp_contacts").update(input).eq("id", id);
+      const { error } = await supabase.from("whatsapp_contacts").update(input as never).eq("id", id);
+
       if (error) throw error;
     },
     onSuccess: invalidate,
