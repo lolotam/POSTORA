@@ -62,7 +62,7 @@ export function useWhatsAppBroadcasts() {
           user_id: user.id,
           name: input.name,
           template_name: input.template_name,
-          template_components: input.template_components || null,
+          template_components: (input.template_components as never) || null,
           recipient_count: input.contact_ids.length,
         })
         .select()
