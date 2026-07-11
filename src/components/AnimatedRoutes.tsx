@@ -81,6 +81,7 @@ const WhatsAppAutoReplies = lazyWithRetry(() => import("@/pages/whatsapp/AutoRep
 const WhatsAppBroadcasts = lazyWithRetry(() => import("@/pages/whatsapp/Broadcasts"), "WhatsAppBroadcasts");
 const WhatsAppAgents = lazyWithRetry(() => import("@/pages/whatsapp/Agents"), "WhatsAppAgents");
 const WhatsAppAiAgent = lazyWithRetry(() => import("@/pages/whatsapp/AiAgent"), "WhatsAppAiAgent");
+const WhatsAppAutomation = lazyWithRetry(() => import("@/pages/whatsapp/Automation"), "WhatsAppAutomation");
 const WhatsAppBusinessProfile = lazyWithRetry(() => import("@/pages/whatsapp/BusinessProfile"), "WhatsAppBusinessProfile");
 const WhatsAppWebhooks = lazyWithRetry(() => import("@/pages/whatsapp/Webhooks"), "WhatsAppWebhooks");
 const WhatsAppScheduled = lazyWithRetry(() => import("@/pages/whatsapp/Scheduled"), "WhatsAppScheduled");
