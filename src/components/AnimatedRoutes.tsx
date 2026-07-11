@@ -265,6 +265,7 @@ export function AnimatedRoutes() {
           <Route path="broadcasts" element={<AnimatedPage><WhatsAppBroadcasts /></AnimatedPage>} />
           <Route path="agents" element={<AnimatedPage><WhatsAppAgents /></AnimatedPage>} />
           <Route path="ai-agent" element={<AnimatedPage><WhatsAppAiAgent /></AnimatedPage>} />
+          <Route path="automation" element={<AnimatedPage><WhatsAppAutomation /></AnimatedPage>} />
           <Route path="profile" element={<AnimatedPage><WhatsAppBusinessProfile /></AnimatedPage>} />
           <Route path="webhooks" element={<AnimatedPage><WhatsAppWebhooks /></AnimatedPage>} />
           <Route path="scheduled" element={<AnimatedPage><WhatsAppScheduled /></AnimatedPage>} />
