@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
 import { normalizeE164Phone } from "@/lib/phone";
+import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
   "is_enabled" | "default_mode" | "language_mode" | "model" | "daily_message_cap" | "reply_cooldown_seconds"
@@ -200,7 +201,7 @@ export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPl
           <div className="flex justify-end"><Button onClick={save} disabled={upsertConfig.isPending}>{upsertConfig.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save settings</Button></div>
         </div>
       </TabsContent>
-      <TabsContent value="knowledge" className="mt-0"><ComingSoonCard title="Knowledge sources" /></TabsContent>
+      <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} /></TabsContent>
       <TabsContent value="tools" className="mt-0"><ComingSoonCard title="Operational tools" /></TabsContent>
       <TabsContent value="test" className="mt-0"><ComingSoonCard title="Agent testing" /></TabsContent>
       <TabsContent value="logs" className="mt-0"><ComingSoonCard title="Agent logs" /></TabsContent>

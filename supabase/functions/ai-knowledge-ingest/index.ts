@@ -1,0 +1,303 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import * as XLSX from "npm:xlsx@0.18.5";
+import {
+  chunkProfileText,
+  chunkRows,
+  rowToText,
+  type KnowledgeChunk,
+} from "./chunking.ts";
+import {
+  errorResponse,
+  handleCorsOptions,
+  jsonResponse,
+  unauthorizedResponse,
+} from "../_shared/cors.ts";
+
+const BUCKET = "ai-knowledge";
+const GRAPH_API = "https://graph.facebook.com/v21.0";
+
+type AdminClient = any;
+
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+function getWhatsAppToken(account: Record<string, unknown>) {
+  return String(
+    account.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN") || "",
+  );
+}
+async function embed(texts: string[]): Promise<number[][]> {
+  const key = Deno.env.get("OPENAI_API_KEY");
+  if (!key)
+    throw new Error(
+      "OPENAI_API_KEY is not configured; knowledge cannot be indexed.",
+    );
+  const all: number[][] = [];
+  for (let index = 0; index < texts.length; index += 64) {
+    const response = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${key}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: texts.slice(index, index + 64),
+      }),
+    });
+    const data = await response.json();
+    if (!response.ok)
+      throw new Error(data?.error?.message || "Embedding request failed");
+    all.push(
+      ...data.data.map((item: { embedding: number[] }) => item.embedding),
+    );
+  }
+  return all;
+}
+async function replaceChunks(
+  admin: AdminClient,
+  sourceId: string,
+  userId: string,
+  chunks: KnowledgeChunk[],
+) {
+  const { error: deleteError } = await (admin as any)
+    .from("ai_knowledge_chunks")
+    .delete()
+    .eq("source_id", sourceId);
+  if (deleteError) throw deleteError;
+  if (!chunks.length) return;
+  const embeddings = await embed(chunks.map((chunk) => chunk.content));
+  const { error } = await (admin as any)
+    .from("ai_knowledge_chunks")
+    .insert(
+      chunks.map((chunk, index) => ({
+        source_id: sourceId,
+        user_id: userId,
+        content: chunk.content,
+        metadata: chunk.metadata,
+        embedding: embeddings[index],
+      })),
+    );
+  if (error) throw error;
+}
+async function setFailed(admin: AdminClient, sourceId: string, error: unknown) {
+  await (admin as any)
+    .from("ai_knowledge_sources")
+    .update({ status: "failed", error: message(error).slice(0, 500) })
+    .eq("id", sourceId);
+}
+
+Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return handleCorsOptions();
+  try {
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) return unauthorizedResponse();
+    const url = Deno.env.get("SUPABASE_URL")!;
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const anonKey =
+      Deno.env.get("SUPABASE_ANON_KEY") ||
+      Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
+    const token = authHeader.replace("Bearer ", "");
+    const anon = createClient(url, anonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+    const {
+      data: { user },
+    } = await anon.auth.getUser(token);
+    if (!user) return unauthorizedResponse();
+    const admin = createClient(url, serviceKey);
+    const body = await req.json();
+    const { action } = body;
+    if (action === "delete_source") {
+      const { data: source } = await (admin as any)
+        .from("ai_knowledge_sources")
+        .select("*")
+        .eq("id", body.source_id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!source) return errorResponse("Knowledge source not found", 404);
+      if (source.file_path)
+        await admin.storage.from(BUCKET).remove([source.file_path]);
+      const { error } = await (admin as any)
+        .from("ai_knowledge_sources")
+        .delete()
+        .eq("id", source.id);
+      if (error) throw error;
+      return jsonResponse({ ok: true });
+    }
+    if (action === "ingest_source") {
+      const { data: source } = await (admin as any)
+        .from("ai_knowledge_sources")
+        .select("*")
+        .eq("id", body.source_id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!source) return errorResponse("Knowledge source not found", 404);
+      if (!["csv", "excel"].includes(source.source_type))
+        return errorResponse("Source type not supported yet", 400);
+      try {
+        await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "processing", error: null })
+          .eq("id", source.id);
+        const { data: file, error: downloadError } = await admin.storage
+          .from(BUCKET)
+          .download(source.file_path);
+        if (downloadError || !file)
+          throw downloadError || new Error("Knowledge file not found");
+        const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const rows: Array<{ text: string; sheet: string; row: number }> = [];
+        for (const sheet of workbook.SheetNames)
+          XLSX.utils
+            .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], {
+              defval: "",
+            })
+            .forEach((row, index) =>
+              rows.push({ text: rowToText(row), sheet, row: index + 2 }),
+            );
+        const chunks = chunkRows(rows);
+        await replaceChunks(admin, source.id, user.id, chunks);
+        await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "ready", chunk_count: chunks.length, error: null })
+          .eq("id", source.id);
+        return jsonResponse({ ok: true, chunk_count: chunks.length });
+      } catch (error) {
+        await setFailed(admin, source.id, error);
+        return errorResponse(message(error));
+      }
+    }
+    if (action === "ingest_profile_text") {
+      const platform = String(body.platform || "whatsapp");
+      const { data: config } = await (admin as any)
+        .from("ai_agent_configs")
+        .select("business_profile_text")
+        .eq("user_id", user.id)
+        .eq("platform", platform)
+        .maybeSingle();
+      const fileName = `Business profile (${platform})`;
+      const { data: existing } = await (admin as any)
+        .from("ai_knowledge_sources")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("source_type", "profile_text")
+        .eq("file_name", fileName)
+        .maybeSingle();
+      const text = config?.business_profile_text?.trim();
+      if (!text) {
+        if (existing)
+          await (admin as any)
+            .from("ai_knowledge_sources")
+            .delete()
+            .eq("id", existing.id);
+        return jsonResponse({ ok: true, chunk_count: 0 });
+      }
+      const source =
+        existing ||
+        (
+          await (admin as any)
+            .from("ai_knowledge_sources")
+            .insert({
+              user_id: user.id,
+              source_type: "profile_text",
+              file_name: fileName,
+              status: "pending",
+            })
+            .select()
+            .single()
+        ).data;
+      try {
+        await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "processing", error: null })
+          .eq("id", source.id);
+        const chunks = chunkProfileText(text);
+        await replaceChunks(admin, source.id, user.id, chunks);
+        await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "ready", chunk_count: chunks.length, error: null })
+          .eq("id", source.id);
+        return jsonResponse({ ok: true, chunk_count: chunks.length });
+      } catch (error) {
+        await setFailed(admin, source.id, error);
+        return errorResponse(message(error));
+      }
+    }
+    if (action === "sync_catalog") {
+      const { data: account } = await (admin as any)
+        .from("social_accounts")
+        .select("*")
+        .eq("id", body.social_account_id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!account || account.platform !== "whatsapp")
+        return errorResponse("WhatsApp account not found", 404);
+      const token = getWhatsAppToken(account);
+      if (!token) throw new Error("WhatsApp access token is unavailable");
+      let next: string | null =
+        `${GRAPH_API}/${body.catalog_id}/products?fields=id,name,description,price,currency,image_url,url,retailer_id,availability&limit=100`;
+      const products: any[] = [];
+      for (let page = 0; next && page < 5; page++) {
+        const res: Response = await fetch(next, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        const data: any = await res.json();
+        if (!res.ok || data.error)
+          throw new Error(data?.error?.message || "Catalog request failed");
+        products.push(...(data.data || []));
+        next = data.paging?.next || null;
+      }
+      let { data: source } = await (admin as any)
+        .from("ai_knowledge_sources")
+        .select("*")
+        .eq("user_id", user.id)
+        .eq("source_type", "catalog")
+        .eq("file_name", "WhatsApp catalog")
+        .maybeSingle();
+      if (!source)
+        ({ data: source } = await (admin as any)
+          .from("ai_knowledge_sources")
+          .insert({
+            user_id: user.id,
+            source_type: "catalog",
+            file_name: "WhatsApp catalog",
+            status: "pending",
+          })
+          .select()
+          .single());
+      try {
+        await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "processing", error: null })
+          .eq("id", source.id);
+        const chunks = products.map((product) => ({
+          content: [
+            `Name: ${product.name || ""}`,
+            `Description: ${product.description || ""}`,
+            `Price: ${product.price || ""} ${product.currency || ""}`,
+            `Availability: ${product.availability || ""}`,
+          ].join("\n"),
+          metadata: {
+            retailer_id: product.retailer_id,
+            product_id: product.id,
+            url: product.url,
+            image_url: product.image_url,
+          },
+        }));
+        await replaceChunks(admin, source.id, user.id, chunks);
+        await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "ready", chunk_count: chunks.length, error: null })
+          .eq("id", source.id);
+        return jsonResponse({ ok: true, chunk_count: chunks.length });
+      } catch (error) {
+        await setFailed(admin, source.id, error);
+        return errorResponse(message(error));
+      }
+    }
+    return errorResponse("Unknown action", 400);
+  } catch (error) {
+    return errorResponse(message(error));
+  }
+});
