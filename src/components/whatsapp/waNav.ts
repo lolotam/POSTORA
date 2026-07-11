@@ -38,11 +38,7 @@ export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "contacts", label: "Contacts", icon: Users },
   { path: "templates", label: "Templates", icon: FileText },
   { path: "analytics", label: "Analytics", icon: BarChart3 },
-  { path: "quick-replies", label: "Quick Replies", icon: Zap },
-  { path: "auto-replies", label: "Auto Replies", icon: Bot },
-  { path: "broadcasts", label: "Broadcasts", icon: Radio },
-  { path: "agents", label: "Agents", icon: UserCog },
-  { path: "ai-agent", label: "AI Agent", icon: Sparkles },
+  { path: "automation", label: "Automation", icon: Sparkles },
   { path: "profile", label: "Profile", icon: Building2 },
   { path: "webhooks", label: "Webhooks", icon: Webhook },
   { path: "scheduled", label: "Scheduled", icon: Clock },
@@ -52,11 +48,27 @@ export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "docs", label: "Docs", icon: BookOpen },
 ];
 
+export interface AutomationTabItem {
+  path: string;
+  label: string;
+  icon: LucideIcon;
+}
+
+export const whatsappAutomationTabs: AutomationTabItem[] = [
+  { path: "ai-agent", label: "AI Agent", icon: Sparkles },
+  { path: "quick-replies", label: "Quick Replies", icon: Zap },
+  { path: "auto-replies", label: "Auto Replies", icon: Bot },
+  { path: "agents", label: "Agents", icon: UserCog },
+  { path: "broadcasts", label: "Broadcasting", icon: Radio },
+  { path: "human-agent", label: "Human Agent", icon: UserCog },
+];
+
 export const whatsappSectionDescriptions: Record<string, string> = {
   conversations: "Handle live customer conversations from the WhatsApp inbox.",
   contacts: "Manage saved contacts, uploads, tags, and customer records.",
   templates: "Review approved message templates and send compliant outreach.",
   analytics: "Track conversation activity, unread messages, and response trends.",
+  automation: "AI agent, quick replies, auto replies, broadcasts, agents, and human handoff.",
   "quick-replies": "Keep reusable replies ready for agents and common questions.",
   "auto-replies": "Automate inbound responses based on keywords and availability.",
   broadcasts: "Plan and send WhatsApp broadcast campaigns to opted-in contacts.",
