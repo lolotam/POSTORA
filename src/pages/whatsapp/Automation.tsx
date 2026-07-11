@@ -1,5 +1,5 @@
 import { Sparkles } from "lucide-react";
-import { NavLink, Navigate } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
 import { whatsappAutomationTabs, whatsappSectionRoute } from "@/components/whatsapp/waNav";
 import { cn } from "@/lib/utils";
