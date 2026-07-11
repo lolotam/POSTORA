@@ -477,6 +477,16 @@ async function handleHistorySync(
   let imported = 0;
 
   for (const chunk of chunks) {
+    // Meta answers a sync request with an error chunk (e.g. 2593109 "History
+    // sync is turned off by the business") instead of threads when the
+    // business declined history sharing during onboarding.
+    if (chunk?.errors?.length) {
+      console.warn(
+        `[whatsapp-webhook] History sync error for ${phoneNumberId}:`,
+        JSON.stringify(chunk.errors),
+      );
+      continue;
+    }
     const threads = chunk?.threads || [];
     for (const thread of threads) {
       const contactWaId: string | undefined = thread?.id;

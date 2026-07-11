@@ -26,9 +26,14 @@ import {
   Unplug,
   X,
   Check,
+  RefreshCw,
 } from "lucide-react";
 import type { MessagingAccount } from "@/hooks/useMessaging";
-import { useWhatsAppConnect, useWhatsAppDisconnect } from "@/hooks/useWhatsAppConnect";
+import {
+  useWhatsAppConnect,
+  useWhatsAppDisconnect,
+  useWhatsAppRequestSync,
+} from "@/hooks/useWhatsAppConnect";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { WhatsAppAdminSetupGuide } from "./WhatsAppAdminSetupGuide";
@@ -47,6 +52,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const hasConnected = whatsappAccounts.length > 0;
   const connect = useWhatsAppConnect();
   const disconnect = useWhatsAppDisconnect();
+  const requestSync = useWhatsAppRequestSync();
   const { isAdmin } = useUserRole();
   const { flags } = useFeatureFlags();
   const cloudApiEnabled = flags.waCloudApiEnabled;
@@ -168,6 +174,22 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                           : "Cloud API only. Mobile app for this number is disabled."}
                       </p>
                     </div>
+                    {isCoexistence && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={requestSync.isPending}
+                        onClick={() => requestSync.mutate(account.id)}
+                        className="gap-1.5"
+                      >
+                        {requestSync.isPending ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        )}
+                        Sync phone chats
+                      </Button>
+                    )}
                     {!isCoexistence && cloudApiEnabled && (
                       <Button
                         size="sm"

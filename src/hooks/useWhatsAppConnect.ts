@@ -44,6 +44,40 @@ export function useWhatsAppConnect() {
   });
 }
 
+export function useWhatsAppRequestSync() {
+  return useMutation({
+    mutationFn: async (socialAccountId: string) => {
+      const { data, error } = await supabase.functions.invoke("whatsapp-oauth", {
+        body: { action: "request_sync", social_account_id: socialAccountId },
+      });
+      if (error) throw new Error(error.message || "Failed to request chat sync.");
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+    onSuccess: (data) => {
+      const failed = (data?.results || []).filter((r: { success: boolean }) => !r.success);
+      if (failed.length === 0) {
+        toast({
+          title: "Chat sync requested",
+          description: "Your phone's chats and contacts will appear in the inbox within a few minutes.",
+        });
+      } else {
+        toast({
+          title: "Chat sync partially failed",
+          description:
+            "Meta rejected the sync request. If you connected more than 24 hours ago, or declined " +
+            "chat-history sharing during setup, disconnect in the WhatsApp Business app " +
+            "(Settings → Account → Business platforms) and reconnect, approving history sharing.",
+          variant: "destructive",
+        });
+      }
+    },
+    onError: (err: Error) => {
+      toast({ title: "Chat sync request failed", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useWhatsAppDisconnect() {
   const queryClient = useQueryClient();
 

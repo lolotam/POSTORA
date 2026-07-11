@@ -17,6 +17,55 @@ interface DisconnectBody {
   social_account_id: string;
 }
 
+interface RequestSyncBody {
+  action: "request_sync";
+  social_account_id: string;
+}
+
+type SmbSyncType = "smb_app_state_sync" | "history";
+
+interface SmbSyncResult {
+  sync_type: SmbSyncType;
+  success: boolean;
+  request_id?: string;
+  error?: string;
+}
+
+// Coexistence numbers never push phone data on their own: Meta only sends
+// history / contact webhooks after an explicit smb_app_data request, and only
+// within 24h of onboarding. If the business declined history sharing, the
+// request still succeeds but Meta answers with a history webhook carrying
+// error 2593109 instead of messages.
+async function requestSmbAppDataSync(
+  phoneNumberId: string,
+  accessToken: string,
+  syncType: SmbSyncType,
+): Promise<SmbSyncResult> {
+  try {
+    const res = await fetch(`${GRAPH_API}/${phoneNumberId}/smb_app_data`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ messaging_product: "whatsapp", sync_type: syncType }),
+    });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      return { sync_type: syncType, success: true, request_id: data.request_id };
+    }
+    console.warn(`[whatsapp-oauth] ${syncType} sync request failed:`, data);
+    return {
+      sync_type: syncType,
+      success: false,
+      error: data.error?.message || JSON.stringify(data),
+    };
+  } catch (e) {
+    console.warn(`[whatsapp-oauth] ${syncType} sync request threw:`, e);
+    return { sync_type: syncType, success: false, error: (e as Error).message };
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
 
@@ -38,7 +87,7 @@ Deno.serve(async (req) => {
     const userId = userData.user.id;
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
-    const body = (await req.json()) as ExchangeBody | DisconnectBody;
+    const body = (await req.json()) as ExchangeBody | DisconnectBody | RequestSyncBody;
 
     // ============ DISCONNECT ============
     if (body.action === "disconnect") {
@@ -74,6 +123,34 @@ Deno.serve(async (req) => {
         .eq("user_id", userId);
 
       return restrictedJsonResponse(req, { success: true });
+    }
+
+    // ============ REQUEST_SYNC (coexistence chat history + contacts) ============
+    if (body.action === "request_sync") {
+      const { data: account } = await admin
+        .from("social_accounts")
+        .select("id, user_id, platform_user_id, access_token, account_metadata")
+        .eq("id", body.social_account_id)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (!account) return restrictedErrorResponse(req, "Account not found", 404);
+
+      const meta = (account.account_metadata || {}) as Record<string, unknown>;
+      if (meta.connection_mode !== "coexistence") {
+        return restrictedErrorResponse(req, "Chat sync is only available for coexistence connections", 400);
+      }
+      if (!account.access_token) {
+        return restrictedErrorResponse(req, "Account has no access token — reconnect first", 400);
+      }
+
+      const results = [
+        await requestSmbAppDataSync(account.platform_user_id, account.access_token, "smb_app_state_sync"),
+        await requestSmbAppDataSync(account.platform_user_id, account.access_token, "history"),
+      ];
+      return restrictedJsonResponse(req, {
+        success: results.every((r) => r.success),
+        results,
+      });
     }
 
     // ============ EXCHANGE_SIGNUP ============
@@ -149,6 +226,15 @@ Deno.serve(async (req) => {
     // They are configured once in the Meta App Dashboard and verified by
     // whatsapp-config-test's webhook_fields check.
 
+    // Coexistence: ask Meta to push the phone's contacts and chat history.
+    let syncRequests: SmbSyncResult[] | null = null;
+    if (mode === "coexistence") {
+      syncRequests = [
+        await requestSmbAppDataSync(phone_number_id, accessToken, "smb_app_state_sync"),
+        await requestSmbAppDataSync(phone_number_id, accessToken, "history"),
+      ];
+    }
+
     // 3. For Cloud API mode, register the phone number. Skip for Coexistence.
     let registrationStatus: "registered" | "skipped_coexistence" | "failed" = "skipped_coexistence";
     if (mode === "cloud_api") {
@@ -210,6 +296,7 @@ Deno.serve(async (req) => {
       connection_mode: mode,
       registration_status: registrationStatus,
       subscribed: subscribeRes.ok,
+      sync_requests: syncRequests,
     };
 
     if (existing) {
@@ -244,6 +331,7 @@ Deno.serve(async (req) => {
       registration_status: registrationStatus,
       display_phone_number: displayPhone,
       verified_name: verifiedName,
+      sync_requests: syncRequests,
     });
   } catch (err) {
     console.error("[whatsapp-oauth] Error:", err);
