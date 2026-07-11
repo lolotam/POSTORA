@@ -44,10 +44,10 @@ import {
   autoMapHeaders,
   deriveDisplayName,
   normalizePhone,
-  type ContactInput,
   type CsvField,
 } from "./contactCodecs";
-import { useContactGroups } from "./useContacts";
+import { useContactGroups, type ContactInput } from "./useContacts";
+
 
 interface ContactImportDialogProps {
   open: boolean;
