@@ -58,10 +58,13 @@ async function chatCompletion(payload: Record<string, unknown>): Promise<any> {
 }
 
 async function isHumanAssignedAndOnline(admin: any, conversationId: string): Promise<boolean> {
+  // Only the active assignment counts — historical rows keep unassigned_at set
+  // (see the partial unique index idx_active_assignment).
   const { data: assignment } = await admin
     .from("whatsapp_conversation_assignments")
     .select("agent_id")
     .eq("conversation_id", conversationId)
+    .is("unassigned_at", null)
     .maybeSingle();
   if (!assignment?.agent_id) return false;
   const { data: agent } = await admin
@@ -119,11 +122,7 @@ async function logOutcome(admin: any, entry: Record<string, unknown>): Promise<v
   if (error) console.error("[ai-agent-reply] Failed to write log:", error.message);
 }
 
-async function sendWhatsAppText(
-  admin: any,
-  request: ReplyRequest,
-  replyText: string,
-): Promise<string> {
+async function resolveWhatsAppToken(admin: any, request: ReplyRequest): Promise<string> {
   const { data: account } = await admin
     .from("social_accounts")
     .select("access_token")
@@ -132,15 +131,23 @@ async function sendWhatsAppText(
     .maybeSingle();
   const accessToken = account?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
   if (!accessToken) throw new Error("No WhatsApp access token available for this account");
+  return accessToken;
+}
 
-  const response = await fetch(`${GRAPH_API}/${request.phone_number_id}/messages`, {
+async function sendWhatsAppText(
+  accessToken: string,
+  phoneNumberId: string,
+  recipientPhone: string,
+  text: string,
+): Promise<string> {
+  const response = await fetch(`${GRAPH_API}/${phoneNumberId}/messages`, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({
       messaging_product: "whatsapp",
-      to: request.recipient_phone,
+      to: recipientPhone,
       type: "text",
-      text: { body: replyText },
+      text: { body: text },
     }),
   });
   const data = await response.json();
@@ -259,12 +266,25 @@ Deno.serve(async (req) => {
       nowIso: new Date().toISOString(),
     });
 
+    const accessToken = await resolveWhatsAppToken(admin, request);
+    const { data: cachedConversation } = await admin
+      .from("messaging_cache")
+      .select("participant_name")
+      .eq("user_id", request.user_id)
+      .eq("conversation_id", request.conversation_id)
+      .maybeSingle();
+
     const toolContext: ToolContext = {
       admin,
       userId: request.user_id,
       platform: request.platform,
       conversationId: request.conversation_id,
+      customerName: cachedConversation?.participant_name || request.recipient_phone,
+      adminPhoneNumbers: config.admin_phone_numbers || [],
       embed,
+      sendWhatsAppText: async (recipientPhone: string, text: string) => {
+        await sendWhatsAppText(accessToken, request.phone_number_id, recipientPhone, text);
+      },
     };
 
     const messages: any[] = [
@@ -330,7 +350,12 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
-    const outboundMessageId = await sendWhatsAppText(admin, request, replyText);
+    const outboundMessageId = await sendWhatsAppText(
+      accessToken,
+      request.phone_number_id,
+      request.recipient_phone,
+      replyText,
+    );
 
     await admin.from("whatsapp_messages").insert({
       user_id: request.user_id,

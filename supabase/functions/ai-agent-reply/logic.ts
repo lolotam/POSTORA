@@ -41,6 +41,34 @@ export function shouldAiReply(params: ReplyGateParams): { reply: boolean; reason
   return { reply: true, reason: "ok" };
 }
 
+export interface EscalationAgentCandidate {
+  id: string;
+  user_id: string;
+  status: string;
+  current_conversations: number | null;
+}
+
+// Prefers the business owner's own agent when online; otherwise the online
+// agent with the lightest load. Returns null when nobody is online.
+export function pickEscalationAgent(
+  agents: EscalationAgentCandidate[],
+  ownerUserId: string,
+): EscalationAgentCandidate | null {
+  const online = agents.filter((agent) => agent.status === "online");
+  if (!online.length) return null;
+  const owner = online.find((agent) => agent.user_id === ownerUserId);
+  if (owner) return owner;
+  return [...online].sort(
+    (a, b) => (a.current_conversations ?? 0) - (b.current_conversations ?? 0),
+  )[0];
+}
+
+// Graph API "to" field wants bare digits (the webhook's `from` field format),
+// while admin numbers are stored E.164 with a leading plus.
+export function waRecipient(phone: string): string {
+  return phone.replace(/[^\d]/g, "");
+}
+
 export interface SystemPromptParams {
   persona: string | null;
   language: ReplyLanguage;

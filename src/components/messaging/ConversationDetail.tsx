@@ -12,6 +12,7 @@ import { InteractiveMessageBuilder } from "./InteractiveMessageBuilder";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
+import { AiConversationModeSelect } from "./AiConversationModeSelect";
 
 interface ConversationDetailProps {
   conversation: Conversation | null;
@@ -247,6 +248,11 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
             {conversation.unread_count > 0 ? `${conversation.unread_count} unread` : "Active"}
           </p>
         </div>
+        {platform === "whatsapp" && (
+          <div className="ml-auto">
+            <AiConversationModeSelect platform="whatsapp" conversationId={conversation.id} />
+          </div>
+        )}
       </div>
 
       {/* Messages */}

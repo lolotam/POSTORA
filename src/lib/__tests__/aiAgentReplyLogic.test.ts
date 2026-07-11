@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildSystemPrompt,
   detectReplyLanguage,
+  pickEscalationAgent,
   resolveEngagementMode,
   shouldAiReply,
+  waRecipient,
+  type EscalationAgentCandidate,
   type ReplyGateParams,
 } from "../../../supabase/functions/ai-agent-reply/logic";
 
@@ -79,6 +82,38 @@ describe("shouldAiReply", () => {
     [{ dailyCapReached: true }, "daily_cap_reached"],
   ] as const)("blocks with %j → %s", (overrides, reason) => {
     expect(shouldAiReply({ ...openGate, ...overrides })).toEqual({ reply: false, reason });
+  });
+});
+
+describe("pickEscalationAgent", () => {
+  const agent = (overrides: Partial<EscalationAgentCandidate>): EscalationAgentCandidate => ({
+    id: "agent-id",
+    user_id: "someone",
+    status: "online",
+    current_conversations: 0,
+    ...overrides,
+  });
+
+  it("returns null when no agent is online", () => {
+    expect(pickEscalationAgent([agent({ status: "away" }), agent({ status: "offline" })], "owner")).toBeNull();
+  });
+
+  it("prefers the business owner's own agent when online, even if busier", () => {
+    const owner = agent({ id: "owner-agent", user_id: "owner", current_conversations: 9 });
+    const idle = agent({ id: "idle-agent", current_conversations: 0 });
+    expect(pickEscalationAgent([idle, owner], "owner")).toBe(owner);
+  });
+
+  it("falls back to the online agent with the fewest active conversations", () => {
+    const busy = agent({ id: "busy", current_conversations: 5 });
+    const idle = agent({ id: "idle", current_conversations: 1 });
+    expect(pickEscalationAgent([busy, idle], "owner")?.id).toBe("idle");
+  });
+});
+
+describe("waRecipient", () => {
+  it("strips the plus and separators from an E.164 number", () => {
+    expect(waRecipient("+965 5000-0000")).toBe("96550000000");
   });
 });
 

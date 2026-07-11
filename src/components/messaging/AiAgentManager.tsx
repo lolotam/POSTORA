@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
+import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
   "is_enabled" | "default_mode" | "language_mode" | "model" | "daily_message_cap" | "reply_cooldown_seconds"
@@ -204,7 +205,7 @@ export function AiAgentManager({ platform = "whatsapp" }: { platform?: AiAgentPl
       <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} /></TabsContent>
       <TabsContent value="tools" className="mt-0"><ComingSoonCard title="Operational tools" /></TabsContent>
       <TabsContent value="test" className="mt-0"><ComingSoonCard title="Agent testing" /></TabsContent>
-      <TabsContent value="logs" className="mt-0"><ComingSoonCard title="Agent logs" /></TabsContent>
+      <TabsContent value="logs" className="mt-0"><AiAgentLogsView platform={platform} /></TabsContent>
     </Tabs>
   );
 }

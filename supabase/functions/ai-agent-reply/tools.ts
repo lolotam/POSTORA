@@ -1,12 +1,16 @@
 // Tool definitions and executors for the AI agent chat loop.
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { pickEscalationAgent, waRecipient } from "./logic.ts";
 
 export interface ToolContext {
   admin: any;
   userId: string;
   platform: string;
   conversationId: string;
+  customerName: string;
+  adminPhoneNumbers: string[];
   embed: (texts: string[]) => Promise<number[][]>;
+  sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
 }
 
 export interface ToolResult {
@@ -46,6 +50,21 @@ export const toolDefinitions = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "notify_admin",
+      description:
+        "Send a short WhatsApp notification to the business admin. Use for urgent matters the admin should see immediately (complaints, large orders, repeated failures). Do not use for routine questions.",
+      parameters: {
+        type: "object",
+        properties: {
+          message: { type: "string", description: "Short notification text for the admin" },
+        },
+        required: ["message"],
+      },
+    },
+  },
 ];
 
 async function searchKnowledge(context: ToolContext, query: string): Promise<ToolResult> {
@@ -66,11 +85,25 @@ async function searchKnowledge(context: ToolContext, query: string): Promise<Too
   };
 }
 
+async function notifyAdmins(context: ToolContext, text: string): Promise<number> {
+  let delivered = 0;
+  for (const phone of context.adminPhoneNumbers) {
+    try {
+      await context.sendWhatsAppText(waRecipient(phone), text);
+      delivered++;
+    } catch (error) {
+      console.error(
+        `[ai-agent-reply] Admin notification to ${phone} failed:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+  return delivered;
+}
+
 async function escalateToHuman(context: ToolContext, reason: string): Promise<ToolResult> {
-  // TODO(Phase 4): auto-assign an online agent via whatsapp_conversation_assignments
-  // and notify the admin. For now we flip the conversation to human_first so the
-  // AI stays silent from the next message on.
-  const { error } = await context.admin
+  // The AI goes silent for this conversation from the next message on.
+  const { error: modeError } = await context.admin
     .from("ai_conversation_modes")
     .upsert(
       {
@@ -81,12 +114,80 @@ async function escalateToHuman(context: ToolContext, reason: string): Promise<To
       },
       { onConflict: "user_id,platform,conversation_id" },
     );
-  if (error) throw error;
-  console.log(`[ai-agent-reply] Escalated conversation to human: ${reason}`);
+  if (modeError) throw modeError;
+
+  // Auto-assign an online human agent, mirroring the manual flow in
+  // src/hooks/useWhatsAppAgents.ts (close active assignment, log history,
+  // insert the new one).
+  const { data: agents } = await context.admin
+    .from("whatsapp_agents")
+    .select("id, user_id, status, current_conversations");
+  const agent = pickEscalationAgent(agents || [], context.userId);
+  let assignmentNote = "No human agent is online right now; the conversation is queued for the team.";
+
+  if (agent) {
+    const { data: existing } = await context.admin
+      .from("whatsapp_conversation_assignments")
+      .select("id, agent_id")
+      .eq("conversation_id", context.conversationId)
+      .is("unassigned_at", null)
+      .maybeSingle();
+
+    if (existing) {
+      await context.admin
+        .from("whatsapp_conversation_assignments")
+        .update({ unassigned_at: new Date().toISOString() })
+        .eq("id", existing.id);
+    }
+
+    const { error: assignError } = await context.admin
+      .from("whatsapp_conversation_assignments")
+      .insert({
+        conversation_id: context.conversationId,
+        agent_id: agent.id,
+        assigned_by: context.userId,
+        notes: `AI escalation: ${reason}`.slice(0, 500),
+      });
+    if (assignError) throw assignError;
+
+    await context.admin.from("whatsapp_assignment_history").insert({
+      conversation_id: context.conversationId,
+      action: existing ? "transferred" : "assigned",
+      from_agent_id: existing?.agent_id || null,
+      to_agent_id: agent.id,
+      performed_by: context.userId,
+      reason: `AI escalation: ${reason}`.slice(0, 500),
+    });
+    assignmentNote = "An online team member has been assigned to this conversation.";
+  }
+
+  const delivered = await notifyAdmins(
+    context,
+    `🤖 AI agent escalation\nCustomer: ${context.customerName}\nReason: ${reason}\n${assignmentNote}`,
+  );
+  console.log(
+    `[ai-agent-reply] Escalated conversation (agent: ${agent?.id || "none"}, admins notified: ${delivered})`,
+  );
+
   return {
     output:
-      "Escalation recorded; a human team member will take over this conversation. Tell the customer briefly that someone from the team will follow up.",
+      `Escalation recorded. ${assignmentNote} Tell the customer briefly that a team member will follow up.`,
     escalated: true,
+  };
+}
+
+async function notifyAdmin(context: ToolContext, messageText: string): Promise<ToolResult> {
+  if (!context.adminPhoneNumbers.length) {
+    return { output: "No admin phone numbers are configured; the admin could not be notified." };
+  }
+  const delivered = await notifyAdmins(
+    context,
+    `🤖 AI agent notification\nCustomer: ${context.customerName}\n${messageText}`,
+  );
+  return {
+    output: delivered > 0
+      ? `Admin notified (${delivered} recipient${delivered === 1 ? "" : "s"}).`
+      : "Admin notification failed to send.",
   };
 }
 
@@ -97,5 +198,6 @@ export async function executeTool(
 ): Promise<ToolResult> {
   if (name === "search_knowledge") return searchKnowledge(context, String(args.query || ""));
   if (name === "escalate_to_human") return escalateToHuman(context, String(args.reason || ""));
+  if (name === "notify_admin") return notifyAdmin(context, String(args.message || ""));
   return { output: `Unknown tool: ${name}` };
 }
