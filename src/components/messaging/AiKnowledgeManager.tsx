@@ -176,33 +176,35 @@ export function AiKnowledgeManager({
           </label>
         </CardContent>
       </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>WhatsApp catalog</CardTitle>
-          <CardDescription>
-            {waAccount && catalog?.catalog_id
-              ? "Sync products for AI product answers."
-              : "Connect a WhatsApp account with a catalog to sync products."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Button
-            onClick={() =>
-              run(
-                "sync_catalog",
-                {
-                  social_account_id: waAccount!.id,
-                  catalog_id: catalog!.catalog_id,
-                },
-                "Catalog synced",
-              )
-            }
-            disabled={!waAccount || !catalog?.catalog_id || invoke.isPending}
-          >
-            Sync catalog
-          </Button>
-        </CardContent>
-      </Card>
+      {isWhatsApp && (
+        <Card>
+          <CardHeader>
+            <CardTitle>WhatsApp catalog</CardTitle>
+            <CardDescription>
+              {waAccount && catalog?.catalog_id
+                ? "Sync products for AI product answers."
+                : "Connect a WhatsApp account with a catalog to sync products."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button
+              onClick={() =>
+                run(
+                  "sync_catalog",
+                  {
+                    social_account_id: waAccount!.id,
+                    catalog_id: catalog!.catalog_id,
+                  },
+                  "Catalog synced",
+                )
+              }
+              disabled={!waAccount || !catalog?.catalog_id || invoke.isPending}
+            >
+              Sync catalog
+            </Button>
+          </CardContent>
+        </Card>
+      )}
       <Card>
         <CardHeader>
           <CardTitle>Sources</CardTitle>
