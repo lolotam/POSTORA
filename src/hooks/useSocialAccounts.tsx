@@ -56,6 +56,7 @@ export function useSocialAccounts() {
       return validAccounts as SocialAccount[];
     },
     enabled: !!user,
+    retry: false,
   });
 }
 

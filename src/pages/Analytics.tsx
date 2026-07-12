@@ -17,11 +17,13 @@ import {
   PostingActivityChart,
   ConnectedAccountsSummary,
 } from "@/components/analytics";
+import { AlertCircle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export default function Analytics() {
   const [timeRange, setTimeRange] = useState("7");
-  const { data: posts = [] } = usePostsWithResults();
-  const { data: accounts = [] } = useSocialAccounts();
+  const { data: posts = [], error: postsError } = usePostsWithResults();
+  const { data: accounts = [], error: accountsError } = useSocialAccounts();
 
   // Calculate date range
   const endDate = new Date();
@@ -160,6 +162,19 @@ export default function Analytics() {
     <DashboardLayout>
       <div className="space-y-8">
         <AnalyticsHeader timeRange={timeRange} onTimeRangeChange={setTimeRange} />
+
+        {(postsError || accountsError) && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>
+              Failed to load analytics data.{" "}
+              {postsError instanceof Error ? postsError.message : ""}
+              {accountsError instanceof Error ? accountsError.message : ""}
+              {" "}
+              Try refreshing the page or re-logging in.
+            </AlertDescription>
+          </Alert>
+        )}
 
         <AnalyticsStatCards
           totalPosts={totalPosts}

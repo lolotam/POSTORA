@@ -63,6 +63,7 @@ export function usePosts(limit?: number) {
       return (data || []) as Post[];
     },
     enabled: !!user,
+    retry: false,
   });
 }
 
@@ -104,6 +105,7 @@ export function usePostsWithResults(limit?: number) {
       }));
     },
     enabled: !!user,
+    retry: false,
   });
 }
 

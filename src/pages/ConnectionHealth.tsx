@@ -128,7 +128,7 @@ export default function ConnectionHealth() {
     const [isSendingTestNotification, setIsSendingTestNotification] = useState(false);
     const { handleConnectPlatform, connectingPlatform } = useProfileOAuth();
 
-    const { data: accounts = [], isLoading } = useQuery({
+    const { data: accounts = [], isLoading, error } = useQuery({
         queryKey: ["connection_health", user?.id],
         queryFn: async () => {
             if (!user) return [];
@@ -144,6 +144,7 @@ export default function ConnectionHealth() {
             return (data || []) as SocialAccountHealth[];
         },
         enabled: !!user,
+        retry: false,
     });
 
     const testConnectionMutation = useMutation({
@@ -351,6 +352,16 @@ export default function ConnectionHealth() {
                         {isLoading ? (
                             <div className="flex items-center justify-center py-12">
                                 <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
+                            </div>
+                        ) : error ? (
+                            <div className="text-center py-12 space-y-2">
+                                <AlertCircle className="w-10 h-10 text-destructive mx-auto" />
+                                <p className="text-sm font-medium text-destructive">
+                                    Failed to load connection data
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                    {error instanceof Error ? error.message : "An unexpected error occurred. Try refreshing the page."}
+                                </p>
                             </div>
                         ) : accounts.length === 0 ? (
                             <div className="text-center py-12 text-muted-foreground">

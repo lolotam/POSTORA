@@ -611,6 +611,18 @@ Deno.serve(async (req) => {
       if (!source) return errorResponse("Knowledge source not found", 404);
       if (!["csv", "excel", "pdf", "doc", "image"].includes(source.source_type))
         return errorResponse("Source type not supported", 400);
+      if (source.source_type === "excel") {
+        const { error } = await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "pending", error: null })
+          .eq("id", source.id);
+        if (error) throw error;
+        await logKnowledgeEvent(admin, user.id, "queue_excel_source", true, {
+          source_id: source.id,
+          file_name: source.file_name,
+        });
+        return jsonResponse({ ok: true, queued: true }, 202);
+      }
       try {
         await (admin as any)
           .from("ai_knowledge_sources")
