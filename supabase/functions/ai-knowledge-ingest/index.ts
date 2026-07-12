@@ -132,6 +132,14 @@ function graphPrompt(content: string): string {
   ].join("\n");
 }
 
+// gemini-2.5-flash wraps its output in ```json fences unless response_format
+// forces a bare object, so JSON.parse(output) threw on every chunk (the graph
+// stayed silently empty). Request json_object AND strip fences defensively.
+function parseGraphJson(output: string): unknown {
+  const fenced = output.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  return JSON.parse((fenced ? fenced[1] : output).trim());
+}
+
 async function extractChunkGraph(content: string) {
   const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
   if (!key) throw new Error("GOOGLE_AI_STUDIO_KEY is not configured");
@@ -142,6 +150,7 @@ async function extractChunkGraph(content: string) {
       model: GRAPH_MODEL,
       temperature: 0,
       max_tokens: 1000,
+      response_format: { type: "json_object" },
       messages: [{ role: "user", content: graphPrompt(content) }],
     }),
     signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
@@ -150,7 +159,7 @@ async function extractChunkGraph(content: string) {
   if (!response.ok) throw new Error(payload?.error?.message || "Graph extraction failed");
   const output = payload?.choices?.[0]?.message?.content;
   if (typeof output !== "string") throw new Error("Graph extraction returned no JSON");
-  return normalizeGraphExtraction(JSON.parse(output));
+  return normalizeGraphExtraction(parseGraphJson(output));
 }
 
 async function upsertGraphEntity(
@@ -199,22 +208,37 @@ async function storeChunkGraph(
   return { entities: graph.entities.length, relations: rows.length };
 }
 
+// One Gemini call per chunk, so bound the work per ingest: cap the chunk count
+// and run a small worker pool. Without this a large source fires dozens of
+// sequential 25s calls and the edge isolate is killed mid-request (opaque 500)
+// even though the source was already marked "ready".
+const MAX_GRAPH_CHUNKS = 50;
+const GRAPH_CONCURRENCY = 3;
+
 async function extractKnowledgeGraph(
   admin: AdminClient,
   userId: string,
   chunks: StoredChunk[],
 ): Promise<GraphExtractionResult> {
   const result = { entities: 0, relations: 0, failures: 0 };
-  for (const chunk of chunks) {
-    try {
-      const stored = await storeChunkGraph(admin, userId, chunk);
-      result.entities += stored.entities;
-      result.relations += stored.relations;
-    } catch (error) {
-      result.failures++;
-      console.error("[ai-knowledge-ingest] Graph extraction failed:", message(error));
+  const queue = chunks.slice(0, MAX_GRAPH_CHUNKS);
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < queue.length) {
+      const chunk = queue[cursor++];
+      try {
+        const stored = await storeChunkGraph(admin, userId, chunk);
+        result.entities += stored.entities;
+        result.relations += stored.relations;
+      } catch (error) {
+        result.failures++;
+        console.error("[ai-knowledge-ingest] Graph extraction failed:", message(error));
+      }
     }
-  }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(GRAPH_CONCURRENCY, queue.length) }, worker),
+  );
   return result;
 }
 

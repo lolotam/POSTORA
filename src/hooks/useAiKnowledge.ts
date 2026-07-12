@@ -52,6 +52,7 @@ export function useAiKnowledge() {
       const { data, error } = await (supabase as any)
         .from("ai_knowledge_graph_exports")
         .select("html_url, vault_url, generated_at")
+        .eq("user_id", user?.id)
         .maybeSingle();
       if (error) throw error;
       return data as AiKnowledgeGraphExport | null;
