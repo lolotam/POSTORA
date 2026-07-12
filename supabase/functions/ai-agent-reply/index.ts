@@ -6,9 +6,12 @@ import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestRespon
 import {
   buildSystemPrompt,
   detectReplyLanguage,
+  formatRelatedFacts,
   formatModelRef,
+  type GraphRelationFact,
   parseModelRef,
   resolveEngagementMode,
+  SIMILARITY_FLOOR,
   shouldAiReply,
   waRecipient,
 } from "./logic.ts";
@@ -30,7 +33,6 @@ const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Only the last 4 stored turns are replayed to the model on each reply, to keep
 // the prompt (and token cost) small; older context lives in ai_thread_messages.
 const HISTORY_LIMIT = 4;
-const SIMILARITY_FLOOR = 0.15;
 
 // For WhatsApp, recipient_phone is the customer's phone and phone_number_id
 // the business number. For Facebook/Instagram, recipient_phone carries the
@@ -473,6 +475,22 @@ Deno.serve(async (req) => {
       console.error("[ai-agent-reply] Knowledge lookup failed, replying without RAG:", ragError);
     }
     const retrievedChunkIds: string[] = relevantChunks.map((chunk: { id: string }) => chunk.id);
+    let graphError: string | null = null;
+    let relatedFacts = "";
+    if (retrievedChunkIds.length) {
+      try {
+        const { data, error } = await admin.rpc("match_ai_knowledge_graph_relations", {
+          p_user_id: request.user_id,
+          p_source_chunk_ids: retrievedChunkIds,
+          match_count: 12,
+        });
+        if (error) throw error;
+        relatedFacts = formatRelatedFacts((data || []) as GraphRelationFact[]);
+      } catch (error) {
+        graphError = errorMessage(error).slice(0, 300);
+        console.error("[ai-agent-reply] Knowledge graph lookup failed:", graphError);
+      }
+    }
 
     // Operational tools unlock only for verified admin senders (or the
     // sandbox's explicit act-as-admin switch). Numbers are compared as bare
@@ -487,7 +505,10 @@ Deno.serve(async (req) => {
     const systemPrompt = buildSystemPrompt({
       persona: config.persona_instructions,
       language,
-      knowledgeBlocks: relevantChunks.map((chunk: { content: string }) => chunk.content),
+      knowledgeBlocks: [
+        ...relevantChunks.map((chunk: { content: string }) => chunk.content),
+        relatedFacts,
+      ].filter(Boolean),
       nowIso: new Date().toISOString(),
       isAdmin,
     });
@@ -638,6 +659,7 @@ Deno.serve(async (req) => {
         fallback_level: usedFallbackLevel,
         model_errors: modelErrors.length ? modelErrors : null,
         rag_error: ragError,
+        graph_error: graphError,
         dry_run: dryRun,
       });
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
@@ -691,7 +713,8 @@ Deno.serve(async (req) => {
       used_model: usedModel,
       fallback_level: usedFallbackLevel,
       model_errors: modelErrors.length ? modelErrors : null,
-      rag_error: ragError,
+        rag_error: ragError,
+        graph_error: graphError,
       tool_calls: executedToolCalls.length ? executedToolCalls.map((t) => t.name) : null,
       escalated,
       dry_run: dryRun,
