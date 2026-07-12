@@ -5,6 +5,10 @@ export type EngagementMode = "ai_first" | "human_first" | "human_then_ai";
 export type ReplyLanguage = "ar" | "en";
 export type LanguageMode = "auto" | ReplyLanguage;
 
+// Gemini similarity scores are compressed. The documented live calibration
+// placed irrelevant matches at 0.52 and relevant ones at 0.62.
+export const SIMILARITY_FLOOR = 0.55;
+
 const ARABIC_CHAR_RE = /[؀-ۿ]/g;
 const LATIN_CHAR_RE = /[A-Za-z]/g;
 
@@ -49,6 +53,22 @@ export function parseModelRef(value: string): ModelRef {
 
 export function formatModelRef(ref: ModelRef): string {
   return `${ref.provider}/${ref.model}`;
+}
+
+export interface GraphRelationFact {
+  source_name: string;
+  source_type: string;
+  relation: string;
+  target_name: string;
+  target_type: string;
+}
+
+export function formatRelatedFacts(facts: GraphRelationFact[]): string {
+  if (!facts.length) return "";
+  return [
+    "Related facts:",
+    ...facts.map((fact) => `- ${fact.source_name} ${fact.relation} ${fact.target_name}`),
+  ].join("\n");
 }
 
 export interface ReplyGateParams {

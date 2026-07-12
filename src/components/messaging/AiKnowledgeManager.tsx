@@ -1,6 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useState } from "react";
-import { Loader2, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ExternalLink, FileArchive, Loader2, RefreshCw, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +30,7 @@ export function AiKnowledgeManager({
   platform: AiAgentPlatform;
 }) {
   const { config, upsertConfig } = useAiAgentConfig(platform);
-  const { user, sources, isLoading, invoke } = useAiKnowledge();
+  const { user, sources, isLoading, graphExport, invoke } = useAiKnowledge();
   const isWhatsApp = platform === "whatsapp";
   const catalogHook = useWhatsAppCatalog();
   const waAccount = isWhatsApp ? catalogHook.waAccount : null;
@@ -309,6 +309,40 @@ export function AiKnowledgeManager({
                 </div>
               </div>
             ))
+          )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>Knowledge graph</CardTitle>
+          <CardDescription>
+            Generate inspection exports from the knowledge currently indexed for this business.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          <Button
+            variant="outline"
+            disabled={invoke.isPending}
+            onClick={() => run("export_graph", {}, "Knowledge graph exports generated")}
+          >
+            {invoke.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            Generate exports
+          </Button>
+          {graphExport?.html_url && (
+            <Button variant="secondary" asChild>
+              <a href={graphExport.html_url} target="_blank" rel="noreferrer">
+                <ExternalLink className="mr-2 h-4 w-4" />
+                Open graph
+              </a>
+            </Button>
+          )}
+          {graphExport?.vault_url && (
+            <Button variant="secondary" asChild>
+              <a href={graphExport.vault_url} target="_blank" rel="noreferrer">
+                <FileArchive className="mr-2 h-4 w-4" />
+                Download vault
+              </a>
+            </Button>
           )}
         </CardContent>
       </Card>

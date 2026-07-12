@@ -1,6 +1,6 @@
 // Tool definitions and executors for the AI agent chat loop.
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { pickEscalationAgent, waRecipient } from "./logic.ts";
+import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
 
 export interface ToolContext {
   admin: any;
@@ -89,7 +89,9 @@ async function searchKnowledge(context: ToolContext, query: string): Promise<Too
     match_count: 6,
   });
   if (error) throw error;
-  const chunks = (data || []).filter((chunk: { similarity: number }) => chunk.similarity > 0.15);
+  const chunks = (data || []).filter(
+    (chunk: { similarity: number }) => chunk.similarity > SIMILARITY_FLOOR,
+  );
   if (!chunks.length) return { output: "No matching business knowledge found.", retrievedChunkIds: [] };
   return {
     output: chunks

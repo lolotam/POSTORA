@@ -2,12 +2,24 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as XLSX from "npm:xlsx@0.18.5";
 import { extractText, getDocumentProxy } from "https://esm.sh/unpdf@0.12.1";
+import JSZip from "npm:jszip@3.10.1";
 import {
   chunkProfileText,
   chunkRows,
   rowToText,
   type KnowledgeChunk,
 } from "./chunking.ts";
+import {
+  normalizeGraphExtraction,
+  type GraphEntity,
+  type GraphRelation,
+} from "./graph.ts";
+import {
+  buildGraphHtml,
+  buildObsidianNotes,
+  type ExportEntity,
+  type ExportRelation,
+} from "./exports.ts";
 import {
   errorResponse,
   handleCorsOptions,
@@ -36,6 +48,21 @@ const EMBED_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/openai/embeddings";
 const EMBED_MODEL = "gemini-embedding-001";
 const EMBED_DIMENSIONS = 1536;
+const GRAPH_ENDPOINT =
+  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const GRAPH_MODEL = "gemini-2.5-flash";
+const GRAPH_TIMEOUT_MS = 25_000;
+
+interface StoredChunk {
+  id: string;
+  content: string;
+}
+
+interface GraphExtractionResult {
+  entities: number;
+  relations: number;
+  failures: number;
+}
 
 async function embed(texts: string[]): Promise<number[][]> {
   const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
@@ -71,15 +98,15 @@ async function replaceChunks(
   sourceId: string,
   userId: string,
   chunks: KnowledgeChunk[],
-) {
+): Promise<StoredChunk[]> {
   const { error: deleteError } = await (admin as any)
     .from("ai_knowledge_chunks")
     .delete()
     .eq("source_id", sourceId);
   if (deleteError) throw deleteError;
-  if (!chunks.length) return;
+  if (!chunks.length) return [];
   const embeddings = await embed(chunks.map((chunk) => chunk.content));
-  const { error } = await (admin as any)
+  const { data, error } = await (admin as any)
     .from("ai_knowledge_chunks")
     .insert(
       chunks.map((chunk, index) => ({
@@ -89,9 +116,130 @@ async function replaceChunks(
         metadata: chunk.metadata,
         embedding: embeddings[index],
       })),
-    );
+    )
+    .select("id, content");
+  if (error) throw error;
+  return data as StoredChunk[];
+}
+
+function graphPrompt(content: string): string {
+  return [
+    "Extract a compact business knowledge graph from the text below.",
+    "Return JSON only: {entities:[{name,type,description}],relations:[{source,target,relation}]}",
+    "Use short, factual names. Only relate entities that appear in the text.",
+    "Text:",
+    content,
+  ].join("\n");
+}
+
+async function extractChunkGraph(content: string) {
+  const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
+  if (!key) throw new Error("GOOGLE_AI_STUDIO_KEY is not configured");
+  const response = await fetch(GRAPH_ENDPOINT, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: GRAPH_MODEL,
+      temperature: 0,
+      max_tokens: 1000,
+      messages: [{ role: "user", content: graphPrompt(content) }],
+    }),
+    signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload?.error?.message || "Graph extraction failed");
+  const output = payload?.choices?.[0]?.message?.content;
+  if (typeof output !== "string") throw new Error("Graph extraction returned no JSON");
+  return normalizeGraphExtraction(JSON.parse(output));
+}
+
+async function upsertGraphEntity(
+  admin: AdminClient,
+  userId: string,
+  entity: GraphEntity,
+): Promise<string> {
+  const { data, error } = await (admin as any)
+    .from("ai_knowledge_entities")
+    .upsert(
+      { user_id: userId, name: entity.name, type: entity.type, description: entity.description },
+      { onConflict: "user_id,normalized_name,type" },
+    )
+    .select("id")
+    .single();
+  if (error) throw error;
+  return data.id;
+}
+
+async function storeChunkGraph(
+  admin: AdminClient,
+  userId: string,
+  chunk: StoredChunk,
+): Promise<{ entities: number; relations: number }> {
+  const graph = await extractChunkGraph(chunk.content);
+  const entityIds = new Map<string, string>();
+  for (const entity of graph.entities) {
+    entityIds.set(entity.name.toLowerCase(), await upsertGraphEntity(admin, userId, entity));
+  }
+  const rows = graph.relations.flatMap((relation: GraphRelation) => {
+    const sourceId = entityIds.get(relation.source.toLowerCase());
+    const targetId = entityIds.get(relation.target.toLowerCase());
+    if (!sourceId || !targetId) return [];
+    return [{
+      user_id: userId,
+      source_entity_id: sourceId,
+      target_entity_id: targetId,
+      relation: relation.relation,
+      source_chunk_id: chunk.id,
+    }];
+  });
+  if (rows.length) {
+    const { error } = await (admin as any).from("ai_knowledge_relations").insert(rows);
+    if (error) throw error;
+  }
+  return { entities: graph.entities.length, relations: rows.length };
+}
+
+async function extractKnowledgeGraph(
+  admin: AdminClient,
+  userId: string,
+  chunks: StoredChunk[],
+): Promise<GraphExtractionResult> {
+  const result = { entities: 0, relations: 0, failures: 0 };
+  for (const chunk of chunks) {
+    try {
+      const stored = await storeChunkGraph(admin, userId, chunk);
+      result.entities += stored.entities;
+      result.relations += stored.relations;
+    } catch (error) {
+      result.failures++;
+      console.error("[ai-knowledge-ingest] Graph extraction failed:", message(error));
+    }
+  }
+  return result;
+}
+
+async function pruneGraphEntities(admin: AdminClient, userId: string) {
+  const { error } = await (admin as any).rpc("prune_ai_knowledge_entities", {
+    p_user_id: userId,
+  });
   if (error) throw error;
 }
+
+async function updateKnowledgeGraph(
+  admin: AdminClient,
+  userId: string,
+  chunks: StoredChunk[],
+): Promise<GraphExtractionResult> {
+  const result = await extractKnowledgeGraph(admin, userId, chunks);
+  try {
+    await pruneGraphEntities(admin, userId);
+  } catch (error) {
+    result.failures++;
+    console.error("[ai-knowledge-ingest] Graph cleanup failed:", message(error));
+  }
+  return result;
+}
+
 async function setFailed(admin: AdminClient, sourceId: string, error: unknown) {
   await (admin as any)
     .from("ai_knowledge_sources")
@@ -125,6 +273,78 @@ function sanitizeEmailForFolder(email: string): string {
     .replace(/@/g, "_at_")
     .replace(/\./g, "_")
     .replace(/[^a-z0-9_-]/g, "_");
+}
+
+async function cloudinarySignature(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function uploadGraphExport(
+  contents: Uint8Array | string,
+  fileName: string,
+  contentType: string,
+  userEmail: string,
+): Promise<string> {
+  const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
+  const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
+  const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
+  if (!cloudName || !apiKey || !apiSecret) throw new Error("Cloudinary is not configured");
+  const folder = `media/${sanitizeEmailForFolder(userEmail)}/knowledge-graph`;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const signature = await cloudinarySignature(
+    `folder=${folder}&overwrite=true&public_id=${fileName}&timestamp=${timestamp}${apiSecret}`,
+  );
+  const form = new FormData();
+  const body = typeof contents === "string"
+    ? contents
+    : (new Uint8Array(contents).buffer as ArrayBuffer);
+  form.append("file", new Blob([body], { type: contentType }), fileName);
+  form.append("api_key", apiKey);
+  form.append("timestamp", String(timestamp));
+  form.append("signature", signature);
+  form.append("folder", folder);
+  form.append("public_id", fileName);
+  form.append("overwrite", "true");
+  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`, {
+    method: "POST",
+    body: form,
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload?.error?.message || "Graph export upload failed");
+  return payload.secure_url;
+}
+
+async function createGraphExports(admin: AdminClient, userId: string, userEmail: string) {
+  const [{ data: entities, error: entityError }, { data: relations, error: relationError }] = await Promise.all([
+    (admin as any).from("ai_knowledge_entities").select("id, name, type, description").eq("user_id", userId),
+    (admin as any)
+      .from("ai_knowledge_relations")
+      .select("source_entity_id, target_entity_id, relation")
+      .eq("user_id", userId),
+  ]);
+  if (entityError || relationError) throw entityError || relationError;
+  const graphEntities = (entities || []) as ExportEntity[];
+  const graphRelations = (relations || []) as ExportRelation[];
+  const zip = new JSZip();
+  for (const [name, note] of buildObsidianNotes(graphEntities, graphRelations)) zip.file(name, note);
+  const [htmlUrl, vaultUrl] = await Promise.all([
+    uploadGraphExport(buildGraphHtml(graphEntities, graphRelations), "graph.html", "text/html", userEmail),
+    uploadGraphExport(
+      await zip.generateAsync({ type: "uint8array" }),
+      "obsidian-vault.zip",
+      "application/zip",
+      userEmail,
+    ),
+  ]);
+  const { error } = await (admin as any).from("ai_knowledge_graph_exports").upsert(
+    { user_id: userId, html_url: htmlUrl, vault_url: vaultUrl, generated_at: new Date().toISOString() },
+    { onConflict: "user_id" },
+  );
+  if (error) throw error;
+  return { html_url: htmlUrl, vault_url: vaultUrl, entity_count: graphEntities.length };
 }
 
 // Best-effort cleanup for both storage generations; a leftover file must not
@@ -321,6 +541,18 @@ Deno.serve(async (req) => {
     const admin = createClient(url, serviceKey);
     const body = await req.json();
     const { action } = body;
+    if (action === "export_graph") {
+      try {
+        const exported = await createGraphExports(admin, user.id, user.email || user.id);
+        await logKnowledgeEvent(admin, user.id, "export_graph", true, exported);
+        return jsonResponse({ ok: true, ...exported });
+      } catch (error) {
+        await logKnowledgeEvent(admin, user.id, "export_graph", false, {
+          error: message(error).slice(0, 500),
+        });
+        return errorResponse(message(error));
+      }
+    }
     if (action === "delete_source") {
       const { data: source } = await (admin as any)
         .from("ai_knowledge_sources")
@@ -335,6 +567,7 @@ Deno.serve(async (req) => {
         .delete()
         .eq("id", source.id);
       if (error) throw error;
+      await updateKnowledgeGraph(admin, user.id, []);
       await logKnowledgeEvent(admin, user.id, "delete_source", true, {
         source_id: source.id,
         source_type: source.source_type,
@@ -363,11 +596,18 @@ Deno.serve(async (req) => {
           source.file_name || source.file_path,
           file,
         );
-        await replaceChunks(admin, source.id, user.id, chunks);
+        const storedChunks = await replaceChunks(admin, source.id, user.id, chunks);
         await (admin as any)
           .from("ai_knowledge_sources")
           .update({ status: "ready", chunk_count: chunks.length, error: null })
           .eq("id", source.id);
+        const graph = await updateKnowledgeGraph(admin, user.id, storedChunks);
+        await logKnowledgeEvent(admin, user.id, "extract_graph", graph.failures === 0, {
+          source_id: source.id,
+          entity_count: graph.entities,
+          relation_count: graph.relations,
+          failed_chunks: graph.failures,
+        });
         await logKnowledgeEvent(admin, user.id, "ingest_source", true, {
           source_id: source.id,
           source_type: source.source_type,
@@ -408,6 +648,7 @@ Deno.serve(async (req) => {
             .from("ai_knowledge_sources")
             .delete()
             .eq("id", existing.id);
+        await updateKnowledgeGraph(admin, user.id, []);
         return jsonResponse({ ok: true, chunk_count: 0 });
       }
       const source =
@@ -430,11 +671,18 @@ Deno.serve(async (req) => {
           .update({ status: "processing", error: null })
           .eq("id", source.id);
         const chunks = chunkProfileText(text);
-        await replaceChunks(admin, source.id, user.id, chunks);
+        const storedChunks = await replaceChunks(admin, source.id, user.id, chunks);
         await (admin as any)
           .from("ai_knowledge_sources")
           .update({ status: "ready", chunk_count: chunks.length, error: null })
           .eq("id", source.id);
+        const graph = await updateKnowledgeGraph(admin, user.id, storedChunks);
+        await logKnowledgeEvent(admin, user.id, "extract_graph", graph.failures === 0, {
+          source_id: source.id,
+          entity_count: graph.entities,
+          relation_count: graph.relations,
+          failed_chunks: graph.failures,
+        });
         await logKnowledgeEvent(admin, user.id, "ingest_profile_text", true, {
           source_id: source.id,
           platform,
@@ -512,11 +760,18 @@ Deno.serve(async (req) => {
             image_url: product.image_url,
           },
         }));
-        await replaceChunks(admin, source.id, user.id, chunks);
+        const storedChunks = await replaceChunks(admin, source.id, user.id, chunks);
         await (admin as any)
           .from("ai_knowledge_sources")
           .update({ status: "ready", chunk_count: chunks.length, error: null })
           .eq("id", source.id);
+        const graph = await updateKnowledgeGraph(admin, user.id, storedChunks);
+        await logKnowledgeEvent(admin, user.id, "extract_graph", graph.failures === 0, {
+          source_id: source.id,
+          entity_count: graph.entities,
+          relation_count: graph.relations,
+          failed_chunks: graph.failures,
+        });
         await logKnowledgeEvent(admin, user.id, "sync_catalog", true, {
           source_id: source.id,
           catalog_id: body.catalog_id,

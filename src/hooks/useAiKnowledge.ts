@@ -14,6 +14,11 @@ export interface AiKnowledgeSource {
   chunk_count: number;
   created_at: string;
 }
+export interface AiKnowledgeGraphExport {
+  html_url: string | null;
+  vault_url: string | null;
+  generated_at: string;
+}
 export function useAiKnowledge() {
   const { user } = useAuth();
   const client = useQueryClient();
@@ -36,7 +41,22 @@ export function useAiKnowledge() {
         : false,
   });
   const refresh = () =>
-    client.invalidateQueries({ queryKey: ["ai-knowledge-sources", user?.id] });
+    Promise.all([
+      client.invalidateQueries({ queryKey: ["ai-knowledge-sources", user?.id] }),
+      client.invalidateQueries({ queryKey: ["ai-knowledge-graph-export", user?.id] }),
+    ]);
+  const graphExport = useQuery({
+    queryKey: ["ai-knowledge-graph-export", user?.id],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("ai_knowledge_graph_exports")
+        .select("html_url, vault_url, generated_at")
+        .maybeSingle();
+      if (error) throw error;
+      return data as AiKnowledgeGraphExport | null;
+    },
+  });
   const invoke = useMutation({
     mutationFn: ({
       action,
@@ -52,6 +72,7 @@ export function useAiKnowledge() {
     sources: sources.data || [],
     isLoading: sources.isLoading,
     error: sources.error,
+    graphExport: graphExport.data || null,
     refetch: sources.refetch,
     invoke,
   };

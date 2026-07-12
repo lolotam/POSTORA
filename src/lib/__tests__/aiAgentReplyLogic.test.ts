@@ -3,9 +3,11 @@ import {
   buildSystemPrompt,
   detectReplyLanguage,
   formatModelRef,
+  formatRelatedFacts,
   parseModelRef,
   pickEscalationAgent,
   resolveEngagementMode,
+  SIMILARITY_FLOOR,
   shouldAiReply,
   waRecipient,
   type EscalationAgentCandidate,
@@ -44,6 +46,27 @@ describe("resolveEngagementMode", () => {
 
   it("falls back to human_then_ai when both values are invalid", () => {
     expect(resolveEngagementMode("bogus", "also-bogus")).toBe("human_then_ai");
+  });
+});
+
+describe("SIMILARITY_FLOOR", () => {
+  it("excludes the highest recorded irrelevant Gemini similarity", () => {
+    expect(SIMILARITY_FLOOR).toBeGreaterThan(0.52);
+    expect(SIMILARITY_FLOOR).toBeLessThan(0.62);
+  });
+});
+
+describe("formatRelatedFacts", () => {
+  it("creates a compact block for graph context", () => {
+    expect(formatRelatedFacts([
+      {
+        source_name: "Starter Plan",
+        source_type: "plan",
+        relation: "includes",
+        target_name: "Analytics",
+        target_type: "feature",
+      },
+    ])).toBe("Related facts:\n- Starter Plan includes Analytics");
   });
 });
 
