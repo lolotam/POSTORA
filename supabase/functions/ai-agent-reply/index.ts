@@ -27,7 +27,9 @@ import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
-const HISTORY_LIMIT = 10;
+// Only the last 4 stored turns are replayed to the model on each reply, to keep
+// the prompt (and token cost) small; older context lives in ai_thread_messages.
+const HISTORY_LIMIT = 4;
 const SIMILARITY_FLOOR = 0.15;
 
 // For WhatsApp, recipient_phone is the customer's phone and phone_number_id
@@ -53,13 +55,26 @@ function errorMessage(error: unknown): string {
 const EMBED_TIMEOUT_MS = 15_000;
 const CHAT_TIMEOUT_MS = 25_000;
 
+// Embeddings run on Gemini's OpenAI-compatible endpoint (OpenAI billing is
+// exhausted). EMBED_MODEL and EMBED_DIMENSIONS MUST stay identical to
+// ai-knowledge-ingest/index.ts: a mismatch silently returns zero RAG matches
+// instead of erroring, because the vectors land in a different space.
+const EMBED_ENDPOINT =
+  "https://generativelanguage.googleapis.com/v1beta/openai/embeddings";
+const EMBED_MODEL = "gemini-embedding-001";
+const EMBED_DIMENSIONS = 1536;
+
 async function embed(texts: string[]): Promise<number[][]> {
-  const key = Deno.env.get("OPENAI_API_KEY");
-  if (!key) throw new Error("OPENAI_API_KEY is not configured");
-  const response = await fetch(`${OPENAI_API}/embeddings`, {
+  const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
+  if (!key) throw new Error("GOOGLE_AI_STUDIO_KEY is not configured");
+  const response = await fetch(EMBED_ENDPOINT, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ model: "text-embedding-3-small", input: texts }),
+    body: JSON.stringify({
+      model: EMBED_MODEL,
+      input: texts,
+      dimensions: EMBED_DIMENSIONS,
+    }),
     signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
   });
   const data = await response.json();

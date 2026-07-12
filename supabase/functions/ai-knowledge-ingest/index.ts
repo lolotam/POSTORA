@@ -28,23 +28,33 @@ function getWhatsAppToken(account: Record<string, unknown>) {
     account.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN") || "",
   );
 }
+// Embeddings run on Gemini's OpenAI-compatible endpoint (OpenAI billing is
+// exhausted). EMBED_MODEL and EMBED_DIMENSIONS MUST stay identical to
+// ai-agent-reply/index.ts: a mismatch silently returns zero RAG matches at
+// query time, because the stored vectors land in a different space.
+const EMBED_ENDPOINT =
+  "https://generativelanguage.googleapis.com/v1beta/openai/embeddings";
+const EMBED_MODEL = "gemini-embedding-001";
+const EMBED_DIMENSIONS = 1536;
+
 async function embed(texts: string[]): Promise<number[][]> {
-  const key = Deno.env.get("OPENAI_API_KEY");
+  const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
   if (!key)
     throw new Error(
-      "OPENAI_API_KEY is not configured; knowledge cannot be indexed.",
+      "GOOGLE_AI_STUDIO_KEY is not configured; knowledge cannot be indexed.",
     );
   const all: number[][] = [];
   for (let index = 0; index < texts.length; index += 64) {
-    const response = await fetch("https://api.openai.com/v1/embeddings", {
+    const response = await fetch(EMBED_ENDPOINT, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "text-embedding-3-small",
+        model: EMBED_MODEL,
         input: texts.slice(index, index + 64),
+        dimensions: EMBED_DIMENSIONS,
       }),
     });
     const data = await response.json();
@@ -107,9 +117,23 @@ async function downloadSourceFile(admin: AdminClient, filePath: string): Promise
   return file;
 }
 
+// Same folder-name derivation as cloudinary-upload — the destroy scope
+// below depends on both sides computing the identical user folder.
+function sanitizeEmailForFolder(email: string): string {
+  return email
+    .toLowerCase()
+    .replace(/@/g, "_at_")
+    .replace(/\./g, "_")
+    .replace(/[^a-z0-9_-]/g, "_");
+}
+
 // Best-effort cleanup for both storage generations; a leftover file must not
 // block deleting the knowledge source row.
-async function deleteSourceFile(admin: AdminClient, filePath: string): Promise<void> {
+async function deleteSourceFile(
+  admin: AdminClient,
+  filePath: string,
+  userEmail: string,
+): Promise<void> {
   try {
     if (!filePath.startsWith(CLOUDINARY_CDN_PREFIX)) {
       if (!/^https?:\/\//.test(filePath)) await admin.storage.from(BUCKET).remove([filePath]);
@@ -123,6 +147,13 @@ async function deleteSourceFile(admin: AdminClient, filePath: string): Promise<v
     const match = filePath.match(/^https:\/\/res\.cloudinary\.com\/[^/]+\/raw\/upload\/v\d+\/(.+)$/);
     if (!cloudName || !apiKey || !apiSecret || !match) return;
     const publicId = decodeURIComponent(match[1]);
+    // file_path is user-writable via RLS: without this scope check a user
+    // could point their row at another user's asset and have the service
+    // role destroy it. Only assets inside the caller's own folder qualify.
+    if (!publicId.startsWith(`media/${sanitizeEmailForFolder(userEmail)}/`)) {
+      console.warn("[ai-knowledge-ingest] Skipping destroy outside caller folder:", publicId);
+      return;
+    }
     const timestamp = Math.floor(Date.now() / 1000);
     const signatureBase = `public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
     const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(signatureBase));
@@ -292,7 +323,7 @@ Deno.serve(async (req) => {
         .eq("user_id", user.id)
         .maybeSingle();
       if (!source) return errorResponse("Knowledge source not found", 404);
-      if (source.file_path) await deleteSourceFile(admin, source.file_path);
+      if (source.file_path) await deleteSourceFile(admin, source.file_path, user.email || "");
       const { error } = await (admin as any)
         .from("ai_knowledge_sources")
         .delete()
