@@ -26,6 +26,7 @@ import {
 } from "./tools.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
+import { embedWithOllama } from "../_shared/ollamaEmbeddings.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 const OPENAI_API = "https://api.openai.com/v1";
@@ -54,35 +55,7 @@ function errorMessage(error: unknown): string {
 // Per-call ceilings keep one slow provider from burning the isolate's wall
 // clock (which kills the request with an opaque 500 and no log row) and let
 // the fallback chain actually get its turn.
-const EMBED_TIMEOUT_MS = 15_000;
 const CHAT_TIMEOUT_MS = 25_000;
-
-// Embeddings run on Gemini's OpenAI-compatible endpoint (OpenAI billing is
-// exhausted). EMBED_MODEL and EMBED_DIMENSIONS MUST stay identical to
-// ai-knowledge-ingest/index.ts: a mismatch silently returns zero RAG matches
-// instead of erroring, because the vectors land in a different space.
-const EMBED_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/openai/embeddings";
-const EMBED_MODEL = "gemini-embedding-001";
-const EMBED_DIMENSIONS = 1536;
-
-async function embed(texts: string[]): Promise<number[][]> {
-  const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
-  if (!key) throw new Error("GOOGLE_AI_STUDIO_KEY is not configured");
-  const response = await fetch(EMBED_ENDPOINT, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: EMBED_MODEL,
-      input: texts,
-      dimensions: EMBED_DIMENSIONS,
-    }),
-    signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.error?.message || "Embedding request failed");
-  return data.data.map((item: { embedding: number[] }) => item.embedding);
-}
 
 // OpenAI-compatible chat-completion endpoints per provider. Providers here
 // must stay in sync with the choices offered in AdminAiAgentSection.tsx.
@@ -460,7 +433,7 @@ Deno.serve(async (req) => {
     let relevantChunks: Array<{ id: string; content: string; similarity: number }> = [];
     let ragError: string | null = null;
     try {
-      const [inboundEmbedding] = await embed([request.inbound_text]);
+      const [inboundEmbedding] = await embedWithOllama([request.inbound_text]);
       const { data: matchedChunks, error: matchError } = await admin.rpc("match_ai_knowledge_chunks", {
         query_embedding: inboundEmbedding,
         p_user_id: request.user_id,
@@ -530,7 +503,7 @@ Deno.serve(async (req) => {
       customerName: cachedConversation?.participant_name || request.recipient_phone,
       adminPhoneNumbers: config.admin_phone_numbers || [],
       dryRun,
-      embed,
+      embed: embedWithOllama,
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
         if (!adminNotifier) return;
         await adminNotifier(recipientPhone, text);

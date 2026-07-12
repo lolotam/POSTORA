@@ -26,6 +26,7 @@ import {
   jsonResponse,
   unauthorizedResponse,
 } from "../_shared/cors.ts";
+import { embedWithOllama } from "../_shared/ollamaEmbeddings.ts";
 
 const BUCKET = "ai-knowledge";
 const GRAPH_API = "https://graph.facebook.com/v21.0";
@@ -40,14 +41,6 @@ function getWhatsAppToken(account: Record<string, unknown>) {
     account.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN") || "",
   );
 }
-// Embeddings run on Gemini's OpenAI-compatible endpoint (OpenAI billing is
-// exhausted). EMBED_MODEL and EMBED_DIMENSIONS MUST stay identical to
-// ai-agent-reply/index.ts: a mismatch silently returns zero RAG matches at
-// query time, because the stored vectors land in a different space.
-const EMBED_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/openai/embeddings";
-const EMBED_MODEL = "gemini-embedding-001";
-const EMBED_DIMENSIONS = 1536;
 const GRAPH_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 const GRAPH_MODEL = "gemini-2.5-flash";
@@ -64,35 +57,6 @@ interface GraphExtractionResult {
   failures: number;
 }
 
-async function embed(texts: string[]): Promise<number[][]> {
-  const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
-  if (!key)
-    throw new Error(
-      "GOOGLE_AI_STUDIO_KEY is not configured; knowledge cannot be indexed.",
-    );
-  const all: number[][] = [];
-  for (let index = 0; index < texts.length; index += 64) {
-    const response = await fetch(EMBED_ENDPOINT, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${key}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: EMBED_MODEL,
-        input: texts.slice(index, index + 64),
-        dimensions: EMBED_DIMENSIONS,
-      }),
-    });
-    const data = await response.json();
-    if (!response.ok)
-      throw new Error(data?.error?.message || "Embedding request failed");
-    all.push(
-      ...data.data.map((item: { embedding: number[] }) => item.embedding),
-    );
-  }
-  return all;
-}
 async function replaceChunks(
   admin: AdminClient,
   sourceId: string,
@@ -105,7 +69,7 @@ async function replaceChunks(
     .eq("source_id", sourceId);
   if (deleteError) throw deleteError;
   if (!chunks.length) return [];
-  const embeddings = await embed(chunks.map((chunk) => chunk.content));
+  const embeddings = await embedWithOllama(chunks.map((chunk) => chunk.content));
   const { data, error } = await (admin as any)
     .from("ai_knowledge_chunks")
     .insert(
