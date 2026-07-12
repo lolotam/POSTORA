@@ -89,7 +89,8 @@ function getSecret(): string {
 
 /**
  * Validate a user-supplied post-OAuth return_to URL.
- * Only allows https URLs whose hostname ends with postora.cloud.
+ * Only allows https URLs on postora.cloud or its subdomains — an unanchored
+ * endsWith would also match attacker domains like evilpostora.cloud.
  * Prevents open-redirect abuse via signed state.
  */
 export function safeReturnTo(
@@ -99,7 +100,11 @@ export function safeReturnTo(
   if (typeof candidate === "string" && candidate.length > 0) {
     try {
       const u = new URL(candidate);
-      if (u.protocol === "https:" && u.hostname.endsWith("postora.cloud")) {
+      const hostname = u.hostname.toLowerCase().replace(/\.$/, "");
+      if (
+        u.protocol === "https:" &&
+        (hostname === "postora.cloud" || hostname.endsWith(".postora.cloud"))
+      ) {
         return candidate;
       }
     } catch {

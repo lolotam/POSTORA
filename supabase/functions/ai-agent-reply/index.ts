@@ -47,6 +47,12 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+// Per-call ceilings keep one slow provider from burning the isolate's wall
+// clock (which kills the request with an opaque 500 and no log row) and let
+// the fallback chain actually get its turn.
+const EMBED_TIMEOUT_MS = 15_000;
+const CHAT_TIMEOUT_MS = 25_000;
+
 async function embed(texts: string[]): Promise<number[][]> {
   const key = Deno.env.get("OPENAI_API_KEY");
   if (!key) throw new Error("OPENAI_API_KEY is not configured");
@@ -54,6 +60,7 @@ async function embed(texts: string[]): Promise<number[][]> {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: "text-embedding-3-small", input: texts }),
+    signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data?.error?.message || "Embedding request failed");
@@ -75,11 +82,20 @@ async function chatCompletion(provider: string, payload: Record<string, unknown>
   const endpoint = PROVIDER_ENDPOINTS[provider] ?? PROVIDER_ENDPOINTS.openai;
   const key = Deno.env.get(endpoint.keyEnv);
   if (!key) throw new Error(`${endpoint.keyEnv} is not configured`);
-  const response = await fetch(endpoint.url, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  let response: Response;
+  try {
+    response = await fetch(endpoint.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "TimeoutError") {
+      throw new Error(`${provider}/${payload.model} timed out after ${CHAT_TIMEOUT_MS / 1000}s`);
+    }
+    throw error;
+  }
   const data = await response.json();
   if (!response.ok) throw new Error(data?.error?.message || "Chat completion failed");
   return data;
