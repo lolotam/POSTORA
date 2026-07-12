@@ -212,21 +212,27 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
 
 // Images become text via a vision model: menus, price lists, and product
 // photos get described/transcribed so they are searchable like any document.
+// Image OCR runs on Gemini (OpenAI billing is exhausted). Uses the same
+// OpenAI-compatible chat endpoint as ai-agent-reply, with a multimodal model.
+const VISION_ENDPOINT =
+  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
+const VISION_MODEL = "gemini-2.5-flash";
+
 async function extractImageText(bytes: Uint8Array, fileName: string): Promise<string> {
-  const key = Deno.env.get("OPENAI_API_KEY");
+  const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
   if (!key)
-    throw new Error("OPENAI_API_KEY is not configured; knowledge cannot be indexed.");
+    throw new Error("GOOGLE_AI_STUDIO_KEY is not configured; knowledge cannot be indexed.");
   const extension = fileName.split(".").pop()?.toLowerCase() || "";
   const mime = IMAGE_MIME_BY_EXTENSION[extension];
   if (!mime) throw new Error(`Unsupported image type: .${extension}`);
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+  const response = await fetch(VISION_ENDPOINT, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${key}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "gpt-4o-mini",
+      model: VISION_MODEL,
       messages: [
         {
           role: "user",
