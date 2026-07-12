@@ -33,7 +33,7 @@ jobs:
         continue-on-error: true
 
       - name: Run tests
-        run: bun test -- --reporter=verbose
+        run: bun test
 
       - name: Upload test results
         if: always()
