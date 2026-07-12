@@ -23,11 +23,3 @@ export function getKnowledgeSourceType(
   const extension = fileName.split(".").pop()?.toLowerCase();
   return (extension && SOURCE_TYPE_BY_EXTENSION[extension]) || null;
 }
-
-export function buildAiKnowledgeStoragePath(
-  userId: string,
-  fileId: string,
-  fileName: string,
-) {
-  return `${userId}/${fileId}-${fileName}`;
-}

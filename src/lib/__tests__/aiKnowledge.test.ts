@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildAiKnowledgeStoragePath,
-  getKnowledgeSourceType,
-} from "@/lib/aiKnowledge";
+import { getKnowledgeSourceType } from "@/lib/aiKnowledge";
 import { validateAiToolName, validateAiToolUrl } from "@/lib/aiTools";
 
 describe("AI knowledge file helpers", () => {
@@ -23,10 +20,6 @@ describe("AI knowledge file helpers", () => {
     expect(getKnowledgeSourceType("archive.zip")).toBeNull();
     expect(getKnowledgeSourceType("presentation.docx")).toBeNull();
   });
-  it("scopes paths to the user and preserves the file name", () =>
-    expect(buildAiKnowledgeStoragePath("user-1", "uuid", "Catalog.xlsx")).toBe(
-      "user-1/uuid-Catalog.xlsx",
-    ));
 });
 
 describe("AI connector tool validation", () => {

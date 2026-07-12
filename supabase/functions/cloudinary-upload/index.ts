@@ -10,7 +10,7 @@ interface UploadRequest {
   fileData?: string; // base64 encoded file (required if no externalUrl)
   externalUrl?: string; // External URL to upload (for stock media)
   fileName: string;
-  fileType: "image" | "video" | "gif";
+  fileType: "image" | "video" | "gif" | "raw"; // raw = documents (CSV/PDF/TXT/…)
   platforms?: string[]; // Platforms this media is being posted to
   socialAccountIds?: string[]; // Social account IDs involved
   subfolder?: string; // Override daily folder with a custom subfolder
@@ -276,7 +276,11 @@ Deno.serve(async (req) => {
       console.warn(`[cloudinary-upload] next_media_seq failed (${seqError?.message}); falling back to timestamp suffix`);
     }
     const sequencePart = seqError || seq == null ? Date.now() : seq;
-    const uniquePublicId = `postora_${dailyFolder}_${userId}_${sequencePart}`;
+    // Raw files are delivered by exact public_id, so it must keep the file
+    // extension (image/video public_ids must NOT have one).
+    const fileExtension = fileName.includes(".") ? fileName.split(".").pop()!.toLowerCase() : "";
+    const rawSuffix = fileType === "raw" && fileExtension ? `.${fileExtension}` : "";
+    const uniquePublicId = `postora_${dailyFolder}_${userId}_${sequencePart}${rawSuffix}`;
     
     console.log(`Uploading ${fileType}: ${fileName} to folder: ${folder}/${uniquePublicId}`);
 
@@ -298,7 +302,7 @@ Deno.serve(async (req) => {
     console.log(`Generated signature for public_id: ${folder}/${uniquePublicId}`);
 
     // Determine upload endpoint
-    const resourceType = fileType === "video" ? "video" : "image";
+    const resourceType = fileType === "video" ? "video" : fileType === "raw" ? "raw" : "image";
     const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
 
     // Prepare form data - Cloudinary accepts both base64 and URLs
@@ -379,7 +383,7 @@ Deno.serve(async (req) => {
       url: result.secure_url,
       publicId: result.public_id,
       cloudName: cloudName,
-      mediaFileId: mediaFileId, // Return the database UUID (null if skipped)
+      mediaFileId: mediaFileId ?? undefined, // Database UUID (omitted if skipped)
       width: result.width,
       height: result.height,
       format: result.format,

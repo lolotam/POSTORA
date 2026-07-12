@@ -20,7 +20,6 @@ import { useAiKnowledge } from "@/hooks/useAiKnowledge";
 import { useWhatsAppCatalog } from "@/hooks/useWhatsAppCatalog";
 import {
   AI_KNOWLEDGE_ACCEPT,
-  buildAiKnowledgeStoragePath,
   getKnowledgeSourceType,
 } from "@/lib/aiKnowledge";
 import { supabase } from "@/integrations/supabase/client";
@@ -79,22 +78,37 @@ export function AiKnowledgeManager({
     }
     setUploading(true);
     try {
-      const path = buildAiKnowledgeStoragePath(
-        user.id,
-        crypto.randomUUID(),
-        file.name,
+      // Knowledge files go to Cloudinary under the user's folder
+      // (media/{user}/ai-knowledge/) as raw assets; ai-knowledge-ingest
+      // downloads them back from the CDN URL stored in file_path.
+      const fileData = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.readAsDataURL(file);
+      });
+      const { data: uploadData, error: uploadError } = await supabase.functions.invoke(
+        "cloudinary-upload",
+        {
+          body: {
+            fileData,
+            fileName: file.name,
+            fileType: "raw",
+            subfolder: "ai-knowledge",
+            skipMediaFiles: true,
+          },
+        },
       );
-      const { error: storageError } = await supabase.storage
-        .from("ai-knowledge")
-        .upload(path, file);
-      if (storageError) throw storageError;
+      if (uploadError || !uploadData?.success) {
+        throw new Error(uploadData?.error || uploadError?.message || "Upload failed");
+      }
       const { data: source, error } = await (supabase as any)
         .from("ai_knowledge_sources")
         .insert({
           user_id: user.id,
           source_type: type,
           file_name: file.name,
-          file_path: path,
+          file_path: uploadData.url,
           status: "pending",
         })
         .select()

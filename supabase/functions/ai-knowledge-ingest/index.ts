@@ -89,6 +89,60 @@ async function setFailed(admin: AdminClient, sourceId: string, error: unknown) {
     .eq("id", sourceId);
 }
 
+// file_path is either a Cloudinary CDN URL (current uploads, stored under
+// media/{user}/ai-knowledge/) or a legacy path in the ai-knowledge storage
+// bucket. Only res.cloudinary.com is fetched — file_path is user-writable
+// via RLS, so any other URL would be an SSRF vector for the service role.
+const CLOUDINARY_CDN_PREFIX = "https://res.cloudinary.com/";
+
+async function downloadSourceFile(admin: AdminClient, filePath: string): Promise<Blob> {
+  if (filePath.startsWith(CLOUDINARY_CDN_PREFIX)) {
+    const response = await fetch(filePath);
+    if (!response.ok) throw new Error(`Knowledge file download failed (${response.status})`);
+    return await response.blob();
+  }
+  if (/^https?:\/\//.test(filePath)) throw new Error("Knowledge file URL is not allowed");
+  const { data: file, error: downloadError } = await admin.storage.from(BUCKET).download(filePath);
+  if (downloadError || !file) throw downloadError || new Error("Knowledge file not found");
+  return file;
+}
+
+// Best-effort cleanup for both storage generations; a leftover file must not
+// block deleting the knowledge source row.
+async function deleteSourceFile(admin: AdminClient, filePath: string): Promise<void> {
+  try {
+    if (!filePath.startsWith(CLOUDINARY_CDN_PREFIX)) {
+      if (!/^https?:\/\//.test(filePath)) await admin.storage.from(BUCKET).remove([filePath]);
+      return;
+    }
+    const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
+    const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
+    const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
+    // URL shape: https://res.cloudinary.com/<cloud>/raw/upload/v<N>/<public_id>
+    // (raw public_ids keep their file extension).
+    const match = filePath.match(/^https:\/\/res\.cloudinary\.com\/[^/]+\/raw\/upload\/v\d+\/(.+)$/);
+    if (!cloudName || !apiKey || !apiSecret || !match) return;
+    const publicId = decodeURIComponent(match[1]);
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signatureBase = `public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
+    const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(signatureBase));
+    const signature = Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    const form = new FormData();
+    form.append("public_id", publicId);
+    form.append("api_key", apiKey);
+    form.append("timestamp", String(timestamp));
+    form.append("signature", signature);
+    await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/raw/destroy`, {
+      method: "POST",
+      body: form,
+    });
+  } catch (error) {
+    console.error("[ai-knowledge-ingest] File cleanup failed:", message(error));
+  }
+}
+
 // Mirrors knowledge operations into system_logs so /admin/logs can track
 // all AI agent calls (category "ai") alongside ai-agent-reply entries.
 async function logKnowledgeEvent(
@@ -238,8 +292,7 @@ Deno.serve(async (req) => {
         .eq("user_id", user.id)
         .maybeSingle();
       if (!source) return errorResponse("Knowledge source not found", 404);
-      if (source.file_path)
-        await admin.storage.from(BUCKET).remove([source.file_path]);
+      if (source.file_path) await deleteSourceFile(admin, source.file_path);
       const { error } = await (admin as any)
         .from("ai_knowledge_sources")
         .delete()
@@ -267,11 +320,7 @@ Deno.serve(async (req) => {
           .from("ai_knowledge_sources")
           .update({ status: "processing", error: null })
           .eq("id", source.id);
-        const { data: file, error: downloadError } = await admin.storage
-          .from(BUCKET)
-          .download(source.file_path);
-        if (downloadError || !file)
-          throw downloadError || new Error("Knowledge file not found");
+        const file = await downloadSourceFile(admin, source.file_path);
         const chunks = await parseSourceFile(
           source.source_type,
           source.file_name || source.file_path,

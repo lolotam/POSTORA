@@ -71,7 +71,18 @@ export const toolDefinitions = [
 ];
 
 async function searchKnowledge(context: ToolContext, query: string): Promise<ToolResult> {
-  const [embedding] = await context.embed([query]);
+  // Embeddings are OpenAI-only; an outage there must degrade to a "no results"
+  // tool answer instead of throwing and killing the whole reply.
+  let embedding: number[];
+  try {
+    [embedding] = await context.embed([query]);
+  } catch (error) {
+    console.error(
+      "[ai-agent-reply] search_knowledge embedding failed:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return { output: "Knowledge search is temporarily unavailable.", retrievedChunkIds: [] };
+  }
   const { data, error } = await context.admin.rpc("match_ai_knowledge_chunks", {
     query_embedding: embedding,
     p_user_id: context.userId,
