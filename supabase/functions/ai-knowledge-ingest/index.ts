@@ -149,7 +149,9 @@ async function extractChunkGraph(content: string) {
     body: JSON.stringify({
       model: GRAPH_MODEL,
       temperature: 0,
-      max_tokens: 1000,
+      // Rich chunks can emit >1000 tokens of JSON; too low a cap truncates the
+      // object mid-string and the chunk's whole graph is lost on parse failure.
+      max_tokens: 2000,
       response_format: { type: "json_object" },
       messages: [{ role: "user", content: graphPrompt(content) }],
     }),
