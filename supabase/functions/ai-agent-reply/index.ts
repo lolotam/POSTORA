@@ -26,7 +26,11 @@ import {
 } from "./tools.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
-import { embedWithOllama } from "../_shared/ollamaEmbeddings.ts";
+import {
+  embedKnowledge,
+  resolveEmbeddingConfig,
+  retrievalRpcName,
+} from "../_shared/knowledgeEmbeddings.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 const OPENAI_API = "https://api.openai.com/v1";
@@ -432,9 +436,13 @@ Deno.serve(async (req) => {
     // without knowledge and record the RAG failure in the logs.
     let relevantChunks: Array<{ id: string; content: string; similarity: number }> = [];
     let ragError: string | null = null;
+    const embeddingConfig = resolveEmbeddingConfig();
     try {
-      const [inboundEmbedding] = await embedWithOllama([request.inbound_text]);
-      const { data: matchedChunks, error: matchError } = await admin.rpc("match_ai_knowledge_chunks", {
+      const [inboundEmbedding] = await embedKnowledge(
+        [request.inbound_text],
+        embeddingConfig,
+      );
+      const { data: matchedChunks, error: matchError } = await admin.rpc(retrievalRpcName(embeddingConfig), {
         query_embedding: inboundEmbedding,
         p_user_id: request.user_id,
         match_count: 6,
@@ -503,7 +511,7 @@ Deno.serve(async (req) => {
       customerName: cachedConversation?.participant_name || request.recipient_phone,
       adminPhoneNumbers: config.admin_phone_numbers || [],
       dryRun,
-      embed: embedWithOllama,
+      embed: (texts: string[]) => embedKnowledge(texts, embeddingConfig),
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
         if (!adminNotifier) return;
         await adminNotifier(recipientPhone, text);

@@ -2,6 +2,16 @@ export const EMBEDDING_MODEL = "bge-m3:latest";
 export const EMBEDDING_DIMENSIONS = 1024;
 const DEFAULT_OLLAMA_BASE_URL = "http://ollama:11434";
 const EMBED_TIMEOUT_MS = 15_000;
+const MAX_ATTEMPTS = 3;
+
+type Fetcher = typeof fetch;
+
+export type OllamaEmbeddingOptions = {
+  baseUrl?: string;
+  model?: string;
+  fetcher?: Fetcher;
+  sleep?: (milliseconds: number) => Promise<void>;
+};
 
 type OllamaEmbedResponse = {
   embeddings?: unknown;
@@ -32,20 +42,55 @@ export function parseOllamaEmbeddings(
   });
 }
 
-export async function embedWithOllama(texts: string[]): Promise<number[][]> {
+function retryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function waitBeforeRetry(
+  attempt: number,
+  sleep: (milliseconds: number) => Promise<void>,
+): Promise<void> {
+  await sleep(250 * 2 ** attempt);
+}
+
+export async function embedWithOllama(
+  texts: string[],
+  options: OllamaEmbeddingOptions = {},
+): Promise<number[][]> {
   if (!texts.length) return [];
 
-  const baseUrl = (Deno.env.get("OLLAMA_BASE_URL") || DEFAULT_OLLAMA_BASE_URL)
+  const baseUrl = (options.baseUrl || Deno.env.get("OLLAMA_BASE_URL") || DEFAULT_OLLAMA_BASE_URL)
     .replace(/\/$/, "");
-  const response = await fetch(`${baseUrl}/api/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model: EMBEDDING_MODEL, input: texts }),
-    signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
-  });
-  const payload = await response.json();
-  if (!response.ok) {
-    throw new Error(payload?.error || "Ollama embedding request failed");
+  const model = options.model || EMBEDDING_MODEL;
+  const fetcher = options.fetcher || fetch;
+  const sleep = options.sleep || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await fetcher(`${baseUrl}/api/embed`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, input: texts, keep_alive: "30m" }),
+        signal: AbortSignal.timeout(EMBED_TIMEOUT_MS),
+      });
+      if (response.ok) {
+        return parseOllamaEmbeddings(await response.json(), texts.length);
+      }
+      if (!retryableStatus(response.status) || attempt === MAX_ATTEMPTS - 1) {
+        throw new Error(`Ollama embedding request failed (HTTP ${response.status})`);
+      }
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("expected")) throw error;
+      const retryableNetworkError =
+        error instanceof TypeError ||
+        (error instanceof DOMException && error.name === "AbortError");
+      if (!retryableNetworkError) throw error;
+      if (attempt === MAX_ATTEMPTS - 1) {
+        throw new Error("Ollama embedding request failed after retries");
+      }
+    }
+    await waitBeforeRetry(attempt, sleep);
   }
-  return parseOllamaEmbeddings(payload, texts.length);
+
+  throw new Error("Ollama embedding request failed after retries");
 }
