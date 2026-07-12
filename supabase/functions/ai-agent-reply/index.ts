@@ -421,16 +421,26 @@ Deno.serve(async (req) => {
       content: row.content || "",
     }));
 
-    const [inboundEmbedding] = await embed([request.inbound_text]);
-    const { data: matchedChunks, error: matchError } = await admin.rpc("match_ai_knowledge_chunks", {
-      query_embedding: inboundEmbedding,
-      p_user_id: request.user_id,
-      match_count: 6,
-    });
-    if (matchError) throw matchError;
-    const relevantChunks = (matchedChunks || []).filter(
-      (chunk: { similarity: number }) => chunk.similarity > SIMILARITY_FLOOR,
-    );
+    // Embeddings are OpenAI-only; a quota/outage there must not silence the
+    // agent when the chat chain uses other providers. Degrade to replying
+    // without knowledge and record the RAG failure in the logs.
+    let relevantChunks: Array<{ id: string; content: string; similarity: number }> = [];
+    let ragError: string | null = null;
+    try {
+      const [inboundEmbedding] = await embed([request.inbound_text]);
+      const { data: matchedChunks, error: matchError } = await admin.rpc("match_ai_knowledge_chunks", {
+        query_embedding: inboundEmbedding,
+        p_user_id: request.user_id,
+        match_count: 6,
+      });
+      if (matchError) throw matchError;
+      relevantChunks = (matchedChunks || []).filter(
+        (chunk: { similarity: number }) => chunk.similarity > SIMILARITY_FLOOR,
+      );
+    } catch (error) {
+      ragError = errorMessage(error).slice(0, 300);
+      console.error("[ai-agent-reply] Knowledge lookup failed, replying without RAG:", ragError);
+    }
     const retrievedChunkIds: string[] = relevantChunks.map((chunk: { id: string }) => chunk.id);
 
     // Operational tools unlock only for verified admin senders (or the
@@ -596,6 +606,7 @@ Deno.serve(async (req) => {
         used_model: usedModel,
         fallback_level: usedFallbackLevel,
         model_errors: modelErrors.length ? modelErrors : null,
+        rag_error: ragError,
         dry_run: dryRun,
       });
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
@@ -649,6 +660,7 @@ Deno.serve(async (req) => {
       used_model: usedModel,
       fallback_level: usedFallbackLevel,
       model_errors: modelErrors.length ? modelErrors : null,
+      rag_error: ragError,
       tool_calls: executedToolCalls.length ? executedToolCalls.map((t) => t.name) : null,
       escalated,
       dry_run: dryRun,
