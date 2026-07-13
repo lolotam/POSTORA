@@ -1,7 +1,12 @@
 export const EMBEDDING_MODEL = "bge-m3:latest";
 export const EMBEDDING_DIMENSIONS = 1024;
 const DEFAULT_OLLAMA_BASE_URL = "http://ollama:11434";
-const EMBED_TIMEOUT_MS = 15_000;
+// bge-m3 on CPU embeds at ~75ms/text; a 32-text batch is ~2.5s, so a single
+// request stays well under the timeout while a whole workbook is embedded over
+// several sequential requests (the worker is a standalone process with no edge
+// wall-clock limit).
+const EMBED_BATCH_SIZE = 32;
+const EMBED_TIMEOUT_MS = 60_000;
 const MAX_ATTEMPTS = 3;
 
 type Fetcher = typeof fetch;
@@ -53,18 +58,24 @@ async function waitBeforeRetry(
   await sleep(250 * 2 ** attempt);
 }
 
-export async function embedWithOllama(
+// A network error or timeout worth retrying. AbortSignal.timeout() raises a
+// DOMException named "TimeoutError" (not "AbortError"), so both must be listed
+// or a slow request would fail on the first attempt instead of retrying.
+function retryableNetworkError(error: unknown): boolean {
+  return (
+    error instanceof TypeError ||
+    (error instanceof DOMException &&
+      (error.name === "AbortError" || error.name === "TimeoutError"))
+  );
+}
+
+async function embedBatch(
   texts: string[],
-  options: OllamaEmbeddingOptions = {},
+  baseUrl: string,
+  model: string,
+  fetcher: Fetcher,
+  sleep: (milliseconds: number) => Promise<void>,
 ): Promise<number[][]> {
-  if (!texts.length) return [];
-
-  const baseUrl = (options.baseUrl || Deno.env.get("OLLAMA_BASE_URL") || DEFAULT_OLLAMA_BASE_URL)
-    .replace(/\/$/, "");
-  const model = options.model || EMBEDDING_MODEL;
-  const fetcher = options.fetcher || fetch;
-  const sleep = options.sleep || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
-
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
     try {
       const response = await fetcher(`${baseUrl}/api/embed`, {
@@ -81,16 +92,37 @@ export async function embedWithOllama(
       }
     } catch (error) {
       if (error instanceof Error && error.message.includes("expected")) throw error;
-      const retryableNetworkError =
-        error instanceof TypeError ||
-        (error instanceof DOMException && error.name === "AbortError");
-      if (!retryableNetworkError) throw error;
-      if (attempt === MAX_ATTEMPTS - 1) {
-        throw new Error("Ollama embedding request failed after retries");
+      if (!retryableNetworkError(error) || attempt === MAX_ATTEMPTS - 1) {
+        if (retryableNetworkError(error)) {
+          throw new Error("Ollama embedding request failed after retries");
+        }
+        throw error;
       }
     }
     await waitBeforeRetry(attempt, sleep);
   }
 
   throw new Error("Ollama embedding request failed after retries");
+}
+
+export async function embedWithOllama(
+  texts: string[],
+  options: OllamaEmbeddingOptions = {},
+): Promise<number[][]> {
+  if (!texts.length) return [];
+
+  const baseUrl = (options.baseUrl || Deno.env.get("OLLAMA_BASE_URL") || DEFAULT_OLLAMA_BASE_URL)
+    .replace(/\/$/, "");
+  const model = options.model || EMBEDDING_MODEL;
+  const fetcher = options.fetcher || fetch;
+  const sleep = options.sleep || ((milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)));
+
+  // Embed in bounded batches so a large workbook can't exceed a single
+  // request's timeout; each batch keeps the model warm for the next.
+  const embeddings: number[][] = [];
+  for (let start = 0; start < texts.length; start += EMBED_BATCH_SIZE) {
+    const batch = texts.slice(start, start + EMBED_BATCH_SIZE);
+    embeddings.push(...await embedBatch(batch, baseUrl, model, fetcher, sleep));
+  }
+  return embeddings;
 }

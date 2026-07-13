@@ -27,9 +27,8 @@ import {
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 import {
-  embedKnowledge,
-  resolveEmbeddingConfig,
-  retrievalRpcName,
+  resolveDualEmbeddingConfig,
+  retrieveKnowledgeChunks,
 } from "../_shared/knowledgeEmbeddings.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v21.0";
@@ -431,25 +430,23 @@ Deno.serve(async (req) => {
       content: row.content || "",
     }));
 
-    // Embeddings are OpenAI-only; a quota/outage there must not silence the
-    // agent when the chat chain uses other providers. Degrade to replying
-    // without knowledge and record the RAG failure in the logs.
+    // Retrieval uses the primary embedding provider and fails over to the
+    // configured fallback provider's vector column when the primary is down. If
+    // both are unavailable, degrade to replying without knowledge and record the
+    // RAG failure in the logs rather than silencing the agent.
     let relevantChunks: Array<{ id: string; content: string; similarity: number }> = [];
     let ragError: string | null = null;
-    const embeddingConfig = resolveEmbeddingConfig();
+    const embeddingConfig = resolveDualEmbeddingConfig();
     try {
-      const [inboundEmbedding] = await embedKnowledge(
-        [request.inbound_text],
+      const matchedChunks = await retrieveKnowledgeChunks(
+        async (name, params) => await admin.rpc(name, params),
+        request.user_id,
+        request.inbound_text,
+        6,
         embeddingConfig,
       );
-      const { data: matchedChunks, error: matchError } = await admin.rpc(retrievalRpcName(embeddingConfig), {
-        query_embedding: inboundEmbedding,
-        p_user_id: request.user_id,
-        match_count: 6,
-      });
-      if (matchError) throw matchError;
-      relevantChunks = (matchedChunks || []).filter(
-        (chunk: { similarity: number }) => chunk.similarity > SIMILARITY_FLOOR,
+      relevantChunks = matchedChunks.filter(
+        (chunk) => chunk.similarity > SIMILARITY_FLOOR,
       );
     } catch (error) {
       ragError = errorMessage(error).slice(0, 300);
@@ -511,8 +508,14 @@ Deno.serve(async (req) => {
       customerName: cachedConversation?.participant_name || request.recipient_phone,
       adminPhoneNumbers: config.admin_phone_numbers || [],
       dryRun,
-      embed: (texts: string[]) => embedKnowledge(texts, embeddingConfig),
-      retrievalRpcName: retrievalRpcName(embeddingConfig),
+      retrieveKnowledge: (query: string, matchCount: number) =>
+        retrieveKnowledgeChunks(
+          async (name, params) => await admin.rpc(name, params),
+          request.user_id,
+          query,
+          matchCount,
+          embeddingConfig,
+        ),
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
         if (!adminNotifier) return;
         await adminNotifier(recipientPhone, text);

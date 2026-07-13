@@ -2,9 +2,9 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as XLSX from "npm:xlsx@0.18.5";
 import { chunkRows, rowToText, type KnowledgeChunk } from "../ai-knowledge-ingest/chunking.ts";
 import {
-  embedKnowledge,
-  embeddingRecord,
-  resolveEmbeddingConfig,
+  dualEmbeddingRecord,
+  embedKnowledgeDual,
+  resolveDualEmbeddingConfig,
 } from "../_shared/knowledgeEmbeddings.ts";
 
 const CLOUDINARY_CDN_PREFIX = "https://res.cloudinary.com/";
@@ -49,65 +49,26 @@ async function processSource(admin: any, source: Source) {
     const file = await downloadSource(admin, source.file_path);
     const chunks = parseExcelChunks(await file.arrayBuffer());
     if (!chunks.length) throw new Error("The workbook contains no indexable rows");
-    const embeddingConfig = resolveEmbeddingConfig();
-    const embeddings = await embedKnowledge(
+    const embeddingConfig = resolveDualEmbeddingConfig();
+    const embeddings = await embedKnowledgeDual(
       chunks.map((chunk) => chunk.content),
       embeddingConfig,
     );
-    if (embeddingConfig.provider === "ollama") {
-      const { data: existingChunks, error: existingError } = await admin
-        .from("ai_knowledge_chunks")
-        .select("id, content")
-        .eq("source_id", source.id);
-      if (existingError) throw existingError;
-      if (existingChunks?.length) {
-        const sameChunks =
-          existingChunks.length === chunks.length &&
-          existingChunks.every(
-            (storedChunk: { content: string }, index: number) =>
-              storedChunk.content === chunks[index].content,
-          );
-        if (!sameChunks) {
-          throw new Error(
-            "Ollama pilot will not replace changed Gemini chunks; use the controlled backfill",
-          );
-        }
-        for (let index = 0; index < existingChunks.length; index += 1) {
-          const { error } = await admin
-            .from("ai_knowledge_chunks")
-            .update(embeddingRecord(embeddingConfig, embeddings[index]))
-            .eq("id", existingChunks[index].id);
-          if (error) throw error;
-        }
-      } else {
-        const { error: insertError } = await admin.from("ai_knowledge_chunks").insert(
-          chunks.map((chunk, index) => ({
-            source_id: source.id,
-            user_id: source.user_id,
-            content: chunk.content,
-            metadata: chunk.metadata,
-            ...embeddingRecord(embeddingConfig, embeddings[index]),
-          })),
-        );
-        if (insertError) throw insertError;
-      }
-    } else {
-      const { error: deleteError } = await admin
-        .from("ai_knowledge_chunks")
-        .delete()
-        .eq("source_id", source.id);
-      if (deleteError) throw deleteError;
-      const { error: insertError } = await admin.from("ai_knowledge_chunks").insert(
-        chunks.map((chunk, index) => ({
-          source_id: source.id,
-          user_id: source.user_id,
-          content: chunk.content,
-          metadata: chunk.metadata,
-          ...embeddingRecord(embeddingConfig, embeddings[index]),
-        })),
-      );
-      if (insertError) throw insertError;
-    }
+    const { error: deleteError } = await admin
+      .from("ai_knowledge_chunks")
+      .delete()
+      .eq("source_id", source.id);
+    if (deleteError) throw deleteError;
+    const { error: insertError } = await admin.from("ai_knowledge_chunks").insert(
+      chunks.map((chunk, index) => ({
+        source_id: source.id,
+        user_id: source.user_id,
+        content: chunk.content,
+        metadata: chunk.metadata,
+        ...dualEmbeddingRecord(embeddingConfig, embeddings, index),
+      })),
+    );
+    if (insertError) throw insertError;
     const { error: updateError } = await admin
       .from("ai_knowledge_sources")
       .update({ status: "ready", chunk_count: chunks.length, error: null })

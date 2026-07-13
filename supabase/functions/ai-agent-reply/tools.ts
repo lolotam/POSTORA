@@ -1,6 +1,7 @@
 // Tool definitions and executors for the AI agent chat loop.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
+import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 
 export interface ToolContext {
   admin: any;
@@ -12,8 +13,9 @@ export interface ToolContext {
   // Test-sandbox runs: read-only tools work normally, but nothing is sent,
   // assigned, or written outside the test conversation.
   dryRun: boolean;
-  embed: (texts: string[]) => Promise<number[][]>;
-  retrievalRpcName: string;
+  // Retrieve knowledge chunks for a query, using the primary embedding provider
+  // and failing over to the configured fallback provider when it is down.
+  retrieveKnowledge: (query: string, matchCount: number) => Promise<KnowledgeChunkMatch[]>;
   sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
 }
 
@@ -72,33 +74,26 @@ export const toolDefinitions = [
 ];
 
 async function searchKnowledge(context: ToolContext, query: string): Promise<ToolResult> {
-  // Embeddings are OpenAI-only; an outage there must degrade to a "no results"
-  // tool answer instead of throwing and killing the whole reply.
-  let embedding: number[];
+  // retrieveKnowledge already fails over to the fallback embedding provider; if
+  // every provider is down, degrade to a "no results" tool answer instead of
+  // throwing and killing the whole reply.
+  let chunks: KnowledgeChunkMatch[];
   try {
-    [embedding] = await context.embed([query]);
+    const matches = await context.retrieveKnowledge(query, 6);
+    chunks = matches.filter((chunk) => chunk.similarity > SIMILARITY_FLOOR);
   } catch (error) {
     console.error(
-      "[ai-agent-reply] search_knowledge embedding failed:",
+      "[ai-agent-reply] search_knowledge retrieval failed:",
       error instanceof Error ? error.message : String(error),
     );
     return { output: "Knowledge search is temporarily unavailable.", retrievedChunkIds: [] };
   }
-  const { data, error } = await context.admin.rpc(context.retrievalRpcName, {
-    query_embedding: embedding,
-    p_user_id: context.userId,
-    match_count: 6,
-  });
-  if (error) throw error;
-  const chunks = (data || []).filter(
-    (chunk: { similarity: number }) => chunk.similarity > SIMILARITY_FLOOR,
-  );
   if (!chunks.length) return { output: "No matching business knowledge found.", retrievedChunkIds: [] };
   return {
     output: chunks
-      .map((chunk: { content: string }, index: number) => `[${index + 1}] ${chunk.content}`)
+      .map((chunk, index) => `[${index + 1}] ${chunk.content}`)
       .join("\n\n"),
-    retrievedChunkIds: chunks.map((chunk: { id: string }) => chunk.id),
+    retrievedChunkIds: chunks.map((chunk) => chunk.id),
   };
 }
 

@@ -27,9 +27,9 @@ import {
   unauthorizedResponse,
 } from "../_shared/cors.ts";
 import {
-  embedKnowledge,
-  embeddingRecord,
-  resolveEmbeddingConfig,
+  dualEmbeddingRecord,
+  embedKnowledgeDual,
+  resolveDualEmbeddingConfig,
 } from "../_shared/knowledgeEmbeddings.ts";
 
 const BUCKET = "ai-knowledge";
@@ -67,54 +67,11 @@ async function replaceChunks(
   userId: string,
   chunks: KnowledgeChunk[],
 ): Promise<StoredChunk[]> {
-  const embeddingConfig = resolveEmbeddingConfig();
-  const embeddings = await embedKnowledge(
+  const embeddingConfig = resolveDualEmbeddingConfig();
+  const embeddings = await embedKnowledgeDual(
     chunks.map((chunk) => chunk.content),
     embeddingConfig,
   );
-
-  if (embeddingConfig.provider === "ollama") {
-    const { data: existingChunks, error: existingError } = await (admin as any)
-      .from("ai_knowledge_chunks")
-      .select("id, content")
-      .eq("source_id", sourceId);
-    if (existingError) throw existingError;
-    if (existingChunks?.length) {
-      const sameChunks =
-        existingChunks.length === chunks.length &&
-        existingChunks.every((storedChunk: StoredChunk, index: number) =>
-          storedChunk.content === chunks[index].content,
-        );
-      if (!sameChunks) {
-        throw new Error(
-          "Ollama pilot will not replace changed Gemini chunks; use the controlled backfill",
-        );
-      }
-      for (let index = 0; index < existingChunks.length; index += 1) {
-        const { error } = await (admin as any)
-          .from("ai_knowledge_chunks")
-          .update(embeddingRecord(embeddingConfig, embeddings[index]))
-          .eq("id", existingChunks[index].id);
-        if (error) throw error;
-      }
-      return existingChunks as StoredChunk[];
-    }
-
-    const { data, error } = await (admin as any)
-      .from("ai_knowledge_chunks")
-      .insert(
-        chunks.map((chunk, index) => ({
-          source_id: sourceId,
-          user_id: userId,
-          content: chunk.content,
-          metadata: chunk.metadata,
-          ...embeddingRecord(embeddingConfig, embeddings[index]),
-        })),
-      )
-      .select("id, content");
-    if (error) throw error;
-    return data as StoredChunk[];
-  }
 
   const { error: deleteError } = await (admin as any)
     .from("ai_knowledge_chunks")
@@ -130,7 +87,7 @@ async function replaceChunks(
         user_id: userId,
         content: chunk.content,
         metadata: chunk.metadata,
-        ...embeddingRecord(embeddingConfig, embeddings[index]),
+        ...dualEmbeddingRecord(embeddingConfig, embeddings, index),
       })),
     )
     .select("id, content");
