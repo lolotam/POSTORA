@@ -29,7 +29,7 @@ function splitRowText(text: string, maxLength: number): string[] {
 
 export function chunkRows(
   rows: Array<{ text: string; sheet: string; row: number }>,
-  maxLength = 1200,
+  maxLength = 3000,
 ): KnowledgeChunk[] {
   const chunks: KnowledgeChunk[] = [];
   let content = "";
