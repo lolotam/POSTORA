@@ -512,6 +512,7 @@ Deno.serve(async (req) => {
       adminPhoneNumbers: config.admin_phone_numbers || [],
       dryRun,
       embed: (texts: string[]) => embedKnowledge(texts, embeddingConfig),
+      retrievalRpcName: retrievalRpcName(embeddingConfig),
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
         if (!adminNotifier) return;
         await adminNotifier(recipientPhone, text);

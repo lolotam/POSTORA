@@ -13,6 +13,7 @@ export interface ToolContext {
   // assigned, or written outside the test conversation.
   dryRun: boolean;
   embed: (texts: string[]) => Promise<number[][]>;
+  retrievalRpcName: string;
   sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
 }
 
@@ -83,7 +84,7 @@ async function searchKnowledge(context: ToolContext, query: string): Promise<Too
     );
     return { output: "Knowledge search is temporarily unavailable.", retrievedChunkIds: [] };
   }
-  const { data, error } = await context.admin.rpc("match_ai_knowledge_chunks", {
+  const { data, error } = await context.admin.rpc(context.retrievalRpcName, {
     query_embedding: embedding,
     p_user_id: context.userId,
     match_count: 6,
