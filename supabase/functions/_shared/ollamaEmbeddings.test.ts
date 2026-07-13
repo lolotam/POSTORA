@@ -3,6 +3,7 @@ import {
   assertThrows,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
+  EMBED_BATCH_SIZE,
   EMBEDDING_DIMENSIONS,
   EMBEDDING_MODEL,
   embedWithOllama,
@@ -72,7 +73,8 @@ Deno.test("embedWithOllama retries transient responses before accepting a valid 
 
 Deno.test("embedWithOllama splits large inputs into bounded batches", async () => {
   const batchSizes: number[] = [];
-  const texts = Array.from({ length: 70 }, (_, i) => `row ${i}`);
+  const count = EMBED_BATCH_SIZE * 2 + 1;
+  const texts = Array.from({ length: count }, (_, i) => `row ${i}`);
 
   const embeddings = await embedWithOllama(texts, {
     fetcher: async (_input, init) => {
@@ -82,9 +84,10 @@ Deno.test("embedWithOllama splits large inputs into bounded batches", async () =
     },
   });
 
-  // 70 texts embed as 32 + 32 + 6, and every vector is returned in order.
-  assertEquals(batchSizes, [32, 32, 6]);
-  assertEquals(embeddings.length, 70);
+  // No request exceeds the batch cap, and every input is embedded exactly once.
+  assertEquals(batchSizes.every((size) => size <= EMBED_BATCH_SIZE), true);
+  assertEquals(batchSizes.reduce((sum, size) => sum + size, 0), count);
+  assertEquals(embeddings.length, count);
 });
 
 Deno.test("embedWithOllama retries an AbortSignal timeout instead of failing immediately", async () => {

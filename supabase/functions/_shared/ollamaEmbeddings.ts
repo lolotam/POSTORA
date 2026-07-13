@@ -1,12 +1,12 @@
 export const EMBEDDING_MODEL = "bge-m3:latest";
 export const EMBEDDING_DIMENSIONS = 1024;
 const DEFAULT_OLLAMA_BASE_URL = "http://ollama:11434";
-// bge-m3 on CPU embeds at ~75ms/text; a 32-text batch is ~2.5s, so a single
-// request stays well under the timeout while a whole workbook is embedded over
-// several sequential requests (the worker is a standalone process with no edge
-// wall-clock limit).
-const EMBED_BATCH_SIZE = 32;
-const EMBED_TIMEOUT_MS = 60_000;
+// Ollama runs CPU-only on a shared, often CPU-saturated host, so per-request
+// latency is spiky. Keep batches small (~a few seconds each even under load)
+// and the timeout very forgiving so one slow batch can't fail a whole workbook;
+// the worker is a standalone process with no edge wall-clock limit.
+export const EMBED_BATCH_SIZE = 8;
+const EMBED_TIMEOUT_MS = 120_000;
 const MAX_ATTEMPTS = 3;
 
 type Fetcher = typeof fetch;
