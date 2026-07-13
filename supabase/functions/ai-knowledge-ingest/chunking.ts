@@ -10,6 +10,23 @@ export function rowToText(row: Record<string, unknown>): string {
     .join("\n");
 }
 
+function splitRowText(text: string, maxLength: number): string[] {
+  const parts: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxLength) {
+    const boundary = Math.max(
+      remaining.lastIndexOf("\n", maxLength - 1),
+      remaining.lastIndexOf(" ", maxLength - 1),
+    );
+    const end = boundary > 0 ? boundary + 1 : maxLength;
+    parts.push(remaining.slice(0, end));
+    remaining = remaining.slice(end);
+  }
+  if (remaining) parts.push(remaining);
+  return parts;
+}
+
 export function chunkRows(
   rows: Array<{ text: string; sheet: string; row: number }>,
   maxLength = 1200,
@@ -28,19 +45,19 @@ export function chunkRows(
     content = "";
   };
   for (const row of rows) {
-    if (!row.text) continue;
-    if (
-      content &&
-      (sheet !== row.sheet || content.length + row.text.length + 2 > maxLength)
-    )
-      push();
-    if (!content) {
-      sheet = row.sheet;
-      startRow = row.row;
+    for (const text of splitRowText(row.text, maxLength)) {
+      if (
+        content &&
+        (sheet !== row.sheet || content.length + text.length + 2 > maxLength)
+      )
+        push();
+      if (!content) {
+        sheet = row.sheet;
+        startRow = row.row;
+      }
+      content += `${content ? "\n\n" : ""}${text}`;
+      endRow = row.row;
     }
-    content += `${content ? "\n\n" : ""}${row.text}`;
-    endRow = row.row;
-    if (row.text.length > maxLength) push();
   }
   push();
   return chunks;
