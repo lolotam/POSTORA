@@ -152,6 +152,14 @@ Deno.serve(async (req) => {
           // internal id is the one thing both this webhook and list_conversations agree on.
           const conversationId = `${account.id}_${senderId}`;
 
+          await recordInboxEvent(adminClient, {
+            account,
+            platform,
+            eventType: "message",
+            externalEventId: event.message.mid || `${senderId}:${event.timestamp}`,
+            payload: event,
+          });
+
           console.log(`[fb-ig-webhook] Received inbound ${platform} message`);
 
           const ruleReplied = await processAutoReplies(adminClient, account, platform, conversationId, senderId, messageText);
@@ -161,6 +169,20 @@ Deno.serve(async (req) => {
           if (!ruleReplied) {
             triggerAiAgentReply(account, platform, conversationId, senderId, messageText)
               .catch((e) => console.error("[fb-ig-webhook] AI agent dispatch failed:", e?.message || e));
+          }
+        }
+
+        for (const change of entry?.changes || []) {
+          const account = await findAccountForRecipient(adminClient, platform, recipientId);
+          const externalEventId = change?.value?.comment_id || change?.value?.id;
+          if (account && externalEventId) {
+            await recordInboxEvent(adminClient, {
+              account,
+              platform,
+              eventType: "comment",
+              externalEventId: String(externalEventId),
+              payload: change,
+            });
           }
         }
       }
@@ -180,6 +202,27 @@ Deno.serve(async (req) => {
 
   return new Response("Method not allowed", { status: 405 });
 });
+
+async function recordInboxEvent(
+  adminClient: any,
+  { account, platform, eventType, externalEventId, payload }: {
+    account: SocialAccountForMessaging;
+    platform: "facebook" | "instagram";
+    eventType: "message" | "comment";
+    externalEventId: string;
+    payload: unknown;
+  },
+) {
+  const { error } = await adminClient.from("social_inbox_events").upsert({
+    user_id: account.user_id,
+    social_account_id: account.id,
+    platform,
+    event_type: eventType,
+    external_event_id: externalEventId,
+    payload,
+  }, { onConflict: "social_account_id,external_event_id" });
+  if (error) console.error("[fb-ig-webhook] Failed to persist inbox event", error.message);
+}
 
 // Returns true when auto-reply rules own this message (a rule matched, or a
 // rule replied recently and the anti-spam cooldown is active), so the AI

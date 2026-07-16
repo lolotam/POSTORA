@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
 import { useSocialAccounts } from "./useSocialAccounts";
+import { useRealtimeQueryInvalidation } from "./useRealtimeQueryInvalidation";
 
 export interface MessagingAccount {
   id: string;
@@ -110,7 +111,8 @@ export function useMessagingAccounts() {
 }
 
 export function useConversations(socialAccountId: string | null, messagingPlatform: string, options?: { silent?: boolean }) {
-  return useQuery({
+  const { session } = useAuth();
+  const query = useQuery({
     queryKey: ["messaging-conversations", socialAccountId, messagingPlatform],
     queryFn: async () => {
       if (!socialAccountId) return [];
@@ -138,10 +140,18 @@ export function useConversations(socialAccountId: string | null, messagingPlatfo
     refetchInterval: 30000,
     retry: options?.silent ? false : 1,
   });
+  useRealtimeQueryInvalidation({
+    table: messagingPlatform === "WHATSAPP" ? "messaging_cache" : "social_inbox_events",
+    userId: session?.user?.id,
+    socialAccountId,
+    queryKey: ["messaging-conversations", socialAccountId, messagingPlatform],
+  });
+  return query;
 }
 
 export function useMessages(conversationId: string | null, socialAccountId: string | null, platform?: string) {
-  return useQuery({
+  const { session } = useAuth();
+  const query = useQuery({
     queryKey: ["messaging-messages", conversationId],
     queryFn: async () => {
       if (!conversationId || !socialAccountId) return [];
@@ -156,6 +166,13 @@ export function useMessages(conversationId: string | null, socialAccountId: stri
     enabled: !!conversationId && !!socialAccountId,
     refetchInterval: 15000,
   });
+  useRealtimeQueryInvalidation({
+    table: platform === "whatsapp" ? "whatsapp_messages" : "social_inbox_events",
+    userId: session?.user?.id,
+    socialAccountId,
+    queryKey: ["messaging-messages", conversationId],
+  });
+  return query;
 }
 
 export function useSendMessage() {

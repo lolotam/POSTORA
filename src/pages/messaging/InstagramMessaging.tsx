@@ -2,16 +2,26 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MessagingInbox } from "@/components/messaging/MessagingInbox";
 import { Camera, Inbox, MessageCircle, Bot, UserCog, Sparkles } from "lucide-react";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
-import { Navigate } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { AgentManager } from "@/components/messaging/AgentManager";
 import { AiAgentManager } from "@/components/messaging/AiAgentManager";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
+import { messagingTabFromSearch } from "@/lib/messagingTab";
 
 export default function InstagramMessaging() {
   const { flags, isLoading } = useFeatureFlags();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = messagingTabFromSearch(searchParams.toString(), "inbox", ["inbox", "comments", "auto-replies", "agents", "ai-agent"]);
+
+  const setTab = (nextTab: string) => {
+    setSearchParams((current) => {
+      current.set("tab", nextTab);
+      return current;
+    });
+  };
 
   if (!isLoading && !flags.msgInstagram) {
     return <Navigate to="/dashboard" replace />;
@@ -31,7 +41,7 @@ export default function InstagramMessaging() {
         </Reveal>
         <GradientDivider tone="rose" />
         <Reveal delay={80}>
-          <Tabs defaultValue="inbox" className="w-full">
+          <Tabs value={tab} onValueChange={setTab} className="w-full">
             <TabsList className="bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1 h-auto [&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-rose-500 [&>[data-state=active]]:via-pink-500 [&>[data-state=active]]:to-fuchsia-500 [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md">
               <TabsTrigger value="inbox" className="gap-1.5 rounded-lg">
                 <Inbox className="w-4 h-4" />

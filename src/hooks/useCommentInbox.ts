@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
+import { useRealtimeQueryInvalidation } from "./useRealtimeQueryInvalidation";
 
 export interface Comment {
   id: string;
@@ -140,7 +141,8 @@ function throwIfCommentManagerError(data: any): void {
 }
 
 export function useComments({ platform, socialAccountId, pageId, igUserId, enabled = true }: UseCommentsOptions) {
-  return useQuery({
+  const { session } = useAuth();
+  const query = useQuery({
     queryKey: ["comments", platform, socialAccountId],
     queryFn: async () => {
       const action = platform === "facebook" ? "get_page_comments" : "get_ig_comments";
@@ -158,7 +160,15 @@ export function useComments({ platform, socialAccountId, pageId, igUserId, enabl
     },
     enabled: enabled && !!socialAccountId && (!!pageId || !!igUserId),
     staleTime: 60 * 1000,
+    refetchInterval: 30_000,
   });
+  useRealtimeQueryInvalidation({
+    table: "social_inbox_events",
+    userId: session?.user?.id,
+    socialAccountId,
+    queryKey: ["comments", platform, socialAccountId],
+  });
+  return query;
 }
 
 export function useReplyComment() {

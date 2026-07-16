@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { formatDistanceToNow } from "date-fns";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
+import { messagingTabFromSearch } from "@/lib/messagingTab";
 
 interface ThreadsAccountOption {
   id: string;
@@ -74,6 +75,8 @@ function useThreadsAccountOptions() {
 
 export default function ThreadsMentions() {
   const { data: accounts = [], isLoading: accountsLoading } = useThreadsAccountOptions();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = messagingTabFromSearch(searchParams.toString(), "mentions", ["mentions", "replies"]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -202,7 +205,7 @@ export default function ThreadsMentions() {
         {/* Tabs: Mentions | Replies */}
         {!noAccounts && (
           <ThreadsAuthorAvatarProvider accountId={selectedAccountId}>
-          <Tabs defaultValue="mentions" className="w-full">
+          <Tabs value={tab} onValueChange={(nextTab) => setSearchParams({ tab: nextTab })} className="w-full">
             <TabsList className="bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1 h-auto [&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-indigo-500 [&>[data-state=active]]:via-violet-500 [&>[data-state=active]]:to-purple-500 [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md">
               <TabsTrigger value="mentions" className="rounded-lg">
                 <AtSign className="h-4 w-4 mr-1.5" />
