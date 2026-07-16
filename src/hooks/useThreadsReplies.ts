@@ -213,6 +213,7 @@ export function useThreadReplies(accountId: string | null, mediaId: string | nul
     queryKey: keys.threadReplies(accountId, mediaId),
     enabled: !!accountId && !!mediaId,
     placeholderData: keepPreviousData,
+    refetchInterval: 15_000,
     queryFn: async () => {
       const res = await invokeEdge<{ data: ThreadsReply[] }>("threads-replies", {
         action: "get_thread_replies",
@@ -247,6 +248,7 @@ export function useUserReplies(accountId: string | null) {
     queryKey: keys.userReplies(accountId),
     enabled: !!accountId,
     placeholderData: keepPreviousData,
+    refetchInterval: 15_000,
     queryFn: async () => {
       const res = await invokeEdge<{ data: ThreadsReply[] }>("threads-replies", {
         action: "get_user_replies",

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
+import { useRealtimeQueryInvalidation } from "./useRealtimeQueryInvalidation";
 
 export type ThreadsMentionStatus = "new" | "read" | "archived" | "replied";
 export type ThreadsMentionSentiment = "positive" | "neutral" | "negative" | "unknown";
@@ -142,6 +143,12 @@ export function useThreadsMentions(
   });
 
   const mentions = query.data || [];
+  useRealtimeQueryInvalidation({
+    table: "threads_mentions",
+    userId,
+    socialAccountId,
+    queryKey: ["threads-mentions", socialAccountId, userId],
+  });
   const unreadCount = mentions.filter((m) => m.status === "new").length;
   const lastSyncedAt = mentions.reduce<string | null>((acc, m) => {
     if (!m.last_synced_at) return acc;
