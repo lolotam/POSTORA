@@ -27,6 +27,16 @@ Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes
   - **Binary Property** — a file from a previous n8n node
   - **URL** — download from a public web address (http/https)
   - **Media File ID** — look up & re-attach a file already in Postora (no re-upload)
+- **Get** — Retrieve one uploaded media file by its UUID.
+
+### Webhook
+- **Register** — Register an HTTPS callback URL for Postora events. Leave events empty to receive the default event set.
+- **List** — List registered webhook subscriptions.
+- **Test** — Send a test event to a registered webhook subscription.
+- **Delete** — Remove a webhook subscription.
+
+### Postora Trigger
+- **Post Event** — Start a workflow when Postora sends a selected post event. n8n registers and removes the callback automatically when the workflow is activated or deactivated.
 
 ### Account
 - **List** — List all connected social media accounts

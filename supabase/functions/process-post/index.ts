@@ -86,6 +86,7 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 // See: supabase/functions/_shared/platforms/ for reusable platform utilities
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
+import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -774,12 +775,17 @@ async function sendWebhookNotifications(
         headers["X-Postora-Signature"] = `sha256=${signatureHex}`;
       }
 
-      await fetch(perRequestWebhook.url, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-      console.log("Per-request webhook sent successfully");
+      const validationError = validateWebhookTarget(perRequestWebhook.url);
+      if (validationError) {
+        console.warn(`Skipping unsafe per-request webhook: ${perRequestWebhook.url}`);
+      } else {
+        await postWebhook(perRequestWebhook.url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload)
+        });
+        console.log("Per-request webhook sent successfully");
+      }
     } catch (webhookError) {
       console.error("Failed to send per-request webhook:", webhookError);
     }
@@ -809,8 +815,13 @@ async function sendWebhookNotifications(
       if (!webhook.events.includes(event) && !webhook.events.includes("*")) continue;
 
       try {
+        const validationError = validateWebhookTarget(webhook.webhook_url);
+        if (validationError) {
+          console.warn(`Skipping unsafe registered webhook: ${webhook.webhook_url}`);
+          continue;
+        }
         console.log(`Sending to registered webhook: ${webhook.webhook_url}`);
-        await fetch(webhook.webhook_url, {
+        await postWebhook(webhook.webhook_url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

@@ -3,6 +3,7 @@
 // Mirrors whatsapp-webhook patterns. verify_jwt = false (public endpoint).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { postWebhook } from "../_shared/webhookSecurity.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -171,7 +172,7 @@ async function dispatchN8nEvent(
       const events: string[] = Array.isArray(wh.events) ? wh.events : [];
       if (!events.includes(event) && !events.includes("*")) continue;
       try {
-        await fetch(wh.webhook_url, {
+        await postWebhook(wh.webhook_url, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Postora-Event": event },
           body: JSON.stringify(payload),
