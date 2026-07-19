@@ -5,6 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Platform } from "@/lib/types";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { getPostActivityTimestamp } from "@/lib/postActivity";
 import { statusConfig, buildPostUrl } from "./historyUtils";
 import { openExternalPostUrl } from "@/lib/openExternalPostUrl";
 import {
@@ -226,7 +227,7 @@ export function HistoryTable({
               />
             </TableHead>
             <TableHead className="w-28">Type</TableHead>
-            <TableHead className="w-44">Date & Time</TableHead>
+            <TableHead className="w-44">Activity Date & Time</TableHead>
             
             <TableHead className="w-40">Account</TableHead>
             <TableHead className="w-28">Platform</TableHead>
@@ -308,7 +309,7 @@ export function HistoryTable({
                   </div>
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                  {format(new Date(post.created_at), "MMM dd, yyyy HH:mm:ss")}
+                  {format(new Date(getPostActivityTimestamp(post)), "MMM dd, yyyy HH:mm:ss")}
                 </TableCell>
                 <TableCell>
                   {uniqueAccounts.length > 0 ? (

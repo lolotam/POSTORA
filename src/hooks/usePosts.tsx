@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
 import { Platform } from "@/lib/types";
+import { getPostActivityTimestamp } from "@/lib/postActivity";
 
 export interface PostMetadata {
   selected_account_ids?: string[];
@@ -90,25 +91,9 @@ export function usePostsWithResults(limit?: number) {
       if (postsError) throw postsError;
       if (!posts || posts.length === 0) return [];
 
-      // Re-sort client-side by "most recent activity" so posts that were just
-      // published, scheduled, or retried surface at the top of /history — even
-      // if they were originally created days/weeks ago. We can't do this in
-      // PostgREST directly because there's no updated_at column and no
-      // COALESCE support in .order(). Falls back through:
-      //   posted_at  → scheduled_at → created_at
-      const sortedPosts = [...posts].sort((a, b) => {
-        const aTime = Math.max(
-          a.posted_at ? new Date(a.posted_at).getTime() : 0,
-          a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0,
-          a.created_at ? new Date(a.created_at).getTime() : 0
-        );
-        const bTime = Math.max(
-          b.posted_at ? new Date(b.posted_at).getTime() : 0,
-          b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0,
-          b.created_at ? new Date(b.created_at).getTime() : 0
-        );
-        return bTime - aTime;
-      });
+      const sortedPosts = [...posts].sort(
+        (a, b) => getPostActivityTimestamp(b) - getPostActivityTimestamp(a)
+      );
 
       const postIds = sortedPosts.map((p) => p.id);
 
