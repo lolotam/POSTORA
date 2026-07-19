@@ -679,6 +679,54 @@ function isVideoUrl(url: string): boolean {
 }
 
 /**
+ * Compress a Cloudinary image URL on-the-fly so it stays under strict
+ * platform limits (Threads 8MB, Instagram 8MB, etc.).
+ *
+ * Cloudinary accepts transformation segments in the URL path:
+ *   https://res.cloudinary.com/<cloud>/image/upload/<transform>/<version>/<path>
+ *
+ * We inject `q_80,f_jpg` which:
+ *   - converts PNG/WEBP → JPEG (much smaller for photographic content)
+ *   - applies 80% quality (visually lossless, ~90-95% size reduction for large PNGs)
+ *
+ * For URLs that already have a transformation segment, we leave them alone.
+ * Non-Cloudinary URLs are returned unchanged.
+ *
+ * Example: 8.27MB PNG → 0.31MB JPEG (96% reduction).
+ */
+function compressCloudinaryImageUrl(url: string): string {
+  if (!url || typeof url !== "string") return url;
+  if (!url.includes("res.cloudinary.com")) return url;
+  if (!url.includes("/image/upload/")) return url;
+
+  // Already has a transformation segment (anything other than a version
+  // immediately after /image/upload/). Detect by checking if the segment
+  // right after /image/upload/ starts with "v" followed by digits.
+  const afterUpload = url.split("/image/upload/")[1] || "";
+  // If the first path segment looks like "v1234567890" (pure version), there
+  // is no transformation yet — safe to inject one.
+  const firstSegment = afterUpload.split("/")[0] || "";
+  const hasExistingTransform = !/^v\d+$/.test(firstSegment) && firstSegment !== "";
+  if (hasExistingTransform) return url;
+
+  // Inject `q_80,f_jpg` between /image/upload/ and the version path.
+  // Using f_jpg forces JPEG output; q_80 is quality 80 (good balance).
+  return url.replace(
+    "/image/upload/",
+    "/image/upload/q_80,f_jpg/"
+  );
+}
+
+/**
+ * Apply platform-safe image compression to a list of media URLs.
+ * Videos are left untouched. Images get Cloudinary compression when available.
+ */
+function compressMediaUrlsForPlatform(urls: string[]): string[] {
+  if (!Array.isArray(urls)) return urls;
+  return urls.map((url) => (isVideoUrl(url) ? url : compressCloudinaryImageUrl(url)));
+}
+
+/**
  * Check if a URL points to an image file
  */
 function isImageUrl(url: string): boolean {
@@ -5563,7 +5611,12 @@ async function postToThreads(
 
   // Handle media
   if (mediaUrls.length > 0) {
-    const firstMediaUrl = mediaUrls[0];
+    // Threads has an 8MB per-image hard limit and rejects the whole carousel
+    // (error 4279004 "Invalid carousel children") if any single child exceeds
+    // it. Cloudinary URLs can be compressed on-the-fly to JPEG q_80 which
+    // typically reduces PNGs by ~95% with no visible quality loss.
+    const safeMediaUrls = compressMediaUrlsForPlatform(mediaUrls);
+    const firstMediaUrl = safeMediaUrls[0];
     const isVideo = isVideoUrl(firstMediaUrl);
 
     if (mediaUrls.length === 1) {
@@ -5580,7 +5633,7 @@ async function postToThreads(
       containerParams.media_type = "CAROUSEL";
       const childIds: string[] = [];
 
-      for (const mediaUrl of mediaUrls.slice(0, 10)) {
+      for (const mediaUrl of safeMediaUrls.slice(0, 10)) {
         const isChildVideo = isVideoUrl(mediaUrl);
         const childParams: Record<string, string> = {
           access_token: accessToken,
@@ -5604,11 +5657,44 @@ async function postToThreads(
         const childData = await childResponse.json();
 
         if (childData.error) {
-          console.error("Threads: Child container error:", childData.error.message);
+          console.error(
+            "Threads: Child container error:",
+            childData.error.message,
+            "| media_url:",
+            mediaUrl.slice(0, 100),
+            "| error_subcode:",
+            childData.error.error_subcode
+          );
           continue;
         }
 
         childIds.push(childData.id);
+      }
+
+      // If no children were created successfully, fail fast with a clear
+      // error instead of letting Threads return the generic "Invalid
+      // parameter" message.
+      if (childIds.length === 0) {
+        throw new Error(
+          "Threads rejected all carousel child containers. This usually means " +
+          "every image exceeded Threads' 8MB per-image limit or used an " +
+          "unsupported format. Original media URLs: " +
+          safeMediaUrls.slice(0, 3).map((u) => u.slice(0, 80)).join(", ")
+        );
+      }
+
+      // If some children failed but not all, warn but proceed — Threads
+      // will still publish a partial carousel.
+      if (childIds.length < safeMediaUrls.length) {
+        console.warn(
+          `Threads: ${safeMediaUrls.length - childIds.length} carousel child(ren) ` +
+          `failed; publishing partial carousel with ${childIds.length} item(s).`
+        );
+        threadsWarnings.push(
+          `${safeMediaUrls.length - childIds.length} of ${safeMediaUrls.length} ` +
+          `carousel images were rejected by Threads (likely over 8MB or unsupported ` +
+          `format). Published with ${childIds.length} image(s) instead.`
+        );
       }
 
       containerParams.children = childIds.join(",");
