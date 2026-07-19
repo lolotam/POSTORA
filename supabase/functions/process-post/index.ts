@@ -87,6 +87,8 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
+import { getMissingMediaFileIds } from "../_shared/post-media.ts";
+import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -1234,6 +1236,14 @@ Deno.serve(async (req) => {
 
       mediaFiles = files || [];
       console.log("Media files:", mediaFiles.length);
+
+      const missingMediaFileIds = getMissingMediaFileIds(post.media_file_ids, mediaFiles);
+      if (missingMediaFileIds.length > 0) {
+        const message = `Post media is unavailable. Re-upload all ${post.media_file_ids.length} media item(s) before retrying.`;
+        console.error(message, { postId: post_id, missingMediaFileIds });
+        await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+        return createErrorResponse(message, 422);
+      }
     }
 
     // Generate URLs for media files
@@ -3069,7 +3079,7 @@ async function optimizeUrlForInstagram(url: string): Promise<string> {
 
     // Pre-flight HEAD check to verify URL is accessible
     try {
-      const headRes = await fetch(optimized, { method: "HEAD" });
+      const headRes = await fetchWithTimeout(optimized, { method: "HEAD" }, 8000);
       if (!headRes.ok) {
         console.warn(`Instagram pre-flight HEAD check failed (${headRes.status}), using original URL`);
         return url;
@@ -3103,8 +3113,10 @@ async function pollContainerStatus(
   delayMs = 2000
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetch(
-      `https://graph.facebook.com/v18.0/${containerId}?fields=status_code&access_token=${accessToken}`
+    const response = await fetchWithTimeout(
+      `https://graph.facebook.com/v18.0/${containerId}?fields=status_code&access_token=${accessToken}`,
+      {},
+      15000,
     );
     const data = await response.json();
 
@@ -3145,7 +3157,7 @@ async function publishInstagramMedia(
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const publishResponse = await fetch(
+    const publishResponse = await fetchWithTimeout(
       `https://graph.facebook.com/v18.0/${igUserId}/media_publish`,
       {
         method: "POST",
@@ -3154,7 +3166,8 @@ async function publishInstagramMedia(
           creation_id: creationId,
           access_token: accessToken,
         }),
-      }
+      },
+      20000,
     );
 
     const publishData = await publishResponse.json();
@@ -3362,11 +3375,11 @@ async function postToInstagram(
       locationDebug.media_container_location_id_sent = locationAttempted ? String(body.location_id) : null;
     }
     const doFetch = async (b: Record<string, unknown>) => {
-      const r = await fetch(endpoint, {
+      const r = await fetchWithTimeout(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(b),
-      });
+      }, 20000);
       return await r.json();
     };
     let data = await doFetch(body);

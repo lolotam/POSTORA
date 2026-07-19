@@ -34,8 +34,8 @@ export function useHistoryActions() {
     // Retry media
     retryMediaDialogPost: retry.retryMediaDialogPost,
     setRetryMediaDialogPost: retry.setRetryMediaDialogPost,
-    retryMediaFile: retry.retryMediaFile,
-    setRetryMediaFile: retry.setRetryMediaFile,
+    retryMediaFiles: retry.retryMediaFiles,
+    setRetryMediaFiles: retry.setRetryMediaFiles,
     retryMediaUploading: retry.retryMediaUploading,
     retryMediaInputRef: retry.retryMediaInputRef,
 

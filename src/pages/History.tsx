@@ -522,8 +522,8 @@ export default function History() {
       <RetryMediaDialog
         post={actions.retryMediaDialogPost as any}
         onClose={() => actions.setRetryMediaDialogPost(null)}
-        mediaFile={actions.retryMediaFile}
-        onMediaChange={actions.setRetryMediaFile}
+        mediaFiles={actions.retryMediaFiles}
+        onMediaChange={actions.setRetryMediaFiles}
         onRetry={actions.handleRetryWithNewMedia}
         isUploading={actions.retryMediaUploading}
       />
