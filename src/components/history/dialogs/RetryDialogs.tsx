@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
-import { CheckCircle2, FileVideo, Loader2, RefreshCw, Upload } from "lucide-react";
+import { CheckCircle2, FileImage, FileVideo, Loader2, RefreshCw, Upload } from "lucide-react";
 
 interface AccountInfo {
   username: string | null;
@@ -26,6 +26,7 @@ interface PlatformResult {
 
 interface PostData {
   id: string;
+  media_file_ids?: string[] | null;
   platformResults?: PlatformResult[];
 }
 
@@ -144,8 +145,8 @@ export function RetryAccountDialog({
 interface RetryMediaDialogProps {
   post: PostData | null;
   onClose: () => void;
-  mediaFile: File | null;
-  onMediaChange: (file: File | null) => void;
+  mediaFiles: File[];
+  onMediaChange: (files: File[]) => void;
   onRetry: () => void;
   isUploading: boolean;
 }
@@ -153,23 +154,27 @@ interface RetryMediaDialogProps {
 export function RetryMediaDialog({
   post,
   onClose,
-  mediaFile,
+  mediaFiles,
   onMediaChange,
   onRetry,
   isUploading,
 }: RetryMediaDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const isCarousel = (post?.media_file_ids?.length || 0) > 1;
+  const selectedMediaLabel = isCarousel ? `${mediaFiles.length} image${mediaFiles.length === 1 ? "" : "s"} selected` : mediaFiles[0]?.name;
 
   return (
     <Dialog open={!!post} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <FileVideo className="w-5 h-5" />
-            Retry with New Video
+            {isCarousel ? <FileImage className="w-5 h-5" /> : <FileVideo className="w-5 h-5" />}
+            {isCarousel ? "Replace Carousel Media" : "Retry with New Video"}
           </DialogTitle>
           <DialogDescription>
-            Upload a new vertical 9:16 video (720×1280 or higher).
+            {isCarousel
+              ? "Upload 2 to 10 replacement images. They will replace the unavailable carousel media."
+              : "Upload a new vertical 9:16 video (720×1280 or higher)."}
           </DialogDescription>
         </DialogHeader>
 
@@ -178,7 +183,7 @@ export function RetryMediaDialog({
             <div
               className={cn(
                 "border-2 border-dashed rounded-lg p-6 text-center transition-colors cursor-pointer",
-                mediaFile
+                mediaFiles.length > 0
                   ? "border-primary/50 bg-primary/5"
                   : "border-border hover:border-primary/30 hover:bg-muted/50"
               )}
@@ -187,27 +192,27 @@ export function RetryMediaDialog({
               <input
                 ref={inputRef}
                 type="file"
-                accept="video/mp4,video/quicktime,video/mov"
+                accept={isCarousel ? "image/jpeg,image/png,image/webp" : "video/mp4,video/quicktime,video/mov"}
+                multiple={isCarousel}
                 className="hidden"
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  onMediaChange(file || null);
+                  onMediaChange(Array.from(e.target.files || []));
                 }}
               />
 
-              {mediaFile ? (
+              {mediaFiles.length > 0 ? (
                 <div className="space-y-2">
-                  <FileVideo className="w-10 h-10 mx-auto text-primary" />
-                  <p className="font-medium">{mediaFile.name}</p>
+                  {isCarousel ? <FileImage className="w-10 h-10 mx-auto text-primary" /> : <FileVideo className="w-10 h-10 mx-auto text-primary" />}
+                  <p className="font-medium">{selectedMediaLabel}</p>
                   <p className="text-sm text-muted-foreground">
-                    {(mediaFile.size / 1024 / 1024).toFixed(2)} MB
+                    {(mediaFiles.reduce((total, file) => total + file.size, 0) / 1024 / 1024).toFixed(2)} MB total
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2">
                   <Upload className="w-10 h-10 mx-auto text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">
-                    Click to select a video file
+                    {isCarousel ? "Click to select 2 to 10 image files" : "Click to select a video file"}
                   </p>
                 </div>
               )}
@@ -219,7 +224,7 @@ export function RetryMediaDialog({
                 className="flex-1"
                 onClick={() => {
                   onClose();
-                  onMediaChange(null);
+                  onMediaChange([]);
                 }}
                 disabled={isUploading}
               >
@@ -228,7 +233,7 @@ export function RetryMediaDialog({
               <Button
                 className="flex-1"
                 onClick={onRetry}
-                disabled={isUploading || !mediaFile}
+                disabled={isUploading || mediaFiles.length === 0 || (isCarousel && (mediaFiles.length < 2 || mediaFiles.length > 10))}
               >
                 {isUploading ? (
                   <>
@@ -236,7 +241,7 @@ export function RetryMediaDialog({
                     Uploading...
                   </>
                 ) : (
-                  "Retry with New Video"
+                  isCarousel ? "Retry with Replacement Images" : "Retry with New Video"
                 )}
               </Button>
             </div>

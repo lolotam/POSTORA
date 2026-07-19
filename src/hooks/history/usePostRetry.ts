@@ -23,7 +23,7 @@ export function usePostRetry() {
 
   // Retry with media
   const [retryMediaDialogPost, setRetryMediaDialogPost] = useState<PostWithResults | null>(null);
-  const [retryMediaFile, setRetryMediaFile] = useState<File | null>(null);
+  const [retryMediaFiles, setRetryMediaFiles] = useState<File[]>([]);
   const [retryMediaUploading, setRetryMediaUploading] = useState(false);
   const retryMediaInputRef = useRef<HTMLInputElement>(null);
 
@@ -34,6 +34,8 @@ export function usePostRetry() {
     post.platformResults?.some(
       (r) => r.status === "failed" && r.platform === "tiktok" && r.error_message &&
         (r.error_message.includes("picture_size_check_failed") || r.error_message.includes("video dimensions") || r.error_message.includes("resolution"))
+    ) || post.platformResults?.some(
+      (r) => r.status === "failed" && /Post media is unavailable|Only photo or video can be accepted as media type/i.test(r.error_message || "")
     );
 
   const openRetryDialog = (post: PostWithResults) => {
@@ -44,7 +46,7 @@ export function usePostRetry() {
 
   const openRetryMediaDialog = (post: PostWithResults) => {
     setRetryMediaDialogPost(post);
-    setRetryMediaFile(null);
+    setRetryMediaFiles([]);
   };
 
   const handleRetrySinglePlatform = async (postId: string, platformPostId: string, platform: string, accountId?: string | null) => {
@@ -97,34 +99,36 @@ export function usePostRetry() {
   };
 
   const handleRetryWithNewMedia = async () => {
-    if (!retryMediaDialogPost || !retryMediaFile) return;
+    if (!retryMediaDialogPost || retryMediaFiles.length === 0) return;
     setRetryMediaUploading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const fileExt = retryMediaFile.name.split(".").pop() || "bin";
-      const fileName = `${user.id}/${await buildPostoraFileName(user.id, fileExt)}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(fileName, retryMediaFile, { cacheControl: "3600", upsert: false });
-      if (uploadError) throw uploadError;
+      const newMediaFiles = await Promise.all(retryMediaFiles.map(async (retryMediaFile) => {
+        const fileExt = retryMediaFile.name.split(".").pop() || "bin";
+        const fileName = `${user.id}/${await buildPostoraFileName(user.id, fileExt)}`;
+        const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(fileName, retryMediaFile, { cacheControl: "3600", upsert: false });
+        if (uploadError) throw uploadError;
 
-      const isGif = retryMediaFile.type === "image/gif" || retryMediaFile.name.toLowerCase().endsWith(".gif");
-      const fileType = retryMediaFile.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
-
-      const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
-        user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
-      }).select().single();
-      if (mediaError) throw mediaError;
+        const isGif = retryMediaFile.type === "image/gif" || retryMediaFile.name.toLowerCase().endsWith(".gif");
+        const fileType = retryMediaFile.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
+        const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
+          user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
+        }).select().single();
+        if (mediaError) throw mediaError;
+        return newMediaFile;
+      }));
 
       await deleteFailedPlatformPosts(retryMediaDialogPost.id);
-      const { error: updateError } = await supabase.from("posts").update({ media_file_ids: [newMediaFile.id], status: "pending" }).eq("id", retryMediaDialogPost.id);
+      const { error: updateError } = await supabase.from("posts").update({ media_file_ids: newMediaFiles.map((mediaFile) => mediaFile.id), status: "pending" }).eq("id", retryMediaDialogPost.id);
       if (updateError) throw updateError;
 
       await invokeProcessPost(retryMediaDialogPost.id);
-      toast({ title: "Retry initiated with new media", description: "Your post is being processed with the new video file." });
+      toast({ title: "Retry initiated with new media", description: `Your post is being processed with ${newMediaFiles.length} replacement media file(s).` });
       invalidatePostQueries(queryClient);
       setRetryMediaDialogPost(null);
-      setRetryMediaFile(null);
+      setRetryMediaFiles([]);
     } catch (error) {
       console.error("Retry with media error:", error);
       toast({ title: "Retry failed", description: error instanceof Error ? error.message : "Failed to retry post", variant: "destructive" });
@@ -153,7 +157,7 @@ export function usePostRetry() {
   return {
     retryingPostId, bulkRetrying, bulkRetryProgress,
     retryDialogPost, setRetryDialogPost, retrySelectedAccountIds, retryLoading,
-    retryMediaDialogPost, setRetryMediaDialogPost, retryMediaFile, setRetryMediaFile, retryMediaUploading, retryMediaInputRef,
+    retryMediaDialogPost, setRetryMediaDialogPost, retryMediaFiles, setRetryMediaFiles, retryMediaUploading, retryMediaInputRef,
     handleRetryFailed, handleRetrySinglePlatform, handleRetryWithAccounts, handleRetryWithNewMedia,
     handleBulkRetry, openRetryMediaDialog, isTikTokMediaError, toggleRetryAccountSelection,
   };

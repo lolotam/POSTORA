@@ -275,7 +275,7 @@ export function PostCard({
                         data-testid="post-menu-retry-media"
                       >
                         <Upload className="w-4 h-4" />
-                        Retry with New Video
+                          {(post.media_file_ids?.length || 0) > 1 ? "Replace Carousel Media" : "Retry with New Video"}
                       </DropdownMenuItem>
                     )}
                   </>
