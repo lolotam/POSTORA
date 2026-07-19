@@ -90,7 +90,27 @@ export function usePostsWithResults(limit?: number) {
       if (postsError) throw postsError;
       if (!posts || posts.length === 0) return [];
 
-      const postIds = posts.map((p) => p.id);
+      // Re-sort client-side by "most recent activity" so posts that were just
+      // published, scheduled, or retried surface at the top of /history — even
+      // if they were originally created days/weeks ago. We can't do this in
+      // PostgREST directly because there's no updated_at column and no
+      // COALESCE support in .order(). Falls back through:
+      //   posted_at  → scheduled_at → created_at
+      const sortedPosts = [...posts].sort((a, b) => {
+        const aTime = Math.max(
+          a.posted_at ? new Date(a.posted_at).getTime() : 0,
+          a.scheduled_at ? new Date(a.scheduled_at).getTime() : 0,
+          a.created_at ? new Date(a.created_at).getTime() : 0
+        );
+        const bTime = Math.max(
+          b.posted_at ? new Date(b.posted_at).getTime() : 0,
+          b.scheduled_at ? new Date(b.scheduled_at).getTime() : 0,
+          b.created_at ? new Date(b.created_at).getTime() : 0
+        );
+        return bTime - aTime;
+      });
+
+      const postIds = sortedPosts.map((p) => p.id);
 
       // Batch the platform_posts lookup to avoid HTTP 414 "URI Too Long" errors
       // when a user has many posts. Each UUID is ~36 chars + URL-encoding overhead,
@@ -108,7 +128,7 @@ export function usePostsWithResults(limit?: number) {
         if (chunkData) allPlatformPosts.push(...(chunkData as PlatformPost[]));
       }
 
-      return posts.map((post) => ({
+      return sortedPosts.map((post) => ({
         ...post,
         platformResults: allPlatformPosts.filter((pp) => pp.post_id === post.id),
       }));
