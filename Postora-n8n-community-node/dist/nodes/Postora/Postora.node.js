@@ -221,12 +221,21 @@ const platformOptions = [
     { name: "3. Threads", value: "threads" },
     { name: "4. YouTube (Beta)", value: "youtube" },
     { name: "5. Pinterest", value: "pinterest" },
-    { name: "6. LinkedIn (Personal Only)", value: "linkedin" },
+    { name: "6. LinkedIn", value: "linkedin" },
     { name: "7. Bluesky", value: "bluesky" },
     // { name: '8. X / Twitter (Coming Soon)', value: 'twitter' },
     // { name: '9. TikTok (Coming Soon)', value: 'tiktok' },
     // { name: '10. Reddit (Coming Soon)', value: 'reddit' },
 ];
+function parseLinkedInAccountSelections(values) {
+    return values.map((value) => {
+        const [accountId, destinationId] = value.split("|");
+        if (!accountId || !destinationId) {
+            throw new Error(`Invalid LinkedIn account selection: ${value}`);
+        }
+        return { account_id: accountId, destination_id: destinationId };
+    });
+}
 class Postora {
     constructor() {
         this.description = {
@@ -896,6 +905,17 @@ class Postora {
                     if (!response?.accounts || !Array.isArray(response.accounts)) {
                         return [];
                     }
+                    if (platform === "linkedin") {
+                        return response.accounts.flatMap((account) => {
+                            const destinations = Array.isArray(account.linkedin_destinations)
+                                ? account.linkedin_destinations
+                                : [{ id: "personal", name: account.name || account.platform_username || "LinkedIn User", type: "personal" }];
+                            return destinations.map((destination) => ({ accountId: account.id, destination }));
+                        }).map(({ accountId, destination }, index) => ({
+                            name: `${index + 1}. ${destination.name} (${destination.type})`,
+                            value: `${accountId}|${destination.id}`,
+                        }));
+                    }
                     return response.accounts.map((account, index) => {
                         const displayName = account.name || account.platform_username || "Unknown";
                         return {
@@ -1074,7 +1094,12 @@ class Postora {
                         caption,
                         platforms: [platform],
                     };
-                    if (socialAccounts.length)
+                    if (platform === "linkedin") {
+                        const linkedInDestinations = parseLinkedInAccountSelections(socialAccounts);
+                        body.account_ids = [...new Set(linkedInDestinations.map((destination) => destination.account_id))];
+                        body.linkedin_destinations = linkedInDestinations;
+                    }
+                    else if (socialAccounts.length)
                         body.account_ids = socialAccounts;
                     if (mediaUrls.length)
                         body.media_urls = mediaUrls;

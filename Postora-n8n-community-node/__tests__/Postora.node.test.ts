@@ -157,6 +157,59 @@ describe("Postora node — Instagram/Facebook Story caption fix (regression)", (
   });
 });
 
+describe("Postora node — LinkedIn personal and commercial destinations", () => {
+  it("lists personal profiles and commercial pages as separate LinkedIn options", async () => {
+    const node = new Postora();
+    const loadOptionsContext = {
+      getCredentials: async () => ({ baseUrl: "https://example.test" }),
+      getCurrentNodeParameter: () => "linkedin",
+      helpers: {
+        httpRequestWithAuthentication: () => ({
+          accounts: [{
+            id: "account-1",
+            platform: "linkedin",
+            platform_username: "Jane Doe",
+            linkedin_destinations: [
+              { id: "personal", name: "Jane Doe", type: "personal" },
+              { id: "page-1", name: "Acme Inc.", type: "commercial" },
+            ],
+          }],
+        }),
+      },
+    } as any;
+
+    const options = await (node.methods.loadOptions.getAccounts as any).call(loadOptionsContext);
+
+    expect(options).toEqual([
+      { name: "1. Jane Doe (personal)", value: "account-1|personal" },
+      { name: "2. Acme Inc. (commercial)", value: "account-1|page-1" },
+    ]);
+  });
+
+  it("sends mixed LinkedIn selections as unique accounts and destinations", async () => {
+    const { callLog } = await run({
+      params: {
+        resource: "post",
+        operation: "create",
+        platform: "linkedin",
+        socialAccounts_linkedin: ["account-1|personal", "account-1|page-1"],
+        caption: "Post from n8n",
+        mediaSource: "none",
+      },
+      http: () => ({ success: true, scheduled: true, post: { id: "post-1" } }),
+    });
+
+    expect(callLog[0].body).toMatchObject({
+      platforms: ["linkedin"],
+      account_ids: ["account-1"],
+      linkedin_destinations: [
+        { account_id: "account-1", destination_id: "personal" },
+        { account_id: "account-1", destination_id: "page-1" },
+      ],
+    });
+  });
+});
+
 describe("Postora node — Post → Create published URLs", () => {
   const createParams = {
     resource: "post",
