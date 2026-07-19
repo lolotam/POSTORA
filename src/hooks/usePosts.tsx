@@ -92,16 +92,25 @@ export function usePostsWithResults(limit?: number) {
 
       const postIds = posts.map((p) => p.id);
 
-      const { data: platformPosts, error: platformError } = await supabase
-        .from("platform_posts")
-        .select("*")
-        .in("post_id", postIds);
-
-      if (platformError) throw platformError;
+      // Batch the platform_posts lookup to avoid HTTP 414 "URI Too Long" errors
+      // when a user has many posts. Each UUID is ~36 chars + URL-encoding overhead,
+      // and Kong/PostgREST reject URLs exceeding ~8KB. Chunk size of 50 keeps us
+      // well under that limit (50 * ~40 chars = ~2KB per request).
+      const CHUNK_SIZE = 50;
+      const allPlatformPosts: PlatformPost[] = [];
+      for (let i = 0; i < postIds.length; i += CHUNK_SIZE) {
+        const chunk = postIds.slice(i, i + CHUNK_SIZE);
+        const { data: chunkData, error: chunkError } = await supabase
+          .from("platform_posts")
+          .select("*")
+          .in("post_id", chunk);
+        if (chunkError) throw chunkError;
+        if (chunkData) allPlatformPosts.push(...(chunkData as PlatformPost[]));
+      }
 
       return posts.map((post) => ({
         ...post,
-        platformResults: (platformPosts || []).filter((pp) => pp.post_id === post.id) as PlatformPost[],
+        platformResults: allPlatformPosts.filter((pp) => pp.post_id === post.id),
       }));
     },
     enabled: !!user,
