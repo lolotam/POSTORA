@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { postWebhook } from "../_shared/webhookSecurity.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -156,7 +157,7 @@ async function dispatchN8nEvent(
       if (!events.includes(event) && !events.includes("*")) continue;
 
       try {
-        await fetch(webhook.webhook_url, {
+        await postWebhook(webhook.webhook_url, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",

@@ -31,6 +31,46 @@ function makeExecute(overrides: {
         callLog.push(opts);
         return httpImpl(opts);
       },
+      httpRequest: async function (opts: any) {
+        const res = await fetch(opts.url, {
+          method: opts.method || "GET",
+          headers: opts.headers,
+          redirect: opts.disableFollowRedirect ? "manual" : "follow",
+        });
+
+        if (opts.returnFullResponse) {
+          const arrayBuffer = await res.arrayBuffer();
+          const headers: Record<string, string> = {};
+          if (res.headers && typeof res.headers.forEach === "function") {
+            res.headers.forEach((val, key) => {
+              headers[key] = val;
+            });
+          } else if (res.headers && (res.headers as any).raw) {
+            const raw = (res.headers as any).raw();
+            for (const [k, v] of Object.entries(raw)) {
+              headers[k] = Array.isArray(v) ? v[0] : String(v);
+            }
+          } else {
+            if (res.headers && typeof res.headers.get === "function") {
+              for (const h of ["location", "content-type", "content-length", "content-disposition"]) {
+                const val = res.headers.get(h);
+                if (val !== null) headers[h] = val;
+              }
+            }
+          }
+          return {
+            statusCode: res.status,
+            headers,
+            body: Buffer.from(arrayBuffer),
+          };
+        }
+
+        if (opts.encoding === "arraybuffer") {
+          const arrayBuffer = await res.arrayBuffer();
+          return Buffer.from(arrayBuffer);
+        }
+        return res.json();
+      },
       assertBinaryData: (_i: number, prop: string) => {
         const b = binaryData[prop];
         if (!b) throw new Error(`no binary data on ${prop}`);
@@ -210,6 +250,98 @@ describe("Postora node — Media → Upload backward compat (legacy binaryProper
     expect(result[0].json.failed).toBe(0);
     expect(calls.length).toBe(1);
     expect(calls[0].method).toBe("POST");
+  });
+});
+
+describe("Postora node — Webhook actions and Media → Get", () => {
+  const webhookUrl = "https://n8n.example/webhook/postora";
+  const mediaId = "11111111-1111-4111-8111-111111111111";
+
+  it("registers a webhook with its subscribed events", async () => {
+    const { callLog } = await run({
+      params: {
+        resource: "webhook",
+        operation: "register",
+        webhookUrl,
+        webhookEvents: ["post.completed", "post.failed"],
+      },
+    });
+
+    expect(callLog[0]).toMatchObject({
+      method: "POST",
+      url: "https://example.test/api/v1/webhooks",
+      body: { webhook_url: webhookUrl, events: ["post.completed", "post.failed"] },
+      json: true,
+    });
+  });
+
+  it("omits events when registering without an event selection", async () => {
+    const { callLog } = await run({
+      params: {
+        resource: "webhook",
+        operation: "register",
+        webhookUrl,
+      },
+    });
+
+    expect(callLog[0].body).toEqual({ webhook_url: webhookUrl });
+  });
+
+  it("lists registered webhooks", async () => {
+    const { callLog } = await run({
+      params: { resource: "webhook", operation: "list" },
+    });
+
+    expect(callLog[0]).toMatchObject({
+      method: "GET",
+      url: "https://example.test/api/v1/webhooks",
+      json: true,
+    });
+  });
+
+  it("tests a webhook URL", async () => {
+    const { callLog } = await run({
+      params: { resource: "webhook", operation: "test", webhookUrl },
+    });
+
+    expect(callLog[0]).toMatchObject({
+      method: "POST",
+      url: "https://example.test/api/v1/webhooks/test",
+      body: { webhook_url: webhookUrl },
+      json: true,
+    });
+  });
+
+  it("deletes a webhook by ID", async () => {
+    const { callLog } = await run({
+      params: { resource: "webhook", operation: "delete", webhookId: "webhook-1" },
+    });
+
+    expect(callLog[0]).toMatchObject({
+      method: "DELETE",
+      url: "https://example.test/api/v1/webhooks/webhook-1",
+      json: true,
+    });
+  });
+
+  it("gets an owned media record by UUID", async () => {
+    const { callLog } = await run({
+      params: { resource: "media", operation: "get", mediaId },
+    });
+
+    expect(callLog[0]).toMatchObject({
+      method: "GET",
+      url: `https://example.test/api/v1/media/${mediaId}`,
+      json: true,
+    });
+  });
+
+  it("rejects Media Get IDs that are not UUIDs before making a request", async () => {
+    await expect(
+      run({
+        params: { resource: "media", operation: "get", mediaId: "not-a-uuid" },
+      }),
+    ).rejects.toThrow(/Invalid Media ID.*valid UUID/i);
   });
 });
 

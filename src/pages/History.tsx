@@ -55,7 +55,7 @@ export default function History() {
   const [detailsMediaLoading, setDetailsMediaLoading] = useState(false);
   const [accountsCache, setAccountsCache] = useState<Record<string, AccountInfo>>({});
 
-  const { data: posts = [], isLoading, isFetching, refetch } = usePostsWithResults();
+  const { data: posts = [], isLoading, isFetching, refetch, error } = usePostsWithResults();
   const { publishingPosts } = usePublishing();
   const { toast } = useToast();
 
@@ -355,6 +355,18 @@ export default function History() {
                 <div className="flex items-center justify-center py-16">
                   <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
                 </div>
+              ) : error ? (
+                <Reveal delay={120}>
+                  <GradientRingCard variant="sky">
+                    <div className="flex flex-col items-center text-center py-8">
+                      <Icon3D icon={Search} variant="sky" size="lg" />
+                      <h3 className="mt-5 text-lg font-semibold">Failed to load posts</h3>
+                      <p className="text-muted-foreground mt-1 max-w-sm">
+                        {(error as Error)?.message || "Something went wrong while fetching your post history."}
+                      </p>
+                    </div>
+                  </GradientRingCard>
+                </Reveal>
               ) : filteredHistory.length === 0 ? (
                 <Reveal delay={120}>
                   <GradientRingCard variant="sky">

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useId, useRef } from "react";
 import { useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -15,6 +15,14 @@ export function matchesRealtimeAccountEvent(
   return event.user_id === userId && event.social_account_id === socialAccountId;
 }
 
+export function realtimeChannelName(
+  table: string,
+  socialAccountId: string,
+  subscriptionId: string,
+) {
+  return `realtime:${table}:${socialAccountId}:${subscriptionId}`;
+}
+
 export function useRealtimeQueryInvalidation({
   table,
   userId,
@@ -27,6 +35,7 @@ export function useRealtimeQueryInvalidation({
   queryKey: QueryKey;
 }) {
   const queryClient = useQueryClient();
+  const subscriptionId = useId();
   const queryKeyRef = useRef(queryKey);
   queryKeyRef.current = queryKey;
 
@@ -34,7 +43,7 @@ export function useRealtimeQueryInvalidation({
     if (!userId || !socialAccountId) return;
 
     const channel = supabase
-      .channel(`realtime:${table}:${socialAccountId}`)
+      .channel(realtimeChannelName(table, socialAccountId, subscriptionId))
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table, filter: `user_id=eq.${userId}` },
@@ -50,5 +59,5 @@ export function useRealtimeQueryInvalidation({
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [queryClient, socialAccountId, table, userId]);
+  }, [queryClient, socialAccountId, subscriptionId, table, userId]);
 }

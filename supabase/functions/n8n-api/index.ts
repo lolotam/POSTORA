@@ -1,5 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse } from "../_shared/errorSanitizer.ts";
+import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -1381,12 +1382,10 @@ async function handleRegisterWebhook(req: Request, supabase: any, userId: string
     );
   }
 
-  // Validate URL format
-  try {
-    new URL(webhook_url);
-  } catch {
+  const validationError = validateWebhookTarget(webhook_url);
+  if (validationError) {
     return new Response(
-      JSON.stringify({ error: 'Invalid webhook_url format' }),
+      JSON.stringify({ error: validationError }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
@@ -1509,6 +1508,14 @@ async function handleTestWebhook(req: Request, supabase: any, userId: string, bo
     );
   }
 
+  const validationError = validateWebhookTarget(webhook_url);
+  if (validationError) {
+    return new Response(
+      JSON.stringify({ error: validationError }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
   const testPayload = {
     event: 'test',
     timestamp: new Date().toISOString(),
@@ -1525,7 +1532,7 @@ async function handleTestWebhook(req: Request, supabase: any, userId: string, bo
   };
 
   try {
-    const response = await fetch(webhook_url, {
+    const response = await postWebhook(webhook_url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
