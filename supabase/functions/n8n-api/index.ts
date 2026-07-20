@@ -1,6 +1,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse } from "../_shared/errorSanitizer.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
+import {
+  type LinkedInDestinationSelection,
+  listLinkedInDestinations,
+  normalizeLinkedInDestinationSelections,
+} from "../_shared/linkedinDestinations.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -141,6 +146,7 @@ interface PlatformMetadata {
   // LinkedIn
   linkedin_page_id?: string;
   linkedin_article_url?: string;
+  linkedin_destinations?: LinkedInDestinationSelection[];
 
   // Twitter/X - Complete settings
   twitter_reply_to_tweet_id?: string;
@@ -442,6 +448,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // LinkedIn metadata
     linkedin_page_id,
     linkedin_article_url,
+    linkedin_destinations,
 
     // Twitter metadata - Complete settings
     twitter_reply_to_tweet_id,
@@ -652,6 +659,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
   // Validate account_ids if provided - supports internal UUID 'id', 'platform_user_id', and 'user_identifier'
   // Note: account_ids is already parsed by parseArrayField above
   let validatedAccountIds: string[] | undefined;
+  let selectedAccounts: any[] = [];
   let accountIdsArray = account_ids; // Already parsed as string[] above
 
   // Also check for user_identifier (username-based selection like "mturpo (instagram)")
@@ -695,7 +703,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // First try to find by internal UUID id
     const { data: accountsById, error: byIdError } = await supabase
       .from('social_accounts')
-      .select('id, platform, platform_user_id')
+      .select('id, platform, platform_user_id, account_metadata')
       .eq('user_id', userId)
       .eq('is_active', true)
       .in('id', accountIdsArray);
@@ -707,7 +715,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // Also try to find by platform_user_id (Instagram/Facebook uses numeric IDs)
     const { data: accountsByPlatformId, error: byPlatformIdError } = await supabase
       .from('social_accounts')
-      .select('id, platform, platform_user_id')
+      .select('id, platform, platform_user_id, account_metadata')
       .eq('user_id', userId)
       .eq('is_active', true)
       .in('platform_user_id', accountIdsArray);
@@ -721,6 +729,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     const uniqueAccounts = allAccounts.filter((account, index, self) =>
       index === self.findIndex(a => a.id === account.id)
     );
+    selectedAccounts = uniqueAccounts;
 
     console.log('Found accounts by id:', accountsById?.length || 0);
     console.log('Found accounts by platform_user_id:', accountsByPlatformId?.length || 0);
@@ -759,6 +768,20 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
   // Store account_ids in metadata if provided (use 'selected_account_ids' to match process-post expectation)
   if (validatedAccountIds) {
     metadata.selected_account_ids = validatedAccountIds;
+  }
+
+  if (linkedin_destinations !== undefined) {
+    try {
+      metadata.linkedin_destinations = normalizeLinkedInDestinationSelections(
+        linkedin_destinations,
+        selectedAccounts,
+      );
+    } catch (error) {
+      return new Response(
+        JSON.stringify({ error: error instanceof Error ? error.message : "Invalid LinkedIn destinations" }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
   }
 
   // YouTube metadata - map to process-post expected format (including Shorts support)
@@ -1246,6 +1269,7 @@ async function handleGetAccounts(req: Request, supabase: any, userId: string, ur
       is_active, 
       connected_at,
       social_profile_id,
+      account_metadata,
       social_profiles!social_accounts_social_profile_id_fkey (
         id,
         name
@@ -1278,7 +1302,13 @@ async function handleGetAccounts(req: Request, supabase: any, userId: string, ur
     is_active: account.is_active,
     connected_at: account.connected_at,
     social_profile_id: account.social_profile_id,
-    profile_name: account.social_profiles?.name || null
+    profile_name: account.social_profiles?.name || null,
+    ...(account.platform === 'linkedin' ? {
+      linkedin_destinations: listLinkedInDestinations(
+        account.platform_username || 'LinkedIn User',
+        account.account_metadata,
+      ),
+    } : {}),
   }));
 
   return new Response(

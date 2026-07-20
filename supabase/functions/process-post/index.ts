@@ -88,6 +88,7 @@ import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/plat
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
+import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { z } from "npm:zod@3.23.8";
 
@@ -188,6 +189,8 @@ interface PlatformMetadata {
   linkedin_article_link?: string | null;
   /** Multi-destination publish. "personal" + organization page IDs. */
   linkedin_destination_ids?: string[] | null;
+  /** Account-scoped LinkedIn destinations selected by n8n. */
+  linkedin_destinations?: Array<{ account_id: string; destination_id: string }> | null;
   /** @deprecated single-page legacy field; superseded by linkedin_destination_ids */
   linkedin_page_id?: string | null;
 
@@ -4655,7 +4658,13 @@ async function postToLinkedIn(
 
   // Build the list of destinations to publish to. Accept the new multi-select
   // field; fall back to legacy single linkedin_page_id; default to personal.
-  const rawDestinations = Array.isArray(metadata?.linkedin_destination_ids)
+  const selectedDestinations = selectedLinkedInDestinationIds(
+    metadata?.linkedin_destinations,
+    account.id,
+  );
+  const rawDestinations = selectedDestinations.length > 0
+    ? selectedDestinations
+    : Array.isArray(metadata?.linkedin_destination_ids)
     ? (metadata!.linkedin_destination_ids as string[])
     : metadata?.linkedin_page_id
     ? ["personal", metadata.linkedin_page_id]
