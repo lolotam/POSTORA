@@ -8,6 +8,7 @@ import { lazyWithRetry } from "@/lib/lazyWithRetry";
 // Lazy load all page components with chunk-retry resilience
 const Landing = lazyWithRetry(() => import("@/pages/Landing"), "Landing");
 const Auth = lazyWithRetry(() => import("@/pages/Auth"), "Auth");
+const WorkspaceInvite = lazyWithRetry(() => import("@/pages/WorkspaceInvite"), "WorkspaceInvite");
 const ResetPassword = lazyWithRetry(() => import("@/pages/ResetPassword"), "ResetPassword");
 const Dashboard = lazyWithRetry(() => import("@/pages/Dashboard"), "Dashboard");
 const Profiles = lazyWithRetry(() => import("@/pages/Profiles"), "Profiles");
@@ -72,6 +73,7 @@ const FacebookMessaging = lazyWithRetry(() => import("@/pages/messaging/Facebook
 const InstagramMessaging = lazyWithRetry(() => import("@/pages/messaging/InstagramMessaging"), "InstagramMessaging");
 const WhatsAppLayout = lazyWithRetry(() => import("@/components/whatsapp/WhatsAppLayout"), "WhatsAppLayout");
 const WhatsAppDashboard = lazyWithRetry(() => import("@/pages/whatsapp/WhatsAppDashboard"), "WhatsAppDashboard");
+const WhatsAppPipelines = lazyWithRetry(() => import("@/pages/whatsapp/Pipelines"), "Pipelines");
 const WhatsAppConversations = lazyWithRetry(() => import("@/pages/whatsapp/Conversations"), "WhatsAppConversations");
 const WhatsAppContacts = lazyWithRetry(() => import("@/pages/whatsapp/Contacts"), "WhatsAppContacts");
 const WhatsAppTemplates = lazyWithRetry(() => import("@/pages/whatsapp/Templates"), "WhatsAppTemplates");
@@ -146,6 +148,7 @@ export function AnimatedRoutes() {
       <Routes>
         <Route path="/" element={<AnimatedPage><Landing /></AnimatedPage>} />
         <Route path="/auth" element={<AnimatedPage><Auth /></AnimatedPage>} />
+        <Route path="/workspace/invite" element={<AnimatedPage><WorkspaceInvite /></AnimatedPage>} />
         <Route path="/connect/authorize" element={<AnimatedPage><ConnectAuthorize /></AnimatedPage>} />
         <Route path="/mcp/authorize" element={<AnimatedPage><McpAuthorize /></AnimatedPage>} />
         <Route path="/auth/oauth/callback" element={<AnimatedPage><OAuthCallback /></AnimatedPage>} />
@@ -256,6 +259,7 @@ export function AnimatedRoutes() {
         <Route path="/messaging/instagram" element={<ProtectedRoute><AnimatedPage><InstagramMessaging /></AnimatedPage></ProtectedRoute>} />
         <Route path="/messaging/whatsapp" element={<ProtectedRoute><WhatsAppLayout /></ProtectedRoute>}>
           <Route index element={<AnimatedPage><WhatsAppDashboard /></AnimatedPage>} />
+          <Route path="pipelines" element={<AnimatedPage><WhatsAppPipelines /></AnimatedPage>} />
           <Route path="conversations" element={<AnimatedPage><WhatsAppConversations /></AnimatedPage>} />
           <Route path="contacts" element={<AnimatedPage><WhatsAppContacts /></AnimatedPage>} />
           <Route path="templates" element={<AnimatedPage><WhatsAppTemplates /></AnimatedPage>} />

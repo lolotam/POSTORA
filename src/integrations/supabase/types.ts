@@ -7,10 +7,22 @@ export type Json =
   | Json[]
 
 export type Database = {
-  // Allows to automatically instantiate createClient with right options
-  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
-  __InternalSupabase: {
-    PostgrestVersion: "14.1"
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      [_ in never]: never
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
   public: {
     Tables: {
@@ -145,6 +157,423 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_agent_allowed_models: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          label: string
+          model_id: string
+          provider: string
+          sort_order: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label: string
+          model_id: string
+          provider: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string
+          model_id?: string
+          provider?: string
+          sort_order?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ai_agent_configs: {
+        Row: {
+          admin_phone_numbers: string[]
+          business_profile_text: string | null
+          created_at: string | null
+          daily_message_cap: number
+          default_mode: string
+          fallback_model_1: string | null
+          fallback_model_2: string | null
+          handoff_on_low_confidence: boolean | null
+          handoff_on_request: boolean | null
+          id: string
+          is_enabled: boolean | null
+          language_mode: string
+          max_tool_iterations: number
+          model: string
+          persona_instructions: string | null
+          platform: string
+          reply_cooldown_seconds: number
+          temperature: number | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          admin_phone_numbers?: string[]
+          business_profile_text?: string | null
+          created_at?: string | null
+          daily_message_cap?: number
+          default_mode?: string
+          fallback_model_1?: string | null
+          fallback_model_2?: string | null
+          handoff_on_low_confidence?: boolean | null
+          handoff_on_request?: boolean | null
+          id?: string
+          is_enabled?: boolean | null
+          language_mode?: string
+          max_tool_iterations?: number
+          model?: string
+          persona_instructions?: string | null
+          platform: string
+          reply_cooldown_seconds?: number
+          temperature?: number | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          admin_phone_numbers?: string[]
+          business_profile_text?: string | null
+          created_at?: string | null
+          daily_message_cap?: number
+          default_mode?: string
+          fallback_model_1?: string | null
+          fallback_model_2?: string | null
+          handoff_on_low_confidence?: boolean | null
+          handoff_on_request?: boolean | null
+          id?: string
+          is_enabled?: boolean | null
+          language_mode?: string
+          max_tool_iterations?: number
+          model?: string
+          persona_instructions?: string | null
+          platform?: string
+          reply_cooldown_seconds?: number
+          temperature?: number | null
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      ai_agent_logs: {
+        Row: {
+          completion_tokens: number | null
+          conversation_id: string | null
+          created_at: string | null
+          error: string | null
+          id: string
+          inbound_text: string | null
+          latency_ms: number | null
+          platform: string | null
+          prompt_tokens: number | null
+          reply_text: string | null
+          retrieved_chunk_ids: string[] | null
+          status: string | null
+          tool_calls: Json | null
+          user_id: string
+        }
+        Insert: {
+          completion_tokens?: number | null
+          conversation_id?: string | null
+          created_at?: string | null
+          error?: string | null
+          id?: string
+          inbound_text?: string | null
+          latency_ms?: number | null
+          platform?: string | null
+          prompt_tokens?: number | null
+          reply_text?: string | null
+          retrieved_chunk_ids?: string[] | null
+          status?: string | null
+          tool_calls?: Json | null
+          user_id: string
+        }
+        Update: {
+          completion_tokens?: number | null
+          conversation_id?: string | null
+          created_at?: string | null
+          error?: string | null
+          id?: string
+          inbound_text?: string | null
+          latency_ms?: number | null
+          platform?: string | null
+          prompt_tokens?: number | null
+          reply_text?: string | null
+          retrieved_chunk_ids?: string[] | null
+          status?: string | null
+          tool_calls?: Json | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      ai_agent_tools: {
+        Row: {
+          admin_only: boolean | null
+          created_at: string | null
+          description: string
+          id: string
+          is_enabled: boolean | null
+          name: string
+          secret: string | null
+          tool_type: string
+          updated_at: string | null
+          url: string | null
+          user_id: string
+        }
+        Insert: {
+          admin_only?: boolean | null
+          created_at?: string | null
+          description: string
+          id?: string
+          is_enabled?: boolean | null
+          name: string
+          secret?: string | null
+          tool_type?: string
+          updated_at?: string | null
+          url?: string | null
+          user_id: string
+        }
+        Update: {
+          admin_only?: boolean | null
+          created_at?: string | null
+          description?: string
+          id?: string
+          is_enabled?: boolean | null
+          name?: string
+          secret?: string | null
+          tool_type?: string
+          updated_at?: string | null
+          url?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      ai_conversation_modes: {
+        Row: {
+          conversation_id: string
+          created_at: string | null
+          id: string
+          mode: string
+          platform: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          conversation_id: string
+          created_at?: string | null
+          id?: string
+          mode: string
+          platform: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          conversation_id?: string
+          created_at?: string | null
+          id?: string
+          mode?: string
+          platform?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
+      ai_knowledge_chunks: {
+        Row: {
+          content: string
+          created_at: string | null
+          embedding: string | null
+          embedding_bge_m3: string | null
+          id: string
+          metadata: Json | null
+          source_id: string
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string | null
+          embedding?: string | null
+          embedding_bge_m3?: string | null
+          id?: string
+          metadata?: Json | null
+          source_id: string
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string | null
+          embedding?: string | null
+          embedding_bge_m3?: string | null
+          id?: string
+          metadata?: Json | null
+          source_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_knowledge_chunks_source_id_fkey"
+            columns: ["source_id"]
+            isOneToOne: false
+            referencedRelation: "ai_knowledge_sources"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_knowledge_entities: {
+        Row: {
+          created_at: string
+          description: string
+          id: string
+          metadata: Json
+          name: string
+          normalized_name: string | null
+          type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string
+          id?: string
+          metadata?: Json
+          name: string
+          normalized_name?: string | null
+          type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string
+          id?: string
+          metadata?: Json
+          name?: string
+          normalized_name?: string | null
+          type?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      ai_knowledge_graph_exports: {
+        Row: {
+          generated_at: string
+          html_url: string | null
+          id: string
+          user_id: string
+          vault_url: string | null
+        }
+        Insert: {
+          generated_at?: string
+          html_url?: string | null
+          id?: string
+          user_id: string
+          vault_url?: string | null
+        }
+        Update: {
+          generated_at?: string
+          html_url?: string | null
+          id?: string
+          user_id?: string
+          vault_url?: string | null
+        }
+        Relationships: []
+      }
+      ai_knowledge_relations: {
+        Row: {
+          created_at: string
+          id: string
+          relation: string
+          source_chunk_id: string
+          source_entity_id: string
+          target_entity_id: string
+          user_id: string
+          weight: number
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          relation: string
+          source_chunk_id: string
+          source_entity_id: string
+          target_entity_id: string
+          user_id: string
+          weight?: number
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          relation?: string
+          source_chunk_id?: string
+          source_entity_id?: string
+          target_entity_id?: string
+          user_id?: string
+          weight?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_knowledge_relations_source_chunk_id_fkey"
+            columns: ["source_chunk_id"]
+            isOneToOne: false
+            referencedRelation: "ai_knowledge_chunks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_knowledge_relations_source_entity_id_fkey"
+            columns: ["source_entity_id"]
+            isOneToOne: false
+            referencedRelation: "ai_knowledge_entities"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ai_knowledge_relations_target_entity_id_fkey"
+            columns: ["target_entity_id"]
+            isOneToOne: false
+            referencedRelation: "ai_knowledge_entities"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_knowledge_sources: {
+        Row: {
+          chunk_count: number | null
+          created_at: string | null
+          error: string | null
+          file_name: string | null
+          file_path: string | null
+          id: string
+          source_type: string | null
+          status: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          chunk_count?: number | null
+          created_at?: string | null
+          error?: string | null
+          file_name?: string | null
+          file_path?: string | null
+          id?: string
+          source_type?: string | null
+          status?: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          chunk_count?: number | null
+          created_at?: string | null
+          error?: string | null
+          file_name?: string | null
+          file_path?: string | null
+          id?: string
+          source_type?: string | null
+          status?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       ai_model_preferences: {
         Row: {
           created_at: string
@@ -269,6 +698,74 @@ export type Database = {
           provider_code?: string
           supports_streaming?: boolean
           updated_at?: string
+        }
+        Relationships: []
+      }
+      ai_thread_messages: {
+        Row: {
+          content: string | null
+          created_at: string | null
+          id: string
+          role: string
+          thread_id: string
+          tool_calls: Json | null
+          user_id: string
+        }
+        Insert: {
+          content?: string | null
+          created_at?: string | null
+          id?: string
+          role: string
+          thread_id: string
+          tool_calls?: Json | null
+          user_id: string
+        }
+        Update: {
+          content?: string | null
+          created_at?: string | null
+          id?: string
+          role?: string
+          thread_id?: string
+          tool_calls?: Json | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_thread_messages_thread_id_fkey"
+            columns: ["thread_id"]
+            isOneToOne: false
+            referencedRelation: "ai_threads"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      ai_threads: {
+        Row: {
+          conversation_id: string
+          created_at: string | null
+          id: string
+          platform: string
+          title: string | null
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          conversation_id: string
+          created_at?: string | null
+          id?: string
+          platform: string
+          title?: string | null
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          conversation_id?: string
+          created_at?: string | null
+          id?: string
+          platform?: string
+          title?: string | null
+          updated_at?: string | null
+          user_id?: string
         }
         Relationships: []
       }
@@ -560,6 +1057,39 @@ export type Database = {
           total_posts_fetched?: number | null
           user_id?: string
           username?: string
+        }
+        Relationships: []
+      }
+      brand_search_history: {
+        Row: {
+          created_at: string
+          id: string
+          last_used_at: string
+          platform: string
+          query: string
+          scope: string
+          use_count: number
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          last_used_at?: string
+          platform: string
+          query: string
+          scope: string
+          use_count?: number
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          last_used_at?: string
+          platform?: string
+          query?: string
+          scope?: string
+          use_count?: number
+          user_id?: string
         }
         Relationships: []
       }
@@ -1780,6 +2310,24 @@ export type Database = {
           },
         ]
       }
+      media_upload_counters: {
+        Row: {
+          last_seq: number
+          upload_date: string
+          user_id: string
+        }
+        Insert: {
+          last_seq?: number
+          upload_date: string
+          user_id: string
+        }
+        Update: {
+          last_seq?: number
+          upload_date?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       messaging_cache: {
         Row: {
           conversation_id: string
@@ -1788,12 +2336,14 @@ export type Database = {
           last_message_at: string | null
           last_message_preview: string | null
           participant_avatar: string | null
+          participant_id: string | null
           participant_name: string | null
           platform: string
           social_account_id: string
           unread_count: number | null
           updated_at: string | null
           user_id: string
+          workspace_id: string
         }
         Insert: {
           conversation_id: string
@@ -1802,12 +2352,14 @@ export type Database = {
           last_message_at?: string | null
           last_message_preview?: string | null
           participant_avatar?: string | null
+          participant_id?: string | null
           participant_name?: string | null
           platform: string
           social_account_id: string
           unread_count?: number | null
           updated_at?: string | null
           user_id: string
+          workspace_id: string
         }
         Update: {
           conversation_id?: string
@@ -1816,14 +2368,24 @@ export type Database = {
           last_message_at?: string | null
           last_message_preview?: string | null
           participant_avatar?: string | null
+          participant_id?: string | null
           participant_name?: string | null
           platform?: string
           social_account_id?: string
           unread_count?: number | null
           updated_at?: string | null
           user_id?: string
+          workspace_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "messaging_cache_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       messenger_auto_replies: {
         Row: {
@@ -2018,6 +2580,75 @@ export type Database = {
           name?: string
           redirect_uris?: string[]
           updated_at?: string | null
+        }
+        Relationships: []
+      }
+      oauth_pending_facebook_selections: {
+        Row: {
+          created_at: string
+          expires_at: string
+          id: string
+          ig_standalone_json: Json
+          pages_json: Json
+          provider_token: string
+          social_profile_id: string | null
+          target_platform: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          ig_standalone_json?: Json
+          pages_json?: Json
+          provider_token: string
+          social_profile_id?: string | null
+          target_platform: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          id?: string
+          ig_standalone_json?: Json
+          pages_json?: Json
+          provider_token?: string
+          social_profile_id?: string | null
+          target_platform?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      oauth_pending_instagram_selections: {
+        Row: {
+          created_at: string
+          expires_at: string
+          expires_in: number
+          id: string
+          ig_candidates_json: Json
+          long_lived_token: string
+          social_profile_id: string | null
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          expires_in?: number
+          id?: string
+          ig_candidates_json?: Json
+          long_lived_token: string
+          social_profile_id?: string | null
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          expires_in?: number
+          id?: string
+          ig_candidates_json?: Json
+          long_lived_token?: string
+          social_profile_id?: string | null
+          user_id?: string
         }
         Relationships: []
       }
@@ -2303,6 +2934,7 @@ export type Database = {
           email: string
           expires_at: string
           id: string
+          purpose: string
           used: boolean | null
         }
         Insert: {
@@ -2312,6 +2944,7 @@ export type Database = {
           email: string
           expires_at: string
           id?: string
+          purpose?: string
           used?: boolean | null
         }
         Update: {
@@ -2321,6 +2954,7 @@ export type Database = {
           email?: string
           expires_at?: string
           id?: string
+          purpose?: string
           used?: boolean | null
         }
         Relationships: []
@@ -2545,6 +3179,27 @@ export type Database = {
         }
         Relationships: []
       }
+      rate_limit_buckets: {
+        Row: {
+          bucket_key: string
+          count: number
+          expires_at: string
+          window_start: string
+        }
+        Insert: {
+          bucket_key: string
+          count?: number
+          expires_at?: string
+          window_start?: string
+        }
+        Update: {
+          bucket_key?: string
+          count?: number
+          expires_at?: string
+          window_start?: string
+        }
+        Relationships: []
+      }
       rate_limit_settings: {
         Row: {
           created_at: string
@@ -2751,6 +3406,7 @@ export type Database = {
           token_expires_at: string | null
           updated_at: string | null
           user_id: string
+          workspace_id: string | null
         }
         Insert: {
           access_token: string
@@ -2774,6 +3430,7 @@ export type Database = {
           token_expires_at?: string | null
           updated_at?: string | null
           user_id: string
+          workspace_id?: string | null
         }
         Update: {
           access_token?: string
@@ -2797,6 +3454,7 @@ export type Database = {
           token_expires_at?: string | null
           updated_at?: string | null
           user_id?: string
+          workspace_id?: string | null
         }
         Relationships: [
           {
@@ -2804,6 +3462,13 @@ export type Database = {
             columns: ["social_profile_id"]
             isOneToOne: false
             referencedRelation: "social_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "social_accounts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
         ]
@@ -2835,6 +3500,33 @@ export type Database = {
           share_token?: string | null
           updated_at?: string | null
           user_id?: string
+        }
+        Relationships: []
+      }
+      stripe_webhook_events: {
+        Row: {
+          error: string | null
+          event_id: string
+          event_type: string
+          processed_at: string | null
+          received_at: string
+          status: string
+        }
+        Insert: {
+          error?: string | null
+          event_id: string
+          event_type: string
+          processed_at?: string | null
+          received_at?: string
+          status?: string
+        }
+        Update: {
+          error?: string | null
+          event_id?: string
+          event_type?: string
+          processed_at?: string | null
+          received_at?: string
+          status?: string
         }
         Relationships: []
       }
@@ -4179,6 +4871,7 @@ export type Database = {
           status: string
           updated_at: string | null
           user_id: string
+          workspace_id: string
         }
         Insert: {
           avatar_url?: string | null
@@ -4191,6 +4884,7 @@ export type Database = {
           status?: string
           updated_at?: string | null
           user_id: string
+          workspace_id: string
         }
         Update: {
           avatar_url?: string | null
@@ -4203,8 +4897,17 @@ export type Database = {
           status?: string
           updated_at?: string | null
           user_id?: string
+          workspace_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_agents_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       whatsapp_assignment_history: {
         Row: {
@@ -4488,88 +5191,153 @@ export type Database = {
       whatsapp_contacts: {
         Row: {
           avatar_url: string | null
+          birthday: string | null
+          city: string | null
           company: string | null
+          country: string | null
           created_at: string
           display_name: string | null
           email: string | null
+          first_name: string | null
           id: string
+          job_title: string | null
           last_message_at: string | null
+          last_name: string | null
           notes: string | null
           phone_number: string
+          phone_secondary: string | null
+          street: string | null
           tags: string[] | null
           updated_at: string
           user_id: string
+          website: string | null
+          workspace_id: string
         }
         Insert: {
           avatar_url?: string | null
+          birthday?: string | null
+          city?: string | null
           company?: string | null
+          country?: string | null
           created_at?: string
           display_name?: string | null
           email?: string | null
+          first_name?: string | null
           id?: string
+          job_title?: string | null
           last_message_at?: string | null
+          last_name?: string | null
           notes?: string | null
           phone_number: string
+          phone_secondary?: string | null
+          street?: string | null
           tags?: string[] | null
           updated_at?: string
           user_id: string
+          website?: string | null
+          workspace_id: string
         }
         Update: {
           avatar_url?: string | null
+          birthday?: string | null
+          city?: string | null
           company?: string | null
+          country?: string | null
           created_at?: string
           display_name?: string | null
           email?: string | null
+          first_name?: string | null
           id?: string
+          job_title?: string | null
           last_message_at?: string | null
+          last_name?: string | null
           notes?: string | null
           phone_number?: string
+          phone_secondary?: string | null
+          street?: string | null
           tags?: string[] | null
           updated_at?: string
           user_id?: string
+          website?: string | null
+          workspace_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_contacts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       whatsapp_conversation_assignments: {
         Row: {
           agent_id: string | null
           assigned_at: string | null
           assigned_by: string | null
+          conversation_cache_id: string | null
           conversation_id: string
           created_at: string | null
           id: string
           notes: string | null
           unassigned_at: string | null
           updated_at: string | null
+          workspace_id: string | null
         }
         Insert: {
           agent_id?: string | null
           assigned_at?: string | null
           assigned_by?: string | null
+          conversation_cache_id?: string | null
           conversation_id: string
           created_at?: string | null
           id?: string
           notes?: string | null
           unassigned_at?: string | null
           updated_at?: string | null
+          workspace_id?: string | null
         }
         Update: {
           agent_id?: string | null
           assigned_at?: string | null
           assigned_by?: string | null
+          conversation_cache_id?: string | null
           conversation_id?: string
           created_at?: string | null
           id?: string
           notes?: string | null
           unassigned_at?: string | null
           updated_at?: string | null
+          workspace_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "whatsapp_assignments_conversation_workspace_fkey"
+            columns: ["conversation_cache_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "messaging_cache"
+            referencedColumns: ["id", "workspace_id"]
+          },
           {
             foreignKeyName: "whatsapp_conversation_assignments_agent_id_fkey"
             columns: ["agent_id"]
             isOneToOne: false
             referencedRelation: "whatsapp_agents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conversation_assignments_conversation_cache_id_fkey"
+            columns: ["conversation_cache_id"]
+            isOneToOne: false
+            referencedRelation: "messaging_cache"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "whatsapp_conversation_assignments_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
         ]
@@ -4629,6 +5397,89 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      whatsapp_deals: {
+        Row: {
+          amount: number
+          assigned_to: string | null
+          contact_id: string
+          conversation_cache_id: string | null
+          created_at: string
+          created_by: string | null
+          currency: string
+          id: string
+          pipeline_id: string
+          position: number
+          stage_id: string
+          status: string
+          title: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          amount?: number
+          assigned_to?: string | null
+          contact_id: string
+          conversation_cache_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          currency?: string
+          id?: string
+          pipeline_id: string
+          position?: number
+          stage_id: string
+          status?: string
+          title: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          amount?: number
+          assigned_to?: string | null
+          contact_id?: string
+          conversation_cache_id?: string | null
+          created_at?: string
+          created_by?: string | null
+          currency?: string
+          id?: string
+          pipeline_id?: string
+          position?: number
+          stage_id?: string
+          status?: string
+          title?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_deals_contact_workspace_fkey"
+            columns: ["contact_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_contacts"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_deals_conversation_workspace_fkey"
+            columns: ["conversation_cache_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "messaging_cache"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_deals_pipeline_workspace_fkey"
+            columns: ["pipeline_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_pipelines"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_deals_stage_pipeline_workspace_fkey"
+            columns: ["stage_id", "pipeline_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_pipeline_stages"
+            referencedColumns: ["id", "pipeline_id", "workspace_id"]
+          },
+        ]
       }
       whatsapp_message_analytics: {
         Row: {
@@ -4774,6 +5625,77 @@ export type Database = {
           timestamp?: string
           to_phone?: string | null
           user_id?: string
+        }
+        Relationships: []
+      }
+      whatsapp_pipeline_stages: {
+        Row: {
+          color: string | null
+          created_at: string
+          id: string
+          name: string
+          pipeline_id: string
+          position: number
+          stage_type: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string
+          id?: string
+          name: string
+          pipeline_id: string
+          position?: number
+          stage_type?: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          color?: string | null
+          created_at?: string
+          id?: string
+          name?: string
+          pipeline_id?: string
+          position?: number
+          stage_type?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_stages_pipeline_workspace_fkey"
+            columns: ["pipeline_id", "workspace_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_pipelines"
+            referencedColumns: ["id", "workspace_id"]
+          },
+        ]
+      }
+      whatsapp_pipelines: {
+        Row: {
+          created_at: string
+          id: string
+          is_default: boolean
+          name: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_default?: boolean
+          name: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_default?: boolean
+          name?: string
+          updated_at?: string
+          workspace_id?: string
         }
         Relationships: []
       }
@@ -5258,8 +6180,141 @@ export type Database = {
         }
         Relationships: []
       }
+      workspace_invitations: {
+        Row: {
+          accepted_at: string | null
+          accepted_by: string | null
+          created_at: string
+          email: string
+          expires_at: string
+          id: string
+          invited_by: string | null
+          revoked_at: string | null
+          role: string
+          token_hash: string
+          workspace_id: string
+        }
+        Insert: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          email: string
+          expires_at: string
+          id?: string
+          invited_by?: string | null
+          revoked_at?: string | null
+          role: string
+          token_hash: string
+          workspace_id: string
+        }
+        Update: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          email?: string
+          expires_at?: string
+          id?: string
+          invited_by?: string | null
+          revoked_at?: string | null
+          role?: string
+          token_hash?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_invitations_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      workspace_members: {
+        Row: {
+          created_at: string
+          id: string
+          role: string
+          updated_at: string
+          user_id: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role: string
+          updated_at?: string
+          user_id: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: string
+          updated_at?: string
+          user_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "workspace_members_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      workspaces: {
+        Row: {
+          created_at: string
+          id: string
+          is_personal: boolean
+          name: string
+          owner_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_personal?: boolean
+          name: string
+          owner_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_personal?: boolean
+          name?: string
+          owner_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
+      hypopg_hidden_indexes: {
+        Row: {
+          am_name: unknown
+          index_name: unknown
+          indexrelid: unknown
+          is_hypo: boolean | null
+          schema_name: unknown
+          table_name: unknown
+        }
+        Relationships: []
+      }
+      hypopg_list_indexes: {
+        Row: {
+          am_name: unknown
+          index_name: string | null
+          indexrelid: unknown
+          schema_name: unknown
+          table_name: unknown
+        }
+        Relationships: []
+      }
       profiles_public: {
         Row: {
           avatar_url: string | null
@@ -5318,6 +6373,10 @@ export type Database = {
       }
     }
     Functions: {
+      accept_workspace_invitation: {
+        Args: { p_token: string }
+        Returns: string
+      }
       add_ticket_message: {
         Args: {
           p_attachments?: Json
@@ -5348,6 +6407,10 @@ export type Database = {
           referral_code: string
         }[]
       }
+      algorithm_sign: {
+        Args: { algorithm: string; secret: string; signables: string }
+        Returns: string
+      }
       assign_ticket: {
         Args: { p_assignee_id: string; p_ticket_id: string }
         Returns: boolean
@@ -5362,6 +6425,36 @@ export type Database = {
         Returns: number
       }
       can_upload_media: { Args: { p_user_id: string }; Returns: boolean }
+      check_rate_limit: {
+        Args: {
+          p_endpoint: string
+          p_identifier: string
+          p_max_requests: number
+          p_window_seconds: number
+        }
+        Returns: Json
+      }
+      claim_ai_knowledge_excel_source: {
+        Args: never
+        Returns: {
+          chunk_count: number | null
+          created_at: string | null
+          error: string | null
+          file_name: string | null
+          file_path: string | null
+          id: string
+          source_type: string | null
+          status: string
+          updated_at: string | null
+          user_id: string
+        }[]
+        SetofOptions: {
+          from: "*"
+          to: "ai_knowledge_sources"
+          isOneToOne: false
+          isSetofReturn: true
+        }
+      }
       cleanup_expired_otps: { Args: never; Returns: undefined }
       cleanup_old_health_data: {
         Args: never
@@ -5372,6 +6465,11 @@ export type Database = {
         }[]
       }
       cleanup_old_token_refresh_history: { Args: never; Returns: number }
+      cleanup_rate_limit_buckets: { Args: never; Returns: number }
+      create_default_whatsapp_pipeline: {
+        Args: { p_workspace_id: string }
+        Returns: string
+      }
       create_support_ticket: {
         Args: {
           p_attachments?: Json
@@ -5380,6 +6478,10 @@ export type Database = {
           p_priority?: string
           p_subject: string
         }
+        Returns: string
+      }
+      ensure_personal_workspace: {
+        Args: { p_user_id: string }
         Returns: string
       }
       generate_referral_code: { Args: never; Returns: string }
@@ -5426,6 +6528,7 @@ export type Database = {
           username: string
         }[]
       }
+      get_cron_secret: { Args: never; Returns: string }
       get_edge_function_statuses: {
         Args: never
         Returns: {
@@ -5525,13 +6628,47 @@ export type Database = {
         }
         Returns: boolean
       }
+      hypopg: { Args: never; Returns: Record<string, unknown>[] }
+      hypopg_create_index: {
+        Args: { sql_order: string }
+        Returns: Record<string, unknown>[]
+      }
+      hypopg_drop_index: { Args: { indexid: unknown }; Returns: boolean }
+      hypopg_get_indexdef: { Args: { indexid: unknown }; Returns: string }
+      hypopg_hidden_indexes: {
+        Args: never
+        Returns: {
+          indexid: unknown
+        }[]
+      }
+      hypopg_hide_index: { Args: { indexid: unknown }; Returns: boolean }
+      hypopg_relation_size: { Args: { indexid: unknown }; Returns: number }
+      hypopg_reset: { Args: never; Returns: undefined }
+      hypopg_reset_index: { Args: never; Returns: undefined }
+      hypopg_unhide_all_indexes: { Args: never; Returns: undefined }
+      hypopg_unhide_index: { Args: { indexid: unknown }; Returns: boolean }
       increment_media_uploads: { Args: { p_user_id: string }; Returns: boolean }
       increment_template_use_count: {
         Args: { p_template_id: string }
         Returns: undefined
       }
+      index_advisor: {
+        Args: { query: string }
+        Returns: {
+          errors: string[]
+          index_statements: string[]
+          startup_cost_after: Json
+          startup_cost_before: Json
+          total_cost_after: Json
+          total_cost_before: Json
+        }[]
+      }
       is_coupon_valid: {
         Args: { p_code: string; p_user_id?: string }
+        Returns: boolean
+      }
+      is_workspace_member: {
+        Args: { p_user_id?: string; p_workspace_id: string }
         Returns: boolean
       }
       log_admin_action: {
@@ -5574,10 +6711,61 @@ export type Database = {
         Args: { p_notification_id: string }
         Returns: boolean
       }
+      match_ai_knowledge_chunks: {
+        Args: {
+          match_count?: number
+          p_user_id: string
+          query_embedding: string
+        }
+        Returns: {
+          content: string
+          id: string
+          metadata: Json
+          similarity: number
+          source_id: string
+        }[]
+      }
+      match_ai_knowledge_chunks_bge_m3: {
+        Args: {
+          match_count?: number
+          p_user_id: string
+          query_embedding: string
+        }
+        Returns: {
+          content: string
+          id: string
+          metadata: Json
+          similarity: number
+          source_id: string
+        }[]
+      }
+      match_ai_knowledge_graph_relations: {
+        Args: {
+          match_count?: number
+          p_source_chunk_ids: string[]
+          p_user_id: string
+        }
+        Returns: {
+          relation: string
+          source_name: string
+          source_type: string
+          target_name: string
+          target_type: string
+        }[]
+      }
+      move_whatsapp_deal: {
+        Args: { p_deal_id: string; p_position: number; p_stage_id: string }
+        Returns: undefined
+      }
       next_media_seq: {
-        Args: { p_user_id: string; p_upload_date: string }
+        Args: { p_upload_date: string; p_user_id: string }
         Returns: number
       }
+      prune_ai_knowledge_entities: {
+        Args: { p_user_id: string }
+        Returns: undefined
+      }
+      prune_all_ai_knowledge_entities: { Args: never; Returns: number }
       redeem_coupon: {
         Args: { p_code: string; p_subscription_id?: string; p_user_id: string }
         Returns: string
@@ -5593,6 +6781,10 @@ export type Database = {
         Args: { p_plan_slug: string; p_user_id: string }
         Returns: undefined
       }
+      sign: {
+        Args: { algorithm?: string; payload: Json; secret: string }
+        Returns: string
+      }
       toggle_checklist_item: {
         Args: { p_completed: boolean; p_item_id: string }
         Returns: boolean
@@ -5601,6 +6793,7 @@ export type Database = {
         Args: { _active: boolean; _jobid: number }
         Returns: undefined
       }
+      try_cast_double: { Args: { inp: string }; Returns: number }
       update_email_status: {
         Args: {
           p_error_message?: string
@@ -5613,9 +6806,23 @@ export type Database = {
         Args: { p_status: string; p_ticket_id: string }
         Returns: boolean
       }
+      url_decode: { Args: { data: string }; Returns: string }
+      url_encode: { Args: { data: string }; Returns: string }
       use_credits: {
         Args: { p_amount: number; p_description?: string; p_user_id: string }
         Returns: boolean
+      }
+      verify: {
+        Args: { algorithm?: string; secret: string; token: string }
+        Returns: {
+          header: Json
+          payload: Json
+          valid: boolean
+        }[]
+      }
+      workspace_role: {
+        Args: { p_user_id?: string; p_workspace_id: string }
+        Returns: string
       }
     }
     Enums: {
@@ -5745,9 +6952,13 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       app_role: ["user", "admin", "subscriber", "support"],
     },
   },
 } as const
+

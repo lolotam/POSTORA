@@ -139,18 +139,36 @@ describe("AccountSelectionSidebar", () => {
     expect(screen.queryByText("Select at least one account")).not.toBeInTheDocument();
   });
 
-  it("shows TikTok disabled badge when hasOnlyImages is true", () => {
+  it("keeps TikTok available for image-only posts", () => {
+    // TikTok used to be badged "Video only" and blocked when a post had no video.
+    // Photo posts are supported now, so the badge was removed and hasOnlyImages no
+    // longer gates anything in this component. This pins the current contract:
+    // TikTok still renders and is not marked unavailable.
+    const tiktokAccount = {
+      id: "4",
+      platform: "tiktok" as const,
+      maxChars: 4000,
+      username: "tt_user",
+      avatarUrl: null,
+    };
     const propsWithTikTok = {
       ...defaultProps,
+      allPlatforms: [...defaultProps.allPlatforms, "tiktok"],
+      accountsByPlatform: {
+        ...defaultProps.accountsByPlatform,
+        tiktok: [tiktokAccount],
+      },
       filteredAccountsForUploadMethod: {
         ...defaultProps.filteredAccountsForUploadMethod,
-        tiktok: [{ id: "4", platform: "tiktok" as const, maxChars: 4000, username: "tt_user", avatarUrl: null }],
+        tiktok: [tiktokAccount],
       },
       hasOnlyImages: true,
     };
-    
+
     render(<AccountSelectionSidebar {...propsWithTikTok} />);
-    expect(screen.getByText("Video only")).toBeInTheDocument();
+
+    expect(screen.getAllByText(/tiktok/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Video only")).not.toBeInTheDocument();
   });
 
   it("displays platform warnings for selected platforms", () => {

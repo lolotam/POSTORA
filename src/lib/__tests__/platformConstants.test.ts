@@ -60,9 +60,13 @@ describe("platformConstants", () => {
       expect(isPlatformType("youtube")).toBe(true);
     });
 
-    it("should return false for extended platforms", () => {
-      expect(isPlatformType("threads")).toBe(false);
-      expect(isPlatformType("bluesky")).toBe(false);
+    it("recognises the platforms that were once merely 'extended'", () => {
+      // Threads and Bluesky are first-class platforms now — ExtendedPlatform is a
+      // straight alias of Platform, they ship in allPlatforms with available: true,
+      // and they have char limits. This assertion previously expected false, which
+      // stopped being true when Threads posting shipped.
+      expect(isPlatformType("threads")).toBe(true);
+      expect(isPlatformType("bluesky")).toBe(true);
     });
   });
 

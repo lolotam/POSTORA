@@ -24,6 +24,14 @@ vi.mock("@/hooks/use-toast", () => ({
 
 vi.mock("@/integrations/supabase/client", () => ({
     supabase: {
+        // Avatar upload moved from Supabase Storage to the cloudinary-upload edge
+        // function, which returns { success, url } and is asserted on below.
+        functions: {
+            invoke: vi.fn().mockResolvedValue({
+                data: { success: true, url: "http://new-avatar.com" },
+                error: null,
+            }),
+        },
         storage: {
             from: vi.fn(() => ({
                 upload: vi.fn().mockResolvedValue({ error: null }),

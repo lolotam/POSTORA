@@ -12,6 +12,7 @@ const AUTO_REPLY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 interface WhatsAppAccount {
   id: string;
   user_id: string;
+  workspace_id: string;
   access_token: string | null;
 }
 
@@ -158,12 +159,25 @@ Deno.serve(async (req) => {
 async function findWhatsAppAccount(adminClient: any, phoneNumberId: string): Promise<WhatsAppAccount | null> {
   const { data: accounts } = await adminClient
     .from("social_accounts")
-    .select("id, user_id, access_token")
+    .select("id, user_id, workspace_id, access_token")
     .eq("platform", "whatsapp")
     .eq("platform_user_id", phoneNumberId)
     .eq("is_active", true)
     .limit(1);
-  return accounts?.[0] ?? null;
+  const account = accounts?.[0];
+  if (!account) return null;
+  if (account.workspace_id) return account as WhatsAppAccount;
+
+  // Legacy accounts may predate workspace_id. Resolve their owner's personal
+  // workspace without changing Meta signature verification or webhook auth.
+  const { data: workspace } = await adminClient
+    .from("workspaces")
+    .select("id")
+    .eq("owner_id", account.user_id)
+    .eq("is_personal", true)
+    .maybeSingle();
+  if (!workspace) return null;
+  return { ...account, workspace_id: workspace.id } as WhatsAppAccount;
 }
 
 // Maps a Cloud API message object (live, history, or echo — all share the same
@@ -234,13 +248,13 @@ function toIsoTimestamp(timestamp: unknown): string {
 // coexistence contact sync has delivered it. Falls back to null.
 async function findSavedContactName(
   adminClient: any,
-  userId: string,
+  workspaceId: string,
   participantWaId: string,
 ): Promise<string | null> {
   const { data: contact } = await adminClient
     .from("whatsapp_contacts")
     .select("display_name")
-    .eq("user_id", userId)
+    .eq("workspace_id", workspaceId)
     .eq("phone_number", participantWaId.replace(/\D/g, ""))
     .maybeSingle();
   return contact?.display_name || null;
@@ -262,6 +276,7 @@ async function touchConversation(
     .from("messaging_cache")
     .select("last_message_at")
     .eq("user_id", account.user_id)
+    .eq("workspace_id", account.workspace_id)
     .eq("conversation_id", conversationId)
     .maybeSingle();
 
@@ -281,14 +296,16 @@ async function touchConversation(
       .from("messaging_cache")
       .update(update)
       .eq("user_id", account.user_id)
+      .eq("workspace_id", account.workspace_id)
       .eq("conversation_id", conversationId);
     return;
   }
 
-  const savedName = await findSavedContactName(adminClient, account.user_id, participantWaId);
+  const savedName = await findSavedContactName(adminClient, account.workspace_id, participantWaId);
 
   await adminClient.from("messaging_cache").insert({
     user_id: account.user_id,
+    workspace_id: account.workspace_id,
     social_account_id: account.id,
     conversation_id: conversationId,
     platform: "whatsapp",
@@ -332,7 +349,7 @@ async function handleLiveMessages(
 
     // Inbox list name: the business's saved phone contact beats the customer's
     // self-chosen push name; the per-message from_name keeps the push name.
-    const savedName = await findSavedContactName(adminClient, account.user_id, from);
+    const savedName = await findSavedContactName(adminClient, account.workspace_id, from);
     const participantName = savedName || contactName;
 
     // Store individual message with media info; ignoreDuplicates makes Meta's
@@ -368,6 +385,7 @@ async function handleLiveMessages(
       .from("messaging_cache")
       .select("unread_count")
       .eq("user_id", account.user_id)
+      .eq("workspace_id", account.workspace_id)
       .eq("conversation_id", conversationId)
       .maybeSingle();
 
@@ -375,6 +393,7 @@ async function handleLiveMessages(
       .from("messaging_cache")
       .upsert({
         user_id: account.user_id,
+        workspace_id: account.workspace_id,
         social_account_id: account.id,
         conversation_id: conversationId,
         platform: "whatsapp",
@@ -648,6 +667,7 @@ async function handleContactSync(
 
     await adminClient.from("whatsapp_contacts").upsert({
       user_id: account.user_id,
+      workspace_id: account.workspace_id,
       phone_number: phone,
       display_name: displayName,
     }, { onConflict: "user_id,phone_number" });
@@ -656,6 +676,7 @@ async function handleContactSync(
       .from("messaging_cache")
       .update({ participant_name: displayName, updated_at: new Date().toISOString() })
       .eq("user_id", account.user_id)
+      .eq("workspace_id", account.workspace_id)
       .eq("conversation_id", `wa_${phoneNumberId}_${phone}`);
 
     synced++;

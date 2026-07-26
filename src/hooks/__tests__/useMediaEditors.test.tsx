@@ -9,6 +9,21 @@ vi.mock("@/hooks/use-toast", () => ({
   useToast: () => ({ toast: mockToast }),
 }));
 
+// useMediaEditors reads the processing-jobs context, which throws outside its
+// provider. Mocking the module keeps these unit tests focused on editor state and
+// matches how use-toast is handled above.
+vi.mock("@/contexts/ProcessingJobsContext", () => ({
+  useProcessingJobsContext: () => ({
+    jobs: [],
+    addJob: vi.fn(),
+    updateJob: vi.fn(),
+    removeJob: vi.fn(),
+    clearCompleted: vi.fn(),
+    retryJob: vi.fn(),
+    registerRetryHandler: vi.fn(),
+  }),
+}));
+
 // Mock URL methods
 const mockRevokeObjectURL = vi.fn();
 (globalThis as any).URL.revokeObjectURL = mockRevokeObjectURL;
@@ -50,6 +65,7 @@ describe("useMediaEditors", () => {
         mediaSrc: "",
         mediaType: "image",
         fileId: null,
+        mediaFileId: null,
         targetRatio: undefined,
       });
     });
@@ -61,6 +77,7 @@ describe("useMediaEditors", () => {
         open: false,
         file: null,
         fileId: null,
+        mediaFileId: null,
         src: "",
       });
     });
@@ -80,6 +97,7 @@ describe("useMediaEditors", () => {
         mediaSrc: "blob:test-url",
         mediaType: "image",
         fileId: "file-1",
+        mediaFileId: null,
         targetRatio: undefined,
       });
     });
@@ -329,6 +347,7 @@ describe("useMediaEditors", () => {
         open: true,
         file: mockFile.file,
         fileId: "file-1",
+        mediaFileId: null,
         src: "blob:test-url",
       });
     });

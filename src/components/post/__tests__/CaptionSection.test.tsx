@@ -12,6 +12,17 @@ vi.mock("@/integrations/supabase/client", () => ({
   },
 }));
 
+// CaptionSection renders HashtagSuggestions, which reads useAuth and therefore
+// requires an AuthProvider. Mocking the hook keeps this a focused unit test.
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({
+    user: { id: "user-1", email: "test@example.com" },
+    profile: { id: "user-1", full_name: "Test User" },
+    session: null,
+    loading: false,
+  }),
+}));
+
 // Mock useFeatureFlags hook
 vi.mock("@/hooks/useFeatureFlags", () => ({
   useFeatureFlags: () => ({
@@ -20,6 +31,8 @@ vi.mock("@/hooks/useFeatureFlags", () => ({
       aiHashtags: true,
       aiImage: true,
       aiThumbnails: true,
+      // Gates the "Required for all media posts" label asserted below.
+      titleRequired: true,
       imageCrop: true,
       videoCompress: true,
       tiktokTranscode: true,

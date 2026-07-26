@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Facebook, Camera, MessageSquare, Loader2, Plus, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { AccountSelector } from "./AccountSelector";
 import { ConversationList } from "./ConversationList";
 import { ConversationDetail } from "./ConversationDetail";
@@ -13,6 +13,7 @@ import { useMessagingAccounts, useConversations } from "@/hooks/useMessaging";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useWhatsAppLabels } from "@/hooks/useWhatsAppLabels";
 import type { Conversation } from "@/hooks/useMessaging";
+import { parseInboxRoute, withInboxRoute } from "@/lib/whatsappInboxRoute";
 
 interface MessagingInboxProps {
   platform?: "facebook" | "instagram" | "whatsapp";
@@ -26,6 +27,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
 
+  const [searchParams, setSearchParams] = useSearchParams();
   const [newConvOpen, setNewConvOpen] = useState(false);
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const { assignments } = useWhatsAppLabels();
@@ -49,9 +51,37 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
     }
   }, [accounts, platformTab, selectedAccountId]);
 
+  // Deep links carry messaging_cache.id (`chat`), which is stable, rather than the
+  // external conversation string. Restoring from the URL is WhatsApp-only and
+  // additive: Facebook and Instagram never publish a cache_id, so they are
+  // untouched. An unknown or stale id deliberately selects NOTHING rather than
+  // falling back to a neighbouring conversation, which would silently show the
+  // wrong chat.
+  const routeSelection = parseInboxRoute(searchParams);
+  const routeChatId = routeSelection.conversationCacheId;
+
+  useEffect(() => {
+    if (platformTab !== "whatsapp" || !routeChatId) return;
+    if (selectedConversation?.cache_id === routeChatId) return;
+    const target = conversations.find((conv) => conv.cache_id === routeChatId);
+    if (target) setSelectedConversation(target);
+  }, [conversations, platformTab, routeChatId, selectedConversation]);
+
+  const selectConversation = (conversation: Conversation | null) => {
+    setSelectedConversation(conversation);
+    if (platformTab !== "whatsapp") return;
+    setSearchParams(
+      withInboxRoute(searchParams, {
+        accountId: selectedAccountId ?? undefined,
+        conversationCacheId: conversation?.cache_id,
+      }),
+      { replace: true },
+    );
+  };
+
   const handleAccountChange = (id: string) => {
     setSelectedAccountId(id);
-    setSelectedConversation(null);
+    selectConversation(null);
   };
 
   const handleTabChange = (tab: string) => {
@@ -120,7 +150,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                     open={newConvOpen}
                     onOpenChange={setNewConvOpen}
                     socialAccountId={selectedAccountId}
-                    onSelectContact={setSelectedConversation}
+                    onSelectContact={selectConversation}
                   />
                   <div className="border rounded-lg overflow-hidden flex h-[600px]">
                     <div className="w-80 border-r shrink-0 flex flex-col">
@@ -129,7 +159,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                         <ConversationList
                           conversations={labelFilter ? conversations.filter(c => assignments.some(a => a.conversation_id === c.id && a.label_id === labelFilter)) : conversations}
                           selectedId={selectedConversation?.id || null}
-                          onSelect={setSelectedConversation}
+                          onSelect={selectConversation}
                           isLoading={convsLoading}
                           showLabels={platformTab === "whatsapp"}
                         />
@@ -164,7 +194,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                 <ConversationList
                   conversations={conversations}
                   selectedId={selectedConversation?.id || null}
-                  onSelect={setSelectedConversation}
+                  onSelect={selectConversation}
                   isLoading={convsLoading}
                 />
               </div>
@@ -206,7 +236,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                 <ConversationList
                   conversations={conversations}
                   selectedId={selectedConversation?.id || null}
-                  onSelect={setSelectedConversation}
+                  onSelect={selectConversation}
                   isLoading={convsLoading}
                 />
               </div>

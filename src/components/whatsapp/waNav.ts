@@ -7,6 +7,7 @@ import {
   Clock,
   FileText,
   Headphones,
+  Kanban,
   LayoutDashboard,
   MessageSquare,
   PieChart,
@@ -35,6 +36,7 @@ export function whatsappSectionRoute(path: string) {
 
 export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { path: "pipelines", label: "Pipelines", icon: Kanban },
   { path: "conversations", label: "Conversations", icon: MessageSquare },
   { path: "contacts", label: "Contacts", icon: Users },
   { path: "templates", label: "Templates", icon: FileText },

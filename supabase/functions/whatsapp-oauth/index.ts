@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedJsonResponse, restrictedErrorResponse } from "../_shared/cors.ts";
+import { requireWhatsAppWorkspaceAccess, roleAtLeast, WhatsAppAccessError, type WhatsAppWorkspaceAccessClient, type WorkspaceRole } from "../_shared/whatsappWorkspaceAccess.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v22.0";
 
@@ -10,6 +11,7 @@ interface ExchangeBody {
   phone_number_id: string;
   business_id?: string;
   mode: "cloud_api" | "coexistence";
+  workspace_id?: string;
 }
 
 interface DisconnectBody {
@@ -87,22 +89,45 @@ Deno.serve(async (req) => {
     const userId = userData.user.id;
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
+    const whatsappAccessClient = admin as unknown as WhatsAppWorkspaceAccessClient;
     const body = (await req.json()) as ExchangeBody | DisconnectBody | RequestSyncBody;
+
+    async function requireWorkspaceAdmin(workspaceId: string): Promise<void> {
+      const { data: member, error } = await admin
+        .from("workspace_members")
+        .select("role")
+        .eq("workspace_id", workspaceId)
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!member) throw new WhatsAppAccessError("Workspace not found", 404);
+      const role = member.role as WorkspaceRole;
+      if (!roleAtLeast(role, "admin")) {
+        throw new WhatsAppAccessError("WhatsApp workspace role 'admin' or above required", 403);
+      }
+    }
+
+    async function resolveNewAccountWorkspace(explicitWorkspaceId?: string): Promise<string> {
+      if (explicitWorkspaceId) {
+        await requireWorkspaceAdmin(explicitWorkspaceId);
+        return explicitWorkspaceId;
+      }
+
+      const { data, error } = await userClient.rpc("ensure_personal_workspace", { p_user_id: userId });
+      if (error || !data) throw error || new Error("Unable to resolve personal workspace");
+      return data as string;
+    }
 
     // ============ DISCONNECT ============
     if (body.action === "disconnect") {
       const { social_account_id } = body;
-      const { data: account } = await admin
-        .from("social_accounts")
-        .select("id, user_id, access_token, account_metadata")
-        .eq("id", social_account_id)
-        .eq("user_id", userId)
-        .maybeSingle();
-      if (!account) return restrictedErrorResponse(req, "Account not found", 404);
+      const account = await requireWhatsAppWorkspaceAccess(
+        whatsappAccessClient, userId, social_account_id, "admin",
+      );
 
-      const meta = (account.account_metadata || {}) as Record<string, unknown>;
+      const meta = (account.accountMetadata || {}) as Record<string, unknown>;
       const wabaId = meta.waba_id as string | undefined;
-      const token = account.access_token as string | undefined;
+      const token = account.accessToken || undefined;
 
       // Best-effort unsubscribe webhook from WABA
       if (wabaId && token) {
@@ -120,32 +145,28 @@ Deno.serve(async (req) => {
         .from("social_accounts")
         .update({ is_active: false })
         .eq("id", social_account_id)
-        .eq("user_id", userId);
+        .eq("workspace_id", account.workspaceId);
 
       return restrictedJsonResponse(req, { success: true });
     }
 
     // ============ REQUEST_SYNC (coexistence chat history + contacts) ============
     if (body.action === "request_sync") {
-      const { data: account } = await admin
-        .from("social_accounts")
-        .select("id, user_id, platform_user_id, access_token, account_metadata")
-        .eq("id", body.social_account_id)
-        .eq("user_id", userId)
-        .maybeSingle();
-      if (!account) return restrictedErrorResponse(req, "Account not found", 404);
+      const account = await requireWhatsAppWorkspaceAccess(
+        whatsappAccessClient, userId, body.social_account_id, "admin",
+      );
 
-      const meta = (account.account_metadata || {}) as Record<string, unknown>;
+      const meta = (account.accountMetadata || {}) as Record<string, unknown>;
       if (meta.connection_mode !== "coexistence") {
         return restrictedErrorResponse(req, "Chat sync is only available for coexistence connections", 400);
       }
-      if (!account.access_token) {
+      if (!account.accessToken) {
         return restrictedErrorResponse(req, "Account has no access token — reconnect first", 400);
       }
 
       const results = [
-        await requestSmbAppDataSync(account.platform_user_id, account.access_token, "smb_app_state_sync"),
-        await requestSmbAppDataSync(account.platform_user_id, account.access_token, "history"),
+        await requestSmbAppDataSync(account.platformUserId, account.accessToken, "smb_app_state_sync"),
+        await requestSmbAppDataSync(account.platformUserId, account.accessToken, "history"),
       ];
       return restrictedJsonResponse(req, {
         success: results.every((r) => r.success),
@@ -162,7 +183,7 @@ Deno.serve(async (req) => {
       return restrictedErrorResponse(req, "FACEBOOK_APP_ID / FACEBOOK_APP_SECRET not configured.", 500);
     }
 
-    const { code, waba_id, phone_number_id, business_id, mode } = body;
+    const { code, waba_id, phone_number_id, business_id, mode, workspace_id } = body;
     if (!code || !waba_id || !phone_number_id || !mode) {
       return restrictedErrorResponse(req, "Missing required fields: code, waba_id, phone_number_id, mode", 400);
     }
@@ -188,6 +209,29 @@ Deno.serve(async (req) => {
           403,
         );
       }
+    }
+
+    const { data: existingAccount, error: existingAccountError } = await admin
+      .from("social_accounts")
+      .select("id")
+      .eq("platform", "whatsapp")
+      .eq("platform_user_id", phone_number_id)
+      .maybeSingle();
+    if (existingAccountError) throw existingAccountError;
+
+    let targetWorkspaceId: string;
+    if (existingAccount) {
+      const existingAccess = await requireWhatsAppWorkspaceAccess(
+        whatsappAccessClient, userId, existingAccount.id, "admin",
+      );
+      if (workspace_id && workspace_id !== existingAccess.workspaceId) {
+        throw new WhatsAppAccessError(
+          "An existing WhatsApp account cannot be moved between workspaces during reconnect", 403,
+        );
+      }
+      targetWorkspaceId = existingAccess.workspaceId;
+    } else {
+      targetWorkspaceId = await resolveNewAccountWorkspace(workspace_id);
     }
 
     // 1. Exchange code for system user access token (no redirect_uri for Embedded Signup)
@@ -279,13 +323,6 @@ Deno.serve(async (req) => {
     // 5. Upsert social_accounts row
     const tokenExpiresAt = expiresIn ? new Date(Date.now() + expiresIn * 1000).toISOString() : null;
 
-    const { data: existing } = await admin
-      .from("social_accounts")
-      .select("id")
-      .eq("user_id", userId)
-      .eq("platform", "whatsapp")
-      .eq("platform_user_id", phone_number_id)
-      .maybeSingle();
 
     const accountMetadata = {
       waba_id,
@@ -299,11 +336,12 @@ Deno.serve(async (req) => {
       sync_requests: syncRequests,
     };
 
-    if (existing) {
+    if (existingAccount) {
       await admin
         .from("social_accounts")
         .update({
           platform_username: displayPhone || verifiedName || phone_number_id,
+          workspace_id: targetWorkspaceId,
           access_token: accessToken,
           token_expires_at: tokenExpiresAt,
           account_metadata: accountMetadata,
@@ -311,10 +349,11 @@ Deno.serve(async (req) => {
           needs_reauth: false,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", existing.id);
+        .eq("id", existingAccount.id);
     } else {
       await admin.from("social_accounts").insert({
         user_id: userId,
+        workspace_id: targetWorkspaceId,
         platform: "whatsapp",
         platform_user_id: phone_number_id,
         platform_username: displayPhone || verifiedName || phone_number_id,
@@ -335,6 +374,7 @@ Deno.serve(async (req) => {
     });
   } catch (err) {
     console.error("[whatsapp-oauth] Error:", err);
+    if (err instanceof WhatsAppAccessError) return restrictedErrorResponse(req, err.message, err.status);
     return restrictedErrorResponse(req, (err as Error).message, 500);
   }
 });

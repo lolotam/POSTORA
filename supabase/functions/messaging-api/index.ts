@@ -1,6 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isDirectInstagramAccount, getPageTokenForMessaging, getSendCredentials } from "../_shared/messengerCredentials.ts";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
+import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
 
 // Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
 // before that window closes rather than serving a dead link from messaging_cache.
@@ -38,6 +40,7 @@ async function upsertOutboundConversation(
     phone_number_id: string;
     recipient_phone: string;
     preview: string;
+    workspace_id: string;
   }
 ) {
   const normalizedPhone = params.recipient_phone.replace(/\D/g, "");
@@ -48,7 +51,7 @@ async function upsertOutboundConversation(
   const { data: existingContact } = await (adminClient as any)
     .from("whatsapp_contacts")
     .select("display_name")
-    .eq("user_id", params.user_id)
+    .eq("workspace_id", params.workspace_id)
     .eq("phone_number", normalizedPhone)
     .maybeSingle();
 
@@ -58,6 +61,7 @@ async function upsertOutboundConversation(
   await (adminClient as any).from("whatsapp_contacts").upsert(
     {
       user_id: params.user_id,
+      workspace_id: params.workspace_id,
       phone_number: normalizedPhone,
       display_name: existingContact?.display_name || `+${normalizedPhone}`,
       last_message_at: nowIso,
@@ -69,6 +73,7 @@ async function upsertOutboundConversation(
   await (adminClient as any).from("messaging_cache").upsert(
     {
       user_id: params.user_id,
+      workspace_id: params.workspace_id,
       social_account_id: params.social_account_id,
       platform: "whatsapp",
       conversation_id: conversationId,
@@ -116,6 +121,7 @@ Deno.serve(async (req) => {
     const user = { id: userId };
 
     const adminClient = createClient(supabaseUrl, supabaseKey);
+    const whatsappAccessClient = adminClient as unknown as WhatsAppWorkspaceAccessClient;
     const body = await req.json();
     const { action } = body;
 
@@ -736,13 +742,19 @@ Deno.serve(async (req) => {
 
     // ===== WhatsApp Cloud API Actions =====
 
+    function getWhatsAppMetadata(account: WhatsAppAccountAccess): Record<string, unknown> {
+      return account.accountMetadata && typeof account.accountMetadata === "object"
+        ? account.accountMetadata as Record<string, unknown>
+        : {};
+    }
+
     // Helper: get WhatsApp token. Multi-tenant: each account sends with its own
     // per-user token from the DB. The shared WHATSAPP_ACCESS_TOKEN env secret is
     // only a fallback for legacy admin accounts that never stored a token.
-    function getWhatsAppToken(account: any): string {
-      if (account?.access_token) {
+    function getWhatsAppToken(account: WhatsAppAccountAccess): string {
+      if (account.accessToken) {
         console.log("[messaging] Using per-user token from DB");
-        return account.access_token;
+        return account.accessToken;
       }
       const envToken = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
       if (envToken) {
@@ -750,7 +762,7 @@ Deno.serve(async (req) => {
         return envToken;
       }
       console.log("[messaging] No token available for this account");
-      return account?.access_token;
+      return account.accessToken;
     }
 
     // Helper: mark account as cloud-api-registered in DB
@@ -862,10 +874,13 @@ Deno.serve(async (req) => {
       const { social_account_id } = body;
       if (!social_account_id) throw new Error("social_account_id required");
 
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-
-      const phoneNumberId = account.platform_user_id;
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_register_phone",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const phoneNumberId = account.platformUserId;
       const token = getWhatsAppToken(account);
       const result = await registerWhatsAppPhone(phoneNumberId, token, social_account_id);
       return jsonResponse({ success: true, message: "Phone number registered successfully", data: result });
@@ -876,10 +891,13 @@ Deno.serve(async (req) => {
       const { social_account_id, recipient_phone, message, message_type } = body;
       if (!social_account_id || !recipient_phone || !message) throw new Error("social_account_id, recipient_phone, and message required");
 
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-
-      const phoneNumberId = account.platform_user_id;
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_message",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const phoneNumberId = account.platformUserId;
       const url = `${GRAPH_API}/${phoneNumberId}/messages`;
       const token = getWhatsAppToken(account);
 
@@ -902,7 +920,7 @@ Deno.serve(async (req) => {
       const normalizedPhone = recipient_phone.replace(/^\+/, "");
       const conversationId = `wa_${phoneNumberId}_${normalizedPhone}`;
       await adminClient.from("whatsapp_messages").insert({
-        user_id: user!.id,
+        user_id: account.ownerId,
         social_account_id,
         conversation_id: conversationId,
         message_id: sentMessageId,
@@ -918,8 +936,9 @@ Deno.serve(async (req) => {
 
       // Make conversation appear in inbox + auto-save contact
       await upsertOutboundConversation(adminClient, {
-        user_id: user!.id,
+        user_id: account.ownerId,
         social_account_id,
+        workspace_id: account.workspaceId,
         phone_number_id: phoneNumberId,
         recipient_phone,
         preview: message_type === "template" ? "[Template message]" : message,
@@ -933,10 +952,13 @@ Deno.serve(async (req) => {
       const { social_account_id, recipient_phone, template_name, template_language, template_components } = body;
       if (!social_account_id || !recipient_phone || !template_name) throw new Error("social_account_id, recipient_phone, and template_name required");
 
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-
-      const phoneNumberId = account.platform_user_id;
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_template",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const phoneNumberId = account.platformUserId;
       const url = `${GRAPH_API}/${phoneNumberId}/messages`;
       const token = getWhatsAppToken(account);
 
@@ -958,7 +980,7 @@ Deno.serve(async (req) => {
       const normalizedPhone = recipient_phone.replace(/^\+/, "");
       const conversationId = `wa_${phoneNumberId}_${normalizedPhone}`;
       await adminClient.from("whatsapp_messages").insert({
-        user_id: user!.id,
+        user_id: account.ownerId,
         social_account_id,
         conversation_id: conversationId,
         message_id: sentMessageId,
@@ -974,8 +996,9 @@ Deno.serve(async (req) => {
 
       // Make conversation appear in inbox + auto-save contact
       await upsertOutboundConversation(adminClient, {
-        user_id: user!.id,
+        user_id: account.ownerId,
         social_account_id,
+        workspace_id: account.workspaceId,
         phone_number_id: phoneNumberId,
         recipient_phone,
         preview: `[Template: ${template_name}]`,
@@ -989,10 +1012,13 @@ Deno.serve(async (req) => {
       const { social_account_id } = body;
       if (!social_account_id) throw new Error("social_account_id required");
 
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-
-      const wabaId = account.account_metadata?.waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_list_templates",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const wabaId = getWhatsAppMetadata(account).waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
       if (!wabaId) throw new Error("WhatsApp Business Account ID not found. Please reconnect your account.");
 
       const waToken = getWhatsAppToken(account);
@@ -1007,10 +1033,13 @@ Deno.serve(async (req) => {
       const { social_account_id, name, category, language, components } = body;
       if (!social_account_id || !name || !category || !components) throw new Error("social_account_id, name, category, and components required");
 
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-
-      const wabaId = account.account_metadata?.waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_create_template",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const wabaId = getWhatsAppMetadata(account).waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
       if (!wabaId) throw new Error("WhatsApp Business Account ID not found.");
 
       const waToken = getWhatsAppToken(account);
@@ -1039,11 +1068,19 @@ Deno.serve(async (req) => {
       const { social_account_id } = body;
       if (!social_account_id) throw new Error("social_account_id required");
 
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_get_analytics",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+
       // Get conversation stats from messaging_cache
       const { data: cacheData, error: cacheError } = await adminClient
         .from("messaging_cache")
         .select("*")
         .eq("social_account_id", social_account_id)
+        .eq("workspace_id", account.workspaceId)
         .eq("platform", "whatsapp");
       if (cacheError) throw cacheError;
 
@@ -1072,27 +1109,60 @@ Deno.serve(async (req) => {
       const { social_account_id } = body;
       if (!social_account_id) throw new Error("social_account_id required");
 
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_list_conversations",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+
       const { data, error } = await adminClient
         .from("messaging_cache")
         .select("*")
         .eq("social_account_id", social_account_id)
+        .eq("workspace_id", account.workspaceId)
         .eq("platform", "whatsapp")
         .order("last_message_at", { ascending: false })
         .limit(50);
 
       if (error) throw error;
 
-      const conversations = (data || []).map((c: any) => ({
-        id: c.conversation_id,
-        participant_name: c.participant_name || "Unknown",
-        participant_id: c.conversation_id.replace(`wa_${social_account_id}_`, "").replace(/^wa_\d+_/, ""),
-        participant_avatar: c.participant_avatar || null,
-        last_message: c.last_message_preview || "",
-        last_message_time: c.last_message_at,
-        last_message_from: c.participant_name || "",
-        unread_count: c.unread_count || 0,
-        updated_time: c.updated_at,
-      }));
+      const participantPhone = (conversationId: string) =>
+        conversationId.replace(`wa_${social_account_id}_`, "").replace(/^wa_\d+_/, "");
+      const participantPhones = [...new Set(
+        (data || []).map((conversation: any) => participantPhone(conversation.conversation_id)),
+      )].filter(Boolean);
+      const contactIdByPhone = new Map<string, string>();
+
+      if (participantPhones.length > 0) {
+        const { data: contacts, error: contactsError } = await adminClient
+          .from("whatsapp_contacts")
+          .select("id, phone_number")
+          .eq("workspace_id", account.workspaceId)
+          .in("phone_number", participantPhones);
+        if (contactsError) throw contactsError;
+        for (const contact of contacts || []) {
+          contactIdByPhone.set(contact.phone_number, contact.id);
+        }
+      }
+
+      const conversations = (data || []).map((c: any) => {
+        const phone = participantPhone(c.conversation_id);
+        return {
+          id: c.conversation_id,
+          cache_id: c.id,
+          workspace_id: c.workspace_id,
+          contact_id: contactIdByPhone.get(phone) || null,
+          participant_name: c.participant_name || "Unknown",
+          participant_id: phone,
+          participant_avatar: c.participant_avatar || null,
+          last_message: c.last_message_preview || "",
+          last_message_time: c.last_message_at,
+          last_message_from: c.participant_name || "",
+          unread_count: c.unread_count || 0,
+          updated_time: c.updated_at,
+        };
+      });
 
       return jsonResponse({ conversations });
     }
@@ -1102,9 +1172,18 @@ Deno.serve(async (req) => {
       const { social_account_id, conversation_id } = body;
       if (!social_account_id || !conversation_id) throw new Error("social_account_id and conversation_id required");
 
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_get_messages",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+
       // Normalize conversation_id to handle both with and without '+' prefix
       const normalizedConvId = conversation_id.replace(/_\+/g, "_");
 
+      // whatsapp_messages has no workspace_id column. The workspace-authorized
+      // social_account_id above is therefore the tenant boundary for this query.
       const { data: msgs, error: msgsError } = await adminClient
         .from("whatsapp_messages")
         .select("*")
@@ -1133,10 +1212,18 @@ Deno.serve(async (req) => {
       const { social_account_id, conversation_id } = body;
       if (!social_account_id || !conversation_id) throw new Error("social_account_id and conversation_id required");
 
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_mark_read",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+
       const { error } = await adminClient
         .from("messaging_cache")
         .update({ unread_count: 0 })
         .eq("social_account_id", social_account_id)
+        .eq("workspace_id", account.workspaceId)
         .eq("conversation_id", conversation_id);
 
       if (error) throw error;
@@ -1148,10 +1235,13 @@ Deno.serve(async (req) => {
       const { social_account_id, recipient_phone, media_url, media_type, caption } = body;
       if (!social_account_id || !recipient_phone || !media_url) throw new Error("social_account_id, recipient_phone, and media_url required");
 
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-
-      const phoneNumberId = account.platform_user_id;
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_media",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const phoneNumberId = account.platformUserId;
       const url = `${GRAPH_API}/${phoneNumberId}/messages`;
       const token = getWhatsAppToken(account);
 
@@ -1178,7 +1268,7 @@ Deno.serve(async (req) => {
       const normalizedPhone = recipient_phone.replace(/^\+/, "");
       const conversationId = `wa_${phoneNumberId}_${normalizedPhone}`;
       await adminClient.from("whatsapp_messages").insert({
-        user_id: user!.id,
+        user_id: account.ownerId,
         social_account_id,
         conversation_id: conversationId,
         message_id: sentMessageId,
@@ -1196,8 +1286,9 @@ Deno.serve(async (req) => {
 
       // Make conversation appear in inbox + auto-save contact
       await upsertOutboundConversation(adminClient, {
-        user_id: user!.id,
+        user_id: account.ownerId,
         social_account_id,
+        workspace_id: account.workspaceId,
         phone_number_id: phoneNumberId,
         recipient_phone,
         preview: caption || `[${mType}]`,
@@ -1209,10 +1300,13 @@ Deno.serve(async (req) => {
       const { social_account_id, recipient_phone, interactive } = body;
       if (!social_account_id || !recipient_phone || !interactive) throw new Error("social_account_id, recipient_phone, and interactive required");
 
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-
-      const phoneNumberId = account.platform_user_id;
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_interactive",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const phoneNumberId = account.platformUserId;
       const url = `${GRAPH_API}/${phoneNumberId}/messages`;
       const token = getWhatsAppToken(account);
 
@@ -1230,7 +1324,7 @@ Deno.serve(async (req) => {
       const normalizedPhone = recipient_phone.replace(/^\+/, "");
       const conversationId = `wa_${phoneNumberId}_${normalizedPhone}`;
       await adminClient.from("whatsapp_messages").insert({
-        user_id: user!.id,
+        user_id: account.ownerId,
         social_account_id,
         conversation_id: conversationId,
         message_id: sentMessageId,
@@ -1241,8 +1335,9 @@ Deno.serve(async (req) => {
 
       // Make conversation appear in inbox + auto-save contact
       await upsertOutboundConversation(adminClient, {
-        user_id: user!.id,
+        user_id: account.ownerId,
         social_account_id,
+        workspace_id: account.workspaceId,
         phone_number_id: phoneNumberId,
         recipient_phone,
         preview: `[Interactive: ${interactive.type}] ${interactive.body?.text || ""}`,
@@ -1256,10 +1351,13 @@ Deno.serve(async (req) => {
       const { social_account_id, template_name } = body;
       if (!social_account_id || !template_name) throw new Error("social_account_id and template_name required");
 
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-
-      const wabaId = account.account_metadata?.waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_delete_template",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const wabaId = getWhatsAppMetadata(account).waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
       if (!wabaId) throw new Error("WhatsApp Business Account ID not found.");
 
       const waToken = getWhatsAppToken(account);
@@ -1278,9 +1376,13 @@ Deno.serve(async (req) => {
     if (action === "whatsapp_get_catalog") {
       const { social_account_id } = body;
       if (!social_account_id) throw new Error("social_account_id required");
-      const account = await getAccountToken(social_account_id);
-      if (account.platform !== "whatsapp") throw new Error("Account is not a WhatsApp Business account");
-      const wabaId = account.account_metadata?.waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_get_catalog",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const wabaId = getWhatsAppMetadata(account).waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
       if (!wabaId) throw new Error("WhatsApp Business Account ID not found.");
       const waToken = getWhatsAppToken(account);
       const res = await fetch(`${GRAPH_API}/${wabaId}/product_catalogs`, {
@@ -1297,7 +1399,12 @@ Deno.serve(async (req) => {
     if (action === "whatsapp_get_products") {
       const { social_account_id, catalog_id } = body;
       if (!social_account_id || !catalog_id) throw new Error("social_account_id and catalog_id required");
-      const account = await getAccountToken(social_account_id);
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_get_products",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
       const waToken = getWhatsAppToken(account);
       const res = await fetch(`${GRAPH_API}/${catalog_id}/products?fields=id,name,description,price,currency,image_url,url,retailer_id,availability&limit=100`, {
         headers: { Authorization: `Bearer ${waToken}` },
@@ -1313,8 +1420,13 @@ Deno.serve(async (req) => {
       if (!social_account_id || !recipient_phone || !catalog_id || !product_retailer_id) {
         throw new Error("social_account_id, recipient_phone, catalog_id, and product_retailer_id required");
       }
-      const account = await getAccountToken(social_account_id);
-      const phoneNumberId = account.account_metadata?.phone_number_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_product",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const phoneNumberId = getWhatsAppMetadata(account).phone_number_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
       const waToken = getWhatsAppToken(account);
       const res = await fetch(`${GRAPH_API}/${phoneNumberId}/messages`, {
         method: "POST",
@@ -1341,8 +1453,13 @@ Deno.serve(async (req) => {
       if (!social_account_id || !recipient_phone || !catalog_id || !sections) {
         throw new Error("social_account_id, recipient_phone, catalog_id, and sections required");
       }
-      const account = await getAccountToken(social_account_id);
-      const phoneNumberId = account.account_metadata?.phone_number_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_product_list",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      const phoneNumberId = getWhatsAppMetadata(account).phone_number_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
       const waToken = getWhatsAppToken(account);
       const res = await fetch(`${GRAPH_API}/${phoneNumberId}/messages`, {
         method: "POST",
@@ -1368,6 +1485,10 @@ Deno.serve(async (req) => {
   } catch (err: any) {
     console.error("messaging-api error:", err);
     const message = err.message || "Internal error";
+
+    if (err instanceof WhatsAppAccessError) {
+      return jsonResponse({ error: err.message }, err.status);
+    }
 
     // Surface friendly WhatsApp 2FA error as 200 with structured field
     if (err.error_type === "WHATSAPP_2FA_ENABLED") {

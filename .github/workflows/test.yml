@@ -32,8 +32,12 @@ jobs:
         run: bun run lint
         continue-on-error: true
 
+      # `bun test` is Bun's own runner: it ignores vitest.config, the jsdom
+      # environment, src/test/setup.ts and the `@` alias, and it walks files the
+      # vitest `include` pattern excludes (such as the Deno edge-function tests).
+      # `bun run test` executes the package.json script, i.e. `vitest run`.
       - name: Run tests
-        run: bun test
+        run: bun run test
 
       - name: Upload test results
         if: always()

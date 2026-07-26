@@ -22,6 +22,13 @@ export interface Conversation {
   // auto-reply lookups, since Meta's own conversation id (`id` above) never appears in webhook
   // payloads and can't be matched against there.
   assignment_key?: string;
+  // WhatsApp only. `cache_id` is messaging_cache.id — the stable conversation key
+  // that deal links point at, unlike `id` (the external conversation string, which
+  // is not durable across reconnects). Optional so Facebook and Instagram
+  // conversations, which supply none of these, keep working unchanged.
+  cache_id?: string;
+  workspace_id?: string;
+  contact_id?: string | null;
   last_message: string;
   last_message_time: string;
   last_message_from: string;

@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { useProfileOAuth } from "../useProfileOAuth";
 import { facebookLogin } from "@/lib/facebookSdk";
 import { supabase } from "@/integrations/supabase/client";
@@ -49,6 +51,16 @@ vi.mock("@/integrations/supabase/client", () => ({
     },
 }));
 
+// useProfileOAuth now runs React Query calls, so it needs a client in scope.
+function createWrapper() {
+    const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    return ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    );
+}
+
 describe("useProfileOAuth Hook", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -60,7 +72,7 @@ describe("useProfileOAuth Hook", () => {
 
     it("should handle error in URL params", () => {
         mockSearchParams.set("error", "access_denied");
-        const { result } = renderHook(() => useProfileOAuth());
+        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
         expect(mockSetSearchParams).toHaveBeenCalledWith({});
     });
 
@@ -79,7 +91,7 @@ describe("useProfileOAuth Hook", () => {
             error: null,
         });
 
-        const { result } = renderHook(() => useProfileOAuth());
+        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
 
         await act(async () => {
             await result.current.handleConnectPlatform("profile_123", "facebook");
@@ -97,7 +109,7 @@ describe("useProfileOAuth Hook", () => {
             diagnostics: { origin: "https://postora.cloud", timestamp: new Date().toISOString(), sdkLoaded: true, loginStatus: "unknown" },
         });
 
-        const { result } = renderHook(() => useProfileOAuth());
+        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
 
         await act(async () => {
             await result.current.handleConnectPlatform("profile_123", "facebook");
@@ -120,7 +132,7 @@ describe("useProfileOAuth Hook", () => {
             diagnostics: { origin: "https://postora.cloud", timestamp: new Date().toISOString(), sdkLoaded: true, loginStatus: "not_authorized" },
         });
 
-        const { result } = renderHook(() => useProfileOAuth());
+        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
 
         await act(async () => {
             await result.current.handleConnectPlatform("profile_123", "facebook");
@@ -146,7 +158,7 @@ describe("useProfileOAuth Hook", () => {
             diagnostics: { origin: "https://postora.cloud", timestamp: new Date().toISOString(), sdkLoaded: false, loginStatus: "sdk_not_loaded" },
         });
 
-        const { result } = renderHook(() => useProfileOAuth());
+        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
 
         await act(async () => {
             await result.current.handleConnectPlatform("profile_123", "facebook");

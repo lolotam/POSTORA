@@ -12,6 +12,7 @@ describe("whatsappNavItems", () => {
   it("keeps the route slugs that external deep links and legacy ?tab= URLs depend on", () => {
     expect(whatsappNavItems.map((item) => item.path)).toEqual([
       "",
+      "pipelines",
       "conversations",
       "contacts",
       "templates",
