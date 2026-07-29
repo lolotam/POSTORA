@@ -2,7 +2,7 @@ create extension if not exists pgtap with schema extensions;
 
 begin;
 set local search_path = public, extensions, auth, pg_temp;
-select plan(33);
+select plan(52);
 
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -385,6 +385,107 @@ select throws_ok(
   'the only owner cannot be removed'
 );
 
+-- ---------------------------------------------------------------------------
+-- Cross-workspace isolation matrix.
+--
+-- Until now only whatsapp_deals had a negative authenticated-role test. Tenancy
+-- is load-bearing on production data, so every RLS-protected table gets one.
+--
+-- Each pair asserts twice: first as the table owner (RLS bypassed) that the
+-- workspace-B row genuinely EXISTS, then as authenticated user A that it is
+-- invisible. Without the first assertion a typo'd id would make the second pass
+-- for the wrong reason.
+-- ---------------------------------------------------------------------------
 reset role;
+
+-- Agent 61000000-...-0002 (user B in workspace B) already exists from the
+-- workspace-scoped uniqueness test above; reuse it rather than colliding with
+-- the UNIQUE (workspace_id, user_id) constraint.
+insert into public.whatsapp_conversation_assignments
+  (id, workspace_id, conversation_id, conversation_cache_id, agent_id)
+values ('a3000000-0000-0000-0000-000000000002', current_setting('test.workspace_b')::uuid,
+        'wa_rehearsal_b_15550000002', '91000000-0000-0000-0000-000000000002',
+        '61000000-0000-0000-0000-000000000002');
+insert into public.workspace_invitations
+  (id, workspace_id, email, role, token_hash, expires_at)
+values ('a4000000-0000-0000-0000-000000000002', current_setting('test.workspace_b')::uuid,
+        'outsider-b@example.test', 'agent', repeat('b', 64), now() + interval '7 days');
+
+-- Superuser preconditions: prove each workspace-B row is really there.
+select is((select count(*) from public.workspaces
+           where id = current_setting('test.workspace_b')::uuid), 1::bigint,
+          'precondition: workspace B exists');
+select is((select count(*) from public.workspace_members
+           where workspace_id = current_setting('test.workspace_b')::uuid), 1::bigint,
+          'precondition: workspace B has a member');
+select is((select count(*) from public.workspace_invitations
+           where workspace_id = current_setting('test.workspace_b')::uuid), 1::bigint,
+          'precondition: workspace B has a pending invitation');
+select is((select count(*) from public.whatsapp_pipelines
+           where workspace_id = current_setting('test.workspace_b')::uuid), 1::bigint,
+          'precondition: workspace B has a pipeline');
+select is((select count(*) from public.whatsapp_pipeline_stages
+           where workspace_id = current_setting('test.workspace_b')::uuid) > 0, true,
+          'precondition: workspace B has stages');
+select is((select count(*) from public.whatsapp_contacts
+           where workspace_id = current_setting('test.workspace_b')::uuid), 1::bigint,
+          'precondition: workspace B has a contact');
+select is((select count(*) from public.messaging_cache
+           where workspace_id = current_setting('test.workspace_b')::uuid), 1::bigint,
+          'precondition: workspace B has a conversation');
+select is((select count(*) from public.whatsapp_agents
+           where workspace_id = current_setting('test.workspace_b')::uuid), 1::bigint,
+          'precondition: workspace B has an agent');
+select is((select count(*) from public.whatsapp_conversation_assignments
+           where workspace_id = current_setting('test.workspace_b')::uuid), 1::bigint,
+          'precondition: workspace B has an assignment');
+
+-- Now become user A, an outsider to workspace B.
+set local role authenticated;
+set local request.jwt.claims =
+  '{"sub":"10000000-0000-0000-0000-000000000001","role":"authenticated","email":"rehearsal-a@example.test"}';
+set local row_security = on;
+
+select is((select count(*) from public.workspaces
+           where id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot read another workspace');
+select is((select count(*) from public.workspace_members
+           where workspace_id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot enumerate another workspace member list');
+select is((select count(*) from public.workspace_invitations
+           where workspace_id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot read another workspace invitations');
+select is((select count(*) from public.whatsapp_pipelines
+           where workspace_id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot read another workspace pipelines');
+select is((select count(*) from public.whatsapp_pipeline_stages
+           where workspace_id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot read another workspace pipeline stages');
+select is((select count(*) from public.whatsapp_contacts
+           where workspace_id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot read another workspace contacts');
+select is((select count(*) from public.messaging_cache
+           where workspace_id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot read another workspace conversations');
+select is((select count(*) from public.whatsapp_agents
+           where workspace_id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot read another workspace agents');
+select is((select count(*) from public.whatsapp_conversation_assignments
+           where workspace_id = current_setting('test.workspace_b')::uuid), 0::bigint,
+          'an outsider cannot read another workspace assignments');
+
+-- Writes must be refused too, not merely hidden. A silently-swallowed insert
+-- would let an outsider seed rows into a tenant they cannot see.
+select throws_ok(
+  $sql$insert into public.whatsapp_contacts
+         (user_id, workspace_id, phone_number, display_name)
+       values ('10000000-0000-0000-0000-000000000001',
+               current_setting('test.workspace_b')::uuid, '+15550009999', 'Intruder')$sql$,
+  '42501', null,
+  'an outsider cannot insert a contact into another workspace'
+);
+
+reset role;
+
 select * from finish();
 rollback;
