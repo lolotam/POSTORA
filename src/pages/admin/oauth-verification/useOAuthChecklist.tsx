@@ -35,12 +35,6 @@ const STORAGE_KEYS = {
   notified: "oauth_completion_notified",
 };
 
-function createPlatformState(storageKey: string): [Set<string>, React.Dispatch<React.SetStateAction<Set<string>>>] {
-  const saved = localStorage.getItem(storageKey);
-  const initial = saved ? new Set<string>(JSON.parse(saved)) : new Set<string>();
-  return useState<Set<string>>(initial);
-}
-
 function createToggle(
   completed: Set<string>,
   setCompleted: React.Dispatch<React.SetStateAction<Set<string>>>,

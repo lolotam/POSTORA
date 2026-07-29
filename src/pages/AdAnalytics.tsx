@@ -39,11 +39,10 @@ export default function AdAnalytics() {
   const { data: campaigns = [], isLoading: campaignsLoading } = useCampaigns(activeAccountId, activeAdAccountId, datePreset);
   const { data: insights = [], isLoading: insightsLoading } = useAccountInsights(activeAccountId, activeAdAccountId, datePreset);
 
-  if (!flagsLoading && !flags.adAnalytics) {
-    return <Navigate to="/dashboard" replace />;
-  }
-
-  // Summary metrics
+  // Summary metrics. This must stay ABOVE the feature-flag redirect below: hooks
+  // run in call order, so a hook placed after an early return is skipped whenever
+  // that branch is taken, and React throws "rendered fewer hooks than expected"
+  // the moment the flag flips.
   const totals = useMemo(() => {
     return insights.reduce(
       (acc, d) => ({
@@ -55,6 +54,10 @@ export default function AdAnalytics() {
       { spend: 0, impressions: 0, clicks: 0, reach: 0 }
     );
   }, [insights]);
+
+  if (!flagsLoading && !flags.adAnalytics) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   const isLoading = adAccountsLoading || campaignsLoading || insightsLoading;
 

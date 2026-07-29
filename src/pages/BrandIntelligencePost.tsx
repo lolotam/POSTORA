@@ -172,7 +172,7 @@ export default function BrandIntelligencePost() {
     setTimeout(() => setCopiedIndex(null), 2000);
   };
 
-  const useInPost = (text: string) => {
+  const handleUseInPost = (text: string) => {
     navigate("/post", { state: { caption: text } });
   };
 
@@ -504,7 +504,7 @@ export default function BrandIntelligencePost() {
                                 {copiedIndex === i ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
                                 {copiedIndex === i ? "Copied" : "Copy"}
                               </Button>
-                              <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1" onClick={() => useInPost(caption)}>
+                              <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1" onClick={() => handleUseInPost(caption)}>
                                 Use in Post
                               </Button>
                             </div>

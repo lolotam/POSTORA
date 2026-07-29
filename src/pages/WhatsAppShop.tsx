@@ -31,6 +31,15 @@ export default function WhatsAppShop() {
   const [createOpen, setCreateOpen] = useState(false);
   const [newProduct, setNewProduct] = useState({ name: "", description: "", price: "", imageUrl: "" });
 
+  // Kept above the feature-flag redirect: a hook after an early return is skipped
+  // whenever that branch is taken, so the hook order changes when the flag flips
+  // and React throws "rendered fewer hooks than expected".
+  const stats = useMemo(() => ({
+    total: products.length,
+    active: products.filter((p) => p.status === "active").length,
+    draft: products.filter((p) => p.status === "draft").length,
+  }), [products]);
+
   if (!flagsLoading && !flags.whatsappShop) {
     return <Navigate to="/dashboard" replace />;
   }
@@ -62,12 +71,6 @@ export default function WhatsAppShop() {
       prev.map((p) => (p.id === id ? { ...p, status: p.status === "active" ? "draft" : "active" } : p))
     );
   };
-
-  const stats = useMemo(() => ({
-    total: products.length,
-    active: products.filter((p) => p.status === "active").length,
-    draft: products.filter((p) => p.status === "draft").length,
-  }), [products]);
 
   return (
     <DashboardLayout>
