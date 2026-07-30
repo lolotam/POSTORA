@@ -15,8 +15,12 @@ import {
 } from "./workspaceService.ts";
 
 const FROM_EMAIL = "Postora <noreply@postora.cloud>";
-const INVITATION_ACCEPT_URL =
-  "https://postora.cloud/settings?workspace_invitation_token=";
+// Must match the route registered in src/components/AnimatedRoutes.tsx
+// ("/workspace/invite") and the query parameter src/pages/WorkspaceInvite.tsx
+// reads ("token"). Nothing in the frontend has ever handled a
+// `workspace_invitation_token` parameter on /settings, so the previous value
+// sent every invitee to a page that silently ignored their token.
+export const INVITATION_ACCEPT_URL = "https://postora.cloud/workspace/invite?token=";
 
 interface DatabaseError {
   message: string;
@@ -315,7 +319,7 @@ function escapeHtml(rawText: string): string {
     .replaceAll("'", "&#039;");
 }
 
-function invitationEmailHtml(message: InvitationEmailMessage): string {
+export function invitationEmailHtml(message: InvitationEmailMessage): string {
   const workspaceName = escapeHtml(message.workspaceName);
   const acceptanceUrl = `${INVITATION_ACCEPT_URL}${
     encodeURIComponent(message.rawToken)
