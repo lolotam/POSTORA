@@ -24,7 +24,7 @@ export interface UserQuota {
 }
 
 // Plan-based quota limits (matches stripe-webhook PLAN_QUOTAS and /pricing page)
-// FREE: 2 profiles, 3 accounts, 30 posts/mo, 1 posts/day, 20 uploads/day
+// FREE: 2 profiles, 3 accounts, 30 posts/mo, 2 posts/day, 20 uploads/day
 // PRO: 15 profiles, 30 accounts, 500 posts/mo, 30 posts/day, unlimited uploads
 // BUSINESS: unlimited everything
 const PLAN_QUOTAS = {
@@ -32,7 +32,7 @@ const PLAN_QUOTAS = {
     max_profiles: 2,
     max_social_accounts: 3,
     max_posts_per_month: 30,
-    max_posts_per_day: 1,
+    max_posts_per_day: 2,
     max_media_uploads_per_day: 20,
   },
   pro: {
@@ -270,48 +270,61 @@ export function useQuotas() {
   };
 
   // Check if user can create a new post (checks both daily and monthly limits)
+  // Prefer DB RPC (same rules as INSERT trigger); fall back to real post counts.
   const canCreatePost = async (): Promise<{ allowed: boolean; message?: string; remaining?: number }> => {
     if (!user?.id) return { allowed: false, message: "Not authenticated" };
     
     // Admins have no limits
     if (isAdmin) return { allowed: true, remaining: 999999 };
 
-    // Use subscription-based limits
     const maxPostsPerDay = planLimits.max_posts_per_day;
     const maxPostsPerMonth = planLimits.max_posts_per_month;
 
-    // If both are unlimited, allow
     if (isUnlimited(maxPostsPerDay) && isUnlimited(maxPostsPerMonth)) {
       return { allowed: true, remaining: 999999 };
     }
 
-    const { data: quotaData } = await supabase
-      .from("user_quotas")
-      .select("posts_this_month, quota_reset_date, posts_today, daily_reset_date")
-      .eq("user_id", user.id)
-      .single();
-
-    if (!quotaData) return { allowed: true }; // No quota record = unlimited
+    // Server-side check (authoritative when migration is applied)
+    const { data: rpcAllowed, error: rpcError } = await supabase.rpc("can_create_post", {
+      p_user_id: user.id,
+    });
 
     const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-    // Check daily limit first
-    const dailyResetDate = new Date(quotaData.daily_reset_date || now);
-    let postsToday = quotaData.posts_today ?? 0;
+    const [dailyResult, monthlyResult] = await Promise.all([
+      supabase
+        .from("posts")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .gte("created_at", startOfDay),
+      supabase
+        .from("posts")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .gte("created_at", startOfMonth),
+    ]);
 
-    if (now >= dailyResetDate) {
-      // Reset daily quota
-      postsToday = 0;
-      await supabase
-        .from("user_quotas")
-        .update({
-          posts_today: 0,
-          daily_reset_date: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).toISOString(),
-        })
-        .eq("user_id", user.id);
+    const postsToday = dailyResult.count ?? 0;
+    const postsThisMonth = monthlyResult.count ?? 0;
+
+    if (!rpcError && rpcAllowed === false) {
+      if (!isUnlimited(maxPostsPerDay) && postsToday >= maxPostsPerDay) {
+        return {
+          allowed: false,
+          message: `You've used all ${maxPostsPerDay} post(s) for today. Your daily limit resets at midnight.`,
+          remaining: 0,
+        };
+      }
+      return {
+        allowed: false,
+        message: `You've used all ${maxPostsPerMonth} posts this month. Posts renew on the 1st of next month.`,
+        remaining: 0,
+      };
     }
 
-    // Check daily limit (unless unlimited = -1)
+    // Client-side fallback / remaining calculation using real post counts
     if (!isUnlimited(maxPostsPerDay) && postsToday >= maxPostsPerDay) {
       return {
         allowed: false,
@@ -320,26 +333,6 @@ export function useQuotas() {
       };
     }
 
-    // Check monthly limit
-    const resetDate = new Date(quotaData.quota_reset_date || now);
-    let postsThisMonth = quotaData.posts_this_month ?? 0;
-
-    if (now >= resetDate) {
-      // Reset the quota
-      const nextResetDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-      postsThisMonth = 0;
-      await supabase
-        .from("user_quotas")
-        .update({
-          posts_this_month: 0,
-          quota_reset_date: nextResetDate.toISOString(),
-        })
-        .eq("user_id", user.id);
-
-      queryClient.invalidateQueries({ queryKey: ["user-quota", user.id] });
-    }
-
-    // Check monthly limit (unless unlimited = -1)
     if (!isUnlimited(maxPostsPerMonth) && postsThisMonth >= maxPostsPerMonth) {
       return {
         allowed: false,

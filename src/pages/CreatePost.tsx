@@ -19,6 +19,7 @@ import { openExternalPostUrl } from "@/lib/openExternalPostUrl";
 import { TikTokSettingsState } from "@/components/post/settings/TikTokSettings";
 import { YouTubeSettingsState } from "@/components/post/settings/YouTubeSettings";
 import { useSavedFieldSuggestions } from "@/hooks/useSavedFieldSuggestions";
+import { useQuotas } from "@/hooks/useQuotas";
 
 // Extracted components
 import { CreatePostHeader } from "@/components/post/CreatePostHeader";
@@ -45,6 +46,7 @@ export default function CreatePost() {
   const location = useLocation();
   const { flags, isLoading: isFlagsLoading } = useFeatureFlags();
   const { isAdmin } = useUserRole();
+  const { canCreatePost } = useQuotas();
 
   // Compute hidden platforms based on feature flags (admin sees all)
   const hiddenPlatforms = useMemo(() => {
@@ -351,6 +353,15 @@ export default function CreatePost() {
   const handlePost = async () => {
     if (!validatePost(unsplashValidationError)) return;
 
+    // Enforce daily/monthly post quotas on new posts (edits reuse existing row)
+    if (!editPostId) {
+      const quotaCheck = await canCreatePost();
+      if (!quotaCheck.allowed) {
+        showErrorToast("Post limit reached", quotaCheck.message || "You've reached your post quota.");
+        return;
+      }
+    }
+
     if (selectedPlatforms.includes("tiktok")) {
       const tiktokError = platformSettings.validateTiktokSettings(hasVideo);
       if (tiktokError) {
@@ -446,13 +457,23 @@ export default function CreatePost() {
         if (error) throw error;
         post = data;
       } else {
-        // Create new post
+        // Create new post (DB trigger also enforces quota server-side)
         const { data, error } = await supabase
           .from("posts")
           .insert(postPayload)
           .select()
           .single();
-        if (error) throw error;
+        if (error) {
+          const msg = error.message || "";
+          if (msg.includes("POST_QUOTA_DAILY_EXCEEDED") || msg.includes("POST_QUOTA_MONTHLY_EXCEEDED")) {
+            showErrorToast(
+              "Post limit reached",
+              msg.replace(/^.*POST_QUOTA_[A-Z_]+:\s*/i, "") || "You've reached your post quota."
+            );
+            return;
+          }
+          throw error;
+        }
         post = data;
       }
 

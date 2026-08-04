@@ -6424,6 +6424,7 @@ export type Database = {
         }
         Returns: number
       }
+      can_create_post: { Args: { p_user_id: string }; Returns: boolean }
       can_upload_media: { Args: { p_user_id: string }; Returns: boolean }
       check_rate_limit: {
         Args: {

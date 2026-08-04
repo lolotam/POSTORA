@@ -1063,6 +1063,27 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     }
   }
 
+  // Enforce plan post quotas before insert (DB trigger is the hard backstop)
+  try {
+    const { data: quotaAllowed, error: quotaError } = await supabase.rpc('can_create_post', {
+      p_user_id: userId,
+    });
+    if (quotaError) {
+      console.error('Quota check error (continuing to insert; trigger will enforce):', quotaError);
+    } else if (quotaAllowed === false) {
+      console.log('Post quota exceeded for user:', userId);
+      return new Response(
+        JSON.stringify({
+          error: 'Post quota exceeded. Free plans are limited to 2 posts per day and 30 posts per month. Upgrade to continue.',
+          code: 'POST_QUOTA_EXCEEDED',
+        }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+  } catch (quotaCheckErr) {
+    console.error('Quota preflight failed (trigger will enforce):', quotaCheckErr);
+  }
+
   // Create the post with metadata
   const { data: post, error: postError } = await supabase
     .from('posts')
@@ -1081,6 +1102,16 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
 
   if (postError) {
     console.error('Error creating post:', postError);
+    const msg = postError.message || '';
+    if (msg.includes('POST_QUOTA_DAILY_EXCEEDED') || msg.includes('POST_QUOTA_MONTHLY_EXCEEDED') || msg.includes('POST_QUOTA_DENIED')) {
+      return new Response(
+        JSON.stringify({
+          error: msg.replace(/^.*POST_QUOTA_[A-Z_]+:\s*/i, '') || 'Post quota exceeded.',
+          code: 'POST_QUOTA_EXCEEDED',
+        }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
     return new Response(
       JSON.stringify({ error: 'Failed to create post. Please try again.' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

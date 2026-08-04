@@ -44,7 +44,7 @@ const DEFAULT_QUOTAS: PlanQuota[] = [
     max_profiles: 2,
     max_social_accounts: 3,
     max_posts_per_month: 30,
-    max_posts_per_day: 1,
+    max_posts_per_day: 2,
     max_media_uploads_per_day: 20,
   },
   {

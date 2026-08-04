@@ -1609,26 +1609,8 @@ Deno.serve(async (req) => {
 
     console.log("Post processing complete:", finalStatus);
 
-    // Increment quota if at least one post was successful
-    if (hasSuccess) {
-      const { data: quotaData } = await supabase
-        .from("user_quotas")
-        .select("posts_this_month, posts_today")
-        .eq("user_id", post.user_id)
-        .single();
-
-      if (quotaData) {
-        await supabase
-          .from("user_quotas")
-          .update({
-            posts_this_month: (quotaData.posts_this_month || 0) + 1,
-            posts_today: (quotaData.posts_today || 0) + 1,
-          })
-          .eq("user_id", post.user_id);
-
-        console.log("Quota incremented for user:", post.user_id);
-      }
-    }
+    // Quota is reserved on posts INSERT (enforce_post_quota_on_insert trigger).
+    // Do not increment again here — that double-counted successful publishes.
 
     // ─────────────────────────────────────────────────────────────────────
     // Step 6: Send webhook notifications (non-blocking)

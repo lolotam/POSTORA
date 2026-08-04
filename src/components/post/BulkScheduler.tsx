@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { Platform } from "@/lib/types";
 import { TimezoneSelector } from "./TimezoneSelector";
+import { useQuotas } from "@/hooks/useQuotas";
 
 interface ParsedPost {
   caption: string;
@@ -37,6 +38,7 @@ interface ParsedPost {
 }
 
 export function BulkScheduler() {
+  const { canCreatePost } = useQuotas();
   const [open, setOpen] = useState(false);
   const [parsedPosts, setParsedPosts] = useState<ParsedPost[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -191,6 +193,16 @@ export function BulkScheduler() {
       if (post.status !== "pending") continue;
 
       try {
+        const quotaCheck = await canCreatePost();
+        if (!quotaCheck.allowed) {
+          updatedPosts[i] = {
+            ...post,
+            status: "error",
+            error: quotaCheck.message || "Post quota exceeded",
+          };
+          continue;
+        }
+
         const { error } = await supabase.from("posts").insert({
           user_id: user.id,
           caption: post.caption,
@@ -204,10 +216,14 @@ export function BulkScheduler() {
 
         updatedPosts[i] = { ...post, status: "success" };
       } catch (err) {
+        const raw = err instanceof Error ? err.message : "Unknown error";
+        const friendly = raw.includes("POST_QUOTA_")
+          ? raw.replace(/^.*POST_QUOTA_[A-Z_]+:\s*/i, "")
+          : raw;
         updatedPosts[i] = {
           ...post,
           status: "error",
-          error: err instanceof Error ? err.message : "Unknown error",
+          error: friendly,
         };
       }
 

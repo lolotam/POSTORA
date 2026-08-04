@@ -4,6 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
+import { useQuotas } from "@/hooks/useQuotas";
 
 export interface WorkflowData {
   id?: string;
@@ -24,6 +25,7 @@ export function useCanvasWorkflow() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const { canCreatePost } = useQuotas();
   const [isSaving, setIsSaving] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -139,6 +141,16 @@ export function useCanvasWorkflow() {
     if (!user) {
       toast({ title: "Login required", variant: "destructive" });
       return { success: false, errors: ["Not authenticated"] };
+    }
+
+    const quotaCheck = await canCreatePost();
+    if (!quotaCheck.allowed) {
+      toast({
+        title: "Post limit reached",
+        description: quotaCheck.message || "You've reached your post quota.",
+        variant: "destructive",
+      });
+      return { success: false, errors: [quotaCheck.message || "Post quota exceeded"] };
     }
 
     setIsExecuting(true);
@@ -296,7 +308,7 @@ export function useCanvasWorkflow() {
     } finally {
       setIsExecuting(false);
     }
-  }, [user, toast, queryClient]);
+  }, [user, toast, queryClient, canCreatePost]);
 
   const createExecution = useCallback(async (
     workflowId: string,
