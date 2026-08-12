@@ -1,53 +1,69 @@
-# Postora WhatsApp Partner API — Design
+# Postora WhatsApp Partner API — Design (v2)
 
 **Date:** 2026-08-13
-**Status:** Draft for review
-**Author:** Claude (brainstorming session)
+**Status:** Draft for review — revised after adversarial review (Codex, thread `019ff844`)
 **Reference integration:** `F:\Danat-Mostakbal` (property management: tenants, contracts, invoices, electricity billing)
+
+> **v2 changes.** v1 was reviewed against the code and failed. It named tenancy
+> tables that do not exist (a hard migration blocker), claimed four capabilities
+> inaccurately, promised a `message.status` callback that is never dispatched, and
+> scoped v1 far wider than the reference integration needs. v2 narrows v1 to
+> **pinned template sends + inbound webhooks**, corrects every verified error, and
+> records what was independently confirmed versus what still needs checking.
+> §16 is the correction log.
 
 ---
 
 ## 1. Problem
 
 Postora already contains a near-complete WhatsApp Business platform. What it lacks
-is a **server-to-server door** into that platform: a way for another product's
-backend to send WhatsApp messages through a business's connected Postora account,
-read the resulting conversation, and receive inbound messages back — without
-holding a Supabase user session.
+is a **server-to-server door**: a way for another product's backend to send WhatsApp
+messages through a business's connected Postora account and receive inbound messages
+back, without holding a Supabase user session.
 
-Today there are exactly two machine-authenticated doors, and each fails a different way:
+There are three machine-authenticated doors today; each fails differently:
 
 | Door | Auth | Why it fails for a partner app |
 |---|---|---|
-| `messaging-api` | Supabase **user JWT** | A backend service cannot hold a user session. Full capability, correct workspace scoping, wrong auth. |
-| `ecommerce-whatsapp-api` | `profiles.api_key` | Machine auth, but scopes by `user_id` (predates workspace tenancy), template-only, six hardcoded event names, no inbox reads, no media, no webhook management. |
-| `n8n-api` | `profiles.api_key` | Same key model; social-posting oriented, not messaging. |
+| `messaging-api` | Supabase **user JWT** (`index.ts:95-118`) | A backend service cannot hold a user session. Full capability, correct workspace scoping, wrong auth. |
+| `ecommerce-whatsapp-api` | `profiles.api_key` | Scopes by `user_id`, predating workspace tenancy. Supports `send_text` (`:229`), `send_template`/`event` (`:242`), `send_media` (`:318`) — but **no inbox reads**, no webhook management, and six hardcoded event names. |
+| `n8n-api` | `profiles.api_key` (`:1835-1864`) | Same key model; social-posting oriented. |
 
-`profiles.api_key` itself is the deeper problem: **one key per user**, unscoped,
+`profiles.api_key` is the deeper problem: **one key per user**, unscoped,
 unrotatable, no per-key permissions, not bound to a workspace or a phone number.
-Leaking it from a partner's server exposes every Postora capability that accepts it.
+
+**However, this repo already has a better credential precedent** —
+`mcp_oauth_tokens` (migration `20260601224925_ca73c2f6…`) stores `token_hash TEXT
+NOT NULL UNIQUE`, `scopes TEXT[]`, `expires_at`, `revoked_at`, `last_used_at`, and
+uses **column-level GRANTs** so clients can read metadata and update only
+`revoked_at` while never seeing the hash. Partner keys follow that shape rather than
+inventing one.
 
 ## 2. Goals
 
-1. A partner backend can send WhatsApp messages through a client business's
-   connected number using a **revocable, least-privilege, workspace-scoped key**.
-2. Every message sent this way appears in the Postora inbox with full CRM context,
-   identical to a message sent from the Postora UI.
-3. Inbound customer replies are delivered to the partner's backend with a signed,
-   **retried** webhook.
-4. One implementation of WhatsApp logic serves both doors — no divergence between
-   what the UI can do and what the API can do.
-5. Existing consumers of `ecommerce-whatsapp-api` (Curemedkw) keep working unchanged.
+1. A partner backend sends WhatsApp **template** messages through a client's
+   connected number using a revocable, least-privilege, workspace-scoped key.
+2. Those messages appear in the Postora inbox with full CRM context.
+3. Inbound customer replies reach the partner's backend via a signed, **retried,
+   at-least-once** webhook that cannot silently disable itself.
+4. Retries by the partner never double-message a real customer.
+5. Existing `ecommerce-whatsapp-api` consumers (Curemedkw) keep working unchanged.
 
-## 3. Non-goals
+## 3. Non-goals (v1)
 
-- Postora owning the WABA / reselling phone numbers (would make Postora a de-facto
-  BSP requiring Meta Tech Provider status, per-conversation billing pass-through,
-  and much heavier review). **Decision: each client business brings its own WABA.**
-- Instagram/Facebook DM parity in the partner API. WhatsApp only for v1 — the
-  IG/FB actions in `messaging-api` still use the legacy `user_id` guard and are
-  explicitly out of the partner surface.
-- Billing/metering of partner API usage beyond rate limiting.
+Deliberately cut after review — each is real work that the reference integration
+does not need, and each carries risk disproportionate to its v1 value:
+
+- **Postora owning the WABA / reselling numbers.** Would make Postora a de-facto BSP
+  requiring Meta Tech Provider status and per-conversation billing. **Decision: each
+  client business brings its own WABA.**
+- **Extracting all 16 WhatsApp operations** into a shared module (see §8).
+- **Free-form text, standalone media, interactive messages, inbox reads, contact and
+  label mutation** over the partner API.
+- **Unpinned keys** ("any account in this workspace").
+- **The AI bot for partner data** — blocked on real work, see §10.
+- Instagram/Facebook parity. Those actions still use the legacy `user_id` guard and
+  are explicitly outside the partner surface.
 
 ## 4. Architecture
 
@@ -55,341 +71,522 @@ Leaking it from a partner's server exposes every Postora capability that accepts
 Danat backend                Postora                          Meta
 ─────────────                ───────                          ────
 sendWithWhatsApp()  ──POST──▶ partner-api            ──────▶ Graph API
-  (provider seam)             ├── authenticatePartnerKey()
-                              │     partner_api_keys (hashed)
-                              ├── resolves workspace + account
-                              └── _shared/whatsappOps.ts ─────┘
+  (provider seam)             ├── authenticatePartnerKey()   (Meta is the
+                              │     partner_api_keys (hashed)  authority on
+                              ├── scope check                  policy)
+                              ├── idempotency claim
+                              ├── resolves workspace + pinned account
+                              └── _shared/whatsappPartnerOps.ts
                                         │
-Postora UI ──JWT──▶ messaging-api ──────┘   (same logic, both doors)
+Postora UI ──JWT──▶ messaging-api ──────┘   (shared ops, independent auth)
                                         │
                                         ▼
                               whatsapp_messages + conversations
-                                   (inbox, CRM, pipelines)
-
-Danat webhook   ◀──signed POST── whatsapp-webhook ◀──inbound── Meta
-  endpoint                        (+ retry queue)
+                                        │
+Danat webhook   ◀─signed, retried─ outbox worker ◀── whatsapp-webhook ◀── Meta
+  endpoint                         (at-least-once, unordered)
 ```
 
-The load-bearing idea: `partner-api` is an **auth adapter**, not a second
-implementation. All WhatsApp behaviour lives in `_shared/whatsappOps.ts`, which
-both `messaging-api` (JWT door) and `partner-api` (key door) call.
+`partner-api` is an **auth adapter**, not a second implementation. Critically, the
+two doors authorize **independently**: `messaging-api` resolves a human workspace
+*role*, `partner-api` resolves key *scopes*. Shared operations accept an
+already-authorized, **role-free** account context — the existing
+`WhatsAppAccountAccess` type carries a `WorkspaceRole`
+(`_shared/whatsappWorkspaceAccess.ts:32-41`) that is meaningless for a machine key.
 
 ## 5. Data model
 
+> **Tenancy tables are `workspaces` and `workspace_members`** — *not*
+> `whatsapp_workspaces`/`whatsapp_workspace_members`, as v1 wrongly stated. Verified
+> in `_shared/whatsappWorkspaceAccess.ts:93-114`. v1's migration would have failed.
+
 ### 5.1 New: `partner_api_keys`
+
+Modelled on `mcp_oauth_tokens`.
 
 ```sql
 CREATE TABLE public.partner_api_keys (
-  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  workspace_id      UUID NOT NULL REFERENCES public.whatsapp_workspaces(id) ON DELETE CASCADE,
-  social_account_id UUID REFERENCES public.social_accounts(id) ON DELETE CASCADE,
-  created_by        UUID NOT NULL REFERENCES auth.users(id),
-  name              TEXT NOT NULL,
-  key_prefix        TEXT NOT NULL,          -- first 12 chars, shown in UI for identification
-  key_hash          TEXT NOT NULL UNIQUE,   -- SHA-256 of the full key; plaintext never stored
-  scopes            TEXT[] NOT NULL DEFAULT '{}',
+  id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_id       UUID NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  social_account_id  UUID NOT NULL REFERENCES public.social_accounts(id) ON DELETE CASCADE,
+  created_by         UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  revoked_by         UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+  revoked_reason     TEXT,
+  name               TEXT NOT NULL,
+  key_prefix         TEXT NOT NULL,          -- first 12 chars, for UI identification
+  key_hash           TEXT NOT NULL UNIQUE,   -- SHA-256; plaintext never stored
+  scopes             TEXT[] NOT NULL DEFAULT '{}',
   rate_limit_per_min INTEGER NOT NULL DEFAULT 60,
-  last_used_at      TIMESTAMPTZ,
-  expires_at        TIMESTAMPTZ,
-  revoked_at        TIMESTAMPTZ,
-  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+  last_used_at       TIMESTAMPTZ,
+  expires_at         TIMESTAMPTZ,
+  revoked_at         TIMESTAMPTZ,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX partner_api_keys_hash_active_idx
   ON public.partner_api_keys (key_hash) WHERE revoked_at IS NULL;
 ```
 
-Key format: `pk_live_<32 random bytes base62>`. Returned **once** at creation.
-Lookup is by SHA-256 of the presented key — a database leak yields no usable keys.
-`social_account_id` NULL means "any WhatsApp account in this workspace"; set means
-the key is pinned to one phone number (recommended for partner integrations).
+Key format `pk_live_<32 random bytes base62>`, returned **once** at creation.
 
-**RLS:** manageable only by workspace `admin` or `owner`, following the existing
-`whatsapp_workspace_members` policy pattern. The edge function reads via service role.
+Decisions the review forced:
 
-### 5.2 Scopes
+- **`social_account_id` is `NOT NULL`** — every key is pinned to one phone number.
+- **Keys are workspace-owned, not creator-owned.** `created_by` is `ON DELETE SET
+  NULL` so deleting a user neither blocks the delete nor silently voids a live
+  integration. Removing the creator from the workspace does **not** auto-revoke;
+  revocation is an explicit act, recorded with `revoked_by` and `revoked_reason`.
+- **Application-level tenancy is not enough.** A bare `social_account_id` FK does not
+  prove the account belongs to `workspace_id`. Enforce in the database with a
+  composite FK against a `UNIQUE (id, workspace_id)` on the account side, or a
+  constraint trigger. *Open: confirm `social_accounts` carries `workspace_id`
+  directly, or resolve through the account→workspace path the resolver uses.*
+
+**RLS:** enabled, with **no direct client access to `key_hash`**. Follow the
+`mcp_oauth_tokens` pattern: column-level `GRANT SELECT` on metadata columns to
+`authenticated`, `GRANT UPDATE (revoked_at, revoked_by, revoked_reason)`, and a
+membership policy restricting rows to workspace admins/owners. The edge function
+reads via service role.
+
+### 5.2 Scopes (v1)
+
+v1's four scopes were the wrong axis: `whatsapp:send` bundled low-risk approved
+templates with arbitrary free-form messaging, and `whatsapp:read` bundled template
+metadata with customer conversation content. Split by **risk**, not by verb:
 
 | Scope | Grants |
 |---|---|
-| `whatsapp:send` | `send_text`, `send_template`, `send_media`, `send_interactive` |
-| `whatsapp:read` | `list_conversations`, `get_messages`, `list_templates` |
-| `whatsapp:manage` | `mark_read`, contact upsert, label assignment |
-| `whatsapp:webhooks` | register/update the partner's own callback URL |
+| `whatsapp:template.send` | Send an approved template to a recipient |
+| `whatsapp:templates.read` | List approved template names/status |
+| `whatsapp:webhooks.manage` | Register/update the key's own callback |
 
-Danat v1 needs `whatsapp:send` + `whatsapp:webhooks`. Least privilege is the point:
-a send-only key that leaks cannot read the client's customer conversations.
+Danat v1 needs all three. Later, if genuinely needed:
+`whatsapp:session.send`, `whatsapp:messages.read`, `whatsapp:conversations.manage`.
+A leaked v1 key can send a pre-approved template and nothing else — it cannot read a
+single customer conversation.
 
 ### 5.3 New: `partner_api_idempotency`
+
+v1 said "store the response for 24h" and left concurrency undefined — the gap that
+actually causes duplicate messages to real customers.
 
 ```sql
 CREATE TABLE public.partner_api_idempotency (
   key_id          UUID NOT NULL REFERENCES public.partner_api_keys(id) ON DELETE CASCADE,
   idempotency_key TEXT NOT NULL,
-  response_body   JSONB NOT NULL,
+  request_hash    TEXT NOT NULL,
+  state           TEXT NOT NULL CHECK (state IN ('processing','completed','indeterminate')),
+  http_status     INTEGER,
+  response_body   JSONB,      -- normalized partner response only, never raw Meta
+  locked_until    TIMESTAMPTZ,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at    TIMESTAMPTZ,
+  expires_at      TIMESTAMPTZ NOT NULL DEFAULT now() + INTERVAL '7 days',
   PRIMARY KEY (key_id, idempotency_key)
 );
 ```
 
-Retention: 24 hours, pruned by the existing cron mechanism. Without this, a partner
-retrying a timed-out send double-messages a real customer — the single most
-user-visible failure mode of a notification integration.
+Semantics:
+
+1. **Atomically insert** `state='processing'` with `request_hash` **before** calling Meta.
+2. Same key, **different** `request_hash` → `409 idempotency_conflict`.
+3. Same key/hash still `processing` → bounded wait, then `409
+   idempotency_in_progress` with `Retry-After`.
+4. `completed` → replay the stored body and original HTTP status, header
+   `Idempotency-Replayed: true`.
+5. **Timeout after the Meta call was issued** → mark `indeterminate`. **Never
+   auto-retry a send in this state**; surface it and let a human or a status webhook
+   resolve it. This is the case that silently double-messages customers.
+6. Store only a **normalized** response — Postora request id, Meta message id,
+   state, typed error. Not the raw Meta body, which current code sometimes returns
+   verbatim (`messaging-api/index.ts:947`, `:1007`).
+
+Retention is **7 days**, not 24h: it must outlive the partner's own retry window.
+Danat's `notificationDrainJob` retention must be confirmed to be shorter.
+
+Note `whatsapp_messages` is unique on `(user_id, message_id)` (migration
+`20260710100000`), which prevents storing the *same* Meta message twice — it does
+**not** prevent two genuine sends with different message ids. Idempotency is the
+only defence.
 
 ### 5.4 Changed: `whatsapp_webhooks`
 
-Add `workspace_id UUID REFERENCES whatsapp_workspaces(id)` (backfilled from the
-owner's workspace) so webhook config follows workspace membership like the rest of
-the WhatsApp stack, and `partner_api_key_id UUID` so a key's webhook is revoked
-with the key.
+Add `workspace_id UUID REFERENCES workspaces(id)` (backfilled) so webhook config
+follows workspace membership, and `partner_api_key_id UUID`.
 
-### 5.5 New: `whatsapp_webhook_deliveries`
+**Revocation is soft** (`revoked_at`), and a foreign key reacts only to row
+*deletion* — so revoking a key does **not** disable its webhook by itself. Dispatch
+must therefore **join against an active, unexpired key**, or revocation must update
+the webhook in the same transaction. Pick the join; it cannot drift.
+
+### 5.5 New: `whatsapp_webhook_deliveries` (transactional outbox)
+
+Current dispatch (`whatsapp-webhook/index.ts:873-934`) is fire-and-forget: one
+`fetch`, and `is_active: newFailures < 10` **silently disables the integration** on
+the tenth failure. There is no retry, dead-letter, or redelivery.
+
+Worse, and the reason a plain retry table is insufficient: the inbound message is
+inserted first and dispatched afterwards (`:355-381`, `:424-436`). If dispatch is
+lost after the insert, Meta's own redelivery hits the duplicate check at `:378-381`
+and **skips** — so the partner callback is lost permanently. The fix must be a
+**transactional outbox**: insert the message and its delivery rows atomically.
 
 ```sql
 CREATE TABLE public.whatsapp_webhook_deliveries (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  webhook_id    UUID NOT NULL REFERENCES public.whatsapp_webhooks(id) ON DELETE CASCADE,
-  event         TEXT NOT NULL,
-  payload       JSONB NOT NULL,
-  attempts      INTEGER NOT NULL DEFAULT 0,
-  next_retry_at TIMESTAMPTZ,
-  delivered_at  TIMESTAMPTZ,
-  last_status   INTEGER,
-  last_error    TEXT,
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  webhook_id      UUID NOT NULL REFERENCES public.whatsapp_webhooks(id) ON DELETE CASCADE,
+  source_event_id TEXT NOT NULL,       -- Meta message/status id; dedup anchor
+  event           TEXT NOT NULL,
+  payload         JSONB NOT NULL,
+  state           TEXT NOT NULL DEFAULT 'pending',
+  attempts        INTEGER NOT NULL DEFAULT 0,
+  locked_until    TIMESTAMPTZ,         -- lease for the worker
+  next_retry_at   TIMESTAMPTZ,
+  delivered_at    TIMESTAMPTZ,
+  last_status     INTEGER,
+  last_error      TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (webhook_id, source_event_id)
 );
 ```
 
-Existing behaviour (`whatsapp-webhook/index.ts:873 dispatchToWebhooks`) is
-fire-and-forget: a single non-2xx increments `failure_count`, and at 10 it flips
-`is_active: false`, **silently disabling the integration**. For a partner whose
-notification log depends on these callbacks, that is data loss. New behaviour:
-enqueue a delivery row, attempt inline, and on failure retry with exponential
-backoff (1m, 5m, 30m, 2h, 6h) via `whatsapp-scheduled-sender`'s existing cron slot.
-Auto-disable only after the backoff ladder is exhausted, and surface it in the UI.
+Worker: claim atomically with `FOR UPDATE SKIP LOCKED` plus a lease
+(`locked_until`) — **not** the select-then-loop pattern in
+`whatsapp-scheduled-sender/index.ts:26-32`, which has no atomic claim and would
+double-deliver under concurrency. Backoff 1m / 5m / 30m / 2h / 6h. Auto-disable only
+after the ladder is exhausted, and surface it in the UI.
+
+**Guarantees promised to partners — no more:**
+- **at-least-once** delivery,
+- **best-effort ordering** (backoff inherently lets event 2 land before event 1's
+  retry; strict per-conversation ordering would mean head-of-line blocking),
+- immutable delivery + event ids, so **partners deduplicate**.
+
+### 5.6 Pre-existing bug this work must not build on
+
+`whatsapp_contacts` is `UNIQUE(user_id, phone_number)` (migration
+`20260413173217_9a04ec64…:16`) and upserts still conflict on that pair
+(`messaging-api/index.ts:61-70`, `whatsapp-webhook/index.ts:668-673`), while
+workspace support only *added* a `workspace_id` column. So one owner handling the
+same customer in two workspaces can overwrite or move contact tenancy. Not caused by
+this work, but partner traffic will increase the write rate against it. Fix it in the
+same migration batch or accept it explicitly.
 
 ## 6. The `partner-api` function
 
-`supabase/functions/partner-api/index.ts` — routed as
-`POST https://api.postora.cloud/functions/v1/partner-api`.
+`supabase/functions/partner-api/index.ts`, `POST /functions/v1/partner-api`.
 
-**Request:**
+**Gateway config is required, not optional.** Every public custom-auth function in
+this repo is declared in `supabase/config.toml` with `verify_jwt = false`
+(`threads-webhook`, `mcp`, `mcp-oauth`, `ecommerce-whatsapp-api` at `:23-33`).
+`partner-api` needs the same entry, and the self-hosted Kong runtime must be
+configured to match — otherwise the platform rejects the request before the function
+ever authenticates the key.
+
 ```
 Header: X-Postora-Key: pk_live_...
-Header: Idempotency-Key: <caller-generated uuid>   (required for all send_* actions)
-Body:   { "action": "send_template", ...params }
+Header: Idempotency-Key: <caller-generated uuid>   (required on every send)
+Body:   { "action": "send_template", ... }
 ```
 
-Pipeline, in order:
+Pipeline: authenticate (hash lookup, not revoked, not expired) → scope check →
+per-key rate limit → idempotency claim → resolve the key's pinned account →
+**verify account health** (§9) → shared op → audit log (never bodies or tokens).
 
-1. `authenticatePartnerKey(hash)` → row where `revoked_at IS NULL` and not expired.
-2. Scope check for the action; `403 insufficient_scope` on failure.
-3. Rate limit per key (`rate_limit_per_min`), sliding window in `api_logs`.
-   Return `429` with `Retry-After`.
-4. Idempotency replay: on hit, return the stored response verbatim, `200`, with
-   `Idempotency-Replayed: true`.
-5. Resolve the target `social_account_id` — either the key's pinned account, or a
-   request param validated to belong to `key.workspace_id`.
-6. Delegate to `_shared/whatsappOps.ts`.
-7. Log to `api_logs` (never log message bodies or tokens).
+### 6.1 Actions (v1 — four, down from nine)
 
-### 6.1 Actions (v1)
+| Action | Scope |
+|---|---|
+| `get_status` | any — connection health, sends nothing |
+| `send_template` | `whatsapp:template.send` |
+| `list_templates` | `whatsapp:templates.read` — so partners discover approved names instead of hardcoding them |
+| `register_webhook` | `whatsapp:webhooks.manage` |
 
-| Action | Scope | Notes |
-|---|---|---|
-| `get_status` | any | Connection health; no message sent. Mirrors the existing `ecommerce-whatsapp-api` GET. |
-| `send_template` | `whatsapp:send` | Business-initiated. Always allowed. |
-| `send_text` | `whatsapp:send` | Only inside the 24h session window (see §7). |
-| `send_media` | `whatsapp:send` | Same window rule. |
-| `send_interactive` | `whatsapp:send` | Same window rule. |
-| `list_templates` | `whatsapp:read` | So partners can discover approved names rather than hardcode them. |
-| `list_conversations` | `whatsapp:read` | |
-| `get_messages` | `whatsapp:read` | |
-| `register_webhook` | `whatsapp:webhooks` | Upsert URL + secret + event filter. |
+### 6.2 Rate limiting
 
-### 6.2 Error contract
+**Not via `api_logs`.** Its schema and indexes are user/endpoint-based, and the
+existing count-then-insert limiter in `ecommerce-whatsapp-api/index.ts:120-146` is
+non-atomic (two concurrent requests both read under the limit and both pass). Use an
+atomic per-key counter — a single `INSERT … ON CONFLICT DO UPDATE … RETURNING`
+against a bucket table. Keep `api_logs` for auditing only.
 
-Typed, stable, machine-readable — partners must branch on these, never on prose:
+### 6.3 Error contract
 
 ```json
 { "success": false, "error": { "code": "outside_session_window",
-  "message": "...", "retryable": false, "details": { "last_inbound_at": "..." } } }
+  "message": "...", "retryable": false, "details": { "meta_code": 131047 } } }
 ```
 
 Codes: `invalid_key`, `key_revoked`, `insufficient_scope`, `rate_limited`,
-`account_not_connected`, `outside_session_window`, `template_not_approved`,
-`invalid_recipient`, `meta_error` (with Meta's code in `details`), `internal_error`.
+`idempotency_conflict`, `idempotency_in_progress`, `account_not_connected`,
+`account_needs_reauth`, `outside_session_window`, `template_not_approved`,
+`invalid_recipient`, `meta_error`, `internal_error`.
 
-## 7. The 24-hour session window
+Responses distinguish **`accepted_by_meta`** from **`delivered`**. Meta accepting a
+send is not delivery, and some policy failures arrive later via status webhooks.
 
-Postora does not enforce it today; it sends and lets Meta reject. That is acceptable
-for a human in a UI who can read the error, and unacceptable for a machine caller.
+## 7. The 24-hour session window — advisory, not authoritative
 
-`_shared/whatsappSessionWindow.ts`:
+**v1 was wrong twice here.** It claimed nothing enforces the window; in fact
+`ai-agent-reply/index.ts:115` has `isWithinServiceWindow()` gating AI replies, and
+`whatsapp-webhook/index.ts:450` already translates Meta error `131047` into a
+human-readable "send a template instead". And its proposed **hard local pre-check
+was the wrong design.**
+
+Postora's message history is not authoritative: it can be incomplete or delayed, and
+it cannot represent Meta's policy variants (free-entry-point, 72h customer-service
+windows). A hard local rejection would block messages Meta would have accepted.
+
+**Design:**
+- Treat the local timestamp as **advisory metadata** returned to the caller, never as
+  authorization.
+- **Send, and translate Meta's error** into the typed `outside_session_window` code —
+  extending the mapping that already exists at `whatsapp-webhook:450`.
+- Handle the **asynchronous** case: `131047` can arrive later via a status webhook.
+- **Never apply the window check to templates.** They are always permitted.
+- Reuse `isWithinServiceWindow` rather than writing a second implementation.
+
+This matters less in v1 than it looks, since v1 is template-only — but the contract
+must be right before free-form sends are added.
+
+## 8. Refactor — minimal, not wholesale
+
+v1 proposed extracting all 16 WhatsApp operations into `_shared/whatsappOps.ts`.
+Rejected as too large a regression surface for its benefit: existing tests cover
+**access decisions**, not Graph calls, persistence, or response shape
+(`whatsappAccess.test.ts`, `_shared/whatsappWorkspaceAccess.test.ts`) — so there is no
+characterization safety net. v1 also wrongly implied the 16 ops are uniform; the
+product ops use raw `fetch` and inconsistent persistence
+(`messaging-api/index.ts:1417-1481`).
+
+**v1 extracts only what it needs**, into `_shared/whatsappPartnerOps.ts`:
 
 ```ts
-// A free-form (non-template) message is deliverable only within 24h of the
-// customer's most recent inbound message. Meta enforces this server-side; we
-// check first so callers get a typed, actionable error instead of a Meta code.
-export async function assertSendable(client, accountId, phone, messageType)
+sendTemplate(ctx: WhatsAppOpsContext, input): Promise<SendResult>
+listTemplates(ctx): Promise<TemplateSummary[]>
+persistOutbound(ctx, result): Promise<void>   // whatsapp_messages + conversation upsert
 ```
 
-Implementation: read `MAX(timestamp)` from `whatsapp_messages` where
-`direction = 'inbound'` for that conversation. If `> 24h` and `messageType !==
-'template'`, throw `outside_session_window` with `last_inbound_at` in the details so
-the partner can fall back to a template deterministically. This mirrors the
-discipline Danat's own provider already has (`src/lib/providers/whatsapp.ts` refuses
-to send without a resolved template mapping).
+`WhatsAppOpsContext` is **role-free** — account id, phone number id, token, owner id,
+workspace id. Each door authorizes before constructing it.
 
-Applied in `whatsappOps`, so **both** doors gain it — the Postora UI benefits too.
+Rules: write **characterization tests first** against current behaviour, then move
+the code, then point `messaging-api` at it. Existing tests must pass untouched.
+The remaining 14 ops stay where they are until a later phase needs them.
 
-## 8. Refactor: `_shared/whatsappOps.ts`
+One thing the extraction must fix, not preserve: several insert/upsert calls do not
+check the returned Supabase `error` (`messaging-api/index.ts:922-947`, `:982-1007`,
+`:1270-1297`), so persistence can fail silently *after* Meta accepted the message.
+The shared op needs explicit partial-success semantics — Meta accepted, we failed to
+record — surfaced rather than swallowed.
 
-`messaging-api/index.ts` is 1679 lines with ~40 actions. Extract only the 16
-WhatsApp ones — the ones already guarded by `withWhatsAppActionAccess` — into pure
-functions taking a resolved `WhatsAppAccountAccess`:
+## 9. Account health
 
-```ts
-export async function sendText(ctx: WhatsAppOpsContext, input: SendTextInput): Promise<SendResult>
-export async function sendTemplate(ctx, input): Promise<SendResult>
-export async function sendMedia(ctx, input): Promise<SendResult>
-export async function sendInteractive(ctx, input): Promise<SendResult>
-export async function listConversations(ctx, input)
-export async function getMessages(ctx, input)
-export async function listTemplates(ctx)
-export async function markRead(ctx, input)
-```
+Partner sends will fail on stale credentials unless this is handled.
+`whatsapp-oauth` stores token expiry (`:253-254`, `:323-365`), but the workspace
+resolver does not select or validate `expires_at`, `is_active`, or reauth state
+(`_shared/whatsappWorkspaceAccess.ts:54-85`), and `refresh-tokens` has no WhatsApp
+implementation. `partner-api` must check health before sending and return
+`account_needs_reauth` — a typed, actionable error rather than a Meta rejection.
 
-Each op keeps the behaviour `messaging-api` has today: call Graph via
-`sendWhatsAppWithRetry`, insert into `whatsapp_messages`, and call
-`upsertOutboundConversation` with `account.ownerId` / `account.workspaceId` so the
-message lands in the inbox and auto-creates the contact.
+**Related, and worth fixing during Phase 1:** `whatsapp-oauth` treats
+`subscribed_apps` and phone-registration failures as **non-fatal** (`:256-305`) and
+still returns success (`:367-374`). A business can therefore appear "connected" while
+being unable to receive inbound messages. Connection should be gated on verified
+outbound *and* inbound health.
 
-`messaging-api` action handlers become thin: resolve access via
-`withWhatsAppActionAccess`, then call the op. **Behaviour-preserving** — the existing
-`messaging-api` tests must pass untouched, which is the refactor's safety net.
+## 10. AI bot for partner data — deferred, and why
 
-The IG/FB actions and their legacy `getAccountToken` path are **not** touched and
-**not** exposed via `partner-api`. Reducing that legacy scope is separate work.
+v1 claimed this was "configuration, not code". **That was wrong.** `ai_agent_tools`
+does support `n8n_webhook` with `url` + `secret`, and `executeCustomTool`
+(`tools.ts:305-357`) already has real SSRF protection (`assertPublicHttpsUrl`,
+`redirect: "manual"`, timeout) worth reusing elsewhere. But the payload it posts is
+`{ tool, input, conversation_id, platform, customer_name }` — where `input` is
+**model-generated** — and `ToolContext` (`tools.ts:6-20`) **carries no sender phone
+at all**. There is no trusted identity to key a lookup on. Agent code must change.
 
-## 9. Postora UI
+v1's rule ("key off the verified sender phone, never a tenant id from the
+conversation") is necessary but nowhere near sufficient. A safe design needs:
 
-New tab under the existing WhatsApp workspace settings: **Integrations → API Keys**.
-- Create key: name, target account, scope checkboxes, optional expiry.
-- Full key shown **once** on creation, with copy button; thereafter only `key_prefix`.
-- Table: name, prefix, scopes, last used, revoke.
-- Webhook panel: URL, secret, event filter, recent delivery attempts with status
-  (reading `whatsapp_webhook_deliveries`) — so a partner can self-diagnose.
+- Server-injected, **signed** canonical identity — normalized sender phone,
+  workspace id, account id, event id, timestamp — from trusted state, never from
+  model arguments; the partner endpoint **ignores identity claims inside `input`**.
+- Identity **bound to** partner + workspace + account. A phone number proves control
+  of a WhatsApp identity, not entitlement to every invoice attached to it.
+- Step-up verification before returning financial data.
+- Narrow structured responses, treated as untrusted **data, never instructions**.
+- Redaction and expiry of sensitive tool-call logs.
+
+And the scope problem is bigger than one column: AI configs, conversation modes,
+knowledge, threads, tools, and logs are **all** `user_id`-scoped (migration
+`20260712000000`), and the webhook invokes AI as the account owner's `user_id`
+(`whatsapp-webhook:842-865`). Workspace-safe AI is a **domain migration**, not an
+added column. Deferred to its own spec.
+
+## 11. Postora UI
+
+WhatsApp workspace settings → **Integrations**:
+- Create key: name, pinned account, scope checkboxes, optional expiry. Full key shown
+  **once**; thereafter only `key_prefix`.
+- Table: name, prefix, scopes, last used, revoke (with reason).
+- Webhook panel: URL, secret, event filter, and recent delivery attempts from
+  `whatsapp_webhook_deliveries` — the partner's self-diagnosis surface.
 
 Follows the existing `useWhatsAppWebhooks.ts` hook pattern.
 
-## 10. AI bot for partner data
+## 12. Webhook security
 
-`ai-agent-reply` already supports RAG plus user-defined tools
-(`ai_agent_tools`, `tool_type = 'n8n_webhook'`, with `url` + `secret`), so "the bot
-answers a tenant's question about their invoice" is **configuration plus one endpoint
-on the partner's side**, not new agent code:
+Current dispatch does an unrestricted `fetch` with **no timeout**
+(`whatsapp-webhook:895-907`) and signs the raw body only — replayable. Required:
 
-1. Danat exposes `POST /api/agent/tenant-lookup`, HMAC-verified with the tool secret,
-   taking `{ phone }` and returning contract/invoice/balance facts.
-2. A Postora `ai_agent_tools` row points at it.
-3. The agent calls it when a tenant asks, and answers from real data.
+- Sign `timestamp + delivery_id + rawBody`; enforce timestamp freshness.
+- Validate the URL and **every redirect hop**, reusing the connector's
+  `assertPublicHttpsUrl` (`ai-agent-reply/tools.ts:262-302`).
+- Set an explicit request timeout.
 
-One required fix: `ai_agent_tools` is `user_id`-scoped while the rest of the WhatsApp
-stack is workspace-scoped. Add `workspace_id` and scope tool visibility to the
-workspace that owns the conversation, or a workspace agent's tools are invisible to
-the bot answering that workspace's messages.
+**`message.status` is not currently dispatched at all.** Only `message.received` is
+(`whatsapp-webhook:424-436`); the status branch (`:439-491`) never calls
+`dispatchToWebhooks`. v1 promised partners a `message.status` callback that does not
+exist — implementing it is new work in this phase, with its own deduplication.
 
-**Safety rule for the spec:** the tool endpoint must key off the WhatsApp sender's
-phone number as verified by Postora, and must never accept a tenant identifier
-supplied in the conversation text — otherwise a customer can ask the bot about
-someone else's invoice. This is a prompt-injection-adjacent data-leak path and must
-be tested explicitly.
+## 13. Danat-Mostakbal integration — step by step
 
-## 11. Danat-Mostakbal integration — step by step
+Danat's seam is clean: `sendWithWhatsApp` in `src/lib/providers/whatsapp.ts`, called
+via `dispatchNotification.ts`, already template-only. Its signature
+(`WhatsAppProviderMessage → ProviderResult`) does not change.
 
-Danat's seam is clean: one function, `sendWithWhatsApp` in
-`src/lib/providers/whatsapp.ts`, called through `dispatchNotification.ts`. Its
-signature (`WhatsAppProviderMessage → ProviderResult`) is unchanged by this work.
+**Phase 0 — Meta prerequisites. Start immediately; runs in parallel with all
+development.** Business Verification, own WABA, phone number, and **template approval**
+(contract expiry, invoice due, payment received, maintenance update). Approval takes
+days and can be rejected.
 
-**Phase 0 — Meta prerequisites (blocking, not code, do first):**
-1. Danat's business completes Meta Business Verification.
-2. Creates its own WABA and adds its phone number.
-3. Submits its notification templates for approval (contract expiry, invoice due,
-   payment received, maintenance update). *Approval takes days and can be rejected —
-   start here, not last.*
+**Phase 1 — Backend.** Migrations (correct table names, RLS, GRANTs), key management
+endpoint + UI, minimal shared ops with characterization tests, idempotency state
+machine, transactional webhook outbox, account-health checks, `config.toml` entry.
 
-**Phase 1 — Connect:** a Danat admin signs into Postora, creates a workspace, and
-runs Embedded Signup (`whatsapp-oauth`, `action: exchange_signup`) to connect the
-WABA. Already built; no new work.
+**Phase 2 — Connect.** Embedded Signup via `whatsapp-oauth`. **Do not call it
+connected until** token health, `subscribed_apps`, phone registration, a real
+outbound send, and a real inbound receipt all verify — per §9, the current flow can
+report success when subscription or registration silently failed.
 
-**Phase 2 — Key:** in Postora → Integrations → API Keys, create a key named
-"Danat backend", pinned to the Danat number, scopes `whatsapp:send` +
-`whatsapp:webhooks`. Store as `POSTORA_API_KEY` in Danat's environment.
+**Phase 3 — Key.** Create a pinned, template-only key. Store as `POSTORA_API_KEY`
+in Danat's environment.
 
-**Phase 3 — Swap the provider:** rewrite `sendWithWhatsApp` to POST
-`{ action: "send_template", recipient_phone, template_name, template_language,
-template_components }` to `partner-api` with `X-Postora-Key` and an
-`Idempotency-Key` derived from Danat's own notification row id — which makes the
-existing `notificationDrainJob` retry loop safe by construction. Map the typed error
-codes onto Danat's existing `ProviderResult` failure shape. Delete
-`WHATSAPP_ACCESS_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` / `WHATSAPP_WABA_ID` from
-Danat's environment — Postora now holds the Meta credentials, which is a security
-improvement in itself.
+**Phase 4 — Webhook, before any provider swap.** Register Danat's
+`/api/webhooks/postora`, and verify signature validation, retry behaviour, partner-side
+deduplication, and `message.status` delivery.
 
-**Phase 4 — Inbox:** tenant replies already flow through `whatsapp-webhook` into
-`whatsapp_messages` and the CRM. Danat staff answer from Postora's inbox. Zero code.
+**Phase 5 — Canary.** Template send; concurrent duplicate send; inbound reply; status
+event; deliberate callback failure and recovery.
 
-**Phase 5 — Webhooks back:** register Danat's `/api/webhooks/postora` endpoint via
-`register_webhook`, subscribed to `message.received` and `message.status`. Danat
-verifies the `X-Webhook-Signature` HMAC and writes to its notification log.
+**Phase 6 — Provider swap.** Rewrite `sendWithWhatsApp` to POST `send_template` with
+`X-Postora-Key` and an `Idempotency-Key` **derived from Danat's own notification row
+id** — which makes the existing `notificationDrainJob` retry loop safe by
+construction. Map typed error codes onto `ProviderResult`. **Keep the old direct-Meta
+route behind a flag for rollback.**
 
-**Phase 6 — AI bot:** per §10.
+**Phase 7 — Inbox.** Danat staff answer from Postora's inbox. Zero code.
 
-## 12. Testing
+**Phase 8 — Rotate out** `WHATSAPP_ACCESS_TOKEN` / `WHATSAPP_PHONE_NUMBER_ID` /
+`WHATSAPP_WABA_ID` from Danat only **after** stable production observation.
 
-- **Unit (Deno):** key auth (valid / revoked / expired / wrong workspace), scope
-  enforcement per action, idempotency replay, session-window logic at the 23h/25h
-  boundaries, HMAC signature generation.
-- **Tenancy matrix:** reuse the pattern from the existing cross-workspace isolation
-  suite (commit c5f16035) — a key for workspace A must not reach workspace B's
-  account, conversations, or templates. This is the highest-risk area and gets the
-  most tests.
-- **Refactor safety:** existing `messaging-api` and `whatsappAccess` tests pass
-  unchanged.
-- **Danat side (vitest):** `whatsapp.test.ts` rewritten against a mocked partner-api,
-  asserting the typed-error mapping and that `Idempotency-Key` is stable across
-  retries of the same notification.
-- **Manual:** one real template send to a test number; confirm it appears in the
-  Postora inbox with the contact auto-created.
+**Phase 9 — AI bot**, once §10's prerequisites are met.
 
-## 13. Deployment sequencing
+Ordering note: v1 put the provider swap before webhook verification and deleted
+Danat's credentials immediately. Both were wrong — the callback path must be proven
+first, and the rollback route must survive the swap.
 
-`main` auto-deploys the frontend via Dokploy, so ordering matters:
+**Most likely practical failure:** OAuth reporting success while `subscribed_apps` or
+phone registration actually failed (§9). **Second:** template component/language
+mismatch on real Meta sends.
 
-1. Apply migrations against production Postgres.
+## 13a. Deployment topology — two separate servers
+
+The two systems live on **different hosts**, so every call between them crosses the
+public internet in both directions. This is not an internal integration.
+
+| System | Server | Access MCP |
+|---|---|---|
+| Postora (frontend + self-hosted Supabase) | Contabo `86.48.2.205` | `ssh-contabo-mcp`, `dokploy-contaboo-mcp` |
+| Danat-Mostakbal / Danat-Future | separate host | `ssh-danatfuture-mcp` |
+
+Consequences the design must honour:
+
+- **Outbound (Danat → Postora):** Danat's server calls `https://api.postora.cloud`
+  over TLS. Its egress must permit that host, and the partner key is a **cross-host
+  bearer credential** — which is exactly why it is hashed at rest, pinned to one
+  account, template-only, and revocable.
+- **Inbound (Postora → Danat):** the webhook endpoint must be **publicly reachable
+  from Contabo** with a valid TLS certificate. Verify this before Phase 4 — a
+  Danat endpoint bound to localhost, behind a VPN, or on a self-signed certificate
+  will fail silently into the retry ladder. Confirm with an egress test from
+  `ssh-contabo-mcp` to Danat's host, not from a laptop.
+- **SSRF validation is load-bearing, not ceremony** (§12): Postora is now making
+  authenticated outbound requests to a URL a partner supplies, from inside its own
+  network.
+- **No shared database, no shared network.** The typed HTTP error contract (§6.3) is
+  the *entire* interface. Nothing may assume co-location, a shared clock, or a
+  private link — which reinforces treating idempotency and at-least-once delivery as
+  correctness requirements rather than niceties.
+- **Two deploy paths:** Postora edge functions deploy via `ssh-contabo-mcp` into the
+  functions volume (§15); Danat's provider swap deploys separately via
+  `ssh-danatfuture-mcp`. They are independently rollback-able, which is what makes
+  the Phase 6 flag-guarded swap workable.
+
+## 14. Testing
+
+- **Unit (Deno):** key auth (valid/revoked/expired/wrong workspace), scope
+  enforcement, idempotency state machine **including the concurrent-duplicate and
+  indeterminate paths**, HMAC generation with timestamp, SSRF rejection of
+  private/redirecting webhook URLs.
+- **Tenancy matrix:** reuse the cross-workspace isolation pattern from commit
+  `c5f16035`. A key for workspace A must not reach workspace B's account or
+  templates. Highest-risk area; most tests.
+- **Characterization:** written **before** the extraction, asserting current
+  `send_template` / `list_templates` behaviour; existing `messaging-api` and
+  `whatsappAccess` tests pass unchanged.
+- **Outbox:** concurrent workers must not double-deliver (lease + `SKIP LOCKED`);
+  a delivery survives a dispatch crash after message insert.
+- **Danat (vitest):** `whatsapp.test.ts` against a mocked partner-api, asserting typed
+  error mapping and a **stable `Idempotency-Key` across retries** of one notification.
+
+## 15. Deployment sequencing
+
+`main` auto-deploys the frontend via Dokploy, so order matters:
+
+1. Apply migrations to production Postgres.
 2. Deploy `partner-api`, updated `messaging-api`, updated `whatsapp-webhook` via
    `ssh-contabo-mcp` into the functions volume, then
-   `docker compose up -d --no-deps functions` (see `docs/runbooks/deploy-edge-function.md`).
-3. **Only then** merge to `main` so the UI ships against a live backend.
-4. Danat deploys its provider swap last, after a smoke test of the key.
+   `docker compose up -d --no-deps functions`
+   (`docs/runbooks/deploy-edge-function.md`). Confirm the gateway accepts
+   `partner-api` without a JWT.
+3. **Only then** merge to `main`, so the UI ships against a live backend.
+4. Danat deploys its provider swap last, behind a rollback flag.
 
-## 14. Risks
+## 16. Correction log (v1 → v2)
 
-| Risk | Mitigation |
+Verified directly against the code during review:
+
+| v1 claim | Reality |
 |---|---|
-| Template rejection by Meta blocks go-live | Phase 0 first; `list_templates` lets Danat verify approved names at runtime rather than hardcoding. |
-| Refactor regresses the Postora UI | Behaviour-preserving extraction; existing tests are the gate; no signature changes to the 16 actions. |
-| Leaked partner key | Hashed at rest, scoped, pinned to one account, revocable, rate-limited, expirable. |
-| Double-sends to real customers | Idempotency keys required on all sends. |
-| Webhook loss silently disabling integration | Retry ladder + delivery table + UI visibility. |
-| Bot leaking one tenant's data to another | Tool lookups keyed on Postora-verified sender phone only; explicit test. |
+| Tenancy tables `whatsapp_workspaces` / `whatsapp_workspace_members` | **`workspaces` / `workspace_members`** (`whatsappWorkspaceAccess.ts:93-114`). v1's migration would have failed. |
+| `ecommerce-whatsapp-api` is template-only | Also supports `send_text` (`:229`) and `send_media` (`:318`). It lacks *inbox reads*, not send variety. |
+| No better machine-key precedent than `profiles.api_key` | `mcp_oauth_tokens` (migration `20260601224925_ca73c2f6…`) has hashed tokens, scopes, expiry, revocation, column GRANTs. |
+| Nothing enforces the 24h window | `isWithinServiceWindow` (`ai-agent-reply:115`) gates AI replies; `131047` is already translated (`whatsapp-webhook:450`). |
+| AI partner tool is "configuration, not code" | `ToolContext` (`tools.ts:6-20`) carries **no sender phone**; payload `input` is model-generated. Agent code must change. |
+| `message.status` callback available to partners | Never dispatched — only `message.received` is (`whatsapp-webhook:424-436`). |
 
-## 15. Open questions
+Reported by review, **not yet independently verified** — confirm before implementing:
+`messaging-api` unchecked insert errors at the cited lines; `refresh-tokens` having no
+WhatsApp path; the precise `api_logs` schema/index shape.
 
-1. Should partner keys be billed/metered per message, or covered by the client's
-   Postora subscription? (Affects whether `api_logs` needs a usage rollup.)
-2. Should `ecommerce-whatsapp-api` be formally deprecated with a sunset date once it
-   is a shim, or maintained indefinitely?
-3. Does Danat want staff replying from Postora's inbox, or should replies also
-   surface inside Danat's own admin UI (would need `whatsapp:read` + a UI build)?
+## 17. Open questions
+
+1. Metered/billed per message, or covered by the client's Postora subscription?
+2. Formally deprecate `ecommerce-whatsapp-api` with a sunset once `partner-api` is
+   stable, or maintain both indefinitely?
+3. Should Danat staff reply from Postora's inbox only, or should conversations also
+   surface inside Danat's own admin UI (needs `whatsapp:messages.read` + a UI build)?
+4. Does `social_accounts` carry `workspace_id` directly, for the database-enforced
+   composite tenancy constraint in §5.1?
