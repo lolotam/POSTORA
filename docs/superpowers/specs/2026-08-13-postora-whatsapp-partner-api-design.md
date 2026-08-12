@@ -11,6 +11,11 @@
 > **pinned template sends + inbound webhooks**, corrects every verified error, and
 > records what was independently confirmed versus what still needs checking.
 > §16 is the correction log.
+>
+> **v2.1 additions** (after user decisions, 2026-08-13): metering and monthly quota
+> are in scope (§5.1b); account tenancy is now **database-enforced** via a composite
+> FK, confirmed viable against the live schema (§5.1a); and the cross-server network
+> path was verified in both directions from the servers themselves (§13a.1).
 
 ---
 
@@ -138,16 +143,104 @@ Decisions the review forced:
   integration. Removing the creator from the workspace does **not** auto-revoke;
   revocation is an explicit act, recorded with `revoked_by` and `revoked_reason`.
 - **Application-level tenancy is not enough.** A bare `social_account_id` FK does not
-  prove the account belongs to `workspace_id`. Enforce in the database with a
-  composite FK against a `UNIQUE (id, workspace_id)` on the account side, or a
-  constraint trigger. *Open: confirm `social_accounts` carries `workspace_id`
-  directly, or resolve through the account→workspace path the resolver uses.*
+  prove the account belongs to `workspace_id`. See §5.1a — this is now settled and
+  database-enforceable.
 
 **RLS:** enabled, with **no direct client access to `key_hash`**. Follow the
 `mcp_oauth_tokens` pattern: column-level `GRANT SELECT` on metadata columns to
 `authenticated`, `GRANT UPDATE (revoked_at, revoked_by, revoked_reason)`, and a
 membership policy restricting rows to workspace admins/owners. The edge function
 reads via service role.
+
+### 5.1a Database-enforced account tenancy — resolved
+
+**Verified against the live production database** (`postorasupabase-supabase-j8axyh-supabase-db`,
+2026-08-13):
+
+```
+social_accounts: id uuid NOT NULL | user_id uuid NOT NULL | platform text NOT NULL
+                 social_profile_id uuid NULL | workspace_id uuid NULL
+```
+
+`workspace_id` **is** carried directly on `social_accounts`, so tenancy does not have
+to be resolved through `social_profiles`. It is **nullable**, and the resolver falls
+back to the owner's personal workspace when it is NULL
+(`_shared/whatsappWorkspaceAccess.ts:93-114`: `workspaces` where `owner_id =
+account.user_id AND is_personal = true`).
+
+Backfill state, live:
+
+| platform | rows | with `workspace_id` | NULL |
+|---|---|---|---|
+| **whatsapp** | **4** | **4** | **0** |
+| facebook | 15 | 14 | 1 |
+| instagram | 24 | 23 | 1 |
+| *(all others)* | 42 | 42 | 0 |
+
+**Every WhatsApp account already has `workspace_id` populated**, so the strict path is
+available without a risky data migration:
+
+1. Add `UNIQUE (id, workspace_id)` on `social_accounts` (redundant given the PK, but
+   it is what makes a composite FK legal).
+2. `partner_api_keys` declares
+   `FOREIGN KEY (social_account_id, workspace_id) REFERENCES social_accounts (id, workspace_id)`.
+   A key can then only ever point at an account **in its own workspace** — enforced by
+   Postgres, not by application code that a future refactor could bypass.
+3. Do **not** make `social_accounts.workspace_id` `NOT NULL` globally — two non-WhatsApp
+   rows are NULL and that is outside this work's scope. Instead add a
+   `CHECK`/trigger requiring `workspace_id IS NOT NULL` for `platform = 'whatsapp'`,
+   backfilling nothing since WhatsApp is already clean.
+
+This is the single strongest control in the design: it makes cross-workspace key
+misuse structurally impossible rather than merely tested against.
+
+### 5.1b Metering and quota
+
+Partner usage is metered. Rate limiting alone bounds burst rate but not monthly cost,
+and Meta bills per conversation — so an unmetered partner key is an open cost tap.
+
+Added to `partner_api_keys`:
+
+```sql
+  rate_limit_per_min  INTEGER NOT NULL DEFAULT 60,
+  monthly_quota       INTEGER,          -- NULL = unlimited
+  current_usage_count INTEGER NOT NULL DEFAULT 0,
+  last_reset_at       TIMESTAMPTZ NOT NULL DEFAULT date_trunc('month', now()),
+```
+
+Plus a durable per-request ledger, because a single counter cannot answer "what did
+this partner send last month" after a reset:
+
+```sql
+CREATE TABLE public.partner_api_usage (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  key_id       UUID NOT NULL REFERENCES public.partner_api_keys(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
+  action       TEXT NOT NULL,
+  billable     BOOLEAN NOT NULL DEFAULT false,  -- true only when Meta accepted a send
+  http_status  INTEGER NOT NULL,
+  error_code   TEXT,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX partner_api_usage_ws_time_idx
+  ON public.partner_api_usage (workspace_id, created_at DESC);
+```
+
+Rules:
+
+- **Count what costs money.** `billable = true` only when Meta accepted the send.
+  Rejected requests (`4xx`, `insufficient_scope`, `rate_limited`) and **idempotent
+  replays** must not consume quota — otherwise a partner's retry storm burns the
+  client's allowance without sending anything.
+- **Reset lazily, atomically.** On each request, `UPDATE … SET current_usage_count =
+  CASE WHEN last_reset_at < date_trunc('month', now()) THEN 1 ELSE current_usage_count + 1 END,
+  last_reset_at = date_trunc('month', now()) … RETURNING current_usage_count` — one
+  statement, no cron, no read-then-write race.
+- Over quota → `429` with code `quota_exceeded` and `retryable: false` (unlike
+  `rate_limited`, which *is* retryable). Partners must distinguish "slow down" from
+  "you are done for the month".
+- Surface usage in the Integrations UI (§11) and roll it up per workspace, so quota
+  can later attach to the subscription plan.
 
 ### 5.2 Scopes (v1)
 
@@ -461,9 +554,10 @@ development.** Business Verification, own WABA, phone number, and **template app
 (contract expiry, invoice due, payment received, maintenance update). Approval takes
 days and can be rejected.
 
-**Phase 1 — Backend.** Migrations (correct table names, RLS, GRANTs), key management
-endpoint + UI, minimal shared ops with characterization tests, idempotency state
-machine, transactional webhook outbox, account-health checks, `config.toml` entry.
+**Phase 1 — Backend.** Migrations (correct table names, composite tenancy FK, RLS,
+column GRANTs), key management endpoint + UI, minimal shared ops with characterization
+tests, idempotency state machine, **metering + quota**, transactional webhook outbox,
+account-health checks, `config.toml` entry. Network path already verified (§13a.1).
 
 **Phase 2 — Connect.** Embedded Signup via `whatsapp-oauth`. **Do not call it
 connected until** token health, `subscribed_apps`, phone registration, a real
@@ -534,6 +628,52 @@ Consequences the design must honour:
   `ssh-danatfuture-mcp`. They are independently rollback-able, which is what makes
   the Phase 6 flag-guarded swap workable.
 
+### 13a.1 Egress verification — executed 2026-08-13, both directions PASS
+
+Run from the servers themselves, not a workstation.
+
+**Postora (Contabo) → Danat**, the webhook direction:
+
+| Check | Result |
+|---|---|
+| DNS `danat-future.com` | `172.67.182.147`, `2606:4700:3032::6815:2402` (Cloudflare) |
+| DNS `supabase.danat-future.com` | resolves, same Cloudflare edge |
+| TLS | `ssl_verify_result: 0` — valid chain |
+| `GET https://danat-future.com/` | **200**, 194 ms |
+| `POST /api/webhooks/postora` (JSON + signature header) | **404**, 92 ms |
+| Edge | `server: cloudflare`, `cf-ray: …-CDG` |
+
+The POST result is the one that matters: **404 from the origin, not a 403 challenge**
+— an unauthenticated cross-origin POST with a custom header passes Cloudflare and
+reaches the application. 404 is expected; the route does not exist yet.
+
+**Danat → Postora (`api.postora.cloud`)**, the send direction:
+
+| Check | Result |
+|---|---|
+| DNS | `188.114.96.3`, `2a06:98c1:3120::3` (Cloudflare) |
+| TLS | `ssl_verify_result: 0` |
+| `GET /functions/v1/ecommerce-whatsapp-api` | **401**, 379 ms |
+| `POST` with empty body, no key | `{"success":false,"error":"Missing x-api-key header"}` |
+
+That JSON body is application output, which proves the request traversed
+**Cloudflare → Kong → the edge function and executed** — and, importantly, that the
+gateway lets a **JWT-less** request reach a `verify_jwt = false` function. This is
+live confirmation that the §6 `config.toml` requirement for `partner-api` is the
+correct and sufficient mechanism.
+
+**Conclusion: the network path is not a risk.** Two residual items, neither blocking:
+
+1. **Cloudflare sits in front of both hosts.** A future WAF or bot-protection rule
+   change could start challenging webhook POSTs, and the failure would look like a
+   generic delivery failure inside the retry ladder. Mitigate with an explicit WAF
+   skip rule on Danat's `/api/webhooks/*` path, and by recording the `cf-ray` header
+   in `whatsapp_webhook_deliveries.last_error` so a Cloudflare rejection is
+   distinguishable from an origin one.
+2. Cloudflare's ~100s proxy timeout is far above the webhook timeout in §12, so it
+   does not bind — but the partner endpoint must still answer fast and process
+   asynchronously.
+
 ## 14. Testing
 
 - **Unit (Deno):** key auth (valid/revoked/expired/wrong workspace), scope
@@ -548,6 +688,13 @@ Consequences the design must honour:
   `whatsappAccess` tests pass unchanged.
 - **Outbox:** concurrent workers must not double-deliver (lease + `SKIP LOCKED`);
   a delivery survives a dispatch crash after message insert.
+- **Metering:** quota decrements only on a Meta-accepted send; **idempotent replays
+  and 4xx rejections do not consume quota**; the monthly reset is atomic under
+  concurrent requests; `quota_exceeded` is returned as non-retryable while
+  `rate_limited` is retryable.
+- **Tenancy at the database layer:** inserting a `partner_api_keys` row whose
+  `social_account_id` belongs to another workspace must be rejected by Postgres —
+  assert the composite FK fires, not merely that application code checks.
 - **Danat (vitest):** `whatsapp.test.ts` against a mocked partner-api, asserting typed
   error mapping and a **stable `Idempotency-Key` across retries** of one notification.
 
@@ -583,10 +730,20 @@ WhatsApp path; the precise `api_logs` schema/index shape.
 
 ## 17. Open questions
 
-1. Metered/billed per message, or covered by the client's Postora subscription?
-2. Formally deprecate `ecommerce-whatsapp-api` with a sunset once `partner-api` is
+**Resolved 2026-08-13:**
+
+- ~~Is usage metered?~~ **Yes** — metering and quota are in scope for v1 (§5.1b).
+- ~~Does `social_accounts` carry `workspace_id` directly?~~ **Yes**, nullable, and all
+  4 WhatsApp rows are already populated, so the composite FK is viable (§5.1a).
+- ~~Is the cross-server network path viable?~~ **Yes**, verified in both directions
+  (§13a.1).
+
+**Still open:**
+
+1. Formally deprecate `ecommerce-whatsapp-api` with a sunset once `partner-api` is
    stable, or maintain both indefinitely?
-3. Should Danat staff reply from Postora's inbox only, or should conversations also
+2. Should Danat staff reply from Postora's inbox only, or should conversations also
    surface inside Danat's own admin UI (needs `whatsapp:messages.read` + a UI build)?
-4. Does `social_accounts` carry `workspace_id` directly, for the database-enforced
-   composite tenancy constraint in §5.1?
+3. Where does `monthly_quota` come from — set per key by hand, or derived from the
+   client's Postora subscription plan? v1 sets it per key; deriving it from
+   `subscription_plans` is the natural follow-up.
