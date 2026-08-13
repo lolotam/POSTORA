@@ -189,6 +189,12 @@ CREATE TABLE public.partner_api_idempotency (
   idempotency_key TEXT NOT NULL,
   request_hash    TEXT NOT NULL,
   state           TEXT NOT NULL CHECK (state IN ('processing','completed','indeterminate')),
+  -- Fencing token. A state predicate alone cannot protect this row: taking
+  -- over an expired lease leaves state = 'processing', so a revived stale
+  -- writer would still satisfy `state = 'processing'` and could settle the
+  -- NEW owner's row with its own result. Every claim and every takeover mints
+  -- a fresh token, and only the holder of the current token may settle.
+  attempt_token   UUID NOT NULL DEFAULT gen_random_uuid(),
   http_status     INTEGER,
   response_body   JSONB,
   locked_until    TIMESTAMPTZ,
@@ -215,9 +221,13 @@ CREATE TABLE public.partner_api_usage (
   http_status  INTEGER NOT NULL,
   error_code   TEXT,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  -- RESTRICT, not CASCADE: usage rows are billing history and must outlive
+  -- day-to-day key churn. Keys are meant to be REVOKED, not deleted; if a key
+  -- genuinely must be removed, its usage has to be archived deliberately
+  -- rather than disappearing as a side effect.
   CONSTRAINT partner_api_usage_key_in_workspace
     FOREIGN KEY (key_id, workspace_id)
-    REFERENCES public.partner_api_keys (id, workspace_id) ON DELETE CASCADE
+    REFERENCES public.partner_api_keys (id, workspace_id) ON DELETE RESTRICT
 );
 
 CREATE INDEX partner_api_usage_ws_time_idx
@@ -334,27 +344,30 @@ CREATE OR REPLACE FUNCTION public.claim_partner_idempotency(
   -- is a duplicate message.
   p_lease_seconds INTEGER DEFAULT 300
 )
-RETURNS TABLE (outcome TEXT, http_status INTEGER, response_body JSONB)
+RETURNS TABLE (outcome TEXT, http_status INTEGER, response_body JSONB, attempt_token UUID)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_row public.partner_api_idempotency%ROWTYPE;
+  v_row   public.partner_api_idempotency%ROWTYPE;
+  v_token UUID;
 BEGIN
   -- Opportunistic pruning: expired rows must not resurrect as false replays.
   DELETE FROM public.partner_api_idempotency
    WHERE key_id = p_key_id AND expires_at < now();
 
+  v_token := gen_random_uuid();
+
   INSERT INTO public.partner_api_idempotency
-    (key_id, idempotency_key, request_hash, state, locked_until)
+    (key_id, idempotency_key, request_hash, state, locked_until, attempt_token)
   VALUES
     (p_key_id, p_idempotency_key, p_request_hash, 'processing',
-     now() + make_interval(secs => p_lease_seconds))
+     now() + make_interval(secs => p_lease_seconds), v_token)
   ON CONFLICT (key_id, idempotency_key) DO NOTHING;
 
   IF FOUND THEN
-    RETURN QUERY SELECT 'claimed'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN QUERY SELECT 'claimed'::TEXT, NULL::INTEGER, NULL::JSONB, v_token;
     RETURN;
   END IF;
 
@@ -367,23 +380,23 @@ BEGIN
 
   IF NOT FOUND THEN
     -- Pruned between the insert and the read; retry is safe and cheap.
-    RETURN QUERY SELECT 'in_progress'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN QUERY SELECT 'in_progress'::TEXT, NULL::INTEGER, NULL::JSONB, NULL::UUID;
     RETURN;
   END IF;
 
   IF v_row.request_hash IS DISTINCT FROM p_request_hash THEN
-    RETURN QUERY SELECT 'conflict'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN QUERY SELECT 'conflict'::TEXT, NULL::INTEGER, NULL::JSONB, NULL::UUID;
     RETURN;
   END IF;
 
   IF v_row.state = 'completed' THEN
-    RETURN QUERY SELECT 'replay'::TEXT, v_row.http_status, v_row.response_body;
+    RETURN QUERY SELECT 'replay'::TEXT, v_row.http_status, v_row.response_body, NULL::UUID;
     RETURN;
   END IF;
 
   IF v_row.state = 'indeterminate' THEN
     -- The first attempt may have reached Meta. Never silently re-send.
-    RETURN QUERY SELECT 'indeterminate'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN QUERY SELECT 'indeterminate'::TEXT, NULL::INTEGER, NULL::JSONB, NULL::UUID;
     RETURN;
   END IF;
 
@@ -391,15 +404,17 @@ BEGIN
   -- an expired one means the previous attempt died before settling, so this
   -- caller takes it over rather than wedging the key forever.
   IF v_row.locked_until IS NOT NULL AND v_row.locked_until > now() THEN
-    RETURN QUERY SELECT 'in_progress'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN QUERY SELECT 'in_progress'::TEXT, NULL::INTEGER, NULL::JSONB, NULL::UUID;
     RETURN;
   END IF;
 
+  -- Takeover: mint a NEW token so the previous holder can no longer settle.
   UPDATE public.partner_api_idempotency
-     SET locked_until = now() + make_interval(secs => p_lease_seconds)
+     SET locked_until  = now() + make_interval(secs => p_lease_seconds),
+         attempt_token = v_token
    WHERE key_id = p_key_id AND idempotency_key = p_idempotency_key;
 
-  RETURN QUERY SELECT 'claimed'::TEXT, NULL::INTEGER, NULL::JSONB;
+  RETURN QUERY SELECT 'claimed'::TEXT, NULL::INTEGER, NULL::JSONB, v_token;
 END;
 $$;
 
@@ -1252,7 +1267,7 @@ Create `supabase/functions/_shared/partnerApiIdempotency.ts`:
 // state. A check-then-insert would let two concurrent retries both send.
 
 export type ClaimResult =
-  | { outcome: "claimed" }
+  | { outcome: "claimed"; attemptToken: string }
   | { outcome: "replay"; httpStatus: number; body: unknown }
   | { outcome: "conflict" }
   | { outcome: "in_progress" }
@@ -1315,7 +1330,7 @@ export async function claimIdempotency(
   const row = Array.isArray(data) ? data[0] : data;
   switch (row?.outcome) {
     case "claimed":
-      return { outcome: "claimed" };
+      return { outcome: "claimed", attemptToken: row.attempt_token };
     case "replay":
       return { outcome: "replay", httpStatus: row.http_status, body: row.response_body };
     case "conflict":
@@ -1332,6 +1347,7 @@ export async function completeIdempotency(
   client: any,
   keyId: string,
   idempotencyKey: string,
+  attemptToken: string,
   httpStatus: number,
   body: unknown,
 ): Promise<void> {
@@ -1346,9 +1362,12 @@ export async function completeIdempotency(
     })
     .eq("key_id", keyId)
     .eq("idempotency_key", idempotencyKey)
-    // Only settle a row still in flight. Without this, a slow request whose
-    // lease was taken over could overwrite the newer attempt's result.
-    .eq("state", "processing");
+    // Only settle a row still in flight...
+    .eq("state", "processing")
+    // ...AND only if we still own it. A takeover leaves state = 'processing'
+    // but mints a new token, so this is what actually stops a revived stale
+    // writer from settling the new owner's attempt with its own result.
+    .eq("attempt_token", attemptToken);
 
   // Swallowing this would leave the row `processing` with no live lease. The
   // stale-lease path in the RPC recovers it, but a silent failure here means
@@ -1364,6 +1383,7 @@ export async function markIndeterminate(
   client: any,
   keyId: string,
   idempotencyKey: string,
+  attemptToken: string,
 ): Promise<void> {
   const { error } = await client
     .from("partner_api_idempotency")
@@ -1372,8 +1392,10 @@ export async function markIndeterminate(
     .eq("idempotency_key", idempotencyKey)
     // Never downgrade an already-settled success to `indeterminate`: if the
     // completion committed and only the response was lost, the row is correct
-    // as it stands.
-    .eq("state", "processing");
+    // as it stands. The token check additionally stops a stale writer from
+    // poisoning an attempt it no longer owns.
+    .eq("state", "processing")
+    .eq("attempt_token", attemptToken);
 
   // If this write is lost the row stays `processing`; once its lease expires
   // a retry would take it over and re-send a message that may already have
@@ -1787,6 +1809,27 @@ export class WhatsAppOpError extends Error {
 type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 /**
+ * Read a JSON body under its own deadline.
+ *
+ * An AbortController on fetch() stops covering the exchange once response
+ * headers arrive, so a peer that sends headers and then stalls the body would
+ * hang the request past every timeout we set. Returns {} on failure, which the
+ * callers already treat as an unparseable response.
+ */
+async function readJsonWithin(response: Response, ms: number): Promise<Record<string, unknown>> {
+  try {
+    return await Promise.race([
+      response.json(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("body read timed out")), ms)
+      ),
+    ]) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Meta is the authority on messaging policy, so we send and translate its
  * errors rather than pre-judging locally against our own message history,
  * which can be incomplete and cannot model every window variant.
@@ -1909,7 +1952,9 @@ export async function sendTemplate(
   };
 
   let response = await post();
-  let body = await response.json().catch(() => ({}));
+  // The abort timer is cleared when the response HEADERS arrive, so a peer
+  // that stalls the BODY could still hang us. Bound the body read too.
+  let body = await readJsonWithin(response, 10_000);
 
   // Coexistence numbers are not on the Cloud API until first registered.
   // Register once and retry, exactly as messaging-api does today.
@@ -1919,7 +1964,7 @@ export async function sendTemplate(
   if (needsRegistration) {
     await registerWhatsAppPhone(ctx.phoneNumberId, ctx.accessToken, fetcher);
     response = await post();
-    body = await response.json().catch(() => ({}));
+    body = await readJsonWithin(response, 10_000);
   }
 
   if (!response.ok || body?.error) throw translateMetaError(response.status, body);
@@ -2487,6 +2532,8 @@ Deno.serve(async (req) => {
     });
 
     const claim = await claimIdempotency(admin, record.id, idempotencyKey!, requestHash);
+    // Held for the rest of the request; every settle is fenced on it.
+    const attemptToken = claim.outcome === "claimed" ? claim.attemptToken : "";
 
     if (claim.outcome === "replay") {
       // A replay costs nothing and must not consume quota.
@@ -2531,7 +2578,7 @@ Deno.serve(async (req) => {
       // Settle the idempotency claim before returning, or a retry of this same
       // request would see `processing` forever instead of a clear quota error.
       const body = errorBody("quota_exceeded", "Monthly quota exhausted for this key", false);
-      await completeIdempotency(admin, record.id, idempotencyKey!, 429, body)
+      await completeIdempotency(admin, record.id, idempotencyKey!, attemptToken, 429, body)
         .catch((e) => console.error("[partner-api] settle after quota refusal failed:", e));
       return await finish(429, false, body, {}, "quota_exceeded");
     }
@@ -2558,13 +2605,13 @@ Deno.serve(async (req) => {
       // stays `processing`, its lease expires, and the partner's retry would
       // take it over and send a SECOND message to a real customer.
       try {
-        await completeIdempotency(admin, record.id, idempotencyKey!, 200, success);
+        await completeIdempotency(admin, record.id, idempotencyKey!, attemptToken, 200, success);
       } catch (settleError) {
         console.error("[partner-api] settle failed after a successful send:", settleError);
         // Best effort, and deliberately not awaited into the failure path:
         // `indeterminate` is the one state no retry will ever re-send from,
         // which is exactly the protection needed here.
-        await markIndeterminate(admin, record.id, idempotencyKey!).catch(() => {});
+        await markIndeterminate(admin, record.id, idempotencyKey!, attemptToken).catch(() => {});
       }
 
       return await finish(200, true, success);
@@ -2573,7 +2620,7 @@ Deno.serve(async (req) => {
       // whether Meta delivered it. Never auto-retry, and never release the
       // quota reservation — the message may well have been sent.
       if (!(err instanceof WhatsAppOpError)) {
-        await markIndeterminate(admin, record.id, idempotencyKey!);
+        await markIndeterminate(admin, record.id, idempotencyKey!, attemptToken);
         const body = errorBody("idempotency_indeterminate",
           "The send may have been delivered; resolve it before retrying", false);
         return await finish(409, false, body, {},
@@ -2584,7 +2631,7 @@ Deno.serve(async (req) => {
       // reached the customer, so it keeps its quota unit and becomes
       // non-resendable — the same treatment as a transport failure.
       if (err.indeterminate) {
-        await markIndeterminate(admin, record.id, idempotencyKey!)
+        await markIndeterminate(admin, record.id, idempotencyKey!, attemptToken)
           .catch((e) => console.error("[partner-api] indeterminate mark failed:", e));
         const body = errorBody("idempotency_indeterminate",
           "The send may have been delivered; resolve it before retrying", false,
@@ -2596,7 +2643,7 @@ Deno.serve(async (req) => {
       const failure = errorBody(err.code, err.message, false,
         err.metaCode ? { meta_code: err.metaCode } : undefined);
       // Settling must not turn a clean rejection into a generic 500.
-      await completeIdempotency(admin, record.id, idempotencyKey!, err.status, failure)
+      await completeIdempotency(admin, record.id, idempotencyKey!, attemptToken, err.status, failure)
         .catch((e) => console.error("[partner-api] settle after rejection failed:", e));
       return await finish(err.status, false, failure, {}, err.code);
     }
@@ -3168,6 +3215,46 @@ VALUES ('44444444-4444-4444-4444-444444444444', 'idem-3', 'hash-c', 'processing'
 SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
                     '44444444-4444-4444-4444-444444444444', 'idem-3', 'hash-c')),
                  'claimed', 'an expired lease is taken over');
+
+-- === Fencing: a revived stale writer must not settle the new owner's attempt ===
+-- This is the case a state predicate alone cannot catch, because a takeover
+-- leaves state = 'processing'.
+INSERT INTO partner_api_idempotency (key_id, idempotency_key, request_hash, state, locked_until)
+VALUES ('44444444-4444-4444-4444-444444444444', 'idem-5', 'he', 'processing',
+        now() - INTERVAL '5 minutes');
+
+-- Capture the token the ORIGINAL (now stale) attempt held.
+CREATE TEMP TABLE fence_probe AS
+SELECT attempt_token AS stale_token FROM partner_api_idempotency
+ WHERE key_id = '44444444-4444-4444-4444-444444444444' AND idempotency_key = 'idem-5';
+
+-- A new caller takes over the expired lease and gets a fresh token.
+CREATE TEMP TABLE fence_new AS
+SELECT attempt_token AS new_token FROM claim_partner_idempotency(
+  '44444444-4444-4444-4444-444444444444', 'idem-5', 'he');
+
+SELECT assert_eq((SELECT stale_token FROM fence_probe) IS DISTINCT FROM
+                 (SELECT new_token FROM fence_new),
+                 true, 'a takeover mints a different attempt token');
+
+-- The stale writer now tries to settle using its OLD token. It must affect
+-- zero rows; otherwise it would overwrite the new owner's result.
+WITH stale_settle AS (
+  UPDATE partner_api_idempotency
+     SET state = 'completed', http_status = 200,
+         response_body = '{"message_id":"STALE"}'::jsonb
+   WHERE key_id = '44444444-4444-4444-4444-444444444444'
+     AND idempotency_key = 'idem-5'
+     AND state = 'processing'
+     AND attempt_token = (SELECT stale_token FROM fence_probe)
+  RETURNING 1)
+SELECT assert_eq((SELECT count(*)::INTEGER FROM stale_settle), 0,
+                 'a stale writer cannot settle a taken-over attempt');
+
+SELECT assert_eq((SELECT state FROM partner_api_idempotency
+                   WHERE key_id = '44444444-4444-4444-4444-444444444444'
+                     AND idempotency_key = 'idem-5'),
+                 'processing', 'the new owner''s attempt is untouched');
 
 -- Expired rows are pruned, not replayed as stale successes.
 INSERT INTO partner_api_idempotency (key_id, idempotency_key, request_hash, state,
