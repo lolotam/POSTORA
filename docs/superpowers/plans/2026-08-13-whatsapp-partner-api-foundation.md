@@ -1001,7 +1001,7 @@ git commit -m "feat(partner-api): add atomic quota consumption, rate limiting, a
 - Produces:
   - `hashRequest(body: unknown): Promise<string>`
   - `claimIdempotency(client, keyId, idempotencyKey, requestHash): Promise<ClaimResult>`
-  - `completeIdempotency(client, keyId, idempotencyKey, httpStatus, body): Promise<void>`
+  - `completeIdempotency(client, keyId, idempotencyKey, httpStatus, body): Promise<void>` — **throws** on write failure; a caller that has already sent must catch it and fall back to `markIndeterminate` rather than reporting the send as failed
   - `markIndeterminate(client, keyId, idempotencyKey): Promise<void>`
   - `type ClaimResult = { outcome: "claimed" } | { outcome: "replay"; httpStatus: number; body: unknown } | { outcome: "conflict" } | { outcome: "in_progress" } | { outcome: "indeterminate" }`
 
@@ -2349,7 +2349,23 @@ Deno.serve(async (req) => {
         state: "accepted_by_meta",
         recorded_in_inbox: result.persisted,
       };
-      await completeIdempotency(admin, record.id, idempotencyKey!, 200, success);
+
+      // Meta has ACCEPTED the message at this point — the customer may already
+      // have it. A bookkeeping failure here must never be reported as a failed
+      // or indeterminate send, or the partner will show a delivered message as
+      // undelivered. But the claim still has to be settled somehow: if the row
+      // stays `processing`, its lease expires, and the partner's retry would
+      // take it over and send a SECOND message to a real customer.
+      try {
+        await completeIdempotency(admin, record.id, idempotencyKey!, 200, success);
+      } catch (settleError) {
+        console.error("[partner-api] settle failed after a successful send:", settleError);
+        // Best effort, and deliberately not awaited into the failure path:
+        // `indeterminate` is the one state no retry will ever re-send from,
+        // which is exactly the protection needed here.
+        await markIndeterminate(admin, record.id, idempotencyKey!).catch(() => {});
+      }
+
       return await respond(admin, record, action, 200, true, success);
     } catch (err) {
       // A network failure after the request left leaves us unable to know
