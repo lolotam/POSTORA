@@ -115,6 +115,65 @@ Deno.test("sendTemplate auto-registers on 133010 and retries the send", async ()
   assertEquals(calls.filter((c) => c.endsWith("/messages")).length, 2);
 });
 
+Deno.test("sendTemplate records cloud_api_registered after auto-registering", async () => {
+  // WhatsAppCoexistenceSetupBanner.tsx reads this flag. Without the write the
+  // send succeeds but the operator keeps seeing a "finish setup" prompt.
+  const updates: Array<Record<string, unknown>> = [];
+  const admin = {
+    from(table: string) {
+      return {
+        insert() { return Promise.resolve({ error: null }); },
+        upsert() { return Promise.resolve({ error: null }); },
+        update(row: Record<string, unknown>) {
+          if (table === "social_accounts") updates.push(row);
+          return { eq: () => Promise.resolve({ error: null }) };
+        },
+        select() { return this; },
+        eq() { return this; },
+        maybeSingle() {
+          return Promise.resolve({ data: { account_metadata: { waba_id: "w1" } }, error: null });
+        },
+      };
+    },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+
+  const calls: string[] = [];
+  const fetcher = (url: string | URL | Request) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.endsWith("/register")) {
+      return Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    }
+    const isRetry = calls.filter((c) => c.endsWith("/messages")).length > 1;
+    return Promise.resolve(new Response(
+      JSON.stringify(isRetry
+        ? { messages: [{ id: "wamid.AFTER" }] }
+        : { error: { code: 133010, message: "not registered" } }),
+      { status: isRetry ? 200 : 400 },
+    ));
+  };
+
+  await sendTemplate({
+    admin, accountId: "acct-1", ownerId: "owner-1", workspaceId: "ws-1",
+    phoneNumberId: "999888777", accessToken: "tok",
+  }, {
+    recipientPhone: "96512345678",
+    templateName: "invoice_due_v1",
+    templateLanguage: "ar",
+  }, fetcher);
+
+  const flagged = updates.find((u) =>
+    ((u.account_metadata ?? {}) as Record<string, unknown>).cloud_api_registered === true
+  );
+  assertEquals(flagged !== undefined, true);
+  // The pre-existing metadata must survive the merge, not be replaced.
+  assertEquals(
+    ((flagged!.account_metadata as Record<string, unknown>).waba_id),
+    "w1",
+  );
+});
+
 Deno.test("sendTemplate upserts the conversation so it appears in the inbox", async () => {
   const captured = { rows: [] as unknown[] };
   const tables: string[] = [];

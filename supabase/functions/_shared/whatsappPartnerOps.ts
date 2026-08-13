@@ -134,8 +134,44 @@ function translateMetaError(status: number, payload: Record<string, unknown>): W
 }
 
 /**
- * Register a phone number on the Cloud API. Moved verbatim from
- * messaging-api so both doors keep the Coexistence self-heal behaviour.
+ * Record that this number is now live on the Cloud API.
+ *
+ * WhatsAppCoexistenceSetupBanner.tsx reads `cloud_api_registered` to decide
+ * whether onboarding is still incomplete. Without this the send succeeds but
+ * the operator keeps seeing a "finish setup" prompt forever.
+ *
+ * Failure is logged, never thrown: the message has already been sent.
+ */
+async function markCloudApiRegistered(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  socialAccountId: string,
+): Promise<void> {
+  try {
+    const { data: account } = await admin
+      .from("social_accounts")
+      .select("account_metadata")
+      .eq("id", socialAccountId)
+      .maybeSingle();
+    const meta = (account?.account_metadata as Record<string, unknown>) || {};
+    await admin
+      .from("social_accounts")
+      .update({
+        account_metadata: {
+          ...meta,
+          cloud_api_registered: true,
+          cloud_api_registered_at: new Date().toISOString(),
+        },
+      })
+      .eq("id", socialAccountId);
+  } catch (err) {
+    console.warn("[whatsappPartnerOps] Failed to mark cloud_api_registered:", err);
+  }
+}
+
+/**
+ * Register a phone number on the Cloud API. Moved from messaging-api so both
+ * doors keep the Coexistence self-heal behaviour.
  */
 async function registerWhatsAppPhone(
   phoneNumberId: string,
@@ -227,6 +263,7 @@ export async function sendTemplate(
 
   if (needsRegistration) {
     await registerWhatsAppPhone(ctx.phoneNumberId, ctx.accessToken, fetcher);
+    await markCloudApiRegistered(ctx.admin, ctx.accountId);
     response = await post();
     body = await readJsonWithin(response, 10_000);
   }

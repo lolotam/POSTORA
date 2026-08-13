@@ -126,8 +126,8 @@ Deno.serve(async (req) => {
 
     // A database error is not "not connected" — do not disguise one as the other.
     if (accountError) {
-      return await respond(
-        admin, record, action, 500, false,
+      return await finish(
+        500, false,
         errorBody("internal_error", "Could not resolve the account", true),
         {}, "internal_error",
       );
@@ -138,8 +138,8 @@ Deno.serve(async (req) => {
     // page, so check platform explicitly, as the human resolver does
     // (_shared/whatsappWorkspaceAccess.ts:124-136).
     if (!account || account.platform !== "whatsapp" || !account.is_active) {
-      return await respond(
-        admin, record, action, 409, false,
+      return await finish(
+        409, false,
         errorBody("account_not_connected", "The WhatsApp account is not connected", false),
         {}, "account_not_connected",
       );
@@ -151,8 +151,8 @@ Deno.serve(async (req) => {
     const tokenExpired = account.token_expires_at &&
       new Date(account.token_expires_at) <= new Date();
     if (account.needs_reauth || tokenExpired) {
-      return await respond(
-        admin, record, action, 401, false,
+      return await finish(
+        401, false,
         errorBody("account_needs_reauth",
           "The WhatsApp connection needs to be re-authorized in Postora", false),
         {}, "account_needs_reauth",
@@ -181,8 +181,8 @@ Deno.serve(async (req) => {
     if (action === "list_templates") {
       const wabaId = (account.account_metadata as Record<string, unknown> | null)?.waba_id;
       if (!wabaId) {
-        return await respond(
-          admin, record, action, 409, false,
+        return await finish(
+          409, false,
           errorBody("account_not_connected", "No WABA id recorded for this account", false),
         );
       }
@@ -194,8 +194,8 @@ Deno.serve(async (req) => {
     // ---- send_template ----
     idempotencyKey = req.headers.get("idempotency-key");
     if (isSendAction(action) && !idempotencyKey) {
-      return await respond(
-        admin, record, action, 400, false,
+      return await finish(
+        400, false,
         errorBody("missing_idempotency_key", "Idempotency-Key header is required for sends", false),
       );
     }
@@ -203,8 +203,8 @@ Deno.serve(async (req) => {
     // Validate BEFORE claiming. Claiming first would leave an invalid request
     // stuck in `processing` forever, poisoning that idempotency key.
     if (!body.recipient_phone || !body.template_name) {
-      return await respond(
-        admin, record, action, 400, false,
+      return await finish(
+        400, false,
         errorBody("invalid_request", "recipient_phone and template_name are required", false),
       );
     }
@@ -222,29 +222,31 @@ Deno.serve(async (req) => {
     const attemptToken = claim.outcome === "claimed" ? claim.attemptToken : "";
 
     if (claim.outcome === "replay") {
-      // A replay costs nothing and must not consume quota.
-      return json(
-        withRequestId(claim.body as Record<string, unknown>, requestId),
-        claim.httpStatus,
-        { "Idempotency-Replayed": "true", "X-Postora-Request-Id": requestId },
+      // A replay must not consume quota, but it IS still a request the partner
+      // made: recording it non-billable keeps the ledger able to reconstruct
+      // retry activity. Not consuming quota and not being recorded are two
+      // different things.
+      return await finish(
+        claim.httpStatus, false, claim.body,
+        { "Idempotency-Replayed": "true" },
       );
     }
     if (claim.outcome === "conflict") {
-      return await respond(
-        admin, record, action, 409, false,
+      return await finish(
+        409, false,
         errorBody("idempotency_conflict", "This Idempotency-Key was used with a different body", false),
       );
     }
     if (claim.outcome === "in_progress") {
-      return await respond(
-        admin, record, action, 409, false,
+      return await finish(
+        409, false,
         errorBody("idempotency_in_progress", "An identical request is still processing", true),
         { "Retry-After": "2" },
       );
     }
     if (claim.outcome === "indeterminate") {
-      return await respond(
-        admin, record, action, 409, false,
+      return await finish(
+        409, false,
         errorBody("idempotency_indeterminate",
           "A previous attempt may have been delivered; resolve it before retrying", false),
       );
