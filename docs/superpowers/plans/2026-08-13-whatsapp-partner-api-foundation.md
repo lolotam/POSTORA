@@ -32,7 +32,14 @@ real systems, what is assumed, and what must be true before Task 8 can complete.
 - `deno check` resolves the `esm.sh` supabase-js import in the deploy environment;
   `deno.lock` has the URL but not every transitive module.
 - Task 9's full SQL script has not been run end to end. Only the
-  `claim_partner_idempotency` behaviours above were executed directly.
+  `claim_partner_idempotency` behaviours above were executed directly, and that
+  was **before** the `attempt_token` fencing column was added — so the current
+  version of the RPC has not been compiled. Expect to fix small SQL errors on
+  the first run of Task 9; that is what its Step 5 (deliberately break an
+  assertion) is for.
+- The fencing guarantee itself — that a stale writer cannot settle a taken-over
+  attempt — is **reasoned, not yet measured**. Task 9 contains the test that
+  measures it. Run it before trusting the mechanism.
 
 ### Hard prerequisites
 
@@ -55,15 +62,28 @@ real systems, what is assumed, and what must be true before Task 8 can complete.
   account can look connected while unable to receive. Task 6's health check catches
   the token side of this, not the subscription side.
 
-### Review history
+### Review history — and its limits
 
-Three adversarial review rounds against the codebase, each of whose findings were
-verified before being acted on. Round 1 rejected the spec outright (wrong tenancy
-table names — the migration would not have run). Round 2 rejected the plan (a lease
-shorter than the send deadline, allowing a duplicate send). Round 3 reviewed the
-delta. The recurring pattern worth knowing as you implement: **most defects were
-introduced by fixes to earlier defects**, because a component was corrected without
-re-tracing its callers. Re-trace call sites after every change.
+Two completed adversarial review rounds against the codebase, each finding verified
+before being acted on:
+
+- **Round 1** rejected the spec outright: it named tenancy tables that do not exist,
+  so the migration would not have run at all.
+- **Round 2** rejected the plan: the idempotency lease (60s) was shorter than the
+  documented worst-case send (75s), so a still-running request could lose its claim
+  and a retry would send a duplicate.
+- **Round 3 never ran** — the reviewer hit a usage limit that resets 2026-09-12. Its
+  questions were worked through directly instead, which surfaced the missing fencing
+  token, the `ON DELETE CASCADE` that would have destroyed billing history, and the
+  unbounded body read. **This plan has therefore not been independently reviewed
+  since those three changes.** If another reviewer is available, that delta is the
+  highest-value thing to point at.
+
+The pattern worth carrying into implementation: **most defects were introduced by
+fixes to earlier defects**, because a component was corrected without re-tracing its
+callers. `touchKey` was implemented and never called; `requestId` was used before it
+was declared; making `completeIdempotency` throw turned a delivered message into a
+reported failure. Re-trace call sites after every change.
 
 ---
 
