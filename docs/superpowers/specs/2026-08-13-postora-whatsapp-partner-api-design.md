@@ -411,10 +411,30 @@ against a bucket table. Keep `api_logs` for auditing only.
   "message": "...", "retryable": false, "details": { "meta_code": 131047 } } }
 ```
 
-Codes: `invalid_key`, `key_revoked`, `insufficient_scope`, `rate_limited`,
-`idempotency_conflict`, `idempotency_in_progress`, `account_not_connected`,
-`account_needs_reauth`, `outside_session_window`, `template_not_approved`,
-`invalid_recipient`, `meta_error`, `internal_error`.
+Codes — this list is **exhaustive** and every entry must have a test pinning its
+code, HTTP status, and `retryable` value:
+
+| Code | Status | Retryable |
+|---|---|---|
+| `invalid_key` | 401 | no |
+| `key_revoked` | 401 | no |
+| `key_expired` | 401 | no |
+| `insufficient_scope` | 403 | no |
+| `unknown_action` | 400 | no |
+| `invalid_request` | 400 | no |
+| `missing_idempotency_key` | 400 | no |
+| `rate_limited` | 429 | **yes** |
+| `quota_exceeded` | 429 | no — waiting does not help until the month rolls over |
+| `idempotency_conflict` | 409 | no |
+| `idempotency_in_progress` | 409 | yes |
+| `idempotency_indeterminate` | 409 | no — a previous attempt may have been delivered |
+| `account_not_connected` | 409 | no |
+| `account_needs_reauth` | 401 | no |
+| `outside_session_window` | 422 | no |
+| `template_not_approved` | 422 | no |
+| `invalid_recipient` | 422 | no |
+| `meta_error` | 422 or 502 | 502 only |
+| `internal_error` | 500 | yes |
 
 Responses distinguish **`accepted_by_meta`** from **`delivered`**. Meta accepting a
 send is not delivery, and some policy failures arrive later via status webhooks.
