@@ -34,6 +34,9 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-postora-key, idempotency-key",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
+  // Without this a browser caller cannot read the correlation handle the API
+  // documents, nor tell a replay from a fresh send.
+  "Access-Control-Expose-Headers": "x-postora-request-id, idempotency-replayed, retry-after",
 };
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {

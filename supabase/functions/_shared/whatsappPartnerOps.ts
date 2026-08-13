@@ -424,7 +424,10 @@ export async function listTemplates(
     },
   ).finally(() => clearTimeout(timer));
   const body = await readJsonWithin(response, 10_000);
-  if (!response.ok) throw translateMetaError(response.status, body);
+  // Meta can answer HTTP 200 with an `error` object. Checking only the status
+  // would return an empty list, so a partner would read "no templates" instead
+  // of a typed error. sendTemplate already checks both.
+  if (!response.ok || body?.error) throw translateMetaError(response.status, body);
 
   // deno-lint-ignore no-explicit-any
   return (body.data ?? []).map((t: any) => ({
