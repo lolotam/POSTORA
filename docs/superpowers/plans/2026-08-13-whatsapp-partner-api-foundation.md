@@ -1169,7 +1169,7 @@ git commit -m "feat(partner-api): add idempotency claim state machine" -- supaba
   - `type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>` — injected so tests never hit the network
   - `interface SendTemplateInput { recipientPhone: string; templateName: string; templateLanguage: string; components?: unknown[] }`
   - `interface SendResult { messageId: string; persisted: boolean; raw: unknown }` — `raw` is the Meta body. **`messaging-api` passes it through as `data` to preserve the existing frontend contract; `partner-api` must NOT return it**, per spec §5.3 (partners get a normalized response only).
-  - `interface TemplateSummary { name: string; language: string; status: string; category: string }`
+  - `interface TemplateSummary { name: string; language: string; status: string; category: string; components: unknown[] }` — `components` is required by `WhatsAppTemplatesContent.tsx`
   - `class WhatsAppOpError extends Error { code: string; status: number; metaCode?: number }`
 
 - [ ] **Step 1: Write the characterization test**
@@ -1486,6 +1486,10 @@ export interface TemplateSummary {
   language: string;
   status: string;
   category: string;
+  // WhatsAppTemplatesContent.tsx renders headers, buttons, and body previews
+  // from this. Dropping it would break the template UI the moment the
+  // messaging-api list handler is repointed at this op.
+  components: unknown[];
 }
 
 export class WhatsAppOpError extends Error {
@@ -1591,15 +1595,22 @@ export async function sendTemplate(
     },
   };
 
-  const post = () =>
-    fetcher(`${GRAPH_API}/${ctx.phoneNumberId}/messages`, {
+  // A hung Graph request must not outlive the function: if the runtime kills
+  // us mid-flight, the idempotency row stays `processing` forever and that
+  // key is poisoned. 30s is well inside the edge runtime's own limit.
+  const post = () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 30_000);
+    return fetcher(`${GRAPH_API}/${ctx.phoneNumberId}/messages`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${ctx.accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(payload),
-    });
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer));
+  };
 
   let response = await post();
   let body = await response.json().catch(() => ({}));
@@ -1764,6 +1775,7 @@ export async function listTemplates(
     language: t.language,
     status: t.status,
     category: t.category,
+    components: t.components ?? [],
   }));
 }
 ```
