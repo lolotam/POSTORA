@@ -118,6 +118,10 @@ CREATE TABLE public.partner_api_keys (
     REFERENCES public.social_accounts (id, workspace_id) ON DELETE CASCADE
 );
 
+-- Referenced by partner_api_usage's composite FK below.
+ALTER TABLE public.partner_api_keys
+  ADD CONSTRAINT partner_api_keys_id_workspace_key UNIQUE (id, workspace_id);
+
 CREATE INDEX partner_api_keys_hash_active_idx
   ON public.partner_api_keys (key_hash) WHERE revoked_at IS NULL;
 CREATE INDEX partner_api_keys_workspace_idx
@@ -140,19 +144,29 @@ CREATE TABLE public.partner_api_idempotency (
 CREATE INDEX partner_api_idempotency_expiry_idx
   ON public.partner_api_idempotency (expires_at);
 
+-- The two foreign keys below are each individually valid but, declared
+-- separately, would allow a usage row whose workspace_id is not the key's
+-- workspace -- silently corrupting per-workspace billing and reporting.
+-- A composite FK against (id, workspace_id) makes the pairing impossible,
+-- the same technique used for account tenancy on partner_api_keys.
 CREATE TABLE public.partner_api_usage (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  key_id       UUID NOT NULL REFERENCES public.partner_api_keys(id) ON DELETE CASCADE,
+  key_id       UUID NOT NULL,
   workspace_id UUID NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
   action       TEXT NOT NULL,
   billable     BOOLEAN NOT NULL DEFAULT false,
   http_status  INTEGER NOT NULL,
   error_code   TEXT,
-  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT partner_api_usage_key_in_workspace
+    FOREIGN KEY (key_id, workspace_id)
+    REFERENCES public.partner_api_keys (id, workspace_id) ON DELETE CASCADE
 );
 
 CREATE INDEX partner_api_usage_ws_time_idx
   ON public.partner_api_usage (workspace_id, created_at DESC);
+CREATE INDEX partner_api_usage_key_time_idx
+  ON public.partner_api_usage (key_id, created_at DESC);
 
 -- Per-key, per-minute rate limit bucket. Counting rows in the usage ledger
 -- would be the same non-atomic count-then-insert the spec rejects: concurrent
@@ -2247,6 +2261,22 @@ function errorBody(code: string, message: string, retryable: boolean, details?: 
   return { success: false, error: { code, message, retryable, ...(details ? { details } : {}) } };
 }
 
+/**
+ * Every response carries a request id, success or failure.
+ *
+ * Without one a partner reporting "the 09:14 send failed" gives us nothing to
+ * grep for: the partner key is hashed, message bodies are never logged, and a
+ * failed send has no Meta message id. This is the only correlation handle
+ * between their logs and ours, and the spec requires it in the normalized
+ * response.
+ */
+function withRequestId<T extends Record<string, unknown>>(
+  body: T,
+  requestId: string,
+): T & { request_id: string } {
+  return { ...body, request_id: requestId };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   if (req.method !== "POST") {
@@ -2261,6 +2291,19 @@ Deno.serve(async (req) => {
   let record: PartnerKeyRecord | null = null;
   let action = "unknown";
   let idempotencyKey: string | null = null;
+  const requestId = crypto.randomUUID();
+
+  // Bound once so every exit path stamps the request id automatically. The
+  // alternative - adding a trailing argument at each call site - is how
+  // touchKey ended up implemented but never called.
+  const finish = (
+    status: number,
+    billable: boolean,
+    body: unknown,
+    extraHeaders: Record<string, string> = {},
+    errorCode?: string,
+  ) => respond(admin, record!, action, status, billable, body, extraHeaders,
+               errorCode, requestId);
 
   try {
     record = await authenticatePartnerKey(admin, req.headers.get("x-postora-key") ?? "");
@@ -2331,7 +2374,7 @@ Deno.serve(async (req) => {
 
     if (action === "get_status") {
       await touchKey(admin, record);
-      return await respond(admin, record, action, 200, false, {
+      return await finish(200, false, {
         success: true,
         whatsapp_connected: true,
         phone_number_id: account.platform_user_id,
@@ -2349,7 +2392,7 @@ Deno.serve(async (req) => {
       }
       const templates = await listTemplates(ctx, String(wabaId));
       await touchKey(admin, record);
-      return await respond(admin, record, action, 200, false, { success: true, templates });
+      return await finish(200, false, { success: true, templates });
     }
 
     // ---- send_template ----
@@ -2382,7 +2425,11 @@ Deno.serve(async (req) => {
 
     if (claim.outcome === "replay") {
       // A replay costs nothing and must not consume quota.
-      return json(claim.body, claim.httpStatus, { "Idempotency-Replayed": "true" });
+      return json(
+        withRequestId(claim.body as Record<string, unknown>, requestId),
+        claim.httpStatus,
+        { "Idempotency-Replayed": "true", "X-Postora-Request-Id": requestId },
+      );
     }
     if (claim.outcome === "conflict") {
       return await respond(
@@ -2421,7 +2468,7 @@ Deno.serve(async (req) => {
       const body = errorBody("quota_exceeded", "Monthly quota exhausted for this key", false);
       await completeIdempotency(admin, record.id, idempotencyKey!, 429, body)
         .catch((e) => console.error("[partner-api] settle after quota refusal failed:", e));
-      return await respond(admin, record, action, 429, false, body, {}, "quota_exceeded");
+      return await finish(429, false, body, {}, "quota_exceeded");
     }
 
     try {
@@ -2455,7 +2502,7 @@ Deno.serve(async (req) => {
         await markIndeterminate(admin, record.id, idempotencyKey!).catch(() => {});
       }
 
-      return await respond(admin, record, action, 200, true, success);
+      return await finish(200, true, success);
     } catch (err) {
       // A network failure after the request left leaves us unable to know
       // whether Meta delivered it. Never auto-retry, and never release the
@@ -2464,7 +2511,7 @@ Deno.serve(async (req) => {
         await markIndeterminate(admin, record.id, idempotencyKey!);
         const body = errorBody("idempotency_indeterminate",
           "The send may have been delivered; resolve it before retrying", false);
-        return await respond(admin, record, action, 409, false, body, {},
+        return await finish(409, false, body, {},
           "idempotency_indeterminate");
       }
       // Only a DEFINITE rejection may be refunded and settled as a failure.
@@ -2477,7 +2524,7 @@ Deno.serve(async (req) => {
         const body = errorBody("idempotency_indeterminate",
           "The send may have been delivered; resolve it before retrying", false,
           err.metaCode ? { meta_code: err.metaCode } : undefined);
-        return await respond(admin, record, action, 409, false, body, {},
+        return await finish(409, false, body, {},
           "idempotency_indeterminate");
       }
       await releaseQuota(admin, record);
@@ -2486,7 +2533,7 @@ Deno.serve(async (req) => {
       // Settling must not turn a clean rejection into a generic 500.
       await completeIdempotency(admin, record.id, idempotencyKey!, err.status, failure)
         .catch((e) => console.error("[partner-api] settle after rejection failed:", e));
-      return await respond(admin, record, action, err.status, false, failure, {}, err.code);
+      return await finish(err.status, false, failure, {}, err.code);
     }
   } catch (err) {
     // listTemplates and the account lookups can also throw WhatsAppOpError.
@@ -2495,25 +2542,31 @@ Deno.serve(async (req) => {
     if (err instanceof WhatsAppOpError) {
       const body = errorBody(err.code, err.message, err.status >= 500,
         err.metaCode ? { meta_code: err.metaCode } : undefined);
-      if (record) return await respond(admin, record, action, err.status, false, body, {}, err.code);
-      return json(body, err.status);
+      if (record) return await finish(err.status, false, body, {}, err.code);
+      return json(withRequestId(body, requestId), err.status,
+                  { "X-Postora-Request-Id": requestId });
     }
     if (err instanceof PartnerAuthError) {
       const retryable = err.code === "rate_limited";
       const body = errorBody(err.code, err.message, retryable);
       if (record) {
-        return await respond(admin, record, action, err.status, false, body, {}, err.code);
+        return await finish(err.status, false, body, {}, err.code);
       }
-      return json(body, err.status);
+      // No key resolved yet, so there is no ledger row to write - but the
+      // caller still gets a correlatable id.
+      return json(withRequestId(body, requestId), err.status,
+                  { "X-Postora-Request-Id": requestId });
     }
-    console.error("[partner-api] unhandled:", err);
+    console.error(`[partner-api] unhandled (request ${requestId}, key ${record?.keyPrefix ?? "none"}):`, err);
     const body = errorBody("internal_error", "Unexpected error", true);
-    if (record) return await respond(admin, record, action, 500, false, body, {}, "internal_error");
-    return json(body, 500);
+    if (record) return await finish(500, false, body, {}, "internal_error");
+    return json(withRequestId(body, requestId), 500,
+                { "X-Postora-Request-Id": requestId });
   }
 });
 
-/** Emit the response and append exactly one usage-ledger row for it. */
+/** Emit the response, stamp it with the request id, and append exactly one
+ *  usage-ledger row for it. */
 async function respond(
   // deno-lint-ignore no-explicit-any
   admin: any,
@@ -2524,6 +2577,7 @@ async function respond(
   body: unknown,
   extraHeaders: Record<string, string> = {},
   errorCode?: string,
+  requestId?: string,
 ) {
   await recordUsage(admin, {
     keyId: record.id,
@@ -2533,7 +2587,15 @@ async function respond(
     httpStatus: status,
     errorCode,
   });
-  return json(body, status, extraHeaders);
+  const stamped = requestId && body && typeof body === "object"
+    ? withRequestId(body as Record<string, unknown>, requestId)
+    : body;
+  // Also a header, so a partner can correlate without parsing the body -
+  // which matters for the 5xx paths where the body may not be ours.
+  return json(stamped, status, {
+    ...extraHeaders,
+    ...(requestId ? { "X-Postora-Request-Id": requestId } : {}),
+  });
 }
 ```
 
