@@ -2328,10 +2328,16 @@ Deno.serve(async (req) => {
     // release: the message may have been delivered.
     const reserved = await reserveQuota(admin, record);
     if (!reserved) {
+      // reserve_partner_quota increments before it reports, so a refused
+      // attempt must give its unit back. Otherwise every rejected call pushes
+      // current_usage_count further past the quota and the number stops
+      // meaning anything for reporting.
+      await releaseQuota(admin, record);
       // Settle the idempotency claim before returning, or a retry of this same
       // request would see `processing` forever instead of a clear quota error.
       const body = errorBody("quota_exceeded", "Monthly quota exhausted for this key", false);
-      await completeIdempotency(admin, record.id, idempotencyKey!, 429, body);
+      await completeIdempotency(admin, record.id, idempotencyKey!, 429, body)
+        .catch((e) => console.error("[partner-api] settle after quota refusal failed:", e));
       return await respond(admin, record, action, 429, false, body, {}, "quota_exceeded");
     }
 
@@ -2821,6 +2827,12 @@ SELECT assert_eq((SELECT allowed FROM reserve_partner_quota('44444444-4444-4444-
                  true, 'second reservation allowed (quota = 2)');
 SELECT assert_eq((SELECT allowed FROM reserve_partner_quota('44444444-4444-4444-4444-444444444444')),
                  false, 'third reservation refused');
+
+-- The refused reservation above still incremented, so the caller releases it.
+-- Without that release, repeated refusals inflate the count indefinitely.
+SELECT assert_eq((SELECT current_usage_count FROM partner_api_keys
+                   WHERE id = '44444444-4444-4444-4444-444444444444'),
+                 3, 'a refused reservation still incremented, so it must be released');
 
 SELECT release_partner_quota('44444444-4444-4444-4444-444444444444');
 SELECT assert_eq((SELECT current_usage_count FROM partner_api_keys
