@@ -46,7 +46,7 @@ Exact values, copied from the spec and verified against the codebase — every t
 
 **Interfaces:**
 - Consumes: existing `workspaces`, `workspace_members`, `social_accounts`, `auth.users`.
-- Produces: tables `partner_api_keys`, `partner_api_idempotency`, `partner_api_usage`; RPC `consume_partner_quota(p_key_id uuid)` returning `(allowed boolean, usage_count integer)`.
+- Produces: tables `partner_api_keys`, `partner_api_idempotency`, `partner_api_usage`, `partner_api_rate_buckets`; RPCs `reserve_partner_quota(uuid) -> (allowed boolean, usage_count integer)`, `release_partner_quota(uuid)`, `consume_partner_rate(uuid, integer) -> boolean`, `touch_partner_key(uuid)`.
 
 > **The composite FK was proven empirically before this plan was written**
 > (scratch database on the production Postgres, 2026-08-13). The concern worth
@@ -83,6 +83,14 @@ ALTER TABLE public.social_accounts
 ALTER TABLE public.social_accounts
   ADD CONSTRAINT social_accounts_whatsapp_needs_workspace
   CHECK (platform <> 'whatsapp' OR workspace_id IS NOT NULL) NOT VALID;
+
+-- Validate in the migration itself. Leaving it NOT VALID would enforce new
+-- writes but leave the constraint catalogued as unvalidated in production,
+-- so nothing would ever prove the existing rows comply. All 4 whatsapp rows
+-- were verified populated on 2026-08-13; if this fails, a non-compliant row
+-- appeared since and must be backfilled before deploying.
+ALTER TABLE public.social_accounts
+  VALIDATE CONSTRAINT social_accounts_whatsapp_needs_workspace;
 
 CREATE TABLE public.partner_api_keys (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -146,9 +154,44 @@ CREATE TABLE public.partner_api_usage (
 CREATE INDEX partner_api_usage_ws_time_idx
   ON public.partner_api_usage (workspace_id, created_at DESC);
 
--- Atomic monthly quota consumption. One statement: no read-then-write race,
--- and the reset happens lazily on first use in a new month (no cron needed).
-CREATE OR REPLACE FUNCTION public.consume_partner_quota(p_key_id UUID)
+-- Per-key, per-minute rate limit bucket. Counting rows in the usage ledger
+-- would be the same non-atomic count-then-insert the spec rejects: concurrent
+-- requests all read the same old count and all pass. INSERT .. ON CONFLICT
+-- DO UPDATE .. RETURNING is a single atomic statement instead.
+CREATE TABLE public.partner_api_rate_buckets (
+  key_id       UUID NOT NULL REFERENCES public.partner_api_keys(id) ON DELETE CASCADE,
+  window_start TIMESTAMPTZ NOT NULL,
+  request_count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (key_id, window_start)
+);
+
+CREATE OR REPLACE FUNCTION public.consume_partner_rate(p_key_id UUID, p_limit INTEGER)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_count INTEGER;
+BEGIN
+  INSERT INTO public.partner_api_rate_buckets (key_id, window_start, request_count)
+  VALUES (p_key_id, date_trunc('minute', now()), 1)
+  ON CONFLICT (key_id, window_start)
+  DO UPDATE SET request_count = partner_api_rate_buckets.request_count + 1
+  RETURNING request_count INTO v_count;
+
+  RETURN v_count <= p_limit;
+END;
+$$;
+
+-- Quota is RESERVED before the send and SETTLED after, because the plan
+-- promises quota is consumed only by a Meta-accepted send. A single
+-- increment-then-check would charge the partner for 4xx rejections too.
+--
+-- reserve: increments and reports whether the reservation is within quota.
+-- release: decrements, called when Meta definitely rejected the send.
+-- Nothing is released for an indeterminate send — it may have been delivered.
+CREATE OR REPLACE FUNCTION public.reserve_partner_quota(p_key_id UUID)
 RETURNS TABLE (allowed BOOLEAN, usage_count INTEGER)
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -177,7 +220,35 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.consume_partner_quota(UUID) FROM PUBLIC, authenticated, anon;
+CREATE OR REPLACE FUNCTION public.release_partner_quota(p_key_id UUID)
+RETURNS VOID
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  UPDATE public.partner_api_keys
+     SET current_usage_count = GREATEST(current_usage_count - 1, 0)
+   WHERE id = p_key_id;
+$$;
+
+-- Touch last_used_at for non-send actions, which never reserve quota.
+CREATE OR REPLACE FUNCTION public.touch_partner_key(p_key_id UUID)
+RETURNS VOID
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  UPDATE public.partner_api_keys SET last_used_at = now() WHERE id = p_key_id;
+$$;
+
+REVOKE ALL ON FUNCTION public.consume_partner_rate(UUID, INTEGER) FROM PUBLIC, authenticated, anon;
+REVOKE ALL ON FUNCTION public.reserve_partner_quota(UUID) FROM PUBLIC, authenticated, anon;
+REVOKE ALL ON FUNCTION public.release_partner_quota(UUID) FROM PUBLIC, authenticated, anon;
+REVOKE ALL ON FUNCTION public.touch_partner_key(UUID) FROM PUBLIC, authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.consume_partner_rate(UUID, INTEGER) TO service_role;
+GRANT EXECUTE ON FUNCTION public.reserve_partner_quota(UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.release_partner_quota(UUID) TO service_role;
+GRANT EXECUTE ON FUNCTION public.touch_partner_key(UUID) TO service_role;
 
 ALTER TABLE public.partner_api_keys       ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.partner_api_idempotency ENABLE ROW LEVEL SECURITY;
@@ -254,9 +325,11 @@ VALUES ('11111111-1111-1111-1111-111111111111',
        ('22222222-2222-2222-2222-222222222222',
         (SELECT id FROM auth.users LIMIT 1), 'ws-b', false);
 
-INSERT INTO social_accounts (id, user_id, platform, platform_user_id, workspace_id)
+-- access_token is NOT NULL on social_accounts; omitting it fails before the
+-- FK is ever exercised.
+INSERT INTO social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id)
 VALUES ('33333333-3333-3333-3333-333333333333',
-        (SELECT id FROM auth.users LIMIT 1), 'whatsapp', '1234567890',
+        (SELECT id FROM auth.users LIMIT 1), 'whatsapp', '1234567890', 'test-token',
         '11111111-1111-1111-1111-111111111111');
 
 -- MUST FAIL: key in workspace B pointing at workspace A's account.
@@ -295,8 +368,9 @@ docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -c "DRO
 - [ ] **Step 7: Commit**
 
 ```bash
-git add supabase/migrations/20260813120000_partner_api_foundation.sql
-git commit -m "feat(partner-api): add partner key, idempotency, usage tables with DB-enforced tenancy"
+# Scoped commit (AGENTS.md): never `git add` — this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "feat(partner-api): add partner key, idempotency, usage tables with DB-enforced tenancy" -- supabase/migrations/20260813120000_partner_api_foundation.sql
 ```
 
 ---
@@ -569,8 +643,9 @@ If the two `generatePartnerKey` tests fail with "key.startsWith is not a functio
 - [ ] **Step 5: Commit**
 
 ```bash
-git add supabase/functions/_shared/partnerApiKeys.ts supabase/functions/_shared/partnerApiKeys.test.ts
-git commit -m "feat(partner-api): add hashed key generation, authentication, and scope checks"
+# Scoped commit (AGENTS.md): never `git add` — this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "feat(partner-api): add hashed key generation, authentication, and scope checks" -- supabase/functions/_shared/partnerApiKeys.ts supabase/functions/_shared/partnerApiKeys.test.ts
 ```
 
 ---
@@ -582,9 +657,11 @@ git commit -m "feat(partner-api): add hashed key generation, authentication, and
 - Create: `supabase/functions/_shared/partnerApiMetering.test.ts`
 
 **Interfaces:**
-- Consumes: `PartnerKeyRecord` (Task 2); RPC `consume_partner_quota` (Task 1).
+- Consumes: `PartnerKeyRecord` (Task 2); RPCs `reserve_partner_quota`, `release_partner_quota`, `consume_partner_rate`, `touch_partner_key` (Task 1).
 - Produces:
-  - `consumeQuota(client, record): Promise<void>` — throws `PartnerAuthError("quota_exceeded", 429)`
+  - `reserveQuota(client, record): Promise<boolean>` — false when over quota; the caller settles the idempotency claim
+  - `releaseQuota(client, record): Promise<void>` — refund after a DEFINITE Meta rejection only
+  - `touchKey(client, record): Promise<void>` — updates `last_used_at` for non-send actions
   - `checkRateLimit(client, record, now?): Promise<void>` — throws `PartnerAuthError("rate_limited", 429)`
   - `recordUsage(client, input: UsageInput): Promise<void>`
   - `interface UsageInput { keyId, workspaceId, action, billable, httpStatus, errorCode? }`
@@ -600,7 +677,7 @@ import {
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { PartnerAuthError } from "./partnerApiKeys.ts";
-import { consumeQuota, recordUsage } from "./partnerApiMetering.ts";
+import { recordUsage, releaseQuota, reserveQuota } from "./partnerApiMetering.ts";
 
 const RECORD = {
   id: "key-1", workspaceId: "ws-1", socialAccountId: "acct-1",
@@ -615,17 +692,19 @@ function stubRpc(result: { allowed: boolean; usage_count: number }) {
   } as any;
 }
 
-Deno.test("consumeQuota passes when the key is under quota", async () => {
-  await consumeQuota(stubRpc({ allowed: true, usage_count: 5 }), RECORD);
+Deno.test("reserveQuota returns true when the key is under quota", async () => {
+  assertEquals(await reserveQuota(stubRpc({ allowed: true, usage_count: 5 }), RECORD), true);
 });
 
-Deno.test("consumeQuota throws a non-retryable quota_exceeded when over", async () => {
-  const error = await assertRejects(
-    () => consumeQuota(stubRpc({ allowed: false, usage_count: 101 }), RECORD),
-    PartnerAuthError,
-  );
-  assertEquals(error.code, "quota_exceeded");
-  assertEquals(error.status, 429);
+Deno.test("reserveQuota returns false when the reservation exceeds quota", async () => {
+  assertEquals(await reserveQuota(stubRpc({ allowed: false, usage_count: 101 }), RECORD), false);
+});
+
+Deno.test("releaseQuota refunds a reservation without throwing", async () => {
+  let called = false;
+  const client = { rpc() { called = true; return Promise.resolve({ error: null }); } } as any;
+  await releaseQuota(client, RECORD);
+  assertEquals(called, true);
 });
 
 Deno.test("recordUsage writes one row with the billable flag it was given", async () => {
@@ -689,57 +768,68 @@ export interface UsageInput {
 }
 
 /**
- * Consume one unit of monthly quota. The reset is lazy and atomic inside
- * consume_partner_quota, so no cron job and no read-then-write race.
+ * Reserve one unit of monthly quota before sending. Returns false when the
+ * reservation would exceed quota — the caller must then settle the pending
+ * idempotency claim rather than leaving it in `processing`.
  *
- * quota_exceeded is NOT retryable — unlike rate_limited, waiting does not help
- * until the month rolls over, and partners must branch on that difference.
+ * Reserve/settle rather than consume-on-entry, because the plan promises a
+ * partner is charged only for messages Meta accepted.
  */
-export async function consumeQuota(
+export async function reserveQuota(
   // deno-lint-ignore no-explicit-any
   client: any,
   record: PartnerKeyRecord,
-): Promise<void> {
-  const { data, error } = await client.rpc("consume_partner_quota", {
+): Promise<boolean> {
+  const { data, error } = await client.rpc("reserve_partner_quota", {
     p_key_id: record.id,
   });
   if (error) {
     throw new PartnerAuthError("Quota check failed", "internal_error", 500);
   }
   const row = Array.isArray(data) ? data[0] : data;
-  if (!row?.allowed) {
-    throw new PartnerAuthError(
-      "Monthly quota exhausted for this key",
-      "quota_exceeded",
-      429,
-    );
-  }
+  return Boolean(row?.allowed);
+}
+
+/** Refund a reservation after Meta DEFINITELY rejected the send. Never call
+ *  this for an indeterminate outcome — the message may have been delivered. */
+export async function releaseQuota(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  record: PartnerKeyRecord,
+): Promise<void> {
+  const { error } = await client.rpc("release_partner_quota", { p_key_id: record.id });
+  if (error) console.error("[partner-api] quota release failed:", error.message);
+}
+
+/** Non-send actions never reserve quota, so they update last_used_at here. */
+export async function touchKey(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  record: PartnerKeyRecord,
+): Promise<void> {
+  await client.rpc("touch_partner_key", { p_key_id: record.id }).catch?.(() => {});
 }
 
 /**
- * Sliding-window rate limit over the usage ledger. Counts every request,
- * billable or not, because the limit protects Postora rather than the wallet.
+ * Per-minute rate limit via an atomic bucket.
+ *
+ * Counting rows in the usage ledger and inserting afterwards would be the
+ * same count-then-insert race the spec rejects — concurrent requests all read
+ * the same stale count and all pass. consume_partner_rate does the increment
+ * and the read in one statement.
  */
 export async function checkRateLimit(
   // deno-lint-ignore no-explicit-any
   client: any,
   record: PartnerKeyRecord,
-  now: Date = new Date(),
 ): Promise<void> {
-  const windowStart = new Date(now.getTime() - 60_000).toISOString();
-  const { count, error } = await client
-    .from("partner_api_usage")
-    .select("id", { count: "exact", head: true })
-    .eq("key_id", record.id)
-    .gte("created_at", windowStart);
-
+  const { data, error } = await client.rpc("consume_partner_rate", {
+    p_key_id: record.id,
+    p_limit: record.rateLimitPerMin,
+  });
   if (error) return; // Never fail a send because the limiter is unavailable.
-  if ((count ?? 0) >= record.rateLimitPerMin) {
-    throw new PartnerAuthError(
-      "Rate limit exceeded",
-      "rate_limited",
-      429,
-    );
+  if (data === false) {
+    throw new PartnerAuthError("Rate limit exceeded", "rate_limited", 429);
   }
 }
 
@@ -776,8 +866,9 @@ Expected: PASS — 4 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add supabase/functions/_shared/partnerApiMetering.ts supabase/functions/_shared/partnerApiMetering.test.ts
-git commit -m "feat(partner-api): add atomic quota consumption, rate limiting, and usage ledger"
+# Scoped commit (AGENTS.md): never `git add` — this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "feat(partner-api): add atomic quota consumption, rate limiting, and usage ledger" -- supabase/functions/_shared/partnerApiMetering.ts supabase/functions/_shared/partnerApiMetering.test.ts
 ```
 
 ---
@@ -834,6 +925,29 @@ Deno.test("hashRequest is stable for equal bodies and differs for different ones
   const c = await hashRequest({ to: "965999", template: "invoice_due" });
   assertEquals(a, b);
   assertEquals(a === c, false);
+});
+
+Deno.test("hashRequest ignores key order but not key content", async () => {
+  const a = await hashRequest({ to: "965123", template: "x" });
+  const b = await hashRequest({ template: "x", to: "965123" });
+  assertEquals(a, b);
+});
+
+Deno.test("hashRequest distinguishes bodies that differ only deep inside", async () => {
+  // The regression guard: a replacer-based canonicalizer collapses both of
+  // these to [{}], so a 99.000 KWD invoice would replay a 12.500 KWD send.
+  const cheap = await hashRequest({
+    template_components: [{ type: "body", parameters: [{ type: "text", text: "12.500" }] }],
+  });
+  const dear = await hashRequest({
+    template_components: [{ type: "body", parameters: [{ type: "text", text: "99.000" }] }],
+  });
+  assertEquals(cheap === dear, false);
+});
+
+Deno.test("hashRequest accepts null and undefined without throwing", async () => {
+  await hashRequest(null);
+  await hashRequest(undefined);
 });
 
 Deno.test("claimIdempotency claims a fresh key", async () => {
@@ -896,10 +1010,32 @@ export type ClaimResult =
   | { outcome: "in_progress" }
   | { outcome: "indeterminate" };
 
+/**
+ * Recursively canonicalize before hashing.
+ *
+ * The obvious one-liner is WRONG and dangerously so:
+ *   JSON.stringify(body, Object.keys(body).sort())
+ * The second argument is a replacer ALLOW-LIST, not a sort order. It strips
+ * every nested property whose name is absent from the top level, so
+ * `[{type:"body",parameters:[{text:"12.500"}]}]` and the same structure with
+ * `"99.000"` both collapse to `[{}]` — two genuinely different messages hash
+ * identically, and the second silently replays the first's response.
+ */
+function canonicalize(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value ?? null;
+  if (Array.isArray(value)) return value.map(canonicalize);
+  const source = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(source).sort()) {
+    if (source[key] !== undefined) out[key] = canonicalize(source[key]);
+  }
+  return out;
+}
+
 /** Stable digest of the request body, so a reused key with different content
- *  is detected rather than silently replayed. */
+ *  is detected rather than silently replayed. Accepts null/undefined. */
 export async function hashRequest(body: unknown): Promise<string> {
-  const canonical = JSON.stringify(body, Object.keys(body as object).sort());
+  const canonical = JSON.stringify(canonicalize(body));
   const digest = await crypto.subtle.digest(
     "SHA-256",
     new TextEncoder().encode(canonical),
@@ -992,8 +1128,9 @@ Expected: PASS — 6 tests.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add supabase/functions/_shared/partnerApiIdempotency.ts supabase/functions/_shared/partnerApiIdempotency.test.ts
-git commit -m "feat(partner-api): add idempotency claim state machine"
+# Scoped commit (AGENTS.md): never `git add` — this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "feat(partner-api): add idempotency claim state machine" -- supabase/functions/_shared/partnerApiIdempotency.ts supabase/functions/_shared/partnerApiIdempotency.test.ts
 ```
 
 ---
@@ -1687,14 +1824,22 @@ Then delete the now-duplicated local definitions, keeping every other handler wo
 
 - [ ] **Step 6: Verify the existing suites still pass**
 
-Run: `deno test --allow-env supabase/functions/messaging-api/ supabase/functions/_shared/`
+Run: `deno test --allow-env supabase/functions/_shared/ supabase/functions/messaging-api/`
 Expected: PASS — every pre-existing test unchanged. If `whatsappAccess.test.ts` or `whatsappWorkspaceAccess.test.ts` fails, the extraction changed authorization behaviour; revert and re-do Step 5.
+
+Then type-check the handler you modified — the existing tests import
+`whatsappAccess.ts`, **not** `index.ts`, so they would not catch a type error
+in the file you just edited:
+
+Run: `deno check --no-lock supabase/functions/messaging-api/index.ts`
+Expected: no errors.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add supabase/functions/_shared/whatsappPartnerOps.ts supabase/functions/_shared/whatsappPartnerOps.test.ts supabase/functions/messaging-api/index.ts
-git commit -m "refactor(whatsapp): extract sendTemplate/listTemplates into shared role-free ops"
+# Scoped commit (AGENTS.md): never `git add` — this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "refactor(whatsapp): extract sendTemplate/listTemplates into shared role-free ops" -- supabase/functions/_shared/whatsappPartnerOps.ts supabase/functions/_shared/whatsappPartnerOps.test.ts supabase/functions/messaging-api/index.ts
 ```
 
 ---
@@ -1711,16 +1856,31 @@ git commit -m "refactor(whatsapp): extract sendTemplate/listTemplates into share
 - Consumes: everything produced by Tasks 2-5.
 - Produces: `HTTP POST /functions/v1/partner-api` accepting `{ action }` of `get_status`, `send_template`, `list_templates`.
 
-- [ ] **Step 1: Add the gateway configuration**
+- [ ] **Step 1: Confirm the gateway lets an unauthenticated request through**
 
-Append to `supabase/config.toml`:
+**Do not add a `[functions.partner-api]` block to `supabase/config.toml`.**
+That file's first line reads *"Local CLI namespace only — does not affect
+runtime"*, and the deploy copies only function directories into the functions
+volume — `config.toml` is never deployed. Adding a block there would create a
+false sense that the gateway had been configured.
 
-```toml
-[functions.partner-api]
-verify_jwt = false
+The live stack instead has JWT verification disabled **globally**: the
+functions container carries `VERIFY_JWT=false` and `FUNCTIONS_VERIFY_JWT=false`
+(verified on the Contabo host, 2026-08-13). So `partner-api` needs no gateway
+change — and, importantly, **every edge function on this stack is solely
+responsible for authenticating its own callers**, which is exactly what Task 2
+provides.
+
+Re-confirm before relying on it:
+
+```bash
+# via ssh-contabo-mcp
+docker inspect $(docker ps --format '{{.Names}}' | grep -i functions | head -1)   | grep -iE "VERIFY_JWT"
 ```
 
-Without this the platform rejects the request before the function can authenticate the key. This was confirmed live: a JWT-less POST to `ecommerce-whatsapp-api` (which carries the same setting) reached the function and returned its own `Missing x-api-key header` body.
+Expected: `VERIFY_JWT=false` and `FUNCTIONS_VERIFY_JWT=false`. If either is
+`true`, stop — the Kong/edge-runtime route configuration must be changed
+before this function can work, and that is a deployment task not covered here.
 
 - [ ] **Step 2: Write the failing router test**
 
@@ -1739,6 +1899,9 @@ Deno.test("each action maps to its required scope", () => {
 
 Deno.test("unknown actions have no scope and are rejected upstream", () => {
   assertEquals(requiredScopeFor("drop_database"), undefined);
+  // Inherited Object properties must not be mistaken for actions.
+  assertEquals(requiredScopeFor("toString"), undefined);
+  assertEquals(requiredScopeFor("constructor"), undefined);
 });
 
 Deno.test("only send actions require an idempotency key", () => {
@@ -1768,7 +1931,9 @@ const ACTION_SCOPES: Record<string, PartnerScope | null> = {
 };
 
 export function requiredScopeFor(action: string): PartnerScope | null | undefined {
-  return action in ACTION_SCOPES ? ACTION_SCOPES[action] : undefined;
+  // Object.hasOwn, not `in`: `in` walks the prototype chain, so an action
+  // named "toString" or "constructor" would resolve as a known action.
+  return Object.hasOwn(ACTION_SCOPES, action) ? ACTION_SCOPES[action] : undefined;
 }
 
 /** Send actions cost money and reach a real customer, so they demand an
@@ -1802,8 +1967,10 @@ import {
 } from "../_shared/partnerApiKeys.ts";
 import {
   checkRateLimit,
-  consumeQuota,
   recordUsage,
+  releaseQuota,
+  reserveQuota,
+  touchKey,
 } from "../_shared/partnerApiMetering.ts";
 import {
   claimIdempotency,
@@ -1866,16 +2033,45 @@ Deno.serve(async (req) => {
 
     // Resolve the key's pinned account. The composite FK already guarantees it
     // belongs to this workspace, so this read cannot cross a tenant boundary.
-    const { data: account } = await admin
+    const { data: account, error: accountError } = await admin
       .from("social_accounts")
-      .select("id, user_id, workspace_id, platform_user_id, access_token, is_active, account_metadata")
+      .select("id, user_id, workspace_id, platform, platform_user_id, access_token, " +
+              "is_active, needs_reauth, token_expires_at, account_metadata")
       .eq("id", record.socialAccountId)
       .maybeSingle();
 
-    if (!account || !account.is_active) {
+    // A database error is not "not connected" — do not disguise one as the other.
+    if (accountError) {
+      return await respond(
+        admin, record, action, 500, false,
+        errorBody("internal_error", "Could not resolve the account", true),
+        {}, "internal_error",
+      );
+    }
+
+    // The composite FK proves the account is in this workspace. It does NOT
+    // prove the account is WhatsApp — a mis-created key could pin a Facebook
+    // page, so check platform explicitly, as the human resolver does
+    // (_shared/whatsappWorkspaceAccess.ts:124-136).
+    if (!account || account.platform !== "whatsapp" || !account.is_active) {
       return await respond(
         admin, record, action, 409, false,
         errorBody("account_not_connected", "The WhatsApp account is not connected", false),
+        {}, "account_not_connected",
+      );
+    }
+
+    // Spec §9: preflight health, so a partner gets a typed, actionable error
+    // instead of a raw Meta rejection. refresh-tokens has no WhatsApp path,
+    // so an expired token stays expired until someone reconnects.
+    const tokenExpired = account.token_expires_at &&
+      new Date(account.token_expires_at) <= new Date();
+    if (account.needs_reauth || tokenExpired) {
+      return await respond(
+        admin, record, action, 401, false,
+        errorBody("account_needs_reauth",
+          "The WhatsApp connection needs to be re-authorized in Postora", false),
+        {}, "account_needs_reauth",
       );
     }
 
@@ -1918,6 +2114,15 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Validate BEFORE claiming. Claiming first would leave an invalid request
+    // stuck in `processing` forever, poisoning that idempotency key.
+    if (!body.recipient_phone || !body.template_name) {
+      return await respond(
+        admin, record, action, 400, false,
+        errorBody("invalid_request", "recipient_phone and template_name are required", false),
+      );
+    }
+
     const requestHash = await hashRequest({
       action,
       recipient_phone: body.recipient_phone,
@@ -1953,15 +2158,18 @@ Deno.serve(async (req) => {
       );
     }
 
-    if (!body.recipient_phone || !body.template_name) {
-      return await respond(
-        admin, record, action, 400, false,
-        errorBody("invalid_request", "recipient_phone and template_name are required", false),
-      );
+    // Reserve quota only once we are actually about to send. On any definite
+    // rejection below we release it, so a partner is charged only for messages
+    // Meta accepted. On an indeterminate outcome we deliberately do NOT
+    // release: the message may have been delivered.
+    const reserved = await reserveQuota(admin, record);
+    if (!reserved) {
+      // Settle the idempotency claim before returning, or a retry of this same
+      // request would see `processing` forever instead of a clear quota error.
+      const body = errorBody("quota_exceeded", "Monthly quota exhausted for this key", false);
+      await completeIdempotency(admin, record.id, idempotencyKey!, 429, body);
+      return await respond(admin, record, action, 429, false, body, {}, "quota_exceeded");
     }
-
-    // Quota is consumed only once we are actually about to send.
-    await consumeQuota(admin, record);
 
     try {
       const result = await sendTemplate(ctx, {
@@ -1981,17 +2189,32 @@ Deno.serve(async (req) => {
       return await respond(admin, record, action, 200, true, success);
     } catch (err) {
       // A network failure after the request left leaves us unable to know
-      // whether Meta delivered it. Never auto-retry from this state.
+      // whether Meta delivered it. Never auto-retry, and never release the
+      // quota reservation — the message may well have been sent.
       if (!(err instanceof WhatsAppOpError)) {
         await markIndeterminate(admin, record.id, idempotencyKey!);
-        throw err;
+        const body = errorBody("idempotency_indeterminate",
+          "The send may have been delivered; resolve it before retrying", false);
+        return await respond(admin, record, action, 409, false, body, {},
+          "idempotency_indeterminate");
       }
+      // Meta definitely rejected it: refund the reservation.
+      await releaseQuota(admin, record);
       const failure = errorBody(err.code, err.message, err.status >= 500,
         err.metaCode ? { meta_code: err.metaCode } : undefined);
       await completeIdempotency(admin, record.id, idempotencyKey!, err.status, failure);
       return await respond(admin, record, action, err.status, false, failure, {}, err.code);
     }
   } catch (err) {
+    // listTemplates and the account lookups can also throw WhatsAppOpError.
+    // Without this branch a token failure while listing templates would be
+    // reported as a generic internal_error instead of account_needs_reauth.
+    if (err instanceof WhatsAppOpError) {
+      const body = errorBody(err.code, err.message, err.status >= 500,
+        err.metaCode ? { meta_code: err.metaCode } : undefined);
+      if (record) return await respond(admin, record, action, err.status, false, body, {}, err.code);
+      return json(body, err.status);
+    }
     if (err instanceof PartnerAuthError) {
       const retryable = err.code === "rate_limited";
       const body = errorBody(err.code, err.message, retryable);
@@ -2044,8 +2267,9 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add supabase/functions/partner-api/ supabase/config.toml
-git commit -m "feat(partner-api): add machine-authenticated WhatsApp template send endpoint"
+# Scoped commit (AGENTS.md): never `git add` — this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "feat(partner-api): add machine-authenticated WhatsApp template send endpoint" -- supabase/functions/partner-api/ supabase/config.toml
 ```
 
 ---
@@ -2167,17 +2391,164 @@ The application tests above prove the code checks. Task 1 Step 4 proved Postgres
 
 - [ ] **Step 4: Run the full suite**
 
-Run: `deno test --allow-env supabase/functions/`
-Expected: PASS, with no pre-existing test failing.
+Run: `deno test --allow-env supabase/functions/_shared/ supabase/functions/partner-api/ supabase/functions/messaging-api/`
+Expected: PASS.
+
+**Do not run `deno test supabase/functions/`.** Several existing suites
+(`check-user-mfa/index.test.ts`, `check-connection-health/index.test.ts`)
+perform live `fetch()` calls against a running Supabase stack: without
+`--allow-net` Deno denies them, and with it they fail anyway because the local
+stack is broken in this project. The three directories above are the hermetic
+unit-test gate.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add supabase/functions/partner-api/isolation.test.ts
-git commit -m "test(partner-api): cover cross-workspace isolation and scope enforcement"
+# Scoped commit (AGENTS.md): never `git add` — this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "test(partner-api): cover cross-workspace isolation and scope enforcement" -- supabase/functions/partner-api/isolation.test.ts
 ```
 
 ---
+
+---
+
+### Task 8: Operator key-creation script
+
+**Files:**
+- Create: `scripts/create-partner-key.ts`
+
+**Interfaces:**
+- Consumes: `generatePartnerKey` (Task 2); tables from Task 1.
+- Produces: the only way to mint a key until the UI lands in Plan 3.
+
+Without this, Task 6 is unreachable: the endpoint authenticates keys that
+nothing can create, and the only testable path is the invalid-key case. The
+spec puts key management in Phase 1 for that reason.
+
+- [ ] **Step 1: Write the script**
+
+```ts
+// Mint a partner API key. Operator-only: run with the service-role key.
+//
+//   deno run --allow-env --allow-net scripts/create-partner-key.ts //     --workspace <uuid> --account <uuid> --name "Danat backend" //     --scopes whatsapp:template.send,whatsapp:webhooks.manage //     --quota 5000
+//
+// The plaintext key is printed ONCE and never stored.
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { generatePartnerKey } from "../supabase/functions/_shared/partnerApiKeys.ts";
+
+function arg(name: string): string | undefined {
+  const i = Deno.args.indexOf(`--${name}`);
+  return i >= 0 ? Deno.args[i + 1] : undefined;
+}
+
+const workspaceId = arg("workspace");
+const accountId = arg("account");
+const name = arg("name");
+const scopes = (arg("scopes") ?? "").split(",").filter(Boolean);
+const quota = arg("quota") ? Number(arg("quota")) : null;
+
+if (!workspaceId || !accountId || !name || scopes.length === 0) {
+  console.error("Missing --workspace, --account, --name, or --scopes");
+  Deno.exit(2);
+}
+
+const admin = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+);
+
+// Refuse to pin a non-WhatsApp or unhealthy account. The composite FK proves
+// only that the account is in the workspace, never that it can send.
+const { data: account, error } = await admin
+  .from("social_accounts")
+  .select("id, platform, workspace_id, is_active, needs_reauth")
+  .eq("id", accountId)
+  .maybeSingle();
+
+if (error) { console.error("Lookup failed:", error.message); Deno.exit(1); }
+if (!account) { console.error("No such social account"); Deno.exit(1); }
+if (account.platform !== "whatsapp") {
+  console.error(`Account is ${account.platform}, not whatsapp`); Deno.exit(1);
+}
+if (account.workspace_id !== workspaceId) {
+  console.error("Account does not belong to that workspace"); Deno.exit(1);
+}
+if (!account.is_active || account.needs_reauth) {
+  console.error("Account is inactive or needs re-authorization"); Deno.exit(1);
+}
+
+const { key, prefix, hash } = await generatePartnerKey();
+
+const { error: insertError } = await admin.from("partner_api_keys").insert({
+  workspace_id: workspaceId,
+  social_account_id: accountId,
+  name,
+  key_prefix: prefix,
+  key_hash: hash,
+  scopes,
+  monthly_quota: quota,
+});
+
+if (insertError) { console.error("Insert failed:", insertError.message); Deno.exit(1); }
+
+console.log("
+Key created. Copy it now — it is never shown again:
+");
+console.log(`  ${key}
+`);
+console.log(`  prefix: ${prefix}  scopes: ${scopes.join(", ")}`);
+```
+
+- [ ] **Step 2: Verify it refuses a non-WhatsApp account**
+
+Run it against a Facebook account id from the same workspace.
+Expected: `Account is facebook, not whatsapp`, exit code 1, no row inserted.
+
+- [ ] **Step 3: Create a real key against the WhatsApp account**
+
+Expected: a `pk_live_…` key printed once. Confirm the stored row holds only
+the hash:
+
+```sql
+SELECT key_prefix, scopes, monthly_quota, key_hash IS NOT NULL AS hashed
+  FROM partner_api_keys ORDER BY created_at DESC LIMIT 1;
+```
+
+Expected: the prefix matches the printed key's first 12 characters, and the
+plaintext appears nowhere in the table.
+
+- [ ] **Step 4: Smoke-test the endpoint end to end**
+
+```bash
+curl -s -X POST https://api.postora.cloud/functions/v1/partner-api   -H "X-Postora-Key: <the key>" -H 'content-type: application/json'   -d '{"action":"get_status"}'
+```
+
+Expected: `{"success":true,"whatsapp_connected":true,...}`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+# Scoped commit (AGENTS.md): never `git add` — this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "feat(partner-api): add operator key-creation script" -- scripts/create-partner-key.ts
+```
+
+---
+
+## Mandatory gates before every commit
+
+`AGENTS.md:43-45` requires these on every task in this repo, and the plan's
+per-task steps assume them rather than repeating them seven times:
+
+- [ ] Run **`clean-code-guard`** on the changed production code.
+- [ ] Run **`test-guard`** on the changed or added tests.
+- [ ] Commit **scoped to the task's files** (`git commit -- <files>`), never
+      `git add .`. This working tree has many unrelated modified and untracked
+      files; a broad add would commit them.
+- [ ] Never commit `b64.txt`, logs, backups, or `.env*`.
+- [ ] After the final task, run `graphify update .` to refresh the knowledge
+      graph (`AGENTS.md:518`).
 
 ## Deployment (after all tasks pass review)
 
@@ -2196,7 +2567,7 @@ git commit -m "test(partner-api): cover cross-workspace isolation and scope enfo
 Carried forward to Plans 2 and 3, and listed here so a reviewer does not read their absence as an oversight:
 
 - `register_webhook`, the deliveries outbox, the retry worker, and `message.status` dispatch (Plan 2).
-- The Integrations key-management UI — until it exists, keys are created by a service-role script (Plan 3).
+- The Integrations key-management **UI** (Plan 3). Key creation itself is covered by the Task 8 operator script, so this plan is executable end to end.
 - Danat's `sendWithWhatsApp` swap, in the other repo (Plan 3).
 - Free-form text, media, and interactive sends; inbox reads; the AI bot.
 - Fixing `whatsapp_contacts`' `UNIQUE(user_id, phone_number)` workspace bug (spec §5.6) and the non-fatal OAuth success gap (spec §9) — both pre-existing, both flagged, neither caused by this work.
