@@ -2909,6 +2909,21 @@ SELECT key_prefix, scopes, monthly_quota, key_hash IS NOT NULL AS hashed
 Expected: the prefix matches the printed key's first 12 characters, and the
 plaintext appears nowhere in the table.
 
+> **Precondition, verified live 2026-08-13.** The machine-auth path itself works
+> end to end: a call from the Danat host to
+> `https://api.postora.cloud/functions/v1/ecommerce-whatsapp-api` with a real
+> `x-api-key` returned `200` with
+> `{"success":true,"api_key_valid":true,"whatsapp_connected":false,...}` — proving
+> the full chain (Danat host → Cloudflare → Kong → edge function → database
+> lookup → response) is sound with no gateway change.
+>
+> But `whatsapp_connected: false` on the account tested means **no WhatsApp
+> account is connected to it yet**. This script refuses to mint a key for a
+> non-WhatsApp or unhealthy account, so Phase 2 of the integration guide
+> (Embedded Signup, §13 of the spec) is a hard prerequisite for this task, not a
+> parallel activity. Until a WABA is connected, Step 3 will correctly exit with
+> "No such social account" or "Account is ... not whatsapp".
+
 - [ ] **Step 4: Smoke-test the endpoint end to end**
 
 ```bash
