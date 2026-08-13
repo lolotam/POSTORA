@@ -1000,10 +1000,27 @@ git commit -m "feat(partner-api): add idempotency claim state machine"
 
 ### Task 5: Shared WhatsApp operations (characterization first)
 
+> **Read this before starting.** An earlier draft of this task extracted only the
+> Graph call and would have caused a **live regression in the Postora UI**. The
+> current handler (`messaging-api/index.ts:951-1008`) does four things the naive
+> extraction dropped. All four are now in scope:
+>
+> | Behaviour | Where it lives today | Consequence if dropped |
+> |---|---|---|
+> | **Auto-register on Meta error `133010` / `100`+subcode `33`**, then retry the send | `sendWhatsAppWithRetry` (`:820-870`) | Coexistence accounts that currently self-heal would start hard-failing |
+> | **`upsertOutboundConversation`** — surfaces the conversation in the inbox and auto-saves the contact | `:997-1005`, helper at `:35` | Sent templates would **not appear in the inbox** — violating spec Goal #2 |
+> | Message preview text `[Template: <name>]` | `:988` | Inbox rows would read `[Template message]`, losing which template was sent |
+> | Response includes `data` (the raw Meta body) | `:1008` | `WhatsAppDiagnostics.tsx:215` and `useMessaging.ts:220` read this response |
+>
+> So this task extracts the **whole chain**: `registerWhatsAppPhone`,
+> `sendWhatsAppWithRetry`, `upsertOutboundConversation`, and `sendTemplate`.
+> That is larger than "extract two ops", and it is the honest cost of having one
+> implementation behind both doors.
+
 **Files:**
 - Create: `supabase/functions/_shared/whatsappPartnerOps.ts`
 - Create: `supabase/functions/_shared/whatsappPartnerOps.test.ts`
-- Modify: `supabase/functions/messaging-api/index.ts` (the `whatsapp_send_template` and `whatsapp_list_templates` handlers, around lines 951-1035)
+- Modify: `supabase/functions/messaging-api/index.ts` — repoint the `whatsapp_send_template` handler (`:951-1008`) at the shared op, and delete the local `upsertOutboundConversation` (`:35-88`) in favour of the imported one. **`registerWhatsAppPhone` (`:787-818`) and `sendWhatsAppWithRetry` (`:820-870`) stay** — four other handlers still call them; see Step 5.
 
 **Interfaces:**
 - Consumes: `WhatsAppAccountAccess` from `_shared/whatsappWorkspaceAccess.ts` — fields `accountId, ownerId, workspaceId, role, platformUserId, platformUsername, accessToken, accountMetadata`.
@@ -1011,9 +1028,10 @@ git commit -m "feat(partner-api): add idempotency claim state machine"
   - `interface WhatsAppOpsContext { admin; accountId; ownerId; workspaceId; phoneNumberId; accessToken }` — deliberately **role-free**; a machine key has scopes, not a human workspace role.
   - `sendTemplate(ctx, input: SendTemplateInput, fetcher?: Fetcher): Promise<SendResult>`
   - `listTemplates(ctx, wabaId: string, fetcher?: Fetcher): Promise<TemplateSummary[]>` — the WABA id comes from `social_accounts.account_metadata.waba_id`, not from the context
+  - `upsertOutboundConversation(admin, params): Promise<boolean>` — moved verbatim from `messaging-api/index.ts:35`, now returning success instead of ignoring its error
   - `type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>` — injected so tests never hit the network
   - `interface SendTemplateInput { recipientPhone: string; templateName: string; templateLanguage: string; components?: unknown[] }`
-  - `interface SendResult { messageId: string; persisted: boolean }`
+  - `interface SendResult { messageId: string; persisted: boolean; raw: unknown }` — `raw` is the Meta body. **`messaging-api` passes it through as `data` to preserve the existing frontend contract; `partner-api` must NOT return it**, per spec §5.3 (partners get a normalized response only).
   - `interface TemplateSummary { name: string; language: string; status: string; category: string }`
   - `class WhatsAppOpError extends Error { code: string; status: number; metaCode?: number }`
 
@@ -1106,6 +1124,114 @@ Deno.test("sendTemplate records the outbound message so it appears in the inbox"
   assertEquals(message?.message_id, "wamid.ABC");
   assertEquals(message?.conversation_id, "wa_999888777_96512345678");
   assertEquals(message?.message_type, "template");
+});
+
+Deno.test("sendTemplate auto-registers on 133010 and retries the send", async () => {
+  const captured = { rows: [] as unknown[] };
+  const calls: string[] = [];
+
+  const fetcher = (url: string | URL | Request) => {
+    const u = String(url);
+    calls.push(u);
+    if (u.endsWith("/register")) {
+      return Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    }
+    // First send fails "not registered"; the retry after registration succeeds.
+    const isRetry = calls.filter((c) => c.endsWith("/messages")).length > 1;
+    return Promise.resolve(new Response(
+      JSON.stringify(isRetry
+        ? { messages: [{ id: "wamid.AFTER" }] }
+        : { error: { code: 133010, message: "not registered" } }),
+      { status: isRetry ? 200 : 400 },
+    ));
+  };
+
+  const result = await sendTemplate(ctx(captured), {
+    recipientPhone: "96512345678",
+    templateName: "invoice_due_v1",
+    templateLanguage: "ar",
+  }, fetcher);
+
+  assertEquals(result.messageId, "wamid.AFTER");
+  assertEquals(calls.filter((c) => c.endsWith("/register")).length, 1);
+  assertEquals(calls.filter((c) => c.endsWith("/messages")).length, 2);
+});
+
+Deno.test("sendTemplate upserts the conversation so it appears in the inbox", async () => {
+  const captured = { rows: [] as unknown[] };
+  const tables: string[] = [];
+
+  const admin = {
+    from(table: string) {
+      tables.push(table);
+      return {
+        insert(row: unknown) { captured.rows.push(row); return Promise.resolve({ error: null }); },
+        upsert(row: unknown) { captured.rows.push(row); return Promise.resolve({ error: null }); },
+        select() { return this; },
+        eq() { return this; },
+        maybeSingle() { return Promise.resolve({ data: null, error: null }); },
+      };
+    },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+
+  const fetcher = () =>
+    Promise.resolve(new Response(JSON.stringify({ messages: [{ id: "wamid.ABC" }] }), { status: 200 }));
+
+  await sendTemplate({
+    admin, accountId: "acct-1", ownerId: "owner-1", workspaceId: "ws-1",
+    phoneNumberId: "999888777", accessToken: "tok",
+  }, {
+    recipientPhone: "96512345678",
+    templateName: "invoice_due_v1",
+    templateLanguage: "ar",
+  }, fetcher);
+
+  // Without messaging_cache the inbox never shows the conversation.
+  assertEquals(tables.includes("whatsapp_messages"), true);
+  assertEquals(tables.includes("whatsapp_contacts"), true);
+  assertEquals(tables.includes("messaging_cache"), true);
+
+  const cacheRow = captured.rows.find((r) =>
+    (r as Record<string, unknown>).platform === "whatsapp" &&
+    (r as Record<string, unknown>).last_message_preview !== undefined
+  ) as Record<string, unknown> | undefined;
+  assertEquals(cacheRow?.last_message_preview, "[Template: invoice_due_v1]");
+});
+
+Deno.test("sendTemplate labels the message with the template name", async () => {
+  const captured = { rows: [] as unknown[] };
+  const fetcher = () =>
+    Promise.resolve(new Response(JSON.stringify({ messages: [{ id: "wamid.ABC" }] }), { status: 200 }));
+
+  await sendTemplate(ctx(captured), {
+    recipientPhone: "96512345678",
+    templateName: "invoice_due_v1",
+    templateLanguage: "ar",
+  }, fetcher);
+
+  const message = captured.rows.find((r) =>
+    (r as Record<string, unknown>).direction === "outbound"
+  ) as Record<string, unknown> | undefined;
+  // The UI shows this string in the inbox; "[Template message]" would lose the name.
+  assertEquals(message?.message_text, "[Template: invoice_due_v1]");
+});
+
+Deno.test("sendTemplate returns the raw Meta body for the existing UI contract", async () => {
+  const captured = { rows: [] as unknown[] };
+  const fetcher = () =>
+    Promise.resolve(new Response(
+      JSON.stringify({ messages: [{ id: "wamid.ABC" }], messaging_product: "whatsapp" }),
+      { status: 200 },
+    ));
+
+  const result = await sendTemplate(ctx(captured), {
+    recipientPhone: "96512345678",
+    templateName: "invoice_due_v1",
+    templateLanguage: "ar",
+  }, fetcher);
+
+  assertEquals((result.raw as Record<string, unknown>).messaging_product, "whatsapp");
 });
 
 Deno.test("sendTemplate maps Meta error 131047 to outside_session_window", async () => {
@@ -1278,6 +1404,40 @@ function translateMetaError(status: number, payload: Record<string, unknown>): W
   }
 }
 
+/**
+ * Register a phone number on the Cloud API. Moved verbatim from
+ * messaging-api so both doors keep the Coexistence self-heal behaviour.
+ */
+async function registerWhatsAppPhone(
+  phoneNumberId: string,
+  token: string,
+  fetcher: Fetcher,
+): Promise<void> {
+  const pin = Deno.env.get("WHATSAPP_VERIFY_PIN") || "000000";
+  const res = await fetcher(`${GRAPH_API}/${phoneNumberId}/register`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ messaging_product: "whatsapp", pin }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    const err = data.error || {};
+    // Subcode 2388001: two-step verification is on in the WhatsApp Business app.
+    if (err.code === 100 && err.error_subcode === 2388001) {
+      throw new WhatsAppOpError(
+        "Two-step verification is enabled on the WhatsApp Business mobile app for " +
+          "this number. Turn it off under Settings → Account → Two-step verification, " +
+          "then try again.",
+        "account_needs_reauth", 409, 2388001,
+      );
+    }
+    throw new WhatsAppOpError(
+      `Phone registration failed: ${JSON.stringify(err)}`,
+      "account_not_connected", 409, err.code,
+    );
+  }
+}
+
 export async function sendTemplate(
   ctx: WhatsAppOpsContext,
   input: SendTemplateInput,
@@ -1285,27 +1445,40 @@ export async function sendTemplate(
 ): Promise<SendResult> {
   const payload = {
     messaging_product: "whatsapp",
-    recipient_type: "individual",
     to: input.recipientPhone,
     type: "template",
     template: {
       name: input.templateName,
       language: { code: input.templateLanguage },
-      ...(input.components?.length ? { components: input.components } : {}),
+      components: input.components ?? [],
     },
   };
 
-  const response = await fetcher(`${GRAPH_API}/${ctx.phoneNumberId}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${ctx.accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  const post = () =>
+    fetcher(`${GRAPH_API}/${ctx.phoneNumberId}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ctx.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
 
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw translateMetaError(response.status, body);
+  let response = await post();
+  let body = await response.json().catch(() => ({}));
+
+  // Coexistence numbers are not on the Cloud API until first registered.
+  // Register once and retry, exactly as messaging-api does today.
+  const needsRegistration = body?.error?.code === 133010 ||
+    (body?.error?.code === 100 && body?.error?.error_subcode === 33);
+
+  if (needsRegistration) {
+    await registerWhatsAppPhone(ctx.phoneNumberId, ctx.accessToken, fetcher);
+    response = await post();
+    body = await response.json().catch(() => ({}));
+  }
+
+  if (!response.ok || body?.error) throw translateMetaError(response.status, body);
 
   const messageId = body?.messages?.[0]?.id;
   if (!messageId) {
@@ -1314,11 +1487,11 @@ export async function sendTemplate(
   }
 
   const persisted = await persistOutbound(ctx, input, messageId);
-  return { messageId, persisted };
+  return { messageId, persisted, raw: body };
 }
 
 /**
- * Record the outbound message and surface the conversation in the inbox.
+ * Record the outbound message AND surface the conversation in the inbox.
  * Returns false rather than throwing: Meta has already accepted the message,
  * so a storage failure must not be reported to the caller as a failed send.
  */
@@ -1327,6 +1500,7 @@ async function persistOutbound(
   input: SendTemplateInput,
   messageId: string,
 ): Promise<boolean> {
+  const preview = `[Template: ${input.templateName}]`;
   const normalizedPhone = input.recipientPhone.replace(/^\+/, "");
   const conversationId = `wa_${ctx.phoneNumberId}_${normalizedPhone}`;
 
@@ -1338,7 +1512,7 @@ async function persistOutbound(
     from_phone: ctx.phoneNumberId,
     from_name: "You",
     to_phone: input.recipientPhone,
-    message_text: "[Template message]",
+    message_text: preview,
     message_type: "template",
     direction: "outbound",
     status: "sent",
@@ -1347,6 +1521,89 @@ async function persistOutbound(
 
   if (error) {
     console.error("[whatsappPartnerOps] message persist failed:", error.message);
+    return false;
+  }
+
+  // Without this the message is stored but the conversation never appears in
+  // the inbox — the exact regression this task's header warns about.
+  return await upsertOutboundConversation(ctx.admin, {
+    user_id: ctx.ownerId,
+    social_account_id: ctx.accountId,
+    workspace_id: ctx.workspaceId,
+    phone_number_id: ctx.phoneNumberId,
+    recipient_phone: input.recipientPhone,
+    preview,
+  });
+}
+
+/**
+ * Moved from messaging-api/index.ts:35. Copy the body verbatim — it upserts
+ * the contact and the conversation row — changing only the signature to
+ * return a boolean instead of swallowing failures silently.
+ *
+ * NOTE: it normalizes with replace(/\D/g, "") while the message insert above
+ * uses replace(/^\+/, ""). Preserve both as they are; unifying them would
+ * change existing conversation_id values. Flagged in the spec, not fixed here.
+ */
+export async function upsertOutboundConversation(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  params: {
+    user_id: string;
+    social_account_id: string;
+    workspace_id: string;
+    phone_number_id: string;
+    recipient_phone: string;
+    preview: string;
+  },
+): Promise<boolean> {
+  const normalizedPhone = params.recipient_phone.replace(/\D/g, "");
+  const conversationId = `wa_${params.phone_number_id}_${normalizedPhone}`;
+  const nowIso = new Date().toISOString();
+
+  const { data: existingContact } = await admin
+    .from("whatsapp_contacts")
+    .select("display_name")
+    .eq("workspace_id", params.workspace_id)
+    .eq("phone_number", normalizedPhone)
+    .maybeSingle();
+
+  const participantName = existingContact?.display_name || `+${normalizedPhone}`;
+
+  // Auto-save contact (no-op on conflict).
+  const { error: contactError } = await admin.from("whatsapp_contacts").upsert(
+    {
+      user_id: params.user_id,
+      workspace_id: params.workspace_id,
+      phone_number: normalizedPhone,
+      display_name: participantName,
+      last_message_at: nowIso,
+    },
+    { onConflict: "user_id,phone_number", ignoreDuplicates: false },
+  );
+
+  // messaging_cache is what makes the conversation show up in the inbox.
+  const { error: cacheError } = await admin.from("messaging_cache").upsert(
+    {
+      user_id: params.user_id,
+      workspace_id: params.workspace_id,
+      social_account_id: params.social_account_id,
+      platform: "whatsapp",
+      conversation_id: conversationId,
+      participant_name: participantName,
+      last_message_preview: params.preview.slice(0, 200),
+      last_message_at: nowIso,
+      unread_count: 0,
+      updated_at: nowIso,
+    },
+    { onConflict: "user_id,conversation_id" },
+  );
+
+  if (contactError || cacheError) {
+    console.error(
+      "[whatsappPartnerOps] conversation upsert failed:",
+      contactError?.message ?? cacheError?.message,
+    );
     return false;
   }
   return true;
@@ -1411,15 +1668,22 @@ In `supabase/functions/messaging-api/index.ts`, the `whatsapp_send_template` han
         components: template_components,
       });
 
-      return jsonResponse({ success: true, message_id: result.messageId });
+      // `data` preserves the existing frontend contract — WhatsAppDiagnostics.tsx:215
+      // and useMessaging.ts:220 consume this response shape.
+      return jsonResponse({ success: true, message_id: result.messageId, data: result.raw });
     }
 ```
 
 Add the import at the top of the file, beside the existing `_shared` imports:
 
 ```ts
-import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
+import { sendTemplate, upsertOutboundConversation } from "../_shared/whatsappPartnerOps.ts";
 ```
+
+Then delete the now-duplicated local definitions, keeping every other handler working:
+
+- `upsertOutboundConversation` at `:35-88` — deleted; the import replaces it. Other callers (`whatsapp_send_message`, `whatsapp_send_media`) now use the shared version, whose signature is identical apart from returning a boolean they may ignore.
+- `registerWhatsAppPhone` at `:787-818` and `sendWhatsAppWithRetry` at `:820-870` — these are nested inside `Deno.serve` and are still called by `whatsapp_send_message`, `whatsapp_send_media`, `whatsapp_send_interactive`, and the manual `whatsapp_register_phone` action. **Leave them in place for now.** Only `whatsapp_send_template` moves to the shared op in this plan; the remaining callers migrate in a later plan. Duplication here is deliberate and temporary — deleting them now would force all four other handlers into this task and blow its blast radius.
 
 - [ ] **Step 6: Verify the existing suites still pass**
 
