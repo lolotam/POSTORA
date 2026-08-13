@@ -387,14 +387,14 @@ Pipeline: authenticate (hash lookup, not revoked, not expired) → scope check �
 per-key rate limit → idempotency claim → resolve the key's pinned account →
 **verify account health** (§9) → shared op → audit log (never bodies or tokens).
 
-### 6.1 Actions (v1 — four, down from nine)
+### 6.1 Actions (v1 — three implemented, one deferred)
 
-| Action | Scope |
-|---|---|
-| `get_status` | any — connection health, sends nothing |
-| `send_template` | `whatsapp:template.send` |
-| `list_templates` | `whatsapp:templates.read` — so partners discover approved names instead of hardcoding them |
-| `register_webhook` | `whatsapp:webhooks.manage` |
+| Action | Scope | Status |
+|---|---|---|
+| `get_status` | any — connection health, sends nothing | Plan 1 |
+| `send_template` | `whatsapp:template.send` | Plan 1 |
+| `list_templates` | `whatsapp:templates.read` — so partners discover approved names instead of hardcoding them | Plan 1 |
+| `register_webhook` | `whatsapp:webhooks.manage` | **Plan 2** — deferred with the outbox it configures. The scope exists in v1 so keys can be minted with it, but registering a callback is pointless until the delivery machinery exists. |
 
 ### 6.2 Rate limiting
 
