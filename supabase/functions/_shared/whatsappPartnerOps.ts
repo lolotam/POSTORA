@@ -154,7 +154,9 @@ async function registerWhatsAppPhone(
     body: JSON.stringify({ messaging_product: "whatsapp", pin }),
     signal: controller.signal,
   }).finally(() => clearTimeout(timer));
-  const data = await res.json().catch(() => ({}));
+  // Bounded like the send path: the abort timer stops covering the exchange
+  // once headers arrive, so a stalled body would hang past every timeout.
+  const data = await readJsonWithin(res, 10_000);
   if (!res.ok || data.error) {
     const err = data.error || {};
     // Subcode 2388001: two-step verification is on in the WhatsApp Business app.

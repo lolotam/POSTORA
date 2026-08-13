@@ -49,13 +49,19 @@ export async function releaseQuota(
   if (error) console.error("[partner-api] quota release failed:", error.message);
 }
 
-/** Non-send actions never reserve quota, so they update last_used_at here. */
+/**
+ * Non-send actions never reserve quota, so they update last_used_at here.
+ *
+ * Failure is logged, not thrown: a missing last_used_at stamp must never turn a
+ * successful read into an error for the caller.
+ */
 export async function touchKey(
   // deno-lint-ignore no-explicit-any
   client: any,
   record: PartnerKeyRecord,
 ): Promise<void> {
-  await client.rpc("touch_partner_key", { p_key_id: record.id }).catch?.(() => {});
+  const { error } = await client.rpc("touch_partner_key", { p_key_id: record.id });
+  if (error) console.error("[partner-api] touch key failed:", error.message);
 }
 
 /**
