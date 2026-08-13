@@ -3,6 +3,7 @@ import { isDirectInstagramAccount, getPageTokenForMessaging, getSendCredentials 
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
+import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
 
 // Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
 // before that window closes rather than serving a dead link from messaging_cache.
@@ -958,53 +959,27 @@ Deno.serve(async (req) => {
         action: "whatsapp_send_template",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
-      const phoneNumberId = account.platformUserId;
-      const url = `${GRAPH_API}/${phoneNumberId}/messages`;
-      const token = getWhatsAppToken(account);
 
-      const payload = {
-        messaging_product: "whatsapp",
-        to: recipient_phone,
-        type: "template",
-        template: {
-          name: template_name,
-          language: { code: template_language || "en_US" },
-          components: template_components || [],
-        },
-      };
-
-      const data = await sendWhatsAppWithRetry(url, token, payload, phoneNumberId, social_account_id);
-      const sentMessageId = data.messages?.[0]?.id;
-
-      // Store outbound template message in whatsapp_messages
-      const normalizedPhone = recipient_phone.replace(/^\+/, "");
-      const conversationId = `wa_${phoneNumberId}_${normalizedPhone}`;
-      await adminClient.from("whatsapp_messages").insert({
-        user_id: account.ownerId,
-        social_account_id,
-        conversation_id: conversationId,
-        message_id: sentMessageId,
-        from_phone: phoneNumberId,
-        from_name: "You",
-        to_phone: recipient_phone,
-        message_text: `[Template: ${template_name}]`,
-        message_type: "template",
-        direction: "outbound",
-        status: "sent",
-        timestamp: new Date().toISOString(),
+      // Delegated to the shared op so the JWT door and the partner-api key door
+      // run one implementation and cannot drift. Authorization stays here: this
+      // door resolves a human workspace role, the other resolves key scopes.
+      const result = await sendTemplate({
+        admin: adminClient,
+        accountId: account.accountId,
+        ownerId: account.ownerId,
+        workspaceId: account.workspaceId,
+        phoneNumberId: account.platformUserId,
+        accessToken: getWhatsAppToken(account),
+      }, {
+        recipientPhone: recipient_phone,
+        templateName: template_name,
+        templateLanguage: template_language || "en_US",
+        components: template_components,
       });
 
-      // Make conversation appear in inbox + auto-save contact
-      await upsertOutboundConversation(adminClient, {
-        user_id: account.ownerId,
-        social_account_id,
-        workspace_id: account.workspaceId,
-        phone_number_id: phoneNumberId,
-        recipient_phone,
-        preview: `[Template: ${template_name}]`,
-      });
-
-      return jsonResponse({ success: true, message_id: sentMessageId, data });
+      // `data` preserves the existing frontend contract — WhatsAppDiagnostics.tsx
+      // and useMessaging.ts consume this response shape.
+      return jsonResponse({ success: true, message_id: result.messageId, data: result.raw });
     }
 
     // ACTION: whatsapp_list_templates

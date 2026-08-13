@@ -21,6 +21,11 @@ real systems, what is assumed, and what must be true before Task 8 can complete.
 |---|---|
 | The composite FK makes cross-workspace keys impossible | Scratch DB on production Postgres: cross-workspace insert **rejected**; an account with NULL `workspace_id` cannot be pinned; cascade works. `MATCH SIMPLE` does not weaken it because both referencing columns are `NOT NULL`. |
 | `claim_partner_idempotency` behaves as designed | Compiled and exercised on a scratch DB, returning in order: `claimed`, `in_progress`, `conflict`, `replay` (with the stored body), `indeterminate`, `claimed` on a stale lease, `claimed` on an expired row. |
+| **The whole Task 1 migration applies cleanly** | Extracted from this plan and run against a scratch database loaded with a full production schema dump: `psql -v ON_ERROR_STOP=1` exited **0**. All 4 tables, all 6 functions, and all 3 tenancy constraints were created. |
+| **Quota reserve / release / refusal** | `reserve_partner_quota` allowed 2 of a quota of 2 and refused the 3rd; `release_partner_quota` refunded exactly one unit (3 → 2). |
+| **The rate bucket refuses past its limit** | `consume_partner_rate(key, 3)` returned true, true, true, **false**. |
+| **Cross-workspace keys are rejected by Postgres** | Insert refused: `violates foreign key constraint "partner_api_keys_account_in_workspace"`. |
+| **The fencing token stops a stale writer** | A `processing` row with an expired lease was taken over (new token minted); the original holder's settle, using its old token, affected **0 rows**, leaving the new owner's attempt untouched. |
 | `social_accounts` carries the columns the design needs | `platform`, `is_active`, `needs_reauth`, `token_expires_at`, `access_token`, `workspace_id` all present. All 4 WhatsApp rows have `workspace_id` populated. |
 | Tenancy tables are `workspaces` / `workspace_members` | `_shared/whatsappWorkspaceAccess.ts:93-114`. The names in the first draft did not exist. |
 | No gateway change is needed | The live functions container sets `VERIFY_JWT=false` and `FUNCTIONS_VERIFY_JWT=false` **globally**. `supabase/config.toml` is local-CLI-only and is never deployed. |
@@ -31,15 +36,8 @@ real systems, what is assumed, and what must be true before Task 8 can complete.
 - The edge runtime's request limit exceeds the 75s worst-case send (Task 5).
 - `deno check` resolves the `esm.sh` supabase-js import in the deploy environment;
   `deno.lock` has the URL but not every transitive module.
-- Task 9's full SQL script has not been run end to end. Only the
-  `claim_partner_idempotency` behaviours above were executed directly, and that
-  was **before** the `attempt_token` fencing column was added — so the current
-  version of the RPC has not been compiled. Expect to fix small SQL errors on
-  the first run of Task 9; that is what its Step 5 (deliberately break an
-  assertion) is for.
-- The fencing guarantee itself — that a stale writer cannot settle a taken-over
-  attempt — is **reasoned, not yet measured**. Task 9 contains the test that
-  measures it. Run it before trusting the mechanism.
+- Task 9's full SQL *script* has not been run as written, though every behaviour
+  it asserts has now been verified directly (see the table above).
 
 ### Hard prerequisites
 
