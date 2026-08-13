@@ -1,4 +1,4 @@
-# WhatsApp Partner API Foundation — Implementation Plan
+# Postora: WhatsApp Partner API Foundation — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -87,15 +87,36 @@ reported failure. Re-trace call sites after every change.
 
 ---
 
-## Scope: this is Plan 1 of 3
+## Scope: the POSTORA side only
+
+**Every task in this plan runs in `F:\Postora_new`.** Nothing here touches the
+Danat codebase; that work is a separate plan in a separate repository, because the
+two systems share no database and no network — the typed HTTP contract is the entire
+interface between them.
+
+| | This plan | The Danat plan |
+|---|---|---|
+| Repo | `F:\Postora_new` | `F:\Danat-Mostakbal` |
+| Server | Contabo `86.48.2.205` | its own host |
+| Access MCP | `ssh-contabo-mcp` | `ssh-danatfuture-mcp` |
+| Gates | `deno test`, `deno check` | `bun run typecheck / lint / test` |
+
+**Danat-side plan:** `docs/superpowers/plans/2026-08-13-danat-postora-whatsapp-integration.md`
+
+Its Tasks 1-2 can run in parallel with this plan. Its Task 3 onward is blocked until
+this plan is deployed and a key has been minted (Task 8 here). Its Task 5 is blocked
+on Plan 2 below.
+
+## Plan 1 of 3
 
 The spec's v1 covers three independently shippable subsystems. This plan is the foundation the other two depend on. Do **not** implement the others here.
 
 | Plan | Contents | Status |
 |---|---|---|
 | **1. Partner API foundation** (this plan) | Migrations, key auth, scopes, metering, idempotency, shared ops, `get_status` / `send_template` / `list_templates` | **This document** |
-| 2. Webhook outbox | `whatsapp_webhook_deliveries`, transactional enqueue, retry worker, `message.status` dispatch, `register_webhook` | Later plan |
-| 3. Integrations UI + Danat provider swap | Key management screen; `sendWithWhatsApp` rewrite in the Danat repo | Later plans |
+| 2. Webhook outbox (Postora) | `whatsapp_webhook_deliveries`, transactional enqueue, retry worker, `message.status` dispatch, `register_webhook` | Not yet written |
+| 3. Integrations UI (Postora) | Key-management screen. Key *creation* is already covered by Task 8's operator script, so this is convenience, not a blocker | Not yet written |
+| — Danat integration | Provider, dispatch routing, drain-job guard, webhook receiver, cutover | **Written**: `2026-08-13-danat-postora-whatsapp-integration.md` |
 
 ## Global Constraints
 
@@ -3492,6 +3513,6 @@ Carried forward to Plans 2 and 3, and listed here so a reviewer does not read th
 
 - `register_webhook`, the deliveries outbox, the retry worker, and `message.status` dispatch (Plan 2).
 - The Integrations key-management **UI** (Plan 3). Key creation itself is covered by the Task 8 operator script, so this plan is executable end to end.
-- Danat's `sendWithWhatsApp` swap, in the other repo (Plan 3).
+- **Anything in the Danat repository.** See `2026-08-13-danat-postora-whatsapp-integration.md`.
 - Free-form text, media, and interactive sends; inbox reads; the AI bot.
 - Fixing `whatsapp_contacts`' `UNIQUE(user_id, phone_number)` workspace bug (spec §5.6) and the non-fatal OAuth success gap (spec §9) — both pre-existing, both flagged, neither caused by this work.
