@@ -360,6 +360,10 @@ BEGIN
 END;
 $$;
 
+-- Revoke first, like every other function here: the membership predicate uses
+-- auth.uid() which is NULL for anon today, but an explicit grant surface must
+-- not depend on that staying true.
+REVOKE ALL ON FUNCTION public.revoke_partner_key(UUID, TEXT) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.revoke_partner_key(UUID, TEXT) TO authenticated;
 
 CREATE TRIGGER update_partner_api_keys_updated_at
