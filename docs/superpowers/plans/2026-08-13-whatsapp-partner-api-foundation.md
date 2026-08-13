@@ -2279,8 +2279,16 @@ function withRequestId<T extends Record<string, unknown>>(
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
+  // Declared first: every exit path below stamps it, including the ones that
+  // run before a key is authenticated. `const` is not hoisted, so declaring it
+  // later would make the method-not-allowed branch a ReferenceError.
+  const requestId = crypto.randomUUID();
   if (req.method !== "POST") {
-    return json(errorBody("method_not_allowed", "Use POST", false), 405);
+    // Before authentication, so there is no key to bill and no ledger row -
+    // but the caller still gets a correlatable id.
+    return json(withRequestId(errorBody("method_not_allowed", "Use POST", false), requestId),
+                405, { "X-Postora-Request-Id": requestId });
   }
 
   const admin = createClient(
@@ -2291,7 +2299,6 @@ Deno.serve(async (req) => {
   let record: PartnerKeyRecord | null = null;
   let action = "unknown";
   let idempotencyKey: string | null = null;
-  const requestId = crypto.randomUUID();
 
   // Bound once so every exit path stamps the request id automatically. The
   // alternative - adding a trailing argument at each call site - is how
@@ -2313,7 +2320,8 @@ Deno.serve(async (req) => {
 
     const scope = requiredScopeFor(action);
     if (scope === undefined) {
-      return json(errorBody("unknown_action", `Unknown action: ${action}`, false), 400);
+      return await finish(400, false,
+        errorBody("unknown_action", `Unknown action: ${action}`, false), {}, "unknown_action");
     }
     if (scope !== null) assertScope(record, scope);
 
