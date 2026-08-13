@@ -1707,11 +1707,17 @@ async function registerWhatsAppPhone(
   fetcher: Fetcher,
 ): Promise<void> {
   const pin = Deno.env.get("WHATSAPP_VERIFY_PIN") || "000000";
+  // Timed like the send: this call sits BETWEEN the two message posts on the
+  // auto-registration path, so an untimed hang here would strand the whole
+  // request and leave its idempotency row in `processing`.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 15_000);
   const res = await fetcher(`${GRAPH_API}/${phoneNumberId}/register`, {
     method: "POST",
     headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
     body: JSON.stringify({ messaging_product: "whatsapp", pin }),
-  });
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timer));
   const data = await res.json().catch(() => ({}));
   if (!res.ok || data.error) {
     const err = data.error || {};
@@ -1749,7 +1755,11 @@ export async function sendTemplate(
 
   // A hung Graph request must not outlive the function: if the runtime kills
   // us mid-flight, the idempotency row stays `processing` forever and that
-  // key is poisoned. 30s is well inside the edge runtime's own limit.
+  // key is poisoned.
+  //
+  // Worst case on the auto-registration path is send(30s) + register(15s) +
+  // retry(30s) = 75s. Confirm that fits the edge runtime's request limit
+  // before deploying; if it does not, lower these rather than removing them.
   const post = () => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
@@ -2772,6 +2782,18 @@ value - not that the database does what the design claims. A stub returning
 load-bearing guarantee in this plan lives in SQL, and this is where those
 guarantees are actually tested.
 
+**What this task still does NOT cover**, stated plainly so nobody mistakes a
+green run for full coverage:
+
+- Only the idempotency claim is raced (Step 4). The **rate bucket** and
+  **quota reservation** are tested sequentially, so their atomicity is argued
+  from the SQL shape rather than demonstrated.
+- The edge function itself is never invoked. Task 6's orchestration - the order
+  of scope check, rate limit, claim, reserve, send, settle - has no automated
+  test at any layer; the Task 8 smoke test is the only end-to-end exercise, and
+  it covers one happy path.
+- Nothing here talks to Meta. Every Graph interaction is stubbed in Task 5.
+
 - [ ] **Step 1: Write the SQL test script**
 
 Create `supabase/tests/partner_api_test.sql`:
@@ -2943,7 +2965,42 @@ docker exec -i postorasupabase-supabase-j8axyh-supabase-db \
 Expected: a run of `ok - ...` notices and no `FAIL`. The script ends in
 `ROLLBACK`, so it leaves nothing behind and is re-runnable.
 
-- [ ] **Step 4: Prove the suite can actually fail**
+- [ ] **Step 4: Race two real sessions against the same idempotency key**
+
+Everything in Step 3 is sequential. Sequential calls exercise the same code
+paths but prove nothing about the property that actually matters: that two
+concurrent duplicates cannot both be told to send. That needs two backends
+hitting the row at the same moment.
+
+```bash
+# Two psql sessions, launched together, claiming the SAME key with the SAME body.
+D=postorasupabase-supabase-j8axyh-supabase-db
+K=44444444-4444-4444-4444-444444444444
+SQL="SELECT outcome FROM claim_partner_idempotency('$K','race-1','hash-r');"
+
+docker exec $D psql -U postgres -d partnertest -t -c "$SQL" > /tmp/r1.txt &
+docker exec $D psql -U postgres -d partnertest -t -c "$SQL" > /tmp/r2.txt &
+wait
+cat /tmp/r1.txt /tmp/r2.txt | tr -d ' ' | grep -v '^$' | sort | tr '\n' ' '
+```
+
+Expected output: `claimed in_progress` — in some order.
+
+**A result of `claimed claimed` is a hard failure**: it means two concurrent
+requests would each send a message to the same customer, which is the exact
+duplicate-send this whole mechanism exists to prevent. If you see it, stop and
+re-examine the `ON CONFLICT DO NOTHING` + `FOR UPDATE` sequence before going
+further.
+
+Note this fixture row is created outside the transaction used in Step 3, so
+delete it afterwards:
+
+```bash
+docker exec $D psql -U postgres -d partnertest -q \
+  -c "DELETE FROM partner_api_idempotency WHERE idempotency_key = 'race-1';"
+```
+
+- [ ] **Step 5: Prove the suite can actually fail**
 
 A green suite that cannot go red is worthless. Temporarily flip the third
 quota assertion from `false` to `true` and re-run.
@@ -2951,13 +3008,13 @@ quota assertion from `false` to `true` and re-run.
 Expected: `ERROR: FAIL third reservation refused: expected true, got false`.
 Revert the change and confirm green again.
 
-- [ ] **Step 5: Drop the scratch database**
+- [ ] **Step 6: Drop the scratch database**
 
 ```bash
 docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -q -c "DROP DATABASE partnertest;"
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 # Scoped commit (AGENTS.md): never `git add` - this working tree carries
