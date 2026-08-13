@@ -2130,12 +2130,19 @@ export async function listTemplates(
   // Keep the explicit field selection the current handler uses
   // (messaging-api/index.ts:1025); without `fields=` Meta omits `components`,
   // which the template UI renders.
+  // Timed and body-bounded like the send path: a read has no side effect, but
+  // an untimed one still hangs the request and burns the runtime's budget.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
   const response = await fetcher(
     `${GRAPH_API}/${wabaId}/message_templates` +
       `?fields=name,status,category,language,components&limit=100`,
-    { headers: { Authorization: `Bearer ${ctx.accessToken}` } },
-  );
-  const body = await response.json().catch(() => ({}));
+    {
+      headers: { Authorization: `Bearer ${ctx.accessToken}` },
+      signal: controller.signal,
+    },
+  ).finally(() => clearTimeout(timer));
+  const body = await readJsonWithin(response, 10_000);
   if (!response.ok) throw translateMetaError(response.status, body);
 
   // deno-lint-ignore no-explicit-any
