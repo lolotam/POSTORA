@@ -241,6 +241,95 @@ AS $$
   UPDATE public.partner_api_keys SET last_used_at = now() WHERE id = p_key_id;
 $$;
 
+-- The idempotency claim lives in SQL, not in the edge function.
+--
+-- Doing it in JS needs insert -> catch 23505 -> re-read, which cannot express
+-- "take over a lease that expired" without another race. One statement here
+-- is atomic, handles stale leases and row expiry in the same place, and is
+-- directly testable with psql.
+--
+-- Returns one row: outcome in
+--   claimed | replay | conflict | in_progress | indeterminate
+CREATE OR REPLACE FUNCTION public.claim_partner_idempotency(
+  p_key_id UUID,
+  p_idempotency_key TEXT,
+  p_request_hash TEXT,
+  p_lease_seconds INTEGER DEFAULT 60
+)
+RETURNS TABLE (outcome TEXT, http_status INTEGER, response_body JSONB)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_row public.partner_api_idempotency%ROWTYPE;
+BEGIN
+  -- Opportunistic pruning: expired rows must not resurrect as false replays.
+  DELETE FROM public.partner_api_idempotency
+   WHERE key_id = p_key_id AND expires_at < now();
+
+  INSERT INTO public.partner_api_idempotency
+    (key_id, idempotency_key, request_hash, state, locked_until)
+  VALUES
+    (p_key_id, p_idempotency_key, p_request_hash, 'processing',
+     now() + make_interval(secs => p_lease_seconds))
+  ON CONFLICT (key_id, idempotency_key) DO NOTHING;
+
+  IF FOUND THEN
+    RETURN QUERY SELECT 'claimed'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN;
+  END IF;
+
+  -- Lock the existing row so two concurrent duplicates cannot both take over
+  -- the same expired lease.
+  SELECT * INTO v_row
+    FROM public.partner_api_idempotency
+   WHERE key_id = p_key_id AND idempotency_key = p_idempotency_key
+     FOR UPDATE;
+
+  IF NOT FOUND THEN
+    -- Pruned between the insert and the read; retry is safe and cheap.
+    RETURN QUERY SELECT 'in_progress'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN;
+  END IF;
+
+  IF v_row.request_hash IS DISTINCT FROM p_request_hash THEN
+    RETURN QUERY SELECT 'conflict'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN;
+  END IF;
+
+  IF v_row.state = 'completed' THEN
+    RETURN QUERY SELECT 'replay'::TEXT, v_row.http_status, v_row.response_body;
+    RETURN;
+  END IF;
+
+  IF v_row.state = 'indeterminate' THEN
+    -- The first attempt may have reached Meta. Never silently re-send.
+    RETURN QUERY SELECT 'indeterminate'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN;
+  END IF;
+
+  -- state = 'processing'. A live lease means a genuine concurrent duplicate;
+  -- an expired one means the previous attempt died before settling, so this
+  -- caller takes it over rather than wedging the key forever.
+  IF v_row.locked_until IS NOT NULL AND v_row.locked_until > now() THEN
+    RETURN QUERY SELECT 'in_progress'::TEXT, NULL::INTEGER, NULL::JSONB;
+    RETURN;
+  END IF;
+
+  UPDATE public.partner_api_idempotency
+     SET locked_until = now() + make_interval(secs => p_lease_seconds)
+   WHERE key_id = p_key_id AND idempotency_key = p_idempotency_key;
+
+  RETURN QUERY SELECT 'claimed'::TEXT, NULL::INTEGER, NULL::JSONB;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.claim_partner_idempotency(UUID, TEXT, TEXT, INTEGER)
+  FROM PUBLIC, authenticated, anon;
+GRANT EXECUTE ON FUNCTION public.claim_partner_idempotency(UUID, TEXT, TEXT, INTEGER)
+  TO service_role;
+
 REVOKE ALL ON FUNCTION public.consume_partner_rate(UUID, INTEGER) FROM PUBLIC, authenticated, anon;
 REVOKE ALL ON FUNCTION public.reserve_partner_quota(UUID) FROM PUBLIC, authenticated, anon;
 REVOKE ALL ON FUNCTION public.release_partner_quota(UUID) FROM PUBLIC, authenticated, anon;
@@ -424,14 +513,33 @@ const ACTIVE_ROW = {
   revoked_at: null,
 };
 
-/** Minimal stub of the supabase-js query chain used by the module. */
-function stubClient(row: unknown) {
+/**
+ * Stub of the supabase-js query chain that actually HONOURS the filter.
+ *
+ * A stub that returns its row regardless of the `.eq()` argument would pass
+ * even if authenticatePartnerKey looked up the wrong column or the plaintext
+ * key instead of its hash. Recording the filter and matching on it is what
+ * makes these assertions mean something.
+ */
+function stubClient(row: Record<string, unknown> | null, expectedHash?: string) {
+  const filters: Record<string, unknown> = {};
+  let table = "";
   return {
-    from() {
+    from(name: string) {
+      table = name;
       return {
         select() { return this; },
-        eq() { return this; },
-        maybeSingle() { return Promise.resolve({ data: row, error: null }); },
+        eq(column: string, value: unknown) { filters[column] = value; return this; },
+        maybeSingle() {
+          if (table !== "partner_api_keys") {
+            return Promise.resolve({ data: null, error: null });
+          }
+          // The module must query by key_hash, never by the raw key.
+          if (expectedHash !== undefined && filters.key_hash !== expectedHash) {
+            return Promise.resolve({ data: null, error: null });
+          }
+          return Promise.resolve({ data: row, error: null });
+        },
       };
     },
   // deno-lint-ignore no-explicit-any
@@ -456,6 +564,15 @@ Deno.test("authenticatePartnerKey returns the record for an active key", async (
   assertEquals(record.id, "key-1");
   assertEquals(record.workspaceId, "ws-1");
   assertEquals(record.socialAccountId, "acct-1");
+});
+
+Deno.test("authenticatePartnerKey looks the key up by its hash, never the plaintext", async () => {
+  const key = "pk_live_whatever";
+  const hash = await hashPartnerKey(key);
+  // The stub only yields a row when filtered on exactly this hash, so a module
+  // that queried `.eq("key_hash", key)` would get null and this would fail.
+  const record = await authenticatePartnerKey(stubClient(ACTIVE_ROW, hash), key);
+  assertEquals(record.id, "key-1");
 });
 
 Deno.test("authenticatePartnerKey rejects an unknown key as invalid_key", async () => {
@@ -880,7 +997,7 @@ git commit -m "feat(partner-api): add atomic quota consumption, rate limiting, a
 - Create: `supabase/functions/_shared/partnerApiIdempotency.test.ts`
 
 **Interfaces:**
-- Consumes: `partner_api_idempotency` (Task 1).
+- Consumes: `partner_api_idempotency` and the `claim_partner_idempotency` RPC (Task 1).
 - Produces:
   - `hashRequest(body: unknown): Promise<string>`
   - `claimIdempotency(client, keyId, idempotencyKey, requestHash): Promise<ClaimResult>`
@@ -894,26 +1011,25 @@ Create `supabase/functions/_shared/partnerApiIdempotency.test.ts`:
 
 ```ts
 // deno-lint-ignore-file no-import-prefix
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { claimIdempotency, hashRequest } from "./partnerApiIdempotency.ts";
+import {
+  assertEquals,
+  assertRejects,
+} from "https://deno.land/std@0.208.0/assert/mod.ts";
+import {
+  claimIdempotency,
+  completeIdempotency,
+  hashRequest,
+} from "./partnerApiIdempotency.ts";
 
 /**
- * Stub whose insert fails with 23505 when a row already exists, mirroring the
- * real unique-violation path that makes the claim atomic.
+ * Stubs the RPC, because that is now the whole interface. These tests cover
+ * ONLY the outcome mapping — they deliberately do not claim to test claim
+ * semantics, which live in SQL and are tested for real in Task 9.
  */
-function stubClient(existing: Record<string, unknown> | null) {
+function stubRpc(outcome: string, extra: Record<string, unknown> = {}) {
   return {
-    from() {
-      return {
-        insert() {
-          return Promise.resolve(
-            existing ? { error: { code: "23505", message: "duplicate key" } } : { error: null },
-          );
-        },
-        select() { return this; },
-        eq() { return this; },
-        maybeSingle() { return Promise.resolve({ data: existing, error: null }); },
-      };
+    rpc() {
+      return Promise.resolve({ data: [{ outcome, ...extra }], error: null });
     },
   // deno-lint-ignore no-explicit-any
   } as any;
@@ -950,17 +1066,30 @@ Deno.test("hashRequest accepts null and undefined without throwing", async () =>
   await hashRequest(undefined);
 });
 
-Deno.test("claimIdempotency claims a fresh key", async () => {
-  const result = await claimIdempotency(stubClient(null), "key-1", "idem-1", "hash-1");
-  assertEquals(result.outcome, "claimed");
+Deno.test("claimIdempotency maps each RPC outcome to its ClaimResult", async () => {
+  assertEquals(
+    (await claimIdempotency(stubRpc("claimed"), "k", "i", "h")).outcome,
+    "claimed",
+  );
+  assertEquals(
+    (await claimIdempotency(stubRpc("conflict"), "k", "i", "h")).outcome,
+    "conflict",
+  );
+  assertEquals(
+    (await claimIdempotency(stubRpc("in_progress"), "k", "i", "h")).outcome,
+    "in_progress",
+  );
+  assertEquals(
+    (await claimIdempotency(stubRpc("indeterminate"), "k", "i", "h")).outcome,
+    "indeterminate",
+  );
 });
 
-Deno.test("claimIdempotency replays a completed identical request", async () => {
-  const existing = {
-    state: "completed", request_hash: "hash-1",
-    http_status: 200, response_body: { message_id: "wamid.X" },
-  };
-  const result = await claimIdempotency(stubClient(existing), "key-1", "idem-1", "hash-1");
+Deno.test("claimIdempotency carries the stored response through a replay", async () => {
+  const result = await claimIdempotency(
+    stubRpc("replay", { http_status: 200, response_body: { message_id: "wamid.X" } }),
+    "k", "i", "h",
+  );
   assertEquals(result.outcome, "replay");
   if (result.outcome === "replay") {
     assertEquals(result.httpStatus, 200);
@@ -968,24 +1097,40 @@ Deno.test("claimIdempotency replays a completed identical request", async () => 
   }
 });
 
-Deno.test("claimIdempotency reports a conflict when the body differs", async () => {
-  const existing = { state: "completed", request_hash: "OTHER", http_status: 200, response_body: {} };
-  const result = await claimIdempotency(stubClient(existing), "key-1", "idem-1", "hash-1");
-  assertEquals(result.outcome, "conflict");
+Deno.test("claimIdempotency treats an unrecognized outcome as in_progress", async () => {
+  // Fail closed: an unknown outcome must never be read as permission to send.
+  assertEquals(
+    (await claimIdempotency(stubRpc("something_new"), "k", "i", "h")).outcome,
+    "in_progress",
+  );
 });
 
-Deno.test("claimIdempotency reports in_progress for a concurrent duplicate", async () => {
-  const existing = { state: "processing", request_hash: "hash-1", http_status: null, response_body: null };
-  const result = await claimIdempotency(stubClient(existing), "key-1", "idem-1", "hash-1");
-  assertEquals(result.outcome, "in_progress");
+Deno.test("claimIdempotency surfaces an RPC error instead of sending anyway", async () => {
+  const client = {
+    rpc() { return Promise.resolve({ data: null, error: { message: "boom" } }); },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+  await assertRejects(() => claimIdempotency(client, "k", "i", "h"), Error);
 });
 
-Deno.test("claimIdempotency never re-sends an indeterminate request", async () => {
-  const existing = { state: "indeterminate", request_hash: "hash-1", http_status: null, response_body: null };
-  const result = await claimIdempotency(stubClient(existing), "key-1", "idem-1", "hash-1");
-  assertEquals(result.outcome, "indeterminate");
+Deno.test("completeIdempotency throws when the settle write fails", async () => {
+  const client = {
+    from() {
+      return {
+        update() { return this; },
+        eq() {
+          return { eq: () => Promise.resolve({ error: { message: "db down" } }) };
+        },
+      };
+    },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+  // A silently dropped settle leaves the row `processing`; it must be loud.
+  await assertRejects(
+    () => completeIdempotency(client, "k", "i", 200, { ok: true }),
+    Error,
+  );
 });
-```
 
 - [ ] **Step 2: Run the test to verify it fails**
 
@@ -1052,33 +1197,25 @@ export async function claimIdempotency(
   idempotencyKey: string,
   requestHash: string,
 ): Promise<ClaimResult> {
-  const { error } = await client.from("partner_api_idempotency").insert({
-    key_id: keyId,
-    idempotency_key: idempotencyKey,
-    request_hash: requestHash,
-    state: "processing",
-    locked_until: new Date(Date.now() + 60_000).toISOString(),
+  // All of the atomicity lives in the RPC: insert-or-inspect, stale-lease
+  // takeover, and expiry pruning happen in one statement under a row lock.
+  const { data, error } = await client.rpc("claim_partner_idempotency", {
+    p_key_id: keyId,
+    p_idempotency_key: idempotencyKey,
+    p_request_hash: requestHash,
+    p_lease_seconds: 60,
   });
+  if (error) throw new Error(`Idempotency claim failed: ${error.message}`);
 
-  if (!error) return { outcome: "claimed" };
-  if (error.code !== "23505") throw new Error(`Idempotency claim failed: ${error.message}`);
-
-  const { data } = await client
-    .from("partner_api_idempotency")
-    .select("state, request_hash, http_status, response_body")
-    .eq("key_id", keyId)
-    .eq("idempotency_key", idempotencyKey)
-    .maybeSingle();
-
-  if (!data) return { outcome: "claimed" }; // Row expired between the two calls.
-  if (data.request_hash !== requestHash) return { outcome: "conflict" };
-
-  switch (data.state) {
-    case "completed":
-      return { outcome: "replay", httpStatus: data.http_status, body: data.response_body };
+  const row = Array.isArray(data) ? data[0] : data;
+  switch (row?.outcome) {
+    case "claimed":
+      return { outcome: "claimed" };
+    case "replay":
+      return { outcome: "replay", httpStatus: row.http_status, body: row.response_body };
+    case "conflict":
+      return { outcome: "conflict" };
     case "indeterminate":
-      // The first attempt may have reached Meta. Re-sending could double-message
-      // a real customer, so this always requires human or webhook resolution.
       return { outcome: "indeterminate" };
     default:
       return { outcome: "in_progress" };
@@ -1093,7 +1230,7 @@ export async function completeIdempotency(
   httpStatus: number,
   body: unknown,
 ): Promise<void> {
-  await client
+  const { error } = await client
     .from("partner_api_idempotency")
     .update({
       state: "completed",
@@ -1104,6 +1241,14 @@ export async function completeIdempotency(
     })
     .eq("key_id", keyId)
     .eq("idempotency_key", idempotencyKey);
+
+  // Swallowing this would leave the row `processing` with no live lease. The
+  // stale-lease path in the RPC recovers it, but a silent failure here means
+  // a duplicate could re-send, so it must at least be visible.
+  if (error) {
+    console.error("[partner-api] idempotency settle failed:", error.message);
+    throw new Error(`Idempotency settle failed: ${error.message}`);
+  }
 }
 
 export async function markIndeterminate(
@@ -1112,18 +1257,25 @@ export async function markIndeterminate(
   keyId: string,
   idempotencyKey: string,
 ): Promise<void> {
-  await client
+  const { error } = await client
     .from("partner_api_idempotency")
     .update({ state: "indeterminate", locked_until: null })
     .eq("key_id", keyId)
     .eq("idempotency_key", idempotencyKey);
-}
-```
+
+  // If this write is lost the row stays `processing`; once its lease expires
+  // a retry would take it over and re-send a message that may already have
+  // been delivered. Loud failure is the lesser evil.
+  if (error) {
+    console.error("[partner-api] indeterminate mark failed:", error.message);
+    throw new Error(`Indeterminate mark failed: ${error.message}`);
+  }
+}```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `deno test --allow-env supabase/functions/_shared/partnerApiIdempotency.test.ts`
-Expected: PASS — 6 tests.
+Expected: PASS — 9 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -2286,7 +2438,7 @@ git commit -m "feat(partner-api): add machine-authenticated WhatsApp template se
 
 ---
 
-### Task 7: Cross-workspace isolation test matrix
+### Task 7: Scope-enforcement tests (application layer)
 
 **Files:**
 - Create: `supabase/functions/partner-api/isolation.test.ts`
@@ -2294,7 +2446,17 @@ git commit -m "feat(partner-api): add machine-authenticated WhatsApp template se
 **Interfaces:**
 - Consumes: `authenticatePartnerKey`, `assertScope` (Task 2); `requiredScopeFor` (Task 6).
 
-This is the highest-risk area in the design, so it gets its own task and its own reviewer gate. It follows the pattern established by the cross-workspace suite in commit `c5f16035`.
+**What this task does and does not prove.** These are unit tests over
+hand-written stubs, so they verify the *application layer*: that each action
+demands the right scope, that a revoked or expired key is refused, and that an
+unknown key is indistinguishable from a malformed one. They deliberately do
+**not** claim to prove cross-workspace isolation - a stub returning a
+workspace-A row proves nothing about what Postgres would allow. The isolation
+guarantee itself is enforced by the composite foreign key and tested for real
+in **Task 9**. Read the two together; neither is sufficient alone.
+
+It follows the pattern established by the cross-workspace suite in commit
+`c5f16035`.
 
 - [ ] **Step 1: Write the isolation tests**
 
@@ -2333,12 +2495,14 @@ function stubClient(row: unknown) {
   } as any;
 }
 
-Deno.test("a workspace-A key resolves only workspace-A's pinned account", async () => {
+Deno.test("the target account comes from the key row, not the request body", async () => {
   const record = await authenticatePartnerKey(stubClient(WS_A_KEY), "pk_live_whatever");
   assertEquals(record.workspaceId, "ws-a");
   assertEquals(record.socialAccountId, "acct-a");
-  // The account id is taken from the key row, never from the request body,
-  // so a caller cannot address another workspace's account.
+  // This is the point worth asserting: PartnerKeyRecord exposes no way for a
+  // caller to name a different account, so partner-api has nothing to trust
+  // from the request. Whether the pairing is legal at all is enforced by the
+  // composite FK and proven in Task 9, not here.
 });
 
 Deno.test("a send-only key cannot read templates", () => {
@@ -2399,7 +2563,10 @@ Expected: PASS — 5 tests.
 
 - [ ] **Step 3: Re-verify the database-level guarantee**
 
-The application tests above prove the code checks. Task 1 Step 4 proved Postgres rejects a cross-workspace key outright. Both layers must hold; re-run Task 1 Step 4 against the scratch database if the migration changed since.
+The tests above cover the application layer only. The isolation guarantee is
+the composite FK, exercised by the tenancy case in the Task 9 suite. Run Task 9
+after this task and confirm `ok - cross-workspace key rejected by the database`
+appears in its output. If the migration changed since, re-run it in full.
 
 - [ ] **Step 4: Run the full suite**
 
@@ -2418,7 +2585,7 @@ unit-test gate.
 ```bash
 # Scoped commit (AGENTS.md): never `git add` — this working tree carries
 # many unrelated modified files that a broad add would sweep in.
-git commit -m "test(partner-api): cover cross-workspace isolation and scope enforcement" -- supabase/functions/partner-api/isolation.test.ts
+git commit -m "test(partner-api): cover scope enforcement and key rejection paths" -- supabase/functions/partner-api/isolation.test.ts
 ```
 
 ---
@@ -2544,6 +2711,230 @@ Expected: `{"success":true,"whatsapp_connected":true,...}`.
 # Scoped commit (AGENTS.md): never `git add` — this working tree carries
 # many unrelated modified files that a broad add would sweep in.
 git commit -m "feat(partner-api): add operator key-creation script" -- scripts/create-partner-key.ts
+```
+
+---
+
+---
+
+### Task 9: SQL integration tests against a real database
+
+**Files:**
+- Create: `supabase/tests/partner_api_test.sql`
+
+**Interfaces:**
+- Consumes: every object created in Task 1.
+
+> **These behaviours were verified against real Postgres before this task was
+> written** (scratch database on the production instance, 2026-08-13). The
+> `claim_partner_idempotency` function compiled and produced:
+>
+> | Scenario | Outcome |
+> |---|---|
+> | First claim | `claimed` |
+> | Concurrent duplicate, same body | `in_progress` |
+> | Same key, different body | `conflict` |
+> | Settled row, same body | `replay`, returning the stored `wamid.X` |
+> | Row marked `indeterminate` | `indeterminate` — never re-sends |
+> | `processing` row whose lease expired | `claimed` — takes over, so a crashed attempt cannot wedge the key |
+> | Row past `expires_at` | `claimed` — pruned rather than replayed as a stale success |
+>
+> The scratch database was dropped afterwards. Task 9 turns these into a
+> repeatable suite; the results above are why the design is trusted, rather
+> than the stub assertions in Tasks 2-8.
+
+**Why this task exists.** The Deno tests in Tasks 2-8 hand-write their own
+stubs, so they verify the *mapping* between a stubbed response and a return
+value - not that the database does what the design claims. A stub returning
+`{allowed: false}` proves nothing about whether the quota SQL is atomic. Every
+load-bearing guarantee in this plan lives in SQL, and this is where those
+guarantees are actually tested.
+
+- [ ] **Step 1: Write the SQL test script**
+
+Create `supabase/tests/partner_api_test.sql`:
+
+```sql
+-- Integration tests for the partner API database objects.
+-- Run against a scratch database that has the partner API migration applied.
+-- Any FAIL raises an exception and aborts the script.
+
+CREATE OR REPLACE FUNCTION assert_eq(actual ANYELEMENT, expected ANYELEMENT, label TEXT)
+RETURNS VOID LANGUAGE plpgsql AS $fn$
+BEGIN
+  IF actual IS DISTINCT FROM expected THEN
+    RAISE EXCEPTION 'FAIL %: expected %, got %', label, expected, actual;
+  END IF;
+  RAISE NOTICE 'ok - %', label;
+END; $fn$;
+
+BEGIN;
+
+-- Fixture: two workspaces, one WhatsApp account in workspace A, one key.
+INSERT INTO workspaces (id, owner_id, name, is_personal) VALUES
+  ('11111111-1111-1111-1111-111111111111', (SELECT id FROM auth.users LIMIT 1), 'ws-a', false),
+  ('22222222-2222-2222-2222-222222222222', (SELECT id FROM auth.users LIMIT 1), 'ws-b', false);
+
+INSERT INTO social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id)
+VALUES ('33333333-3333-3333-3333-333333333333',
+        (SELECT id FROM auth.users LIMIT 1), 'whatsapp', '1234567890', 'tok',
+        '11111111-1111-1111-1111-111111111111');
+
+INSERT INTO partner_api_keys (id, workspace_id, social_account_id, name, key_prefix, key_hash,
+                              scopes, rate_limit_per_min, monthly_quota)
+VALUES ('44444444-4444-4444-4444-444444444444',
+        '11111111-1111-1111-1111-111111111111',
+        '33333333-3333-3333-3333-333333333333',
+        'test', 'pk_live_test', 'hash-1', ARRAY['whatsapp:template.send'], 3, 2);
+
+-- === Tenancy: the control the whole design rests on ===
+DO $t$
+BEGIN
+  INSERT INTO partner_api_keys (workspace_id, social_account_id, name, key_prefix, key_hash)
+  VALUES ('22222222-2222-2222-2222-222222222222',
+          '33333333-3333-3333-3333-333333333333', 'bad', 'pk_live_bad', 'hash-bad');
+  RAISE EXCEPTION 'FAIL tenancy: a cross-workspace key was accepted';
+EXCEPTION WHEN foreign_key_violation THEN
+  RAISE NOTICE 'ok - cross-workspace key rejected by the database';
+END $t$;
+
+-- === Quota: reserve, exceed, release, lazy monthly reset ===
+SELECT assert_eq((SELECT allowed FROM reserve_partner_quota('44444444-4444-4444-4444-444444444444')),
+                 true, 'first reservation allowed');
+SELECT assert_eq((SELECT allowed FROM reserve_partner_quota('44444444-4444-4444-4444-444444444444')),
+                 true, 'second reservation allowed (quota = 2)');
+SELECT assert_eq((SELECT allowed FROM reserve_partner_quota('44444444-4444-4444-4444-444444444444')),
+                 false, 'third reservation refused');
+
+SELECT release_partner_quota('44444444-4444-4444-4444-444444444444');
+SELECT assert_eq((SELECT current_usage_count FROM partner_api_keys
+                   WHERE id = '44444444-4444-4444-4444-444444444444'),
+                 2, 'release refunds exactly one unit');
+
+UPDATE partner_api_keys SET last_reset_at = date_trunc('month', now()) - INTERVAL '1 month'
+ WHERE id = '44444444-4444-4444-4444-444444444444';
+SELECT assert_eq((SELECT allowed FROM reserve_partner_quota('44444444-4444-4444-4444-444444444444')),
+                 true, 'new month allows again');
+SELECT assert_eq((SELECT current_usage_count FROM partner_api_keys
+                   WHERE id = '44444444-4444-4444-4444-444444444444'),
+                 1, 'new month resets the count to 1');
+
+-- === Rate limit ===
+SELECT assert_eq(consume_partner_rate('44444444-4444-4444-4444-444444444444', 3), true,  'rate 1 of 3');
+SELECT assert_eq(consume_partner_rate('44444444-4444-4444-4444-444444444444', 3), true,  'rate 2 of 3');
+SELECT assert_eq(consume_partner_rate('44444444-4444-4444-4444-444444444444', 3), true,  'rate 3 of 3');
+SELECT assert_eq(consume_partner_rate('44444444-4444-4444-4444-444444444444', 3), false, 'rate 4 refused');
+
+-- === Idempotency ===
+SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
+                    '44444444-4444-4444-4444-444444444444', 'idem-1', 'hash-a')),
+                 'claimed', 'first claim wins');
+SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
+                    '44444444-4444-4444-4444-444444444444', 'idem-1', 'hash-a')),
+                 'in_progress', 'concurrent duplicate sees in_progress');
+SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
+                    '44444444-4444-4444-4444-444444444444', 'idem-1', 'hash-DIFFERENT')),
+                 'conflict', 'same key with a different body is a conflict');
+
+UPDATE partner_api_idempotency
+   SET state = 'completed', http_status = 200,
+       response_body = '{"message_id":"wamid.X"}'::jsonb, locked_until = NULL
+ WHERE key_id = '44444444-4444-4444-4444-444444444444' AND idempotency_key = 'idem-1';
+
+SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
+                    '44444444-4444-4444-4444-444444444444', 'idem-1', 'hash-a')),
+                 'replay', 'completed claim replays');
+SELECT assert_eq((SELECT response_body->>'message_id' FROM claim_partner_idempotency(
+                    '44444444-4444-4444-4444-444444444444', 'idem-1', 'hash-a')),
+                 'wamid.X', 'replay returns the stored response');
+
+-- An indeterminate row must never hand out a fresh claim.
+INSERT INTO partner_api_idempotency (key_id, idempotency_key, request_hash, state)
+VALUES ('44444444-4444-4444-4444-444444444444', 'idem-2', 'hash-b', 'indeterminate');
+SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
+                    '44444444-4444-4444-4444-444444444444', 'idem-2', 'hash-b')),
+                 'indeterminate', 'indeterminate never re-sends');
+
+-- A crashed attempt must not wedge the key forever.
+INSERT INTO partner_api_idempotency (key_id, idempotency_key, request_hash, state, locked_until)
+VALUES ('44444444-4444-4444-4444-444444444444', 'idem-3', 'hash-c', 'processing',
+        now() - INTERVAL '5 minutes');
+SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
+                    '44444444-4444-4444-4444-444444444444', 'idem-3', 'hash-c')),
+                 'claimed', 'an expired lease is taken over');
+
+-- Expired rows are pruned, not replayed as stale successes.
+INSERT INTO partner_api_idempotency (key_id, idempotency_key, request_hash, state,
+                                     http_status, response_body, expires_at)
+VALUES ('44444444-4444-4444-4444-444444444444', 'idem-4', 'hash-d', 'completed',
+        200, '{"message_id":"old"}'::jsonb, now() - INTERVAL '1 day');
+SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
+                    '44444444-4444-4444-4444-444444444444', 'idem-4', 'hash-d')),
+                 'claimed', 'an expired row is pruned, not replayed');
+
+ROLLBACK;
+```
+
+- [ ] **Step 2: Prepare a scratch database**
+
+```bash
+# via ssh-contabo-mcp. Separate invocations: CREATE/DROP DATABASE cannot run
+# inside a transaction block, and psql wraps multiple -c statements in one.
+docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -q -c "DROP DATABASE IF EXISTS partnertest;"
+docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -q -c "CREATE DATABASE partnertest;"
+```
+
+The fixture references `auth.users`, `workspaces`, and `social_accounts`, so
+load the schema first, then apply the Task 1 migration:
+
+```bash
+docker exec postorasupabase-supabase-j8axyh-supabase-db \
+  pg_dump -U postgres --schema-only postgres > /tmp/schema.sql
+docker exec -i postorasupabase-supabase-j8axyh-supabase-db \
+  psql -U postgres -d partnertest -q < /tmp/schema.sql
+```
+
+A schema-only dump carries no rows, so insert one throwaway user for the
+fixture's `(SELECT id FROM auth.users LIMIT 1)`:
+
+```bash
+docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -d partnertest -q \
+  -c "INSERT INTO auth.users (id, email) VALUES (gen_random_uuid(), 'test@example.invalid') ON CONFLICT DO NOTHING;"
+```
+
+If that insert fails on NOT NULL columns specific to this Supabase version,
+add the columns it names - do not weaken the fixture.
+
+- [ ] **Step 3: Run the suite**
+
+```bash
+docker exec -i postorasupabase-supabase-j8axyh-supabase-db \
+  psql -U postgres -d partnertest -v ON_ERROR_STOP=1 < supabase/tests/partner_api_test.sql
+```
+
+Expected: a run of `ok - ...` notices and no `FAIL`. The script ends in
+`ROLLBACK`, so it leaves nothing behind and is re-runnable.
+
+- [ ] **Step 4: Prove the suite can actually fail**
+
+A green suite that cannot go red is worthless. Temporarily flip the third
+quota assertion from `false` to `true` and re-run.
+
+Expected: `ERROR: FAIL third reservation refused: expected true, got false`.
+Revert the change and confirm green again.
+
+- [ ] **Step 5: Drop the scratch database**
+
+```bash
+docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -q -c "DROP DATABASE partnertest;"
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+# Scoped commit (AGENTS.md): never `git add` - this working tree carries
+# many unrelated modified files that a broad add would sweep in.
+git commit -m "test(partner-api): add SQL integration suite for tenancy, quota, rate, idempotency" -- supabase/tests/partner_api_test.sql
 ```
 
 ---
