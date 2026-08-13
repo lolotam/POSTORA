@@ -10,6 +10,63 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md`
 
+## Readiness
+
+**Before you start, read this section.** It records what has been proven against
+real systems, what is assumed, and what must be true before Task 8 can complete.
+
+### Verified against live systems (not assumed)
+
+| Claim | How it was verified |
+|---|---|
+| The composite FK makes cross-workspace keys impossible | Scratch DB on production Postgres: cross-workspace insert **rejected**; an account with NULL `workspace_id` cannot be pinned; cascade works. `MATCH SIMPLE` does not weaken it because both referencing columns are `NOT NULL`. |
+| `claim_partner_idempotency` behaves as designed | Compiled and exercised on a scratch DB, returning in order: `claimed`, `in_progress`, `conflict`, `replay` (with the stored body), `indeterminate`, `claimed` on a stale lease, `claimed` on an expired row. |
+| `social_accounts` carries the columns the design needs | `platform`, `is_active`, `needs_reauth`, `token_expires_at`, `access_token`, `workspace_id` all present. All 4 WhatsApp rows have `workspace_id` populated. |
+| Tenancy tables are `workspaces` / `workspace_members` | `_shared/whatsappWorkspaceAccess.ts:93-114`. The names in the first draft did not exist. |
+| No gateway change is needed | The live functions container sets `VERIFY_JWT=false` and `FUNCTIONS_VERIFY_JWT=false` **globally**. `supabase/config.toml` is local-CLI-only and is never deployed. |
+| The cross-server path works in both directions | Contabo → Danat: TLS valid, `GET` 200, `POST` reaches the origin (404, not a Cloudflare challenge). Danat → Postora: a real `x-api-key` call returned `200 {"api_key_valid":true}` — the full chain through Cloudflare, Kong, the edge function and the database. |
+
+### Assumed, not verified — confirm during implementation
+
+- The edge runtime's request limit exceeds the 75s worst-case send (Task 5).
+- `deno check` resolves the `esm.sh` supabase-js import in the deploy environment;
+  `deno.lock` has the URL but not every transitive module.
+- Task 9's full SQL script has not been run end to end. Only the
+  `claim_partner_idempotency` behaviours above were executed directly.
+
+### Hard prerequisites
+
+1. **A connected WABA.** Task 8 refuses to mint a key for a non-WhatsApp or
+   unhealthy account, and the account tested on 2026-08-13 returned
+   `whatsapp_connected: false`. Embedded Signup (spec §13, Phase 2) must run first.
+2. **Meta-approved templates.** Nothing business-initiated can be sent without them,
+   approval takes days, and it can be rejected. Start it before writing any code.
+
+### Known-accepted risks
+
+- **base62 modulo bias** in key generation: reviewed and rated fine to defer — it
+  slightly reduces uniformity across 32 random bytes, not materially the security.
+- **`whatsapp_contacts` is `UNIQUE(user_id, phone_number)`** while the stack is
+  workspace-scoped, so one owner handling the same customer in two workspaces can
+  overwrite contact tenancy. Pre-existing, not caused by this work, and explicitly
+  accepted in spec §5.6 — but partner traffic increases writes against it.
+- **The OAuth false-success gap** (spec §9): `whatsapp-oauth` treats `subscribed_apps`
+  and phone-registration failures as non-fatal and still reports success, so an
+  account can look connected while unable to receive. Task 6's health check catches
+  the token side of this, not the subscription side.
+
+### Review history
+
+Three adversarial review rounds against the codebase, each of whose findings were
+verified before being acted on. Round 1 rejected the spec outright (wrong tenancy
+table names — the migration would not have run). Round 2 rejected the plan (a lease
+shorter than the send deadline, allowing a duplicate send). Round 3 reviewed the
+delta. The recurring pattern worth knowing as you implement: **most defects were
+introduced by fixes to earlier defects**, because a component was corrected without
+re-tracing its callers. Re-trace call sites after every change.
+
+---
+
 ## Scope: this is Plan 1 of 3
 
 The spec's v1 covers three independently shippable subsystems. This plan is the foundation the other two depend on. Do **not** implement the others here.
