@@ -48,6 +48,23 @@ Exact values, copied from the spec and verified against the codebase — every t
 - Consumes: existing `workspaces`, `workspace_members`, `social_accounts`, `auth.users`.
 - Produces: tables `partner_api_keys`, `partner_api_idempotency`, `partner_api_usage`; RPC `consume_partner_quota(p_key_id uuid)` returning `(allowed boolean, usage_count integer)`.
 
+> **The composite FK was proven empirically before this plan was written**
+> (scratch database on the production Postgres, 2026-08-13). The concern worth
+> checking was that Postgres's default `MATCH SIMPLE` skips enforcement when a
+> referencing column is NULL — which would have made this control decorative.
+> It does not apply here, because **both referencing columns are `NOT NULL`**.
+> Measured results:
+>
+> | Case | Result |
+> |---|---|
+> | `UNIQUE (id, workspace_id)` where `workspace_id` is nullable | valid FK target |
+> | Key whose `workspace_id` matches the account's | `INSERT` succeeds |
+> | Key pointing at **another workspace's** account | **rejected**: `violates foreign key constraint` |
+> | Key pointing at an account whose `workspace_id` is NULL | **rejected** — an unscoped account cannot be pinned at all |
+> | Deleting the account | cascades, key removed |
+>
+> `update_updated_at_column` is confirmed present in production.
+
 - [ ] **Step 1: Write the migration**
 
 Create `supabase/migrations/20260813120000_partner_api_foundation.sql`:
