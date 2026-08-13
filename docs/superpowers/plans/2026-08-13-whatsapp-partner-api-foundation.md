@@ -254,7 +254,14 @@ CREATE OR REPLACE FUNCTION public.claim_partner_idempotency(
   p_key_id UUID,
   p_idempotency_key TEXT,
   p_request_hash TEXT,
-  p_lease_seconds INTEGER DEFAULT 60
+  -- MUST exceed the maximum end-to-end send deadline, with margin.
+  -- The auto-registration path allows send(30s) + register(15s) + retry(30s)
+  -- = 75s. A 60s lease would let a SECOND caller take over a request that is
+  -- still in flight, and both would send to the same customer. 300s leaves
+  -- room for that worst case plus retries and clock skew; the cost of a lease
+  -- that is too long is only a delayed recovery, while one that is too short
+  -- is a duplicate message.
+  p_lease_seconds INTEGER DEFAULT 300
 )
 RETURNS TABLE (outcome TEXT, http_status INTEGER, response_body JSONB)
 LANGUAGE plpgsql
@@ -339,9 +346,10 @@ GRANT EXECUTE ON FUNCTION public.reserve_partner_quota(UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION public.release_partner_quota(UUID) TO service_role;
 GRANT EXECUTE ON FUNCTION public.touch_partner_key(UUID) TO service_role;
 
-ALTER TABLE public.partner_api_keys       ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.partner_api_idempotency ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.partner_api_usage      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.partner_api_keys         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.partner_api_idempotency  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.partner_api_usage        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.partner_api_rate_buckets ENABLE ROW LEVEL SECURITY;
 
 -- Idempotency and usage are service-role only: RLS on, no policies, no grants.
 
@@ -355,14 +363,8 @@ USING (EXISTS (
      AND m.role IN ('owner','admin')
 ));
 
-CREATE POLICY "Workspace admins revoke partner keys"
-ON public.partner_api_keys FOR UPDATE TO authenticated
-USING (EXISTS (
-  SELECT 1 FROM public.workspace_members m
-   WHERE m.workspace_id = partner_api_keys.workspace_id
-     AND m.user_id = auth.uid()
-     AND m.role IN ('owner','admin')
-));
+-- No UPDATE policy: revocation goes through revoke_partner_key() below, so
+-- there is no path by which a client can clear revoked_at.
 
 -- Column-level grants, mirroring the mcp_oauth_tokens precedent: key_hash is
 -- never selectable by a client, and only revocation fields are writable.
@@ -372,8 +374,35 @@ GRANT SELECT (id, workspace_id, social_account_id, created_by, revoked_by,
               monthly_quota, current_usage_count, last_reset_at, last_used_at,
               expires_at, revoked_at, created_at, updated_at)
   ON public.partner_api_keys TO authenticated;
-GRANT UPDATE (revoked_at, revoked_by, revoked_reason)
-  ON public.partner_api_keys TO authenticated;
+
+-- Revocation is a one-way door, so it is NOT a granted UPDATE.
+-- Granting UPDATE(revoked_at) would let an admin set it back to NULL and
+-- silently un-revoke a key that was revoked because it leaked. This function
+-- refuses to act on an already-revoked key and stamps the actor server-side.
+CREATE OR REPLACE FUNCTION public.revoke_partner_key(p_key_id UUID, p_reason TEXT)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_updated INTEGER;
+BEGIN
+  UPDATE public.partner_api_keys k
+     SET revoked_at = now(), revoked_by = auth.uid(), revoked_reason = p_reason
+   WHERE k.id = p_key_id
+     AND k.revoked_at IS NULL
+     AND EXISTS (
+       SELECT 1 FROM public.workspace_members m
+        WHERE m.workspace_id = k.workspace_id
+          AND m.user_id = auth.uid()
+          AND m.role IN ('owner','admin'));
+  GET DIAGNOSTICS v_updated = ROW_COUNT;
+  RETURN v_updated > 0;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION public.revoke_partner_key(UUID, TEXT) TO authenticated;
 
 CREATE TRIGGER update_partner_api_keys_updated_at
 BEFORE UPDATE ON public.partner_api_keys
@@ -385,12 +414,15 @@ FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
 Local `supabase start` is broken in this project, so rehearse inside the production container against a scratch database:
 
 ```bash
-# via ssh-contabo-mcp
-docker exec postorasupabase-supabase-j8axyh-supabase-db \
-  psql -U postgres -c "DROP DATABASE IF EXISTS rehearse; CREATE DATABASE rehearse TEMPLATE postgres;"
+# via ssh-contabo-mcp. Separate invocations: psql wraps multiple -c statements
+# in one transaction, and CREATE/DROP DATABASE cannot run inside a transaction
+# block. Verified empirically — the combined form fails.
+docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -q -c "DROP DATABASE IF EXISTS rehearse;"
+docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -q -c "CREATE DATABASE rehearse;"
 ```
 
-Expected: `CREATE DATABASE`.
+Expected: both succeed. Do NOT use `TEMPLATE postgres` — cloning the live
+database fails while it has active connections.
 
 - [ ] **Step 3: Apply the migration to the scratch database**
 
@@ -1203,7 +1235,9 @@ export async function claimIdempotency(
     p_key_id: keyId,
     p_idempotency_key: idempotencyKey,
     p_request_hash: requestHash,
-    p_lease_seconds: 60,
+    // Must stay above the 75s worst-case send deadline in Task 5. See the
+    // comment on claim_partner_idempotency for why a short lease double-sends.
+    p_lease_seconds: 300,
   });
   if (error) throw new Error(`Idempotency claim failed: ${error.message}`);
 
@@ -1240,7 +1274,10 @@ export async function completeIdempotency(
       locked_until: null,
     })
     .eq("key_id", keyId)
-    .eq("idempotency_key", idempotencyKey);
+    .eq("idempotency_key", idempotencyKey)
+    // Only settle a row still in flight. Without this, a slow request whose
+    // lease was taken over could overwrite the newer attempt's result.
+    .eq("state", "processing");
 
   // Swallowing this would leave the row `processing` with no live lease. The
   // stale-lease path in the RPC recovers it, but a silent failure here means
@@ -1261,7 +1298,11 @@ export async function markIndeterminate(
     .from("partner_api_idempotency")
     .update({ state: "indeterminate", locked_until: null })
     .eq("key_id", keyId)
-    .eq("idempotency_key", idempotencyKey);
+    .eq("idempotency_key", idempotencyKey)
+    // Never downgrade an already-settled success to `indeterminate`: if the
+    // completion committed and only the response was lost, the row is correct
+    // as it stands.
+    .eq("state", "processing");
 
   // If this write is lost the row stays `processing`; once its lease expires
   // a retry would take it over and re-send a message that may already have
@@ -1631,6 +1672,12 @@ export interface SendResult {
   messageId: string;
   /** False when Meta accepted the send but Postora failed to record it. */
   persisted: boolean;
+  /**
+   * The raw Meta body. messaging-api passes this through as `data` to keep
+   * the existing frontend contract; partner-api must NOT return it, because
+   * partners get a normalized response only (spec 5.3).
+   */
+  raw: unknown;
 }
 
 export interface TemplateSummary {
@@ -1650,6 +1697,16 @@ export class WhatsAppOpError extends Error {
     public readonly code: string,
     public readonly status: number,
     public readonly metaCode?: number,
+    /**
+     * True when we cannot prove Meta did NOT accept the message.
+     *
+     * This distinction decides whether the caller may refund quota and settle
+     * the request as a clean failure. A 4xx with a specific Meta code is a
+     * definite rejection. A 5xx, a missing message id, or a body we could not
+     * parse are NOT: the message may be on its way to a real customer, so the
+     * request must become non-resendable and keep its quota unit.
+     */
+    public readonly indeterminate: boolean = false,
   ) {
     super(message);
     this.name = "WhatsAppOpError";
@@ -1693,7 +1750,10 @@ function translateMetaError(status: number, payload: Record<string, unknown>): W
         "account_needs_reauth", 401, metaCode,
       );
     default:
-      return new WhatsAppOpError(message, "meta_error", status >= 500 ? 502 : 422, metaCode);
+      // A 5xx tells us Meta failed to RESPOND, not that it failed to accept.
+      return status >= 500
+        ? new WhatsAppOpError(message, "meta_error", 502, metaCode, true)
+        : new WhatsAppOpError(message, "meta_error", 422, metaCode, false);
   }
 }
 
@@ -1758,8 +1818,11 @@ export async function sendTemplate(
   // key is poisoned.
   //
   // Worst case on the auto-registration path is send(30s) + register(15s) +
-  // retry(30s) = 75s. Confirm that fits the edge runtime's request limit
-  // before deploying; if it does not, lower these rather than removing them.
+  // retry(30s) = 75s. Two constraints bind these numbers:
+  //   1. the edge runtime's own request limit must exceed 75s;
+  //   2. the idempotency LEASE (300s) must exceed 75s by a wide margin, or a
+  //      still-running request loses its claim and a retry sends a duplicate.
+  // If you shorten the lease or lengthen these timeouts, re-check both.
   const post = () => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 30_000);
@@ -1792,8 +1855,12 @@ export async function sendTemplate(
 
   const messageId = body?.messages?.[0]?.id;
   if (!messageId) {
-    throw new WhatsAppOpError("Meta accepted the send but returned no message id",
-      "meta_error", 502);
+    // Meta returned 2xx, so it very likely accepted the message; we simply
+    // cannot name it. Never treat this as a rejection.
+    throw new WhatsAppOpError(
+      "Meta accepted the send but returned no message id",
+      "meta_error", 502, undefined, true,
+    );
   }
 
   const persisted = await persistOutbound(ctx, input, messageId);
@@ -1924,8 +1991,12 @@ export async function listTemplates(
   wabaId: string,
   fetcher: Fetcher = fetch,
 ): Promise<TemplateSummary[]> {
+  // Keep the explicit field selection the current handler uses
+  // (messaging-api/index.ts:1025); without `fields=` Meta omits `components`,
+  // which the template UI renders.
   const response = await fetcher(
-    `${GRAPH_API}/${wabaId}/message_templates?limit=200`,
+    `${GRAPH_API}/${wabaId}/message_templates` +
+      `?fields=name,status,category,language,components&limit=100`,
     { headers: { Authorization: `Bearer ${ctx.accessToken}` } },
   );
   const body = await response.json().catch(() => ({}));
@@ -2024,7 +2095,7 @@ git commit -m "refactor(whatsapp): extract sendTemplate/listTemplates into share
 - Create: `supabase/functions/partner-api/index.ts`
 - Create: `supabase/functions/partner-api/router.ts`
 - Create: `supabase/functions/partner-api/router.test.ts`
-- Modify: `supabase/config.toml` (append after the `[functions.ecommerce-whatsapp-api]` block at line 32-33)
+- **No change to `supabase/config.toml`** — see Step 1; that file is local-CLI-only and is never deployed.
 
 **Interfaces:**
 - Consumes: everything produced by Tasks 2-5.
@@ -2259,6 +2330,7 @@ Deno.serve(async (req) => {
     };
 
     if (action === "get_status") {
+      await touchKey(admin, record);
       return await respond(admin, record, action, 200, false, {
         success: true,
         whatsapp_connected: true,
@@ -2276,6 +2348,7 @@ Deno.serve(async (req) => {
         );
       }
       const templates = await listTemplates(ctx, String(wabaId));
+      await touchKey(admin, record);
       return await respond(admin, record, action, 200, false, { success: true, templates });
     }
 
@@ -2394,11 +2467,25 @@ Deno.serve(async (req) => {
         return await respond(admin, record, action, 409, false, body, {},
           "idempotency_indeterminate");
       }
-      // Meta definitely rejected it: refund the reservation.
+      // Only a DEFINITE rejection may be refunded and settled as a failure.
+      // An indeterminate one (5xx, missing message id) may already have
+      // reached the customer, so it keeps its quota unit and becomes
+      // non-resendable — the same treatment as a transport failure.
+      if (err.indeterminate) {
+        await markIndeterminate(admin, record.id, idempotencyKey!)
+          .catch((e) => console.error("[partner-api] indeterminate mark failed:", e));
+        const body = errorBody("idempotency_indeterminate",
+          "The send may have been delivered; resolve it before retrying", false,
+          err.metaCode ? { meta_code: err.metaCode } : undefined);
+        return await respond(admin, record, action, 409, false, body, {},
+          "idempotency_indeterminate");
+      }
       await releaseQuota(admin, record);
-      const failure = errorBody(err.code, err.message, err.status >= 500,
+      const failure = errorBody(err.code, err.message, false,
         err.metaCode ? { meta_code: err.metaCode } : undefined);
-      await completeIdempotency(admin, record.id, idempotencyKey!, err.status, failure);
+      // Settling must not turn a clean rejection into a generic 500.
+      await completeIdempotency(admin, record.id, idempotencyKey!, err.status, failure)
+        .catch((e) => console.error("[partner-api] settle after rejection failed:", e));
       return await respond(admin, record, action, err.status, false, failure, {}, err.code);
     }
   } catch (err) {
@@ -2465,7 +2552,7 @@ Expected: PASS.
 ```bash
 # Scoped commit (AGENTS.md): never `git add` — this working tree carries
 # many unrelated modified files that a broad add would sweep in.
-git commit -m "feat(partner-api): add machine-authenticated WhatsApp template send endpoint" -- supabase/functions/partner-api/ supabase/config.toml
+git commit -m "feat(partner-api): add machine-authenticated WhatsApp template send endpoint" -- supabase/functions/partner-api/
 ```
 
 ---
@@ -2657,10 +2744,33 @@ const workspaceId = arg("workspace");
 const accountId = arg("account");
 const name = arg("name");
 const scopes = (arg("scopes") ?? "").split(",").filter(Boolean);
-const quota = arg("quota") ? Number(arg("quota")) : null;
+// Number("--account") is NaN, and NaN serializes to null, which means
+// UNLIMITED quota. Validate rather than silently minting an uncapped key.
+const rawQuota = arg("quota");
+let quota: number | null = null;
+if (rawQuota !== undefined) {
+  quota = Number(rawQuota);
+  if (!Number.isSafeInteger(quota) || quota < 0) {
+    console.error(`--quota must be a non-negative integer, got: ${rawQuota}`);
+    Deno.exit(2);
+  }
+}
+
+const ALLOWED_SCOPES = [
+  "whatsapp:template.send",
+  "whatsapp:templates.read",
+  "whatsapp:webhooks.manage",
+];
 
 if (!workspaceId || !accountId || !name || scopes.length === 0) {
   console.error("Missing --workspace, --account, --name, or --scopes");
+  Deno.exit(2);
+}
+
+const badScopes = scopes.filter((sc) => !ALLOWED_SCOPES.includes(sc));
+if (badScopes.length > 0) {
+  console.error(`Unknown scope(s): ${badScopes.join(", ")}`);
+  console.error(`Allowed: ${ALLOWED_SCOPES.join(", ")}`);
   Deno.exit(2);
 }
 
@@ -2753,6 +2863,7 @@ git commit -m "feat(partner-api): add operator key-creation script" -- scripts/c
 
 **Files:**
 - Create: `supabase/tests/partner_api_test.sql`
+- Create: `supabase/tests/partner_api_race_fixture.sql`
 
 **Interfaces:**
 - Consumes: every object created in Task 1.
@@ -2785,9 +2896,12 @@ guarantees are actually tested.
 **What this task still does NOT cover**, stated plainly so nobody mistakes a
 green run for full coverage:
 
-- Only the idempotency claim is raced (Step 4). The **rate bucket** and
-  **quota reservation** are tested sequentially, so their atomicity is argued
-  from the SQL shape rather than demonstrated.
+- Only the idempotency claim is raced under a real barrier (Step 4). The
+  **rate bucket** and **quota reservation** are tested sequentially, so their
+  atomicity is argued from the SQL shape rather than demonstrated. Both use
+  single-statement `UPDATE ... RETURNING` / `INSERT ... ON CONFLICT DO UPDATE
+  ... RETURNING`, which Postgres executes atomically, but that is reasoning
+  rather than evidence.
 - The edge function itself is never invoked. Task 6's orchestration - the order
   of scope check, rate limit, claim, reserve, send, settle - has no automated
   test at any layer; the Task 8 smoke test is the only end-to-end exercise, and
@@ -2944,6 +3058,18 @@ docker exec -i postorasupabase-supabase-j8axyh-supabase-db \
   psql -U postgres -d partnertest -q < /tmp/schema.sql
 ```
 
+Then apply the Task 1 migration — without this the suite reaches missing
+`partner_api_*` objects and fails on the first statement:
+
+```bash
+docker cp supabase/migrations/20260813120000_partner_api_foundation.sql \
+  postorasupabase-supabase-j8axyh-supabase-db:/tmp/mig.sql
+docker exec postorasupabase-supabase-j8axyh-supabase-db \
+  psql -U postgres -d partnertest -v ON_ERROR_STOP=1 -q -f /tmp/mig.sql
+```
+
+Expected: no errors.
+
 A schema-only dump carries no rows, so insert one throwaway user for the
 fixture's `(SELECT id FROM auth.users LIMIT 1)`:
 
@@ -2967,37 +3093,91 @@ Expected: a run of `ok - ...` notices and no `FAIL`. The script ends in
 
 - [ ] **Step 4: Race two real sessions against the same idempotency key**
 
-Everything in Step 3 is sequential. Sequential calls exercise the same code
-paths but prove nothing about the property that actually matters: that two
-concurrent duplicates cannot both be told to send. That needs two backends
-hitting the row at the same moment.
+Everything in Step 3 is sequential, and a sequential pair of calls produces the
+same `claimed` / `in_progress` output that a genuinely concurrent pair would.
+It therefore proves nothing about the property that matters: that two
+overlapping duplicates cannot both be told to send.
 
-```bash
-# Two psql sessions, launched together, claiming the SAME key with the SAME body.
-D=postorasupabase-supabase-j8axyh-supabase-db
-K=44444444-4444-4444-4444-444444444444
-SQL="SELECT outcome FROM claim_partner_idempotency('$K','race-1','hash-r');"
+Two things are needed to make this a real test. First, a **committed** fixture
+— the Step 3 suite ends in `ROLLBACK`, so its key does not exist afterwards and
+the race would fail on the foreign key rather than testing anything. Second, a
+**barrier**, so the second session provably contends with the first while it
+still holds the row.
 
-docker exec $D psql -U postgres -d partnertest -t -c "$SQL" > /tmp/r1.txt &
-docker exec $D psql -U postgres -d partnertest -t -c "$SQL" > /tmp/r2.txt &
-wait
-cat /tmp/r1.txt /tmp/r2.txt | tr -d ' ' | grep -v '^$' | sort | tr '\n' ' '
+Create `supabase/tests/partner_api_race_fixture.sql`:
+
+```sql
+-- Committed fixture for the concurrency check. Separate from the main suite,
+-- which rolls back.
+INSERT INTO workspaces (id, owner_id, name, is_personal)
+VALUES ('55555555-5555-5555-5555-555555555555',
+        (SELECT id FROM auth.users LIMIT 1), 'ws-race', false)
+ON CONFLICT DO NOTHING;
+
+INSERT INTO social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id)
+VALUES ('66666666-6666-6666-6666-666666666666',
+        (SELECT id FROM auth.users LIMIT 1), 'whatsapp', '9999999999', 'tok',
+        '55555555-5555-5555-5555-555555555555')
+ON CONFLICT DO NOTHING;
+
+INSERT INTO partner_api_keys (id, workspace_id, social_account_id, name, key_prefix,
+                              key_hash, scopes, rate_limit_per_min, monthly_quota)
+VALUES ('77777777-7777-7777-7777-777777777777',
+        '55555555-5555-5555-5555-555555555555',
+        '66666666-6666-6666-6666-666666666666',
+        'race', 'pk_live_race', 'hash-race', ARRAY['whatsapp:template.send'], 1000, NULL)
+ON CONFLICT DO NOTHING;
 ```
 
-Expected output: `claimed in_progress` — in some order.
+Apply it, then run the race:
 
-**A result of `claimed claimed` is a hard failure**: it means two concurrent
-requests would each send a message to the same customer, which is the exact
-duplicate-send this whole mechanism exists to prevent. If you see it, stop and
-re-examine the `ON CONFLICT DO NOTHING` + `FOR UPDATE` sequence before going
-further.
+```bash
+D=postorasupabase-supabase-j8axyh-supabase-db
+K=77777777-7777-7777-7777-777777777777
 
-Note this fixture row is created outside the transaction used in Step 3, so
-delete it afterwards:
+docker cp supabase/tests/partner_api_race_fixture.sql $D:/tmp/fix.sql
+docker exec $D psql -U postgres -d partnertest -q -f /tmp/fix.sql
+
+# Session 1 claims inside an OPEN transaction and holds it for 5 seconds.
+# Session 2 starts while that transaction is still open, so its INSERT blocks
+# on the uncommitted unique key — this is the actual contention, not two
+# commands that merely started at a similar time.
+docker exec $D psql -U postgres -d partnertest -t -c \
+  "BEGIN; SELECT outcome FROM claim_partner_idempotency('$K','race-1','hash-r'); SELECT pg_sleep(5); COMMIT;" \
+  > /tmp/r1.txt 2>&1 &
+
+sleep 1   # session 1 is now holding the row
+
+docker exec $D psql -U postgres -d partnertest -t -c \
+  "SELECT outcome FROM claim_partner_idempotency('$K','race-1','hash-r');" \
+  > /tmp/r2.txt 2>&1
+
+wait
+echo "session 1: $(grep -oE 'claimed|in_progress|conflict' /tmp/r1.txt | head -1)"
+echo "session 2: $(grep -oE 'claimed|in_progress|conflict' /tmp/r2.txt | head -1)"
+```
+
+Expected:
+
+```
+session 1: claimed
+session 2: in_progress
+```
+
+Session 2 must also visibly **block** for roughly the remaining 4 seconds —
+that wait is the evidence it truly contended rather than running after the
+fact. Time it if you want proof: `time` on the second command should show ~4s.
+
+**`session 2: claimed` is a hard failure.** It means two concurrent requests
+would each send a message to the same customer — the exact duplicate-send this
+mechanism exists to prevent. Stop and re-examine the
+`ON CONFLICT DO NOTHING` + `FOR UPDATE` sequence before going further.
+
+Clean up the committed fixture:
 
 ```bash
 docker exec $D psql -U postgres -d partnertest -q \
-  -c "DELETE FROM partner_api_idempotency WHERE idempotency_key = 'race-1';"
+  -c "DELETE FROM partner_api_keys WHERE id = '77777777-7777-7777-7777-777777777777';"
 ```
 
 - [ ] **Step 5: Prove the suite can actually fail**
@@ -3019,7 +3199,7 @@ docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -q -c "
 ```bash
 # Scoped commit (AGENTS.md): never `git add` - this working tree carries
 # many unrelated modified files that a broad add would sweep in.
-git commit -m "test(partner-api): add SQL integration suite for tenancy, quota, rate, idempotency" -- supabase/tests/partner_api_test.sql
+git commit -m "test(partner-api): add SQL integration suite for tenancy, quota, rate, idempotency" -- supabase/tests/partner_api_test.sql supabase/tests/partner_api_race_fixture.sql
 ```
 
 ---
