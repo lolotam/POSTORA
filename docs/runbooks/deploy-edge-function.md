@@ -9,47 +9,82 @@ Run on the Contabo VPS (`86.48.2.205`) via `ssh-contabo-mcp` or a normal SSH ses
 ## Paths (constant)
 
 ```bash
-REPO=/root/postora       # adjust if your git checkout lives elsewhere
 VOL=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions
 STACK=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code
 ```
+
+There is **no usable git checkout on the server**. `/root/postora-runtime` is a clone of
+`git@github.com:lolotam/postora.git`, but it has no GitHub credentials (`git fetch` fails with
+"make sure you have the correct access rights") and is stuck on a July 2026 commit. Do not
+`git pull` there and do not copy from it — push the file from your workstation instead.
+(`/root/postora` in earlier versions of this runbook never existed.)
 
 ---
 
 ## 1. One-function deploy (common case)
 
-Just changed `supabase/functions/linkedin-oauth/index.ts`? Paste this, swap `FN`:
+Just changed `supabase/functions/linkedin-oauth/index.ts`? Copy it up from your workstation:
 
 ```bash
 FN=linkedin-oauth
 
-cd "$REPO" && git pull --ff-only
-rsync -av --delete "$REPO/supabase/functions/$FN/" "$VOL/$FN/"
-
-# Verify file hash matches between repo and volume
-sha256sum "$REPO/supabase/functions/$FN/index.ts" "$VOL/$FN/index.ts"
-
-# Restart ONLY the functions container (do not restart the whole stack)
-cd "$STACK" && docker compose up -d --no-deps functions
-
-# Tail logs and confirm the function loaded cleanly
-docker compose logs --tail=80 functions | grep -i "$FN"
+# From your local repo checkout
+rsync -av --delete "supabase/functions/$FN/" "root@86.48.2.205:/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/$FN/"
 ```
 
-The two `sha256sum` lines must print identical hashes. If they don't, the rsync didn't land — re-run it.
+Then on the server:
+
+```bash
+FN=linkedin-oauth
+VOL=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions
+STACK=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code
+
+sha256sum "$VOL/$FN/index.ts"
+
+# Reload the function code (see "Why restart, not up -d" below)
+cd "$STACK" && docker compose restart functions
+
+# Confirm the runtime came back and the function answers
+docker compose logs --tail=40 functions | tail -20
+curl -s -o /dev/null -w '%{http_code}\n' -X OPTIONS "https://api.postora.cloud/functions/v1/$FN"
+```
+
+Compare that hash against the local file. On Windows the local copy usually has CRLF line
+endings, which changes the hash even when the content is identical — normalise before comparing:
+
+```bash
+tr -d '\r' < "supabase/functions/$FN/index.ts" | sha256sum
+```
+
+If the hashes still differ, the copy didn't land — re-run the rsync.
+
+### Why restart, not `up -d`
+
+`docker compose up -d --no-deps functions` prints `Container ... Running` and does nothing when
+the compose config is unchanged — the container keeps serving the old code, so the deploy looks
+successful and isn't. The function sources are a bind mount, so `docker compose restart functions`
+is what actually reloads them. Restarting only this service leaves auth, db and storage untouched.
+
+Env-var changes are the exception: `restart` reuses the existing container and its old
+environment, so after editing `$STACK/.env` use
+`docker compose up -d --force-recreate --no-deps functions`.
 
 ---
 
 ## 2. All-functions deploy (refactor touched many)
 
 ```bash
-cd "$REPO" && git pull --ff-only
-rsync -av --delete "$REPO/supabase/functions/" "$VOL/"
-cd "$STACK" && docker compose up -d --no-deps functions
+# From your local repo checkout
+rsync -av "supabase/functions/" "root@86.48.2.205:/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/"
+```
+
+```bash
+cd "$STACK" && docker compose restart functions
 docker compose logs --tail=120 functions
 ```
 
-`--delete` removes functions in the volume that no longer exist in the repo. Skip the `--delete` flag if you want to leave orphaned functions in place.
+Add `--delete` to the rsync to remove functions in the volume that no longer exist in the repo.
+Leave it off to keep orphaned functions in place.
 
 ---
 
@@ -79,16 +114,21 @@ cd "$STACK" && docker compose logs -f functions | grep -i <FN>
 
 ## 4. Rollback
 
+Roll back from your local checkout, then re-deploy with Section 1:
+
 ```bash
 FN=linkedin-oauth
-cd "$REPO"
 git log --oneline supabase/functions/$FN/        # find the prior good SHA
 git checkout <prev-sha> -- supabase/functions/$FN/
-rsync -av --delete "$REPO/supabase/functions/$FN/" "$VOL/$FN/"
-cd "$STACK" && docker compose up -d --no-deps functions
+rsync -av --delete "supabase/functions/$FN/" "root@86.48.2.205:/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/$FN/"
 ```
 
-After verifying the rollback works, restore the repo to `HEAD` with `git checkout HEAD -- supabase/functions/$FN/` so future Lovable edits aren't based on stale code.
+```bash
+cd "$STACK" && docker compose restart functions
+```
+
+After verifying the rollback works, restore your checkout with
+`git checkout HEAD -- supabase/functions/$FN/` so later edits aren't based on stale code.
 
 ---
 
@@ -100,16 +140,19 @@ Do **not** echo secret values. Confirm the var exists in the stack `.env`:
 grep -E '^<VAR_NAME>=' "$STACK/.env" >/dev/null && echo present || echo MISSING
 ```
 
-If missing, add it to `$STACK/.env`, then follow `docs/EDGE_RUNTIME_ENV_RUNBOOK.md` (the `functions` service uses `env_file: [./.env]`, so a restart is enough):
+If missing, add it to `$STACK/.env`, then follow `docs/EDGE_RUNTIME_ENV_RUNBOOK.md`. The
+`functions` service uses `env_file: [./.env]`, and a plain `restart` reuses the container's
+existing environment, so the container has to be recreated:
 
 ```bash
-cd "$STACK" && docker compose up -d --no-deps functions
+cd "$STACK" && docker compose up -d --force-recreate --no-deps functions
 ```
 
-Then re-run the server env checker:
+Then re-run the server env checker (copy `scripts/check-edge-env-server.sh` up from your
+checkout first — the server has no current copy of the repo):
 
 ```bash
-COMPOSE_DIR="$STACK" bash "$REPO/scripts/check-edge-env-server.sh"
+COMPOSE_DIR="$STACK" bash /tmp/check-edge-env-server.sh
 ```
 
 ---
