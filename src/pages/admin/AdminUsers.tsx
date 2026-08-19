@@ -96,6 +96,7 @@ interface UserWithRole {
   profile_count?: number;
   post_count?: number;
   plan_slug?: PlanSlug;
+  stripe_subscription_id?: string | null;
   ai_calls?: number;
 }
 
@@ -386,6 +387,10 @@ export default function AdminUsers() {
   // Plan selection dialog state for subscriber role change
   const [subscriberPlanUser, setSubscriberPlanUser] = useState<UserWithRole | null>(null);
   const [selectedSubscriberPlan, setSelectedSubscriberPlan] = useState<string>("pro");
+
+  // Downgrade confirmation for users whose plan is paid through Stripe
+  const [downgradeUser, setDowngradeUser] = useState<UserWithRole | null>(null);
+  const [cancelStripeOnDowngrade, setCancelStripeOnDowngrade] = useState(true);
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { updateQuota, isUpdating, bulkUpdateQuota, isBulkUpdating, bulkDeleteUsers, isBulkDeleting } = useAdminQuotas();
@@ -427,6 +432,7 @@ export default function AdminUsers() {
           user_id,
           status,
           plan_id,
+          stripe_subscription_id,
           subscription_plans:plan_id (
             slug,
             name
@@ -473,10 +479,14 @@ export default function AdminUsers() {
 
       // Map subscription plan slugs per user
       const userPlanMap: Record<string, PlanSlug> = {};
+      const userStripeSubMap: Record<string, string> = {};
       subscriptions?.forEach((sub: any) => {
         const planSlug = sub.subscription_plans?.slug as PlanSlug;
         if (planSlug) {
           userPlanMap[sub.user_id] = planSlug;
+        }
+        if (sub.stripe_subscription_id) {
+          userStripeSubMap[sub.user_id] = sub.stripe_subscription_id;
         }
       });
 
@@ -505,6 +515,7 @@ export default function AdminUsers() {
           
           post_count: postCountMap[profile.id] || 0,
           plan_slug: planSlug,
+          stripe_subscription_id: userStripeSubMap[profile.id] || null,
           ai_calls: aiCallCountMap[profile.id] || 0,
         };
       });
@@ -610,6 +621,15 @@ export default function AdminUsers() {
     }
   };
 
+  // Cancelling only the local row would leave Stripe billing the customer
+  const cancelStripeSubscription = async (stripeSubscriptionId: string) => {
+    const { data, error } = await supabase.functions.invoke("stripe-manage-subscription", {
+      body: { action: "cancel_now", subscription_id: stripeSubscriptionId },
+    });
+    if (error) throw error;
+    if (data?.error) throw new Error(data.error);
+  };
+
   const cancelActiveSubscriptions = async (userId: string) => {
     const { error } = await supabase
       .from("user_subscriptions")
@@ -621,7 +641,17 @@ export default function AdminUsers() {
 
   // Change user role mutation
   const changeRoleMutation = useMutation({
-    mutationFn: async ({ userId, newRole, planSlug }: { userId: string; newRole: AppRole; planSlug?: string }) => {
+    mutationFn: async ({
+      userId,
+      newRole,
+      planSlug,
+      stripeSubscriptionIdToCancel,
+    }: {
+      userId: string;
+      newRole: AppRole;
+      planSlug?: string;
+      stripeSubscriptionIdToCancel?: string;
+    }) => {
       await supabase.from("user_roles").delete().eq("user_id", userId);
       const { error } = await supabase.from("user_roles").insert({
         user_id: userId,
@@ -637,6 +667,11 @@ export default function AdminUsers() {
       if (newRole === "subscriber") {
         await applySubscriptionPlan(userId, plan);
       } else if (newRole === "user") {
+        // Stripe first: if it refuses, the user keeps their plan rather than losing
+        // access while still being billed
+        if (stripeSubscriptionIdToCancel) {
+          await cancelStripeSubscription(stripeSubscriptionIdToCancel);
+        }
         await cancelActiveSubscriptions(userId);
       }
 
@@ -653,6 +688,7 @@ export default function AdminUsers() {
       queryClient.invalidateQueries({ queryKey: ["admin-subscriptions"] });
       queryClient.invalidateQueries({ queryKey: ["admin-user-subscription"] });
       setSubscriberPlanUser(null);
+      setDowngradeUser(null);
       toast({
         title: "Role updated",
         description: "User role and quotas have been updated successfully.",
@@ -1172,7 +1208,14 @@ export default function AdminUsers() {
                             <DropdownMenuLabel>Change Role</DropdownMenuLabel>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
-                              onClick={() => changeRoleMutation.mutate({ userId: user.id, newRole: "user" })}
+                              onClick={() => {
+                                if (user.stripe_subscription_id) {
+                                  setDowngradeUser(user);
+                                  setCancelStripeOnDowngrade(true);
+                                  return;
+                                }
+                                changeRoleMutation.mutate({ userId: user.id, newRole: "user" });
+                              }}
                               disabled={user.role === "user" && user.plan_slug === "free"}
                             >
                               <User className="w-4 h-4 mr-2" />
@@ -1402,6 +1445,59 @@ export default function AdminUsers() {
               }}
             >
               Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Downgrade confirmation for Stripe-billed users */}
+      <AlertDialog
+        open={!!downgradeUser}
+        onOpenChange={(open) => {
+          if (!open && !changeRoleMutation.isPending) setDowngradeUser(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Downgrade to Free User</AlertDialogTitle>
+            <AlertDialogDescription>
+              <span className="font-semibold">{downgradeUser?.email}</span> is on the{" "}
+              <span className="capitalize">{downgradeUser?.plan_slug}</span> plan and pays through Stripe. Their
+              subscription record and quotas drop to Free immediately.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="flex items-start gap-3 rounded-md border p-3">
+            <Checkbox
+              id="cancel-stripe-on-downgrade"
+              checked={cancelStripeOnDowngrade}
+              onCheckedChange={(checked) => setCancelStripeOnDowngrade(checked === true)}
+            />
+            <Label htmlFor="cancel-stripe-on-downgrade" className="text-sm font-normal leading-snug">
+              Cancel their Stripe subscription now
+              <span className="block text-xs text-muted-foreground">
+                Leave this unchecked only if you are handling the billing separately — otherwise Stripe keeps charging
+                them.
+              </span>
+            </Label>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={changeRoleMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={changeRoleMutation.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                if (!downgradeUser) return;
+                changeRoleMutation.mutate({
+                  userId: downgradeUser.id,
+                  newRole: "user",
+                  stripeSubscriptionIdToCancel: cancelStripeOnDowngrade
+                    ? downgradeUser.stripe_subscription_id ?? undefined
+                    : undefined,
+                });
+              }}
+            >
+              {changeRoleMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              Downgrade
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -15,6 +15,36 @@ const logStep = (step: string, details?: unknown) => {
   console.log(`[STRIPE-MANAGE] ${step}${detailsStr}`);
 };
 
+type SupabaseClient = ReturnType<typeof createClient>;
+
+const isAdmin = async (supabase: SupabaseClient, userId: string) => {
+  const { data } = await supabase
+    .from("user_roles")
+    .select("role")
+    .eq("user_id", userId)
+    .eq("role", "admin")
+    .maybeSingle();
+  return !!data;
+};
+
+// The caller may only act on Stripe objects recorded against their own subscription.
+// Admins manage other users' subscriptions from the admin dashboard.
+const assertCallerMayManage = async (
+  supabase: SupabaseClient,
+  userId: string,
+  target: { subscription_id?: string; customer_id?: string },
+) => {
+  if (await isAdmin(supabase, userId)) return;
+
+  const ownedRows = supabase.from("user_subscriptions").select("id").eq("user_id", userId);
+  const { data, error } = target.subscription_id
+    ? await ownedRows.eq("stripe_subscription_id", target.subscription_id).maybeSingle()
+    : await ownedRows.eq("stripe_customer_id", target.customer_id ?? "").maybeSingle();
+
+  if (error) throw error;
+  if (!data) throw new Error("Subscription not found");
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -49,6 +79,8 @@ Deno.serve(async (req) => {
 
     const { action, subscription_id, customer_id } = await req.json();
 
+    await assertCallerMayManage(supabase, user.id, { subscription_id, customer_id });
+
     switch (action) {
       case "cancel": {
         if (!subscription_id) {
@@ -71,6 +103,38 @@ Deno.serve(async (req) => {
             success: true, 
             message: "Subscription will be cancelled at period end",
             cancel_at: subscription.cancel_at,
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      case "cancel_now": {
+        if (!subscription_id) {
+          throw new Error("subscription_id is required for cancel_now action");
+        }
+
+        // Admin downgrades revoke access at once, so billing stops at once too
+        const existing = await stripe.subscriptions.retrieve(subscription_id);
+        if (existing.status !== "canceled") {
+          await stripe.subscriptions.cancel(subscription_id);
+        }
+
+        await supabase
+          .from("user_subscriptions")
+          .update({
+            status: "cancelled",
+            cancel_at_period_end: false,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("stripe_subscription_id", subscription_id);
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message:
+              existing.status === "canceled"
+                ? "Subscription was already cancelled in Stripe"
+                : "Subscription cancelled immediately",
           }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
