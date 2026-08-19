@@ -385,7 +385,7 @@ export default function AdminUsers() {
   
   // Plan selection dialog state for subscriber role change
   const [subscriberPlanUser, setSubscriberPlanUser] = useState<UserWithRole | null>(null);
-  const [selectedSubscriberPlan, setSelectedSubscriberPlan] = useState<"pro" | "business">("pro");
+  const [selectedSubscriberPlan, setSelectedSubscriberPlan] = useState<string>("pro");
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { updateQuota, isUpdating, bulkUpdateQuota, isBulkUpdating, bulkDeleteUsers, isBulkDeleting } = useAdminQuotas();
@@ -520,11 +520,103 @@ export default function AdminUsers() {
     return () => clearInterval(interval);
   }, [refetch]);
 
+  // Paid plans an admin can assign to a subscriber
+  const { data: assignablePlans = [] } = useQuery({
+    queryKey: ["admin-assignable-plans"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("subscription_plans")
+        .select("id, name, slug, price_monthly, profile_limit")
+        .eq("is_active", true)
+        .neq("slug", "free")
+        .order("sort_order");
+
+      if (error) throw error;
+      return data || [];
+    },
+  });
+
+  const defaultPlanSlug = assignablePlans[0]?.slug || "pro";
+
   // Role-to-plan mapping for quota updates via DB function
   const roleToPlan: Record<AppRole, string> = {
     user: "free",
     subscriber: "pro",
     admin: "business",
+  };
+
+  const fetchPlanIdBySlug = async (planSlug: string) => {
+    const { data: plan, error } = await supabase
+      .from("subscription_plans")
+      .select("id")
+      .eq("slug", planSlug)
+      .maybeSingle();
+    if (error) throw error;
+    if (!plan) throw new Error(`Plan "${planSlug}" was not found`);
+    return plan.id;
+  };
+
+  const cancelSubscriptionsByIds = async (subscriptionIds: string[]) => {
+    const { error } = await supabase
+      .from("user_subscriptions")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .in("id", subscriptionIds);
+    if (error) throw error;
+  };
+
+  // Point the user's single active subscription at the selected plan
+  const applySubscriptionPlan = async (userId: string, planSlug: string) => {
+    const planId = await fetchPlanIdBySlug(planSlug);
+
+    const { data: activeSubs, error: activeError } = await supabase
+      .from("user_subscriptions")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("status", "active")
+      .order("created_at", { ascending: false });
+    if (activeError) throw activeError;
+
+    const [currentSub, ...duplicateSubs] = activeSubs || [];
+
+    if (currentSub) {
+      const { error } = await supabase
+        .from("user_subscriptions")
+        .update({
+          plan_id: planId,
+          cancel_at_period_end: false,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", currentSub.id);
+      if (error) throw error;
+    } else {
+      const periodStart = new Date();
+      const periodEnd = new Date(periodStart);
+      periodEnd.setFullYear(periodEnd.getFullYear() + 1);
+
+      const { error } = await supabase.from("user_subscriptions").insert({
+        user_id: userId,
+        plan_id: planId,
+        status: "active",
+        current_period_start: periodStart.toISOString(),
+        current_period_end: periodEnd.toISOString(),
+        cancel_at_period_end: false,
+      });
+      if (error) throw error;
+    }
+
+    // Subscription readers use maybeSingle() on the active row, so never leave more than one
+    if (duplicateSubs.length > 0) {
+      await cancelSubscriptionsByIds(duplicateSubs.map((sub) => sub.id));
+    }
+  };
+
+  const cancelActiveSubscriptions = async (userId: string) => {
+    const { error } = await supabase
+      .from("user_subscriptions")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("user_id", userId)
+      .eq("status", "active");
+    if (error) throw error;
   };
 
   // Change user role mutation
@@ -540,7 +632,16 @@ export default function AdminUsers() {
       // Use provided planSlug or fall back to role mapping
       const plan = planSlug || roleToPlan[newRole];
 
-      // Auto-update quotas via SECURITY DEFINER DB function (bypasses RLS)
+      // Keep the subscription record in step with the role, otherwise the plan badge,
+      // the user detail page and useSubscription() all keep reading the stale plan
+      if (newRole === "subscriber") {
+        await applySubscriptionPlan(userId, plan);
+      } else if (newRole === "user") {
+        await cancelActiveSubscriptions(userId);
+      }
+
+      // Auto-update quotas via SECURITY DEFINER DB function (bypasses RLS).
+      // Also covers re-assigning the same plan, where the plan_id trigger does not fire.
       const { error: quotaError } = await supabase.rpc("set_user_quotas_for_plan", {
         p_user_id: userId,
         p_plan_slug: plan,
@@ -549,6 +650,8 @@ export default function AdminUsers() {
     },
     onSuccess: async () => {
       await queryClient.refetchQueries({ queryKey: ["admin-users"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-subscriptions"] });
+      queryClient.invalidateQueries({ queryKey: ["admin-user-subscription"] });
       setSubscriberPlanUser(null);
       toast({
         title: "Role updated",
@@ -1070,20 +1173,23 @@ export default function AdminUsers() {
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
                               onClick={() => changeRoleMutation.mutate({ userId: user.id, newRole: "user" })}
-                              disabled={user.role === "user"}
+                              disabled={user.role === "user" && user.plan_slug === "free"}
                             >
                               <User className="w-4 h-4 mr-2" />
-                              Set as User
+                              Set as Free User
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => {
                                 setSubscriberPlanUser(user);
-                                setSelectedSubscriberPlan("pro");
+                                setSelectedSubscriberPlan(
+                                  user.role === "subscriber" && user.plan_slug && user.plan_slug !== "free"
+                                    ? user.plan_slug
+                                    : defaultPlanSlug
+                                );
                               }}
-                              disabled={user.role === "subscriber"}
                             >
                               <Crown className="w-4 h-4 mr-2" />
-                              Set as Subscriber
+                              {user.role === "subscriber" ? "Change Plan" : "Set as Subscriber"}
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => changeRoleMutation.mutate({ userId: user.id, newRole: "admin" })}
@@ -1302,38 +1408,63 @@ export default function AdminUsers() {
       </AlertDialog>
 
       {/* Plan Selection Dialog for Subscriber Role */}
-      <Dialog open={!!subscriberPlanUser} onOpenChange={() => setSubscriberPlanUser(null)}>
+      <Dialog
+        open={!!subscriberPlanUser}
+        onOpenChange={(open) => {
+          if (!open && !changeRoleMutation.isPending) setSubscriberPlanUser(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Select Subscription Plan</DialogTitle>
+            <DialogTitle>
+              {subscriberPlanUser?.role === "subscriber" ? "Change Subscription Plan" : "Select Subscription Plan"}
+            </DialogTitle>
             <DialogDescription>
-              Choose which plan to assign to <span className="font-semibold">{subscriberPlanUser?.email}</span>. Quotas will be updated based on the selected plan.
+              Choose which plan to assign to <span className="font-semibold">{subscriberPlanUser?.email}</span>. The
+              subscription record and quotas will be updated based on the selected plan.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-3 py-4">
             <Label>Plan</Label>
-            <Select value={selectedSubscriberPlan} onValueChange={(v) => setSelectedSubscriberPlan(v as "pro" | "business")}>
+            <Select value={selectedSubscriberPlan} onValueChange={setSelectedSubscriberPlan}>
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue placeholder="Select a plan" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="pro">
-                  <div className="flex flex-col">
-                    <span>Pro</span>
-                    <span className="text-xs text-muted-foreground">15 profiles, 30 accounts, 500 posts/mo</span>
-                  </div>
-                </SelectItem>
-                <SelectItem value="business">
-                  <div className="flex flex-col">
-                    <span>Business</span>
-                    <span className="text-xs text-muted-foreground">Unlimited everything</span>
-                  </div>
-                </SelectItem>
+                {assignablePlans.map((plan) => (
+                  <SelectItem key={plan.id} value={plan.slug}>
+                    <div className="flex flex-col">
+                      <span>{plan.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {[
+                          plan.profile_limit == null
+                            ? null
+                            : plan.profile_limit === -1
+                              ? "Unlimited profiles"
+                              : `${plan.profile_limit} profiles`,
+                          plan.price_monthly == null ? null : `$${plan.price_monthly}/mo`,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </div>
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
+            <p className="text-xs text-muted-foreground">
+              Current plan:{" "}
+              <span className="font-medium capitalize">{subscriberPlanUser?.plan_slug || "free"}</span>
+            </p>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSubscriberPlanUser(null)}>Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={() => setSubscriberPlanUser(null)}
+              disabled={changeRoleMutation.isPending}
+            >
+              Cancel
+            </Button>
             <Button
               onClick={() => {
                 if (subscriberPlanUser) {
@@ -1344,10 +1475,10 @@ export default function AdminUsers() {
                   });
                 }
               }}
-              disabled={changeRoleMutation.isPending}
+              disabled={changeRoleMutation.isPending || !selectedSubscriberPlan}
             >
               {changeRoleMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Assign {selectedSubscriberPlan === "pro" ? "Pro" : "Business"} Plan
+              Assign {assignablePlans.find((plan) => plan.slug === selectedSubscriberPlan)?.name || "Plan"}
             </Button>
           </DialogFooter>
         </DialogContent>
