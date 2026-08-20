@@ -15,6 +15,7 @@ import {
   SubscriptionSection,
   IntegrationsSection,
 } from "@/components/settings";
+import { HiggsfieldConnectionCard } from "@/components/settings/HiggsfieldConnectionCard";
 
 import {
   User,
@@ -167,6 +168,7 @@ export default function Settings() {
           {/* Integrations Tab */}
           <TabsContent value="integrations" className="mt-6 space-y-6">
             <IntegrationsSection />
+            <HiggsfieldConnectionCard />
           </TabsContent>
         </Tabs>
       </div>

@@ -20,6 +20,7 @@ import { ScrapingServicesSettings } from "@/components/admin/ScrapingServicesSet
 import { AppCredentialsSettings } from "@/components/admin/AppCredentialsSettings";
 import { TikTokAnalyticsSourceCard } from "@/components/admin/settings/TikTokAnalyticsSourceCard";
 import { CdnStorageSettings } from "@/components/admin/settings/CdnStorageSettings";
+import { HiggsfieldIntegrationCard } from "@/components/admin/settings/HiggsfieldIntegrationCard";
 import { AdminAiAgentSection } from "@/components/admin/AdminAiAgentSection";
 import { useFeatureFlags, FLAG_KEY_MAP, DEFAULT_FLAGS } from "@/hooks/useFeatureFlags";
 
@@ -405,6 +406,8 @@ export default function AdminSettings() {
 
             {/* AI Configuration */}
             <AIConfigurationTab />
+
+            <HiggsfieldIntegrationCard />
 
             {/* AI Usage Analytics */}
             <AiUsageAnalytics />

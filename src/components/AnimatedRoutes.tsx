@@ -102,6 +102,7 @@ const ConnectAuthorize = lazyWithRetry(() => import("@/pages/ConnectAuthorize"),
 const McpAuthorize = lazyWithRetry(() => import("@/pages/McpAuthorize"), "McpAuthorize");
 const BrandIntelligencePost = lazyWithRetry(() => import("@/pages/BrandIntelligencePost"), "BrandIntelligencePost");
 const OAuthCallback = lazyWithRetry(() => import("@/pages/OAuthCallback"), "OAuthCallback");
+const AdminHiggsfieldCallback = lazyWithRetry(() => import("@/pages/AdminHiggsfieldCallback"), "AdminHiggsfieldCallback");
 const ApiDocumentation = lazyWithRetry(() => import("@/pages/ApiDocumentation"), "ApiDocumentation");
 const EcommerceWhatsAppApi = lazyWithRetry(() => import("@/pages/docs/EcommerceWhatsAppApi"), "EcommerceWhatsAppApi");
 
@@ -152,6 +153,7 @@ export function AnimatedRoutes() {
         <Route path="/connect/authorize" element={<AnimatedPage><ConnectAuthorize /></AnimatedPage>} />
         <Route path="/mcp/authorize" element={<AnimatedPage><McpAuthorize /></AnimatedPage>} />
         <Route path="/auth/oauth/callback" element={<AnimatedPage><OAuthCallback /></AnimatedPage>} />
+        <Route path="/admin/oauth/higgsfield/callback" element={<AnimatedPage><AdminHiggsfieldCallback /></AnimatedPage>} />
         <Route path="/reset-password" element={<AnimatedPage><ResetPassword /></AnimatedPage>} />
         <Route
           path="/dashboard"
