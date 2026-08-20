@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedErrorResponse, restrictedJsonResponse } from "../_shared/cors.ts";
-import { createEvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
+import { createEvolutionApi, type EvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
+import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
 
 const EVOLUTION_EVENTS: EvolutionEvent[] = [
   "MESSAGES_UPSERT",
@@ -236,9 +237,30 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
   }
 }
 
+// The webhook is the primary activation path; this keeps a dropped delivery from
+// leaving an already-linked session permanently inactive in Postora.
+async function reconcileAccountConnection(reconciliation: {
+  admin: any;
+  api: EvolutionApi;
+  account: { id: string; platform_user_id: string; is_active: boolean };
+  instanceName: string;
+  state: string;
+}): Promise<void> {
+  const { admin, api, account, instanceName } = reconciliation;
+  const connection = reconciliation.state.toLowerCase();
+  if (connection === "open") {
+    if (account.is_active && !account.platform_user_id.startsWith("pending_")) return;
+    await syncEvolutionAccountConnection(admin, account, connection, await api.fetchInstance(instanceName));
+    return;
+  }
+  if (connection === "close" && account.is_active) {
+    await syncEvolutionAccountConnection(admin, account, connection, null);
+  }
+}
+
 async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
-  await findOwnedAccount(admin, userId, body.social_account_id);
+  const account = await findOwnedAccount(admin, userId, body.social_account_id);
   const instance = await findInstance(admin, body.social_account_id);
   const api = createEvolutionApi();
   let qr = instance.last_qr;
@@ -250,6 +272,7 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   const state = extractState(statePayload);
   if (state) {
     await admin.from("whatsapp_evolution_instances").update({ last_connection_state: state }).eq("social_account_id", body.social_account_id);
+    await reconcileAccountConnection({ admin, api, account, instanceName: instance.instance_name, state });
   }
   return { success: true, social_account_id: body.social_account_id, qr, state };
 }

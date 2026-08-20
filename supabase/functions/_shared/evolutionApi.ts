@@ -46,6 +46,7 @@ export interface EvolutionApi {
   createInstance(input: EvolutionCreateInstanceInput): Promise<unknown>;
   connect(instanceName: string): Promise<unknown>;
   connectionState(instanceName: string): Promise<unknown>;
+  fetchInstance(instanceName: string): Promise<unknown>;
   logout(instanceName: string): Promise<unknown>;
   deleteInstance(instanceName: string): Promise<unknown>;
   sendText(instanceName: string, input: { number: string; text: string }): Promise<EvolutionSendResult>;
@@ -129,6 +130,12 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
     }),
     connect: (instanceName) => request(`/instance/connect/${encodeURIComponent(instanceName)}`),
     connectionState: (instanceName) => request(`/instance/connectionState/${encodeURIComponent(instanceName)}`),
+    // connectionState reports only the state, so the linked number and profile name
+    // have to come from here. The route always answers with a list.
+    fetchInstance: async (instanceName) => {
+      const payload = await request(`/instance/fetchInstances?instanceName=${encodeURIComponent(instanceName)}`);
+      return Array.isArray(payload) ? payload[0] ?? null : payload;
+    },
     logout: (instanceName) => request(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
     deleteInstance: (instanceName) => request(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
     sendText: async (instanceName, input) => sendResult(await request(`/message/sendText/${encodeURIComponent(instanceName)}`, {

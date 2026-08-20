@@ -3,6 +3,7 @@ import { runInBackground } from "../_shared/background.ts";
 import { buildMessagePayload, dispatchMessageEvent } from "../_shared/n8nMessagingDispatch.ts";
 import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts";
 import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
+import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -204,19 +205,7 @@ async function handleConnectionUpdate(admin: any, account: EvolutionAccount, dat
     .update({ last_connection_state: state })
     .eq("social_account_id", account.id);
 
-  if (state === "connecting") return;
-  if (state === "close") {
-    await admin.from("social_accounts").update({ is_active: false }).eq("id", account.id);
-    return;
-  }
-  if (state !== "open") return;
-
-  const realJid = data?.wuid || data?.wid || data?.user?.id || data?.jid;
-  const updates: Record<string, unknown> = { is_active: true };
-  if (typeof realJid === "string" && realJid && account.platform_user_id.startsWith("pending_")) {
-    updates.platform_user_id = realJid;
-  }
-  await admin.from("social_accounts").update(updates).eq("id", account.id);
+  await syncEvolutionAccountConnection(admin, account, state, data);
 }
 
 async function handleQrUpdate(admin: any, socialAccountId: string, data: any): Promise<void> {
