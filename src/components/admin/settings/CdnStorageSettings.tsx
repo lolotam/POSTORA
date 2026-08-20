@@ -29,6 +29,33 @@ export function CdnStorageSettings() {
       return { cloudinaryOnly: Number(row.cloudinary_only), both: Number(row.both), openinaryOnly: Number(row.openinary_only) };
     },
   });
+  // The credentials under test live in the edge-function environment, not in
+  // this form, so the check has to happen server-side.
+  const testing = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke("openinary-test");
+      if (error) throw error;
+      return data as { ok: boolean; message: string; serverUrl?: string };
+    },
+    onSuccess: (result) => {
+      // The endpoint reports the server uploads actually use, which comes from
+      // the edge environment. The field below is a record of that value, not a
+      // control over it, so the two can drift apart silently. Say so, because a
+      // reachable server at the wrong address still means media lands somewhere
+      // the delivery URLs do not point.
+      const configured = (serverUrl || openinary?.serverUrl || "").replace(/\/+$/, "");
+      const effective = (result.serverUrl || "").replace(/\/+$/, "");
+      const mismatch = result.ok && configured && effective && configured !== effective;
+      toast({
+        title: result.ok ? (mismatch ? "Reachable, but not the server configured here" : "Openinary reachable") : "Openinary unreachable",
+        description: mismatch
+          ? `Uploads use ${effective}. This form says ${configured}. Update the field to match, or change OPENINARY_SERVER_URL on the edge functions.`
+          : result.message,
+        variant: result.ok && !mismatch ? undefined : "destructive",
+      });
+    },
+    onError: (error) => toast({ title: "Connection test failed", description: error.message, variant: "destructive" }),
+  });
   const saving = useMutation({
     mutationFn: async (value: CdnStorageConfig) => {
       const { error } = await supabase.from("app_settings").upsert({ key: "cdn_storage", value, updated_at: new Date().toISOString() }, { onConflict: "key" });
@@ -48,9 +75,8 @@ export function CdnStorageSettings() {
   };
   const countsAvailable = !countsLoading && !countsError && !!counts;
   const canSave = useMemo(() => Boolean(current && countsAvailable && (!openinary?.enabled || !serverUrl || /^https?:\/\/[^\\s]+$/i.test(serverUrl))), [current, countsAvailable, openinary, serverUrl]);
+  if (configError) return <Card><CardContent className="p-6 text-destructive">Could not load CDN settings: {configError.message || "Unknown error"}</CardContent></Card>;
   if (isLoading || !current) return <Card><CardContent className="p-6">Loading CDN settings…</CardContent></Card>;
-  if (isLoading) return <Card><CardContent className="p-6">Loading CDN settings...</CardContent></Card>;
-  if (configError || !current) return <Card><CardContent className="p-6 text-destructive">Could not load CDN settings: {configError?.message || "Unknown error"}</CardContent></Card>;
   return <Card>
     <CardHeader><CardTitle>CDN storage</CardTitle></CardHeader>
     <CardContent className="space-y-6">
@@ -58,8 +84,12 @@ export function CdnStorageSettings() {
         {(["cloudinary", "openinary"] as const).map((provider) => <div className="flex items-center justify-between py-2" key={provider}><Label className="capitalize">{provider}</Label><Switch checked={providers.includes(provider)} onCheckedChange={(checked) => toggleProvider(provider, checked)} disabled={!countsAvailable || provider === "cloudinary" && counts!.cloudinaryOnly > 0 && providers.includes("cloudinary")} /></div>)}
       </div>
       <div><p className="text-sm font-medium">Read preference</p><p className="text-xs text-muted-foreground mb-3">This is the provider the app serves when it is ready.</p><RadioGroup value={current.read_preference ?? "cloudinary"} onValueChange={(value) => update({ read_preference: value as "cloudinary" | "openinary" })}>{["cloudinary", "openinary"].map((value) => <div className="flex items-center gap-2" key={value}><RadioGroupItem value={value} id={`cdn-read-${value}`} /><Label htmlFor={`cdn-read-${value}`} className="capitalize">{value}</Label></div>)}</RadioGroup></div>
-      <div className="rounded-lg border p-4 space-y-2"><p className="font-medium">Retirement gate</p><p className="text-sm">Cloudinary-only: {counts.cloudinaryOnly.toLocaleString()} {counts.cloudinaryOnly > 0 && <span className="text-destructive">← must reach 0</span>}</p><p className="text-sm">Both providers: {counts.both.toLocaleString()}</p><p className="text-sm">Openinary-only: {counts.openinaryOnly.toLocaleString()}</p><p className="text-xs text-muted-foreground">Disable Cloudinary means stop writing to it, never stop reading it.</p></div>
-      <div className="space-y-2"><Label>Openinary server URL</Label><Input value={serverUrl || openinary?.serverUrl || ""} onChange={(event) => { setServerUrl(event.target.value); update({ openinary: { ...openinary, serverUrl: event.target.value } }); }} placeholder="https://openinary.example" /><p className="text-xs text-muted-foreground">Uploads use the edge-function server URL; this value must match it.</p><Button variant="outline" onClick={() => toast({ title: "Connection test unavailable", description: "The edge connection-test endpoint is not present in this checkout." })}>Test connection</Button></div>
+      <div className="rounded-lg border p-4 space-y-2"><p className="font-medium">Retirement gate</p>
+        {countsLoading && <p className="text-sm text-muted-foreground">Loading provider counts…</p>}
+        {!countsLoading && !counts && <p className="text-sm text-destructive">Provider counts unavailable. Saving is disabled until they load.</p>}
+        {counts && <><p className="text-sm">Cloudinary-only: {counts.cloudinaryOnly.toLocaleString()} {counts.cloudinaryOnly > 0 && <span className="text-destructive">← must reach 0</span>}</p><p className="text-sm">Both providers: {counts.both.toLocaleString()}</p><p className="text-sm">Openinary-only: {counts.openinaryOnly.toLocaleString()}</p></>}
+        <p className="text-xs text-muted-foreground">Disable Cloudinary means stop writing to it, never stop reading it.</p></div>
+      <div className="space-y-2"><Label>Openinary server URL</Label><Input value={serverUrl || openinary?.serverUrl || ""} onChange={(event) => { setServerUrl(event.target.value); update({ openinary: { ...openinary, serverUrl: event.target.value } }); }} placeholder="https://openinary.example" /><p className="text-xs text-muted-foreground">Uploads use the edge-function server URL; this value must match it.</p><Button variant="outline" disabled={testing.isPending} onClick={() => testing.mutate()}>{testing.isPending ? "Testing…" : "Test connection"}</Button></div>
       <Button disabled={!canSave || saving.isPending} onClick={() => saving.mutate(current)}>Save CDN settings</Button>
     </CardContent>
   </Card>;

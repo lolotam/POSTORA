@@ -49,8 +49,11 @@ CREATE POLICY "Admins can view all media file providers"
   ON public.media_file_providers FOR SELECT
   USING (public.has_role(auth.uid(), 'admin'));
 
+-- "both" must stay double-quoted: BOTH is a reserved word in Postgres (TRIM(BOTH ...)),
+-- and an unquoted column of that name is a syntax error that fails the whole migration.
+-- Quoting keeps the identifier lowercase, so PostgREST still exposes it as `both`.
 CREATE OR REPLACE FUNCTION public.get_cdn_provider_counts()
-RETURNS TABLE(cloudinary_only bigint, both bigint, openinary_only bigint)
+RETURNS TABLE(cloudinary_only bigint, "both" bigint, openinary_only bigint)
 LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
   WITH versions AS (
     SELECT media_file_id, object_version,
@@ -97,11 +100,11 @@ VALUES (
   '{
     "write_policy": { "providers": ["cloudinary"], "required": ["cloudinary"] },
     "read_preference": "cloudinary",
-    "cloudinary": { "enabled": true, "cloud_name": "dur1soa8n" },
+    "cloudinary": { "enabled": true, "cloudName": "dur1soa8n" },
     "openinary": {
       "enabled": false,
-      "server_url": "https://openinary.walidmohamed.com",
-      "folder_prefix": "postora.cloud"
+      "serverUrl": "https://openinary.walidmohamed.com",
+      "folderPrefix": "postora.cloud"
     }
   }'::jsonb,
   'Dual-cloud CDN storage configuration'
