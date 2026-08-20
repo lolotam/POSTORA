@@ -11,7 +11,6 @@ import { QuickReplyPicker, SlashCommandSuggestions } from "./QuickReplyPicker";
 import { InteractiveMessageBuilder } from "./InteractiveMessageBuilder";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { supabase } from "@/integrations/supabase/client";
-import { buildPostoraFileName } from "@/lib/postoraFileName";
 import { AiConversationModeSelect } from "./AiConversationModeSelect";
 
 interface ConversationDetailProps {
@@ -101,16 +100,25 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
     if (!mediaPreview) return;
     setSendingMedia(true);
     try {
-      // Upload to Supabase storage first
+      // Unified uploader (Openinary-priority, Cloudinary fallback) — public CDN URL for WhatsApp/Meta fetch
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
-      const ext = mediaPreview.file.name.split(".").pop() || "bin";
-      const path = `whatsapp-media/${await buildPostoraFileName(user.id, ext)}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(path, mediaPreview.file);
-      if (uploadError) throw uploadError;
 
-      const { data: urlData } = supabase.storage.from("media").getPublicUrl(uploadData.path);
-      const mediaUrl = urlData.publicUrl;
+      const reader = new FileReader();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(mediaPreview.file);
+      });
+      const isGif = mediaPreview.file.type === "image/gif" || mediaPreview.file.name.toLowerCase().endsWith(".gif");
+      const uploadFileType = mediaPreview.file.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
+
+      const { data: uploadData, error: uploadError } = await supabase.functions.invoke("cloudinary-upload", {
+        body: { fileData: base64, fileName: mediaPreview.file.name, fileType: uploadFileType },
+      });
+      if (uploadError) throw uploadError;
+      if (!uploadData?.success || !uploadData?.url) throw new Error(uploadData?.error || "Upload failed");
+      const mediaUrl = uploadData.url as string;
 
       // Determine media type for WhatsApp
       let mediaType = "document";

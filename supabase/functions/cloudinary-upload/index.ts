@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getOpeninaryConfig, openinaryTarget, uploadToOpeninary } from "../_shared/openinary.ts";
+import { getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,12 +36,25 @@ interface UploadResponse {
   errors?: string[];
 }
 
-type CdnPolicy = { providers: string[]; required: string[] };
+type CdnPolicy = { providers: string[]; required: string[]; readPreference: string; openinaryEnabled: boolean };
 async function getCdnPolicy(db: any): Promise<CdnPolicy> {
   const { data } = await db.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
-  const policy = data?.value?.write_policy;
-  return { providers: Array.isArray(policy?.providers) && policy.providers.length ? policy.providers : ["cloudinary"], required: Array.isArray(policy?.required) && policy.required.length ? policy.required : ["cloudinary"] };
+  const value = data?.value || {};
+  const policy = value?.write_policy;
+  return {
+    providers: Array.isArray(policy?.providers) && policy.providers.length ? policy.providers : ["cloudinary"],
+    required: Array.isArray(policy?.required) && policy.required.length ? policy.required : ["cloudinary"],
+    readPreference: typeof value?.read_preference === "string" ? value.read_preference : "cloudinary",
+    openinaryEnabled: value?.openinary?.enabled === true,
+  };
 }
+
+// Canonical MIME per extension — Openinary rejects application/octet-stream uploads.
+const MIME_BY_EXT: Record<string, string> = {
+  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
+  avif: "image/avif", heic: "image/heic", heif: "image/heif", psd: "image/vnd.adobe.photoshop",
+  mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm", mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav",
+};
 
 // Sanitize email for folder name (replace special chars)
 function sanitizeEmailForFolder(email: string): string {
@@ -147,21 +160,26 @@ Deno.serve(async (req) => {
 
     // Use admin client for DB ops if service-role caller, otherwise normal client
     const dbClient = (req as any)._supabaseAdmin || supabase;
+    // Provider-state writes (media_file_providers) always go through the admin client:
+    // RLS on that table must never be able to fail an upload after bytes are stored.
+    const dbAdmin = (req as any)._supabaseAdmin || createClient(supabaseUrl, serviceRoleKey);
     const userFolder = sanitizeEmailForFolder(userEmail);
     const dailyFolder = getTodayFolder();
     const todayDate = dailyFolder; // For database
     
     console.log(`User ${userId} (${userEmail}) requesting Cloudinary upload to folder: ${userFolder}/${dailyFolder}`);
 
-    // Get Cloudinary credentials
+    // Get Cloudinary credentials (optional when Openinary can serve the upload)
     const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
     const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
     const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
+    const cloudinaryUsable = !!(cloudName && apiKey && apiSecret);
+    const openinaryReadyForGate = !!getOpeninaryConfig();
 
-    if (!cloudName || !apiKey || !apiSecret) {
-      console.error("Missing Cloudinary credentials");
+    if (!cloudinaryUsable && !openinaryReadyForGate) {
+      console.error("No storage provider available: missing Cloudinary credentials and Openinary config");
       return new Response(
-        JSON.stringify({ success: false, error: "Cloudinary temporarily unavailable", retryable: true }),
+        JSON.stringify({ success: false, error: "Storage temporarily unavailable", retryable: true }),
         { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -177,9 +195,6 @@ Deno.serve(async (req) => {
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
-
-    // Determine the upload source - Cloudinary accepts URLs directly
-    const uploadSource = externalUrl || fileData;
 
     // Folder structure: media/{user_email_sanitized}/{YYYY-MM-DD}/
     const folder = subfolder
@@ -292,60 +307,131 @@ Deno.serve(async (req) => {
     const fileExtension = fileName.includes(".") ? fileName.split(".").pop()!.toLowerCase() : "";
     const rawSuffix = fileType === "raw" && fileExtension ? `.${fileExtension}` : "";
     const uniquePublicId = `postora_${dailyFolder}_${userId}_${sequencePart}${rawSuffix}`;
-    
-    console.log(`Uploading ${fileType}: ${fileName} to folder: ${folder}/${uniquePublicId}`);
-
-    // Build signature string - use overwrite to allow replacing duplicates
-    const signatureParams = [
-      `folder=${folder}`,
-      `overwrite=true`,
-      `public_id=${uniquePublicId}`,
-      `timestamp=${timestamp}`,
-    ].sort().join("&");
-
-    // Create SHA-1 signature
-    const encoder = new TextEncoder();
-    const data = encoder.encode(signatureParams + apiSecret);
-    const hashBuffer = await crypto.subtle.digest("SHA-1", data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const signature = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-
-    console.log(`Generated signature for public_id: ${folder}/${uniquePublicId}`);
-
-    // Determine upload endpoint
-    const resourceType = fileType === "video" ? "video" : fileType === "raw" ? "raw" : "image";
-    const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
-
-    // Prepare form data - Cloudinary accepts both base64 and URLs
-    const formData = new FormData();
-    formData.append("file", uploadSource!);
-    formData.append("api_key", apiKey);
-    formData.append("timestamp", timestamp.toString());
-    formData.append("signature", signature);
-    formData.append("folder", folder);
-    formData.append("public_id", uniquePublicId);
-    formData.append("overwrite", "true");
-
-    // Upload to Cloudinary
-    console.log(`Uploading to Cloudinary: ${uploadUrl}`);
-    const uploadResponse = await fetch(uploadUrl, {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text();
-      console.error("Cloudinary upload failed:", errorText);
-      return new Response(
-        JSON.stringify({ success: false, error: `Upload failed: ${errorText}` }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
-
-    const result = await uploadResponse.json();
-    console.log(`Cloudinary upload successful: ${result.secure_url}`);
 
     const cdnPolicy = await getCdnPolicy(dbClient);
+    const openinaryConfig = getOpeninaryConfig();
+    const openinaryUsable = cdnPolicy.openinaryEnabled && !!openinaryConfig;
+    // Openinary-first ordering (priority provider), dropping providers that cannot run.
+    const orderedProviders: string[] = [];
+    if (cdnPolicy.providers.includes("openinary") && openinaryUsable) orderedProviders.push("openinary");
+    for (const p of cdnPolicy.providers) {
+      if (p === "openinary") { if (!openinaryUsable) continue; }
+      if (p === "cloudinary" && !cloudinaryUsable) continue;
+      orderedProviders.push(p);
+    }
+    const effectiveProviders = [...new Set(orderedProviders.length ? orderedProviders : (cloudinaryUsable ? ["cloudinary"] : openinaryUsable ? ["openinary"] : []))];
+
+    console.log(`Uploading ${fileType}: ${fileName} to folder: ${folder}/${uniquePublicId} via providers: [${effectiveProviders.join(", ")}]`);
+
+    // Materialise payload bytes once so every provider stores identical content.
+    let uploadSource = externalUrl || ""; // Cloudinary accepts remote URLs or base64 data URIs
+    let payloadBytes: Uint8Array | null = null;
+    if (fileData) {
+      const b64Part = fileData.includes(",") ? fileData.split(",")[1] : fileData;
+      uploadSource = fileData.startsWith("data:") ? fileData : `data:application/octet-stream;base64,${b64Part}`;
+      if (effectiveProviders.includes("openinary")) {
+        payloadBytes = Uint8Array.from(atob(b64Part), (c) => c.charCodeAt(0));
+      }
+    } else if (externalUrl && effectiveProviders.includes("openinary")) {
+      try {
+        const res = await fetch(externalUrl);
+        if (res.ok) {
+          payloadBytes = new Uint8Array(await res.arrayBuffer());
+          if (!incomingFileSize) incomingFileSize = payloadBytes.length;
+        } else {
+          console.warn(`[cloudinary-upload] externalUrl fetch for Openinary failed: HTTP ${res.status}`);
+        }
+      } catch (e) {
+        console.warn(`[cloudinary-upload] externalUrl fetch for Openinary failed:`, e);
+      }
+    }
+
+    const objectExt = fileExtension || (fileType === "video" ? "mp4" : fileType === "gif" ? "gif" : "jpg");
+    const openinaryBaseName = fileType === "raw" && fileExtension ? uniquePublicId.slice(0, -(fileExtension.length + 1)) : uniquePublicId;
+    const openinaryFallbackKey = `${openinaryConfig?.folderPrefix || "postora.cloud"}/${folder}/${uniquePublicId}.${objectExt}`;
+
+    const storedIn: string[] = [];
+    const errors: string[] = [];
+    let cloudinaryResult: any = null;
+    let openinaryPath: string | null = null;
+    let openinaryUrl: string | null = null;
+
+    for (const provider of effectiveProviders) {
+      try {
+        if (provider === "openinary" && openinaryConfig && payloadBytes) {
+          const target = openinaryTarget(`${folder}/${uniquePublicId}`, openinaryConfig.folderPrefix);
+          const uploadMime = MIME_BY_EXT[objectExt] || (fileType === "video" ? "video/mp4" : `image/${objectExt}`);
+          const openResult = await uploadBytesToOpeninary(openinaryConfig, payloadBytes, target.folder, openinaryBaseName, objectExt, uploadMime, payloadBytes.length);
+          if (openResult.success && openResult.path) {
+            openinaryPath = openResult.path;
+            openinaryUrl = openResult.url || openinaryDeliveryUrl(openinaryConfig, openResult.path);
+            storedIn.push("openinary");
+            console.log(`Openinary upload successful: ${openinaryPath}`);
+          } else {
+            errors.push(`openinary: ${openResult.error || "unknown error"}`);
+            console.error("Openinary upload failed:", openResult.error);
+          }
+        } else if (provider === "cloudinary") {
+          // Build signature string - use overwrite to allow replacing duplicates
+          const signatureParams = [
+            `folder=${folder}`,
+            `overwrite=true`,
+            `public_id=${uniquePublicId}`,
+            `timestamp=${timestamp}`,
+          ].sort().join("&");
+
+          // Create SHA-1 signature
+          const encoder = new TextEncoder();
+          const data = encoder.encode(signatureParams + apiSecret);
+          const hashBuffer = await crypto.subtle.digest("SHA-1", data);
+          const hashArray = Array.from(new Uint8Array(hashBuffer));
+          const signature = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+
+          // Determine upload endpoint
+          const resourceType = fileType === "video" ? "video" : fileType === "raw" ? "raw" : "image";
+          const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
+
+          // Prepare form data - Cloudinary accepts both base64 and URLs
+          const formData = new FormData();
+          formData.append("file", uploadSource!);
+          // Non-null: the cloudinary branch is only reached when cloudinaryUsable was true.
+          formData.append("api_key", apiKey!);
+          formData.append("timestamp", timestamp.toString());
+          formData.append("signature", signature);
+          formData.append("folder", folder);
+          formData.append("public_id", uniquePublicId);
+          formData.append("overwrite", "true");
+
+          console.log(`Uploading to Cloudinary: ${uploadUrl}`);
+          const uploadResponse = await fetch(uploadUrl, { method: "POST", body: formData });
+          if (uploadResponse.ok) {
+            cloudinaryResult = await uploadResponse.json();
+            storedIn.push("cloudinary");
+            console.log(`Cloudinary upload successful: ${cloudinaryResult.secure_url}`);
+          } else {
+            const errorText = await uploadResponse.text();
+            errors.push(`cloudinary: HTTP ${uploadResponse.status} ${errorText.slice(0, 200)}`);
+            console.error("Cloudinary upload failed:", errorText);
+          }
+        }
+      } catch (e: any) {
+        errors.push(`${provider}: ${e?.message || String(e)}`);
+        console.error(`${provider} upload error:`, e);
+      }
+    }
+
+    // Resilient contract: success when at least one provider stored the bytes.
+    if (storedIn.length === 0) {
+      return new Response(JSON.stringify({ success: false, partial: false, storedIn, errors }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    const preferOpeninaryRead = cdnPolicy.readPreference === "openinary";
+    const primaryUrl = preferOpeninaryRead
+      ? (openinaryUrl || cloudinaryResult?.secure_url)
+      : (cloudinaryResult?.secure_url || openinaryUrl);
+    const primaryPublicId: string | undefined = cloudinaryResult?.public_id ?? undefined;
+    const bytesOut: number | undefined = cloudinaryResult?.bytes ?? payloadBytes?.length ?? incomingFileSize ?? undefined;
+
     // Store reference in database with platform/account tracking
     let mediaFileId: string | null = null;
     if (!skipMediaFiles) {
@@ -353,25 +439,27 @@ Deno.serve(async (req) => {
         .from("media_files")
         .insert({
           user_id: userId,
-          file_path: result.secure_url,
+          file_path: primaryUrl,
           file_type: fileType,
-          file_size: result.bytes,
+          file_size: bytesOut ?? null,
           mime_type:
             fileType === "video"
               ? "video/mp4"
               : fileType === "gif"
                 ? "image/gif"
-                : `image/${result.format}`,
-          storage_bucket: "cloudinary",
-          cloudinary_public_id: result.public_id,
+                : fileType === "raw"
+                  ? "application/octet-stream"
+                  : `image/${cloudinaryResult?.format || objectExt}`,
+          storage_bucket: cloudinaryResult ? "cloudinary" : "openinary",
+          cloudinary_public_id: primaryPublicId ?? null,
           platforms: platforms,
           social_account_ids: socialAccountIds,
           upload_date: todayDate,
           metadata: {
-            width: result.width || null,
-            height: result.height || null,
-            format: result.format || null,
-            duration: result.duration || null,
+            width: cloudinaryResult?.width || null,
+            height: cloudinaryResult?.height || null,
+            format: cloudinaryResult?.format || objectExt,
+            duration: cloudinaryResult?.duration || null,
             original_filename: cleanFileName,
           },
         })
@@ -390,52 +478,52 @@ Deno.serve(async (req) => {
       console.log(`Media file record created with ID: ${mediaFileId}`);
 
       const objectVersion = 1;
-      const cloudinaryKey = result.public_id as string;
-      const providerRows = cdnPolicy.providers.map((provider) => ({ media_file_id: mediaFileId, provider, object_version: objectVersion, object_key: provider === "cloudinary" ? cloudinaryKey : `${getOpeninaryConfig()?.folderPrefix || "postora.cloud"}/${cloudinaryKey}.${fileExtension || result.format}`, status: "pending", bytes: result.bytes, mime_type: result.resource_type === "video" ? `video/${result.format}` : `image/${result.format}` }));
-      const { error: providerInsertError } = await dbClient.from("media_file_providers").insert(providerRows);
+      const providerRows = effectiveProviders.map((provider) => ({
+        media_file_id: mediaFileId,
+        provider,
+        object_version: objectVersion,
+        object_key: provider === "cloudinary"
+          ? (cloudinaryResult?.public_id ?? `${folder}/${uniquePublicId}`)
+          : (openinaryPath ?? openinaryFallbackKey),
+        status: "pending",
+        bytes: bytesOut ?? null,
+        mime_type: fileType === "video" ? "video/mp4" : fileType === "gif" ? "image/gif" : `image/${cloudinaryResult?.format || objectExt}`,
+      }));
+      const { error: providerInsertError } = await dbAdmin.from("media_file_providers").insert(providerRows);
       if (providerInsertError) return new Response(JSON.stringify({ success: false, error: `Provider state error: ${providerInsertError.message}` }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
-      const storedIn: string[] = ["cloudinary"];
-      const errors: string[] = [];
-      const { error: cloudinaryStatusError } = await dbClient.from("media_file_providers").update({ status: "ready", delivery_url: result.secure_url }).eq("media_file_id", mediaFileId).eq("provider", "cloudinary").eq("object_version", objectVersion);
-      if (cloudinaryStatusError) throw new Error(`Cloudinary provider status update failed: ${cloudinaryStatusError.message}`);
-      if (cdnPolicy.providers.includes("openinary")) {
-        const config = getOpeninaryConfig();
-        if (!config) errors.push("openinary: unavailable");
-        else {
-          const target = openinaryTarget(cloudinaryKey, config.folderPrefix);
-          const openResult = await uploadToOpeninary(config, result.secure_url, target.folder, target.baseName, fileExtension || result.format, result.bytes);
-          if (openResult.success && openResult.path === `${target.folder}/${target.baseName}.${fileExtension || result.format}`) {
-            storedIn.push("openinary");
-            const { error: openinaryStatusError } = await dbClient.from("media_file_providers").update({ status: "ready", object_key: openResult.path, delivery_url: openResult.url }).eq("media_file_id", mediaFileId).eq("provider", "openinary").eq("object_version", objectVersion);
-            if (openinaryStatusError) errors.push(`openinary status update: ${openinaryStatusError.message}`);
-          } else {
-            const error = openResult.error || "object key mismatch"; errors.push(`openinary: ${error}`);
-            await dbClient.from("media_file_providers").update({ status: "failed", error }).eq("media_file_id", mediaFileId).eq("provider", "openinary").eq("object_version", objectVersion);
-          }
-        }
+      if (cloudinaryResult) {
+        const { error: cloudinaryStatusError } = await dbAdmin.from("media_file_providers").update({ status: "ready", delivery_url: cloudinaryResult.secure_url }).eq("media_file_id", mediaFileId).eq("provider", "cloudinary").eq("object_version", objectVersion);
+        if (cloudinaryStatusError) errors.push(`cloudinary status update: ${cloudinaryStatusError.message}`);
       }
-      const requiredReady = cdnPolicy.required.every((provider) => storedIn.includes(provider));
-      // Contract: a required provider success with a non-required provider failure is a successful partial upload; the failed provider row is the durable retry record. Return 500 only when nothing was stored.
-      if (!requiredReady || storedIn.length === 0) return new Response(JSON.stringify({ success: false, partial: false, storedIn, errors }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      (result as any)._storedIn = storedIn; (result as any)._errors = errors;
+      if (openinaryPath && openinaryUrl) {
+        const { error: openinaryStatusError } = await dbAdmin.from("media_file_providers").update({ status: "ready", object_key: openinaryPath, delivery_url: openinaryUrl }).eq("media_file_id", mediaFileId).eq("provider", "openinary").eq("object_version", objectVersion);
+        if (openinaryStatusError) errors.push(`openinary status update: ${openinaryStatusError.message}`);
+      }
+      // Durable retry record for any attempted-but-failed provider.
+      for (const provider of effectiveProviders) {
+        if (storedIn.includes(provider)) continue;
+        const providerError = errors.find((e) => e.startsWith(`${provider}:`)) || "upload failed";
+        await dbAdmin.from("media_file_providers").update({ status: "failed", error: providerError }).eq("media_file_id", mediaFileId).eq("provider", provider).eq("object_version", objectVersion);
+      }
     }
 
+    const requiredSatisfied = cdnPolicy.required.every((provider) => storedIn.includes(provider));
     const response: UploadResponse = {
       success: true,
-      url: result.secure_url,
-      publicId: result.public_id,
+      url: primaryUrl,
+      publicId: primaryPublicId,
       cloudName: cloudName,
       mediaFileId: mediaFileId ?? undefined, // Database UUID (omitted if skipped)
-      width: result.width,
-      height: result.height,
-      format: result.format,
-      bytes: result.bytes,
-      duration: result.duration, // For videos
+      width: cloudinaryResult?.width,
+      height: cloudinaryResult?.height,
+      format: cloudinaryResult?.format || objectExt,
+      bytes: bytesOut,
+      duration: cloudinaryResult?.duration, // For videos
       isDuplicate: false,
-      storedIn: (result as any)._storedIn || ["cloudinary"],
-      partial: !!(result as any)._errors?.length && ((result as any)._storedIn || []).includes("cloudinary"),
-      errors: (result as any)._errors,
+      storedIn,
+      partial: !requiredSatisfied || errors.length > 0,
+      errors: errors.length ? errors : undefined,
     };
 
     return new Response(JSON.stringify(response), {

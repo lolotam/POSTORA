@@ -9,6 +9,7 @@ const corsHeaders = {
 interface DeleteRequest {
   publicIds: string[]; // Cloudinary public IDs to delete
   resourceType?: "image" | "video";
+  mediaFileIds?: string[]; // media_files IDs to delete across all providers (openinary-primary rows)
 }
 
 interface DeleteResponse {
@@ -65,7 +66,67 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { publicIds, resourceType = "image" }: DeleteRequest = await req.json();
+    const { publicIds, resourceType = "image", mediaFileIds }: DeleteRequest = await req.json();
+
+    // mediaFileIds path: resolve every stored provider object for each media row and
+    // delete from the right cloud (used for openinary-primary rows that have no
+    // Cloudinary public_id).
+    if (mediaFileIds && mediaFileIds.length > 0) {
+      const deletedIds: string[] = [];
+      const failedIds: string[] = [];
+      const errors: string[] = [];
+      const config = getOpeninaryConfig();
+
+      const { data: providerRows, error: providerError } = await supabase
+        .from("media_file_providers")
+        .select("id, media_file_id, provider, object_key, object_version, status")
+        .in("media_file_id", mediaFileIds)
+        .neq("status", "deleted");
+
+      if (providerError) {
+        return new Response(JSON.stringify({ success: false, error: `Provider lookup failed: ${providerError.message}` }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      for (const mediaFileId of mediaFileIds) {
+        let anyFailure = false;
+        for (const row of (providerRows || []).filter((r: any) => r.media_file_id === mediaFileId)) {
+          try {
+            if (row.provider === "openinary") {
+              if (!config) { errors.push(`openinary: unavailable`); anyFailure = true; continue; }
+              const removed = await deleteFromOpeninary(config, row.object_key);
+              if (!removed.success) { errors.push(`openinary: ${removed.error}`); anyFailure = true; continue; }
+            } else if (row.provider === "cloudinary") {
+              const timestamp = Math.floor(Date.now() / 1000);
+              const signatureParams = [`public_id=${row.object_key}`, `timestamp=${timestamp}`].sort().join("&");
+              const encoder = new TextEncoder();
+              const signData = encoder.encode(signatureParams + apiSecret);
+              const hashBuffer = await crypto.subtle.digest("SHA-1", signData);
+              const signature = Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
+              const formData = new FormData();
+              formData.append("public_id", row.object_key);
+              formData.append("api_key", apiKey);
+              formData.append("timestamp", timestamp.toString());
+              formData.append("signature", signature);
+              const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, { method: "POST", body: formData });
+              const result = await response.json();
+              if (result.result !== "ok" && result.result !== "not found") { errors.push(`cloudinary: ${result?.error?.message || response.status}`); anyFailure = true; continue; }
+            }
+            await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" }).eq("id", row.id);
+          } catch (err: any) {
+            errors.push(`${row.provider}: ${err?.message || String(err)}`);
+            anyFailure = true;
+          }
+        }
+        if (anyFailure) failedIds.push(mediaFileId); else deletedIds.push(mediaFileId);
+      }
+
+      return new Response(JSON.stringify({
+        success: failedIds.length === 0,
+        deletedMediaFileIds: deletedIds,
+        failedMediaFileIds: failedIds.length ? failedIds : undefined,
+        errors: errors.length ? errors : undefined,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     if (!publicIds || publicIds.length === 0) {
       return new Response(

@@ -1249,12 +1249,60 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Generate URLs for media files
+    // Generate URLs for media files (provider-aware: prefer the delivery URL of the
+    // read-preference provider, fall back to the other provider, then legacy paths).
     const mediaUrls: string[] = [];
+    let readPreference = "cloudinary";
+    try {
+      const { data: cdnSetting } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", "cdn_storage")
+        .maybeSingle();
+      if (typeof cdnSetting?.value?.read_preference === "string") {
+        readPreference = cdnSetting.value.read_preference;
+      }
+    } catch (e) {
+      console.warn("[process-post] cdn_storage read failed, defaulting read_preference to cloudinary:", e);
+    }
+
+    // Provider state per media file (single query for the whole post).
+    let providerRowsByMedia: Record<string, { provider: string; status: string; delivery_url: string | null }[]> = {};
+    if (mediaFiles.length > 0) {
+      try {
+        const { data: providerRows } = await supabase
+          .from("media_file_providers")
+          .select("media_file_id, provider, status, delivery_url")
+          .in("media_file_id", mediaFiles.map((f) => f.id))
+          .eq("object_version", 1);
+        if (providerRows) {
+          for (const row of providerRows) {
+            (providerRowsByMedia[row.media_file_id] ||= []).push(row);
+          }
+        }
+      } catch (e) {
+        console.warn("[process-post] media_file_providers lookup failed, falling back to file_path:", e);
+        providerRowsByMedia = {};
+      }
+    }
+
+    const providerPreferenceOrder = readPreference === "openinary"
+      ? ["openinary", "cloudinary"]
+      : ["cloudinary", "openinary"];
+
     for (const file of mediaFiles) {
-      if (file.storage_bucket === "cloudinary") {
-        // Cloudinary files: file_path contains the full URL
-        console.log(`Using Cloudinary URL for ${file.id}: ${file.file_path}`);
+      const providers = providerRowsByMedia[file.id] || [];
+      let resolvedUrl: string | null = null;
+      for (const provider of providerPreferenceOrder) {
+        const ready = providers.find((p) => p.provider === provider && p.status === "ready" && !!p.delivery_url);
+        if (ready) { resolvedUrl = ready.delivery_url!; break; }
+      }
+      if (resolvedUrl) {
+        console.log(`Using provider-resolved URL for ${file.id}: ${resolvedUrl}`);
+        mediaUrls.push(resolvedUrl);
+      } else if (file.storage_bucket === "cloudinary" || file.storage_bucket === "openinary" || file.file_path.startsWith("http")) {
+        // CDN files: file_path contains the full URL
+        console.log(`Using file_path URL for ${file.id}: ${file.file_path}`);
         mediaUrls.push(file.file_path);
       } else {
         // Supabase storage: create signed URL

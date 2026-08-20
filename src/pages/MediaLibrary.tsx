@@ -59,6 +59,8 @@ import {
   CommandItem,
 } from "@/components/ui/command";
 import { useToast } from "@/hooks/use-toast";
+import { useCdnConfig } from "@/hooks/useCdnConfig";
+import { resolveMediaPublicUrl, type MediaProviderRow } from "@/lib/mediaUrl";
 import { useLogMediaOperation } from "@/hooks/useMediaOperationsHistory";
 import {
   DropdownMenu,
@@ -296,33 +298,31 @@ export default function MediaLibrary() {
     enabled: !!effectiveUserId,
   });
 
-  // Fetch media files
+  // Fetch media files (provider-aware URLs: prefer read_preference provider delivery URL)
+  const { data: cdnConfig } = useCdnConfig();
   const { data: mediaFiles = [], isLoading, refetch } = useQuery({
-    queryKey: ["media-files", effectiveUserId, mediaToAccountsMap],
+    queryKey: ["media-files", effectiveUserId, mediaToAccountsMap, cdnConfig?.read_preference],
     queryFn: async () => {
       if (!effectiveUserId) return [];
       const { data, error } = await supabase
         .from("media_files")
-        .select("*")
+        .select("*, media_file_providers(provider, object_version, status, delivery_url)")
         .eq("user_id", effectiveUserId)
         .order("created_at", { ascending: false });
       if (error) throw error;
 
+      const storageResolver = (bucket: string, path: string) => {
+        const { data: urlData } = supabase.storage.from(bucket || "media").getPublicUrl(path);
+        return urlData.publicUrl;
+      };
+
       const filesWithUrls = data.map((file) => {
-        let publicUrl: string;
-        if (file.storage_bucket === "cloudinary") {
-          if (file.file_path.startsWith("http")) {
-            publicUrl = file.file_path;
-          } else if (file.metadata && typeof file.metadata === "object" && "cloudinary_url" in file.metadata) {
-            publicUrl = (file.metadata as { cloudinary_url?: string }).cloudinary_url || "";
-          } else {
-            // Fallback to file_path if it's the only option, even if it doesn't look like a URL
-            publicUrl = file.file_path;
-          }
-        } else {
-          const { data: urlData } = supabase.storage.from("media").getPublicUrl(file.file_path);
-          publicUrl = urlData.publicUrl;
-        }
+        const publicUrl = resolveMediaPublicUrl(
+          file,
+          storageResolver,
+          (file.media_file_providers as MediaProviderRow[]) || [],
+          { read_preference: cdnConfig?.read_preference },
+        );
 
         // Debug log for troubleshooting broken images
         if (import.meta.env.DEV) {
@@ -517,6 +517,11 @@ export default function MediaLibrary() {
         await supabase.functions.invoke("cloudinary-delete", {
           body: { publicIds: [file.cloudinary_public_id], resourceType: file.file_type },
         });
+      } else if (file.storage_bucket === "openinary" || file.file_path?.startsWith("http")) {
+        // Openinary-primary / CDN rows: delete via provider state by media id
+        await supabase.functions.invoke("cloudinary-delete", {
+          body: { mediaFileIds: [file.id] },
+        });
       } else {
         await supabase.storage.from("media").remove([file.file_path]);
       }
@@ -545,7 +550,8 @@ export default function MediaLibrary() {
   const handleBulkDelete = async () => {
     const filesToDelete = mediaFiles.filter((f) => selectedFiles.has(f.id));
     const cloudinaryFiles = filesToDelete.filter((f) => f.storage_bucket === "cloudinary" && f.cloudinary_public_id);
-    const supabaseFiles = filesToDelete.filter((f) => f.storage_bucket !== "cloudinary");
+    const providerOnlyFiles = filesToDelete.filter((f) => f.storage_bucket !== "cloudinary" && (f.storage_bucket === "openinary" || f.file_path?.startsWith("http")));
+    const supabaseFiles = filesToDelete.filter((f) => f.storage_bucket !== "cloudinary" && !providerOnlyFiles.includes(f));
 
     const startTime = Date.now();
     let operationId: string | null = null;
@@ -572,6 +578,11 @@ export default function MediaLibrary() {
         if (videoIds.length > 0) {
           await supabase.functions.invoke("cloudinary-delete", { body: { publicIds: videoIds, resourceType: "video" } });
         }
+      }
+      if (providerOnlyFiles.length > 0) {
+        await supabase.functions.invoke("cloudinary-delete", {
+          body: { mediaFileIds: providerOnlyFiles.map((f) => f.id) },
+        });
       }
       if (supabaseFiles.length > 0) {
         await supabase.storage.from("media").remove(supabaseFiles.map((f) => f.file_path));

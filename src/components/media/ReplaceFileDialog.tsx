@@ -102,33 +102,64 @@ export function ReplaceFileDialog({
 
       setProgress(30);
 
-      // Upload to Cloudinary
-      const formData = new FormData();
-      formData.append("file", newFile);
-      formData.append("resourceType", file.file_type);
+      // Upload the replacement through the unified uploader (Openinary-priority, JSON body)
+      const reader = new FileReader();
+      const base64 = await new Promise<string>((resolve, reject) => {
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(newFile);
+      });
+      const isGif = newFile.type === "image/gif" || newFile.name.toLowerCase().endsWith(".gif");
+      const uploadFileType = newFile.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
 
       const { data: uploadData, error: uploadError } = await supabase.functions.invoke(
         "cloudinary-upload",
-        { body: formData }
+        {
+          body: {
+            fileData: base64,
+            fileName: newFile.name,
+            fileType: uploadFileType,
+          },
+        }
       );
 
       if (uploadError) throw uploadError;
+      if (!uploadData?.success || !uploadData?.mediaFileId) {
+        throw new Error(uploadData?.error || "Upload failed");
+      }
 
       setProgress(70);
 
-      // Update the database record with new file info
+      // Point the original media_files row at the new upload: copy the new row's
+      // provider-backed fields over, then delete the new redundant row so the
+      // file keeps its original id (posts reference it by id).
+      const { data: newFileRow, error: newFileFetchError } = await supabase
+        .from("media_files")
+        .select("file_path, cloudinary_public_id, storage_bucket, file_size, mime_type, metadata")
+        .eq("id", uploadData.mediaFileId)
+        .single();
+      if (newFileFetchError) throw newFileFetchError;
+
       const { error: updateError } = await supabase
         .from("media_files")
         .update({
-          file_path: uploadData.secure_url,
-          cloudinary_public_id: uploadData.public_id,
-          file_size: newFile.size,
-          mime_type: newFile.type,
-          storage_bucket: "cloudinary",
+          file_path: newFileRow.file_path,
+          cloudinary_public_id: newFileRow.cloudinary_public_id,
+          file_size: newFileRow.file_size ?? newFile.size,
+          mime_type: newFileRow.mime_type ?? newFile.type,
+          storage_bucket: newFileRow.storage_bucket ?? "cloudinary",
+          metadata: { ...(file.metadata as Record<string, unknown> | null), ...(newFileRow.metadata as Record<string, unknown> | null) },
+          current_object_version: 1,
         })
         .eq("id", file.id);
 
       if (updateError) throw updateError;
+
+      // Re-point the new upload's provider rows at the original media id, then
+      // remove the shell row created for the replacement upload.
+      await supabase.from("media_file_providers").delete().eq("media_file_id", file.id);
+      await supabase.from("media_file_providers").update({ media_file_id: file.id }).eq("media_file_id", uploadData.mediaFileId);
+      await supabase.from("media_files").delete().eq("id", uploadData.mediaFileId);
 
       setProgress(100);
 
@@ -138,7 +169,7 @@ export function ReplaceFileDialog({
       });
 
       if (operationId) {
-        await completeOperation(operationId, uploadData.secure_url, Date.now() - startTime);
+        await completeOperation(operationId, uploadData.url, Date.now() - startTime);
       }
 
       onReplaced();

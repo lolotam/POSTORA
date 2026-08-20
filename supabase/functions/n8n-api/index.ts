@@ -1709,12 +1709,38 @@ async function handleGetMediaById(req: Request, supabase: any, userId: string, m
     return apiError(req, 'Media file not found or not owned by the authenticated user.', 404, 'MEDIA_NOT_FOUND');
   }
 
+  // Resolve the preferred delivery URL from provider state (openinary-first per
+  // cdn_storage.read_preference), falling back to file_path.
+  let publicUrl: string = media.file_path;
+  let readPreference = 'cloudinary';
+  try {
+    const [{ data: providerRows }, { data: cdnSetting }] = await Promise.all([
+      supabase
+        .from('media_file_providers')
+        .select('provider, status, delivery_url')
+        .eq('media_file_id', mediaId)
+        .eq('object_version', 1),
+      supabase.from('app_settings').select('value').eq('key', 'cdn_storage').maybeSingle(),
+    ]);
+    if (typeof cdnSetting?.value?.read_preference === 'string') {
+      readPreference = cdnSetting.value.read_preference;
+    }
+    const order = readPreference === 'openinary' ? ['openinary', 'cloudinary'] : ['cloudinary', 'openinary'];
+    for (const provider of order) {
+      const ready = (providerRows || []).find((p: any) => p.provider === provider && p.status === 'ready' && !!p.delivery_url);
+      if (ready) { publicUrl = ready.delivery_url; break; }
+    }
+  } catch (e) {
+    console.warn('Provider-aware URL resolution failed, using file_path:', e);
+  }
+
   return new Response(
     JSON.stringify({
       success: true,
       media: {
         id: media.id,
         file_path: media.file_path,
+        public_url: publicUrl,
         file_type: media.file_type,
         file_size: media.file_size,
         mime_type: media.mime_type,

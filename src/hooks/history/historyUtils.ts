@@ -34,7 +34,8 @@ export const deleteMediaFiles = async (mediaFileIds: string[]) => {
   if (fetchError || !mediaFiles || mediaFiles.length === 0) return;
 
   const cloudinaryFiles = mediaFiles.filter(f => f.storage_bucket === "cloudinary" && f.cloudinary_public_id);
-  const supabaseFiles = mediaFiles.filter(f => f.storage_bucket !== "cloudinary");
+  const providerOnlyFiles = mediaFiles.filter(f => f.storage_bucket !== "cloudinary" && (f.storage_bucket === "openinary" || f.file_path?.startsWith("http")));
+  const supabaseFiles = mediaFiles.filter(f => f.storage_bucket !== "cloudinary" && !providerOnlyFiles.includes(f));
 
   if (cloudinaryFiles.length > 0) {
     try {
@@ -43,6 +44,12 @@ export const deleteMediaFiles = async (mediaFileIds: string[]) => {
       if (imageIds.length > 0) await supabase.functions.invoke("cloudinary-delete", { body: { publicIds: imageIds, resourceType: "image" } });
       if (videoIds.length > 0) await supabase.functions.invoke("cloudinary-delete", { body: { publicIds: videoIds, resourceType: "video" } });
     } catch (err) { console.error("Error deleting from Cloudinary:", err); }
+  }
+
+  if (providerOnlyFiles.length > 0) {
+    try {
+      await supabase.functions.invoke("cloudinary-delete", { body: { mediaFileIds: providerOnlyFiles.map(f => f.id) } });
+    } catch (err) { console.error("Error deleting provider-backed media:", err); }
   }
 
   if (supabaseFiles.length > 0) {

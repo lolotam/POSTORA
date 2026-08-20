@@ -1,6 +1,5 @@
 import { useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { buildPostoraFileName } from "@/lib/postoraFileName";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -106,16 +105,26 @@ export function usePostRetry() {
       if (!user) throw new Error("Not authenticated");
 
       const newMediaFiles = await Promise.all(retryMediaFiles.map(async (retryMediaFile) => {
-        const fileExt = retryMediaFile.name.split(".").pop() || "bin";
-        const fileName = `${user.id}/${await buildPostoraFileName(user.id, fileExt)}`;
-        const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(fileName, retryMediaFile, { cacheControl: "3600", upsert: false });
-        if (uploadError) throw uploadError;
-
+        // Unified uploader (Openinary-priority, Cloudinary fallback) — no direct Storage writes
+        const reader = new FileReader();
+        const base64 = await new Promise<string>((resolve, reject) => {
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(retryMediaFile);
+        });
         const isGif = retryMediaFile.type === "image/gif" || retryMediaFile.name.toLowerCase().endsWith(".gif");
         const fileType = retryMediaFile.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
-        const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
-          user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
-        }).select().single();
+
+        const { data: uploadData, error: uploadError } = await supabase.functions.invoke("cloudinary-upload", {
+          body: { fileData: base64, fileName: retryMediaFile.name, fileType },
+        });
+        if (uploadError) throw uploadError;
+        if (!uploadData?.success || !uploadData?.mediaFileId) throw new Error(uploadData?.error || "Upload failed");
+
+        const { data: newMediaFile, error: mediaError } = await supabase.from("media_files")
+          .select("*")
+          .eq("id", uploadData.mediaFileId)
+          .single();
         if (mediaError) throw mediaError;
         return newMediaFile;
       }));
