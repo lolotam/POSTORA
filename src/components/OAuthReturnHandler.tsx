@@ -1,11 +1,17 @@
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import {
+  higgsfieldCallbackRescuePath,
+  shouldForwardSocialOAuthToProfiles,
+} from "@/lib/higgsfieldOAuthReturn";
 
 /**
  * Handles OAuth redirects and ensures logged-in users are directed to the dashboard.
  * - Redirects authenticated users from landing page to dashboard
  * - Handles Facebook OAuth callback storage
+ * - Forwards Instagram-style code+state returns to /profiles
+ * - Must not intercept Higgsfield (Clerk) callbacks
  */
 export function OAuthReturnHandler() {
   const { user, isLoading } = useAuth();
@@ -15,6 +21,14 @@ export function OAuthReturnHandler() {
   useEffect(() => {
     if (isLoading) return;
     if (!user) return;
+
+    const params = new URLSearchParams(location.search);
+
+    const higgsfieldRescue = higgsfieldCallbackRescuePath(location.pathname, params);
+    if (higgsfieldRescue) {
+      navigate(higgsfieldRescue, { replace: true });
+      return;
+    }
 
     // Check for pending Facebook OAuth flow
     const hasPendingFacebook =
@@ -26,10 +40,7 @@ export function OAuthReturnHandler() {
       return;
     }
 
-    // Check for pending Instagram Business Login OAuth callback (code + state in URL)
-    const params = new URLSearchParams(location.search);
-    const hasIgCallback = params.get("code") && params.get("state");
-    if (hasIgCallback && location.pathname !== "/profiles") {
+    if (shouldForwardSocialOAuthToProfiles(location.pathname, params)) {
       navigate("/profiles" + location.search, { replace: true });
       return;
     }
@@ -39,7 +50,7 @@ export function OAuthReturnHandler() {
     if (publicPaths.includes(location.pathname)) {
       navigate("/dashboard", { replace: true });
     }
-  }, [isLoading, user, location.pathname, navigate]);
+  }, [isLoading, user, location.pathname, location.search, navigate]);
 
   return null;
 }

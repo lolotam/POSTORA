@@ -11,6 +11,10 @@ import { CookieConsent } from "@/components/CookieConsent";
 import { OTPVerification, PasswordResetOptions } from "@/components/auth";
 import { Eye, EyeOff, ArrowLeft, Loader2, Mail, Shield } from "lucide-react";
 import { z } from "zod";
+import {
+  HIGGSFIELD_CALLBACK_PATH,
+  isHiggsfieldOAuthCallback,
+} from "@/lib/higgsfieldOAuthReturn";
 
 const authSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -94,6 +98,11 @@ export default function Auth() {
       if (oauthRedirect) {
         sessionStorage.removeItem("oauth_redirect_after_login");
         window.location.href = oauthRedirect;
+        return;
+      }
+
+      if (isHiggsfieldOAuthCallback(searchParams)) {
+        navigate(HIGGSFIELD_CALLBACK_PATH + window.location.search, { replace: true });
         return;
       }
 

@@ -5,6 +5,7 @@ export interface AIProvider {
   api_endpoint: string;
   api_key_env_var: string;
   api_type: string;
+  auth_type?: string;
   supports_streaming: boolean;
   is_active: boolean;
 }

@@ -1,5 +1,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { restrictedCorsHeaders } from '../_shared/cors.ts';
+import { HiggsfieldAuthError, getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
+import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -100,6 +102,16 @@ serve(async (req) => {
         let errorMessage: string | null = null;
 
         try {
+          if (provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield') {
+            await getValidAccessToken(supabase);
+            const mcp = await HiggsfieldMcpClient.create(supabase);
+            await mcp.callTool('models_explore', { action: 'list', type: 'image', limit: 1 });
+            latency = Date.now() - startTime;
+            success = true;
+            return new Response(JSON.stringify({ success, latency, error: null, provider_code: provider.provider_code }), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
           // Try env var first, then DB fallback
           let apiKey = Deno.env.get(provider.api_key_env_var);
           if (!apiKey) {
@@ -130,7 +142,7 @@ serve(async (req) => {
           latency = Date.now() - startTime;
           success = true;
         } catch (e: any) {
-          errorMessage = e.message;
+          errorMessage = e instanceof HiggsfieldAuthError ? e.message : e.message;
           latency = Date.now() - startTime;
         }
 

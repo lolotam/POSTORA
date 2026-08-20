@@ -10,7 +10,7 @@ export default function AdminHiggsfieldCallback() {
   const started = useRef(false);
   const [phase, setPhase] = useState<Phase>("working");
   const [message, setMessage] = useState("Completing the Higgsfield connection…");
-  const destination = params.get("return_to") || "/settings";
+  const fallbackDestination = params.get("return_to") || "/settings";
   useEffect(() => {
     if (started.current) return;
     started.current = true;
@@ -27,14 +27,22 @@ export default function AdminHiggsfieldCallback() {
       .then(({ data, error }) => {
         if (error || data?.error) throw error ?? new Error(data.error);
         setPhase("success");
-        setMessage("Higgsfield is connected.");
-        window.setTimeout(() => navigate(destination, { replace: true }), 900);
+        setMessage(
+          data?.account_id ? `Connected as ${data.account_id}.` : "Higgsfield is connected.",
+        );
+        const next =
+          typeof data?.return_to === "string" && data.return_to.startsWith("/") && !data.return_to.startsWith("//")
+            ? data.return_to
+            : data?.scope_kind === "platform"
+              ? "/admin/settings"
+              : fallbackDestination;
+        window.setTimeout(() => navigate(next, { replace: true }), 900);
       })
       .catch((error) => {
         setPhase("error");
         setMessage(error instanceof Error ? error.message : "Could not complete the connection.");
       });
-  }, [params, navigate, destination]);
+  }, [params, navigate, fallbackDestination]);
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
       <div className="w-full max-w-md space-y-4 rounded-xl border p-8 text-center">
@@ -55,7 +63,7 @@ export default function AdminHiggsfieldCallback() {
         <p className="text-sm text-muted-foreground">{message}</p>
         {phase === "error" && (
           <Button asChild>
-            <Link to={destination}>Back to settings</Link>
+            <Link to={fallbackDestination}>Back to settings</Link>
           </Button>
         )}
       </div>

@@ -4,10 +4,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { HIGGSFIELD_CALLBACK_PATH } from "@/lib/higgsfieldOAuthReturn";
 
 export function HiggsfieldConnectionCard() {
   const { toast } = useToast();
   const [connected, setConnected] = useState(false);
+  const [account, setAccount] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const invoke = async (body: Record<string, unknown>) => {
     const { data, error } = await supabase.functions.invoke("higgsfield-oauth", { body });
@@ -16,8 +18,15 @@ export function HiggsfieldConnectionCard() {
   };
   useEffect(() => {
     void invoke({ action: "status", scope_kind: "user" })
-      .then((data) => setConnected(!!data?.connected))
-      .catch(() => setConnected(false));
+      .then((data) => {
+        const user = data?.user ?? data;
+        setConnected(!!(data?.connected ?? user?.connected));
+        setAccount(user?.account_email ?? data?.account_id ?? null);
+      })
+      .catch(() => {
+        setConnected(false);
+        setAccount(null);
+      });
   }, []);
   const connect = async () => {
     setBusy(true);
@@ -25,7 +34,8 @@ export function HiggsfieldConnectionCard() {
       const data = await invoke({
         action: "authorize_url",
         scope_kind: "user",
-        redirect_uri: `${window.location.origin}/admin/oauth/higgsfield/callback`,
+        redirect_uri: `${window.location.origin}${HIGGSFIELD_CALLBACK_PATH}`,
+        return_to: "/settings",
       });
       if (typeof data?.url !== "string" || !data.url.trim()) throw new Error("Higgsfield did not return an authorization URL");
       window.location.assign(data.url);
@@ -43,6 +53,7 @@ export function HiggsfieldConnectionCard() {
     try {
       await invoke({ action: "disconnect", scope_kind: "user" });
       setConnected(false);
+      setAccount(null);
       toast({ title: "Higgsfield disconnected" });
     } catch (e) {
       toast({
@@ -65,6 +76,9 @@ export function HiggsfieldConnectionCard() {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        {connected && account && (
+          <p className="text-sm text-muted-foreground">Connected as {account}</p>
+        )}
         <Button
           onClick={() => void (connected ? disconnect() : connect())}
           variant={connected ? "outline" : "default"}

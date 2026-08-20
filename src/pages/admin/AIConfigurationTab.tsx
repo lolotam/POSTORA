@@ -23,6 +23,10 @@ import { toast } from 'sonner';
 import type { AIProvider, AIModel } from '@/hooks/ai-config/types';
 import { supabase } from '@/integrations/supabase/client';
 
+function isOAuthProvider(provider: AIProvider | null) {
+  return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
+}
+
 export function AIConfigurationTab() {
   const queryClient = useQueryClient();
   const { data: aiConfig, isLoading } = useAIConfiguration();
@@ -253,8 +257,16 @@ export function AIConfigurationTab() {
             <DialogDescription>{selectedProvider?.api_type} • {selectedProvider?.api_endpoint}</DialogDescription>
           </DialogHeader>
 
-          {/* API Key Section */}
-          {selectedProvider && (
+          {/* API Key Section — OAuth providers (Higgsfield) connect via the Hub card, not a pasted key. */}
+          {selectedProvider && isOAuthProvider(selectedProvider) && (
+            <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/30">
+              <p className="text-xs text-muted-foreground">
+                Higgsfield uses OAuth, not an API key. Connect it from the Higgsfield Hub card on this
+                page, then use Test and Sync models.
+              </p>
+            </div>
+          )}
+          {selectedProvider && !isOAuthProvider(selectedProvider) && (
             <div className="space-y-2 p-3 rounded-lg border border-border bg-muted/30">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <KeyRound className="w-3.5 h-3.5" />

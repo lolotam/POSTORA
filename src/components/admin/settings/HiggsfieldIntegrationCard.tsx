@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, Link2, Loader2, RefreshCw, Unlink } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { HIGGSFIELD_CALLBACK_PATH } from "@/lib/higgsfieldOAuthReturn";
 import { useToast } from "@/hooks/use-toast";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,7 +22,7 @@ type Status = {
   expires_at?: string | null;
   scope?: string | null;
 };
-const callback = () => `${window.location.origin}/admin/oauth/higgsfield/callback`;
+const callback = () => `${window.location.origin}${HIGGSFIELD_CALLBACK_PATH}`;
 
 export function HiggsfieldIntegrationCard({ onCatalogChanged }: { onCatalogChanged?: () => void }) {
   const { toast } = useToast();
@@ -37,7 +38,14 @@ export function HiggsfieldIntegrationCard({ onCatalogChanged }: { onCatalogChang
   // than silencing exhaustive-deps: `invoke` closes over nothing that changes.
   const load = useCallback(async () => {
     try {
-      setStatus(await invoke({ action: "status", scope_kind: "platform" }));
+      const data = await invoke({ action: "status", scope_kind: "platform" });
+      const platform = data?.platform ?? data;
+      setStatus({
+        connected: !!(data?.connected ?? platform?.connected),
+        account_id: data?.account_id ?? platform?.account_id ?? null,
+        expires_at: data?.expires_at ?? platform?.expires_at ?? null,
+        scope: data?.scope ?? platform?.scope ?? null,
+      });
     } catch {
       setStatus({ connected: false });
     }
@@ -53,6 +61,7 @@ export function HiggsfieldIntegrationCard({ onCatalogChanged }: { onCatalogChang
           action: "authorize_url",
           scope_kind: "platform",
           redirect_uri: callback(),
+          return_to: "/admin/settings",
         });
         if (typeof data?.url !== "string" || !data.url.trim()) throw new Error("Higgsfield did not return an authorization URL");
         window.location.assign(data.url);
