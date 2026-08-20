@@ -6,11 +6,12 @@ import type {
   DefaultModel,
   CategoryDefaults,
   CategoryFallbacks,
+  CategoryFallbacks2,
   AIConfigData,
   ModelCategory,
 } from './ai-config/types';
 
-export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, AIConfigData, ModelCategory };
+export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, AIConfigData, ModelCategory };
 
 function parseDefault(val: unknown): DefaultModel | null {
   if (!val || typeof val !== 'object') return null;
@@ -22,13 +23,53 @@ function parseDefault(val: unknown): DefaultModel | null {
 const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null };
 const emptyCategoryFallbacks: CategoryFallbacks = { chat: null, image: null, tts: null, video: null, search: null, stt: null };
 
+const MODEL_CATEGORIES: ModelCategory[] = ['chat', 'image', 'tts', 'video', 'search', 'stt'];
+
+export interface ParsedModelSettings {
+  defaultModel: DefaultModel | null;
+  categoryDefaults: CategoryDefaults;
+  categoryFallbacks: CategoryFallbacks;
+  categoryFallbacks2: CategoryFallbacks2;
+}
+
+/**
+ * Route system_settings rows to their tier.
+ *
+ * Suffix order matters: "_fallback_2" is matched before "_fallback", because the
+ * longer key ends with the shorter one and would otherwise be swallowed by it.
+ */
+export function parseSettingsRows(rows: { key: string; value: unknown }[]): ParsedModelSettings {
+  const out: ParsedModelSettings = {
+    defaultModel: null,
+    categoryDefaults: { ...emptyCategoryDefaults },
+    categoryFallbacks: { ...emptyCategoryFallbacks },
+    categoryFallbacks2: { ...emptyCategoryFallbacks },
+  };
+
+  for (const row of rows) {
+    const parsed = parseDefault(row.value);
+    if (row.key === 'default_ai_model') {
+      out.defaultModel = parsed;
+      continue;
+    }
+    for (const category of MODEL_CATEGORIES) {
+      if (row.key === `default_ai_model_${category}_fallback_2`) out.categoryFallbacks2[category] = parsed;
+      else if (row.key === `default_ai_model_${category}_fallback`) out.categoryFallbacks[category] = parsed;
+      else if (row.key === `default_ai_model_${category}`) out.categoryDefaults[category] = parsed;
+      else continue;
+      break;
+    }
+  }
+  return out;
+}
+
 export function useAIConfiguration() {
   return useQuery({
     queryKey: ['ai-config'],
     queryFn: async (): Promise<AIConfigData> => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        return { providers: [], models: [], defaultModel: null, categoryDefaults: { ...emptyCategoryDefaults }, categoryFallbacks: { ...emptyCategoryFallbacks } };
+        return { providers: [], models: [], defaultModel: null, categoryDefaults: { ...emptyCategoryDefaults }, categoryFallbacks: { ...emptyCategoryFallbacks }, categoryFallbacks2: { ...emptyCategoryFallbacks } };
       }
 
       const [providersResult, modelsResult, settingsResult] = await Promise.all([
@@ -41,28 +82,8 @@ export function useAIConfiguration() {
       const models = (modelsResult.data || []) as unknown as AIModel[];
       const settings = (settingsResult.data || []) as any[];
 
-      let defaultModel: DefaultModel | null = null;
-      const categoryDefaults: CategoryDefaults = { ...emptyCategoryDefaults };
-      const categoryFallbacks: CategoryFallbacks = { ...emptyCategoryFallbacks };
-
-      for (const s of settings) {
-        const parsed = parseDefault(s.value);
-        if (s.key === 'default_ai_model') defaultModel = parsed;
-        else if (s.key === 'default_ai_model_chat') categoryDefaults.chat = parsed;
-        else if (s.key === 'default_ai_model_image') categoryDefaults.image = parsed;
-        else if (s.key === 'default_ai_model_tts') categoryDefaults.tts = parsed;
-        else if (s.key === 'default_ai_model_video') categoryDefaults.video = parsed;
-        else if (s.key === 'default_ai_model_search') categoryDefaults.search = parsed;
-        else if (s.key === 'default_ai_model_stt') categoryDefaults.stt = parsed;
-        else if (s.key === 'default_ai_model_chat_fallback') categoryFallbacks.chat = parsed;
-        else if (s.key === 'default_ai_model_image_fallback') categoryFallbacks.image = parsed;
-        else if (s.key === 'default_ai_model_tts_fallback') categoryFallbacks.tts = parsed;
-        else if (s.key === 'default_ai_model_video_fallback') categoryFallbacks.video = parsed;
-        else if (s.key === 'default_ai_model_search_fallback') categoryFallbacks.search = parsed;
-        else if (s.key === 'default_ai_model_stt_fallback') categoryFallbacks.stt = parsed;
-      }
-
-      return { providers, models, defaultModel, categoryDefaults, categoryFallbacks };
+      const parsed = parseSettingsRows(settings as { key: string; value: unknown }[]);
+      return { providers, models, ...parsed };
     },
     retry: false,
   });
@@ -93,6 +114,36 @@ export function useSetFallbackModel() {
         .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() } as any, { onConflict: 'key' } as any);
       if (error) throw new Error(error.message);
       return { success: true, provider_code, model_id, category };
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
+  });
+}
+
+export function useSetFallback2Model() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ provider_code, model_id, category }: { provider_code: string; model_id: string; category: ModelCategory }) => {
+      const key = `default_ai_model_${category}_fallback_2`;
+      const { error } = await supabase
+        .from('system_settings' as any)
+        .upsert({ key, value: { provider_code, model_id }, updated_at: new Date().toISOString() } as any, { onConflict: 'key' } as any);
+      if (error) throw new Error(error.message);
+      return { success: true, provider_code, model_id, category };
+    },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
+  });
+}
+
+export function useSetModelAdminParams() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ model_row_id, admin_params }: { model_row_id: string; admin_params: Record<string, string | number | boolean> }) => {
+      const { error } = await supabase
+        .from('ai_models' as any)
+        .update({ admin_params } as any)
+        .eq('id', model_row_id);
+      if (error) throw new Error(error.message);
+      return { success: true };
     },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['ai-config'] }); },
   });
