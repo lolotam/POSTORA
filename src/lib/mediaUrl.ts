@@ -14,7 +14,10 @@ export interface MediaFileUrlRow {
   file_path: string | null | undefined;
   storage_bucket?: string | null | undefined;
   cloudinary_public_id?: string | null | undefined;
+  current_object_version?: number | null | undefined;
 }
+export interface MediaProviderRow { object_version?: number | null; provider: string; status: string; delivery_url?: string | null }
+export interface MediaUrlConfig { read_preference?: string; primaryCdn?: string }
 
 /**
  * Function that turns a Supabase-Storage object path into a public URL.
@@ -39,8 +42,26 @@ export type StorageUrlResolver = (bucket: string, path: string) => string;
 export function resolveMediaPublicUrl(
   row: MediaFileUrlRow,
   storageResolver?: StorageUrlResolver,
+  providerRows?: MediaProviderRow[],
+  config?: MediaUrlConfig,
 ): string {
   const filePath = row?.file_path;
+
+  if (providerRows) {
+    // Default both sides to 1 (the column's DB default) so a caller that forgot to
+    // SELECT `current_object_version` still matches version-1 rows. Comparing against
+    // a raw `undefined` would silently find nothing and fall through to the legacy
+    // branch — which looks like it works and serves the wrong URL after a rename or
+    // an authoritative delete.
+    const currentVersion = row?.current_object_version ?? 1;
+    const current = providerRows.filter((candidate) => (candidate.object_version ?? 1) === currentVersion);
+    if (current.length > 0) {
+      const preferred = config?.read_preference ?? config?.primaryCdn;
+      const selected = current.find((candidate) => candidate.provider === preferred && candidate.status === "ready")
+        ?? current.find((candidate) => candidate.status === "ready");
+      return selected?.delivery_url ?? "";
+    }
+  }
 
   // 1. Cloudinary — file_path IS the complete secure_url.
   const isCloudinary =

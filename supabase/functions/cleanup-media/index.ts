@@ -1,5 +1,6 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -245,6 +246,16 @@ Deno.serve(async (req) => {
           if (!cloudinaryDeleted) {
             result.errors.push(`Cloudinary delete failed: ${file.cloudinary_public_id}`);
           }
+        }
+
+        const { data: providerRows } = await supabase.from("media_file_providers").select("id, object_key, provider").eq("media_file_id", file.id).neq("status", "deleted");
+        for (const row of providerRows || []) {
+          if (row.provider !== "openinary") continue;
+          try {
+            const config = getOpeninaryConfig(); if (!config) throw new Error("Openinary unavailable");
+            await deleteFromOpeninary(config, row.object_key);
+            await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "cleanup-media" }).eq("id", row.id);
+          } catch (error) { result.errors.push(`openinary delete failed: ${error instanceof Error ? error.message : String(error)}`); }
         }
 
         // Delete from database

@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { deleteFromOpeninary, getOpeninaryConfig, openinaryTarget, uploadToOpeninary } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -133,6 +134,52 @@ Deno.serve(async (req) => {
     formData.append("timestamp", timestamp.toString());
     formData.append("signature", signature);
 
+    // Mirror to Openinary BEFORE renaming on Cloudinary.
+    //
+    // Cloudinary's native rename is atomic, but it kills the old secure_url the
+    // moment it lands — and the resolver keeps serving the old object_version until
+    // the swap commits below. Doing the Openinary upload after the rename would sit
+    // a full download+re-POST inside that window, so a large file would 404 on the
+    // live CDN for as long as the mirror took. The bytes are identical either side
+    // of a rename, so we can stage the new Openinary object from the OLD URL first
+    // and leave the old version completely intact while we do it.
+    //
+    // What remains is a single DB round-trip between the rename and the swap.
+    const { data: cdnSetting } = await supabase
+      .from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
+    const providers = cdnSetting?.value?.write_policy?.providers || ["cloudinary"];
+
+    const renamedFormat =
+      (file.file_path?.split(".").pop() || "").toLowerCase().split(/[?#]/)[0] || undefined;
+    let stagedOpeninary: { path: string; url: string } | null = null;
+
+    if (providers.includes("openinary")) {
+      const config = getOpeninaryConfig();
+      if (!config) {
+        return new Response(
+          JSON.stringify({ success: false, error: "Openinary unavailable" }),
+          { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      const target = openinaryTarget(newPublicId, config.folderPrefix);
+      const staged = await uploadToOpeninary(
+        config, file.file_path, target.folder, target.baseName, renamedFormat, file.file_size,
+      );
+      // A collision-renamed object is unreachable by the read side and could shadow
+      // an older object holding the intended name, so a key mismatch is a failure.
+      const expected = `${target.folder}/${target.baseName}${renamedFormat ? `.${renamedFormat}` : ""}`;
+      if (!staged.success || staged.path !== expected) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: `Openinary rename upload failed: ${staged.error || "object key mismatch"}`,
+          }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      stagedOpeninary = { path: staged.path!, url: staged.url! };
+    }
+
     console.log(`Calling Cloudinary rename API: ${renameUrl}`);
     const renameResponse = await fetch(renameUrl, {
       method: "POST",
@@ -150,6 +197,61 @@ Deno.serve(async (req) => {
 
     const result = await renameResponse.json();
     console.log("Cloudinary rename successful:", result);
+
+    // The swap: everything below is DB-only, so the interval during which the old
+    // version's now-dead Cloudinary URL is still current is a single round-trip.
+    const { data: currentProvider } = await supabase
+      .from("media_file_providers")
+      .select("object_version, object_key")
+      .eq("media_file_id", fileId).eq("provider", "cloudinary").eq("status", "ready")
+      .order("object_version", { ascending: false }).limit(1).maybeSingle();
+    const nextVersion = (file.current_object_version || currentProvider?.object_version || 1) + 1;
+
+    const providerRows: Record<string, unknown>[] = [{
+      media_file_id: fileId, provider: "cloudinary", object_version: nextVersion,
+      object_key: result.public_id, delivery_url: result.secure_url, status: "ready",
+      bytes: file.file_size, mime_type: file.mime_type,
+    }];
+    if (stagedOpeninary) {
+      providerRows.push({
+        media_file_id: fileId, provider: "openinary", object_version: nextVersion,
+        object_key: stagedOpeninary.path, delivery_url: stagedOpeninary.url, status: "ready",
+        bytes: file.file_size, mime_type: file.mime_type,
+      });
+    }
+
+    const { error: providerError } = await supabase.from("media_file_providers").insert(providerRows);
+    if (providerError) {
+      return new Response(
+        JSON.stringify({ success: false, error: `Provider swap failed: ${providerError.message}` }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    await supabase.from("media_files").update({ current_object_version: nextVersion }).eq("id", fileId);
+
+    // The swap has committed, so the old objects are no longer reachable through the
+    // resolver. Retire the old Openinary object now — leaving it would cost storage
+    // and, because Openinary never overwrites, a future upload of that same name
+    // would be suffixed rather than replacing it. Best-effort: a failure here is a
+    // cleanup problem, not a correctness one, and must not fail a completed rename.
+    if (stagedOpeninary && currentProvider?.object_key) {
+      const { data: oldOpeninary } = await supabase
+        .from("media_file_providers")
+        .select("id, object_key")
+        .eq("media_file_id", fileId).eq("provider", "openinary")
+        .eq("object_version", file.current_object_version || 1).maybeSingle();
+      if (oldOpeninary?.object_key) {
+        const config = getOpeninaryConfig();
+        if (config) {
+          const removed = await deleteFromOpeninary(config, oldOpeninary.object_key);
+          await supabase.from("media_file_providers").update({
+            status: "deleted",
+            deleted_at: new Date().toISOString(),
+            deleted_reason: removed?.success ? "superseded by rename" : "superseded by rename (remote delete failed)",
+          }).eq("id", oldOpeninary.id);
+        }
+      }
+    }
 
     // Update database with new URL and public_id
     const { error: updateError } = await supabase

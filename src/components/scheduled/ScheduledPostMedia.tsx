@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
+import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
+import { useCdnConfig } from "@/hooks/useCdnConfig";
 import { Image as ImageIcon, Maximize2, Play, Video as VideoIcon } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -26,11 +28,11 @@ interface ScheduledPostMediaProps {
 // Module-level cache to avoid re-signing on re-renders / card revisits.
 const urlCache = new Map<string, CachedMediaUrl>();
 
-async function loadOwnedMediaItems(mediaFileIds: string[], userId: string) {
+async function loadOwnedMediaItems(mediaFileIds: string[], userId: string, config?: { read_preference?: string }) {
   const uniqueIds = [...new Set(mediaFileIds)];
   const { data: rows, error } = await supabase
     .from("media_files")
-    .select("id, file_path, file_type, storage_bucket, folder_path")
+    .select("id, file_path, file_type, storage_bucket, folder_path, current_object_version, media_file_providers(provider, object_version, status, delivery_url)")
     .eq("user_id", userId)
     .in("id", uniqueIds);
 
@@ -42,7 +44,7 @@ async function loadOwnedMediaItems(mediaFileIds: string[], userId: string) {
     const cacheKey = `${userId}:${mediaRow.id}`;
     let cached = urlCache.get(cacheKey);
     if (!cached) {
-      let url: string | null = mediaRow.storage_bucket === "cloudinary" ? mediaRow.file_path : null;
+      let url: string | null = resolveMediaPublicUrl(mediaRow, undefined, mediaRow.media_file_providers, config);
       if (!url && mediaRow.storage_bucket) {
         const { data: signed } = await supabase.storage
           .from(mediaRow.storage_bucket)
@@ -70,6 +72,7 @@ async function loadOwnedMediaItems(mediaFileIds: string[], userId: string) {
 }
 
 export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen }: ScheduledPostMediaProps) {
+  const { data: cdnConfig } = useCdnConfig();
   const [items, setItems] = useState<ScheduledMediaItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [savingFolder, setSavingFolder] = useState(false);
@@ -86,7 +89,7 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
 
     (async () => {
       setLoading(true);
-      const loaded = await loadOwnedMediaItems(ids, userId);
+      const loaded = await loadOwnedMediaItems(ids, userId, cdnConfig);
 
       if (cancelled) return;
       setItems(loaded.items);

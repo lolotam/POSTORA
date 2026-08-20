@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -15,6 +16,7 @@ interface DeleteResponse {
   deleted?: string[];
   failed?: string[];
   error?: string;
+  errors?: string[];
 }
 
 Deno.serve(async (req) => {
@@ -76,6 +78,9 @@ Deno.serve(async (req) => {
 
     const deleted: string[] = [];
     const failed: string[] = [];
+    const providerErrors: string[] = [];
+    const { data: setting } = await supabase.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
+    const providers = setting?.value?.write_policy?.providers || ["cloudinary"];
 
     // Delete each file from Cloudinary
     for (const publicId of publicIds) {
@@ -118,6 +123,14 @@ Deno.serve(async (req) => {
           failed.push(publicId);
           console.error(`Failed to delete ${publicId}:`, result);
         }
+        if (providers.includes("openinary")) {
+          const config = getOpeninaryConfig();
+          const { data: rows } = await supabase.from("media_file_providers").select("id, object_key, object_version").eq("provider", "openinary").eq("object_key", publicId).neq("status", "deleted");
+          for (const row of rows || []) {
+            try { if (!config) throw new Error("Openinary unavailable"); await deleteFromOpeninary(config, row.object_key); await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" }).eq("id", row.id); }
+            catch (e) { providerErrors.push(`openinary: ${publicId}: ${e instanceof Error ? e.message : String(e)}`); }
+          }
+        }
       } catch (err) {
         failed.push(publicId);
         console.error(`Error deleting ${publicId}:`, err);
@@ -128,6 +141,7 @@ Deno.serve(async (req) => {
       success: failed.length === 0,
       deleted,
       failed: failed.length > 0 ? failed : undefined,
+      errors: providerErrors.length ? providerErrors : undefined,
     };
 
     return new Response(JSON.stringify(response), {

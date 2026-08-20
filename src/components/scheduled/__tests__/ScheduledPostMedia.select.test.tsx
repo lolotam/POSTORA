@@ -1,6 +1,18 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import { ScheduledPostMedia } from "../ScheduledPostMedia";
+
+// ScheduledPostMedia reads CDN settings through useCdnConfig (react-query). The app
+// provides a QueryClient at the root (App.tsx), so supply one here rather than
+// loosening the component. Retries off so a failed query settles immediately.
+function render(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
+
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast: vi.fn() }) }));
 vi.mock("@/components/ui/tooltip", () => ({

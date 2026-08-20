@@ -9,6 +9,41 @@ import { resolveMediaPublicUrl } from "../mediaUrl";
  * `secure_url` already stored in `file_path`, which we now return verbatim.
  */
 describe("resolveMediaPublicUrl", () => {
+  it("uses provider rows authoritatively for the current version", () => {
+    const row = { file_path: "legacy.png", current_object_version: 2 };
+    expect(resolveMediaPublicUrl(row, undefined, [{ object_version: 2, provider: "openinary", status: "ready", delivery_url: "https://cdn/x.png" }], { read_preference: "openinary" })).toBe("https://cdn/x.png");
+    expect(resolveMediaPublicUrl(row, undefined, [{ object_version: 2, provider: "openinary", status: "failed" }], { read_preference: "openinary" })).toBe("");
+    expect(resolveMediaPublicUrl(row, undefined, [{ object_version: 2, provider: "openinary", status: "deleted", delivery_url: "https://cdn/deleted" }], { read_preference: "openinary" })).toBe("");
+  });
+  it("falls back to file_path only when no current-version rows exist", () => {
+    const row = { file_path: "legacy.png", current_object_version: 3 };
+    expect(resolveMediaPublicUrl(row, undefined, [], {})).toBe("legacy.png");
+    expect(resolveMediaPublicUrl(row, undefined, [{ object_version: 2, provider: "openinary", status: "ready", delivery_url: "https://cdn/old" }], {})).toBe("legacy.png");
+  });
+  // A caller that forgets to SELECT current_object_version must not silently get
+  // legacy behaviour: comparing version-1 rows against `undefined` would match
+  // nothing and serve file_path, which is wrong after a rename or a delete. Both
+  // sides default to 1, the column's DB default.
+  it("treats a missing object_version as version 1 on both sides", () => {
+    const rowWithoutVersion = { file_path: "legacy.png" };
+    expect(
+      resolveMediaPublicUrl(
+        rowWithoutVersion,
+        undefined,
+        [{ provider: "openinary", status: "ready", delivery_url: "https://cdn/v1.png" }],
+        { read_preference: "openinary" },
+      ),
+    ).toBe("https://cdn/v1.png");
+    // ...and an authoritative delete on that same implicit version still wins.
+    expect(
+      resolveMediaPublicUrl(
+        rowWithoutVersion,
+        undefined,
+        [{ object_version: 1, provider: "cloudinary", status: "deleted", delivery_url: "https://cdn/gone" }],
+        { read_preference: "cloudinary" },
+      ),
+    ).toBe("");
+  });
   describe("Cloudinary rows return file_path verbatim", () => {
     // Regression (Rule 6): each row is a real production record shape.
     // Before the fix these produced

@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getOpeninaryConfig, openinaryTarget, uploadToOpeninary } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -30,6 +31,16 @@ interface UploadResponse {
   duration?: number;
   error?: string;
   isDuplicate?: boolean; // Indicates if existing file was reused
+  storedIn?: string[];
+  partial?: boolean;
+  errors?: string[];
+}
+
+type CdnPolicy = { providers: string[]; required: string[] };
+async function getCdnPolicy(db: any): Promise<CdnPolicy> {
+  const { data } = await db.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
+  const policy = data?.value?.write_policy;
+  return { providers: Array.isArray(policy?.providers) && policy.providers.length ? policy.providers : ["cloudinary"], required: Array.isArray(policy?.required) && policy.required.length ? policy.required : ["cloudinary"] };
 }
 
 // Sanitize email for folder name (replace special chars)
@@ -334,6 +345,7 @@ Deno.serve(async (req) => {
     const result = await uploadResponse.json();
     console.log(`Cloudinary upload successful: ${result.secure_url}`);
 
+    const cdnPolicy = await getCdnPolicy(dbClient);
     // Store reference in database with platform/account tracking
     let mediaFileId: string | null = null;
     if (!skipMediaFiles) {
@@ -376,6 +388,34 @@ Deno.serve(async (req) => {
 
       mediaFileId = mediaRecord.id;
       console.log(`Media file record created with ID: ${mediaFileId}`);
+
+      const objectVersion = 1;
+      const cloudinaryKey = result.public_id as string;
+      const providerRows = cdnPolicy.providers.map((provider) => ({ media_file_id: mediaFileId, provider, object_version: objectVersion, object_key: provider === "cloudinary" ? cloudinaryKey : `${getOpeninaryConfig()?.folderPrefix || "postora.cloud"}/${cloudinaryKey}.${fileExtension || result.format}`, status: "pending", bytes: result.bytes, mime_type: result.resource_type === "video" ? `video/${result.format}` : `image/${result.format}` }));
+      const { error: providerInsertError } = await dbClient.from("media_file_providers").insert(providerRows);
+      if (providerInsertError) return new Response(JSON.stringify({ success: false, error: `Provider state error: ${providerInsertError.message}` }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+
+      const storedIn: string[] = ["cloudinary"];
+      const errors: string[] = [];
+      await dbClient.from("media_file_providers").update({ status: "ready", delivery_url: result.secure_url }).eq("media_file_id", mediaFileId).eq("provider", "cloudinary").eq("object_version", objectVersion);
+      if (cdnPolicy.providers.includes("openinary")) {
+        const config = getOpeninaryConfig();
+        if (!config) errors.push("openinary: unavailable");
+        else {
+          const target = openinaryTarget(cloudinaryKey, config.folderPrefix);
+          const openResult = await uploadToOpeninary(config, result.secure_url, target.folder, target.baseName, fileExtension || result.format, result.bytes);
+          if (openResult.success && openResult.path === `${target.folder}/${target.baseName}.${fileExtension || result.format}`) {
+            storedIn.push("openinary");
+            await dbClient.from("media_file_providers").update({ status: "ready", object_key: openResult.path, delivery_url: openResult.url }).eq("media_file_id", mediaFileId).eq("provider", "openinary").eq("object_version", objectVersion);
+          } else {
+            const error = openResult.error || "object key mismatch"; errors.push(`openinary: ${error}`);
+            await dbClient.from("media_file_providers").update({ status: "failed", error }).eq("media_file_id", mediaFileId).eq("provider", "openinary").eq("object_version", objectVersion);
+          }
+        }
+      }
+      const requiredReady = cdnPolicy.required.every((provider) => storedIn.includes(provider));
+      if (!requiredReady || storedIn.length === 0) return new Response(JSON.stringify({ success: false, partial: storedIn.length > 0, storedIn, errors }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      (result as any)._storedIn = storedIn; (result as any)._errors = errors;
     }
 
     const response: UploadResponse = {
@@ -390,6 +430,9 @@ Deno.serve(async (req) => {
       bytes: result.bytes,
       duration: result.duration, // For videos
       isDuplicate: false,
+      storedIn: (result as any)._storedIn || ["cloudinary"],
+      partial: !!(result as any)._errors?.length && ((result as any)._storedIn || []).includes("cloudinary"),
+      errors: (result as any)._errors,
     };
 
     return new Response(JSON.stringify(response), {

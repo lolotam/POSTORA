@@ -1,6 +1,18 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ScheduledPostMedia } from "../ScheduledPostMedia";
+
+// ScheduledPostMedia reads CDN settings through useCdnConfig (react-query). The app
+// provides a QueryClient at the root (App.tsx), so supply one here rather than
+// loosening the component. Retries off so a failed query settles immediately.
+function render(ui: React.ReactElement) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false, gcTime: 0 } },
+  });
+  return rtlRender(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+}
+
 import { supabase } from "@/integrations/supabase/client";
 
 const toast = vi.fn();
