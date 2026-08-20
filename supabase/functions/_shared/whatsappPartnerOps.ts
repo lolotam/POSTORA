@@ -12,6 +12,7 @@ export interface WhatsAppOpsContext {
   workspaceId: string;
   phoneNumberId: string;
   accessToken: string;
+  connectionMode?: "cloud_api" | "coexistence" | "evolution_qr" | null;
 }
 
 export interface SendTemplateInput {
@@ -216,6 +217,13 @@ export async function sendTemplate(
   input: SendTemplateInput,
   fetcher: Fetcher = fetch,
 ): Promise<SendResult> {
+  if (ctx.connectionMode === "evolution_qr") {
+    throw new WhatsAppOpError(
+      "Template messages are not supported in Direct QR mode",
+      "unsupported_direct_qr",
+      400,
+    );
+  }
   const payload = {
     messaging_product: "whatsapp",
     to: input.recipientPhone,

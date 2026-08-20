@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 
 // Public, API-key authenticated endpoint that lets external e-commerce
 // stores (Curemedkw, custom storefronts, etc.) send WhatsApp messages
@@ -182,7 +183,7 @@ Deno.serve(async (req) => {
     // 3. Resolve merchant's WhatsApp account
     let accountQuery = admin
       .from("social_accounts")
-      .select("id, platform, platform_user_id, access_token, account_metadata, is_active")
+      .select("id, platform, platform_user_id, access_token, connection_mode, account_metadata, is_active")
       .eq("user_id", userId)
       .eq("platform", "whatsapp")
       .eq("is_active", true);
@@ -204,7 +205,7 @@ Deno.serve(async (req) => {
 
     const phoneNumberId = account.platform_user_id as string;
     const token = account.access_token as string;
-    if (!phoneNumberId || !token) {
+    if (!phoneNumberId || (account.connection_mode !== "evolution_qr" && !token)) {
       return json(
         {
           success: false,
@@ -336,19 +337,38 @@ Deno.serve(async (req) => {
       return json({ success: false, error: `Unknown action: ${action}` }, 400);
     }
 
-    // 5. Send via Meta Cloud API
-    const url = `${GRAPH_API}/${phoneNumberId}/messages`;
-    const sendRes = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    const sendData = await sendRes.json().catch(() => ({}));
+    // 5. Send through the account's server-side transport
+    let sendData: any;
+    let sendOk = true;
+    if (action !== "send_template" && action !== "event") {
+      const transport = await resolveWhatsAppTransport(admin, account);
+      sendData = (await (action === "send_text"
+        ? transport.sendText({ recipientPhone: to, text: String(body.text ?? "") })
+        : transport.sendMedia({
+          recipientPhone: to,
+          mediaUrl: String(body.media_url ?? ""),
+          mediaType: (body.media_type ?? "image") as "image" | "document" | "video",
+          caption: body.caption ? String(body.caption) : undefined,
+          fileName: body.filename ? String(body.filename) : undefined,
+        }))).raw;
+    } else {
+      if (account.connection_mode === "evolution_qr") {
+        return json({ success: false, error: "Template messages are not supported in Direct QR mode" }, 400);
+      }
+      const url = `${GRAPH_API}/${phoneNumberId}/messages`;
+      const sendRes = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+      sendData = await sendRes.json().catch(() => ({}));
+      sendOk = sendRes.ok;
+    }
 
-    if (!sendRes.ok || sendData.error) {
+    if (!sendOk || sendData.error) {
       const err = sendData.error || {};
       console.error("[ecommerce-whatsapp-api] Send failed:", JSON.stringify(err));
       return new Response(
@@ -365,7 +385,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    const waMessageId = sendData.messages?.[0]?.id ?? null;
+    const waMessageId = sendData.messages?.[0]?.id ?? sendData.key?.id ?? null;
     const conversationId = `wa_${phoneNumberId}_${to}`;
 
     // 6. Log into whatsapp_messages so it appears in Postora Inbox

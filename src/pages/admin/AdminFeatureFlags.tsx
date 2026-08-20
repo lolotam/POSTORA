@@ -83,6 +83,7 @@ const FEATURE_FLAGS = [
   { key: "feature_msg_threads", label: "Messaging Threads Mentions", description: "Show Threads Mentions tab in the Messaging section for users", icon: AtSign },
   { key: "feature_comment_manager", label: "Messaging Comments Inbox", description: "Show Comments inbox tab in the Messaging section for users", icon: MessageSquare },
   { key: "feature_wa_cloud_api_enabled", label: "WhatsApp Cloud API Mode", description: "Show the 'Cloud API Only' connection option alongside Coexistence. Disable to force all users to Coexistence (recommended).", icon: MessageSquare },
+  { key: "feature_wa_evolution_qr_enabled", label: "WhatsApp Direct QR Mode", description: "Show the Direct QR connection option for self-hosted WhatsApp sessions.", icon: MessageSquare },
   { key: "feature_marketero_button", label: "Marketero Button", description: "Show the Marketero button in the Dashboard header", icon: ExternalLink },
   // Analytics dropdown sub-pages
   { key: "feature_analytics_facebook", label: "Analytics: Facebook", description: "Show Facebook entry in the Analytics dropdown in the sidebar", icon: Facebook },

@@ -5,7 +5,7 @@
 import { loadFacebookSdk } from "./facebookSdk";
 import { supabase } from "@/integrations/supabase/client";
 
-export type WhatsAppConnectionMode = "cloud_api" | "coexistence";
+export type WhatsAppConnectionMode = "cloud_api" | "coexistence" | "evolution_qr";
 
 export interface WhatsAppSignupResult {
   code: string;
@@ -62,6 +62,9 @@ async function fetchConfigIds(): Promise<{ cloud_api: string; coexistence: strin
 }
 
 export async function launchWhatsAppSignup(mode: WhatsAppConnectionMode): Promise<WhatsAppSignupResult> {
+  if (mode === "evolution_qr") {
+    throw new Error("Embedded Signup is not available for Direct QR mode.");
+  }
   await loadFacebookSdk();
 
   const configs = await fetchConfigIds();

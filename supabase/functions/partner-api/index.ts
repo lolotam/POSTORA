@@ -123,7 +123,7 @@ Deno.serve(async (req) => {
       // One string literal, not a concatenation: supabase-js resolves the
       // column list at the TYPE level, and a non-literal collapses the row
       // type to GenericStringError.
-      .select("id, user_id, workspace_id, platform, platform_user_id, access_token, is_active, needs_reauth, token_expires_at, account_metadata")
+      .select("id, user_id, workspace_id, platform, platform_user_id, access_token, connection_mode, is_active, needs_reauth, token_expires_at, account_metadata")
       .eq("id", record.socialAccountId)
       .maybeSingle();
 
@@ -169,6 +169,7 @@ Deno.serve(async (req) => {
       workspaceId: account.workspace_id,
       phoneNumberId: account.platform_user_id,
       accessToken: account.access_token,
+      connectionMode: account.connection_mode,
     };
 
     if (action === "get_status") {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,7 @@ import {
   X,
   Check,
   RefreshCw,
+  QrCode,
 } from "lucide-react";
 import type { MessagingAccount } from "@/hooks/useMessaging";
 import {
@@ -41,6 +43,9 @@ import { useWhatsAppTpStatus } from "@/hooks/useWhatsAppTpStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Info, Clock } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
+import { WhatsAppQrDisclaimerDialog } from "./WhatsAppQrDisclaimerDialog";
+import { WhatsAppQrScanner } from "./WhatsAppQrScanner";
+import { supabase } from "@/integrations/supabase/client";
 
 interface WhatsAppSetupProps {
   connectedAccounts: MessagingAccount[];
@@ -55,10 +60,15 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const requestSync = useWhatsAppRequestSync();
   const { isAdmin } = useUserRole();
   const { flags } = useFeatureFlags();
+  const queryClient = useQueryClient();
   const cloudApiEnabled = flags.waCloudApiEnabled;
+  const evolutionQrEnabled = flags.waEvolutionQrEnabled;
   const { status: tpStatus, isLoading: tpLoading } = useWhatsAppTpStatus();
 
   const [pendingMode, setPendingMode] = useState<"cloud_api" | "coexistence" | null>(null);
+  const [qrDisclaimerOpen, setQrDisclaimerOpen] = useState(false);
+  const [qrAccountId, setQrAccountId] = useState<string | null>(null);
+  const [qrConnecting, setQrConnecting] = useState(false);
   const [switchTarget, setSwitchTarget] = useState<MessagingAccount | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<MessagingAccount | null>(null);
 
@@ -143,9 +153,9 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
           {hasConnected ? (
             <div className="space-y-3">
               {whatsappAccounts.map((account) => {
-                const meta = (account.account_metadata || {}) as Record<string, unknown>;
-                const mode = (meta.connection_mode as string) || "cloud_api";
+                const mode = account.connection_mode || "cloud_api";
                 const isCoexistence = mode === "coexistence";
+                const isEvolutionQr = mode === "evolution_qr";
                 return (
                   <div
                     key={account.id}
@@ -162,16 +172,20 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                           className={
                             isCoexistence
                               ? "border-green-600/40 text-green-700 dark:text-green-400 bg-green-500/10"
-                              : "border-blue-600/40 text-blue-700 dark:text-blue-400 bg-blue-500/10"
+                              : isEvolutionQr
+                                ? "border-purple-600/40 text-purple-700 dark:text-purple-400 bg-purple-500/10"
+                                : "border-blue-600/40 text-blue-700 dark:text-blue-400 bg-blue-500/10"
                           }
                         >
-                          {isCoexistence ? "Coexistence" : "Cloud API"}
+                          {isCoexistence ? "Coexistence" : isEvolutionQr ? "Direct QR" : "Cloud API"}
                         </Badge>
                       </div>
                       <p className="text-xs text-muted-foreground">
                         {isCoexistence
                           ? "Mobile app stays active. Chats sync to your phone."
-                          : "Cloud API only. Mobile app for this number is disabled."}
+                          : isEvolutionQr
+                            ? "Self-hosted WhatsApp session connected by QR code."
+                            : "Cloud API only. Mobile app for this number is disabled."}
                       </p>
                     </div>
                     {isCoexistence && (
@@ -226,11 +240,22 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
         </CardContent>
       </Card>
 
-      {/* Two-mode connect cards */}
-      {!hasConnected && !hideConnectButtons && (
-        <div className={`grid gap-4 ${cloudApiEnabled ? "md:grid-cols-2" : "md:grid-cols-1 max-w-2xl mx-auto"}`}>
+      {qrAccountId && (
+        <WhatsAppQrScanner
+          socialAccountId={qrAccountId}
+          onComplete={() => {
+            setQrAccountId(null);
+            queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
+            queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+          }}
+        />
+      )}
+
+      {/* Connection mode cards */}
+      {!hasConnected && (!hideConnectButtons || evolutionQrEnabled) && (
+        <div className={`grid gap-4 ${cloudApiEnabled && evolutionQrEnabled ? "md:grid-cols-3" : cloudApiEnabled || evolutionQrEnabled ? "md:grid-cols-2" : "md:grid-cols-1 max-w-2xl mx-auto"}`}>
           {/* Coexistence */}
-          <Card className="relative border-green-600/40">
+          {!hideConnectButtons && <Card className="relative border-green-600/40">
             <Badge className="absolute -top-2 right-4 bg-green-600 hover:bg-green-600">
               Recommended
             </Badge>
@@ -280,10 +305,10 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                 Eligibility set by Meta — based on account tenure & messaging quality.
               </p>
             </CardContent>
-          </Card>
+          </Card>}
 
           {/* Cloud API */}
-          {cloudApiEnabled && (
+          {cloudApiEnabled && !hideConnectButtons && (
             <Card>
               <CardHeader>
                 <div className="flex items-center gap-2">
@@ -326,6 +351,31 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                 <p className="text-xs text-muted-foreground">
                   Best for businesses that don't need the mobile app.
                 </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {evolutionQrEnabled && (
+            <Card className="border-purple-600/40">
+              <CardHeader>
+                <div className="flex items-center gap-2">
+                  <QrCode className="w-5 h-5 text-purple-600" />
+                  <CardTitle className="text-base">Direct QR Mode</CardTitle>
+                </div>
+                <CardDescription>
+                  Connect an existing WhatsApp number by scanning a QR code. Keep the session on your phone and Postora.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                <ul className="space-y-1.5 text-sm">
+                  <li className="flex items-start gap-2"><Check className="w-4 h-4 text-purple-600 mt-0.5 shrink-0" />Use your existing WhatsApp account</li>
+                  <li className="flex items-start gap-2"><Check className="w-4 h-4 text-purple-600 mt-0.5 shrink-0" />Text and media replies in Postora</li>
+                  <li className="flex items-start gap-2"><X className="w-4 h-4 text-destructive mt-0.5 shrink-0" />Templates and interactive catalog sends unavailable</li>
+                </ul>
+                <Button onClick={() => setQrDisclaimerOpen(true)} disabled={qrConnecting} variant="outline" className="w-full gap-2 border-purple-600/40">
+                  {qrConnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
+                  Connect with QR code
+                </Button>
               </CardContent>
             </Card>
           )}
@@ -424,6 +474,26 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
           </Card>
         </div>
       )}
+
+      <WhatsAppQrDisclaimerDialog
+        open={qrDisclaimerOpen}
+        onOpenChange={setQrDisclaimerOpen}
+        onProceed={async () => {
+          setQrDisclaimerOpen(false);
+          setQrConnecting(true);
+          try {
+            const { data, error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
+              body: { action: "create_and_get_qr", risk_consent: true },
+            });
+            if (error || data?.error) throw new Error(error?.message || data?.error || "Unable to start QR connection");
+            setQrAccountId(data.social_account_id);
+          } catch (error) {
+            toast({ title: "QR connection failed", description: error instanceof Error ? error.message : "Unable to start QR connection", variant: "destructive" });
+          } finally {
+            setQrConnecting(false);
+          }
+        }}
+      />
 
       {/* Requirements Info */}
       {!hasConnected && (

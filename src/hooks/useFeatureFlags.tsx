@@ -76,6 +76,7 @@ export interface FeatureFlags {
   adManager: boolean;
   marketeroButton: boolean;
   waCloudApiEnabled: boolean;
+  waEvolutionQrEnabled: boolean;
   // Analytics dropdown sub-pages
   analyticsFacebook: boolean;
   analyticsInstagram: boolean;
@@ -152,6 +153,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   adManager: false,
   marketeroButton: true,
   waCloudApiEnabled: false,
+  waEvolutionQrEnabled: false,
   analyticsFacebook: false,
   analyticsInstagram: false,
   analyticsThreads: false,
@@ -226,6 +228,7 @@ export const FLAG_KEYS = [
   "feature_ad_manager",
   "feature_marketero_button",
   "feature_wa_cloud_api_enabled",
+  "feature_wa_evolution_qr_enabled",
   "feature_analytics_facebook",
   "feature_analytics_instagram",
   "feature_analytics_threads",
@@ -295,6 +298,7 @@ export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
   feature_ad_manager: "adManager",
   feature_marketero_button: "marketeroButton",
   feature_wa_cloud_api_enabled: "waCloudApiEnabled",
+  feature_wa_evolution_qr_enabled: "waEvolutionQrEnabled",
   feature_analytics_facebook: "analyticsFacebook",
   feature_analytics_instagram: "analyticsInstagram",
   feature_analytics_threads: "analyticsThreads",
@@ -376,6 +380,7 @@ const FEATURE_DISPLAY_NAMES: Record<keyof FeatureFlags, string> = {
   adManager: "Ad Manager",
   marketeroButton: "Marketero Button",
   waCloudApiEnabled: "WhatsApp Cloud API Mode",
+  waEvolutionQrEnabled: "WhatsApp Direct QR Mode",
   analyticsFacebook: "Analytics: Facebook",
   analyticsInstagram: "Analytics: Instagram",
   analyticsThreads: "Analytics: Threads",
@@ -446,6 +451,7 @@ const ALL_FLAGS_ENABLED: FeatureFlags = {
   adManager: true,
   marketeroButton: true,
   waCloudApiEnabled: true,
+  waEvolutionQrEnabled: true,
   analyticsFacebook: true,
   analyticsInstagram: true,
   analyticsThreads: true,
@@ -563,6 +569,7 @@ export function useFeatureFlags() {
         adManager: globalFlagMap["feature_ad_manager"] ?? DEFAULT_FLAGS.adManager,
         marketeroButton: globalFlagMap["feature_marketero_button"] ?? DEFAULT_FLAGS.marketeroButton,
         waCloudApiEnabled: globalFlagMap["feature_wa_cloud_api_enabled"] ?? DEFAULT_FLAGS.waCloudApiEnabled,
+        waEvolutionQrEnabled: globalFlagMap["feature_wa_evolution_qr_enabled"] ?? DEFAULT_FLAGS.waEvolutionQrEnabled,
         analyticsFacebook: globalFlagMap["feature_analytics_facebook"] ?? DEFAULT_FLAGS.analyticsFacebook,
         analyticsInstagram: globalFlagMap["feature_analytics_instagram"] ?? DEFAULT_FLAGS.analyticsInstagram,
         analyticsThreads: globalFlagMap["feature_analytics_threads"] ?? DEFAULT_FLAGS.analyticsThreads,

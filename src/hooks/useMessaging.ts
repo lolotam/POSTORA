@@ -10,6 +10,7 @@ export interface MessagingAccount {
   platform_user_id: string;
   platform_username: string | null;
   avatar_url: string | null;
+  connection_mode?: "cloud_api" | "coexistence" | "evolution_qr" | null;
   account_metadata?: Record<string, unknown> | null;
 }
 

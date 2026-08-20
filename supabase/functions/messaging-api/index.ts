@@ -4,6 +4,7 @@ import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
 import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
+import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 
 // Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
 // before that window closes rather than serving a dead link from messaging_cache.
@@ -749,6 +750,12 @@ Deno.serve(async (req) => {
         : {};
     }
 
+    function rejectDirectQrCapability(account: WhatsAppAccountAccess): void {
+      if (account.connectionMode === "evolution_qr") {
+        throw new Error("This action is not supported in Direct QR mode");
+      }
+    }
+
     // Helper: get WhatsApp token. Multi-tenant: each account sends with its own
     // per-user token from the DB. The shared WHATSAPP_ACCESS_TOKEN env secret is
     // only a fallback for legacy admin accounts that never stored a token.
@@ -881,6 +888,7 @@ Deno.serve(async (req) => {
         action: "whatsapp_register_phone",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
+      rejectDirectQrCapability(account);
       const phoneNumberId = account.platformUserId;
       const token = getWhatsAppToken(account);
       const result = await registerWhatsAppPhone(phoneNumberId, token, social_account_id);
@@ -899,23 +907,34 @@ Deno.serve(async (req) => {
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
       const phoneNumberId = account.platformUserId;
-      const url = `${GRAPH_API}/${phoneNumberId}/messages`;
-      const token = getWhatsAppToken(account);
-
-      const payload: any = {
-        messaging_product: "whatsapp",
-        to: recipient_phone,
-        type: message_type || "text",
-      };
-
+      let data: any;
       if (message_type === "template") {
-        payload.template = typeof message === "string" ? JSON.parse(message) : message;
+        rejectDirectQrCapability(account);
+        const token = getWhatsAppToken(account);
+        const payload = {
+          messaging_product: "whatsapp",
+          to: recipient_phone,
+          type: message_type,
+          template: typeof message === "string" ? JSON.parse(message) : message,
+        };
+        data = await sendWhatsAppWithRetry(
+          `${GRAPH_API}/${phoneNumberId}/messages`,
+          token,
+          payload,
+          phoneNumberId,
+          social_account_id,
+        );
       } else {
-        payload.text = { body: message };
+        const transport = await resolveWhatsAppTransport(adminClient, {
+          id: account.accountId,
+          platform_user_id: account.platformUserId,
+          access_token: account.accessToken,
+          connection_mode: account.connectionMode,
+          account_metadata: account.accountMetadata as Record<string, unknown> | null,
+        });
+        data = (await transport.sendText({ recipientPhone: recipient_phone, text: String(message) })).raw;
       }
-
-      const data = await sendWhatsAppWithRetry(url, token, payload, phoneNumberId, social_account_id);
-      const sentMessageId = data.messages?.[0]?.id;
+      const sentMessageId = data?.messages?.[0]?.id || data?.key?.id;
 
       // Store outbound message in whatsapp_messages table
       const normalizedPhone = recipient_phone.replace(/^\+/, "");
@@ -959,6 +978,7 @@ Deno.serve(async (req) => {
         action: "whatsapp_send_template",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
+      rejectDirectQrCapability(account);
 
       // Delegated to the shared op so the JWT door and the partner-api key door
       // run one implementation and cannot drift. Authorization stays here: this
@@ -970,6 +990,7 @@ Deno.serve(async (req) => {
         workspaceId: account.workspaceId,
         phoneNumberId: account.platformUserId,
         accessToken: getWhatsAppToken(account),
+        connectionMode: account.connectionMode,
       }, {
         recipientPhone: recipient_phone,
         templateName: template_name,
@@ -1217,27 +1238,23 @@ Deno.serve(async (req) => {
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
       const phoneNumberId = account.platformUserId;
-      const url = `${GRAPH_API}/${phoneNumberId}/messages`;
-      const token = getWhatsAppToken(account);
 
       const mType = media_type || "document";
-      const mediaObj: any = { link: media_url };
-      if (caption && (mType === "image" || mType === "video" || mType === "document")) {
-        mediaObj.caption = caption;
-      }
-      if (mType === "document") {
-        mediaObj.filename = media_url.split("/").pop() || "file";
-      }
-
-      const payload = {
-        messaging_product: "whatsapp",
-        to: recipient_phone,
-        type: mType,
-        [mType]: mediaObj,
-      };
-
-      const data = await sendWhatsAppWithRetry(url, token, payload, phoneNumberId);
-      const sentMessageId = data.messages?.[0]?.id;
+      const transport = await resolveWhatsAppTransport(adminClient, {
+          id: account.accountId,
+          platform_user_id: account.platformUserId,
+          access_token: account.accessToken,
+          connection_mode: account.connectionMode,
+          account_metadata: account.accountMetadata as Record<string, unknown> | null,
+      });
+      const data: any = (await transport.sendMedia({
+        recipientPhone: recipient_phone,
+        mediaUrl: media_url,
+        mediaType: (mType === "image" || mType === "video" || mType === "document" || mType === "audio") ? mType : "document",
+        caption,
+        fileName: mType === "document" ? media_url.split("/").pop() || "file" : undefined,
+      })).raw;
+      const sentMessageId = data?.messages?.[0]?.id || data?.key?.id;
 
       // Store outbound media message
       const normalizedPhone = recipient_phone.replace(/^\+/, "");
@@ -1281,6 +1298,7 @@ Deno.serve(async (req) => {
         action: "whatsapp_send_interactive",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
+      rejectDirectQrCapability(account);
       const phoneNumberId = account.platformUserId;
       const url = `${GRAPH_API}/${phoneNumberId}/messages`;
       const token = getWhatsAppToken(account);
@@ -1357,6 +1375,7 @@ Deno.serve(async (req) => {
         action: "whatsapp_get_catalog",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
+      rejectDirectQrCapability(account);
       const wabaId = getWhatsAppMetadata(account).waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
       if (!wabaId) throw new Error("WhatsApp Business Account ID not found.");
       const waToken = getWhatsAppToken(account);
@@ -1380,6 +1399,7 @@ Deno.serve(async (req) => {
         action: "whatsapp_get_products",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
+      rejectDirectQrCapability(account);
       const waToken = getWhatsAppToken(account);
       const res = await fetch(`${GRAPH_API}/${catalog_id}/products?fields=id,name,description,price,currency,image_url,url,retailer_id,availability&limit=100`, {
         headers: { Authorization: `Bearer ${waToken}` },
@@ -1401,6 +1421,7 @@ Deno.serve(async (req) => {
         action: "whatsapp_send_product",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
+      rejectDirectQrCapability(account);
       const phoneNumberId = getWhatsAppMetadata(account).phone_number_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
       const waToken = getWhatsAppToken(account);
       const res = await fetch(`${GRAPH_API}/${phoneNumberId}/messages`, {
@@ -1434,6 +1455,7 @@ Deno.serve(async (req) => {
         action: "whatsapp_send_product_list",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
+      rejectDirectQrCapability(account);
       const phoneNumberId = getWhatsAppMetadata(account).phone_number_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
       const waToken = getWhatsAppToken(account);
       const res = await fetch(`${GRAPH_API}/${phoneNumberId}/messages`, {

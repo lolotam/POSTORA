@@ -37,6 +37,7 @@ export interface WhatsAppAccountAccess {
   platformUserId: string;
   platformUsername: string | null;
   accessToken: string;
+  connectionMode: "cloud_api" | "coexistence" | "evolution_qr" | null;
   accountMetadata: unknown;
 }
 
@@ -59,6 +60,7 @@ interface SocialAccountRow {
   platform_user_id: string;
   platform_username: string | null;
   access_token: string | null;
+  connection_mode: "cloud_api" | "coexistence" | "evolution_qr" | null;
   account_metadata: unknown;
 }
 
@@ -77,7 +79,7 @@ async function findSocialAccount(
   const { data: account, error } = await client
     .from("social_accounts")
     .select(
-      "id, user_id, workspace_id, platform, platform_user_id, platform_username, access_token, account_metadata",
+      "id, user_id, workspace_id, platform, platform_user_id, platform_username, access_token, connection_mode, account_metadata",
     )
     .eq("id", socialAccountId)
     .maybeSingle();
@@ -149,6 +151,7 @@ export async function requireWhatsAppWorkspaceAccess(
     platformUserId: account.platform_user_id,
     platformUsername: account.platform_username,
     accessToken: account.access_token || "",
+    connectionMode: account.connection_mode,
     accountMetadata: account.account_metadata,
   };
 }
@@ -163,6 +166,7 @@ export function toSafeWhatsAppAccount(
     role: access.role,
     platformUserId: access.platformUserId,
     platformUsername: access.platformUsername,
+    connectionMode: access.connectionMode,
     accountMetadata: access.accountMetadata,
   };
 }

@@ -3814,6 +3814,7 @@ export type Database = {
           alerts_snoozed: boolean | null
           avatar_url: string | null
           connected_at: string | null
+          connection_mode: string | null
           failure_count: number | null
           id: string
           ig_auth_type: string | null
@@ -3838,6 +3839,7 @@ export type Database = {
           alerts_snoozed?: boolean | null
           avatar_url?: string | null
           connected_at?: string | null
+          connection_mode?: string | null
           failure_count?: number | null
           id?: string
           ig_auth_type?: string | null
@@ -3862,6 +3864,7 @@ export type Database = {
           alerts_snoozed?: boolean | null
           avatar_url?: string | null
           connected_at?: string | null
+          connection_mode?: string | null
           failure_count?: number | null
           id?: string
           ig_auth_type?: string | null

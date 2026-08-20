@@ -156,8 +156,7 @@ Deno.serve(async (req) => {
         whatsappAccessClient, userId, body.social_account_id, "admin",
       );
 
-      const meta = (account.accountMetadata || {}) as Record<string, unknown>;
-      if (meta.connection_mode !== "coexistence") {
+      if (account.connectionMode !== "coexistence") {
         return restrictedErrorResponse(req, "Chat sync is only available for coexistence connections", 400);
       }
       if (!account.accessToken) {

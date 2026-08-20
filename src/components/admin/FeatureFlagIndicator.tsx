@@ -69,6 +69,7 @@ const FLAG_LABELS: Record<keyof FeatureFlags, string> = {
   adManager: "Ad Manager",
   marketeroButton: "Marketero Button",
   waCloudApiEnabled: "WhatsApp Cloud API Mode",
+  waEvolutionQrEnabled: "WhatsApp Direct QR Mode",
   analyticsFacebook: "Analytics: Facebook",
   analyticsInstagram: "Analytics: Instagram",
   analyticsThreads: "Analytics: Threads",

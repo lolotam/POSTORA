@@ -26,12 +26,12 @@ import {
 } from "./tools.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
+import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 import {
   resolveDualEmbeddingConfig,
   retrieveKnowledgeChunks,
 } from "../_shared/knowledgeEmbeddings.ts";
 
-const GRAPH_API = "https://graph.facebook.com/v21.0";
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Only the last 4 stored turns are replayed to the model on each reply, to keep
@@ -186,49 +186,30 @@ async function logOutcome(
   if (systemLogError) console.error("[ai-agent-reply] Failed to write system log:", systemLogError.message);
 }
 
-async function resolveWhatsAppToken(admin: any, request: ReplyRequest): Promise<string> {
-  const { data: account } = await admin
-    .from("social_accounts")
-    .select("access_token")
-    .eq("id", request.social_account_id)
-    .eq("user_id", request.user_id)
-    .maybeSingle();
-  const accessToken = account?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
-  if (!accessToken) throw new Error("No WhatsApp access token available for this account");
-  return accessToken;
-}
-
-async function sendWhatsAppText(
-  accessToken: string,
-  phoneNumberId: string,
-  recipientPhone: string,
-  text: string,
-): Promise<string> {
-  const response = await fetch(`${GRAPH_API}/${phoneNumberId}/messages`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: recipientPhone,
-      type: "text",
-      text: { body: text },
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.error?.message || "WhatsApp send failed");
-  return data?.messages?.[0]?.id || `ai_${Date.now()}`;
-}
-
 type TextSender = (recipientId: string, text: string) => Promise<string>;
+
+async function buildWhatsAppTextSender(admin: any, account: any, fallbackPhoneNumberId?: string): Promise<TextSender> {
+  if (!account.platform_user_id && !fallbackPhoneNumberId) throw new Error("No WhatsApp phone number available for this account");
+  const transport = await resolveWhatsAppTransport(admin, {
+    ...account,
+    platform_user_id: account.platform_user_id || fallbackPhoneNumberId,
+  });
+  return async (recipientId, text) => (await transport.sendText({ recipientPhone: recipientId, text })).messageId || `ai_${Date.now()}`;
+}
 
 // Resolves how to deliver the reply for the request's platform. WhatsApp uses
 // the Cloud API messages endpoint; Facebook/Instagram use the page Send API
 // (shared credential resolution with the fb-ig webhook).
 async function buildReplySender(admin: any, request: ReplyRequest): Promise<TextSender> {
   if (request.platform === "whatsapp") {
-    const accessToken = await resolveWhatsAppToken(admin, request);
-    return (recipientId, text) =>
-      sendWhatsAppText(accessToken, request.phone_number_id!, recipientId, text);
+    const { data: account, error } = await admin
+      .from("social_accounts")
+      .select("id, platform_user_id, access_token, connection_mode, account_metadata")
+      .eq("id", request.social_account_id)
+      .eq("user_id", request.user_id)
+      .maybeSingle();
+    if (error || !account) throw new Error("WhatsApp account not found for AI reply");
+    return buildWhatsAppTextSender(admin, account, request.phone_number_id);
   }
 
   const { data: account, error } = await admin
@@ -262,28 +243,26 @@ async function buildReplySender(admin: any, request: ReplyRequest): Promise<Text
 // (logged by the tool layer) instead of failing the whole reply.
 async function buildAdminNotifier(admin: any, request: ReplyRequest): Promise<TextSender> {
   if (request.platform === "whatsapp") {
-    const accessToken = await resolveWhatsAppToken(admin, request);
-    return (recipientId, text) =>
-      sendWhatsAppText(accessToken, request.phone_number_id!, recipientId, text);
+    const { data: account, error } = await admin
+      .from("social_accounts")
+      .select("id, platform_user_id, access_token, connection_mode, account_metadata")
+      .eq("id", request.social_account_id)
+      .eq("user_id", request.user_id)
+      .maybeSingle();
+    if (error || !account) throw new Error("WhatsApp account not found for admin notifications");
+    return buildWhatsAppTextSender(admin, account, request.phone_number_id);
   }
 
   const { data: waAccount } = await admin
     .from("social_accounts")
-    .select("access_token, account_metadata")
+    .select("id, platform_user_id, access_token, connection_mode, account_metadata")
     .eq("user_id", request.user_id)
     .eq("platform", "whatsapp")
     .eq("is_active", true)
     .limit(1)
     .maybeSingle();
-  const accessToken = waAccount?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
-  const phoneNumberId = waAccount?.account_metadata?.phone_number_id ||
-    Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
-  return (recipientId, text) => {
-    if (!accessToken || !phoneNumberId) {
-      throw new Error("No WhatsApp account available for admin notifications");
-    }
-    return sendWhatsAppText(accessToken, phoneNumberId, recipientId, text);
-  };
+  if (!waAccount) throw new Error("No WhatsApp account available for admin notifications");
+  return buildWhatsAppTextSender(admin, waAccount, Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"));
 }
 
 Deno.serve(async (req) => {

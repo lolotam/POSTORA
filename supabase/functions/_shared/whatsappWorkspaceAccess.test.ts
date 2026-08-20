@@ -57,6 +57,7 @@ function accountRow(overrides: Partial<FakeRow> = {}): FakeRow {
     platform_user_id: "phone-number-id",
     platform_username: "Postora WA",
     access_token: "top-secret",
+    connection_mode: null,
     account_metadata: { waba_id: "waba-1" },
     ...overrides,
   };
@@ -202,6 +203,7 @@ Deno.test("safe account projection never includes accessToken", async () => {
     role: "owner",
     platformUserId: "phone-number-id",
     platformUsername: "Postora WA",
+    connectionMode: null,
     accountMetadata: { waba_id: "waba-1" },
   });
 });

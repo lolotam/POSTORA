@@ -13,6 +13,7 @@ export interface SocialAccount {
   avatar_url: string | null;
   is_active: boolean;
   connected_at: string;
+  connection_mode: "cloud_api" | "coexistence" | "evolution_qr" | null;
   updated_at: string;
   social_profile_id: string | null;
   token_expires_at: string | null;
@@ -35,7 +36,7 @@ export function useSocialAccounts() {
       const { data, error } = await supabase
         .from("social_accounts")
         .select(`
-          id, user_id, platform, platform_user_id, platform_username, avatar_url, is_active, connected_at, updated_at, social_profile_id, account_metadata, token_expires_at, needs_reauth,
+          id, user_id, platform, platform_user_id, platform_username, avatar_url, is_active, connected_at, connection_mode, updated_at, social_profile_id, account_metadata, token_expires_at, needs_reauth,
           social_profiles!social_accounts_social_profile_id_fkey(id, user_id)
         `)
         .eq("user_id", user.id)
