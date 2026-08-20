@@ -40,7 +40,7 @@ export interface VideoGeneratorProps {
 type VideoModel = {
   model_id: string;
   name?: string;
-  metadata?: Record<string, unknown>;
+  metadata?: unknown;
   capabilities?: string[];
 };
 export function VideoGenerator({
