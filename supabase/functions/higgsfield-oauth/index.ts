@@ -67,9 +67,16 @@ function catalog(payload: any) {
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  // Authenticate before the main try, so a missing or expired token answers 401
+  // instead of falling into the outer catch and being reported as a 500.
+  let caller: { userId: string };
+  try {
+    caller = await authenticateCaller(req, null);
+  } catch {
+    return json({ error: "Unauthorized" }, 401);
+  }
   try {
     const body = await req.json().catch(() => ({}));
-    const caller = await authenticateCaller(req, null);
     const db = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,

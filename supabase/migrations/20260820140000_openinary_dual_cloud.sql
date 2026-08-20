@@ -100,11 +100,11 @@ VALUES (
   '{
     "write_policy": { "providers": ["cloudinary"], "required": ["cloudinary"] },
     "read_preference": "cloudinary",
-    "cloudinary": { "enabled": true, "cloud_name": "dur1soa8n" },
+    "cloudinary": { "enabled": true, "cloudName": "dur1soa8n" },
     "openinary": {
       "enabled": false,
-      "server_url": "https://openinary.walidmohamed.com",
-      "folder_prefix": "postora.cloud"
+      "serverUrl": "https://openinary.walidmohamed.com",
+      "folderPrefix": "postora.cloud"
     }
   }'::jsonb,
   'Dual-cloud CDN storage configuration'

@@ -29,6 +29,21 @@ export function CdnStorageSettings() {
       return { cloudinaryOnly: Number(row.cloudinary_only), both: Number(row.both), openinaryOnly: Number(row.openinary_only) };
     },
   });
+  // The credentials under test live in the edge-function environment, not in
+  // this form, so the check has to happen server-side.
+  const testing = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.functions.invoke("openinary-test");
+      if (error) throw error;
+      return data as { ok: boolean; message: string };
+    },
+    onSuccess: (result) => toast({
+      title: result.ok ? "Openinary reachable" : "Openinary unreachable",
+      description: result.message,
+      variant: result.ok ? undefined : "destructive",
+    }),
+    onError: (error) => toast({ title: "Connection test failed", description: error.message, variant: "destructive" }),
+  });
   const saving = useMutation({
     mutationFn: async (value: CdnStorageConfig) => {
       const { error } = await supabase.from("app_settings").upsert({ key: "cdn_storage", value, updated_at: new Date().toISOString() }, { onConflict: "key" });
@@ -62,7 +77,7 @@ export function CdnStorageSettings() {
         {!countsLoading && !counts && <p className="text-sm text-destructive">Provider counts unavailable. Saving is disabled until they load.</p>}
         {counts && <><p className="text-sm">Cloudinary-only: {counts.cloudinaryOnly.toLocaleString()} {counts.cloudinaryOnly > 0 && <span className="text-destructive">← must reach 0</span>}</p><p className="text-sm">Both providers: {counts.both.toLocaleString()}</p><p className="text-sm">Openinary-only: {counts.openinaryOnly.toLocaleString()}</p></>}
         <p className="text-xs text-muted-foreground">Disable Cloudinary means stop writing to it, never stop reading it.</p></div>
-      <div className="space-y-2"><Label>Openinary server URL</Label><Input value={serverUrl || openinary?.serverUrl || ""} onChange={(event) => { setServerUrl(event.target.value); update({ openinary: { ...openinary, serverUrl: event.target.value } }); }} placeholder="https://openinary.example" /><p className="text-xs text-muted-foreground">Uploads use the edge-function server URL; this value must match it.</p><Button variant="outline" onClick={() => toast({ title: "Connection test unavailable", description: "The edge connection-test endpoint is not present in this checkout." })}>Test connection</Button></div>
+      <div className="space-y-2"><Label>Openinary server URL</Label><Input value={serverUrl || openinary?.serverUrl || ""} onChange={(event) => { setServerUrl(event.target.value); update({ openinary: { ...openinary, serverUrl: event.target.value } }); }} placeholder="https://openinary.example" /><p className="text-xs text-muted-foreground">Uploads use the edge-function server URL; this value must match it.</p><Button variant="outline" disabled={testing.isPending} onClick={() => testing.mutate()}>{testing.isPending ? "Testing…" : "Test connection"}</Button></div>
       <Button disabled={!canSave || saving.isPending} onClick={() => saving.mutate(current)}>Save CDN settings</Button>
     </CardContent>
   </Card>;
