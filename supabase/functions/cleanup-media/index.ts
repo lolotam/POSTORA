@@ -248,12 +248,14 @@ Deno.serve(async (req) => {
           }
         }
 
-        const { data: providerRows } = await supabase.from("media_file_providers").select("id, object_key, provider").eq("media_file_id", file.id).neq("status", "deleted");
+        const { data: providerRows, error: providerLookupError } = await supabase.from("media_file_providers").select("id, object_key, provider").eq("media_file_id", file.id).neq("status", "deleted");
+        if (providerLookupError) { result.failed++; result.errors.push(`Provider lookup failed for ${file.id}: ${providerLookupError.message}`); continue; }
         for (const row of providerRows || []) {
           if (row.provider !== "openinary") continue;
           try {
             const config = getOpeninaryConfig(); if (!config) throw new Error("Openinary unavailable");
-            await deleteFromOpeninary(config, row.object_key);
+            const removed = await deleteFromOpeninary(config, row.object_key);
+            if (!removed.success) { result.errors.push(`openinary delete failed: ${removed.error}`); continue; }
             await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "cleanup-media" }).eq("id", row.id);
           } catch (error) { result.errors.push(`openinary delete failed: ${error instanceof Error ? error.message : String(error)}`); }
         }

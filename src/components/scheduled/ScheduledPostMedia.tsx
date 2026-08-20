@@ -41,7 +41,7 @@ async function loadOwnedMediaItems(mediaFileIds: string[], userId: string, confi
   const resolvedById = new Map<string, ScheduledMediaItem>();
   for (const mediaRow of rows) {
     if (!mediaRow.file_path) continue;
-    const cacheKey = `${userId}:${mediaRow.id}`;
+    const cacheKey = `${userId}:${mediaRow.id}:${config?.read_preference ?? "default"}`;
     let cached = urlCache.get(cacheKey);
     if (!cached) {
       let url: string | null = resolveMediaPublicUrl(mediaRow, undefined, mediaRow.media_file_providers, config);
@@ -100,7 +100,7 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
     return () => {
       cancelled = true;
     };
-  }, [mediaFileIds.join("|"), userId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mediaFileIds.join("|"), userId, cdnConfig?.read_preference]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const count = loading ? mediaFileIds.length : items.length;
   if (mediaFileIds.length === 0) return null;

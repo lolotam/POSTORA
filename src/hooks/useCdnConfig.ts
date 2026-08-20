@@ -18,11 +18,19 @@ export function useCdnConfig() {
       const { data, error } = await supabase.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
       if (error) throw error;
       if (!data?.value) return DEFAULT_CDN_STORAGE_CONFIG;
-      const value = typeof data.value === "string" ? JSON.parse(data.value) : data.value;
+      let value: unknown;
+      try { value = typeof data.value === "string" ? JSON.parse(data.value) : data.value; } catch { return DEFAULT_CDN_STORAGE_CONFIG; }
+      if (!value || typeof value !== "object") return DEFAULT_CDN_STORAGE_CONFIG;
+      const candidate = value as Record<string, unknown>;
+      const writePolicy = candidate.write_policy;
+      if (!writePolicy || typeof writePolicy !== "object") return DEFAULT_CDN_STORAGE_CONFIG;
+      const providers = (writePolicy as Record<string, unknown>).providers;
+      const required = (writePolicy as Record<string, unknown>).required;
+      if (!Array.isArray(providers) || !Array.isArray(required) || !providers.every((p) => p === "cloudinary" || p === "openinary") || !required.every((p) => p === "cloudinary" || p === "openinary")) return DEFAULT_CDN_STORAGE_CONFIG;
       return {
         ...DEFAULT_CDN_STORAGE_CONFIG,
         ...value,
-        write_policy: { ...DEFAULT_CDN_STORAGE_CONFIG.write_policy, ...(value.write_policy ?? {}) },
+        write_policy: { providers, required },
       };
     },
     staleTime: 5 * 60 * 1000,

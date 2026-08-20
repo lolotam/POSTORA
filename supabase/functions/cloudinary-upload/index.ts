@@ -397,7 +397,8 @@ Deno.serve(async (req) => {
 
       const storedIn: string[] = ["cloudinary"];
       const errors: string[] = [];
-      await dbClient.from("media_file_providers").update({ status: "ready", delivery_url: result.secure_url }).eq("media_file_id", mediaFileId).eq("provider", "cloudinary").eq("object_version", objectVersion);
+      const { error: cloudinaryStatusError } = await dbClient.from("media_file_providers").update({ status: "ready", delivery_url: result.secure_url }).eq("media_file_id", mediaFileId).eq("provider", "cloudinary").eq("object_version", objectVersion);
+      if (cloudinaryStatusError) throw new Error(`Cloudinary provider status update failed: ${cloudinaryStatusError.message}`);
       if (cdnPolicy.providers.includes("openinary")) {
         const config = getOpeninaryConfig();
         if (!config) errors.push("openinary: unavailable");
@@ -406,7 +407,8 @@ Deno.serve(async (req) => {
           const openResult = await uploadToOpeninary(config, result.secure_url, target.folder, target.baseName, fileExtension || result.format, result.bytes);
           if (openResult.success && openResult.path === `${target.folder}/${target.baseName}.${fileExtension || result.format}`) {
             storedIn.push("openinary");
-            await dbClient.from("media_file_providers").update({ status: "ready", object_key: openResult.path, delivery_url: openResult.url }).eq("media_file_id", mediaFileId).eq("provider", "openinary").eq("object_version", objectVersion);
+            const { error: openinaryStatusError } = await dbClient.from("media_file_providers").update({ status: "ready", object_key: openResult.path, delivery_url: openResult.url }).eq("media_file_id", mediaFileId).eq("provider", "openinary").eq("object_version", objectVersion);
+            if (openinaryStatusError) errors.push(`openinary status update: ${openinaryStatusError.message}`);
           } else {
             const error = openResult.error || "object key mismatch"; errors.push(`openinary: ${error}`);
             await dbClient.from("media_file_providers").update({ status: "failed", error }).eq("media_file_id", mediaFileId).eq("provider", "openinary").eq("object_version", objectVersion);
@@ -414,7 +416,8 @@ Deno.serve(async (req) => {
         }
       }
       const requiredReady = cdnPolicy.required.every((provider) => storedIn.includes(provider));
-      if (!requiredReady || storedIn.length === 0) return new Response(JSON.stringify({ success: false, partial: storedIn.length > 0, storedIn, errors }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      // Contract: a required provider success with a non-required provider failure is a successful partial upload; the failed provider row is the durable retry record. Return 500 only when nothing was stored.
+      if (!requiredReady || storedIn.length === 0) return new Response(JSON.stringify({ success: false, partial: false, storedIn, errors }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       (result as any)._storedIn = storedIn; (result as any)._errors = errors;
     }
 

@@ -57,8 +57,8 @@ export function resolveMediaPublicUrl(
     const current = providerRows.filter((candidate) => (candidate.object_version ?? 1) === currentVersion);
     if (current.length > 0) {
       const preferred = config?.read_preference ?? config?.primaryCdn;
-      const selected = current.find((candidate) => candidate.provider === preferred && candidate.status === "ready")
-        ?? current.find((candidate) => candidate.status === "ready");
+      const selected = current.find((candidate) => candidate.provider === preferred && candidate.status === "ready" && candidate.delivery_url)
+        ?? current.find((candidate) => candidate.status === "ready" && candidate.delivery_url);
       return selected?.delivery_url ?? "";
     }
   }

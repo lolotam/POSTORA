@@ -149,8 +149,9 @@ Deno.serve(async (req) => {
       .from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
     const providers = cdnSetting?.value?.write_policy?.providers || ["cloudinary"];
 
-    const renamedFormat =
-      (file.file_path?.split(".").pop() || "").toLowerCase().split(/[?#]/)[0] || undefined;
+    const pathWithoutQuery = file.file_path?.split(/[?#]/)[0] || "";
+    const extensionMatch = pathWithoutQuery.match(/\.([a-z0-9]+)$/i);
+    const renamedFormat = extensionMatch?.[1]?.toLowerCase();
     let stagedOpeninary: { path: string; url: string } | null = null;
 
     if (providers.includes("openinary")) {
@@ -205,7 +206,9 @@ Deno.serve(async (req) => {
       .select("object_version, object_key")
       .eq("media_file_id", fileId).eq("provider", "cloudinary").eq("status", "ready")
       .order("object_version", { ascending: false }).limit(1).maybeSingle();
-    const nextVersion = (file.current_object_version || currentProvider?.object_version || 1) + 1;
+    const { data: allProviderVersions, error: versionError } = await supabase.from("media_file_providers").select("object_version").eq("media_file_id", fileId);
+    if (versionError) throw new Error(`Provider version lookup failed: ${versionError.message}`);
+    const nextVersion = Math.max(file.current_object_version || 1, currentProvider?.object_version || 1, ...(allProviderVersions || []).map((row) => row.object_version || 1)) + 1;
 
     const providerRows: Record<string, unknown>[] = [{
       media_file_id: fileId, provider: "cloudinary", object_version: nextVersion,
@@ -227,14 +230,15 @@ Deno.serve(async (req) => {
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
-    await supabase.from("media_files").update({ current_object_version: nextVersion }).eq("id", fileId);
+    const { error: versionUpdateError } = await supabase.from("media_files").update({ current_object_version: nextVersion }).eq("id", fileId);
+    if (versionUpdateError) throw new Error(`Media version update failed: ${versionUpdateError.message}`);
 
     // The swap has committed, so the old objects are no longer reachable through the
     // resolver. Retire the old Openinary object now — leaving it would cost storage
     // and, because Openinary never overwrites, a future upload of that same name
     // would be suffixed rather than replacing it. Best-effort: a failure here is a
     // cleanup problem, not a correctness one, and must not fail a completed rename.
-    if (stagedOpeninary && currentProvider?.object_key) {
+    if (stagedOpeninary) {
       const { data: oldOpeninary } = await supabase
         .from("media_file_providers")
         .select("id, object_key")
@@ -243,7 +247,8 @@ Deno.serve(async (req) => {
       if (oldOpeninary?.object_key) {
         const config = getOpeninaryConfig();
         if (config) {
-          const removed = await deleteFromOpeninary(config, oldOpeninary.object_key);
+          let removed: { success: boolean; error?: string };
+          try { removed = await deleteFromOpeninary(config, oldOpeninary.object_key); } catch (error) { removed = { success: false, error: error instanceof Error ? error.message : String(error) }; }
           await supabase.from("media_file_providers").update({
             status: "deleted",
             deleted_at: new Date().toISOString(),

@@ -27,6 +27,10 @@ CREATE INDEX IF NOT EXISTS media_file_providers_media_file_id_object_version_idx
 
 ALTER TABLE public.media_file_providers ENABLE ROW LEVEL SECURITY;
 
+DROP TRIGGER IF EXISTS media_file_providers_updated_at ON public.media_file_providers;
+CREATE TRIGGER media_file_providers_updated_at BEFORE UPDATE ON public.media_file_providers
+FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
+
 DROP POLICY IF EXISTS "Users can view own media file providers"
   ON public.media_file_providers;
 
@@ -40,6 +44,29 @@ CREATE POLICY "Users can view own media file providers"
         AND auth.uid() = media_files.user_id
     )
   );
+
+CREATE POLICY "Admins can view all media file providers"
+  ON public.media_file_providers FOR SELECT
+  USING (public.has_role(auth.uid(), 'admin'));
+
+CREATE OR REPLACE FUNCTION public.get_cdn_provider_counts()
+RETURNS TABLE(cloudinary_only bigint, both bigint, openinary_only bigint)
+LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
+  WITH versions AS (
+    SELECT media_file_id, object_version,
+      bool_or(provider = 'cloudinary') AS has_cloudinary,
+      bool_or(provider = 'openinary') AS has_openinary
+    FROM public.media_file_providers
+    WHERE status = 'ready'
+    GROUP BY media_file_id, object_version
+  )
+  SELECT count(*) FILTER (WHERE has_cloudinary AND NOT has_openinary),
+         count(*) FILTER (WHERE has_cloudinary AND has_openinary),
+         count(*) FILTER (WHERE has_openinary AND NOT has_cloudinary)
+  FROM versions
+  WHERE public.has_role(auth.uid(), 'admin');
+$$;
+GRANT EXECUTE ON FUNCTION public.get_cdn_provider_counts() TO authenticated;
 
 INSERT INTO public.media_file_providers (
   media_file_id,
