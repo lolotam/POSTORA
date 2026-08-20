@@ -3,6 +3,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { z } from "npm:zod@3.23.8";
+import { HiggsfieldAuthError, resolveHiggsfieldCredential } from "../_shared/higgsfield-oauth.ts";
+import { HiggsfieldMcpClient, findOutputUrl } from "../_shared/higgsfield-mcp.ts";
+import { checkByoGenerationLimits } from "../_shared/higgsfield-rate-limit.ts";
+import { mergeModelSpec, sanitizeParams, missingRequiredParams, resolveAspectRatio } from "../_shared/higgsfield-model-spec.ts";
 
 const GenerateImageSchema = z.object({
   prompt: z.string().min(1).max(5000),
@@ -605,6 +609,37 @@ Make the image visually striking and engaging.`;
     const attemptErrors: string[] = [];
 
     for (const m of chain) {
+      if (m.provider_code === 'higgsfield' || m.api_type === 'higgsfield') {
+        const cred = await resolveHiggsfieldCredential(supabaseAdmin, user.id);
+        if (cred.source === 'byo') {
+          const byoLimit = await checkByoGenerationLimits(supabaseAdmin, user.id);
+          if (!byoLimit.allowed) return errorResponse(byoLimit.error, 429);
+        }
+        let reserved = false;
+        if (cred.source === 'platform') {
+          const { data } = await supabaseAdmin.rpc('reserve_ai_generation_quota', { p_user_id: user.id });
+          const quota = Array.isArray(data) ? data[0] : data;
+          if (!quota?.allowed) return errorResponse('Daily AI generation limit reached', 402);
+          reserved = true;
+        }
+        try {
+          const { data: catalog } = await supabaseAdmin.from('ai_models').select('metadata').eq('model_id', m.model_id).maybeSingle();
+          const spec = mergeModelSpec(m.model_id, catalog?.metadata, 'image');
+          const params = sanitizeParams(spec, { aspect_ratio: resolveAspectRatio(spec, aspectRatio) || undefined, quality, ...(rawBody && typeof rawBody === 'object' ? rawBody : {}) });
+          const missing = missingRequiredParams(spec, params);
+          if (missing.length) throw new Error(`Missing parameters: ${missing.join(', ')}`);
+          const payload = await HiggsfieldMcpClient.fromCredential(cred, supabaseAdmin).callTool('generate_image', { params: { model: m.model_id, prompt: fullPrompt, ...params } });
+          const generatedUrl = findOutputUrl(payload);
+          if (!generatedUrl) throw new Error('Higgsfield returned no image URL');
+          const { data: job, error: jobError } = await supabaseAdmin.from('ai_generation_jobs').insert({ user_id: user.id, provider: 'higgsfield', model_id: m.model_id, modality: 'image', credential_source: cred.source, status: 'succeeded', result_url: generatedUrl, params: { prompt, ...params, reservation: reserved } }).select('id').single();
+          if (jobError) throw jobError;
+          imageUrl = generatedUrl; description = `Generated with Higgsfield ${m.model_id}`; usedModel = m;
+          break;
+        } catch (err) {
+          if (reserved) await supabaseAdmin.rpc('release_ai_generation_quota', { p_user_id: user.id });
+          throw err;
+        }
+      }
       const apiKey = await getProviderApiKey(supabaseAdmin, m);
       if (!apiKey) {
         const msg = `[${m.source}] ${m.provider_code}/${m.model_id}: missing ${m.api_key_env_var}`;

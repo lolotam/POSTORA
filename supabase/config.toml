@@ -31,3 +31,12 @@ verify_jwt = false
 
 [functions.ecommerce-whatsapp-api]
 verify_jwt = false
+
+[functions.higgsfield-oauth]
+verify_jwt = true
+
+[functions.generate-video]
+verify_jwt = true
+
+[functions.ai-generation-status]
+verify_jwt = true
