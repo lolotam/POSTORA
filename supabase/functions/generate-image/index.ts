@@ -607,7 +607,7 @@ Style requirements:
 - Professional, polished look suitable for social media
 - High resolution and clear details
 - Aspect ratio: ${aspectRatio}
-- Quality level: ${quality}
+${quality ? `- Quality level: ${quality}` : ''}
 
 Make the image visually striking and engaging.`;
 
@@ -622,7 +622,19 @@ Make the image visually striking and engaging.`;
 
     for (const m of chain) {
       if (m.provider_code === 'higgsfield' || m.api_type === 'higgsfield') {
-        const cred = await resolveHiggsfieldCredential(supabaseAdmin, user.id);
+        // Resolving the credential can throw when Higgsfield is not connected.
+        // That makes THIS provider unusable, not the request: skip to the next
+        // candidate rather than letting the throw escape the loop. Quota
+        // breaches below are different -- those are user policy and do abort.
+        let cred;
+        try {
+          cred = await resolveHiggsfieldCredential(supabaseAdmin, user.id);
+        } catch (err: any) {
+          const msg = `[${m.source}] ${m.provider_code}/${m.model_id}: ${err?.message || String(err)}`;
+          console.error(msg);
+          attemptErrors.push(msg);
+          continue;
+        }
         if (cred.source === 'byo') {
           const byoLimit = await checkByoGenerationLimits(supabaseAdmin, user.id);
           if (!byoLimit.allowed) return errorResponse(byoLimit.error, 429);

@@ -18,6 +18,10 @@ import { Separator } from '@/components/ui/separator';
 import { ModelParamControls } from '@/components/admin/shared/ModelParamControls';
 import { defaultParamsFor, mergeModelSpec } from '@/lib/higgsfieldModelSpecs';
 
+function primarySpecFor(row: AIModel | null, capability: string) {
+  return mergeModelSpec(row?.model_id ?? '', row?.metadata ?? null, capability === 'video' ? 'video' : 'image');
+}
+
 const CATEGORY_MODALITY: Record<string, string> = {
   chat: 'text', search: 'text', image: 'image', tts: 'audio', video: 'video',
 };
@@ -66,13 +70,19 @@ export function DefaultModelSelector({
         : null,
     [models, currentDefault],
   );
+  const savedParams = useMemo(
+    () => ({ ...defaultParamsFor(primarySpecFor(primaryRow, capability)), ...(primaryRow?.admin_params ?? {}) }),
+    [primaryRow, capability],
+  );
+  const [paramDraft, setParamDraft] = useState<Record<string, string | number | boolean>>(savedParams);
+  // Re-seed when the administrator switches model: the previous model's knobs
+  // are meaningless for the new one.
+  useEffect(() => { setParamDraft(savedParams); }, [savedParams]);
+  const paramsDirty = JSON.stringify(paramDraft) !== JSON.stringify(savedParams);
+
   const primarySpec = useMemo(
     () =>
-      mergeModelSpec(
-        primaryRow?.model_id ?? '',
-        primaryRow?.metadata ?? null,
-        capability === 'video' ? 'video' : 'image',
-      ),
+      primarySpecFor(primaryRow, capability),
     [primaryRow, capability],
   );
 
@@ -156,11 +166,20 @@ export function DefaultModelSelector({
                   </p>
                   <ModelParamControls
                     spec={primarySpec}
-                    values={{ ...defaultParamsFor(primarySpec), ...(primaryRow.admin_params ?? {}) }}
-                    onChange={(next) => onSetAdminParams(primaryRow.id, next)}
+                    values={paramDraft}
+                    onChange={setParamDraft}
                     omit={['aspect_ratio']}
                     disabled={isSaving}
                   />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isSaving || !paramsDirty}
+                    onClick={() => onSetAdminParams(primaryRow.id, paramDraft)}
+                  >
+                    {isSaving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                    Save parameters
+                  </Button>
                 </div>
               </>
             )}

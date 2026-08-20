@@ -16,8 +16,14 @@ export function resolveTiers(
   tiers: { primary: DefaultModel | null; fallback: DefaultModel | null; fallback2: DefaultModel | null },
 ): ResolvedTier[] {
   const out: ResolvedTier[] = [];
+  // The server dedupes the chain by provider::model, so an administrator who
+  // picks the same model twice sees one card, not two that imply a retry.
+  const seen = new Set<string>();
   for (const tier of [tiers.primary, tiers.fallback, tiers.fallback2]) {
     if (!tier) continue;
+    const key = `${tier.provider_code}::${tier.model_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     const row = models.find(
       (m) => m.model_id === tier.model_id && m.ai_providers?.provider_code === tier.provider_code,
     );

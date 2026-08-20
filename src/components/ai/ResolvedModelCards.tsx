@@ -32,7 +32,7 @@ export function ResolvedModelCards({ tiers }: { tiers: ResolvedTier[] }) {
       </p>
       <div className="grid gap-2 sm:grid-cols-3">
         {tiers.slice(0, TIER_LABELS.length).map((tier, index) => (
-          <div key={`${tier.provider_code}:${tier.model_id}`} className="rounded-lg border p-3">
+          <div key={`${index}:${tier.provider_code}:${tier.model_id}`} className="rounded-lg border p-3">
             <Badge variant={index === 0 ? "default" : "secondary"} className="mb-1.5">
               {TIER_LABELS[index]}
             </Badge>

@@ -50,6 +50,17 @@ describe("resolveTiers", () => {
     expect(out).toEqual([]);
   });
 
+  // The server dedupes the chain by provider::model, so showing the same model
+  // twice would imply a retry that will not happen.
+  it("collapses a model configured in more than one tier", () => {
+    const out = resolveTiers(models, {
+      primary: { provider_code: "higgsfield", model_id: "gpt_image_2" },
+      fallback: { provider_code: "higgsfield", model_id: "gpt_image_2" },
+      fallback2: { provider_code: "higgsfield", model_id: "nano_banana_2" },
+    });
+    expect(out.map((t) => t.model_id)).toEqual(["gpt_image_2", "nano_banana_2"]);
+  });
+
   it("returns nothing when no tier is configured", () => {
     expect(resolveTiers(models, { primary: null, fallback: null, fallback2: null })).toEqual([]);
   });

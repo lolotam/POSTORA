@@ -549,7 +549,7 @@ export function PlatformSettingsSection({
                   onSelectAutoThumbnail={platformSettings.setYoutubeSelectedAutoThumbnail}
                   onGenerateAutoThumbnails={async () => { youtubeThumbnails.generateAutoThumbnails(); }}
                   aiGeneratedThumbnails={platformSettings.youtubeAiGeneratedThumbnails}
-                  onGenerateAiThumbnail={async (prompt: string, refImage?: string) => { youtubeThumbnails.generateAiThumbnail(prompt, refImage); }}
+                  onGenerateAiThumbnail={(prompt: string, refImage?: string) => Promise.resolve(youtubeThumbnails.generateAiThumbnail(prompt, refImage))}
                   isGeneratingAiThumbnail={platformSettings.youtubeGeneratingAiThumbnail}
                   onDownloadThumbnail={youtubeThumbnails.downloadThumbnail}
                   selectedAccounts={getSelectedAccountsForPlatform("youtube")}
