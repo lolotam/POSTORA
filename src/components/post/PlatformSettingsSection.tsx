@@ -71,7 +71,7 @@ interface PlatformSettingsSectionProps {
   onYoutubeSettingsChange: (changes: Partial<YouTubeSettingsState>) => void;
   youtubeThumbnails: {
     generateAutoThumbnails: () => Promise<void> | void;
-    generateAiThumbnail: (prompt: string, model: string, size: string, refImage?: string) => Promise<void> | void;
+    generateAiThumbnail: (prompt: string, refImage?: string) => Promise<void> | void;
     downloadThumbnail: (url: string, filename: string) => void;
   };
   musicCopyright: {
@@ -549,7 +549,7 @@ export function PlatformSettingsSection({
                   onSelectAutoThumbnail={platformSettings.setYoutubeSelectedAutoThumbnail}
                   onGenerateAutoThumbnails={async () => { youtubeThumbnails.generateAutoThumbnails(); }}
                   aiGeneratedThumbnails={platformSettings.youtubeAiGeneratedThumbnails}
-                  onGenerateAiThumbnail={async (prompt: string, model: string, size: string, refImage?: string) => { youtubeThumbnails.generateAiThumbnail(prompt, model, size, refImage); }}
+                  onGenerateAiThumbnail={async (prompt: string, refImage?: string) => { youtubeThumbnails.generateAiThumbnail(prompt, refImage); }}
                   isGeneratingAiThumbnail={platformSettings.youtubeGeneratingAiThumbnail}
                   onDownloadThumbnail={youtubeThumbnails.downloadThumbnail}
                   selectedAccounts={getSelectedAccountsForPlatform("youtube")}

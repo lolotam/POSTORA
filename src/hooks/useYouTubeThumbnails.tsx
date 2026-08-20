@@ -20,7 +20,7 @@ interface UseYouTubeThumbnailsReturn {
   /** Generate auto thumbnails from video frames */
   generateAutoThumbnails: () => Promise<void>;
   /** Generate AI-powered thumbnail */
-  generateAiThumbnail: (prompt: string, model: string, size: string, refImage?: string) => Promise<void>;
+  generateAiThumbnail: (prompt: string, refImage?: string) => Promise<void>;
   /** Download a thumbnail image */
   downloadThumbnail: (imageUrl: string, filename: string) => Promise<void>;
   /** Whether AI thumbnail generation is in progress */
@@ -109,33 +109,21 @@ export function useYouTubeThumbnails({
    * Generate AI-powered thumbnail using image generation
    */
   const generateAiThumbnail = useCallback(async (
-    prompt: string, 
-    model: string, 
-    size: string, 
+    prompt: string,
     refImage?: string
   ) => {
     setIsGeneratingAi(true);
     setYoutubeGeneratingAiThumbnail(true);
 
     try {
-      const modelName = model === "pro" ? "imagen-3.0-generate-002" : "imagen-3.0-fast-generate-001";
-      let width = 1280, height = 720;
-      if (model === "pro") {
-        switch (size) {
-          case "2k": width = 2560; height = 1440; break;
-          case "4k": width = 3840; height = 2160; break;
-        }
-      }
-
       const { data, error } = await supabase.functions.invoke("generate-image", {
         body: {
+          // No model and no quality: generate-image resolves the chain from
+          // admin settings and applies the administrator's knobs. 16:9 is the
+          // YouTube thumbnail ratio and stays fixed here.
           prompt,
-          model: modelName,
           aspectRatio: "16:9",
-          quality: model === "pro" ? "hd" : "standard",
           referenceImage: refImage || undefined,
-          width,
-          height,
         },
       });
 

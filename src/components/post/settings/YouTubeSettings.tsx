@@ -46,6 +46,8 @@ import { MediaLibraryPicker } from "../MediaLibraryPicker";
 import { StockMediaPicker, SelectedMedia } from "../StockMediaPicker";
 import { UploadedFile } from "@/hooks/usePostForm";
 import { Image as ImageIcon } from "lucide-react";
+import { ResolvedModelCards } from "@/components/ai/ResolvedModelCards";
+import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
 
 export interface YouTubeSettingsState {
   // Video type
@@ -99,7 +101,7 @@ interface YouTubeSettingsProps {
   onSelectAutoThumbnail: (index: number | null) => void;
   onGenerateAutoThumbnails: () => Promise<void>;
   aiGeneratedThumbnails: string[];
-  onGenerateAiThumbnail: (prompt: string, model: string, size: string, refImage?: string) => Promise<void>;
+  onGenerateAiThumbnail: (prompt: string, refImage?: string) => Promise<void>;
   isGeneratingAiThumbnail: boolean;
   onDownloadThumbnail: (url: string, filename: string) => void;
   selectedAccounts?: SelectedAccount[];
@@ -124,8 +126,7 @@ export function YouTubeSettings({
   const { flags } = useFeatureFlags();
   const [thumbnailDialogOpen, setThumbnailDialogOpen] = useState(false);
   const [aiThumbnailPrompt, setAiThumbnailPrompt] = useState("");
-  const [aiThumbnailModel, setAiThumbnailModel] = useState<"nano-banana" | "pro">("nano-banana");
-  const [aiThumbnailSize, setAiThumbnailSize] = useState<"1k" | "2k" | "4k">("1k");
+  const { tiers: resolvedTiers } = useResolvedImageModels();
   const [aiThumbnailRefs, setAiThumbnailRefs] = useState<string[]>([]);
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isStockPickerOpen, setIsStockPickerOpen] = useState(false);
@@ -183,9 +184,7 @@ export function YouTubeSettings({
 
   const handleGenerateAiThumbnail = async () => {
     await onGenerateAiThumbnail(
-      aiThumbnailPrompt, 
-      aiThumbnailModel, 
-      aiThumbnailSize, 
+      aiThumbnailPrompt,
       aiThumbnailRefs.length > 0 ? aiThumbnailRefs[0] : undefined
     );
   };
@@ -817,38 +816,8 @@ export function YouTubeSettings({
                   Create custom thumbnails with AI. Aspect ratio fixed at 16:9.
                 </p>
 
-                {/* Model Selection */}
-                <div className="flex items-center gap-4">
-                  <div className="space-y-1.5 flex-1">
-                    <Label className="text-xs text-muted-foreground">Model</Label>
-                    <Select value={aiThumbnailModel} onValueChange={(v) => setAiThumbnailModel(v as "nano-banana" | "pro")}>
-                      <SelectTrigger className="w-full">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="nano-banana">🍌 Nano Banana</SelectItem>
-                        <SelectItem value="pro">⚡ Pro</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  {/* Size Selection (only for Pro model) */}
-                  {aiThumbnailModel === "pro" && (
-                    <div className="space-y-1.5 flex-1">
-                      <Label className="text-xs text-muted-foreground">Quality</Label>
-                      <Select value={aiThumbnailSize} onValueChange={(v) => setAiThumbnailSize(v as "1k" | "2k" | "4k")}>
-                        <SelectTrigger className="w-full">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="1k">1280×720 (1K)</SelectItem>
-                          <SelectItem value="2k">2560×1440 (2K)</SelectItem>
-                          <SelectItem value="4k">3840×2160 (4K)</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  )}
-                </div>
+                {/* Which models will run — administrator-controlled, read-only here. */}
+                <ResolvedModelCards tiers={resolvedTiers} />
 
                 {/* Prompt */}
                 <div className="space-y-2">
