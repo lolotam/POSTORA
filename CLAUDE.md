@@ -9,7 +9,7 @@ This document provides comprehensive context for AI coding assistants (Claude, G
 Follow these steps for every task, in order:
 
 ### Before starting any task
-1. **Recall prior history**: search the `mem0` MCP for previous fixes/debugging of the same or similar issue (`search_memories` with the feature/bug keywords). Old solutions and gotchas are stored there — use them.
+1. **Recall prior history**: search the `mem0` MCP for previous fixes/debugging of the same or similar issue (`search_memories` with `user_id="HP"`, `app_id="lolotam-postora"`, plus the feature/bug keywords). Old solutions and gotchas are stored there — use them before re-deriving.
 2. **Brainstorm first**: run the `brainstorming` skill before any creative/implementation work to pin down intent, requirements, and design.
 3. **Confirm root cause with evidence** before writing any fix. No speculative patches — reproduce, inspect DB state / logs / code paths, and state the proven cause first.
 
@@ -30,7 +30,8 @@ Follow these steps for every task, in order:
 6. **Commit locally, always**: commit scoped to the task's files only (`git commit -- <files>`). Never commit `b64.txt`, logs, backups, `.env*`, or any secret files.
 
 ### Deployment
-7. If any edge function under `supabase/functions/*` changed, **redeploy it via `ssh-contabo-mcp`**: copy the changed files into the functions volume `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`, verify hashes, then `docker compose up -d --no-deps functions` from the stack dir (see `docs/runbooks/deploy-edge-function.md`). Frontend deploys automatically when `main` is pushed (Dokploy).
+7. If any edge function under `supabase/functions/*` changed, **redeploy it via `ssh-contabo-mcp`**: copy the changed files into the functions volume `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`, verify SHA256 hashes, then `docker compose up -d --no-deps functions` from the stack dir (see `docs/runbooks/deploy-edge-function.md`). Frontend deploys automatically when `main` is pushed (Dokploy).
+   - ⚠️ **Do NOT use `npx supabase functions deploy`** — that targets Supabase Cloud and fails against this self-hosted stack.
 
 ### Wrap-up (always)
 8. **Save to memory**: store a task summary in the `mem0` MCP (`add_memory`): the issue, root cause, how it was solved, and files changed — so future sessions can retrieve the fix history.
@@ -551,3 +552,14 @@ The following email is configured as admin with full access:
 - `dr.vet.waleedtam@gmail.com`
 
 Admins bypass all subscription limits and see no upgrade prompts.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+- Dirty `graphify-out/` files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
