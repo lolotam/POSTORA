@@ -1,6 +1,6 @@
 import { getOpeninaryUrl, getOpeninarySrcSet, getOpeninaryThumbnail, getOpeninaryPlaceholder, type OpeninaryConfig, type OpeninaryTransformOptions } from "./openinary";
 export type CdnProvider = "cloudinary" | "openinary" | "supabase";
-export interface CdnConfig { read_preference?: CdnProvider; primaryCdn?: CdnProvider; cloudinary?: { cloudName?: string; enabled?: boolean }; openinary?: OpeninaryConfig & { enabled?: boolean } }
+export type CdnConfig = { read_preference?: CdnProvider; primaryCdn?: CdnProvider; cloudinary?: { cloudName?: string; enabled?: boolean }; openinary?: OpeninaryConfig & { enabled?: boolean } }
 export interface CdnMediaFile { file_path?: string | null; storage_bucket?: string | null; current_object_version?: number | null; [key: string]: unknown }
 export interface CdnProviderRow { provider: CdnProvider; object_version?: number | null; delivery_url?: string | null; status?: string }
 function cloudinary(url: string, options: OpeninaryTransformOptions, name = "") { if (!name || !url) return url; const m = url.match(/^https?:\/\/[^/]+\/[^/]+\/upload\/(.*)$/); if (!m) return url; const components = [options.width ? `w_${options.width}` : undefined, options.format === "auto" ? "f_auto" : undefined].filter(Boolean); return `https://res.cloudinary.com/${name}/image/upload/${components.length ? `${components.join(",")}/` : ""}${m[1].replace(/\.[^.]+$/, "")}`; }

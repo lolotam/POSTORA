@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import type { CdnConfig, CdnProvider } from "@/lib/cdn";
 
-export interface CdnStorageConfig extends CdnConfig {
+export type CdnStorageConfig = CdnConfig & {
   write_policy: { providers: CdnProvider[]; required: CdnProvider[] };
-}
+};
 
 export const DEFAULT_CDN_STORAGE_CONFIG: CdnStorageConfig = {
   write_policy: { providers: ["cloudinary"], required: ["cloudinary"] },

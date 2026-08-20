@@ -1,4 +1,4 @@
-export interface OpeninaryConfig { serverUrl: string; folderPrefix?: string }
+export type OpeninaryConfig = { serverUrl: string; folderPrefix?: string };
 export interface OpeninaryTransformOptions { width?: number; height?: number; crop?: string; quality?: string | number; format?: string; gravity?: string; aspectRatio?: string; dpr?: string | number; blur?: number; effect?: string }
 export const DEFAULT_OPENINARY_WIDTHS = [320, 640, 768, 1024, 1280, 1536];
 

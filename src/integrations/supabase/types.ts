@@ -15,7 +15,15 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      graphql: {
+        Args: {
+          operationName?: string
+          extensions?: Json
+          variables?: Json
+          query?: string
+        }
+        Returns: Json
+      }
     }
     Enums: {
       [_ in never]: never
@@ -127,7 +135,6 @@ export type Database = {
           {
             foreignKeyName: "admin_inbox_messages_reply_to_id_fkey"
             columns: ["reply_to_id"]
-            isOneToOne: false
             referencedRelation: "admin_inbox_messages"
             referencedColumns: ["id"]
           },
@@ -382,6 +389,57 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_generation_jobs: {
+        Row: {
+          created_at: string
+          credential_source: string
+          error: string | null
+          id: string
+          media_file_id: string | null
+          modality: string
+          model_id: string
+          params: Json
+          provider: string
+          provider_job_id: string | null
+          result_url: string | null
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credential_source: string
+          error?: string | null
+          id?: string
+          media_file_id?: string | null
+          modality: string
+          model_id: string
+          params?: Json
+          provider: string
+          provider_job_id?: string | null
+          result_url?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credential_source?: string
+          error?: string | null
+          id?: string
+          media_file_id?: string | null
+          modality?: string
+          model_id?: string
+          params?: Json
+          provider?: string
+          provider_job_id?: string | null
+          result_url?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       ai_knowledge_chunks: {
         Row: {
           content: string
@@ -417,7 +475,6 @@ export type Database = {
           {
             foreignKeyName: "ai_knowledge_chunks_source_id_fkey"
             columns: ["source_id"]
-            isOneToOne: false
             referencedRelation: "ai_knowledge_sources"
             referencedColumns: ["id"]
           },
@@ -515,21 +572,18 @@ export type Database = {
           {
             foreignKeyName: "ai_knowledge_relations_source_chunk_id_fkey"
             columns: ["source_chunk_id"]
-            isOneToOne: false
             referencedRelation: "ai_knowledge_chunks"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "ai_knowledge_relations_source_entity_id_fkey"
             columns: ["source_entity_id"]
-            isOneToOne: false
             referencedRelation: "ai_knowledge_entities"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "ai_knowledge_relations_target_entity_id_fkey"
             columns: ["target_entity_id"]
-            isOneToOne: false
             referencedRelation: "ai_knowledge_entities"
             referencedColumns: ["id"]
           },
@@ -603,7 +657,6 @@ export type Database = {
           {
             foreignKeyName: "ai_model_preferences_model_id_fkey"
             columns: ["model_id"]
-            isOneToOne: false
             referencedRelation: "ai_models"
             referencedColumns: ["id"]
           },
@@ -619,6 +672,7 @@ export type Database = {
           description: string | null
           id: string
           is_active: boolean
+          metadata: Json
           model_id: string
           name: string
           provider_id: string
@@ -633,6 +687,7 @@ export type Database = {
           description?: string | null
           id?: string
           is_active?: boolean
+          metadata?: Json
           model_id: string
           name: string
           provider_id: string
@@ -647,6 +702,7 @@ export type Database = {
           description?: string | null
           id?: string
           is_active?: boolean
+          metadata?: Json
           model_id?: string
           name?: string
           provider_id?: string
@@ -656,7 +712,6 @@ export type Database = {
           {
             foreignKeyName: "ai_models_provider_id_fkey"
             columns: ["provider_id"]
-            isOneToOne: false
             referencedRelation: "ai_providers"
             referencedColumns: ["id"]
           },
@@ -667,6 +722,7 @@ export type Database = {
           api_endpoint: string
           api_key_env_var: string
           api_type: string
+          auth_type: string
           created_at: string
           id: string
           is_active: boolean
@@ -679,6 +735,7 @@ export type Database = {
           api_endpoint: string
           api_key_env_var: string
           api_type?: string
+          auth_type?: string
           created_at?: string
           id?: string
           is_active?: boolean
@@ -691,6 +748,7 @@ export type Database = {
           api_endpoint?: string
           api_key_env_var?: string
           api_type?: string
+          auth_type?: string
           created_at?: string
           id?: string
           is_active?: boolean
@@ -733,7 +791,6 @@ export type Database = {
           {
             foreignKeyName: "ai_thread_messages_thread_id_fkey"
             columns: ["thread_id"]
-            isOneToOne: false
             referencedRelation: "ai_threads"
             referencedColumns: ["id"]
           },
@@ -774,7 +831,7 @@ export type Database = {
           created_at: string | null
           endpoint: string
           id: string
-          ip_address: unknown
+          ip_address: unknown | null
           method: string
           request_data: Json | null
           response_data: Json | null
@@ -786,7 +843,7 @@ export type Database = {
           created_at?: string | null
           endpoint: string
           id?: string
-          ip_address?: unknown
+          ip_address?: unknown | null
           method: string
           request_data?: Json | null
           response_data?: Json | null
@@ -798,7 +855,7 @@ export type Database = {
           created_at?: string | null
           endpoint?: string
           id?: string
-          ip_address?: unknown
+          ip_address?: unknown | null
           method?: string
           request_data?: Json | null
           response_data?: Json | null
@@ -1221,14 +1278,12 @@ export type Database = {
           {
             foreignKeyName: "coupon_redemptions_coupon_id_fkey"
             columns: ["coupon_id"]
-            isOneToOne: false
             referencedRelation: "coupons"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "coupon_redemptions_subscription_id_fkey"
             columns: ["subscription_id"]
-            isOneToOne: false
             referencedRelation: "user_subscriptions"
             referencedColumns: ["id"]
           },
@@ -1329,14 +1384,12 @@ export type Database = {
           {
             foreignKeyName: "credit_transactions_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "credit_transactions_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: false
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
           },
@@ -1392,14 +1445,12 @@ export type Database = {
           {
             foreignKeyName: "deployment_logs_triggered_by_fkey"
             columns: ["triggered_by"]
-            isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "deployment_logs_triggered_by_fkey"
             columns: ["triggered_by"]
-            isOneToOne: false
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
           },
@@ -1542,14 +1593,12 @@ export type Database = {
           {
             foreignKeyName: "email_drafts_reply_to_message_id_fkey"
             columns: ["reply_to_message_id"]
-            isOneToOne: false
             referencedRelation: "admin_inbox_messages"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "email_drafts_signature_id_fkey"
             columns: ["signature_id"]
-            isOneToOne: false
             referencedRelation: "email_signatures"
             referencedColumns: ["id"]
           },
@@ -1605,7 +1654,6 @@ export type Database = {
           {
             foreignKeyName: "email_log_template_id_fkey"
             columns: ["template_id"]
-            isOneToOne: false
             referencedRelation: "email_templates"
             referencedColumns: ["id"]
           },
@@ -1800,6 +1848,45 @@ export type Database = {
         }
         Relationships: []
       }
+      higgsfield_connections: {
+        Row: {
+          access_token: string
+          account_email: string | null
+          account_id: string | null
+          created_at: string
+          expires_at: string | null
+          id: string
+          refresh_token: string | null
+          scope: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          access_token: string
+          account_email?: string | null
+          account_id?: string | null
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          refresh_token?: string | null
+          scope?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          access_token?: string
+          account_email?: string | null
+          account_id?: string | null
+          created_at?: string
+          expires_at?: string | null
+          id?: string
+          refresh_token?: string | null
+          scope?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       image_reference_presets: {
         Row: {
           created_at: string
@@ -1883,7 +1970,6 @@ export type Database = {
           {
             foreignKeyName: "launch_checklist_dependency_id_fkey"
             columns: ["dependency_id"]
-            isOneToOne: false
             referencedRelation: "launch_checklist"
             referencedColumns: ["id"]
           },
@@ -1969,7 +2055,6 @@ export type Database = {
           {
             foreignKeyName: "leads_form_id_fkey"
             columns: ["form_id"]
-            isOneToOne: false
             referencedRelation: "lead_forms"
             referencedColumns: ["id"]
           },
@@ -2007,7 +2092,6 @@ export type Database = {
           {
             foreignKeyName: "log_analyses_log_id_fkey"
             columns: ["log_id"]
-            isOneToOne: true
             referencedRelation: "system_logs"
             referencedColumns: ["id"]
           },
@@ -2063,7 +2147,6 @@ export type Database = {
           {
             foreignKeyName: "mcp_oauth_authorizations_client_id_fkey"
             columns: ["client_id"]
-            isOneToOne: false
             referencedRelation: "mcp_oauth_clients"
             referencedColumns: ["client_id"]
           },
@@ -2167,9 +2250,66 @@ export type Database = {
           {
             foreignKeyName: "mcp_oauth_tokens_client_id_fkey"
             columns: ["client_id"]
-            isOneToOne: false
             referencedRelation: "mcp_oauth_clients"
             referencedColumns: ["client_id"]
+          },
+        ]
+      }
+      media_file_providers: {
+        Row: {
+          bytes: number | null
+          created_at: string
+          deleted_at: string | null
+          deleted_reason: string | null
+          delivery_url: string | null
+          error: string | null
+          id: string
+          media_file_id: string
+          mime_type: string | null
+          object_key: string
+          object_version: number
+          provider: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          bytes?: number | null
+          created_at?: string
+          deleted_at?: string | null
+          deleted_reason?: string | null
+          delivery_url?: string | null
+          error?: string | null
+          id?: string
+          media_file_id: string
+          mime_type?: string | null
+          object_key: string
+          object_version?: number
+          provider: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          bytes?: number | null
+          created_at?: string
+          deleted_at?: string | null
+          deleted_reason?: string | null
+          delivery_url?: string | null
+          error?: string | null
+          id?: string
+          media_file_id?: string
+          mime_type?: string | null
+          object_key?: string
+          object_version?: number
+          provider?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "media_file_providers_media_file_id_fkey"
+            columns: ["media_file_id"]
+            referencedRelation: "media_files"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -2177,6 +2317,7 @@ export type Database = {
         Row: {
           cloudinary_public_id: string | null
           created_at: string | null
+          current_object_version: number
           file_path: string
           file_size: number | null
           file_type: string
@@ -2193,6 +2334,7 @@ export type Database = {
         Insert: {
           cloudinary_public_id?: string | null
           created_at?: string | null
+          current_object_version?: number
           file_path: string
           file_size?: number | null
           file_type: string
@@ -2209,6 +2351,7 @@ export type Database = {
         Update: {
           cloudinary_public_id?: string | null
           created_at?: string | null
+          current_object_version?: number
           file_path?: string
           file_size?: number | null
           file_type?: string
@@ -2304,7 +2447,6 @@ export type Database = {
           {
             foreignKeyName: "media_operations_history_media_file_id_fkey"
             columns: ["media_file_id"]
-            isOneToOne: false
             referencedRelation: "media_files"
             referencedColumns: ["id"]
           },
@@ -2381,7 +2523,6 @@ export type Database = {
           {
             foreignKeyName: "messaging_cache_workspace_id_fkey"
             columns: ["workspace_id"]
-            isOneToOne: false
             referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
@@ -2506,7 +2647,6 @@ export type Database = {
           {
             foreignKeyName: "node_execution_logs_execution_id_fkey"
             columns: ["execution_id"]
-            isOneToOne: false
             referencedRelation: "workflow_executions"
             referencedColumns: ["id"]
           },
@@ -2541,7 +2681,6 @@ export type Database = {
           {
             foreignKeyName: "notification_reads_notification_id_fkey"
             columns: ["notification_id"]
-            isOneToOne: false
             referencedRelation: "system_notifications"
             referencedColumns: ["id"]
           },
@@ -2580,6 +2719,39 @@ export type Database = {
           name?: string
           redirect_uris?: string[]
           updated_at?: string | null
+        }
+        Relationships: []
+      }
+      oauth_clients: {
+        Row: {
+          client_id: string
+          client_secret: string | null
+          created_at: string
+          id: string
+          issuer: string
+          provider_code: string
+          redirect_uri: string
+          registration_response: Json
+        }
+        Insert: {
+          client_id: string
+          client_secret?: string | null
+          created_at?: string
+          id?: string
+          issuer: string
+          provider_code: string
+          redirect_uri: string
+          registration_response?: Json
+        }
+        Update: {
+          client_id?: string
+          client_secret?: string | null
+          created_at?: string
+          id?: string
+          issuer?: string
+          provider_code?: string
+          redirect_uri?: string
+          registration_response?: Json
         }
         Relationships: []
       }
@@ -2690,11 +2862,46 @@ export type Database = {
           {
             foreignKeyName: "oauth_redirect_requests_oauth_app_id_fkey"
             columns: ["oauth_app_id"]
-            isOneToOne: false
             referencedRelation: "oauth_apps"
             referencedColumns: ["id"]
           },
         ]
+      }
+      oauth_states: {
+        Row: {
+          code_verifier: string
+          created_at: string
+          expires_at: string
+          provider_code: string
+          redirect_uri: string
+          return_to: string | null
+          scope_kind: string
+          state: string
+          user_id: string | null
+        }
+        Insert: {
+          code_verifier: string
+          created_at?: string
+          expires_at?: string
+          provider_code: string
+          redirect_uri: string
+          return_to?: string | null
+          scope_kind: string
+          state: string
+          user_id?: string | null
+        }
+        Update: {
+          code_verifier?: string
+          created_at?: string
+          expires_at?: string
+          provider_code?: string
+          redirect_uri?: string
+          return_to?: string | null
+          scope_kind?: string
+          state?: string
+          user_id?: string | null
+        }
+        Relationships: []
       }
       observability_alert_configs: {
         Row: {
@@ -2824,7 +3031,6 @@ export type Database = {
           {
             foreignKeyName: "observability_alert_history_alert_config_id_fkey"
             columns: ["alert_config_id"]
-            isOneToOne: false
             referencedRelation: "observability_alert_configs"
             referencedColumns: ["id"]
           },
@@ -2926,6 +3132,205 @@ export type Database = {
         }
         Relationships: []
       }
+      partner_api_idempotency: {
+        Row: {
+          attempt_token: string
+          completed_at: string | null
+          created_at: string
+          expires_at: string
+          http_status: number | null
+          idempotency_key: string
+          key_id: string
+          locked_until: string | null
+          request_hash: string
+          response_body: Json | null
+          state: string
+        }
+        Insert: {
+          attempt_token?: string
+          completed_at?: string | null
+          created_at?: string
+          expires_at?: string
+          http_status?: number | null
+          idempotency_key: string
+          key_id: string
+          locked_until?: string | null
+          request_hash: string
+          response_body?: Json | null
+          state: string
+        }
+        Update: {
+          attempt_token?: string
+          completed_at?: string | null
+          created_at?: string
+          expires_at?: string
+          http_status?: number | null
+          idempotency_key?: string
+          key_id?: string
+          locked_until?: string | null
+          request_hash?: string
+          response_body?: Json | null
+          state?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "partner_api_idempotency_key_id_fkey"
+            columns: ["key_id"]
+            referencedRelation: "partner_api_keys"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      partner_api_keys: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          current_usage_count: number
+          expires_at: string | null
+          id: string
+          key_hash: string
+          key_prefix: string
+          last_reset_at: string
+          last_used_at: string | null
+          monthly_quota: number | null
+          name: string
+          rate_limit_per_min: number
+          revoked_at: string | null
+          revoked_by: string | null
+          revoked_reason: string | null
+          scopes: string[]
+          social_account_id: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          current_usage_count?: number
+          expires_at?: string | null
+          id?: string
+          key_hash: string
+          key_prefix: string
+          last_reset_at?: string
+          last_used_at?: string | null
+          monthly_quota?: number | null
+          name: string
+          rate_limit_per_min?: number
+          revoked_at?: string | null
+          revoked_by?: string | null
+          revoked_reason?: string | null
+          scopes?: string[]
+          social_account_id: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          current_usage_count?: number
+          expires_at?: string | null
+          id?: string
+          key_hash?: string
+          key_prefix?: string
+          last_reset_at?: string
+          last_used_at?: string | null
+          monthly_quota?: number | null
+          name?: string
+          rate_limit_per_min?: number
+          revoked_at?: string | null
+          revoked_by?: string | null
+          revoked_reason?: string | null
+          scopes?: string[]
+          social_account_id?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "partner_api_keys_account_in_workspace"
+            columns: ["social_account_id", "workspace_id"]
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "partner_api_keys_workspace_id_fkey"
+            columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      partner_api_rate_buckets: {
+        Row: {
+          key_id: string
+          request_count: number
+          window_start: string
+        }
+        Insert: {
+          key_id: string
+          request_count?: number
+          window_start: string
+        }
+        Update: {
+          key_id?: string
+          request_count?: number
+          window_start?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "partner_api_rate_buckets_key_id_fkey"
+            columns: ["key_id"]
+            referencedRelation: "partner_api_keys"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      partner_api_usage: {
+        Row: {
+          action: string
+          billable: boolean
+          created_at: string
+          error_code: string | null
+          http_status: number
+          id: string
+          key_id: string
+          workspace_id: string
+        }
+        Insert: {
+          action: string
+          billable?: boolean
+          created_at?: string
+          error_code?: string | null
+          http_status: number
+          id?: string
+          key_id: string
+          workspace_id: string
+        }
+        Update: {
+          action?: string
+          billable?: boolean
+          created_at?: string
+          error_code?: string | null
+          http_status?: number
+          id?: string
+          key_id?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "partner_api_usage_key_in_workspace"
+            columns: ["key_id", "workspace_id"]
+            referencedRelation: "partner_api_keys"
+            referencedColumns: ["id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "partner_api_usage_workspace_id_fkey"
+            columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       password_reset_otps: {
         Row: {
           attempts: number | null
@@ -3003,21 +3408,18 @@ export type Database = {
           {
             foreignKeyName: "platform_posts_post_id_fkey"
             columns: ["post_id"]
-            isOneToOne: false
             referencedRelation: "posts"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "platform_posts_social_account_id_fkey"
             columns: ["social_account_id"]
-            isOneToOne: false
             referencedRelation: "public_social_accounts"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "platform_posts_social_account_id_fkey"
             columns: ["social_account_id"]
-            isOneToOne: false
             referencedRelation: "social_accounts"
             referencedColumns: ["id"]
           },
@@ -3157,24 +3559,45 @@ export type Database = {
       }
       provider_api_keys: {
         Row: {
-          api_key: string
+          access_token: string | null
+          account_id: string | null
+          api_key: string | null
+          auth_type: string
           created_by: string | null
+          expires_at: string | null
           id: string
+          meta: Json
           provider_code: string
+          refresh_token: string | null
+          scope: string | null
           updated_at: string | null
         }
         Insert: {
-          api_key: string
+          access_token?: string | null
+          account_id?: string | null
+          api_key?: string | null
+          auth_type?: string
           created_by?: string | null
+          expires_at?: string | null
           id?: string
+          meta?: Json
           provider_code: string
+          refresh_token?: string | null
+          scope?: string | null
           updated_at?: string | null
         }
         Update: {
-          api_key?: string
+          access_token?: string | null
+          account_id?: string | null
+          api_key?: string | null
+          auth_type?: string
           created_by?: string | null
+          expires_at?: string | null
           id?: string
+          meta?: Json
           provider_code?: string
+          refresh_token?: string | null
+          scope?: string | null
           updated_at?: string | null
         }
         Relationships: []
@@ -3370,14 +3793,12 @@ export type Database = {
           {
             foreignKeyName: "scheduled_emails_reply_to_message_id_fkey"
             columns: ["reply_to_message_id"]
-            isOneToOne: false
             referencedRelation: "admin_inbox_messages"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "scheduled_emails_signature_id_fkey"
             columns: ["signature_id"]
-            isOneToOne: false
             referencedRelation: "email_signatures"
             referencedColumns: ["id"]
           },
@@ -3460,14 +3881,12 @@ export type Database = {
           {
             foreignKeyName: "social_accounts_social_profile_id_fkey"
             columns: ["social_profile_id"]
-            isOneToOne: false
             referencedRelation: "social_profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "social_accounts_workspace_id_fkey"
             columns: ["workspace_id"]
-            isOneToOne: false
             referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
@@ -3988,14 +4407,12 @@ export type Database = {
           {
             foreignKeyName: "threads_mentions_social_account_id_fkey"
             columns: ["social_account_id"]
-            isOneToOne: false
             referencedRelation: "public_social_accounts"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "threads_mentions_social_account_id_fkey"
             columns: ["social_account_id"]
-            isOneToOne: false
             referencedRelation: "social_accounts"
             referencedColumns: ["id"]
           },
@@ -4111,14 +4528,12 @@ export type Database = {
           {
             foreignKeyName: "threads_reply_cache_social_account_id_fkey"
             columns: ["social_account_id"]
-            isOneToOne: false
             referencedRelation: "public_social_accounts"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "threads_reply_cache_social_account_id_fkey"
             columns: ["social_account_id"]
-            isOneToOne: false
             referencedRelation: "social_accounts"
             referencedColumns: ["id"]
           },
@@ -4153,7 +4568,6 @@ export type Database = {
           {
             foreignKeyName: "ticket_activities_ticket_id_fkey"
             columns: ["ticket_id"]
-            isOneToOne: false
             referencedRelation: "support_tickets"
             referencedColumns: ["id"]
           },
@@ -4191,7 +4605,6 @@ export type Database = {
           {
             foreignKeyName: "ticket_messages_ticket_id_fkey"
             columns: ["ticket_id"]
-            isOneToOne: false
             referencedRelation: "support_tickets"
             referencedColumns: ["id"]
           },
@@ -4313,14 +4726,12 @@ export type Database = {
           {
             foreignKeyName: "token_refresh_history_account_id_fkey"
             columns: ["account_id"]
-            isOneToOne: false
             referencedRelation: "public_social_accounts"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "token_refresh_history_account_id_fkey"
             columns: ["account_id"]
-            isOneToOne: false
             referencedRelation: "social_accounts"
             referencedColumns: ["id"]
           },
@@ -4385,7 +4796,6 @@ export type Database = {
           {
             foreignKeyName: "user_blog_post_reads_blog_post_id_fkey"
             columns: ["blog_post_id"]
-            isOneToOne: false
             referencedRelation: "blog_posts"
             referencedColumns: ["id"]
           },
@@ -4459,14 +4869,12 @@ export type Database = {
           {
             foreignKeyName: "user_credits_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: true
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_credits_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: true
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
           },
@@ -4507,28 +4915,24 @@ export type Database = {
           {
             foreignKeyName: "user_feature_overrides_created_by_fkey"
             columns: ["created_by"]
-            isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_feature_overrides_created_by_fkey"
             columns: ["created_by"]
-            isOneToOne: false
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_feature_overrides_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_feature_overrides_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: false
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
           },
@@ -4590,7 +4994,6 @@ export type Database = {
           {
             foreignKeyName: "user_notification_reads_notification_id_fkey"
             columns: ["notification_id"]
-            isOneToOne: false
             referencedRelation: "admin_notifications"
             referencedColumns: ["id"]
           },
@@ -4598,9 +5001,12 @@ export type Database = {
       }
       user_quotas: {
         Row: {
+          ai_generations_reset_date: string | null
+          ai_generations_today: number
           created_at: string | null
           daily_reset_date: string | null
           id: string
+          max_ai_generations_per_day: number | null
           max_media_uploads_per_day: number | null
           max_posts_per_day: number | null
           max_posts_per_month: number | null
@@ -4615,9 +5021,12 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          ai_generations_reset_date?: string | null
+          ai_generations_today?: number
           created_at?: string | null
           daily_reset_date?: string | null
           id?: string
+          max_ai_generations_per_day?: number | null
           max_media_uploads_per_day?: number | null
           max_posts_per_day?: number | null
           max_posts_per_month?: number | null
@@ -4632,9 +5041,12 @@ export type Database = {
           user_id: string
         }
         Update: {
+          ai_generations_reset_date?: string | null
+          ai_generations_today?: number
           created_at?: string | null
           daily_reset_date?: string | null
           id?: string
+          max_ai_generations_per_day?: number | null
           max_media_uploads_per_day?: number | null
           max_posts_per_day?: number | null
           max_posts_per_month?: number | null
@@ -4652,14 +5064,12 @@ export type Database = {
           {
             foreignKeyName: "user_quotas_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: true
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_quotas_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: true
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
           },
@@ -4706,28 +5116,24 @@ export type Database = {
           {
             foreignKeyName: "user_rate_limits_created_by_fkey"
             columns: ["created_by"]
-            isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_rate_limits_created_by_fkey"
             columns: ["created_by"]
-            isOneToOne: false
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_rate_limits_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: false
             referencedRelation: "profiles"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_rate_limits_user_id_fkey"
             columns: ["user_id"]
-            isOneToOne: false
             referencedRelation: "profiles_public"
             referencedColumns: ["id"]
           },
@@ -4804,14 +5210,12 @@ export type Database = {
           {
             foreignKeyName: "user_subscriptions_coupon_id_fkey"
             columns: ["coupon_id"]
-            isOneToOne: false
             referencedRelation: "coupons"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "user_subscriptions_plan_id_fkey"
             columns: ["plan_id"]
-            isOneToOne: false
             referencedRelation: "subscription_plans"
             referencedColumns: ["id"]
           },
@@ -4903,7 +5307,6 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_agents_workspace_id_fkey"
             columns: ["workspace_id"]
-            isOneToOne: false
             referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
@@ -4944,14 +5347,12 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_assignment_history_from_agent_id_fkey"
             columns: ["from_agent_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_agents"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "whatsapp_assignment_history_to_agent_id_fkey"
             columns: ["to_agent_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_agents"
             referencedColumns: ["id"]
           },
@@ -5064,14 +5465,12 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_broadcast_recipients_broadcast_id_fkey"
             columns: ["broadcast_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_broadcasts"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "whatsapp_broadcast_recipients_contact_id_fkey"
             columns: ["contact_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_contacts"
             referencedColumns: ["id"]
           },
@@ -5145,14 +5544,12 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_contact_group_members_contact_id_fkey"
             columns: ["contact_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_contacts"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "whatsapp_contact_group_members_group_id_fkey"
             columns: ["group_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_contact_groups"
             referencedColumns: ["id"]
           },
@@ -5265,7 +5662,6 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_contacts_workspace_id_fkey"
             columns: ["workspace_id"]
-            isOneToOne: false
             referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
@@ -5315,28 +5711,24 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_assignments_conversation_workspace_fkey"
             columns: ["conversation_cache_id", "workspace_id"]
-            isOneToOne: false
             referencedRelation: "messaging_cache"
             referencedColumns: ["id", "workspace_id"]
           },
           {
             foreignKeyName: "whatsapp_conversation_assignments_agent_id_fkey"
             columns: ["agent_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_agents"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "whatsapp_conversation_assignments_conversation_cache_id_fkey"
             columns: ["conversation_cache_id"]
-            isOneToOne: false
             referencedRelation: "messaging_cache"
             referencedColumns: ["id"]
           },
           {
             foreignKeyName: "whatsapp_conversation_assignments_workspace_id_fkey"
             columns: ["workspace_id"]
-            isOneToOne: false
             referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
@@ -5368,7 +5760,6 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_conversation_label_assignments_label_id_fkey"
             columns: ["label_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_conversation_labels"
             referencedColumns: ["id"]
           },
@@ -5454,30 +5845,32 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_deals_contact_workspace_fkey"
             columns: ["contact_id", "workspace_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_contacts"
             referencedColumns: ["id", "workspace_id"]
           },
           {
             foreignKeyName: "whatsapp_deals_conversation_workspace_fkey"
             columns: ["conversation_cache_id", "workspace_id"]
-            isOneToOne: false
             referencedRelation: "messaging_cache"
             referencedColumns: ["id", "workspace_id"]
           },
           {
             foreignKeyName: "whatsapp_deals_pipeline_workspace_fkey"
             columns: ["pipeline_id", "workspace_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_pipelines"
             referencedColumns: ["id", "workspace_id"]
           },
           {
             foreignKeyName: "whatsapp_deals_stage_pipeline_workspace_fkey"
             columns: ["stage_id", "pipeline_id", "workspace_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_pipeline_stages"
             referencedColumns: ["id", "pipeline_id", "workspace_id"]
+          },
+          {
+            foreignKeyName: "whatsapp_deals_workspace_id_fkey"
+            columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
           },
         ]
       }
@@ -5666,7 +6059,6 @@ export type Database = {
           {
             foreignKeyName: "whatsapp_stages_pipeline_workspace_fkey"
             columns: ["pipeline_id", "workspace_id"]
-            isOneToOne: false
             referencedRelation: "whatsapp_pipelines"
             referencedColumns: ["id", "workspace_id"]
           },
@@ -5697,7 +6089,14 @@ export type Database = {
           updated_at?: string
           workspace_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_pipelines_workspace_id_fkey"
+            columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       whatsapp_quick_replies: {
         Row: {
@@ -5890,7 +6289,6 @@ export type Database = {
           {
             foreignKeyName: "workflow_comments_workflow_id_fkey"
             columns: ["workflow_id"]
-            isOneToOne: false
             referencedRelation: "workflows"
             referencedColumns: ["id"]
           },
@@ -5934,7 +6332,6 @@ export type Database = {
           {
             foreignKeyName: "workflow_executions_workflow_id_fkey"
             columns: ["workflow_id"]
-            isOneToOne: false
             referencedRelation: "workflows"
             referencedColumns: ["id"]
           },
@@ -5984,7 +6381,6 @@ export type Database = {
           {
             foreignKeyName: "workflow_schedules_workflow_id_fkey"
             columns: ["workflow_id"]
-            isOneToOne: false
             referencedRelation: "workflows"
             referencedColumns: ["id"]
           },
@@ -6079,7 +6475,6 @@ export type Database = {
           {
             foreignKeyName: "workflow_versions_workflow_id_fkey"
             columns: ["workflow_id"]
-            isOneToOne: false
             referencedRelation: "workflows"
             referencedColumns: ["id"]
           },
@@ -6123,7 +6518,6 @@ export type Database = {
           {
             foreignKeyName: "workflow_webhooks_workflow_id_fkey"
             columns: ["workflow_id"]
-            isOneToOne: false
             referencedRelation: "workflows"
             referencedColumns: ["id"]
           },
@@ -6224,7 +6618,6 @@ export type Database = {
           {
             foreignKeyName: "workspace_invitations_workspace_id_fkey"
             columns: ["workspace_id"]
-            isOneToOne: false
             referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
@@ -6259,7 +6652,6 @@ export type Database = {
           {
             foreignKeyName: "workspace_members_workspace_id_fkey"
             columns: ["workspace_id"]
-            isOneToOne: false
             referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
@@ -6294,24 +6686,45 @@ export type Database = {
       }
     }
     Views: {
+      higgsfield_connection_status: {
+        Row: {
+          account_email: string | null
+          connected: boolean | null
+          expires_at: string | null
+          user_id: string | null
+        }
+        Insert: {
+          account_email?: string | null
+          connected?: never
+          expires_at?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          account_email?: string | null
+          connected?: never
+          expires_at?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       hypopg_hidden_indexes: {
         Row: {
-          am_name: unknown
-          index_name: unknown
-          indexrelid: unknown
+          am_name: unknown | null
+          index_name: unknown | null
+          indexrelid: unknown | null
           is_hypo: boolean | null
-          schema_name: unknown
-          table_name: unknown
+          schema_name: unknown | null
+          table_name: unknown | null
         }
         Relationships: []
       }
       hypopg_list_indexes: {
         Row: {
-          am_name: unknown
+          am_name: unknown | null
           index_name: string | null
-          indexrelid: unknown
-          schema_name: unknown
-          table_name: unknown
+          indexrelid: unknown | null
+          schema_name: unknown | null
+          table_name: unknown | null
         }
         Relationships: []
       }
@@ -6365,7 +6778,6 @@ export type Database = {
           {
             foreignKeyName: "social_accounts_social_profile_id_fkey"
             columns: ["social_profile_id"]
-            isOneToOne: false
             referencedRelation: "social_profiles"
             referencedColumns: ["id"]
           },
@@ -6379,32 +6791,32 @@ export type Database = {
       }
       add_ticket_message: {
         Args: {
-          p_attachments?: Json
-          p_is_internal?: boolean
           p_message: string
+          p_is_internal?: boolean
           p_ticket_id: string
+          p_attachments?: Json
         }
         Returns: string
       }
       add_user_credits: {
         Args: {
-          p_amount: number
           p_description?: string
           p_stripe_session_id?: string
-          p_transaction_type?: string
+          p_amount: number
           p_user_id: string
+          p_transaction_type?: string
         }
         Returns: number
       }
       admin_get_profiles: {
-        Args: { p_limit?: number; p_offset?: number; p_search?: string }
+        Args: { p_offset?: number; p_limit?: number; p_search?: string }
         Returns: {
+          email: string
           avatar_url: string
           created_at: string
-          email: string
-          full_name: string
-          id: string
           referral_code: string
+          id: string
+          full_name: string
         }[]
       }
       algorithm_sign: {
@@ -6412,31 +6824,41 @@ export type Database = {
         Returns: string
       }
       assign_ticket: {
-        Args: { p_assignee_id: string; p_ticket_id: string }
+        Args: { p_ticket_id: string; p_assignee_id: string }
         Returns: boolean
+      }
+      binary_quantize: {
+        Args: { "": string } | { "": unknown }
+        Returns: unknown
       }
       calculate_health_score: {
         Args: {
+          p_storage_percent: number
+          p_edge_function_errors: number
           p_api_error_rate: number
           p_db_query_time: number
-          p_edge_function_errors: number
-          p_storage_percent: number
         }
         Returns: number
       }
-      can_create_post: { Args: { p_user_id: string }; Returns: boolean }
-      can_upload_media: { Args: { p_user_id: string }; Returns: boolean }
+      can_create_post: {
+        Args: { p_user_id: string }
+        Returns: boolean
+      }
+      can_upload_media: {
+        Args: { p_user_id: string }
+        Returns: boolean
+      }
       check_rate_limit: {
         Args: {
+          p_window_seconds: number
           p_endpoint: string
           p_identifier: string
           p_max_requests: number
-          p_window_seconds: number
         }
         Returns: Json
       }
       claim_ai_knowledge_excel_source: {
-        Args: never
+        Args: Record<PropertyKey, never>
         Returns: {
           chunk_count: number | null
           created_at: string | null
@@ -6449,24 +6871,49 @@ export type Database = {
           updated_at: string | null
           user_id: string
         }[]
-        SetofOptions: {
-          from: "*"
-          to: "ai_knowledge_sources"
-          isOneToOne: false
-          isSetofReturn: true
-        }
       }
-      cleanup_expired_otps: { Args: never; Returns: undefined }
-      cleanup_old_health_data: {
-        Args: never
+      claim_partner_idempotency: {
+        Args: {
+          p_key_id: string
+          p_idempotency_key: string
+          p_lease_seconds?: number
+          p_request_hash: string
+        }
         Returns: {
-          edge_status_deleted: number
-          logs_deleted: number
-          snapshots_deleted: number
+          attempt_token: string
+          response_body: Json
+          http_status: number
+          outcome: string
         }[]
       }
-      cleanup_old_token_refresh_history: { Args: never; Returns: number }
-      cleanup_rate_limit_buckets: { Args: never; Returns: number }
+      cleanup_expired_otps: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      cleanup_old_health_data: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          snapshots_deleted: number
+          edge_status_deleted: number
+          logs_deleted: number
+        }[]
+      }
+      cleanup_old_token_refresh_history: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      cleanup_rate_limit_buckets: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
+      consume_partner_rate: {
+        Args: { p_key_id: string; p_limit: number }
+        Returns: boolean
+      }
+      count_openinary_backfill_remaining: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
       create_default_whatsapp_pipeline: {
         Args: { p_workspace_id: string }
         Returns: string
@@ -6474,9 +6921,9 @@ export type Database = {
       create_support_ticket: {
         Args: {
           p_attachments?: Json
+          p_priority?: string
           p_category: string
           p_description: string
-          p_priority?: string
           p_subject: string
         }
         Returns: string
@@ -6485,60 +6932,74 @@ export type Database = {
         Args: { p_user_id: string }
         Returns: string
       }
-      generate_referral_code: { Args: never; Returns: string }
+      generate_referral_code: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
       get_active_ai_model_config: {
-        Args: { p_feature?: string; p_user_id: string }
+        Args: { p_user_id: string; p_feature?: string }
         Returns: {
+          supports_streaming: boolean
+          provider_code: string
+          model_id: string
+          model_name: string
           api_endpoint: string
           api_key_env_var: string
           api_type: string
-          model_id: string
-          model_name: string
-          provider_code: string
-          supports_streaming: boolean
+        }[]
+      }
+      get_cdn_provider_counts: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          openinary_only: number
+          both: number
+          cloudinary_only: number
         }[]
       }
       get_checklist_progress: {
-        Args: never
+        Args: Record<PropertyKey, never>
         Returns: {
-          completed_items: number
           progress_percentage: number
+          completed_items: number
           total_items: number
         }[]
       }
       get_coupon_stats: {
         Args: { p_coupon_id: string }
         Returns: {
-          avg_discount: number
-          total_discount: number
-          total_redemptions: number
           unique_users: number
+          avg_discount: number
+          total_redemptions: number
+          total_discount: number
         }[]
       }
       get_cron_jobs: {
-        Args: never
+        Args: Record<PropertyKey, never>
         Returns: {
-          active: boolean
-          command: string
-          database: string
           jobid: number
           jobname: string
+          schedule: string
+          active: boolean
           nodename: string
           nodeport: number
-          schedule: string
+          database: string
           username: string
+          command: string
         }[]
       }
-      get_cron_secret: { Args: never; Returns: string }
+      get_cron_secret: {
+        Args: Record<PropertyKey, never>
+        Returns: string
+      }
       get_edge_function_statuses: {
-        Args: never
+        Args: Record<PropertyKey, never>
         Returns: {
-          avg_execution_time_ms: number
-          checked_at: string
-          error_rate: number
-          function_name: string
-          invocations_last_hour: number
           last_error: string
+          function_name: string
+          error_rate: number
+          avg_execution_time_ms: number
+          invocations_last_hour: number
+          checked_at: string
           status: string
         }[]
       }
@@ -6546,8 +7007,8 @@ export type Database = {
         Args: { p_days?: number }
         Returns: {
           click_rate: number
-          delivered_rate: number
           open_rate: number
+          delivered_rate: number
           total_sent: number
         }[]
       }
@@ -6556,65 +7017,74 @@ export type Database = {
         Returns: {
           active_sessions: number
           api_requests_per_minute: number
-          captured_at: string
-          health_score: number
           health_status: string
+          health_score: number
+          captured_at: string
         }[]
       }
       get_latest_health_snapshot: {
-        Args: never
+        Args: Record<PropertyKey, never>
         Returns: {
-          active_sessions: number
-          alerts_active: number
+          health_status: string
+          db_connections: number
           api_requests_per_minute: number
           captured_at: string
-          db_connections: number
           health_score: number
-          health_status: string
           id: string
-          mrr: number
           total_users: number
+          mrr: number
+          alerts_active: number
+          active_sessions: number
         }[]
       }
       get_my_notifications: {
-        Args: { p_limit?: number; p_unread_only?: boolean }
+        Args: { p_unread_only?: boolean; p_limit?: number }
         Returns: {
-          action_label: string
-          action_url: string
-          dismissible: boolean
           expires_at: string
           id: string
+          title: string
           message: string
+          type: string
           priority: string
+          action_label: string
+          action_url: string
           published_at: string
           read_at: string
-          title: string
-          type: string
+          dismissible: boolean
         }[]
       }
       get_notification_stats: {
         Args: { p_notification_id: string }
         Returns: {
-          read_rate: number
           total_reads: number
           unique_readers: number
+          read_rate: number
+        }[]
+      }
+      get_openinary_backfill_batch: {
+        Args: { p_retry_failed?: boolean; p_limit: number }
+        Returns: {
+          object_key: string
+          delivery_url: string
+          media_file_id: string
+          object_version: number
         }[]
       }
       get_system_logs_filtered: {
         Args: {
-          p_hours?: number
           p_level?: string
-          p_limit?: number
           p_service?: string
+          p_hours?: number
+          p_limit?: number
         }
         Returns: {
-          component: string
-          created_at: string
-          error_code: string
-          id: string
           level: string
-          message: string
+          id: string
+          created_at: string
           service: string
+          component: string
+          message: string
+          error_code: string
           user_id: string
         }[]
       }
@@ -6622,33 +7092,95 @@ export type Database = {
         Args: { _user_id: string }
         Returns: Database["public"]["Enums"]["app_role"]
       }
+      halfvec_avg: {
+        Args: { "": number[] }
+        Returns: unknown
+      }
+      halfvec_out: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      halfvec_send: {
+        Args: { "": unknown }
+        Returns: string
+      }
+      halfvec_typmod_in: {
+        Args: { "": unknown[] }
+        Returns: number
+      }
       has_role: {
         Args: {
-          _role: Database["public"]["Enums"]["app_role"]
           _user_id: string
+          _role: Database["public"]["Enums"]["app_role"]
         }
         Returns: boolean
       }
-      hypopg: { Args: never; Returns: Record<string, unknown>[] }
+      hnsw_bit_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      hnsw_halfvec_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      hnsw_sparsevec_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      hnswhandler: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      hypopg: {
+        Args: Record<PropertyKey, never>
+        Returns: Record<string, unknown>[]
+      }
       hypopg_create_index: {
         Args: { sql_order: string }
         Returns: Record<string, unknown>[]
       }
-      hypopg_drop_index: { Args: { indexid: unknown }; Returns: boolean }
-      hypopg_get_indexdef: { Args: { indexid: unknown }; Returns: string }
+      hypopg_drop_index: {
+        Args: { indexid: unknown }
+        Returns: boolean
+      }
+      hypopg_get_indexdef: {
+        Args: { indexid: unknown }
+        Returns: string
+      }
       hypopg_hidden_indexes: {
-        Args: never
+        Args: Record<PropertyKey, never>
         Returns: {
           indexid: unknown
         }[]
       }
-      hypopg_hide_index: { Args: { indexid: unknown }; Returns: boolean }
-      hypopg_relation_size: { Args: { indexid: unknown }; Returns: number }
-      hypopg_reset: { Args: never; Returns: undefined }
-      hypopg_reset_index: { Args: never; Returns: undefined }
-      hypopg_unhide_all_indexes: { Args: never; Returns: undefined }
-      hypopg_unhide_index: { Args: { indexid: unknown }; Returns: boolean }
-      increment_media_uploads: { Args: { p_user_id: string }; Returns: boolean }
+      hypopg_hide_index: {
+        Args: { indexid: unknown }
+        Returns: boolean
+      }
+      hypopg_relation_size: {
+        Args: { indexid: unknown }
+        Returns: number
+      }
+      hypopg_reset: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      hypopg_reset_index: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      hypopg_unhide_all_indexes: {
+        Args: Record<PropertyKey, never>
+        Returns: undefined
+      }
+      hypopg_unhide_index: {
+        Args: { indexid: unknown }
+        Returns: boolean
+      }
+      increment_media_uploads: {
+        Args: { p_user_id: string }
+        Returns: boolean
+      }
       increment_template_use_count: {
         Args: { p_template_id: string }
         Returns: undefined
@@ -6656,12 +7188,12 @@ export type Database = {
       index_advisor: {
         Args: { query: string }
         Returns: {
-          errors: string[]
-          index_statements: string[]
-          startup_cost_after: Json
           startup_cost_before: Json
-          total_cost_after: Json
+          startup_cost_after: Json
           total_cost_before: Json
+          index_statements: string[]
+          errors: string[]
+          total_cost_after: Json
         }[]
       }
       is_coupon_valid: {
@@ -6672,12 +7204,32 @@ export type Database = {
         Args: { p_user_id?: string; p_workspace_id: string }
         Returns: boolean
       }
+      ivfflat_bit_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      ivfflat_halfvec_support: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      ivfflathandler: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      l2_norm: {
+        Args: { "": unknown } | { "": unknown }
+        Returns: number
+      }
+      l2_normalize: {
+        Args: { "": string } | { "": unknown } | { "": unknown }
+        Returns: string
+      }
       log_admin_action: {
         Args: {
-          p_action: string
-          p_details?: Json
           p_resource_id?: string
           p_resource_type: string
+          p_action: string
+          p_details?: Json
         }
         Returns: string
       }
@@ -6685,25 +7237,28 @@ export type Database = {
         Args: {
           p_provider_id?: string
           p_recipient_email: string
-          p_recipient_id: string
-          p_subject: string
           p_template_slug: string
+          p_subject: string
+          p_recipient_id: string
         }
         Returns: string
       }
       log_system_event: {
         Args: {
-          p_details?: Json
-          p_error_code?: string
-          p_error_message?: string
-          p_level: string
-          p_message: string
-          p_service: string
           p_user_id?: string
+          p_error_message?: string
+          p_error_code?: string
+          p_details?: Json
+          p_level: string
+          p_service: string
+          p_message: string
         }
         Returns: string
       }
-      mark_all_notifications_read: { Args: never; Returns: number }
+      mark_all_notifications_read: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
       mark_notification_dismissed: {
         Args: { p_notification_id: string }
         Returns: boolean
@@ -6714,115 +7269,194 @@ export type Database = {
       }
       match_ai_knowledge_chunks: {
         Args: {
-          match_count?: number
           p_user_id: string
           query_embedding: string
+          match_count?: number
         }
         Returns: {
           content: string
-          id: string
-          metadata: Json
-          similarity: number
           source_id: string
+          id: string
+          similarity: number
+          metadata: Json
         }[]
       }
       match_ai_knowledge_chunks_bge_m3: {
         Args: {
+          query_embedding: string
           match_count?: number
           p_user_id: string
-          query_embedding: string
         }
         Returns: {
-          content: string
-          id: string
-          metadata: Json
           similarity: number
+          metadata: Json
+          content: string
           source_id: string
+          id: string
         }[]
       }
       match_ai_knowledge_graph_relations: {
         Args: {
-          match_count?: number
-          p_source_chunk_ids: string[]
           p_user_id: string
+          p_source_chunk_ids: string[]
+          match_count?: number
         }
         Returns: {
           relation: string
+          target_type: string
           source_name: string
           source_type: string
           target_name: string
-          target_type: string
         }[]
       }
       move_whatsapp_deal: {
-        Args: { p_deal_id: string; p_position: number; p_stage_id: string }
+        Args: { p_stage_id: string; p_position: number; p_deal_id: string }
         Returns: undefined
       }
       next_media_seq: {
-        Args: { p_upload_date: string; p_user_id: string }
+        Args: { p_user_id: string; p_upload_date: string }
         Returns: number
       }
       prune_ai_knowledge_entities: {
         Args: { p_user_id: string }
         Returns: undefined
       }
-      prune_all_ai_knowledge_entities: { Args: never; Returns: number }
+      prune_all_ai_knowledge_entities: {
+        Args: Record<PropertyKey, never>
+        Returns: number
+      }
       redeem_coupon: {
-        Args: { p_code: string; p_subscription_id?: string; p_user_id: string }
+        Args: { p_subscription_id?: string; p_user_id: string; p_code: string }
         Returns: string
+      }
+      release_ai_generation_quota: {
+        Args: { p_user_id: string }
+        Returns: undefined
+      }
+      release_partner_quota: {
+        Args: { p_key_id: string }
+        Returns: undefined
       }
       render_email_template: {
         Args: { p_slug: string; p_variables: Json }
         Returns: {
-          html: string
           subject: string
+          html: string
         }[]
       }
+      reserve_ai_generation_quota: {
+        Args: { p_user_id: string }
+        Returns: {
+          daily_limit: number
+          usage_count: number
+          allowed: boolean
+        }[]
+      }
+      reserve_partner_quota: {
+        Args: { p_key_id: string }
+        Returns: {
+          usage_count: number
+          allowed: boolean
+        }[]
+      }
+      revoke_partner_key: {
+        Args: { p_key_id: string; p_reason: string }
+        Returns: boolean
+      }
       set_user_quotas_for_plan: {
-        Args: { p_plan_slug: string; p_user_id: string }
+        Args: { p_user_id: string; p_plan_slug: string }
         Returns: undefined
       }
       sign: {
-        Args: { algorithm?: string; payload: Json; secret: string }
+        Args: { secret: string; algorithm?: string; payload: Json }
         Returns: string
       }
+      sparsevec_out: {
+        Args: { "": unknown }
+        Returns: unknown
+      }
+      sparsevec_send: {
+        Args: { "": unknown }
+        Returns: string
+      }
+      sparsevec_typmod_in: {
+        Args: { "": unknown[] }
+        Returns: number
+      }
       toggle_checklist_item: {
-        Args: { p_completed: boolean; p_item_id: string }
+        Args: { p_item_id: string; p_completed: boolean }
         Returns: boolean
       }
       toggle_cron_job: {
-        Args: { _active: boolean; _jobid: number }
+        Args: { _jobid: number; _active: boolean }
         Returns: undefined
       }
-      try_cast_double: { Args: { inp: string }; Returns: number }
+      touch_partner_key: {
+        Args: { p_key_id: string }
+        Returns: undefined
+      }
+      try_cast_double: {
+        Args: { inp: string }
+        Returns: number
+      }
       update_email_status: {
         Args: {
-          p_error_message?: string
           p_provider_id: string
           p_status: string
+          p_error_message?: string
         }
         Returns: boolean
       }
       update_ticket_status: {
-        Args: { p_status: string; p_ticket_id: string }
+        Args: { p_ticket_id: string; p_status: string }
         Returns: boolean
       }
-      url_decode: { Args: { data: string }; Returns: string }
-      url_encode: { Args: { data: string }; Returns: string }
+      url_decode: {
+        Args: { data: string }
+        Returns: string
+      }
+      url_encode: {
+        Args: { data: string }
+        Returns: string
+      }
       use_credits: {
-        Args: { p_amount: number; p_description?: string; p_user_id: string }
+        Args: { p_user_id: string; p_description?: string; p_amount: number }
         Returns: boolean
+      }
+      vector_avg: {
+        Args: { "": number[] }
+        Returns: string
+      }
+      vector_dims: {
+        Args: { "": string } | { "": unknown }
+        Returns: number
+      }
+      vector_norm: {
+        Args: { "": string }
+        Returns: number
+      }
+      vector_out: {
+        Args: { "": string }
+        Returns: unknown
+      }
+      vector_send: {
+        Args: { "": string }
+        Returns: string
+      }
+      vector_typmod_in: {
+        Args: { "": unknown[] }
+        Returns: number
       }
       verify: {
-        Args: { algorithm?: string; secret: string; token: string }
+        Args: { secret: string; algorithm?: string; token: string }
         Returns: {
-          header: Json
           payload: Json
           valid: boolean
+          header: Json
         }[]
       }
       workspace_role: {
-        Args: { p_user_id?: string; p_workspace_id: string }
+        Args: { p_workspace_id: string; p_user_id?: string }
         Returns: string
       }
     }
@@ -6835,25 +7469,21 @@ export type Database = {
   }
 }
 
-type DatabaseWithoutInternals = Omit<Database, "__InternalSupabase">
-
-type DefaultSchema = DatabaseWithoutInternals[Extract<keyof Database, "public">]
+type DefaultSchema = Database[Extract<keyof Database, "public">]
 
 export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
-    | { schema: keyof DatabaseWithoutInternals },
+    | { schema: keyof Database },
   TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof Database
   }
-    ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
-        DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
+    ? keyof (Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+        Database[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
     : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
-      DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
+> = DefaultSchemaTableNameOrOptions extends { schema: keyof Database }
+  ? (Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
+      Database[DefaultSchemaTableNameOrOptions["schema"]]["Views"])[TableName] extends {
       Row: infer R
     }
     ? R
@@ -6871,16 +7501,14 @@ export type Tables<
 export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
+    | { schema: keyof Database },
   TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof Database
   }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    ? keyof Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
     : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+> = DefaultSchemaTableNameOrOptions extends { schema: keyof Database }
+  ? Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
       Insert: infer I
     }
     ? I
@@ -6896,16 +7524,14 @@ export type TablesInsert<
 export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
-    | { schema: keyof DatabaseWithoutInternals },
+    | { schema: keyof Database },
   TableName extends DefaultSchemaTableNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof Database
   }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
+    ? keyof Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
     : never = never,
-> = DefaultSchemaTableNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
+> = DefaultSchemaTableNameOrOptions extends { schema: keyof Database }
+  ? Database[DefaultSchemaTableNameOrOptions["schema"]]["Tables"][TableName] extends {
       Update: infer U
     }
     ? U
@@ -6921,16 +7547,14 @@ export type TablesUpdate<
 export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
-    | { schema: keyof DatabaseWithoutInternals },
+    | { schema: keyof Database },
   EnumName extends DefaultSchemaEnumNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof Database
   }
-    ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
+    ? keyof Database[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
     : never = never,
-> = DefaultSchemaEnumNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
+> = DefaultSchemaEnumNameOrOptions extends { schema: keyof Database }
+  ? Database[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"][EnumName]
   : DefaultSchemaEnumNameOrOptions extends keyof DefaultSchema["Enums"]
     ? DefaultSchema["Enums"][DefaultSchemaEnumNameOrOptions]
     : never
@@ -6938,16 +7562,14 @@ export type Enums<
 export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
-    | { schema: keyof DatabaseWithoutInternals },
+    | { schema: keyof Database },
   CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
-    schema: keyof DatabaseWithoutInternals
+    schema: keyof Database
   }
-    ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
+    ? keyof Database[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
     : never = never,
-> = PublicCompositeTypeNameOrOptions extends {
-  schema: keyof DatabaseWithoutInternals
-}
-  ? DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
+> = PublicCompositeTypeNameOrOptions extends { schema: keyof Database }
+  ? Database[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"][CompositeTypeName]
   : PublicCompositeTypeNameOrOptions extends keyof DefaultSchema["CompositeTypes"]
     ? DefaultSchema["CompositeTypes"][PublicCompositeTypeNameOrOptions]
     : never
@@ -6962,4 +7584,3 @@ export const Constants = {
     },
   },
 } as const
-
