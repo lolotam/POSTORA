@@ -31,11 +31,20 @@ serve(async (req) => {
     if (["succeeded", "failed", "timeout"].includes(job.status))
       return json({ success: true, status: job.status, videoUrl: job.modality === "video" ? job.result_url : null, imageUrl: job.modality === "image" ? job.result_url : null, url: job.result_url, error: job.error });
     if (Date.now() - Date.parse(job.created_at) > 30 * 60_000) {
-      const { data: transitioned, error: transitionError } = await supabase
+      const { data: timedOut, error: timeoutError } = await supabase
         .from("ai_generation_jobs")
         .update({ status: "timeout", error: "Generation timed out" })
         .eq("id", job.id)
-        .eq("user_id", user.id);
+        .eq("user_id", user.id)
+        .in("status", ["queued", "running", "archiving"])
+        .select("id");
+      if (timeoutError) throw timeoutError;
+      // A timeout is a definitive end for this job, so the reservation must come
+      // back — otherwise an abandoned generation silently costs the user a slot
+      // for the rest of the day. Guarded on the transition so concurrent polls
+      // cannot each release.
+      if (job.credential_source === "platform" && timedOut?.length)
+        await supabase.rpc("release_ai_generation_quota", { p_user_id: user.id });
       return json({ success: true, status: "timeout" });
     }
     const cred = await resolveHiggsfieldCredential(supabase, user.id);
@@ -58,46 +67,107 @@ serve(async (req) => {
         pollAfterSeconds: snap.pollAfterSeconds,
       });
     if (snap.state === "failed") {
-      await supabase
+      const { data: failedRows, error: failError } = await supabase
         .from("ai_generation_jobs")
         .update({ status: "failed", error: snap.error })
         .eq("id", job.id)
         .eq("user_id", user.id)
         .in("status", ["queued", "running"])
         .select("id");
-      if (transitionError) throw transitionError;
-      if (job.credential_source === "platform" && transitioned?.length)
+      if (failError) throw failError;
+      // Release only if THIS poll performed the transition. Concurrent polls both
+      // see `running`, and releasing per-poll would return more quota than was
+      // reserved.
+      if (job.credential_source === "platform" && failedRows?.length)
         await supabase.rpc("release_ai_generation_quota", { p_user_id: user.id });
       return json({ success: true, status: "failed", error: snap.error });
     }
+
+    // Claim the job BEFORE archiving. Archiving creates a media_files row, so two
+    // concurrent polls that both archive produce two rows for one generation — and
+    // because a zero-row UPDATE is not an error, the loser would still report
+    // success with its own duplicate URL. Claiming first means exactly one poll
+    // archives; the others read back the winner's persisted result.
+    const { data: claimed, error: claimError } = await supabase
+      .from("ai_generation_jobs")
+      .update({ status: "archiving" })
+      .eq("id", job.id)
+      .eq("user_id", user.id)
+      .in("status", ["queued", "running"])
+      .select("id");
+    if (claimError) throw claimError;
+
+    if (!claimed?.length) {
+      // Another poll won the claim. Report its outcome rather than archiving again.
+      const { data: winner } = await supabase
+        .from("ai_generation_jobs")
+        .select("status, result_url, media_file_id, error")
+        .eq("id", job.id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (winner?.status === "succeeded") {
+        return json({
+          success: true,
+          status: "succeeded",
+          url: winner.result_url,
+          ...(job.modality === "video"
+            ? { videoUrl: winner.result_url }
+            : { imageUrl: winner.result_url }),
+          mediaFileId: winner.media_file_id,
+        });
+      }
+      // Still archiving, or it failed after we last looked.
+      return json({
+        success: true,
+        status: winner?.status === "failed" ? "failed" : "running",
+        error: winner?.error ?? undefined,
+        pollAfterSeconds: 5,
+      });
+    }
+
     const uploadUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/cloudinary-upload`;
-    const archived = await fetch(uploadUrl, {
-      method: "POST",
-      headers: { Authorization: h, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        externalUrl: snap.outputUrl,
-        fileName: `higgsfield-${job.id}.${job.modality === "video" ? "mp4" : "png"}`,
-        fileType: job.modality,
-      }),
-    });
-    const archiveBody = await archived.json().catch(() => ({}));
-    if (!archived.ok || !archiveBody.success) throw new Error("Could not archive generated media");
+    let archiveBody: Record<string, any> = {};
+    try {
+      const archived = await fetch(uploadUrl, {
+        method: "POST",
+        headers: { Authorization: h, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          externalUrl: snap.outputUrl,
+          fileName: `higgsfield-${job.id}.${job.modality === "video" ? "mp4" : "png"}`,
+          fileType: job.modality,
+        }),
+      });
+      archiveBody = await archived.json().catch(() => ({}));
+      if (!archived.ok || !archiveBody.success) throw new Error("Could not archive generated media");
+    } catch (archiveErr) {
+      // We hold the claim, so release it or the job is stranded in `archiving`
+      // until the 30-minute timeout with no poll able to retry it.
+      await supabase
+        .from("ai_generation_jobs")
+        .update({ status: "running" })
+        .eq("id", job.id)
+        .eq("user_id", user.id)
+        .eq("status", "archiving");
+      throw archiveErr;
+    }
+
+    const resultUrl = archiveBody.url || snap.outputUrl;
     const { error: transitionError } = await supabase
       .from("ai_generation_jobs")
       .update({
         status: "succeeded",
-        result_url: archiveBody.url || snap.outputUrl,
+        result_url: resultUrl,
         media_file_id: archiveBody.mediaFileId,
       })
       .eq("id", job.id)
       .eq("user_id", user.id)
-      .in("status", ["queued", "running"]);
+      .eq("status", "archiving");
     if (transitionError) throw transitionError;
     return json({
       success: true,
       status: "succeeded",
-      url: archiveBody.url || snap.outputUrl,
-      ...(job.modality === "video" ? { videoUrl: archiveBody.url || snap.outputUrl } : { imageUrl: archiveBody.url || snap.outputUrl }),
+      url: resultUrl,
+      ...(job.modality === "video" ? { videoUrl: resultUrl } : { imageUrl: resultUrl }),
       mediaFileId: archiveBody.mediaFileId,
     });
   } catch (err) {
