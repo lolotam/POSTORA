@@ -610,6 +610,7 @@ Deferred, and why it is safe to defer:
 | Divergence alerting | Follows reconciliation; premature without it. |
 | GDPR erasure across providers | `cleanup-media` already gains Openinary deletes (Phase 5), which is the mechanism erasure would use. |
 | Orphan GC | Bounded by the retirement gate: orphans cannot strand reads, only cost storage. |
+
 **Promoted back into scope: Openinary contract tests.** This was on the deferred
 list; Codex round 2 argued it is load-bearing for release safety, and that is
 correct — the instance runs a `latest` tag and its behaviour has *already* drifted

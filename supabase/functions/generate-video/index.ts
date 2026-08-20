@@ -10,6 +10,7 @@ import {
   resolveAspectRatio,
   resolveDuration,
 } from "../_shared/higgsfield-model-spec.ts";
+import { checkByoGenerationLimits } from "../_shared/higgsfield-rate-limit.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -48,21 +49,8 @@ serve(async (req) => {
       return json({ error: "Invalid Higgsfield video model" }, 400);
     const cred = await resolveHiggsfieldCredential(supabase, user.id);
     if (cred.source === "byo") {
-      const hour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      const [{ count: recent }, { count: running }] = await Promise.all([
-        supabase
-          .from("ai_generation_jobs")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .gte("created_at", hour),
-        supabase
-          .from("ai_generation_jobs")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .in("status", ["queued", "running"]),
-      ]);
-      if ((recent ?? 0) >= 10) return json({ error: "BYO generation hourly limit reached" }, 429);
-      if ((running ?? 0) >= 2) return json({ error: "Too many concurrent generations" }, 429);
+      const byoLimit = await checkByoGenerationLimits(supabase, user.id);
+      if (!byoLimit.allowed) return json({ error: byoLimit.error }, 429);
     }
     if (cred.source === "platform") {
       const { data } = await supabase.rpc("reserve_ai_generation_quota", { p_user_id: user.id });
@@ -76,7 +64,7 @@ serve(async (req) => {
     }
     const spec = mergeModelSpec(modelId, model.metadata, "video");
     const params = sanitizeParams(spec, typeof body.params === "object" ? body.params : {});
-    const ratio = resolveAspectRatio(spec, body.aspectRatio);
+    const ratio = resolveAspectRatio(spec, body.aspect_ratio ?? body.aspectRatio);
     if (ratio) params.aspect_ratio = ratio;
     const duration = resolveDuration(spec, body.duration);
     if (duration !== null) params.duration = duration;

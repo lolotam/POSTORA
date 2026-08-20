@@ -96,8 +96,8 @@ export function useAiGenerationJob(jobId: string | null): AiGenerationJobState {
         if (data?.status === "succeeded") {
           finish({
             status: "succeeded",
-            videoUrl: data.videoUrl ?? null,
-            imageUrl: data.imageUrl ?? null,
+            videoUrl: data.videoUrl ?? data.imageUrl ?? data.url ?? null,
+            imageUrl: data.imageUrl ?? data.videoUrl ?? data.url ?? null,
           });
           return;
         }

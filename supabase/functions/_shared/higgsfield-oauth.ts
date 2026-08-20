@@ -70,6 +70,7 @@ export interface TokenSet {
   expires_at: string | null;
   scope: string | null;
   account_id: string | null;
+  account_email: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -313,8 +314,7 @@ function toTokenSet(payload: any): TokenSet {
   let accountId: string | null = null;
   if (typeof payload.id_token === "string") {
     const claims = decodeJwtPayload(payload.id_token);
-    const candidate = claims?.email ?? claims?.sub;
-    if (typeof candidate === "string") accountId = candidate;
+    if (typeof claims?.email === "string") accountId = claims.email;
   }
 
   return {
@@ -323,6 +323,7 @@ function toTokenSet(payload: any): TokenSet {
     expires_at: expiresAt,
     scope: payload.scope ?? null,
     account_id: accountId,
+    account_email: typeof payload.id_token === "string" ? (decodeJwtPayload(payload.id_token)?.email as string | undefined) ?? null : null,
   };
 }
 
@@ -508,7 +509,7 @@ async function refreshByoConnection(
 ): Promise<string> {
   const { data: row } = await supabaseAdmin
     .from("higgsfield_connections")
-    .select("refresh_token, scope, account_id")
+    .select("refresh_token, scope, account_id, meta")
     .eq("user_id", userId)
     .maybeSingle();
   if (!row?.refresh_token) {
@@ -521,7 +522,7 @@ async function refreshByoConnection(
     .from("oauth_clients")
     .select("client_id, client_secret, issuer, redirect_uri")
     .eq("provider_code", HIGGSFIELD_PROVIDER_CODE)
-    .limit(1)
+    .eq("redirect_uri", row.meta?.redirect_uri ?? "")
     .maybeSingle();
   if (!client) {
     throw new HiggsfieldAuthError(
@@ -555,7 +556,7 @@ export async function resolveHiggsfieldCredential(
 ): Promise<HiggsfieldCredential> {
   const { data: byo, error: byoError } = await supabaseAdmin
     .from("higgsfield_connections")
-    .select("access_token, refresh_token, expires_at, scope, account_id, account_email")
+        .select("access_token, refresh_token, expires_at, scope, account_id, account_email, meta")
     .eq("user_id", userId)
     .maybeSingle();
   if (byoError) throw new Error(`Higgsfield connection lookup failed: ${byoError.message}`);
@@ -576,8 +577,8 @@ export async function resolveHiggsfieldCredential(
       const { data: client } = await supabaseAdmin
         .from("oauth_clients")
         .select("client_id, client_secret, issuer, redirect_uri")
-        .eq("provider_code", HIGGSFIELD_PROVIDER_CODE)
-        .limit(1)
+          .eq("provider_code", HIGGSFIELD_PROVIDER_CODE)
+          .eq("redirect_uri", byo.meta?.redirect_uri ?? "")
         .maybeSingle();
       if (client) {
         const tokens = await refreshTokens({
@@ -636,7 +637,7 @@ export interface OAuthState {
 export async function consumeOAuthState(
   supabaseAdmin: { from: (table: string) => any },
   state: string,
-  expectedScope: "platform" | "user",
+  _expectedScope: "platform" | "user" | undefined,
   sessionUserId: string | null,
   isAdmin: boolean,
 ): Promise<OAuthState | null> {
@@ -648,8 +649,9 @@ export async function consumeOAuthState(
     .select("*")
     .maybeSingle();
   if (error || !data) return null;
-  if (data.scope_kind !== expectedScope) return null;
-  if (expectedScope === "platform" && !isAdmin) return null;
-  if (expectedScope === "user" && (!sessionUserId || data.user_id !== sessionUserId)) return null;
+  if (data.scope_kind === "platform" && !isAdmin)
+    throw new Error("Authorization state requires admin access for a platform connection");
+  if (data.scope_kind === "user" && (!sessionUserId || data.user_id !== sessionUserId))
+    throw new Error("Authorization state belongs to a different user");
   return data as OAuthState;
 }

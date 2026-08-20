@@ -51,7 +51,11 @@ async function readRpcResponse(res: Response, id: number): Promise<JsonRpcRespon
   if (!contentType.includes("text/event-stream")) {
     const text = await res.text();
     if (!text.trim()) return null;
-    return JSON.parse(text) as JsonRpcResponse;
+    try {
+      return JSON.parse(text) as JsonRpcResponse;
+    } catch {
+      throw new McpError(`Higgsfield returned invalid JSON: ${text.slice(0, 300)}`);
+    }
   }
 
   const raw = await res.text();

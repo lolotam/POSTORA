@@ -54,6 +54,7 @@ export function HiggsfieldIntegrationCard({ onCatalogChanged }: { onCatalogChang
           scope_kind: "platform",
           redirect_uri: callback(),
         });
+        if (typeof data?.url !== "string" || !data.url.trim()) throw new Error("Higgsfield did not return an authorization URL");
         window.location.assign(data.url);
         return;
       }

@@ -108,8 +108,7 @@ Deno.serve(async (req) => {
     if (action === "callback") {
       if (typeof body.code !== "string" || typeof body.state !== "string")
         return json({ error: "Missing code or state" }, 400);
-      const expected = body.scope_kind === "platform" ? "platform" : "user";
-      const state = await consumeOAuthState(db, body.state, expected, caller.userId, admin);
+      const state = await consumeOAuthState(db, body.state, undefined, caller.userId, admin);
       if (!state)
         return json({ error: "Unknown, expired, or unauthorized authorization state" }, 400);
       const client = await getOrRegisterClient(db, state.redirect_uri);
@@ -136,7 +135,7 @@ Deno.serve(async (req) => {
               expires_at: tokens.expires_at,
               scope: tokens.scope,
               account_id: tokens.account_id,
-              account_email: tokens.account_id,
+              account_email: tokens.account_email,
               updated_at: new Date().toISOString(),
             },
             { onConflict: "user_id" },
@@ -190,13 +189,14 @@ Deno.serve(async (req) => {
       return json({ success: true, connected: false, revoked: false });
     }
     if (action === "sync_models") {
+      if (!admin) return json({ error: "Admin access required" }, 403);
       const { data: provider } = await db
         .from("ai_providers")
         .select("id")
         .eq("provider_code", HIGGSFIELD_PROVIDER_CODE)
         .maybeSingle();
       if (!provider) return json({ error: "Higgsfield provider row is missing" }, 500);
-      await resolveHiggsfieldCredential(db, caller.userId);
+      await getValidAccessToken(db);
       const mcp = await HiggsfieldMcpClient.create(db),
         found = new Map<string, any>();
       for (const capability of ["video", "image"] as const)

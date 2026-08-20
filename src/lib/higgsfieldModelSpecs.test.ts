@@ -121,6 +121,11 @@ describe("sanitizeParams", () => {
     expect(sanitizeParams(soul, { soul_id: "soul-123" }).soul_id).toBe("soul-123");
   });
 
+  it("should preserve string arrays as filtered arrays", () => {
+    const spec = { id: "array-test", modality: "image" as const, parameters: [{ name: "tags", type: "string_array" as const, required: false, description: "Tags" }], aspectRatios: [] };
+    expect(sanitizeParams(spec, { tags: [" one ", "", 3, "two"] }).tags).toEqual(["one", "two"]);
+  });
+
   it("should return nothing for a model with no parameters", () => {
     expect(sanitizeParams(getHiggsfieldModelSpec("image_auto")!, { resolution: "4k" })).toEqual({});
   });

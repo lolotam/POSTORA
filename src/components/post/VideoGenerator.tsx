@@ -101,7 +101,9 @@ export function VideoGenerator({
           prompt: buildVideoPrompt(prompt, motion),
           model_id: modelId,
           aspect_ratio: aspectRatio,
-          duration,
+          duration: Number.isFinite(duration)
+            ? Math.min(spec.durationRange?.max ?? duration, Math.max(spec.durationRange?.min ?? duration, duration))
+            : undefined,
           params,
         },
       });

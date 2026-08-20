@@ -27,6 +27,7 @@ export function HiggsfieldConnectionCard() {
         scope_kind: "user",
         redirect_uri: `${window.location.origin}/admin/oauth/higgsfield/callback`,
       });
+      if (typeof data?.url !== "string" || !data.url.trim()) throw new Error("Higgsfield did not return an authorization URL");
       window.location.assign(data.url);
     } catch (e) {
       toast({

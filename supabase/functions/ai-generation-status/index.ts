@@ -29,9 +29,9 @@ serve(async (req) => {
       .maybeSingle();
     if (!job) return json({ error: "Job not found" }, 404);
     if (["succeeded", "failed", "timeout"].includes(job.status))
-      return json({ success: true, status: job.status, url: job.result_url, error: job.error });
+      return json({ success: true, status: job.status, videoUrl: job.modality === "video" ? job.result_url : null, imageUrl: job.modality === "image" ? job.result_url : null, url: job.result_url, error: job.error });
     if (Date.now() - Date.parse(job.created_at) > 30 * 60_000) {
-      await supabase
+      const { data: transitioned, error: transitionError } = await supabase
         .from("ai_generation_jobs")
         .update({ status: "timeout", error: "Generation timed out" })
         .eq("id", job.id)
@@ -62,8 +62,11 @@ serve(async (req) => {
         .from("ai_generation_jobs")
         .update({ status: "failed", error: snap.error })
         .eq("id", job.id)
-        .eq("user_id", user.id);
-      if (job.credential_source === "platform")
+        .eq("user_id", user.id)
+        .in("status", ["queued", "running"])
+        .select("id");
+      if (transitionError) throw transitionError;
+      if (job.credential_source === "platform" && transitioned?.length)
         await supabase.rpc("release_ai_generation_quota", { p_user_id: user.id });
       return json({ success: true, status: "failed", error: snap.error });
     }
@@ -79,7 +82,7 @@ serve(async (req) => {
     });
     const archiveBody = await archived.json().catch(() => ({}));
     if (!archived.ok || !archiveBody.success) throw new Error("Could not archive generated media");
-    await supabase
+    const { error: transitionError } = await supabase
       .from("ai_generation_jobs")
       .update({
         status: "succeeded",
@@ -87,11 +90,14 @@ serve(async (req) => {
         media_file_id: archiveBody.mediaFileId,
       })
       .eq("id", job.id)
-      .eq("user_id", user.id);
+      .eq("user_id", user.id)
+      .in("status", ["queued", "running"]);
+    if (transitionError) throw transitionError;
     return json({
       success: true,
       status: "succeeded",
       url: archiveBody.url || snap.outputUrl,
+      ...(job.modality === "video" ? { videoUrl: archiveBody.url || snap.outputUrl } : { imageUrl: archiveBody.url || snap.outputUrl }),
       mediaFileId: archiveBody.mediaFileId,
     });
   } catch (err) {

@@ -139,8 +139,14 @@ BEGIN
     RETURN;
   END IF;
 
-  -- A NULL limit is the documented "unlimited" sentinel used elsewhere in this table.
-  RETURN QUERY SELECT (v_limit IS NULL OR v_count <= v_limit), v_count, v_limit;
+  IF v_limit IS NOT NULL AND v_count > v_limit THEN
+    UPDATE public.user_quotas SET ai_generations_today = GREATEST(0, ai_generations_today - 1), updated_at = now()
+      WHERE user_id = p_user_id;
+    v_count := v_count - 1;
+    RETURN QUERY SELECT false, v_count, v_limit;
+    RETURN;
+  END IF;
+  RETURN QUERY SELECT true, v_count, v_limit;
 END;
 $$;
 

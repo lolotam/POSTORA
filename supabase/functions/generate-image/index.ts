@@ -5,6 +5,7 @@ import { validateRequestBody, validationErrorResponse } from "../_shared/validat
 import { z } from "npm:zod@3.23.8";
 import { HiggsfieldAuthError, resolveHiggsfieldCredential } from "../_shared/higgsfield-oauth.ts";
 import { HiggsfieldMcpClient, findOutputUrl } from "../_shared/higgsfield-mcp.ts";
+import { checkByoGenerationLimits } from "../_shared/higgsfield-rate-limit.ts";
 import { mergeModelSpec, sanitizeParams, missingRequiredParams, resolveAspectRatio } from "../_shared/higgsfield-model-spec.ts";
 
 const GenerateImageSchema = z.object({
@@ -611,13 +612,8 @@ Make the image visually striking and engaging.`;
       if (m.provider_code === 'higgsfield' || m.api_type === 'higgsfield') {
         const cred = await resolveHiggsfieldCredential(supabaseAdmin, user.id);
         if (cred.source === 'byo') {
-          const hour = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-          const [{ count: recent }, { count: running }] = await Promise.all([
-            supabaseAdmin.from('ai_generation_jobs').select('id', { count: 'exact', head: true }).eq('user_id', user.id).gte('created_at', hour),
-            supabaseAdmin.from('ai_generation_jobs').select('id', { count: 'exact', head: true }).eq('user_id', user.id).in('status', ['queued', 'running']),
-          ]);
-          if ((recent ?? 0) >= 10) return errorResponse('BYO generation hourly limit reached', 429);
-          if ((running ?? 0) >= 2) return errorResponse('Too many concurrent generations', 429);
+          const byoLimit = await checkByoGenerationLimits(supabaseAdmin, user.id);
+          if (!byoLimit.allowed) return errorResponse(byoLimit.error, 429);
         }
         let reserved = false;
         if (cred.source === 'platform') {

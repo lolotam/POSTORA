@@ -14,8 +14,8 @@
  * that over the snapshot so a model whose options change upstream does not need
  * a code change.
  *
- * Mirrored (deliberately, since edge functions cannot import from `src/`) by
- * `supabase/functions/_shared/higgsfield-model-spec.ts`. Keep both in step.
+ * The Deno copy in `supabase/functions/_shared/higgsfield-model-spec.ts` is the
+ * counterpart of this browser copy; update both together.
  *
  * @module lib/higgsfieldModelSpecs
  */
@@ -748,8 +748,8 @@ export function defaultParamsFor(spec: HiggsfieldModelSpec): Record<string, stri
 export function sanitizeParams(
   spec: HiggsfieldModelSpec,
   raw: unknown,
-): Record<string, string | number | boolean> {
-  const out: Record<string, string | number | boolean> = {};
+): Record<string, string | string[] | number | boolean> {
+  const out: Record<string, string | string[] | number | boolean> = {};
   const input = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 
   for (const param of spec.parameters) {
@@ -777,6 +777,11 @@ export function sanitizeParams(
       continue;
     }
 
+    if (param.type === "string_array") {
+      const values = Array.isArray(value) ? value : [value];
+      out[param.name] = values.filter((item): item is string => typeof item === "string" && item.trim() !== "").map((item) => item.trim());
+      continue;
+    }
     const text = String(value);
     if (param.options && !param.options.includes(text)) {
       if (param.default !== undefined) out[param.name] = param.default;
