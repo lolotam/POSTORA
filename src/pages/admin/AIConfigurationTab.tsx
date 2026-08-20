@@ -19,6 +19,7 @@ import {
 } from '@/hooks/useAIConfiguration';
 import { Input } from '@/components/ui/input';
 import { DefaultModelSelector } from '@/components/admin/DefaultModelSelector';
+import { useSetFallback2Model, useSetModelAdminParams } from '@/hooks/useAIConfiguration';
 import { toast } from 'sonner';
 import type { AIProvider, AIModel } from '@/hooks/ai-config/types';
 import { supabase } from '@/integrations/supabase/client';
@@ -32,6 +33,8 @@ export function AIConfigurationTab() {
   const { data: aiConfig, isLoading } = useAIConfiguration();
   const setDefaultModel = useSetDefaultModel();
   const setFallbackModel = useSetFallbackModel();
+  const setFallback2Model = useSetFallback2Model();
+  const setModelAdminParams = useSetModelAdminParams();
   const toggleProvider = useToggleProvider();
   const toggleModel = useToggleModel();
   const testConnection = useTestConnection();
@@ -94,6 +97,26 @@ export function AIConfigurationTab() {
     }
   };
 
+  const handleSetCategoryFallback2 = async (category: 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt', providerCode: string, modelId: string) => {
+    setFallback2Model.mutate(
+      { provider_code: providerCode, model_id: modelId, category },
+      {
+        onSuccess: () => toast.success('Second fallback updated'),
+        onError: (error: Error) => toast.error(error.message),
+      },
+    );
+  };
+
+  const handleSetAdminParams = (modelRowId: string, params: Record<string, string | number | boolean>) => {
+    setModelAdminParams.mutate(
+      { model_row_id: modelRowId, admin_params: params },
+      {
+        onSuccess: () => toast.success('Model parameters saved'),
+        onError: (error: Error) => toast.error(error.message),
+      },
+    );
+  };
+
   const handleSetCategoryFallback = async (category: 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt', providerCode: string, modelId: string) => {
     try {
       await setFallbackModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category });
@@ -140,6 +163,7 @@ export function AIConfigurationTab() {
   const models = aiConfig?.models || [];
   const categoryDefaults = aiConfig?.categoryDefaults || { chat: null, image: null, tts: null, video: null, search: null, stt: null };
   const categoryFallbacks = aiConfig?.categoryFallbacks || { chat: null, image: null, tts: null, video: null, search: null, stt: null };
+  const categoryFallbacks2 = aiConfig?.categoryFallbacks2 || { chat: null, image: null, tts: null, video: null, search: null, stt: null };
 
   if (providers.length === 0) {
     return (
@@ -166,17 +190,17 @@ export function AIConfigurationTab() {
       {/* Category Default Selectors */}
       <div className="grid gap-4 md:grid-cols-2">
         <DefaultModelSelector category="chat" capability="chat" title="Chat Models" description="Default model for AI chat conversations" icon={MessageSquare}
-          providers={providers} models={models} currentDefault={categoryDefaults.chat} currentFallback={categoryFallbacks.chat} onSetDefault={(pc, mid) => handleSetCategoryDefault('chat', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('chat', pc, mid)} isSaving={setDefaultModel.isPending || setFallbackModel.isPending} />
+          providers={providers} models={models} currentDefault={categoryDefaults.chat} currentFallback={categoryFallbacks.chat} onSetDefault={(pc, mid) => handleSetCategoryDefault('chat', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('chat', pc, mid)} currentFallback2={categoryFallbacks2.chat} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('chat', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
         <DefaultModelSelector category="image" capability="image" title="Image Generation" description="Default model for AI image generation" icon={ImageIcon}
-          providers={providers} models={models} currentDefault={categoryDefaults.image} currentFallback={categoryFallbacks.image} onSetDefault={(pc, mid) => handleSetCategoryDefault('image', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('image', pc, mid)} isSaving={setDefaultModel.isPending || setFallbackModel.isPending} />
+          providers={providers} models={models} currentDefault={categoryDefaults.image} currentFallback={categoryFallbacks.image} onSetDefault={(pc, mid) => handleSetCategoryDefault('image', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('image', pc, mid)} currentFallback2={categoryFallbacks2.image} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('image', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
         <DefaultModelSelector category="tts" capability="tts" title="Text to Speech" description="Default model for text-to-speech conversion" icon={AudioLines}
-          providers={providers} models={models} currentDefault={categoryDefaults.tts} currentFallback={categoryFallbacks.tts} onSetDefault={(pc, mid) => handleSetCategoryDefault('tts', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('tts', pc, mid)} isSaving={setDefaultModel.isPending || setFallbackModel.isPending} />
+          providers={providers} models={models} currentDefault={categoryDefaults.tts} currentFallback={categoryFallbacks.tts} onSetDefault={(pc, mid) => handleSetCategoryDefault('tts', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('tts', pc, mid)} currentFallback2={categoryFallbacks2.tts} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('tts', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
         <DefaultModelSelector category="video" capability="video" title="Video Generation" description="Default model for AI video generation" icon={Video}
-          providers={providers} models={models} currentDefault={categoryDefaults.video} currentFallback={categoryFallbacks.video} onSetDefault={(pc, mid) => handleSetCategoryDefault('video', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('video', pc, mid)} isSaving={setDefaultModel.isPending || setFallbackModel.isPending} />
+          providers={providers} models={models} currentDefault={categoryDefaults.video} currentFallback={categoryFallbacks.video} onSetDefault={(pc, mid) => handleSetCategoryDefault('video', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('video', pc, mid)} currentFallback2={categoryFallbacks2.video} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('video', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
         <DefaultModelSelector category="search" capability="search" title="Search Models" description="Default model for AI-powered web search" icon={Search}
-          providers={providers} models={models} currentDefault={categoryDefaults.search} currentFallback={categoryFallbacks.search} onSetDefault={(pc, mid) => handleSetCategoryDefault('search', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('search', pc, mid)} isSaving={setDefaultModel.isPending || setFallbackModel.isPending} />
+          providers={providers} models={models} currentDefault={categoryDefaults.search} currentFallback={categoryFallbacks.search} onSetDefault={(pc, mid) => handleSetCategoryDefault('search', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('search', pc, mid)} currentFallback2={categoryFallbacks2.search} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('search', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
         <DefaultModelSelector category="stt" capability="stt" title="Speech to Text" description="Default model for voice-to-text transcription" icon={Mic}
-          providers={providers} models={models} currentDefault={categoryDefaults.stt} currentFallback={categoryFallbacks.stt} onSetDefault={(pc, mid) => handleSetCategoryDefault('stt', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('stt', pc, mid)} isSaving={setDefaultModel.isPending || setFallbackModel.isPending} />
+          providers={providers} models={models} currentDefault={categoryDefaults.stt} currentFallback={categoryFallbacks.stt} onSetDefault={(pc, mid) => handleSetCategoryDefault('stt', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('stt', pc, mid)} currentFallback2={categoryFallbacks2.stt} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('stt', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
       </div>
 
       {/* Providers Grid */}
