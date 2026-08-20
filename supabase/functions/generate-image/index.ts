@@ -37,9 +37,14 @@ interface ResolvedModel {
   admin_params: Record<string, string | number | boolean>;
 }
 
+// Last resort when no configured model can run. Must be a model the key can
+// actually call: imagen-4.0-generate-001 was 404ing because Imagen is not
+// offered on this account and does not support generateContent anyway, which
+// left the chain with no working floor. gemini-2.5-flash-image is available and
+// was this app's own previous default.
 const HARDCODED_FALLBACK: ResolvedModel = {
   provider_code: 'gemini',
-  model_id: 'imagen-4.0-generate-001',
+  model_id: 'gemini-2.5-flash-image',
   api_endpoint: 'https://generativelanguage.googleapis.com/v1beta',
   api_key_env_var: 'GOOGLE_AI_STUDIO_KEY',
   api_type: 'google',
