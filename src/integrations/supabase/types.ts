@@ -1856,6 +1856,7 @@ export type Database = {
           created_at: string
           expires_at: string | null
           id: string
+          meta: Json
           refresh_token: string | null
           scope: string | null
           updated_at: string
@@ -1868,6 +1869,7 @@ export type Database = {
           created_at?: string
           expires_at?: string | null
           id?: string
+          meta?: Json
           refresh_token?: string | null
           scope?: string | null
           updated_at?: string
@@ -1880,6 +1882,7 @@ export type Database = {
           created_at?: string
           expires_at?: string | null
           id?: string
+          meta?: Json
           refresh_token?: string | null
           scope?: string | null
           updated_at?: string
