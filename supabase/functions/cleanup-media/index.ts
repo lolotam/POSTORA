@@ -1,5 +1,6 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -245,6 +246,18 @@ Deno.serve(async (req) => {
           if (!cloudinaryDeleted) {
             result.errors.push(`Cloudinary delete failed: ${file.cloudinary_public_id}`);
           }
+        }
+
+        const { data: providerRows, error: providerLookupError } = await supabase.from("media_file_providers").select("id, object_key, provider").eq("media_file_id", file.id).neq("status", "deleted");
+        if (providerLookupError) { result.failed++; result.errors.push(`Provider lookup failed for ${file.id}: ${providerLookupError.message}`); continue; }
+        for (const row of providerRows || []) {
+          if (row.provider !== "openinary") continue;
+          try {
+            const config = getOpeninaryConfig(); if (!config) throw new Error("Openinary unavailable");
+            const removed = await deleteFromOpeninary(config, row.object_key);
+            if (!removed.success) { result.errors.push(`openinary delete failed: ${removed.error}`); continue; }
+            await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "cleanup-media" }).eq("id", row.id);
+          } catch (error) { result.errors.push(`openinary delete failed: ${error instanceof Error ? error.message : String(error)}`); }
         }
 
         // Delete from database

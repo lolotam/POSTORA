@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -15,6 +16,7 @@ interface DeleteResponse {
   deleted?: string[];
   failed?: string[];
   error?: string;
+  errors?: string[];
 }
 
 Deno.serve(async (req) => {
@@ -76,6 +78,9 @@ Deno.serve(async (req) => {
 
     const deleted: string[] = [];
     const failed: string[] = [];
+    const providerErrors: string[] = [];
+    const { data: setting } = await supabase.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
+    const providers = setting?.value?.write_policy?.providers || ["cloudinary"];
 
     // Delete each file from Cloudinary
     for (const publicId of publicIds) {
@@ -118,6 +123,19 @@ Deno.serve(async (req) => {
           failed.push(publicId);
           console.error(`Failed to delete ${publicId}:`, result);
         }
+        if (providers.includes("openinary")) {
+          const config = getOpeninaryConfig();
+          const { data: cloudinaryRow, error: lookupError } = await supabase.from("media_file_providers").select("media_file_id").eq("provider", "cloudinary").eq("object_key", publicId).neq("status", "deleted").maybeSingle();
+          if (lookupError) { providerErrors.push(`openinary lookup failed: ${lookupError.message}`); continue; }
+          const { data: rows, error: providerLookupError } = cloudinaryRow ? await supabase.from("media_file_providers").select("id, object_key, object_version").eq("media_file_id", cloudinaryRow.media_file_id).eq("provider", "openinary").neq("status", "deleted") : { data: [], error: null };
+          if (providerLookupError) { providerErrors.push(`openinary lookup failed: ${providerLookupError.message}`); continue; }
+          for (const row of rows || []) {
+            if (!config) { providerErrors.push(`openinary: ${publicId}: unavailable`); continue; }
+            const removed = await deleteFromOpeninary(config, row.object_key);
+            if (!removed.success) { providerErrors.push(`openinary: ${publicId}: ${removed.error}`); continue; }
+            await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" }).eq("id", row.id);
+          }
+        }
       } catch (err) {
         failed.push(publicId);
         console.error(`Error deleting ${publicId}:`, err);
@@ -128,6 +146,7 @@ Deno.serve(async (req) => {
       success: failed.length === 0,
       deleted,
       failed: failed.length > 0 ? failed : undefined,
+      errors: providerErrors.length ? providerErrors : undefined,
     };
 
     return new Response(JSON.stringify(response), {

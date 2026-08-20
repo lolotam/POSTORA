@@ -2,6 +2,8 @@ import { useState, useMemo, useRef, useCallback } from "react";
 import { getAspectRatioLabel } from "@/lib/aspectRatioUtils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { useCdnConfig } from "@/hooks/useCdnConfig";
+import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
 import { useAuth } from "@/hooks/useAuth";
 import {
   Dialog,
@@ -60,6 +62,8 @@ import { Icon3D, GradientHeading, GradientRingCard, Reveal } from "@/components/
 interface MediaFile {
   id: string;
   file_path: string;
+  current_object_version?: number;
+  media_file_providers?: Array<{ provider: string; object_version: number; status: string; delivery_url?: string | null }>;
   file_type: string;
   file_size: number | null;
   created_at: string | null;
@@ -104,6 +108,7 @@ export function MediaLibraryPicker({
   showExtendedFilters = false,
 }: MediaLibraryPickerProps) {
   const { user } = useAuth();
+  const { data: cdnConfig } = useCdnConfig();
   const queryClient = useQueryClient();
   const healedIdsRef = useRef<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -154,7 +159,7 @@ export function MediaLibraryPicker({
       if (!user) return [];
       const { data, error } = await supabase
         .from("media_files")
-        .select("id, file_path, file_type, file_size, created_at, folder_path, metadata, platforms, social_account_ids, storage_bucket")
+        .select("id, file_path, file_type, file_size, created_at, folder_path, metadata, platforms, social_account_ids, storage_bucket, current_object_version, media_file_providers(provider, object_version, status, delivery_url)")
         .eq("user_id", user.id)
         .eq("folder_path", currentPath)
         .order("created_at", { ascending: false });
@@ -315,12 +320,7 @@ export function MediaLibraryPicker({
   };
 
   const resolvePublicUrl = (file: MediaFile): string => {
-    if (file.storage_bucket === "cloudinary" || file.file_path.includes("res.cloudinary.com")) {
-      return file.file_path;
-    }
-    // Supabase storage bucket
-    const { data } = supabase.storage.from(file.storage_bucket || "media").getPublicUrl(file.file_path);
-    return data?.publicUrl || file.file_path;
+    return resolveMediaPublicUrl(file, (bucket, path) => supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl, file.media_file_providers, cdnConfig);
   };
 
   const handleConfirm = async () => {
