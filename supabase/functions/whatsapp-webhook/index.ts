@@ -1,4 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { runInBackground } from "../_shared/background.ts";
+import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
+import { buildMessagePayload, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -14,6 +17,7 @@ interface WhatsAppAccount {
   user_id: string;
   workspace_id: string;
   access_token: string | null;
+  account_metadata: Record<string, unknown> | null;
 }
 
 interface MessageContent {
@@ -159,7 +163,7 @@ Deno.serve(async (req) => {
 async function findWhatsAppAccount(adminClient: any, phoneNumberId: string): Promise<WhatsAppAccount | null> {
   const { data: accounts } = await adminClient
     .from("social_accounts")
-    .select("id, user_id, workspace_id, access_token")
+    .select("id, user_id, workspace_id, access_token, account_metadata")
     .eq("platform", "whatsapp")
     .eq("platform_user_id", phoneNumberId)
     .eq("is_active", true)
@@ -335,6 +339,7 @@ async function handleLiveMessages(
       break;
     }
     const from = msg.from;
+    if (!shouldDispatchInboundMessage({ isEcho: msg.is_echo })) continue;
     const msgType = msg.type;
     const messageId = msg.id;
 
@@ -409,31 +414,36 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
-    // === AUTO-REPLY LOGIC ===
-    const ruleReplied = await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken);
+    await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
+      adminClient,
+      account.user_id,
+      buildMessagePayload({
+        platform: "whatsapp",
+        socialAccountId: account.id,
+        conversationId,
+        sender: { id: from, name: contactName, phone: from },
+        message: {
+          id: messageId,
+          text: messageText,
+          type: msgType,
+          attachments: mediaUrl ? [{ url: mediaUrl, type: mediaType, metadata: mediaMetadata }] : [],
+        },
+        timestamp: msgTimestamp,
+      }),
+    ));
 
-    // === AI AGENT DISPATCH (fire-and-forget) ===
+    const automationHandler = resolveAutomationHandler(account.account_metadata);
+    const ruleReplied = automationHandler === "internal"
+      ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken)
+      : false;
+
     // Deterministic keyword/away rules outrank the AI; only unanswered
     // messages reach the agent. Imported/history/echo messages never get
     // here (see handleHistorySync guard), so the AI cannot reply to them.
-    if (!ruleReplied) {
+    if (automationHandler === "internal" && !ruleReplied) {
       triggerAiAgentReply(account, conversationId, phoneNumberId, from, messageText)
         .catch((e) => console.error("[whatsapp-webhook] AI agent dispatch failed:", e?.message || e));
     }
-
-    // === EXTERNAL WEBHOOK DISPATCH (fire-and-forget) ===
-    dispatchToWebhooks(adminClient, account.user_id, {
-      event: "message.received",
-      timestamp: msgTimestamp,
-      data: {
-        from,
-        contact_name: contactName,
-        message: messageText,
-        message_type: msgType,
-        conversation_id: conversationId,
-        phone_number_id: phoneNumberId,
-      },
-    }).catch(() => console.error("[whatsapp-webhook] Webhook dispatch failed"));
   }
 
   // Process status updates — write back to whatsapp_messages and surface failures
@@ -867,70 +877,6 @@ async function triggerAiAgentReply(
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     console.error(`[whatsapp-webhook] ai-agent-reply returned ${response.status}: ${text.slice(0, 200)}`);
-  }
-}
-
-async function dispatchToWebhooks(
-  adminClient: any,
-  userId: string,
-  payload: Record<string, any>
-) {
-  const { data: webhooks } = await adminClient
-    .from("whatsapp_webhooks")
-    .select("id, url, secret, events, failure_count")
-    .eq("user_id", userId)
-    .eq("is_active", true);
-
-  if (!webhooks || webhooks.length === 0) return;
-
-  const body = JSON.stringify(payload);
-
-  for (const wh of webhooks) {
-    // Check if this webhook subscribes to the event
-    if (wh.events && !wh.events.includes(payload.event)) continue;
-
-    try {
-      const headers: Record<string, string> = { "Content-Type": "application/json" };
-
-      // HMAC-SHA256 signing
-      if (wh.secret) {
-        const encoder = new TextEncoder();
-        const key = await crypto.subtle.importKey(
-          "raw", encoder.encode(wh.secret),
-          { name: "HMAC", hash: "SHA-256" }, false, ["sign"]
-        );
-        const sig = await crypto.subtle.sign("HMAC", key, encoder.encode(body));
-        headers["X-Webhook-Signature"] = Array.from(new Uint8Array(sig))
-          .map(b => b.toString(16).padStart(2, "0")).join("");
-      }
-
-      const res = await fetch(wh.url, { method: "POST", headers, body });
-      const statusCode = res.status;
-
-      if (res.ok) {
-        await adminClient.from("whatsapp_webhooks").update({
-          last_triggered_at: new Date().toISOString(),
-          last_status_code: statusCode,
-          failure_count: 0,
-        }).eq("id", wh.id);
-      } else {
-        const newFailures = (wh.failure_count || 0) + 1;
-        await adminClient.from("whatsapp_webhooks").update({
-          last_triggered_at: new Date().toISOString(),
-          last_status_code: statusCode,
-          failure_count: newFailures,
-          is_active: newFailures < 10,
-        }).eq("id", wh.id);
-        console.warn(`[whatsapp-webhook] Webhook ${wh.id} failed with HTTP ${statusCode} (failures: ${newFailures})`);
-      }
-    } catch (err) {
-      const newFailures = (wh.failure_count || 0) + 1;
-      await adminClient.from("whatsapp_webhooks").update({
-        failure_count: newFailures,
-        is_active: newFailures < 10,
-      }).eq("id", wh.id);
-      console.error(`[whatsapp-webhook] Webhook ${wh.id} dispatch error:`, err);
-    }
   }
 }
 

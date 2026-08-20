@@ -398,6 +398,64 @@ describe("Postora node — Webhook actions and Media → Get", () => {
   });
 });
 
+describe("Postora node — Message → Send / Reply", () => {
+  it.each(["send", "reply"])("posts a %s operation to the reply endpoint", async (operation) => {
+    const { result, callLog } = await run({
+      params: {
+        resource: "message",
+        operation,
+        messagePlatform: "auto",
+        messageSocialAccountId: "account-1",
+        messageRecipientId: "96512345678",
+        messageText: "Hello from n8n",
+        messageType: "text",
+      },
+      http: () => ({ success: true, message_id: "wamid.1" }),
+    });
+
+    expect(callLog[0]).toMatchObject({
+      method: "POST",
+      url: "https://example.test/api/v1/messages/reply",
+      body: {
+        social_account_id: "account-1",
+        recipient_id: "96512345678",
+        message: "Hello from n8n",
+        message_type: "text",
+      },
+      json: true,
+    });
+    expect(callLog[0].body.platform).toBeUndefined();
+    expect(result[0].json).toEqual({ success: true, message_id: "wamid.1" });
+  });
+
+  it("includes media fields for a media reply", async () => {
+    const { callLog } = await run({
+      params: {
+        resource: "message",
+        operation: "reply",
+        messagePlatform: "whatsapp",
+        messageSocialAccountId: "account-1",
+        messageRecipientId: "96512345678",
+        messageText: "See this",
+        messageType: "media",
+        messageMediaUrl: "https://cdn.example/file.jpg",
+        messageMediaType: "image",
+      },
+      http: () => ({ success: true, message_id: "wamid.2" }),
+    });
+
+    expect(callLog[0].body).toEqual({
+      social_account_id: "account-1",
+      platform: "whatsapp",
+      recipient_id: "96512345678",
+      message: "See this",
+      message_type: "media",
+      media_url: "https://cdn.example/file.jpg",
+      media_type: "image",
+    });
+  });
+});
+
 describe("Postora node — Upload sources", () => {
   it("binary source: uploads each binary property", async () => {
     const buf1 = Buffer.from("a");

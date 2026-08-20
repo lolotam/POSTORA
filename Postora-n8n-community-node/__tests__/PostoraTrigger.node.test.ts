@@ -35,6 +35,19 @@ function createHookContext(overrides: {
 }
 
 describe("Postora Trigger", () => {
+  it("offers the four messaging trigger events alongside post.completed", () => {
+    const trigger = new PostoraTrigger();
+    const events = (trigger.description.properties?.find((property) => property.name === "events") as any).options;
+
+    expect(events.map((event: { value: string }) => event.value)).toEqual([
+      "post.completed",
+      "message.received",
+      "message.whatsapp",
+      "message.instagram",
+      "message.facebook",
+    ]);
+  });
+
   it("reports whether a subscription ID is saved in node static data", async () => {
     const existing = createHookContext({ staticData: { webhookId: "subscription-123" } });
     const absent = createHookContext({});

@@ -1,6 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse } from "../_shared/errorSanitizer.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
+import { sendMessage, type MessageSendAccount } from "../_shared/messageSend.ts";
 import {
   type LinkedInDestinationSelection,
   listLinkedInDestinations,
@@ -16,8 +17,14 @@ const RATE_LIMITS: Record<string, { requests: number; windowMs: number }> = {
   '/api/v1/posts': { requests: 100, windowMs: 60 * 60 * 1000 }, // 100 queries per hour
   '/api/v1/accounts': { requests: 100, windowMs: 60 * 60 * 1000 }, // 100 queries per hour
   '/api/v1/webhooks': { requests: 30, windowMs: 60 * 60 * 1000 }, // 30 webhook operations per hour
+  '/api/v1/messages/reply': { requests: 60, windowMs: 60 * 60 * 1000 },
   'default': { requests: 100, windowMs: 60 * 60 * 1000 }, // Default: 100 requests per hour
 };
+
+const ALLOWED_WEBHOOK_EVENTS = new Set([
+  'post.completed', 'post.failed', 'post.published',
+  'message.received', 'message.whatsapp', 'message.instagram', 'message.facebook', '*',
+]);
 
 // Check rate limit using api_logs table
 async function checkRateLimit(
@@ -363,7 +370,7 @@ function parseArrayField(value: any, fieldName: string): string[] {
 // Handle POST /api/v1/post - Create a new post with platform-specific metadata
 async function handleCreatePost(req: Request, supabase: any, userId: string, body: any, userPreferredTimezone?: string | null) {
   const corsHeaders = restrictedCorsHeaders(req);
-  console.log('Creating post for user:', userId, 'with body:', JSON.stringify(body, null, 2));
+  console.log('Creating post for user:', userId, 'with fields:', Object.keys(body || {}));
 
   const {
     // Core fields
@@ -476,7 +483,6 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
 
     // Webhook configuration for this specific post
     webhook_url, // URL to send status callbacks
-    webhook_secret, // Secret for HMAC signature verification
   } = body;
 
   // Parse platforms array from various formats (JSON string, comma-separated, actual array)
@@ -996,13 +1002,15 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
   if (alt_text) metadata.alt_text = alt_text;
   if (first_comment) metadata.first_comment = first_comment;
 
-  // Store webhook configuration for per-request callbacks
+  // Store webhook configuration for per-request callbacks. The secret is
+  // generated here so callers cannot choose or reuse signing material.
   if (webhook_url) {
+    const webhookSecret = crypto.randomUUID();
     metadata.webhook_url = webhook_url;
-    if (webhook_secret) metadata.webhook_secret = webhook_secret;
+    metadata.webhook_secret = webhookSecret;
   }
 
-  console.log('Built metadata:', JSON.stringify(metadata, null, 2));
+  console.log('Built metadata fields:', Object.keys(metadata));
 
   // Use title as caption fallback if caption not provided
   const finalCaption = caption || title || '';
@@ -1373,7 +1381,7 @@ async function handleGetPosts(req: Request, supabase: any, userId: string, url: 
       .select('post_id')
       .eq('social_account_id', accountId);
     postIdFilter = ppRows?.map((r: any) => r.post_id) || [];
-    if (postIdFilter.length === 0) {
+    if (!postIdFilter || postIdFilter.length === 0) {
       return new Response(
         JSON.stringify({ success: true, posts: [], limit, offset }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -1432,7 +1440,7 @@ async function handleGetPosts(req: Request, supabase: any, userId: string, url: 
 // Handle POST /api/v1/webhooks - Register a webhook for post status updates
 async function handleRegisterWebhook(req: Request, supabase: any, userId: string, body: any) {
   const corsHeaders = restrictedCorsHeaders(req);
-  console.log('Registering webhook for user:', userId, 'with body:', JSON.stringify(body, null, 2));
+  console.log('Registering webhook for user:', userId, 'with fields:', Object.keys(body || {}));
 
   const { webhook_url, events } = body;
 
@@ -1451,12 +1459,18 @@ async function handleRegisterWebhook(req: Request, supabase: any, userId: string
     );
   }
 
-  // Default events if not specified
   const subscribedEvents = events || ['post.completed', 'post.failed', 'post.published'];
+  if (!Array.isArray(subscribedEvents) || subscribedEvents.some((event) => typeof event !== 'string' || !ALLOWED_WEBHOOK_EVENTS.has(event))) {
+    return new Response(
+      JSON.stringify({ error: 'events contains an unsupported webhook event' }),
+      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+    );
+  }
 
   // Create webhook entry in app_settings with user-specific key
   const webhookId = crypto.randomUUID();
   const webhookKey = `n8n_webhook_${userId}_${webhookId}`;
+  const webhookSecret = crypto.randomUUID();
 
   const { error: settingsError } = await supabase
     .from('app_settings')
@@ -1467,6 +1481,7 @@ async function handleRegisterWebhook(req: Request, supabase: any, userId: string
         user_id: userId,
         webhook_url,
         events: subscribedEvents,
+        webhook_secret: webhookSecret,
         created_at: new Date().toISOString(),
         is_active: true
       },
@@ -1490,6 +1505,7 @@ async function handleRegisterWebhook(req: Request, supabase: any, userId: string
         id: webhookId,
         webhook_url,
         events: subscribedEvents,
+        webhook_secret: webhookSecret,
         status: 'active'
       }
     }),
@@ -1727,8 +1743,61 @@ async function handleGetMediaById(req: Request, supabase: any, userId: string, m
   );
 }
 
+async function handleMessageReply(req: Request, supabase: any, userId: string, body: any) {
+  const accountId = typeof body?.social_account_id === 'string' ? body.social_account_id : '';
+  const recipientId = typeof body?.recipient_id === 'string'
+    ? body.recipient_id
+    : typeof body?.recipient_phone === 'string' ? body.recipient_phone : '';
+  const message = typeof body?.message === 'string' ? body.message : '';
+  const messageType = body?.message_type || 'text';
+
+  if (!accountId || !recipientId || !message) {
+    return apiError(req, 'social_account_id, recipient_id, and message are required', 400, 'INVALID_MESSAGE');
+  }
+  if (!['text', 'media'].includes(messageType)) {
+    return apiError(req, 'Only text and media messages are supported', 400, 'INVALID_MESSAGE_TYPE');
+  }
+  if (messageType === 'media' && typeof body?.media_url !== 'string') {
+    return apiError(req, 'media_url is required for media messages', 400, 'INVALID_MEDIA');
+  }
+
+  const { data: account, error } = await supabase
+    .from('social_accounts')
+    .select('id, user_id, workspace_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token')
+    .eq('id', accountId)
+    .maybeSingle();
+  if (error) return apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR');
+  if (!account || account.user_id !== userId) {
+    return apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND');
+  }
+
+  const platform = body?.platform || account.platform;
+  if (!['whatsapp', 'instagram', 'facebook'].includes(platform) || platform !== account.platform) {
+    return apiError(req, 'platform does not match the selected social account', 400, 'INVALID_PLATFORM');
+  }
+
+  try {
+    const result = await sendMessage(supabase, {
+      account: account as MessageSendAccount,
+      recipientId,
+      conversationId: typeof body?.conversation_id === 'string' ? body.conversation_id : undefined,
+      message,
+      messageType,
+      mediaUrl: body.media_url,
+      mediaType: body.media_type,
+    });
+    return new Response(JSON.stringify({ success: true, message_id: result.messageId }), {
+      status: 200,
+      headers: { ...restrictedCorsHeaders(req), 'Content-Type': 'application/json' },
+    });
+  } catch (sendError) {
+    console.error('Message reply failed:', sendError);
+    return apiError(req, 'Failed to send message', 502, 'MESSAGE_SEND_FAILED');
+  }
+}
+
 // Standardized API error helper
-function apiError(req, message: string, status: number, code?: string, details?: any): Response {
+function apiError(req: Request, message: string, status: number, code?: string, details?: any): Response {
   const corsHeaders = restrictedCorsHeaders(req);
   return new Response(
     JSON.stringify({
@@ -1977,7 +2046,7 @@ Deno.serve(async (req) => {
 
     if (path === '/api/v1/post' && req.method === 'POST') {
       const body = await parseRequestBody(req);
-      console.log('Parsed request body:', JSON.stringify(body, null, 2));
+      console.log('Parsed request body fields:', Object.keys(body || {}));
       response = await handleCreatePost(req, supabaseAdmin, userId, body, userPreferredTimezone);
     } else if ((path === '/api/v1/upload-media' || path === '/api/v1/media/upload') && req.method === 'POST') {
       response = await handleUploadMedia(supabaseAdmin, userId, req);
@@ -2002,6 +2071,9 @@ Deno.serve(async (req) => {
     } else if (path.match(/^\/api\/v1\/media\/[^/]+$/) && req.method === 'GET') {
       const mediaId = path.replace('/api/v1/media/', '');
       response = await handleGetMediaById(req, supabaseAdmin, userId, mediaId);
+    } else if (path === '/api/v1/messages/reply' && req.method === 'POST') {
+      const body = await parseRequestBody(req);
+      response = await handleMessageReply(req, supabaseAdmin, userId, body);
     } else {
       // 404 for unknown routes
       response = apiError(req, 'Not Found', 404, 'NOT_FOUND', {
@@ -2015,7 +2087,8 @@ Deno.serve(async (req) => {
           'POST /api/v1/webhooks',
           'GET /api/v1/webhooks',
           'DELETE /api/v1/webhooks/:id',
-          'POST /api/v1/webhooks/test'
+          'POST /api/v1/webhooks/test',
+          'POST /api/v1/messages/reply'
         ]
       });
     }

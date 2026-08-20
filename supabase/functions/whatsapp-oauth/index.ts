@@ -213,7 +213,7 @@ Deno.serve(async (req) => {
 
     const { data: existingAccount, error: existingAccountError } = await admin
       .from("social_accounts")
-      .select("id")
+      .select("id, account_metadata")
       .eq("platform", "whatsapp")
       .eq("platform_user_id", phone_number_id)
       .maybeSingle();
@@ -325,6 +325,7 @@ Deno.serve(async (req) => {
 
 
     const accountMetadata = {
+      ...((existingAccount?.account_metadata as Record<string, unknown> | null) || {}),
       waba_id,
       phone_number_id,
       business_id: business_id || null,

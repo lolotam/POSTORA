@@ -50,6 +50,22 @@ export class PostoraTrigger implements INodeType {
             name: "Post Completed",
             value: "post.completed",
           },
+          {
+            name: "New Message Received (All Platforms)",
+            value: "message.received",
+          },
+          {
+            name: "WhatsApp Message Received",
+            value: "message.whatsapp",
+          },
+          {
+            name: "Instagram DM Received",
+            value: "message.instagram",
+          },
+          {
+            name: "Facebook Message Received",
+            value: "message.facebook",
+          },
         ],
         default: ["post.completed"],
       },

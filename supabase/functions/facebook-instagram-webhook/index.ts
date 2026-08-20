@@ -1,5 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { runInBackground } from "../_shared/background.ts";
+import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
+import { buildMessagePayload, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -134,7 +137,7 @@ Deno.serve(async (req) => {
 
         for (const event of events) {
           // Only handle actual inbound messages, not delivery/read receipts or echoes of our own sends.
-          if (!event.message || event.message.is_echo) continue;
+          if (!event.message || !shouldDispatchInboundMessage({ isEcho: event.message.is_echo })) continue;
 
           const account = await findAccountForRecipient(adminClient, platform, recipientId);
           if (!account) {
@@ -152,7 +155,7 @@ Deno.serve(async (req) => {
           // internal id is the one thing both this webhook and list_conversations agree on.
           const conversationId = `${account.id}_${senderId}`;
 
-          await recordInboxEvent(adminClient, {
+          const inboxResult = await recordInboxEvent(adminClient, {
             account,
             platform,
             eventType: "message",
@@ -160,13 +163,40 @@ Deno.serve(async (req) => {
             payload: event,
           });
 
+          if (inboxResult === "inserted") {
+            await runInBackground("facebook-instagram message dispatch", () => dispatchMessageEvent(
+              adminClient,
+              account.user_id,
+              buildMessagePayload({
+                platform,
+                socialAccountId: account.id,
+                conversationId,
+                sender: {
+                  id: senderId,
+                  name: event.sender?.name || null,
+                  phone: event.sender?.phone || null,
+                },
+                message: {
+                  id: event.message.mid || `${senderId}:${event.timestamp}`,
+                  text: messageText,
+                  type: event.message.attachments ? "attachment" : "text",
+                  attachments: event.message.attachments?.data || event.message.attachments || [],
+                },
+                timestamp: event.timestamp ? new Date(event.timestamp).toISOString() : undefined,
+              }),
+            ));
+          }
+
           console.log(`[fb-ig-webhook] Received inbound ${platform} message`);
 
-          const ruleReplied = await processAutoReplies(adminClient, account, platform, conversationId, senderId, messageText);
+          const automationHandler = resolveAutomationHandler(account.account_metadata);
+          const ruleReplied = automationHandler === "internal"
+            ? await processAutoReplies(adminClient, account, platform, conversationId, senderId, messageText)
+            : false;
 
           // Deterministic rules outrank the AI; only unclaimed messages reach
           // the agent. Echoes/receipts never get here (filtered above).
-          if (!ruleReplied) {
+          if (automationHandler === "internal" && !ruleReplied) {
             triggerAiAgentReply(account, platform, conversationId, senderId, messageText)
               .catch((e) => console.error("[fb-ig-webhook] AI agent dispatch failed:", e?.message || e));
           }
@@ -212,16 +242,20 @@ async function recordInboxEvent(
     externalEventId: string;
     payload: unknown;
   },
-) {
-  const { error } = await adminClient.from("social_inbox_events").upsert({
+): Promise<"inserted" | "duplicate" | "error"> {
+  const { data, error } = await adminClient.from("social_inbox_events").upsert({
     user_id: account.user_id,
     social_account_id: account.id,
     platform,
     event_type: eventType,
     external_event_id: externalEventId,
     payload,
-  }, { onConflict: "social_account_id,external_event_id" });
-  if (error) console.error("[fb-ig-webhook] Failed to persist inbox event", error.message);
+  }, { onConflict: "social_account_id,external_event_id", ignoreDuplicates: true }).select("id");
+  if (error) {
+    console.error("[fb-ig-webhook] Failed to persist inbox event", error.message);
+    return "error";
+  }
+  return data?.length ? "inserted" : "duplicate";
 }
 
 // Returns true when auto-reply rules own this message (a rule matched, or a
