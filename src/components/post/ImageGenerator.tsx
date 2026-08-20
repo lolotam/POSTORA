@@ -20,6 +20,7 @@ import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
 import { ImagePlus, Loader2, Upload, Sparkles, Download, FolderOpen, X, Image, ImageIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { compressImage } from "@/lib/imageUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { handleAIError } from "@/lib/aiErrorHandler";
@@ -93,6 +94,21 @@ const platformOptions = [
 
 const MAX_REFERENCE_IMAGES = 5;
 
+// References travel inline in the request body, so a photo straight off a phone
+// would be several megabytes of base64 and be rejected before it reaches a
+// model. 1536px is more detail than a style or content reference needs.
+const REFERENCE_MAX_EDGE = 1536;
+const REFERENCE_QUALITY = 0.85;
+
+function readAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error ?? new Error("Could not read the file"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGeneratorProps) {
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -144,31 +160,34 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
   // Generate unique ID for reference images
   const generateRefId = () => `ref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-  const handleReferenceUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleReferenceUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files) return;
 
     const remainingSlots = MAX_REFERENCE_IMAGES - referenceImages.length;
     const filesToProcess = Array.from(files).slice(0, remainingSlots);
 
-    filesToProcess.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setReferenceImages(prev => {
-          if (prev.length >= MAX_REFERENCE_IMAGES) return prev;
-          return [...prev, {
-            id: generateRefId(),
-            url: event.target?.result as string,
-            type: "style" as ReferenceType,
-          }];
-        });
-      };
-      reader.readAsDataURL(file);
-    });
-
-    // Reset input
+    // Cleared before the awaits below, so re-picking the same file still fires
+    // a change event while this handler is still running.
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
+    }
+
+    for (const file of filesToProcess) {
+      try {
+        const compressed = await compressImage(file, REFERENCE_QUALITY, REFERENCE_MAX_EDGE, REFERENCE_MAX_EDGE);
+        const url = await readAsDataUrl(compressed);
+        setReferenceImages(prev => {
+          if (prev.length >= MAX_REFERENCE_IMAGES) return prev;
+          return [...prev, { id: generateRefId(), url, type: "style" as ReferenceType }];
+        });
+      } catch {
+        toast({
+          title: "Could not read that image",
+          description: file.name,
+          variant: "destructive",
+        });
+      }
     }
   };
 
