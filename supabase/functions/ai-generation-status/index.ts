@@ -116,13 +116,13 @@ serve(async (req) => {
           mediaFileId: winner.media_file_id,
         });
       }
-      // Still archiving, or it failed after we last looked.
-      return json({
-        success: true,
-        status: winner?.status === "failed" ? "failed" : "running",
-        error: winner?.error ?? undefined,
-        pollAfterSeconds: 5,
-      });
+      // Report the persisted state truthfully. `timeout` and `failed` are terminal,
+      // and calling them "running" would keep the client polling a job that will
+      // never change again.
+      if (winner?.status === "failed" || winner?.status === "timeout") {
+        return json({ success: true, status: winner.status, error: winner.error ?? undefined });
+      }
+      return json({ success: true, status: "running", pollAfterSeconds: 5 });
     }
 
     const uploadUrl = `${Deno.env.get("SUPABASE_URL")}/functions/v1/cloudinary-upload`;
@@ -152,7 +152,7 @@ serve(async (req) => {
     }
 
     const resultUrl = archiveBody.url || snap.outputUrl;
-    const { error: transitionError } = await supabase
+    const { data: succeeded, error: transitionError } = await supabase
       .from("ai_generation_jobs")
       .update({
         status: "succeeded",
@@ -161,8 +161,32 @@ serve(async (req) => {
       })
       .eq("id", job.id)
       .eq("user_id", user.id)
-      .eq("status", "archiving");
+      .eq("status", "archiving")
+      .select("id");
     if (transitionError) throw transitionError;
+
+    // Losing this transition means our claim was taken away while we archived --
+    // the 30-minute timeout is the only thing that does so. Reporting "succeeded"
+    // on an unconfirmed write would tell the client a job completed when the
+    // database says it timed out, so re-read and return whatever actually persisted.
+    if (!succeeded?.length) {
+      const { data: persisted } = await supabase
+        .from("ai_generation_jobs")
+        .select("status, result_url, media_file_id, error")
+        .eq("id", job.id)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      console.warn(
+        `[ai-generation-status] archive claim lost for job ${job.id}; persisted status=${persisted?.status}`,
+      );
+      return json({
+        success: true,
+        status: persisted?.status ?? "failed",
+        url: persisted?.result_url ?? undefined,
+        error: persisted?.error ?? "The generation was marked timed out while archiving.",
+      });
+    }
+
     return json({
       success: true,
       status: "succeeded",
