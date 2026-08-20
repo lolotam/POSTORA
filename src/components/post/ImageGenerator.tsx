@@ -25,6 +25,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { handleAIError } from "@/lib/aiErrorHandler";
 import { MediaLibraryPicker } from "./MediaLibraryPicker";
 import { StockMediaPicker, SelectedMedia } from "./StockMediaPicker";
+import { ResolvedModelCards } from "@/components/ai/ResolvedModelCards";
+import { useResolvedImageModels } from "@/hooks/useResolvedImageModels";
 import { UploadedFile } from "@/hooks/usePostForm";
 import { useAIRateLimit } from "@/hooks/useAIRateLimit";
 import { RateLimitIndicator } from "./RateLimitIndicator";
@@ -52,47 +54,9 @@ interface ImageGeneratorProps {
   buttonClassName?: string;
 }
 
-const imageModels = [
-  {
-    value: "google/gemini-2.5-flash-image",
-    label: "Nano Banana",
-    description: "Fast & affordable image generation",
-    badge: null,
-    supportsReference: true,
-  },
-  {
-    value: "google/gemini-3-pro-image-preview",
-    label: "Nano Banana Pro",
-    description: "State-of-the-art quality",
-    badge: "Pro",
-    supportsReference: true,
-  },
-  {
-    value: "openai/gpt-image-2",
-    label: "GPT Image 2",
-    description: "Premium OpenAI model — best for text & detail (1–2 min/image)",
-    badge: "Slow • HQ",
-    supportsReference: false,
-  },
-  {
-    value: "imagen-4.0-generate-001",
-    label: "Imagen 4",
-    description: "Better text rendering & quality",
-    badge: null,
-    supportsReference: false,
-  },
-  {
-    value: "imagen-4.0-ultra-generate-001",
-    label: "Imagen 4 Ultra",
-    description: "Highest quality image generation",
-    badge: "Ultra",
-    supportsReference: false,
-  },
-];
-
 // Models that take significantly longer (1-2 min) — used to show a notice
 // and to extend the client-side wait without aborting the request.
-const SLOW_MODELS = new Set(["openai/gpt-image-2"]);
+const SLOW_MODELS = new Set(["openai/gpt-image-2", "gpt_image_2"]);
 
 // All aspect ratios available
 const allAspectRatios = [
@@ -127,21 +91,13 @@ const platformOptions = [
   { value: "pinterest", label: "Pinterest" },
 ];
 
-const qualityOptions = [
-  { value: "1k", label: "1K (1024px)", multiplier: 1 },
-  { value: "2k", label: "2K (2048px)", multiplier: 2 },
-  { value: "3k", label: "3K (3072px)", multiplier: 3 },
-];
-
 const MAX_REFERENCE_IMAGES = 5;
 
 export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGeneratorProps) {
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
-  const [model, setModel] = useState("google/gemini-2.5-flash-image");
   const [selectedPlatform, setSelectedPlatform] = useState("all");
   const [aspectRatio, setAspectRatio] = useState("1:1");
-  const [quality, setQuality] = useState("1k");
   const [referenceImages, setReferenceImages] = useState<ReferenceImage[]>([]);
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -164,9 +120,12 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
     })
   );
 
-  // Check if current model supports reference images
-  const currentModelConfig = imageModels.find(m => m.value === model);
-  const supportsReference = currentModelConfig?.supportsReference ?? false;
+  const { tiers } = useResolvedImageModels();
+  // Reference images are always offered now. Which model runs is decided
+  // server-side, and sanitizeParams drops the parameter for models that do not
+  // declare it, so gating the input on a client-side guess is both impossible
+  // and unnecessary.
+  const supportsReference = true;
 
   // Get filtered aspect ratios based on selected platform
   const filteredAspectRatios = allAspectRatios.filter((ratio) =>
@@ -279,7 +238,6 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
 
     try {
       const selectedRatio = allAspectRatios.find((r) => r.value === aspectRatio);
-      const qualityOption = qualityOptions.find((q) => q.value === quality);
 
       // Prepare reference images for the API
       const referenceImagesData = referenceImages.map((ref, idx) => ({
@@ -291,13 +249,11 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
       const { data, error } = await supabase.functions.invoke("generate-image", {
         body: {
           prompt,
-          model,
           aspectRatio,
-          quality,
           referenceImage: supportsReference && referenceImages.length > 0 ? referenceImages[0].url : undefined,
           referenceImages: supportsReference && referenceImages.length > 0 ? referenceImagesData : undefined,
-          width: selectedRatio ? selectedRatio.width * (qualityOption?.multiplier || 1) : 1024,
-          height: selectedRatio ? selectedRatio.height * (qualityOption?.multiplier || 1) : 1024,
+          width: selectedRatio ? selectedRatio.width : 1024,
+          height: selectedRatio ? selectedRatio.height : 1024,
         },
       });
 
@@ -426,10 +382,8 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
 
   const resetForm = () => {
     setPrompt("");
-    setModel("google/gemini-2.5-flash-image");
     setSelectedPlatform("all");
     setAspectRatio("1:1");
-    setQuality("1k");
     setReferenceImages([]);
     setGeneratedImage(null);
   };
@@ -501,35 +455,10 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
               />
             </div>
 
-            {/* Model Selection */}
+            {/* Which models will run — administrator-controlled, read-only here. */}
             <div className="space-y-2">
               <Label>AI Model</Label>
-              <Select value={model} onValueChange={setModel}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-background border border-border z-50">
-                  {imageModels.map((m) => (
-                    <SelectItem key={m.value} value={m.value}>
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{m.label}</span>
-                        {m.badge && (
-                          <Badge variant="secondary" className="text-xs">
-                            {m.badge}
-                          </Badge>
-                        )}
-                      </div>
-                      <span className="text-xs text-muted-foreground block">{m.description}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {SLOW_MODELS.has(model) && (
-                <p className="text-xs text-amber-600 dark:text-amber-400 flex items-start gap-1.5 mt-1">
-                  <Loader2 className="w-3 h-3 mt-0.5 shrink-0" />
-                  GPT Image 2 typically takes <strong className="mx-1">1–2 minutes</strong> per image. Please keep this dialog open while it generates — don't refresh.
-                </p>
-              )}
+              <ResolvedModelCards tiers={tiers} />
             </div>
 
             {/* Reference Images - Only show for Nano Banana models */}
@@ -657,21 +586,6 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                 )}
               </div>
 
-              <div className="space-y-2">
-                <Label>Quality</Label>
-                <Select value={quality} onValueChange={setQuality}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent className="bg-background border border-border z-50">
-                    {qualityOptions.map((q) => (
-                      <SelectItem key={q.value} value={q.value}>
-                        {q.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
             </div>
 
             <GradientDivider />
@@ -685,7 +599,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
               {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  {SLOW_MODELS.has(model) ? "Generating… up to 2 minutes" : "Generating..."}
+                  {tiers.some((t) => SLOW_MODELS.has(t.model_id)) ? "Generating… up to 2 minutes" : "Generating..."}
                 </>
               ) : isRateLimited ? (
                 "Rate limit reached"

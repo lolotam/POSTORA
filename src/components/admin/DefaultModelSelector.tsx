@@ -15,6 +15,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
+import { ModelParamControls } from '@/components/admin/shared/ModelParamControls';
+import { defaultParamsFor, mergeModelSpec } from '@/lib/higgsfieldModelSpecs';
+
+function primarySpecFor(row: AIModel | null, capability: string) {
+  return mergeModelSpec(row?.model_id ?? '', row?.metadata ?? null, capability === 'video' ? 'video' : 'image');
+}
 
 const CATEGORY_MODALITY: Record<string, string> = {
   chat: 'text', search: 'text', image: 'image', tts: 'audio', video: 'video',
@@ -39,15 +45,47 @@ interface DefaultModelSelectorProps {
   models: AIModel[];
   currentDefault: DefaultModel | null;
   currentFallback: DefaultModel | null;
+  currentFallback2: DefaultModel | null;
   onSetDefault: (providerCode: string, modelId: string) => void;
   onSetFallback: (providerCode: string, modelId: string) => void;
+  onSetFallback2: (providerCode: string, modelId: string) => void;
+  /** Persist the primary model's knobs. Receives the ai_models row id. */
+  onSetAdminParams: (modelRowId: string, params: Record<string, string | number | boolean>) => void;
   isSaving?: boolean;
 }
 
 export function DefaultModelSelector({
   category, capability, title, description, icon: Icon,
-  providers, models, currentDefault, currentFallback, onSetDefault, onSetFallback, isSaving,
+  providers, models, currentDefault, currentFallback, currentFallback2,
+  onSetDefault, onSetFallback, onSetFallback2, onSetAdminParams, isSaving,
 }: DefaultModelSelectorProps) {
+  const primaryRow = useMemo(
+    () =>
+      currentDefault
+        ? models.find(
+            (m) =>
+              m.model_id === currentDefault.model_id &&
+              m.ai_providers?.provider_code === currentDefault.provider_code,
+          ) ?? null
+        : null,
+    [models, currentDefault],
+  );
+  const savedParams = useMemo(
+    () => ({ ...defaultParamsFor(primarySpecFor(primaryRow, capability)), ...(primaryRow?.admin_params ?? {}) }),
+    [primaryRow, capability],
+  );
+  const [paramDraft, setParamDraft] = useState<Record<string, string | number | boolean>>(savedParams);
+  // Re-seed when the administrator switches model: the previous model's knobs
+  // are meaningless for the new one.
+  useEffect(() => { setParamDraft(savedParams); }, [savedParams]);
+  const paramsDirty = JSON.stringify(paramDraft) !== JSON.stringify(savedParams);
+
+  const primarySpec = useMemo(
+    () =>
+      primarySpecFor(primaryRow, capability),
+    [primaryRow, capability],
+  );
+
   const filteredModels = useMemo(
     () => models.filter(m => m.is_active && m.capabilities?.includes(capability)),
     [models, capability]
@@ -103,7 +141,50 @@ export function DefaultModelSelector({
               category={category}
             />
 
-            {/* Last Resort */}
+            <Separator />
+
+            {/* Fallback 2 */}
+            <TierSelector
+              label="Fallback 2"
+              icon={<Shield className="w-3.5 h-3.5 text-muted-foreground" />}
+              providers={availableProviders}
+              allProviders={providers}
+              filteredModels={filteredModels}
+              currentModel={currentFallback2}
+              onSelect={onSetFallback2}
+              isSaving={isSaving}
+              category={category}
+            />
+
+            {primaryRow && primarySpec.parameters.length > 0 && (
+              <>
+                <Separator />
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">{primaryRow.name} parameters</p>
+                  <p className="text-xs text-muted-foreground">
+                    Applied to every generation with this model. Aspect ratio stays with the user.
+                  </p>
+                  <ModelParamControls
+                    spec={primarySpec}
+                    values={paramDraft}
+                    onChange={setParamDraft}
+                    omit={['aspect_ratio']}
+                    disabled={isSaving}
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isSaving || !paramsDirty}
+                    onClick={() => onSetAdminParams(primaryRow.id, paramDraft)}
+                  >
+                    {isSaving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                    Save parameters
+                  </Button>
+                </div>
+              </>
+            )}
+
+                        {/* Last Resort */}
             {lastResort && (
               <>
                 <Separator />

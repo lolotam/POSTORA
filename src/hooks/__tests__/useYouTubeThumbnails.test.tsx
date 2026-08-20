@@ -67,7 +67,7 @@ describe("useYouTubeThumbnails", () => {
   });
 
   describe("generateAiThumbnail", () => {
-    it("calls supabase function with correct parameters for standard model", async () => {
+    it("sends the prompt and ratio, leaving the model to the server", async () => {
       mockInvoke.mockResolvedValue({
         data: { imageUrl: "https://generated-image.jpg" },
         error: null,
@@ -76,27 +76,21 @@ describe("useYouTubeThumbnails", () => {
       const { result } = renderHook(() => useYouTubeThumbnails(defaultProps));
 
       await act(async () => {
-        await result.current.generateAiThumbnail(
-          "A beautiful thumbnail",
-          "standard",
-          "hd"
-        );
+        await result.current.generateAiThumbnail("A beautiful thumbnail");
       });
 
       expect(mockInvoke).toHaveBeenCalledWith("generate-image", {
         body: {
           prompt: "A beautiful thumbnail",
-          model: "imagen-3.0-fast-generate-001",
           aspectRatio: "16:9",
-          quality: "standard",
           referenceImage: undefined,
-          width: 1280,
-          height: 720,
         },
       });
     });
 
-    it("calls supabase function with correct parameters for pro model 2k", async () => {
+    // The whole point of the change: model choice is administrative, so the
+    // client must not pin one, and quality is an admin knob now.
+    it("does not send a model, quality, width or height", async () => {
       mockInvoke.mockResolvedValue({
         data: { imageUrl: "https://generated-image.jpg" },
         error: null,
@@ -105,48 +99,14 @@ describe("useYouTubeThumbnails", () => {
       const { result } = renderHook(() => useYouTubeThumbnails(defaultProps));
 
       await act(async () => {
-        await result.current.generateAiThumbnail(
-          "A pro thumbnail",
-          "pro",
-          "2k"
-        );
+        await result.current.generateAiThumbnail("Anything");
       });
 
-      expect(mockInvoke).toHaveBeenCalledWith("generate-image", {
-        body: {
-          prompt: "A pro thumbnail",
-          model: "imagen-3.0-generate-002",
-          aspectRatio: "16:9",
-          quality: "hd",
-          referenceImage: undefined,
-          width: 2560,
-          height: 1440,
-        },
-      });
-    });
-
-    it("calls supabase function with correct parameters for pro model 4k", async () => {
-      mockInvoke.mockResolvedValue({
-        data: { imageUrl: "https://generated-image.jpg" },
-        error: null,
-      });
-
-      const { result } = renderHook(() => useYouTubeThumbnails(defaultProps));
-
-      await act(async () => {
-        await result.current.generateAiThumbnail(
-          "A 4k thumbnail",
-          "pro",
-          "4k"
-        );
-      });
-
-      expect(mockInvoke).toHaveBeenCalledWith("generate-image", {
-        body: expect.objectContaining({
-          width: 3840,
-          height: 2160,
-        }),
-      });
+      const body = mockInvoke.mock.calls[0][1].body;
+      expect(body).not.toHaveProperty("model");
+      expect(body).not.toHaveProperty("quality");
+      expect(body).not.toHaveProperty("width");
+      expect(body).not.toHaveProperty("height");
     });
 
     it("includes reference image when provided", async () => {
@@ -160,8 +120,6 @@ describe("useYouTubeThumbnails", () => {
       await act(async () => {
         await result.current.generateAiThumbnail(
           "Thumbnail with reference",
-          "standard",
-          "hd",
           "data:image/jpeg;base64,refimage"
         );
       });
@@ -182,7 +140,7 @@ describe("useYouTubeThumbnails", () => {
       const { result } = renderHook(() => useYouTubeThumbnails(defaultProps));
 
       await act(async () => {
-        await result.current.generateAiThumbnail("Test", "standard", "hd");
+        await result.current.generateAiThumbnail("Test");
       });
 
       expect(mockSetAiGeneratedThumbnails).toHaveBeenCalled();
@@ -201,7 +159,7 @@ describe("useYouTubeThumbnails", () => {
       const { result } = renderHook(() => useYouTubeThumbnails(defaultProps));
 
       await act(async () => {
-        await result.current.generateAiThumbnail("Test", "standard", "hd");
+        await result.current.generateAiThumbnail("Test");
       });
 
       expect(mockToast).toHaveBeenCalledWith({
@@ -220,7 +178,7 @@ describe("useYouTubeThumbnails", () => {
       const { result } = renderHook(() => useYouTubeThumbnails(defaultProps));
 
       await act(async () => {
-        await result.current.generateAiThumbnail("Test", "standard", "hd");
+        await result.current.generateAiThumbnail("Test");
       });
 
       expect(mockToast).toHaveBeenCalledWith({
@@ -241,7 +199,7 @@ describe("useYouTubeThumbnails", () => {
       expect(result.current.isGeneratingAi).toBe(false);
 
       await act(async () => {
-        await result.current.generateAiThumbnail("Test", "standard", "hd");
+        await result.current.generateAiThumbnail("Test");
       });
 
       expect(mockSetGeneratingAiThumbnail).toHaveBeenCalledWith(true);

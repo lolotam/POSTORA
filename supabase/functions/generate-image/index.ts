@@ -6,7 +6,7 @@ import { z } from "npm:zod@3.23.8";
 import { HiggsfieldAuthError, resolveHiggsfieldCredential } from "../_shared/higgsfield-oauth.ts";
 import { HiggsfieldMcpClient, findOutputUrl } from "../_shared/higgsfield-mcp.ts";
 import { checkByoGenerationLimits } from "../_shared/higgsfield-rate-limit.ts";
-import { mergeModelSpec, sanitizeParams, missingRequiredParams, resolveAspectRatio } from "../_shared/higgsfield-model-spec.ts";
+import { mergeModelSpec, sanitizeParams, missingRequiredParams, resolveAspectRatio, defaultParamsFor } from "../_shared/higgsfield-model-spec.ts";
 
 const GenerateImageSchema = z.object({
   prompt: z.string().min(1).max(5000),
@@ -32,16 +32,24 @@ interface ResolvedModel {
   api_endpoint: string;
   api_key_env_var: string;
   api_type: string; // 'openai' | 'google' | ...
-  source: 'requested' | 'primary' | 'fallback' | 'hardcoded';
+  source: 'requested' | 'primary' | 'fallback' | 'fallback_2' | 'hardcoded';
+  /** Administrator-set knobs for this model, from ai_models.admin_params. */
+  admin_params: Record<string, string | number | boolean>;
 }
 
+// Last resort when no configured model can run. Must be a model the key can
+// actually call: imagen-4.0-generate-001 was 404ing because Imagen is not
+// offered on this account and does not support generateContent anyway, which
+// left the chain with no working floor. gemini-2.5-flash-image is available and
+// was this app's own previous default.
 const HARDCODED_FALLBACK: ResolvedModel = {
   provider_code: 'gemini',
-  model_id: 'imagen-4.0-generate-001',
+  model_id: 'gemini-2.5-flash-image',
   api_endpoint: 'https://generativelanguage.googleapis.com/v1beta',
   api_key_env_var: 'GOOGLE_AI_STUDIO_KEY',
   api_type: 'google',
   source: 'hardcoded',
+  admin_params: {},
 };
 
 async function lookupModelByProviderAndId(
@@ -52,7 +60,7 @@ async function lookupModelByProviderAndId(
 ): Promise<ResolvedModel | null> {
   const { data } = await supabaseAdmin
     .from('ai_models')
-    .select('model_id, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
+    .select('model_id, admin_params, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
     .eq('model_id', model_id)
     .eq('ai_providers.provider_code', provider_code)
     .eq('is_active', true)
@@ -65,6 +73,7 @@ async function lookupModelByProviderAndId(
     api_key_env_var: data.ai_providers.api_key_env_var,
     api_type: data.ai_providers.api_type,
     source,
+    admin_params: (data.admin_params ?? {}) as Record<string, string | number | boolean>,
   };
 }
 
@@ -94,7 +103,7 @@ async function resolveModelChain(supabaseAdmin: any, requestedModelId?: string):
   if (requestedModelId) {
     const { data } = await supabaseAdmin
       .from('ai_models')
-      .select('model_id, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
+      .select('model_id, admin_params, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
       .eq('model_id', requestedModelId)
       .eq('is_active', true)
       .maybeSingle();
@@ -106,6 +115,7 @@ async function resolveModelChain(supabaseAdmin: any, requestedModelId?: string):
         api_key_env_var: data.ai_providers.api_key_env_var,
         api_type: data.ai_providers.api_type,
         source: 'requested',
+        admin_params: (data.admin_params ?? {}) as Record<string, string | number | boolean>,
       });
     }
   }
@@ -114,7 +124,9 @@ async function resolveModelChain(supabaseAdmin: any, requestedModelId?: string):
   push(await getSystemSettingModel(supabaseAdmin, 'default_ai_model_image', 'primary'));
   // 3. Admin fallback
   push(await getSystemSettingModel(supabaseAdmin, 'default_ai_model_image_fallback', 'fallback'));
-  // 4. Hardcoded last-resort
+  // 4. Admin second fallback
+  push(await getSystemSettingModel(supabaseAdmin, 'default_ai_model_image_fallback_2', 'fallback_2'));
+  // 5. Hardcoded last-resort
   push(HARDCODED_FALLBACK);
 
   return chain;
@@ -595,7 +607,7 @@ Style requirements:
 - Professional, polished look suitable for social media
 - High resolution and clear details
 - Aspect ratio: ${aspectRatio}
-- Quality level: ${quality}
+${quality ? `- Quality level: ${quality}` : ''}
 
 Make the image visually striking and engaging.`;
 
@@ -610,7 +622,19 @@ Make the image visually striking and engaging.`;
 
     for (const m of chain) {
       if (m.provider_code === 'higgsfield' || m.api_type === 'higgsfield') {
-        const cred = await resolveHiggsfieldCredential(supabaseAdmin, user.id);
+        // Resolving the credential can throw when Higgsfield is not connected.
+        // That makes THIS provider unusable, not the request: skip to the next
+        // candidate rather than letting the throw escape the loop. Quota
+        // breaches below are different -- those are user policy and do abort.
+        let cred;
+        try {
+          cred = await resolveHiggsfieldCredential(supabaseAdmin, user.id);
+        } catch (err: any) {
+          const msg = `[${m.source}] ${m.provider_code}/${m.model_id}: ${err?.message || String(err)}`;
+          console.error(msg);
+          attemptErrors.push(msg);
+          continue;
+        }
         if (cred.source === 'byo') {
           const byoLimit = await checkByoGenerationLimits(supabaseAdmin, user.id);
           if (!byoLimit.allowed) return errorResponse(byoLimit.error, 429);
@@ -625,9 +649,22 @@ Make the image visually striking and engaging.`;
         try {
           const { data: catalog } = await supabaseAdmin.from('ai_models').select('metadata').eq('model_id', m.model_id).maybeSingle();
           const spec = mergeModelSpec(m.model_id, catalog?.metadata, 'image');
-          const params = sanitizeParams(spec, { aspect_ratio: resolveAspectRatio(spec, aspectRatio) || undefined, quality, ...(rawBody && typeof rawBody === 'object' ? rawBody : {}) });
+          // Spec defaults are the floor, the administrator overrides them, and the
+          // user's aspect ratio is applied last. sanitizeParams then drops anything
+          // this model does not declare, so falling through to a model with
+          // different knobs cannot send it a parameter it will reject.
+          const params = sanitizeParams(spec, {
+            ...defaultParamsFor(spec),
+            ...m.admin_params,
+            ...(aspectRatio ? { aspect_ratio: resolveAspectRatio(spec, aspectRatio) || aspectRatio } : {}),
+          });
           const missing = missingRequiredParams(spec, params);
-          if (missing.length) throw new Error(`Missing parameters: ${missing.join(', ')}`);
+          if (missing.length) {
+            // Skip this candidate, do not abort the chain. A model the
+            // administrator has not finished configuring must not take the whole
+            // run down with it — the next tier may well be ready.
+            throw new Error(`needs ${missing.join(', ')} — set it in Admin › AI Configuration`);
+          }
           const payload = await HiggsfieldMcpClient.fromCredential(cred, supabaseAdmin).callTool('generate_image', { params: { model: m.model_id, prompt: fullPrompt, ...params } });
           const generatedUrl = findOutputUrl(payload);
           if (!generatedUrl) throw new Error('Higgsfield returned no image URL');
@@ -635,9 +672,14 @@ Make the image visually striking and engaging.`;
           if (jobError) throw jobError;
           imageUrl = generatedUrl; description = `Generated with Higgsfield ${m.model_id}`; usedModel = m;
           break;
-        } catch (err) {
+        } catch (err: any) {
           if (reserved) await supabaseAdmin.rpc('release_ai_generation_quota', { p_user_id: user.id });
-          throw err;
+          // Record and move to the next candidate. Rethrowing here aborted the
+          // entire chain, which defeated the point of having fallbacks.
+          const msg = `[${m.source}] ${m.provider_code}/${m.model_id}: ${err?.message || String(err)}`;
+          console.error(msg);
+          attemptErrors.push(msg);
+          continue;
         }
       }
       const apiKey = await getProviderApiKey(supabaseAdmin, m);
