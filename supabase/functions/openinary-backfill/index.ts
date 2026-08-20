@@ -83,9 +83,12 @@ Deno.serve(async (req) => {
   let throttled = false;
 
   // A failed row is the durable retry record, matching how cloudinary-upload
-  // treats a partial write.
+  // treats a partial write. It is also what removes this media from the next
+  // batch, so a write error here has to be reported rather than swallowed: with
+  // no row written at all, the same media is selected again on every pass and
+  // the caller's loop never reaches processed=0.
   async function recordFailure(row: CloudinaryRow, intendedKey: string, reason: string) {
-    await db.from("media_file_providers").upsert({
+    const { error } = await db.from("media_file_providers").upsert({
       media_file_id: row.media_file_id,
       provider: "openinary",
       object_version: row.object_version,
@@ -93,14 +96,22 @@ Deno.serve(async (req) => {
       status: "failed",
       error: reason,
     }, { onConflict: "media_file_id,provider,object_version" });
+    if (error) {
+      failures.push({
+        media_file_id: row.media_file_id,
+        error: `${reason} (and the failure row could not be written: ${error.message})`,
+      });
+    }
   }
 
   // Fixed-size worker pool over a shared cursor: keeps CONCURRENCY uploads in
   // flight without slicing the batch into chunks that stall on their slowest item.
   let cursor = 0;
+  let attempted = 0;
   async function worker() {
     while (cursor < rows.length) {
       const row = rows[cursor++];
+      attempted++;
       const target = openinaryTarget(row.object_key, config!.folderPrefix);
       const intendedKey = `${target.folder}/${target.baseName}`;
 
@@ -149,7 +160,10 @@ Deno.serve(async (req) => {
   const { data: remaining } = await db.rpc("count_openinary_backfill_remaining");
 
   return jsonResponse({
-    processed: rows.length,
+    // Rows actually attempted, not rows selected: a throttled batch abandons
+    // the rest, and reporting the selection would overstate the work done.
+    processed: attempted,
+    selected: rows.length,
     succeeded,
     failed: failures.length,
     // Truncated so one bad batch cannot return a multi-megabyte payload.

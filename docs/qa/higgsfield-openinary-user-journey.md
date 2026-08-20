@@ -4,7 +4,7 @@ Manual test script for the two features brought online on 2026-08-20.
 Self-hosted Supabase at `https://api.postora.cloud`. Live app at
 `https://postora.cloud`.
 
-Run as the admin account (`dr.vet.waleedtam@gmail.com`). Some steps need a
+Run as any account holding the `admin` role. Some steps need a
 second, non-admin account — those are marked **[2nd account]** and can be
 skipped on a smoke pass.
 
@@ -124,6 +124,16 @@ moved — that means one leg of the dual-write failed. The failed provider row
 is kept as the retry record; check `media_file_providers` for a row with
 `status='failed'` and read its `error` column.
 
+To retry rows in that state, call the backfill with the explicit retry flag —
+an ordinary run deliberately skips any media that already has an openinary
+row, failed included, so that a permanently broken object cannot stall the
+queue:
+
+```jsonc
+// POST /functions/v1/openinary-backfill   (admin JWT)
+{ "limit": 15, "retry_failed": true }
+```
+
 ### J6. Media serves from Openinary
 
 1. On **`/media`**, right-click any image that existed *before* today and
@@ -174,7 +184,7 @@ reported symptom — authorising succeeded upstream, then failed to land. If it
 returns, capture the message on the callback page and check the edge log for
 the function name and error:
 
-```
+```shell
 docker logs --since 10m postorasupabase-supabase-j8axyh-supabase-edge-functions 2>&1 | grep -i higgsfield
 ```
 
@@ -207,7 +217,7 @@ brings their own Higgsfield account and pays their own provider costs.
 2. Settings card: click **Disconnect**.
    **Pass:** same toast, card returns to not-connected.
 
-Re-run J8 afterwards to confirm reconnecting still works — the OAuth client is
+Re-run J8 afterward to confirm reconnecting still works — the OAuth client is
 registered once and reused, so a reconnect exercises a different path than a
 first connect.
 
@@ -248,7 +258,7 @@ Collect these before filing:
    not the Cloudflare beacon line).
 2. Which account and which page.
 3. Edge function log for the window:
-   ```
+   ```shell
    docker logs --since 15m postorasupabase-supabase-j8axyh-supabase-edge-functions 2>&1 | grep -iE 'error|boot'
    ```
 

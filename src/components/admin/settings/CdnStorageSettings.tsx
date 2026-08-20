@@ -35,13 +35,25 @@ export function CdnStorageSettings() {
     mutationFn: async () => {
       const { data, error } = await supabase.functions.invoke("openinary-test");
       if (error) throw error;
-      return data as { ok: boolean; message: string };
+      return data as { ok: boolean; message: string; serverUrl?: string };
     },
-    onSuccess: (result) => toast({
-      title: result.ok ? "Openinary reachable" : "Openinary unreachable",
-      description: result.message,
-      variant: result.ok ? undefined : "destructive",
-    }),
+    onSuccess: (result) => {
+      // The endpoint reports the server uploads actually use, which comes from
+      // the edge environment. The field below is a record of that value, not a
+      // control over it, so the two can drift apart silently. Say so, because a
+      // reachable server at the wrong address still means media lands somewhere
+      // the delivery URLs do not point.
+      const configured = (serverUrl || openinary?.serverUrl || "").replace(/\/+$/, "");
+      const effective = (result.serverUrl || "").replace(/\/+$/, "");
+      const mismatch = result.ok && configured && effective && configured !== effective;
+      toast({
+        title: result.ok ? (mismatch ? "Reachable, but not the server configured here" : "Openinary reachable") : "Openinary unreachable",
+        description: mismatch
+          ? `Uploads use ${effective}. This form says ${configured}. Update the field to match, or change OPENINARY_SERVER_URL on the edge functions.`
+          : result.message,
+        variant: result.ok && !mismatch ? undefined : "destructive",
+      });
+    },
     onError: (error) => toast({ title: "Connection test failed", description: error.message, variant: "destructive" }),
   });
   const saving = useMutation({
