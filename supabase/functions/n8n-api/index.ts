@@ -1694,7 +1694,7 @@ async function handleGetMediaById(req: Request, supabase: any, userId: string, m
 
   const { data: media, error } = await supabase
     .from('media_files')
-    .select('id, user_id, file_path, file_type, file_size, mime_type, storage_bucket, metadata, created_at')
+    .select('id, user_id, file_path, file_type, file_size, mime_type, storage_bucket, metadata, created_at, current_object_version')
     .eq('id', mediaId)
     .maybeSingle();
 
@@ -1717,17 +1717,20 @@ async function handleGetMediaById(req: Request, supabase: any, userId: string, m
     const [{ data: providerRows }, { data: cdnSetting }] = await Promise.all([
       supabase
         .from('media_file_providers')
-        .select('provider, status, delivery_url')
-        .eq('media_file_id', mediaId)
-        .eq('object_version', 1),
+        .select('provider, object_version, status, delivery_url')
+        .eq('media_file_id', mediaId),
       supabase.from('app_settings').select('value').eq('key', 'cdn_storage').maybeSingle(),
     ]);
     if (typeof cdnSetting?.value?.read_preference === 'string') {
       readPreference = cdnSetting.value.read_preference;
     }
+    // Match the file's current object version — renames bump it and leave the old
+    // version rows 'ready' with invalidated URLs.
+    const currentVersion = media.current_object_version ?? 1;
+    const current = (providerRows || []).filter((p: any) => (p.object_version ?? 1) === currentVersion);
     const order = readPreference === 'openinary' ? ['openinary', 'cloudinary'] : ['cloudinary', 'openinary'];
     for (const provider of order) {
-      const ready = (providerRows || []).find((p: any) => p.provider === provider && p.status === 'ready' && !!p.delivery_url);
+      const ready = current.find((p: any) => p.provider === provider && p.status === 'ready' && !!p.delivery_url);
       if (ready) { publicUrl = ready.delivery_url; break; }
     }
   } catch (e) {

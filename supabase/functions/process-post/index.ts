@@ -320,6 +320,7 @@ interface MediaFile {
   file_type: string;
   storage_bucket: string;
   mime_type?: string | null;
+  current_object_version?: number | null;
 }
 
 /**
@@ -1266,15 +1267,16 @@ Deno.serve(async (req) => {
       console.warn("[process-post] cdn_storage read failed, defaulting read_preference to cloudinary:", e);
     }
 
-    // Provider state per media file (single query for the whole post).
-    let providerRowsByMedia: Record<string, { provider: string; status: string; delivery_url: string | null }[]> = {};
+    // Provider state per media file (single query for the whole post). Rows are
+    // matched against each file's current_object_version afterwards — renames bump
+    // the version, and the stale version-1 rows stay 'ready' with dead URLs.
+    let providerRowsByMedia: Record<string, { provider: string; object_version: number | null; status: string; delivery_url: string | null }[]> = {};
     if (mediaFiles.length > 0) {
       try {
         const { data: providerRows } = await supabase
           .from("media_file_providers")
-          .select("media_file_id, provider, status, delivery_url")
-          .in("media_file_id", mediaFiles.map((f) => f.id))
-          .eq("object_version", 1);
+          .select("media_file_id, provider, object_version, status, delivery_url")
+          .in("media_file_id", mediaFiles.map((f) => f.id));
         if (providerRows) {
           for (const row of providerRows) {
             (providerRowsByMedia[row.media_file_id] ||= []).push(row);
@@ -1291,7 +1293,9 @@ Deno.serve(async (req) => {
       : ["cloudinary", "openinary"];
 
     for (const file of mediaFiles) {
-      const providers = providerRowsByMedia[file.id] || [];
+      const currentVersion = file.current_object_version ?? 1;
+      const providers = (providerRowsByMedia[file.id] || [])
+        .filter((p) => (p.object_version ?? 1) === currentVersion);
       let resolvedUrl: string | null = null;
       for (const provider of providerPreferenceOrder) {
         const ready = providers.find((p) => p.provider === provider && p.status === "ready" && !!p.delivery_url);

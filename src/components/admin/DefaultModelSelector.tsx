@@ -45,10 +45,11 @@ interface DefaultModelSelectorProps {
   models: AIModel[];
   currentDefault: DefaultModel | null;
   currentFallback: DefaultModel | null;
-  currentFallback2: DefaultModel | null;
+  /** Tier-2 fallback. Only pass for categories whose runtime resolver reads the _fallback_2 setting (currently image). */
+  currentFallback2?: DefaultModel | null;
   onSetDefault: (providerCode: string, modelId: string) => void;
   onSetFallback: (providerCode: string, modelId: string) => void;
-  onSetFallback2: (providerCode: string, modelId: string) => void;
+  onSetFallback2?: (providerCode: string, modelId: string) => void;
   /** Persist the primary model's knobs. Receives the ai_models row id. */
   onSetAdminParams: (modelRowId: string, params: Record<string, string | number | boolean>) => void;
   isSaving?: boolean;
@@ -141,20 +142,23 @@ export function DefaultModelSelector({
               category={category}
             />
 
-            <Separator />
-
-            {/* Fallback 2 */}
-            <TierSelector
-              label="Fallback 2"
-              icon={<Shield className="w-3.5 h-3.5 text-muted-foreground" />}
-              providers={availableProviders}
-              allProviders={providers}
-              filteredModels={filteredModels}
-              currentModel={currentFallback2}
-              onSelect={onSetFallback2}
-              isSaving={isSaving}
-              category={category}
-            />
+            {currentFallback2 !== undefined && onSetFallback2 && (
+              <>
+                <Separator />
+                {/* Fallback 2 */}
+                <TierSelector
+                  label="Fallback 2"
+                  icon={<Shield className="w-3.5 h-3.5 text-muted-foreground" />}
+                  providers={availableProviders}
+                  allProviders={providers}
+                  filteredModels={filteredModels}
+                  currentModel={currentFallback2}
+                  onSelect={onSetFallback2}
+                  isSaving={isSaving}
+                  category={category}
+                />
+              </>
+            )}
 
             {primaryRow && primarySpec.parameters.length > 0 && (
               <>

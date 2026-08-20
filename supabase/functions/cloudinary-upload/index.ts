@@ -56,6 +56,171 @@ const MIME_BY_EXT: Record<string, string> = {
   mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm", mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav",
 };
 
+// SSRF hardening for externalUrl fetching (the Openinary path downloads bytes from
+// the edge runtime, unlike the Cloudinary path where Cloudinary's servers fetch).
+// Known limit (same as the n8n node): DNS is validated per hop, but a rebinding
+// race between check and fetch is not eliminated.
+const MAX_EXTERNAL_BYTES = 50 * 1024 * 1024;
+const MAX_REDIRECT_HOPS = 5;
+
+function ipv4ToUint32(ip: string): number | null {
+  const parts = ip.split(".");
+  if (parts.length !== 4) return null;
+  let value = 0;
+  for (const part of parts) {
+    const n = Number(part);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    value = value * 256 + n;
+  }
+  return value >>> 0;
+}
+
+function isBlockedIpv4(ip: string): boolean {
+  const value = ipv4ToUint32(ip);
+  if (value === null) return true;
+  // Bitwise AND yields a signed int32, so compare unsigned — literals with the top
+  // byte >= 128 (169.254/16, 172.16/12, 192.168/16) otherwise never match.
+  const blocked: [number, number][] = [
+    [0x0A000000, 0xFF000000], // 10.0.0.0/8 private
+    [0xAC100000, 0xFFF00000], // 172.16.0.0/12 private
+    [0xC0A80000, 0xFFFF0000], // 192.168.0.0/16 private
+    [0x7F000000, 0xFF000000], // 127.0.0.0/8 loopback
+    [0xA9FE0000, 0xFFFF0000], // 169.254.0.0/16 link-local
+    [0x00000000, 0xFF000000], // 0.0.0.0/8
+    [0x64400000, 0xFFC00000], // 100.64.0.0/10 CGNAT
+  ];
+  return blocked.some(([network, mask]) => ((value & mask) >>> 0) === ((network & mask) >>> 0));
+}
+
+/** Expand an IPv6 address (including :: compression) to 8 numeric groups, or null if unparseable. */
+function expandIpv6Groups(bare: string): number[] | null {
+  const segments = bare.split("::");
+  if (segments.length > 2) return null;
+  const hasCompression = segments.length === 2;
+  const head = segments[0] ? segments[0].split(":") : [];
+  const tail = segments.length === 2 ? (segments[1] ? segments[1].split(":") : []) : [];
+  // Trailing embedded IPv4 (e.g. 64:ff9b::1.2.3.4) becomes two hex groups.
+  const parts = [...head, ...tail];
+  const last = parts[parts.length - 1];
+  if (last && last.includes(".")) {
+    const v4 = ipv4ToUint32(last);
+    if (v4 === null) return null;
+    parts.pop();
+    parts.push(((v4 >>> 16) & 0xFFFF).toString(16), (v4 & 0xFFFF).toString(16));
+  }
+  const missing = 8 - parts.length;
+  if (hasCompression) {
+    if (missing < 1) return null;
+    const insertAt = head.length;
+    parts.splice(insertAt, 0, ...Array(missing).fill("0"));
+  } else if (parts.length !== 8) {
+    return null;
+  }
+  const groups = parts.map((g) => parseInt(g, 16));
+  if (groups.some((g) => Number.isNaN(g) || g < 0 || g > 0xFFFF)) return null;
+  return groups;
+}
+
+function isBlockedIpv6(ip: string): boolean {
+  const bare = ip.toLowerCase().replace(/^\[|\]$/g, "").split("%")[0];
+  if (bare === "::" || bare === "::1") return true;
+  const mapped = bare.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return isBlockedIpv4(mapped[1]);
+  const groups = expandIpv6Groups(bare);
+  if (!groups) return true; // unparseable/zone forms are rejected conservatively
+  const first = groups[0];
+  if ((first & 0xFE00) === 0xFC00) return true; // fc00::/7 ULA
+  if ((first & 0xFFC0) === 0xFE80) return true; // fe80::/10 link-local
+  if ((first & 0xFF00) === 0xFF00) return true; // multicast
+  if (groups.every((g) => g === 0)) return true; // unspecified
+  return false;
+}
+
+async function assertSafeExternalUrl(rawUrl: string): Promise<URL> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid external URL");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new Error("Only http(s) external URLs are allowed");
+  }
+  if (url.username || url.password) {
+    throw new Error("Credentials in external URLs are not allowed");
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) {
+    throw new Error("Internal hostnames are not allowed for external uploads");
+  }
+  if (host.includes(":")) {
+    if (isBlockedIpv6(host)) throw new Error("Private/reserved addresses are not allowed for external uploads");
+    return url;
+  }
+  if (ipv4ToUint32(host) !== null) {
+    if (isBlockedIpv4(host)) throw new Error("Private/reserved addresses are not allowed for external uploads");
+    return url;
+  }
+  const [aRecords, aaaaRecords] = await Promise.all([
+    Deno.resolveDns(host, "A").catch(() => [] as string[]),
+    Deno.resolveDns(host, "AAAA").catch(() => [] as string[]),
+  ]);
+  const addresses = [...aRecords, ...aaaaRecords];
+  if (addresses.length === 0) throw new Error(`Cannot resolve external host: ${host}`);
+  for (const address of addresses) {
+    const blocked = address.includes(":") ? isBlockedIpv6(address) : isBlockedIpv4(address);
+    if (blocked) throw new Error(`External host ${host} resolves to a private address`);
+  }
+  return url;
+}
+
+/** Follow redirects manually, validating every hop's URL + DNS before fetching it. */
+async function safeFetchExternal(rawUrl: string, timeoutMs = 30_000): Promise<Response> {
+  let current = await assertSafeExternalUrl(rawUrl);
+  for (let hop = 0; hop < MAX_REDIRECT_HOPS; hop++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let response: Response;
+    try {
+      response = await fetch(current, { method: "GET", redirect: "manual", signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get("location");
+      if (!location) return response;
+      current = await assertSafeExternalUrl(new URL(location, current).toString());
+      continue;
+    }
+    return response;
+  }
+  throw new Error("Too many redirects fetching external URL");
+}
+
+/** Stream-read a body, aborting as soon as the byte cap is exceeded. */
+async function readCappedBytes(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const reader = response.body?.getReader();
+  if (!reader) return new Uint8Array(await response.arrayBuffer());
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) {
+      chunks.push(value);
+      total += value.length;
+      if (total > maxBytes) throw new Error(`External file exceeds the ${maxBytes} byte limit`);
+    }
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return merged;
+}
+
 // Sanitize email for folder name (replace special chars)
 function sanitizeEmailForFolder(email: string): string {
   return email
@@ -196,6 +361,20 @@ Deno.serve(async (req) => {
       );
     }
 
+    // SSRF gate: validate the external URL (scheme, host, DNS targets) before any
+    // provider touches it — the Openinary path downloads it from this runtime.
+    if (externalUrl) {
+      try {
+        await assertSafeExternalUrl(externalUrl);
+      } catch (e) {
+        const reason = e instanceof Error ? e.message : "URL validation failed";
+        return new Response(
+          JSON.stringify({ success: false, error: `External URL rejected: ${reason}` }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+
     // Folder structure: media/{user_email_sanitized}/{YYYY-MM-DD}/
     const folder = subfolder
       ? `media/${userFolder}/${subfolder}`
@@ -334,9 +513,9 @@ Deno.serve(async (req) => {
       }
     } else if (externalUrl && effectiveProviders.includes("openinary")) {
       try {
-        const res = await fetch(externalUrl);
+        const res = await safeFetchExternal(externalUrl);
         if (res.ok) {
-          payloadBytes = new Uint8Array(await res.arrayBuffer());
+          payloadBytes = await readCappedBytes(res, MAX_EXTERNAL_BYTES);
           if (!incomingFileSize) incomingFileSize = payloadBytes.length;
         } else {
           console.warn(`[cloudinary-upload] externalUrl fetch for Openinary failed: HTTP ${res.status}`);

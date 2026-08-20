@@ -53,18 +53,11 @@ Deno.serve(async (req) => {
 
     console.log(`User ${user.id} requesting Cloudinary delete`);
 
-    // Get Cloudinary credentials
+    // Cloudinary credentials are only required by paths that delete a Cloudinary
+    // object — an Openinary-only deployment must still be able to delete via mediaFileIds.
     const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
     const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
     const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
-
-    if (!cloudName || !apiKey || !apiSecret) {
-      console.error("Missing Cloudinary credentials");
-      return new Response(
-        JSON.stringify({ success: false, error: "Cloudinary not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
 
     const { publicIds, resourceType = "image", mediaFileIds }: DeleteRequest = await req.json();
 
@@ -96,6 +89,7 @@ Deno.serve(async (req) => {
               const removed = await deleteFromOpeninary(config, row.object_key);
               if (!removed.success) { errors.push(`openinary: ${removed.error}`); anyFailure = true; continue; }
             } else if (row.provider === "cloudinary") {
+              if (!cloudName || !apiKey || !apiSecret) { errors.push("cloudinary: credentials unavailable"); anyFailure = true; continue; }
               const timestamp = Math.floor(Date.now() / 1000);
               const signatureParams = [`public_id=${row.object_key}`, `timestamp=${timestamp}`].sort().join("&");
               const encoder = new TextEncoder();
@@ -132,6 +126,14 @@ Deno.serve(async (req) => {
       return new Response(
         JSON.stringify({ success: false, error: "No public IDs provided" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (!cloudName || !apiKey || !apiSecret) {
+      console.error("Missing Cloudinary credentials");
+      return new Response(
+        JSON.stringify({ success: false, error: "Cloudinary not configured" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
