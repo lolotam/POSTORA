@@ -170,6 +170,74 @@ async function getProviderApiKey(supabaseAdmin: any, m: ResolvedModel): Promise<
 const MAX_REFERENCE_BYTES = 3_000_000;
 /** How long Higgsfield has to fetch a staged reference before the link dies. */
 const REFERENCE_URL_TTL_SECONDS = 3600;
+/** Redirect hops allowed while fetching a reference. */
+const MAX_REFERENCE_REDIRECTS = 3;
+/** Ceiling on a single reference fetch, so a slow host cannot hold the isolate. */
+const REFERENCE_FETCH_TIMEOUT_MS = 20_000;
+
+/**
+ * Fetch a reference URL, checking every hop.
+ *
+ * `fetch` follows redirects itself, so validating only the URL the caller gave
+ * us would let a public address redirect into the internal network. Redirects
+ * are followed by hand instead, with each destination checked before it is
+ * requested.
+ */
+async function fetchReference(url: string): Promise<Response> {
+  let target = url;
+  for (let hop = 0; hop <= MAX_REFERENCE_REDIRECTS; hop++) {
+    if (!isPublicHttpsUrl(target)) {
+      throw new Error('reference image must be an https URL on a public host');
+    }
+    const resp = await fetch(target, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(REFERENCE_FETCH_TIMEOUT_MS),
+    });
+    if (resp.status < 300 || resp.status > 399) return resp;
+
+    const location = resp.headers.get('location');
+    await resp.body?.cancel();
+    if (!location) throw new Error('reference image redirect had no location');
+    target = new URL(location, target).toString();
+  }
+  throw new Error('reference image redirected too many times');
+}
+
+/**
+ * Read a body, giving up once it exceeds the cap.
+ *
+ * Buffering first and measuring afterwards lets a host that omits
+ * content-length exhaust the isolate before the size is ever checked.
+ */
+async function readBoundedBody(resp: Response): Promise<Uint8Array> {
+  const declared = Number(resp.headers.get('content-length'));
+  if (Number.isFinite(declared) && declared > MAX_REFERENCE_BYTES) {
+    throw new Error('reference image is too large');
+  }
+  const reader = resp.body?.getReader();
+  if (!reader) throw new Error('reference image had no body');
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > MAX_REFERENCE_BYTES) {
+      await reader.cancel();
+      throw new Error('reference image is too large');
+    }
+    chunks.push(value);
+  }
+
+  const body = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
+}
 
 /**
  * Read a reference image as base64, whichever form it arrived in.
@@ -180,15 +248,10 @@ async function readReferenceBytes(url: string): Promise<{ mimeType: string; base
   const inline = parseDataUrl(url);
   if (inline) return inline;
 
-  if (!isPublicHttpsUrl(url)) {
-    throw new Error('reference image must be an https URL on a public host');
-  }
-  const resp = await fetch(url);
+  const resp = await fetchReference(url);
   if (!resp.ok) throw new Error(`could not read reference image (${resp.status})`);
-  const bytes = new Uint8Array(await resp.arrayBuffer());
-  if (bytes.byteLength > MAX_REFERENCE_BYTES) throw new Error('reference image is too large');
   const mimeType = resp.headers.get('content-type')?.split(';')[0] || 'image/png';
-  return { mimeType, base64: base64Encode(bytes) };
+  return { mimeType, base64: base64Encode(await readBoundedBody(resp)) };
 }
 
 /**
@@ -213,8 +276,12 @@ function publicSupabaseOrigin(): string {
  * be hosted first. The media bucket is private, so the reference gets a
  * short-lived signed URL rather than the bucket being opened up.
  */
-async function stageReferenceUrl(supabaseAdmin: any, userId: string, url: string): Promise<string> {
-  if (!url.startsWith('data:')) return url;
+async function stageReferenceUrl(
+  supabaseAdmin: any,
+  userId: string,
+  url: string,
+): Promise<{ url: string; stagedPath: string | null }> {
+  if (!url.startsWith('data:')) return { url, stagedPath: null };
   const inline = parseDataUrl(url);
   if (!inline) throw new Error('unsupported reference image format');
 
@@ -236,7 +303,7 @@ async function stageReferenceUrl(supabaseAdmin: any, userId: string, url: string
   // The client builds signed URLs on SUPABASE_URL, so the path is re-hosted on
   // the public origin before it is handed to a service outside this network.
   const signed = new URL(data.signedUrl);
-  return `${publicSupabaseOrigin()}${signed.pathname}${signed.search}`;
+  return { url: `${publicSupabaseOrigin()}${signed.pathname}${signed.search}`, stagedPath: path };
 }
 
 /**
@@ -247,14 +314,23 @@ async function stageReferenceUrl(supabaseAdmin: any, userId: string, url: string
  * that cannot take the attachment hands over to the next tier instead of
  * generating from the prompt as though no reference had been given.
  */
-async function importReferences(
-  mcp: HiggsfieldMcpClient,
-  supabaseAdmin: any,
-  userId: string,
-  spec: { maxReferenceImages: number; referenceRoles: string[]; requiresReferenceImage: boolean },
-  references: ReferenceInput[],
-  modelId: string,
-): Promise<{ role: string; value: string }[] | null> {
+interface ReferenceImportRequest {
+  mcp: HiggsfieldMcpClient;
+  supabaseAdmin: any;
+  userId: string;
+  spec: { maxReferenceImages: number; referenceRoles: string[]; requiresReferenceImage: boolean };
+  references: ReferenceInput[];
+  modelId: string;
+  /**
+   * Collects the storage paths staged for this attempt so the caller can remove
+   * them. It is filled as work proceeds rather than returned, so the paths
+   * survive a throw partway through and are still cleaned up.
+   */
+  stagedPaths: string[];
+}
+
+async function importReferences(req: ReferenceImportRequest): Promise<{ role: string; value: string }[] | null> {
+  const { mcp, supabaseAdmin, userId, spec, references, modelId, stagedPaths } = req;
   if (references.length === 0) {
     if (spec.requiresReferenceImage) throw new Error(`${modelId} requires a reference image`);
     return null;
@@ -264,7 +340,8 @@ async function importReferences(
   const role = spec.referenceRoles[0] ?? 'image';
   const medias: { role: string; value: string }[] = [];
   for (const ref of references.slice(0, spec.maxReferenceImages)) {
-    const url = await stageReferenceUrl(supabaseAdmin, userId, ref.url);
+    const { url, stagedPath } = await stageReferenceUrl(supabaseAdmin, userId, ref.url);
+    if (stagedPath) stagedPaths.push(stagedPath);
     let imported: unknown;
     try {
       imported = await mcp.callTool('media_import_url', { url, type: 'image' });
@@ -803,6 +880,10 @@ Make the image visually striking and engaging.`;
           if (!byoLimit.allowed) return errorResponse(byoLimit.error, 429);
         }
         let reserved = false;
+        // Removed once the attempt is over: cleanup-media only walks media_files
+        // rows, and these staging objects are deliberately not recorded there,
+        // so nothing else would ever collect them.
+        const stagedPaths: string[] = [];
         if (cred.source === 'platform') {
           const { data } = await supabaseAdmin.rpc('reserve_ai_generation_quota', { p_user_id: user.id });
           const quota = Array.isArray(data) ? data[0] : data;
@@ -831,7 +912,9 @@ Make the image visually striking and engaging.`;
           const mcp = HiggsfieldMcpClient.fromCredential(cred, supabaseAdmin);
           // sanitizeParams keeps only what the spec declares, so the reference is
           // attached after it rather than passed through it.
-          const medias = await importReferences(mcp, supabaseAdmin, user.id, spec, references, m.model_id);
+          const medias = await importReferences({
+            mcp, supabaseAdmin, userId: user.id, spec, references, modelId: m.model_id, stagedPaths,
+          });
           const payload = await mcp.callTool('generate_image', { params: { model: m.model_id, prompt: fullPrompt, ...params, ...(medias ? { medias } : {}) } });
           const generatedUrl = findOutputUrl(payload);
           if (!generatedUrl) throw new Error('Higgsfield returned no image URL');
@@ -847,6 +930,13 @@ Make the image visually striking and engaging.`;
           console.error(msg);
           attemptErrors.push(msg);
           continue;
+        } finally {
+          // Higgsfield has taken its own copy by now, so the staging object has
+          // no further use. Failing to remove it must not fail the generation.
+          if (stagedPaths.length) {
+            const { error: removeError } = await supabaseAdmin.storage.from('media').remove(stagedPaths);
+            if (removeError) console.warn('[generate-image] could not remove staged references:', removeError.message);
+          }
         }
       }
       const apiKey = await getProviderApiKey(supabaseAdmin, m);

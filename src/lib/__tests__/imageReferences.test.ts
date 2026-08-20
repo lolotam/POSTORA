@@ -90,4 +90,33 @@ describe("isPublicHttpsUrl", () => {
   it("does not reject a public address that merely starts with 172", () => {
     expect(isPublicHttpsUrl("https://172.32.0.1/photo.jpg")).toBe(true);
   });
+
+  // A trailing dot is the absolute-FQDN spelling and resolves identically, so
+  // a check written against "localhost" has to fold it in first.
+  it.each([
+    "https://localhost./photo.jpg",
+    "https://LOCALHOST/photo.jpg",
+    "https://something.localhost/photo.jpg",
+    "https://127.0.0.1./photo.jpg",
+  ])("rejects the alternate spelling %s", (url) => {
+    expect(isPublicHttpsUrl(url)).toBe(false);
+  });
+
+  // Ranges beyond the obvious ones that still reach internal services.
+  it.each([
+    "https://0.0.0.0/photo.jpg",
+    "https://100.64.0.1/photo.jpg",
+    "https://224.0.0.1/photo.jpg",
+    "https://[fd00::1]/photo.jpg",
+    "https://[fe80::1]/photo.jpg",
+    "https://[::ffff:169.254.169.254]/photo.jpg",
+  ])("rejects %s", (url) => {
+    expect(isPublicHttpsUrl(url)).toBe(false);
+  });
+
+  it("still accepts ordinary public hosts and addresses", () => {
+    expect(isPublicHttpsUrl("https://8.8.8.8/photo.jpg")).toBe(true);
+    expect(isPublicHttpsUrl("https://res.cloudinary.com/demo/a.png")).toBe(true);
+    expect(isPublicHttpsUrl("https://api.postora.cloud/storage/v1/object/sign/media/a.png?token=x")).toBe(true);
+  });
 });

@@ -80,6 +80,14 @@ export async function compressImage(
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
+    // Revoked on both paths: reference-image uploads call this repeatedly, and
+    // an unreleased object URL holds the whole blob for the page's lifetime.
+    const objectUrl = URL.createObjectURL(file);
+    const settle = <T,>(finish: (value: T) => void, value: T) => {
+      URL.revokeObjectURL(objectUrl);
+      finish(value);
+    };
+
     img.onload = () => {
       let { width, height } = img;
 
@@ -97,7 +105,7 @@ export async function compressImage(
       canvas.height = height;
 
       if (!ctx) {
-        reject(new Error('Failed to get canvas context'));
+        settle(reject, new Error('Failed to get canvas context'));
         return;
       }
 
@@ -106,9 +114,9 @@ export async function compressImage(
       canvas.toBlob(
         (blob) => {
           if (blob) {
-            resolve(blob);
+            settle(resolve, blob);
           } else {
-            reject(new Error('Failed to compress image'));
+            settle(reject, new Error('Failed to compress image'));
           }
         },
         'image/jpeg',
@@ -116,8 +124,8 @@ export async function compressImage(
       );
     };
 
-    img.onerror = () => reject(new Error('Failed to load image'));
-    img.src = URL.createObjectURL(file);
+    img.onerror = () => settle(reject, new Error('Failed to load image'));
+    img.src = objectUrl;
   });
 }
 
