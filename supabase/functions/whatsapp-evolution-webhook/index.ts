@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
 import { buildMessagePayload, dispatchMessageEvent } from "../_shared/n8nMessagingDispatch.ts";
 import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts";
+import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -258,11 +259,12 @@ Deno.serve(async (req) => {
     const account = await findAccount(admin, instance.social_account_id);
     if (!account) return jsonResponse({ error: "Unauthorized" }, 401);
 
-    if (body.event === "MESSAGES_UPSERT") {
+    const event = normalizeEvolutionEvent(body.event);
+    if (event === "MESSAGES_UPSERT") {
       for (const message of messageItems(body)) await persistInboundMessage(admin, account, message);
-    } else if (body.event === "CONNECTION_UPDATE") {
+    } else if (event === "CONNECTION_UPDATE") {
       await handleConnectionUpdate(admin, account, body.data);
-    } else if (body.event === "QRCODE_UPDATED") {
+    } else if (event === "QRCODE_UPDATED") {
       await handleQrUpdate(admin, account.id, body.data);
     }
     return jsonResponse({ received: true });

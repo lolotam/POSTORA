@@ -44,6 +44,13 @@ function extractState(payload: any): string | null {
   return payload?.instance?.state || payload?.state || payload?.connectionStatus || null;
 }
 
+// Evolution runs in its own stack and can only reach the public gateway, while
+// SUPABASE_URL is the internal Kong hostname inside the edge runtime.
+function evolutionWebhookBaseUrl(internalUrl: string): string {
+  const base = Deno.env.get("SUPABASE_PUBLIC_URL") || internalUrl;
+  return base.endsWith("/") ? base.slice(0, -1) : base;
+}
+
 async function authenticateRequest(req: Request) {
   const authorization = req.headers.get("Authorization");
   if (!authorization?.startsWith("Bearer ")) throw new BridgeError("Invalid session", 401);
@@ -63,7 +70,7 @@ async function authenticateRequest(req: Request) {
     user: data.user,
     userClient,
     admin: createClient(supabaseUrl, serviceRoleKey),
-    supabaseUrl,
+    webhookBaseUrl: evolutionWebhookBaseUrl(supabaseUrl),
   };
 }
 
@@ -205,7 +212,7 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
     await api.createInstance({
       instanceName,
       webhook: {
-        url: `${context.supabaseUrl}/functions/v1/whatsapp-evolution-webhook`,
+        url: `${context.webhookBaseUrl}/functions/v1/whatsapp-evolution-webhook`,
         headers: { jwt_key: jwtKey },
         events: EVOLUTION_EVENTS,
       },

@@ -27,6 +27,13 @@ export interface EvolutionSendResult {
   raw: unknown;
 }
 
+// Evolution registers webhook subscriptions under SCREAMING_SNAKE event names but sends
+// the dot-lowercase form ("connection.update") in the delivered body, so every consumer
+// has to normalize before matching.
+export function normalizeEvolutionEvent(event: unknown): string {
+  return String(event ?? "").replace(/[.-]/g, "_").toUpperCase();
+}
+
 type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 interface EvolutionApiOptions {

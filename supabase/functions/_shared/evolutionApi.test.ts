@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { createEvolutionApi } from "./evolutionApi.ts";
+import { createEvolutionApi, normalizeEvolutionEvent } from "./evolutionApi.ts";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -90,4 +90,26 @@ Deno.test("Evolution API client rejects a request that exceeds its deadline", as
     Error,
     "Evolution API request timed out",
   );
+});
+
+Deno.test("Evolution event names normalize onto the registered subscription names", async (t) => {
+  // Regression (2026-08-21): Direct QR connect linked on the phone but never activated in
+  // Postora. Evolution subscribes with SCREAMING_SNAKE names but delivers the dot-lowercase
+  // form in the webhook body, so the handler's raw `body.event === "CONNECTION_UPDATE"`
+  // comparison never matched and every connection and message event was dropped.
+  const deliveries: Array<[unknown, string]> = [
+    ["connection.update", "CONNECTION_UPDATE"],
+    ["messages.upsert", "MESSAGES_UPSERT"],
+    ["qrcode.updated", "QRCODE_UPDATED"],
+    ["CONNECTION_UPDATE", "CONNECTION_UPDATE"],
+    ["connection-update", "CONNECTION_UPDATE"],
+    [undefined, ""],
+    [null, ""],
+  ];
+
+  for (const [delivered, registered] of deliveries) {
+    await t.step(`${String(delivered)} matches ${registered || "nothing"}`, () => {
+      assertEquals(normalizeEvolutionEvent(delivered), registered);
+    });
+  }
 });
