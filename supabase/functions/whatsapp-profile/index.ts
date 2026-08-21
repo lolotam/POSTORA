@@ -63,10 +63,7 @@ serve(async (req) => {
       .eq("is_active", true)
       .order("connected_at", { ascending: false });
 
-    const resolution = resolveWhatsAppCloudCredentials(waAccounts || [], {
-      accessToken: Deno.env.get("WHATSAPP_ACCESS_TOKEN"),
-      phoneNumberId: Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"),
-    });
+    const resolution = resolveWhatsAppCloudCredentials(waAccounts || []);
 
     if (resolution.status !== "ok") {
       // Distinguishes "connected, but through a mode Meta holds no profile for" from "nothing
