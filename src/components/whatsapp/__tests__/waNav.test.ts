@@ -55,6 +55,15 @@ describe("whatsappLegacyTabTarget", () => {
     expect(whatsappLegacyTabTarget("not-a-section")).toBeNull();
   });
 
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "treats the inherited key %s as an unknown tab",
+    (inheritedKey) => {
+      // The value arrives from the query string, so a lookup that honoured the prototype chain
+      // would hand a function to <Navigate to={...}> for ?tab=constructor.
+      expect(whatsappLegacyTabTarget(inheritedKey)).toBeNull();
+    },
+  );
+
   it("points every retired route at a destination inside the section", () => {
     for (const target of Object.values(whatsappRetiredRoutes)) {
       expect(target.startsWith(`${WHATSAPP_BASE_PATH}/`)).toBe(true);

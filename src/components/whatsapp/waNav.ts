@@ -45,7 +45,11 @@ export const whatsappRetiredRoutes: Record<string, string> = {
 /** Resolves a legacy `/messaging/whatsapp?tab=<slug>` deep link to the route serving it today. */
 export function whatsappLegacyTabTarget(tab: string | null | undefined): string | null {
   if (!tab) return null;
-  if (tab in whatsappRetiredRoutes) return whatsappRetiredRoutes[tab];
+  // `in` would also match inherited keys, so ?tab=constructor would hand a function back to
+  // <Navigate to={...}>. The value comes straight from the query string, so own properties only.
+  if (Object.prototype.hasOwnProperty.call(whatsappRetiredRoutes, tab)) {
+    return whatsappRetiredRoutes[tab];
+  }
   return whatsappNavItems.some((item) => item.path === tab) ? whatsappSectionRoute(tab) : null;
 }
 
