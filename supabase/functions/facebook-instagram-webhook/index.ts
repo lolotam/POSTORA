@@ -134,10 +134,12 @@ Deno.serve(async (req) => {
       for (const entry of entries) {
         const recipientId = entry.id;
         const events = entry?.messaging || [];
+        let handledMessages = 0;
 
         for (const event of events) {
           // Only handle actual inbound messages, not delivery/read receipts or echoes of our own sends.
           if (!event.message || !shouldDispatchInboundMessage({ isEcho: event.message.is_echo })) continue;
+          handledMessages += 1;
 
           const account = await findAccountForRecipient(adminClient, platform, recipientId);
           if (!account) {
@@ -163,7 +165,12 @@ Deno.serve(async (req) => {
             payload: event,
           });
 
-          if (inboxResult === "inserted") {
+          // A failed inbox write must not also cost the user their automation. Only a
+          // genuine duplicate is skipped -- that one has already been dispatched.
+          if (inboxResult === "error") {
+            console.error(`[fb-ig-webhook] Inbox persist failed for ${platform}; dispatching anyway`);
+          }
+          if (inboxResult !== "duplicate") {
             await runInBackground("facebook-instagram message dispatch", () => dispatchMessageEvent(
               adminClient,
               account.user_id,
@@ -214,6 +221,22 @@ Deno.serve(async (req) => {
               payload: change,
             });
           }
+        }
+
+        // Meta delivering an event that yields no message is indistinguishable from Meta
+        // not delivering at all, because every filter above continues silently. This
+        // records the envelope shape -- never message content -- so a delivery that does
+        // not become an inbox event can be told apart from one that never arrived.
+        if (handledMessages === 0) {
+          console.log(`[fb-ig-webhook] ${platform} entry produced no inbound message`, JSON.stringify({
+            entryId: recipientId,
+            entryKeys: Object.keys(entry || {}),
+            messagingCount: events.length,
+            messagingKinds: events.map((event: any) =>
+              Object.keys(event || {}).filter((key) => key !== "sender" && key !== "recipient" && key !== "timestamp")
+            ),
+            changeFields: (entry?.changes || []).map((change: any) => change?.field),
+          }));
         }
       }
 
