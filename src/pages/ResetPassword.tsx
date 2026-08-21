@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { readFunctionError } from "@/lib/authenticatedFunction";
 
 type ResetView = "email" | "verify" | "success";
 
@@ -74,14 +75,16 @@ export default function ResetPassword() {
       }>("verify-reset-otp", { body });
 
       if (error) {
-        const ctx = (error as { context?: { response?: Response } }).context;
-        const payload = ctx?.response ? await ctx.response.json().catch(() => null) : null;
-        if (payload?.code === "mfa_required") {
+        // Reading `error.context.response` by hand always yielded undefined for
+        // the supabase-js error shape, so 2FA accounts never reached the
+        // authenticator field. readFunctionError owns that shape.
+        const result = await readFunctionError(error);
+        if (result.code === "mfa_required") {
           setNeedsMfa(true);
           setErrors({ mfaCode: "Enter your authenticator code" });
           return;
         }
-        setErrors({ otp: payload?.error ?? error.message });
+        setErrors({ otp: result.error });
         return;
       }
       if (data?.code === "mfa_required") {
