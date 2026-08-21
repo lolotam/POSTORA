@@ -37,7 +37,7 @@ export interface EvolutionMessageRow {
 // Group and privacy JIDs are skipped to match the history sync: their digits are not phone
 // numbers, so they would collide inside the wa_<owner>_<number> conversation id and could
 // not be replied to.
-export function isPersistableMessage(message: any): boolean {
+function isPersistableMessage(message: any): boolean {
   const remoteJid = String(message?.key?.remoteJid || "");
   return Boolean(message?.message) &&
     message?.messageType !== "protocolMessage" &&
@@ -46,7 +46,7 @@ export function isPersistableMessage(message: any): boolean {
     !remoteJid.endsWith("@lid");
 }
 
-export function describeMessageContent(message: any): EvolutionMessageContent {
+function describeMessageContent(message: any): EvolutionMessageContent {
   const body = message?.message || {};
   if (body.conversation) return { text: body.conversation, type: "text", mediaType: null, mediaMetadata: null };
   if (body.extendedTextMessage?.text) {
@@ -100,14 +100,14 @@ export function describeMessageContent(message: any): EvolutionMessageContent {
   return { text: "[Message]", type: message?.messageType || "unknown", mediaType: null, mediaMetadata: null };
 }
 
-export function messageTimestamp(message: any): string {
+function messageTimestamp(message: any): string {
   const seconds = Number(message?.messageTimestamp);
   return Number.isFinite(seconds) && seconds > 0
     ? new Date(seconds * 1000).toISOString()
     : new Date().toISOString();
 }
 
-export function conversationIdFor(account: EvolutionMessageAccount, remoteJid: string): string {
+function conversationIdFor(account: EvolutionMessageAccount, remoteJid: string): string {
   return `wa_${account.platform_user_id}_${remoteNumberFor(remoteJid)}`;
 }
 
@@ -133,8 +133,10 @@ export function buildEvolutionMessageRow(
   // to carry the owner as its sender or it renders as if the contact wrote it.
   const senderName = sentByOwner ? "You" : (message?.pushName || remoteNumber);
 
+  const conversationId = conversationIdFor(account, remoteJid);
+
   return {
-    conversationId: conversationIdFor(account, remoteJid),
+    conversationId,
     sentByOwner,
     // Blank for an owner-sent message: its push name is the operator's own, which must not
     // overwrite the name already resolved for the person on the other end.
@@ -144,7 +146,7 @@ export function buildEvolutionMessageRow(
     row: {
       user_id: account.user_id,
       social_account_id: account.id,
-      conversation_id: conversationIdFor(account, remoteJid),
+      conversation_id: conversationId,
       message_id: messageId,
       from_phone: sentByOwner ? account.platform_user_id : remoteNumber,
       from_name: senderName,

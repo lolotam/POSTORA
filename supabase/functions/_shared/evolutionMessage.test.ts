@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildEvolutionMessageRow, describeMessageContent, isPersistableMessage } from "./evolutionMessage.ts";
+import { buildEvolutionMessageRow } from "./evolutionMessage.ts";
 
 const ACCOUNT = { id: "acc-1", user_id: "user-1", platform_user_id: "96597950350" };
 
@@ -74,7 +74,7 @@ Deno.test("only addressable one-to-one chats are persisted", async (t) => {
 
   for (const [label, overrides, expected] of cases) {
     await t.step(label, () => {
-      assertEquals(isPersistableMessage(baileysMessage(overrides)), expected);
+      assertEquals(buildEvolutionMessageRow(ACCOUNT, baileysMessage(overrides)) !== null, expected);
     });
   }
 });
@@ -92,9 +92,9 @@ Deno.test("each media kind gets a preview the inbox can render", async (t) => {
 
   for (const [label, body, text, type] of cases) {
     await t.step(label, () => {
-      const content = describeMessageContent({ message: body });
-      assertEquals(content.text, text);
-      assertEquals(content.type, type);
+      const built = buildEvolutionMessageRow(ACCOUNT, baileysMessage({ message: body }))!;
+      assertEquals(built.row.message_text, text);
+      assertEquals(built.row.message_type, type);
     });
   }
 });
