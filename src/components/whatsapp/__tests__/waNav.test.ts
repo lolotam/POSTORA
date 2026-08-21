@@ -19,13 +19,20 @@ describe("whatsappNavItems", () => {
       "analytics",
       "automation",
       "profile",
-      "webhooks",
       "scheduled",
       "response-stats",
       "catalog",
       "setup",
       "docs",
     ]);
+  });
+
+  it("drops Webhooks from the nav without breaking its URL", () => {
+    // Webhooks moved into Setup as a tab. The slug keeps working because AnimatedRoutes
+    // redirects it to /setup?tab=webhooks, so existing links must not be treated as free to
+    // repurpose even though nothing in the sidebar points at them any more.
+    expect(whatsappNavItems.some((item) => item.path === "webhooks")).toBe(false);
+    expect(whatsappSectionRoute("webhooks")).toBe(`${WHATSAPP_BASE_PATH}/webhooks`);
   });
 
   it("marks only the dashboard index route with end so it doesn't stay active on child routes", () => {

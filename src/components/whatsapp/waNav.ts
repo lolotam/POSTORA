@@ -17,7 +17,6 @@ import {
   Sparkles,
   UserCog,
   Users,
-  Webhook,
   Zap,
 } from "lucide-react";
 
@@ -43,7 +42,6 @@ export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "analytics", label: "Analytics", icon: BarChart3 },
   { path: "automation", label: "Automation", icon: Sparkles },
   { path: "profile", label: "Profile", icon: Building2 },
-  { path: "webhooks", label: "Webhooks", icon: Webhook },
   { path: "scheduled", label: "Scheduled", icon: Clock },
   { path: "response-stats", label: "Response Stats", icon: PieChart },
   { path: "catalog", label: "Catalog", icon: ShoppingBag },
@@ -80,10 +78,9 @@ export const whatsappSectionDescriptions: Record<string, string> = {
   agents: "Manage assignments, ownership, and handoff for WhatsApp conversations.",
   "ai-agent": "Configure the AI assistant that answers customers automatically.",
   profile: "Update business identity details shown through WhatsApp.",
-  webhooks: "Inspect webhook behavior and connected automation endpoints.",
   scheduled: "Review queued WhatsApp messages before they are delivered.",
   "response-stats": "Measure canned response usage and team response performance.",
   catalog: "Maintain catalog items for WhatsApp commerce conversations.",
-  setup: "Connect WhatsApp Business numbers and run diagnostics.",
+  setup: "Connect WhatsApp Business numbers, manage webhooks, and run diagnostics.",
   docs: "Learn how to connect, configure, and troubleshoot WhatsApp in Postora.",
 };
