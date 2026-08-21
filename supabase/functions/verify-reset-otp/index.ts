@@ -194,7 +194,22 @@ serve(async (req) => {
       return jsonResponse({ error: "Failed to update password" }, 500, corsHeaders);
     }
 
-    await admin.rpc("cleanup_expired_otps").catch(() => undefined);
+    // Best-effort housekeeping. This runs AFTER the password is already
+    // changed, so it must never be able to fail the request: `rpc()` returns a
+    // PostgrestBuilder (a `PromiseLike` with `then` only, no `catch`), so the
+    // former `.catch(...)` threw a synchronous TypeError and turned every
+    // successful reset into a 500.
+    try {
+      // PostgREST resolves with `{ data, error }` rather than rejecting, so a
+      // SQL-level failure only shows up in `error`; the catch covers transport
+      // failures. Either way the reset itself already succeeded.
+      const { error: cleanupError } = await admin.rpc("cleanup_expired_otps");
+      if (cleanupError) {
+        console.error("verify-reset-otp: cleanup_expired_otps failed (ignored):", cleanupError.message);
+      }
+    } catch (cleanupThrow) {
+      console.error("verify-reset-otp: cleanup_expired_otps threw (ignored):", cleanupThrow);
+    }
 
     return jsonResponse(
       { success: true, message: "Password reset successfully." },
