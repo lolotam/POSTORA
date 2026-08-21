@@ -13,11 +13,42 @@ VOL=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions
 STACK=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code
 ```
 
-There is **no usable git checkout on the server**. `/root/postora-runtime` is a clone of
-`git@github.com:lolotam/postora.git`, but it has no GitHub credentials (`git fetch` fails with
-"make sure you have the correct access rights") and is stuck on a July 2026 commit. Do not
-`git pull` there and do not copy from it — push the file from your workstation instead.
-(`/root/postora` in earlier versions of this runbook never existed.)
+`/root/postora-runtime` is a checkout of `git@github.com:lolotam/POSTORA.git` that can fetch
+again as of 2026-08-22: it uses the dedicated **read-only** deploy key
+`~/.ssh/postora_edge_deploy_ed25519` (GitHub deploy key "postora-edge-deploy-ro", registered on
+the repo), wired in via `git config core.sshCommand`. It cannot push. This makes the preferred
+deploy a fetch + copy on the server — see Section 0 — rather than an rsync from a workstation.
+(`/root/postora` in earlier versions of this runbook never existed; before 2026-08-22 the
+earlier key `postora_runtime_deploy_ed25519` was never registered, which is why fetch failed.)
+
+---
+
+## 0. Preferred: deploy straight from git (no workstation upload)
+
+```bash
+FN=verify-reset-otp          # or several, space-separated
+REF=origin/main              # or origin/<branch> to deploy a PR before merging
+VOL=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions
+STACK=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code
+
+cd /root/postora-runtime
+git fetch origin "+refs/heads/${REF#origin/}:refs/remotes/$REF"
+for f in $FN; do
+  git show "$REF:supabase/functions/$f/index.ts" > "$VOL/$f/index.ts"
+done
+# shared modules, if the change touched supabase/functions/_shared/*:
+# git show "$REF:supabase/functions/_shared/foo.ts" > "$VOL/_shared/foo.ts"
+
+# Verify: the two hashes on each line must match.
+for f in $FN; do
+  echo "$f git=$(git show "$REF:supabase/functions/$f/index.ts" | sha256sum | cut -d' ' -f1) vol=$(sha256sum "$VOL/$f/index.ts" | cut -d' ' -f1)"
+done
+cd "$STACK" && docker compose restart functions
+```
+
+Files written with `git show` are always LF, so the hashes compare directly with no CRLF
+normalisation. (Do not use `"$VOL"/{$FN}/index.ts` — bash brace expansion happens before
+variable expansion, so it produces literal `{` paths.)
 
 ---
 
