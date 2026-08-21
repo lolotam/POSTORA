@@ -36,7 +36,18 @@ Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes
 - **Delete** — Remove a webhook subscription.
 
 ### Postora Trigger
-- **Post Event** — Start a workflow when Postora sends a selected post event. n8n registers and removes the callback automatically when the workflow is activated or deactivated.
+Starts a workflow when Postora sends a selected event. n8n registers and removes the callback automatically when the workflow is activated or deactivated.
+
+Selectable events:
+- **Post Completed** (`post.completed`) — a post finished publishing.
+- **New Message Received (All Platforms)** (`message.received`) — an inbound message on any messaging platform.
+- **WhatsApp Message Received** (`message.whatsapp`)
+- **Instagram DM Received** (`message.instagram`)
+- **Facebook Message Received** (`message.facebook`)
+
+Selecting **New Message Received (All Platforms)** matches every platform, so you do not also need the per-platform events.
+
+Changing the **Events** selection takes effect the next time the workflow is activated: on activation the node compares its selection against the subscription registered with Postora and re-registers when they differ. Before v1.2.1 the original subscription was kept regardless, so an edited selection was silently ignored — if you edited Events on an already-active workflow under an older version, deactivate and reactivate it once after upgrading.
 
 ### Account
 - **List** — List all connected social media accounts
