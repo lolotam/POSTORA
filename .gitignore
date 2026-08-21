@@ -30,3 +30,6 @@ dist-ssr
 !.env.example
 
 testsprite_tests/tmp/config.json
+
+# Stray graphify cache written under src/; the real graph lives in /graphify-out
+src/graphify-out/
