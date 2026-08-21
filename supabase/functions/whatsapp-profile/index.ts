@@ -63,20 +63,18 @@ serve(async (req) => {
       .eq("is_active", true)
       .order("connected_at", { ascending: false });
 
-    const resolution = resolveWhatsAppCloudCredentials(waAccounts || [], {
-      accessToken: Deno.env.get("WHATSAPP_ACCESS_TOKEN"),
-      phoneNumberId: Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"),
-    });
+    const resolution = resolveWhatsAppCloudCredentials(waAccounts || []);
 
     if (resolution.status !== "ok") {
       // Distinguishes "connected, but through a mode Meta holds no profile for" from "nothing
       // connected", so the page can explain the mode instead of reporting a generic failure.
-      const requiresCloudApi = resolution.status === "requires_cloud_api";
       return new Response(
         JSON.stringify(
-          requiresCloudApi
+          resolution.status === "requires_cloud_api"
             ? {
-              error: "WhatsApp Business profiles are only available for Meta Cloud API numbers. This number is connected with Direct QR.",
+              error: resolution.reason === "qr_only"
+                ? "WhatsApp Business profiles are only available for Meta Cloud API numbers. This number is connected with Direct QR."
+                : "This WhatsApp number is missing the Cloud API credentials needed to read its business profile. Reconnect it from Setup.",
               code: "PROFILE_REQUIRES_CLOUD_API",
             }
             : { error: "No connected WhatsApp Business account", code: "NO_WHATSAPP_ACCOUNT" },

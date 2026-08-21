@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { whatsappRetiredRoutes } from "@/components/whatsapp/waNav";
 import { Suspense } from "react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { PageLoader } from "@/components/PageLoader";
@@ -85,7 +86,6 @@ const WhatsAppAgents = lazyWithRetry(() => import("@/pages/whatsapp/Agents"), "W
 const WhatsAppAiAgent = lazyWithRetry(() => import("@/pages/whatsapp/AiAgent"), "WhatsAppAiAgent");
 const WhatsAppAutomation = lazyWithRetry(() => import("@/pages/whatsapp/Automation"), "WhatsAppAutomation");
 const WhatsAppBusinessProfile = lazyWithRetry(() => import("@/pages/whatsapp/BusinessProfile"), "WhatsAppBusinessProfile");
-const WhatsAppWebhooks = lazyWithRetry(() => import("@/pages/whatsapp/Webhooks"), "WhatsAppWebhooks");
 const WhatsAppScheduled = lazyWithRetry(() => import("@/pages/whatsapp/Scheduled"), "WhatsAppScheduled");
 const WhatsAppResponseStats = lazyWithRetry(() => import("@/pages/whatsapp/ResponseStats"), "WhatsAppResponseStats");
 const WhatsAppCatalog = lazyWithRetry(() => import("@/pages/whatsapp/Catalog"), "WhatsAppCatalog");
@@ -274,7 +274,8 @@ export function AnimatedRoutes() {
           <Route path="ai-agent/:tab" element={<AnimatedPage><WhatsAppAiAgent /></AnimatedPage>} />
           <Route path="automation" element={<AnimatedPage><WhatsAppAutomation /></AnimatedPage>} />
           <Route path="profile" element={<AnimatedPage><WhatsAppBusinessProfile /></AnimatedPage>} />
-          <Route path="webhooks" element={<AnimatedPage><WhatsAppWebhooks /></AnimatedPage>} />
+          {/* Webhooks now live as a tab inside Setup; existing links and bookmarks land there. */}
+          <Route path="webhooks" element={<Navigate to={whatsappRetiredRoutes.webhooks} replace />} />
           <Route path="scheduled" element={<AnimatedPage><WhatsAppScheduled /></AnimatedPage>} />
           <Route path="response-stats" element={<AnimatedPage><WhatsAppResponseStats /></AnimatedPage>} />
           <Route path="catalog" element={<AnimatedPage><WhatsAppCatalog /></AnimatedPage>} />

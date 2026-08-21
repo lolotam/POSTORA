@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
 import {
+  whatsappLegacyTabTarget,
   whatsappNavItems,
   whatsappSectionDescriptions,
   whatsappSectionRoute,
@@ -198,14 +199,14 @@ function SectionCard({ item }: { item: (typeof dashboardSectionItems)[number] })
 
 export default function WhatsAppDashboard() {
   const [searchParams] = useSearchParams();
-  const legacyTab = searchParams.get("tab");
-  const legacyRoute =
-    legacyTab && whatsappNavItems.some((item) => item.path === legacyTab) ? legacyTab : null;
+  // Resolved through the shared helper so retired sections keep their deep links; matching on
+  // the visible nav alone silently broke ?tab=webhooks when Webhooks moved into Setup.
+  const legacyRoute = whatsappLegacyTabTarget(searchParams.get("tab"));
   const { accounts, isLoading } = useMessagingAccounts();
   const whatsappAccounts = accounts.filter((account) => account.platform === "whatsapp");
 
   if (legacyRoute) {
-    return <Navigate to={whatsappSectionRoute(legacyRoute)} replace />;
+    return <Navigate to={legacyRoute} replace />;
   }
 
   return (

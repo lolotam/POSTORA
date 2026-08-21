@@ -1,9 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.168.0/testing/asserts.ts";
 import { resolveWhatsAppCloudCredentials } from "./whatsappCloudCredentials.ts";
 
-const ENV = { accessToken: "env-token", phoneNumberId: "env-phone-id" };
-const NO_ENV = { accessToken: undefined, phoneNumberId: undefined };
-
 const cloudAccount = {
   access_token: "account-token",
   platform_user_id: "1097745303431352",
@@ -19,9 +16,8 @@ const qrAccount = {
 };
 
 Deno.test("uses the account's own credentials when it is Cloud API backed", () => {
-  assertEquals(resolveWhatsAppCloudCredentials([cloudAccount], ENV), {
+  assertEquals(resolveWhatsAppCloudCredentials([cloudAccount]), {
     status: "ok",
-    source: "account",
     credentials: { accessToken: "account-token", phoneNumberId: "1097745303431352" },
   });
 });
@@ -30,42 +26,54 @@ Deno.test("accepts accounts whose connection_mode predates the field", () => {
   // Rows connected before connection_mode existed have no value at all; requiring an explicit
   // 'cloud_api' would reject every one of them.
   const legacy = { ...cloudAccount, account_metadata: null };
-  const resolution = resolveWhatsAppCloudCredentials([legacy], NO_ENV);
+  const resolution = resolveWhatsAppCloudCredentials([legacy]);
   assertEquals(resolution.status, "ok");
 });
 
 Deno.test("skips a newer Direct QR account in favour of an older Cloud API one", () => {
-  assertEquals(resolveWhatsAppCloudCredentials([qrAccount, cloudAccount], NO_ENV), {
+  assertEquals(resolveWhatsAppCloudCredentials([qrAccount, cloudAccount]), {
     status: "ok",
-    source: "account",
     credentials: { accessToken: "account-token", phoneNumberId: "1097745303431352" },
   });
 });
 
-Deno.test("never pairs the env token with an account's phone number", () => {
-  // The original defect: a per-field fallback produced env-token + QR phone number, a pair
-  // belonging to no real WhatsApp account.
-  const resolution = resolveWhatsAppCloudCredentials([qrAccount], ENV);
-  assertEquals(resolution, {
-    status: "ok",
-    source: "env",
-    credentials: { accessToken: "env-token", phoneNumberId: "env-phone-id" },
+Deno.test("never borrows another account's identity for a QR-only user", () => {
+  // The original defect paired a global env token with this account's phone number. There is no
+  // global fallback any more, so a QR-only user must be reported rather than quietly sent out
+  // under someone else's WhatsApp identity.
+  assertEquals(resolveWhatsAppCloudCredentials([qrAccount]), {
+    status: "requires_cloud_api",
+    reason: "qr_only",
   });
 });
 
-Deno.test("falls back to env only when both halves are present", () => {
-  const halfConfigured = { accessToken: "env-token", phoneNumberId: undefined };
-  assertEquals(resolveWhatsAppCloudCredentials([qrAccount], halfConfigured), {
+Deno.test("separates a QR-only user from a broken Cloud API account", () => {
+  // Both are unusable, but the fix differs: one needs a Cloud API number connected, the other
+  // needs the existing one reconnected. Reporting both as Direct QR sends half of them the
+  // wrong way.
+  const broken = { ...cloudAccount, access_token: null };
+  assertEquals(resolveWhatsAppCloudCredentials([broken]), {
     status: "requires_cloud_api",
+    reason: "incomplete_credentials",
+  });
+  assertEquals(resolveWhatsAppCloudCredentials([qrAccount, broken]), {
+    status: "requires_cloud_api",
+    reason: "incomplete_credentials",
   });
 });
 
 Deno.test("reports a QR-only user separately from a user with nothing connected", () => {
-  assertEquals(resolveWhatsAppCloudCredentials([qrAccount], NO_ENV), { status: "requires_cloud_api" });
-  assertEquals(resolveWhatsAppCloudCredentials([], NO_ENV), { status: "none" });
+  assertEquals(resolveWhatsAppCloudCredentials([qrAccount]), {
+    status: "requires_cloud_api",
+    reason: "qr_only",
+  });
+  assertEquals(resolveWhatsAppCloudCredentials([]), { status: "none" });
 });
 
 Deno.test("ignores a Cloud API account that is missing half its credentials", () => {
   const incomplete = { ...cloudAccount, access_token: null };
-  assertEquals(resolveWhatsAppCloudCredentials([incomplete], NO_ENV), { status: "requires_cloud_api" });
+  assertEquals(resolveWhatsAppCloudCredentials([incomplete]), {
+    status: "requires_cloud_api",
+    reason: "incomplete_credentials",
+  });
 });

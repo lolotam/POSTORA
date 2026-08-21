@@ -17,7 +17,6 @@ import {
   Sparkles,
   UserCog,
   Users,
-  Webhook,
   Zap,
 } from "lucide-react";
 
@@ -34,6 +33,26 @@ export function whatsappSectionRoute(path: string) {
   return path ? `${WHATSAPP_BASE_PATH}/${path}` : WHATSAPP_BASE_PATH;
 }
 
+/**
+ * Sections that left the nav but whose URLs are still out there in bookmarks and docs. Kept
+ * separate from whatsappNavItems precisely because a slug's absence from the nav says nothing
+ * about whether its links should keep working.
+ */
+export const whatsappRetiredRoutes: Record<string, string> = {
+  webhooks: `${WHATSAPP_BASE_PATH}/setup?tab=webhooks`,
+};
+
+/** Resolves a legacy `/messaging/whatsapp?tab=<slug>` deep link to the route serving it today. */
+export function whatsappLegacyTabTarget(tab: string | null | undefined): string | null {
+  if (!tab) return null;
+  // `in` would also match inherited keys, so ?tab=constructor would hand a function back to
+  // <Navigate to={...}>. The value comes straight from the query string, so own properties only.
+  if (Object.prototype.hasOwnProperty.call(whatsappRetiredRoutes, tab)) {
+    return whatsappRetiredRoutes[tab];
+  }
+  return whatsappNavItems.some((item) => item.path === tab) ? whatsappSectionRoute(tab) : null;
+}
+
 export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "", label: "Dashboard", icon: LayoutDashboard, end: true },
   { path: "pipelines", label: "Pipelines", icon: Kanban },
@@ -43,7 +62,6 @@ export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "analytics", label: "Analytics", icon: BarChart3 },
   { path: "automation", label: "Automation", icon: Sparkles },
   { path: "profile", label: "Profile", icon: Building2 },
-  { path: "webhooks", label: "Webhooks", icon: Webhook },
   { path: "scheduled", label: "Scheduled", icon: Clock },
   { path: "response-stats", label: "Response Stats", icon: PieChart },
   { path: "catalog", label: "Catalog", icon: ShoppingBag },
@@ -80,10 +98,9 @@ export const whatsappSectionDescriptions: Record<string, string> = {
   agents: "Manage assignments, ownership, and handoff for WhatsApp conversations.",
   "ai-agent": "Configure the AI assistant that answers customers automatically.",
   profile: "Update business identity details shown through WhatsApp.",
-  webhooks: "Inspect webhook behavior and connected automation endpoints.",
   scheduled: "Review queued WhatsApp messages before they are delivered.",
   "response-stats": "Measure canned response usage and team response performance.",
   catalog: "Maintain catalog items for WhatsApp commerce conversations.",
-  setup: "Connect WhatsApp Business numbers and run diagnostics.",
+  setup: "Connect WhatsApp Business numbers, manage webhooks, and run diagnostics.",
   docs: "Learn how to connect, configure, and troubleshoot WhatsApp in Postora.",
 };

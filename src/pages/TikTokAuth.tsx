@@ -129,7 +129,7 @@ export default function TikTokAuth() {
     <div className="min-h-screen bg-white dark:bg-zinc-950">
       {/* Top Navigation Bar */}
       <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+        <div className="w-full flex items-center justify-between">
           <Link to="/"><Logo size="sm" /></Link>
           <nav className="flex gap-4">
             <Link
@@ -149,7 +149,7 @@ export default function TikTokAuth() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-6 py-16">
+      <main className="w-full px-6 py-16">
         <div className="text-center mb-10">
           <h2 className="text-2xl font-bold text-zinc-900 dark:text-white mb-2">
             Connect Your TikTok Account

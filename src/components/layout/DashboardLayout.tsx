@@ -229,7 +229,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     <div className="min-h-screen bg-background flex flex-col">
       {/* Top Header Navigation */}
       <header className="app-topnav sticky top-0 z-50 w-full border-b border-border bg-background/80 backdrop-blur-xl">
-        <div className="flex h-14 md:h-16 items-center px-3 md:px-6 max-w-[1800px] mx-auto w-full">
+        <div className="flex h-14 md:h-16 items-center px-3 md:px-6 w-full">
           {/* Logo */}
           <Link to="/" className="flex items-center mr-4 md:mr-8 shrink-0">
             <Logo size="sm" showText className="hidden sm:flex" />
@@ -662,7 +662,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
       {/* Main Content */}
       <main className="app-main flex-1 overflow-auto">
-        <div className="p-4 md:p-6 lg:p-8 max-w-[1400px] mx-auto w-full">{children}</div>
+        <div className="p-4 md:p-6 lg:p-8 2xl:p-10 w-full">{children}</div>
       </main>
 
       {/* Footer */}

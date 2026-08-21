@@ -8,9 +8,10 @@ export default {
     container: {
       center: true,
       padding: "2rem",
-      screens: {
-        "2xl": "1400px",
-      },
+      // No max-width caps. The app runs full-bleed, so .container contributes gutters and
+      // centring only; leaving the old 1400px ceiling here would have quietly re-capped the
+      // 77 places that use it even after the layout shell was widened.
+      screens: {},
     },
     extend: {
       fontFamily: {

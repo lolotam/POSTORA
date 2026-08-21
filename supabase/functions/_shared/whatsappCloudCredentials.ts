@@ -1,14 +1,16 @@
 /**
  * Resolves the Meta Cloud API credentials to use for a user's WhatsApp number.
  *
- * Two rules that callers kept getting wrong on their own:
+ * Credentials come only from the user's own connected account. The former
+ * WHATSAPP_ACCESS_TOKEN / WHATSAPP_PHONE_NUMBER_ID env fallback is deliberately gone: it was a
+ * single-tenant leftover that let one user's request go out under another account's identity,
+ * and because it was applied per field it could pair the global token with an account's phone
+ * number — a combination belonging to no real WhatsApp account, which Meta rejected in a way
+ * that looked like an expired token.
  *
- * 1. Direct QR accounts are not Cloud API accounts. They run a self-hosted session, so their
- *    access_token is empty and platform_user_id holds a phone number rather than a Cloud API
- *    phone_number_id. Passing one to Meta produces a confusing token error.
- * 2. Credentials are a pair, not two independent fields. Falling back per field can combine the
- *    global env token with an account's phone number — a pairing that belongs to no real
- *    WhatsApp account and fails in a way that looks like an expired token.
+ * Direct QR accounts are excluded because they are not Cloud API accounts at all: they run a
+ * self-hosted session, so access_token is empty and platform_user_id holds a phone number rather
+ * than a Cloud API phone_number_id.
  */
 
 export interface WhatsAppAccountRow {
@@ -23,9 +25,13 @@ export interface CloudApiCredentials {
 }
 
 export type CredentialResolution =
-  | { status: "ok"; credentials: CloudApiCredentials; source: "account" | "env" }
-  /** The user has WhatsApp connected, but only through a mode Meta holds no Cloud API identity for. */
-  | { status: "requires_cloud_api" }
+  | { status: "ok"; credentials: CloudApiCredentials }
+  /**
+   * WhatsApp is connected but no account can reach the Cloud API. The reason decides what the
+   * user should actually do, and the two are not interchangeable: a QR session needs a different
+   * number connected, whereas a Cloud API account missing half its credentials needs reconnecting.
+   */
+  | { status: "requires_cloud_api"; reason: "qr_only" | "incomplete_credentials" }
   | { status: "none" };
 
 export function isCloudApiAccount(account: WhatsAppAccountRow): boolean {
@@ -36,13 +42,11 @@ export function isCloudApiAccount(account: WhatsAppAccountRow): boolean {
 
 export function resolveWhatsAppCloudCredentials(
   accounts: WhatsAppAccountRow[],
-  env: { accessToken?: string | null; phoneNumberId?: string | null },
 ): CredentialResolution {
   const account = accounts.find(isCloudApiAccount);
   if (account) {
     return {
       status: "ok",
-      source: "account",
       credentials: {
         accessToken: account.access_token as string,
         phoneNumberId: account.platform_user_id as string,
@@ -50,13 +54,13 @@ export function resolveWhatsAppCloudCredentials(
     };
   }
 
-  if (env.accessToken && env.phoneNumberId) {
-    return {
-      status: "ok",
-      source: "env",
-      credentials: { accessToken: env.accessToken, phoneNumberId: env.phoneNumberId },
-    };
-  }
+  if (accounts.length === 0) return { status: "none" };
 
-  return accounts.length > 0 ? { status: "requires_cloud_api" } : { status: "none" };
+  const everyAccountIsQr = accounts.every(
+    (candidate) => candidate.account_metadata?.connection_mode === "evolution_qr",
+  );
+  return {
+    status: "requires_cloud_api",
+    reason: everyAccountIsQr ? "qr_only" : "incomplete_credentials",
+  };
 }

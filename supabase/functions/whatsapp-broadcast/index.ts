@@ -62,8 +62,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Multi-tenant: send with the user's own connected WhatsApp account.
-    // The shared env credentials are only a fallback for legacy admin setups.
+    // Multi-tenant: send with the user's own connected WhatsApp account, and only that.
     // Broadcasts go out over the Cloud API, so Direct QR accounts cannot carry them; every
     // active account is considered rather than only the newest, which may well be a QR one.
     const { data: waAccounts } = await supabaseAdmin
@@ -74,18 +73,24 @@ Deno.serve(async (req) => {
       .eq("is_active", true)
       .order("connected_at", { ascending: false });
 
-    const resolution = resolveWhatsAppCloudCredentials(waAccounts || [], {
-      accessToken: Deno.env.get("WHATSAPP_ACCESS_TOKEN"),
-      phoneNumberId: Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"),
-    });
-    const whatsappToken = resolution.status === "ok" ? resolution.credentials.accessToken : null;
-    const phoneNumberId = resolution.status === "ok" ? resolution.credentials.phoneNumberId : null;
-
-    if (!whatsappToken || !phoneNumberId) {
-      return new Response(JSON.stringify({ error: "No connected WhatsApp Business account" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    const resolution = resolveWhatsAppCloudCredentials(waAccounts || []);
+    if (resolution.status !== "ok") {
+      return new Response(
+        JSON.stringify(
+          resolution.status === "requires_cloud_api"
+            ? {
+              error: resolution.reason === "qr_only"
+                ? "Broadcasts require a Cloud API connection. This number is connected with Direct QR, which cannot send template messages."
+                : "This WhatsApp number is missing the Cloud API credentials needed to broadcast. Reconnect it from Setup.",
+              code: "BROADCAST_REQUIRES_CLOUD_API",
+            }
+            : { error: "No connected WhatsApp Business account", code: "NO_WHATSAPP_ACCOUNT" },
+        ),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
+
+    const { accessToken: whatsappToken, phoneNumberId } = resolution.credentials;
 
     // Get recipients
     const { data: recipients, error: rErr } = await supabaseAdmin
