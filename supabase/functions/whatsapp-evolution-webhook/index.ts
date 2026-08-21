@@ -154,7 +154,9 @@ async function handleConnectionUpdate(
     .update({ last_connection_state: state })
     .eq("social_account_id", account.id);
 
-  await syncEvolutionAccountConnection(admin, account, state, data);
+  // Activation resolves the provisional platform_user_id, so the import below has to use the
+  // value that was just stored rather than the one this request loaded.
+  const ownerNumber = await syncEvolutionAccountConnection(admin, account, state, data);
 
   // Evolution reports "open" more than once while a session settles, and the QR screen stops
   // polling shortly after the first one. Importing from here too gives the sweep a later
@@ -164,7 +166,7 @@ async function handleConnectionUpdate(
     await runInBackground("whatsapp history sync", () => importEvolutionHistory({
       admin,
       api: createEvolutionApi(),
-      account: { ...account, platform_user_id: account.platform_user_id },
+      account: { ...account, platform_user_id: ownerNumber },
       instanceName: instance.instance_name,
     }));
   }

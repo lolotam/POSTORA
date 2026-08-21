@@ -199,6 +199,12 @@ export async function importEvolutionHistory(deps: {
     console.log(`[whatsapp-sync] ${instanceName}: skipped, account has no workspace`);
     return;
   }
+  // Conversation ids embed this value, so importing under the provisional placeholder would
+  // write every chat under an id the reply path cannot parse and then mark the sweep done.
+  if (account.platform_user_id.startsWith("pending_")) {
+    console.log(`[whatsapp-sync] ${instanceName}: skipped, owner number not resolved yet`);
+    return;
+  }
   const { data: claimed, error: claimError } = await admin.rpc("claim_whatsapp_history_sync", {
     p_social_account_id: account.id,
     p_lease_seconds: LEASE_SECONDS,
@@ -216,11 +222,14 @@ export async function importEvolutionHistory(deps: {
   try {
     const outcome = await syncEvolutionHistory(deps);
     console.log(`[whatsapp-sync] ${instanceName}: ${JSON.stringify(outcome)}`);
-    // A sweep that lost chats to errors is not complete. Leaving last_sync_at unset lets a
-    // later trigger try again -- which is also what covers Baileys still loading history
-    // when the connection first opens -- while the lease keeps that retry to once per
-    // lease window rather than once per status poll.
-    if (outcome.chatsImported > 0 && outcome.chatFailures === 0) {
+    // Completion needs evidence the history was actually there. Baileys can publish the chat
+    // list before it has loaded any messages, so a sweep that found 300 conversations and
+    // zero messages has not succeeded -- recording it would permanently disable the retry
+    // that a warming session depends on. Leaving last_sync_at unset lets a later trigger try
+    // again, while the lease keeps that retry to once per lease window rather than once per
+    // status poll.
+    const sweptCleanly = outcome.chatsImported > 0 && outcome.chatFailures === 0;
+    if (sweptCleanly && outcome.messagesWritten > 0) {
       completion.last_sync_at = new Date().toISOString();
     }
   } finally {

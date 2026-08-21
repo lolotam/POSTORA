@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { syncEvolutionHistory } from "./whatsappSyncEngine.ts";
+import { importEvolutionHistory, syncEvolutionHistory } from "./whatsappSyncEngine.ts";
 
 const ACCOUNT = {
   id: "acc-1",
@@ -176,4 +176,51 @@ Deno.test("a page that repeats a message id is written once", async () => {
 
   assertEquals(outcome.messagesWritten, 2);
   assertEquals(rowsFor(admin, "import_whatsapp_messages").map((r) => r.message_id).sort(), ["OTHER", "SAME"]);
+});
+
+Deno.test("a sweep is not marked complete until history is actually available", async (t) => {
+  // 2026-08-21 review finding: Baileys can publish the chat list before it has loaded any
+  // messages. Recording completion on chats alone permanently disabled the retry a warming
+  // session depends on. A placeholder owner id must not be imported under at all.
+  const cases: Array<[string, string, Record<string, any[]>, boolean]> = [
+    ["chats but no messages yet", "96597950350", {}, false],
+    ["chats and messages", "96597950350", {
+      "96555683677@s.whatsapp.net": [{
+        key: { id: "m1", fromMe: false, remoteJid: "96555683677@s.whatsapp.net" },
+        message: { conversation: "hello" },
+        messageTimestamp: 1787268633,
+      }],
+    }, true],
+    ["owner number not resolved yet", "pending_acc-1", {}, false],
+  ];
+
+  for (const [label, platformUserId, messages, expectComplete] of cases) {
+    await t.step(label, async () => {
+      const updates: Record<string, unknown>[] = [];
+      const admin = {
+        writes: [] as any[],
+        rpc: (fn: string, args: any) => {
+          if (fn === "claim_whatsapp_history_sync") return Promise.resolve({ data: true, error: null });
+          (admin.writes as any[]).push({ table: fn, rows: args.p_rows });
+          return Promise.resolve({ data: args.p_rows.length, error: null });
+        },
+        from: () => ({
+          update: (values: Record<string, unknown>) => ({
+            eq: () => {
+              updates.push(values);
+              return Promise.resolve({ error: null });
+            },
+          }),
+        }),
+      };
+      await importEvolutionHistory({
+        admin,
+        api: fakeApi({ chats: [chat("96555683677@s.whatsapp.net")], messages }),
+        account: { ...ACCOUNT, platform_user_id: platformUserId },
+        instanceName: "postora_acc-1",
+      });
+      const completion = updates[updates.length - 1];
+      assertEquals(Boolean(completion && "last_sync_at" in completion), expectComplete);
+    });
+  }
 });

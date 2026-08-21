@@ -2,7 +2,7 @@
 
 Date: 2026-08-21
 Branch: `fix/whatsapp-qr-webhook-delivery`
-Status: approved design, pending implementation
+Status: implemented, reviewed and verified against the live stack (2026-08-21)
 
 ## Problem
 
@@ -174,8 +174,12 @@ Gates: `deno check` on every changed function, `deno test supabase/functions/_sh
 2. Copy changed edge functions into
    `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`,
    hash-verify with `tr -d '\r' | sha256sum` on both sides (volume is CRLF, git blobs LF).
-3. `docker restart postorasupabase-supabase-j8axyh-supabase-edge-functions`
-   (`compose up -d --no-deps functions` does not reload).
+3. `docker restart postorasupabase-supabase-j8axyh-supabase-edge-functions`.
+   The project runbook says `docker compose up -d --no-deps functions`, but that command
+   compares service definitions rather than file contents: with no image or config change it
+   prints `Running` and leaves the old code loaded. Observed again during this work, and
+   already recorded from two earlier deploys. Use it only when the compose file itself
+   changed; otherwise restart the container.
 4. Only then merge to `main` - main auto-deploys the frontend only, so a merged frontend
    calling undeployed functions is the failure mode to avoid.
 
@@ -318,7 +322,9 @@ is logged rather than silently swallowed.
 
 ## Measured result of a full run
 
-    chatsDiscovered 332, chatsImported 307, chatsSkipped 25, messagesWritten 457, chatFailures 0
+```text
+chatsDiscovered 332, chatsImported 307, chatsSkipped 25, messagesWritten 457, chatFailures 0
+```
 
 307 conversations, 451 stored messages, 161 contacts, 159 conversations resolved to a real
 name. All 307 conversation ids match `wa_<owner>_<digits>`, and both directions are present

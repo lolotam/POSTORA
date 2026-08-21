@@ -32,18 +32,22 @@ function ownerNumberFromJid(jid: string): string | null {
   return /^\d{5,}$/.test(local) ? local : null;
 }
 
+// Returns the owner number now stored for the account. Callers need it because activation
+// replaces a provisional "pending_<uuid>" placeholder, and anything that builds conversation
+// ids straight afterwards would otherwise use the stale value it passed in -- writing a whole
+// history import under ids no reply path can parse.
 export async function syncEvolutionAccountConnection(
   admin: any,
   account: EvolutionQrAccount,
   state: string,
   identity: unknown,
-): Promise<void> {
+): Promise<string> {
   const connection = state.toLowerCase();
   if (connection === "close") {
     await admin.from("social_accounts").update({ is_active: false }).eq("id", account.id);
-    return;
+    return account.platform_user_id;
   }
-  if (connection !== "open") return;
+  if (connection !== "open") return account.platform_user_id;
 
   const updates: Record<string, unknown> = { is_active: true };
   const ownerJid = extractOwnerJid(identity);
@@ -54,4 +58,5 @@ export async function syncEvolutionAccountConnection(
   const profileName = extractProfileName(identity);
   if (profileName) updates.platform_username = profileName;
   await admin.from("social_accounts").update(updates).eq("id", account.id);
+  return (updates.platform_user_id as string) ?? account.platform_user_id;
 }

@@ -268,17 +268,17 @@ async function reconcileAccountConnection(reconciliation: {
   account: { id: string; platform_user_id: string; is_active: boolean };
   instanceName: string;
   state: string;
-}): Promise<void> {
+}): Promise<string> {
   const { admin, api, account, instanceName } = reconciliation;
   const connection = reconciliation.state.toLowerCase();
   if (connection === "open") {
-    if (account.is_active && !account.platform_user_id.startsWith("pending_")) return;
-    await syncEvolutionAccountConnection(admin, account, connection, await api.fetchInstance(instanceName));
-    return;
+    if (account.is_active && !account.platform_user_id.startsWith("pending_")) return account.platform_user_id;
+    return await syncEvolutionAccountConnection(admin, account, connection, await api.fetchInstance(instanceName));
   }
   if (connection === "close" && account.is_active) {
     await syncEvolutionAccountConnection(admin, account, connection, null);
   }
+  return account.platform_user_id;
 }
 
 async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
@@ -295,9 +295,15 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   const state = extractState(statePayload);
   if (state) {
     await admin.from("whatsapp_evolution_instances").update({ last_connection_state: state }).eq("social_account_id", body.social_account_id);
-    await reconcileAccountConnection({ admin, api, account, instanceName: instance.instance_name, state });
+    // Reconciliation may have just replaced the provisional owner id, and conversation ids
+    // are built from it, so the sweep uses the value it returns rather than the one loaded
+    // at the top of this request.
+    const ownerNumber = await reconcileAccountConnection({
+      admin, api, account, instanceName: instance.instance_name, state,
+    });
     if (state.toLowerCase() === "open") {
-      await runInBackground("whatsapp history sync", () => autoImportHistory(admin, account, instance));
+      const linked = { ...account, platform_user_id: ownerNumber };
+      await runInBackground("whatsapp history sync", () => autoImportHistory(admin, linked, instance));
     }
   }
   return { success: true, social_account_id: body.social_account_id, qr, state };

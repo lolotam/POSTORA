@@ -99,3 +99,24 @@ Deno.test("a session still pairing writes nothing at all", async () => {
   await syncEvolutionAccountConnection(admin, PENDING, "connecting", null);
   assertEquals(admin.updates, []);
 });
+
+Deno.test("activation reports the number it stored so callers stop using the placeholder", async (t) => {
+  // 2026-08-21 review finding: the caller passes an account loaded before activation, so on
+  // the first "open" its platform_user_id is still pending_<uuid>. The history sweep builds
+  // conversation ids from that value, and importing under the placeholder writes every chat
+  // under an id no reply path can parse -- then marks the sweep complete.
+  const cases: Array<[string, { id: string; platform_user_id: string }, string, unknown, string]> = [
+    ["newly linked", PENDING, "open", { ownerJid: "96597950350@s.whatsapp.net" }, "96597950350"],
+    ["already identified", { id: "acc-2", platform_user_id: "96597950350" }, "open", { ownerJid: "999@s.whatsapp.net" }, "96597950350"],
+    ["no identity payload", PENDING, "open", null, "pending_acc-1"],
+    ["closing session", PENDING, "close", null, "pending_acc-1"],
+    ["still pairing", PENDING, "connecting", null, "pending_acc-1"],
+  ];
+
+  for (const [label, account, state, identity, expected] of cases) {
+    await t.step(label, async () => {
+      const admin = recordingAdmin();
+      assertEquals(await syncEvolutionAccountConnection(admin, account, state, identity), expected);
+    });
+  }
+});
