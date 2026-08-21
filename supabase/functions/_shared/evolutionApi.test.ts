@@ -113,3 +113,26 @@ Deno.test("Evolution event names normalize onto the registered subscription name
     });
   }
 });
+
+Deno.test("history reads unwrap the shapes Evolution actually returns", async (t) => {
+  // Measured against v2.3.7: findChats and findContacts answer with a bare array, but
+  // findMessages answers with a paged envelope. Treating the envelope as a list -- which
+  // the original design assumed -- silently imports nothing.
+  const cases: Array<[string, unknown, (api: ReturnType<typeof createEvolutionApi>) => Promise<any[]>, number]> = [
+    ["findChats array", [{ remoteJid: "1@s.whatsapp.net" }], (api) => api.findChats("i"), 1],
+    ["findContacts array", [{ remoteJid: "1@s.whatsapp.net" }, { remoteJid: "2@s.whatsapp.net" }], (api) => api.findContacts("i"), 2],
+    ["findMessages envelope", { messages: { total: 110, pages: 3, records: [{ key: { id: "a" } }] } }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 1],
+    ["findMessages empty envelope", { messages: { total: 0, records: [] } }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 0],
+    ["unexpected payload", { error: "nope" }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 0],
+  ];
+
+  for (const [label, payload, call, expected] of cases) {
+    await t.step(label, async () => {
+      const api = createEvolutionApi(async () => response(payload), {
+        baseUrl: "https://wa.postora.cloud",
+        apiKey: "k",
+      });
+      assertEquals((await call(api)).length, expected);
+    });
+  }
+});

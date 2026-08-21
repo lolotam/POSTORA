@@ -47,6 +47,9 @@ export interface EvolutionApi {
   connect(instanceName: string): Promise<unknown>;
   connectionState(instanceName: string): Promise<unknown>;
   fetchInstance(instanceName: string): Promise<unknown>;
+  findChats(instanceName: string): Promise<any[]>;
+  findContacts(instanceName: string): Promise<any[]>;
+  findMessages(instanceName: string, remoteJid: string): Promise<any[]>;
   logout(instanceName: string): Promise<unknown>;
   deleteInstance(instanceName: string): Promise<unknown>;
   sendText(instanceName: string, input: { number: string; text: string }): Promise<EvolutionSendResult>;
@@ -135,6 +138,34 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
     fetchInstance: async (instanceName) => {
       const payload = await request(`/instance/fetchInstances?instanceName=${encodeURIComponent(instanceName)}`);
       return Array.isArray(payload) ? payload[0] ?? null : payload;
+    },
+    // Evolution keeps the chat and contact history Baileys pulled off the phone at link
+    // time. Nothing is pushed for it, so importing past conversations means reading it.
+    findChats: async (instanceName) => {
+      const payload = await request(`/chat/findChats/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return Array.isArray(payload) ? payload : [];
+    },
+    // findChats reports no participant names at all, so this is the only source for them.
+    findContacts: async (instanceName) => {
+      const payload = await request(`/contact/findContacts/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return Array.isArray(payload) ? payload : [];
+    },
+    // Unlike the other two this answers with a paged envelope, and it ignores `limit` --
+    // measured against v2.3.7, a 110-message chat came back as 3 pages of ~40. Only the
+    // newest page is imported, so the records are taken straight off the first response.
+    findMessages: async (instanceName, remoteJid) => {
+      const payload: any = await request(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: JSON.stringify({ where: { key: { remoteJid } } }),
+      });
+      const records = payload?.messages?.records;
+      return Array.isArray(records) ? records : [];
     },
     logout: (instanceName) => request(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
     deleteInstance: (instanceName) => request(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
