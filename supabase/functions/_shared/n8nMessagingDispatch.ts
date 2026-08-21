@@ -131,7 +131,9 @@ async function loadDestinations(
 ): Promise<{ configured: number; matching: Destination[] }> {
   const [settingsResult, legacyResult] = await Promise.all([
     adminClient.from("app_settings").select("key, value").like("key", `n8n_webhook_${userId}_%`),
-    adminClient.from("whatsapp_webhooks").select("id, url, secret, events, failure_count").eq("user_id", userId).eq("is_active", true),
+    // Inactive rows are kept here on purpose so both registries count "configured" the same
+    // way; the shared filter below drops them, as it already does for settings-registry rows.
+    adminClient.from("whatsapp_webhooks").select("id, url, secret, events, failure_count, is_active").eq("user_id", userId),
   ]);
   if (settingsResult.error) throw settingsResult.error;
   if (legacyResult.error) throw legacyResult.error;
@@ -153,7 +155,7 @@ async function loadDestinations(
     secret: row.secret,
     events: row.events,
     failureCount: Number(row.failure_count || 0),
-    isActive: true,
+    isActive: row.is_active === true,
   }));
   const configuredDestinations = [...settings, ...legacy];
   return {

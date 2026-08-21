@@ -151,7 +151,7 @@ Deno.test("legacy whatsapp_webhooks subscribers keep their original body and sig
   // envelope. Changing their payload or header silently breaks integrations.
   const admin = stubAdmin({
     settings: [],
-    legacy: [{ id: "legacy-1", url: "https://legacy.example", secret: "s3cret", events: ["message.received"], failure_count: 0 }],
+    legacy: [{ id: "legacy-1", url: "https://legacy.example", secret: "s3cret", events: ["message.received"], failure_count: 0, is_active: true }],
     updates: [],
   });
   let sent: any;
@@ -175,7 +175,7 @@ Deno.test("a legacy row with no events column still receives every message", asy
   // silently cut off existing subscribers.
   const admin = stubAdmin({
     settings: [],
-    legacy: [{ id: "legacy-2", url: "https://legacy2.example", secret: null, events: null, failure_count: 0 }],
+    legacy: [{ id: "legacy-2", url: "https://legacy2.example", secret: null, events: null, failure_count: 0, is_active: true }],
     updates: [],
   });
   let delivered = false;
@@ -243,6 +243,34 @@ Deno.test("a webhook that exists but is not subscribed to this platform is warne
       messagePayload,
       { fetcher: (async () => new Response("{}")) as unknown as typeof fetch },
     );
+    assertEquals(warnings, [
+      "[n8n-dispatch] 1 webhook(s) configured for user user-1 but none subscribed to message.whatsapp",
+    ]);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("an inactive legacy webhook counts as configured, like an inactive settings one", async () => {
+  // CodeRabbit round 2 on PR #14: the legacy query used to drop inactive rows in SQL while
+  // the settings registry kept them, so the same misconfiguration produced a different log
+  // line depending on which table it lived in. Both registries now share one rule.
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message: string) => { warnings.push(message); };
+  try {
+    let delivered = false;
+    await dispatchMessageEvent(
+      stubAdmin({
+        settings: [],
+        legacy: [{ id: "legacy-off", url: "https://off.example", secret: null, events: null, failure_count: 0, is_active: false }],
+        updates: [],
+      }),
+      "user-1",
+      messagePayload,
+      { fetcher: (async () => { delivered = true; return new Response("{}"); }) as unknown as typeof fetch },
+    );
+    assertEquals(delivered, false);
     assertEquals(warnings, [
       "[n8n-dispatch] 1 webhook(s) configured for user user-1 but none subscribed to message.whatsapp",
     ]);
