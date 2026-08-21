@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-n8n community node package (`n8n-nodes-postora`) for the Postora social media publishing platform. Publishes content to 10 platforms: Facebook, Instagram, TikTok, Twitter/X, LinkedIn, Pinterest, YouTube, Threads, Bluesky, Reddit. Current version: `1.1.11`.
+n8n community node package (`n8n-nodes-postora`) for the Postora social media publishing platform. Publishes content to 10 platforms: Facebook, Instagram, TikTok, Twitter/X, LinkedIn, Pinterest, YouTube, Threads, Bluesky, Reddit. Current version: `1.2.1`.
 
 ## Sibling copy — keep both in sync
 

@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useWhatsAppBusinessProfile } from "@/hooks/useWhatsAppBusinessProfile";
-import { Loader2, Save, Building2, Plus, X } from "lucide-react";
+import { useWhatsAppBusinessProfile, WhatsAppProfileError } from "@/hooks/useWhatsAppBusinessProfile";
+import { Loader2, Save, Building2, Plus, X, QrCode } from "lucide-react";
+import { Link } from "react-router-dom";
 
 const VERTICALS = [
   "AUTOMOTIVE", "BEAUTY", "APPAREL", "EDU", "ENTERTAIN", "EVENT_PLAN",
@@ -75,6 +76,28 @@ export function BusinessProfileManager() {
       <div className="flex items-center justify-center py-12">
         <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
       </div>
+    );
+  }
+
+  // Direct QR runs a self-hosted session that Meta knows nothing about, so there is no business
+  // profile to load. That is a property of the connection mode, not a failure worth alarming over.
+  if (error instanceof WhatsAppProfileError && error.code === "PROFILE_REQUIRES_CLOUD_API") {
+    return (
+      <Card>
+        <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
+          <QrCode className="h-8 w-8 text-purple-600" />
+          <div className="space-y-1">
+            <p className="font-medium">Business profile needs a Cloud API connection</p>
+            <p className="mx-auto max-w-md text-sm text-muted-foreground">
+              This number is connected with Direct QR, which runs a self-hosted WhatsApp session.
+              Meta only stores a business profile for numbers connected through the Cloud API.
+            </p>
+          </div>
+          <Button asChild variant="outline" size="sm">
+            <Link to="/messaging/whatsapp/setup">Review connection modes</Link>
+          </Button>
+        </CardContent>
+      </Card>
     );
   }
 
