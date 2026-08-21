@@ -4,6 +4,7 @@ import { buildMessagePayload, dispatchMessageEvent } from "../_shared/n8nMessagi
 import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts";
 import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
 import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
+import { buildEvolutionMessageRow } from "../_shared/evolutionMessage.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -31,76 +32,8 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function getMessageText(message: any): { text: string; type: string; mediaType: string | null; mediaMetadata: Record<string, unknown> | null } {
-  const messageBody = message?.message || {};
-  if (messageBody.conversation) return { text: messageBody.conversation, type: "text", mediaType: null, mediaMetadata: null };
-  if (messageBody.extendedTextMessage?.text) return { text: messageBody.extendedTextMessage.text, type: "text", mediaType: null, mediaMetadata: null };
-  if (messageBody.imageMessage) return {
-    text: messageBody.imageMessage.caption || "[Image]",
-    type: "image",
-    mediaType: "image",
-    mediaMetadata: { mime_type: messageBody.imageMessage.mimetype || null },
-  };
-  if (messageBody.videoMessage) return {
-    text: messageBody.videoMessage.caption || "[Video]",
-    type: "video",
-    mediaType: "video",
-    mediaMetadata: { mime_type: messageBody.videoMessage.mimetype || null },
-  };
-  if (messageBody.documentMessage) return {
-    text: `[Document] ${messageBody.documentMessage.fileName || ""}`,
-    type: "document",
-    mediaType: "document",
-    mediaMetadata: {
-      mime_type: messageBody.documentMessage.mimetype || null,
-      filename: messageBody.documentMessage.fileName || null,
-    },
-  };
-  if (messageBody.audioMessage) return {
-    text: "[Audio message]",
-    type: "audio",
-    mediaType: "audio",
-    mediaMetadata: { mime_type: messageBody.audioMessage.mimetype || null },
-  };
-  if (messageBody.stickerMessage) return {
-    text: "[Sticker]",
-    type: "sticker",
-    mediaType: "sticker",
-    mediaMetadata: { mime_type: messageBody.stickerMessage.mimetype || null },
-  };
-  if (messageBody.buttonsResponseMessage) return {
-    text: messageBody.buttonsResponseMessage.selectedDisplayText || "[Interactive]",
-    type: "interactive",
-    mediaType: null,
-    mediaMetadata: null,
-  };
-  if (messageBody.listResponseMessage) return {
-    text: messageBody.listResponseMessage.title || "[Interactive]",
-    type: "interactive",
-    mediaType: null,
-    mediaMetadata: null,
-  };
-  return { text: "[Message]", type: message?.messageType || "unknown", mediaType: null, mediaMetadata: null };
-}
-
-function messageTimestamp(message: any): string {
-  const seconds = Number(message?.messageTimestamp);
-  return Number.isFinite(seconds) && seconds > 0
-    ? new Date(seconds * 1000).toISOString()
-    : new Date().toISOString();
-}
-
 function messageItems(body: any): any[] {
   return Array.isArray(body?.data) ? body.data : body?.data ? [body.data] : [];
-}
-
-function isInboundMessage(message: any): boolean {
-  const key = message?.key || {};
-  const remoteJid = String(key.remoteJid || "");
-  return key.fromMe !== true &&
-    !message?.status &&
-    message?.messageType !== "protocolMessage" &&
-    !remoteJid.endsWith("status@broadcast");
 }
 
 async function findInstance(admin: any, instanceName: string): Promise<EvolutionInstance | null> {
@@ -125,59 +58,67 @@ async function findAccount(admin: any, socialAccountId: string): Promise<Evoluti
   return data as EvolutionAccount | null;
 }
 
-async function touchConversation(admin: any, account: EvolutionAccount, conversationId: string, participantName: string, preview: string, timestamp: string): Promise<void> {
+interface ConversationTouch {
+  conversationId: string;
+  participantName: string;
+  preview: string;
+  timestamp: string;
+  unreadDelta: number;
+}
+
+async function touchConversation(admin: any, account: EvolutionAccount, touch: ConversationTouch): Promise<void> {
   const { data: cached } = await admin
     .from("messaging_cache")
-    .select("unread_count")
+    .select("unread_count, participant_name, participant_avatar")
     .eq("user_id", account.user_id)
     .eq("workspace_id", account.workspace_id)
-    .eq("conversation_id", conversationId)
+    .eq("conversation_id", touch.conversationId)
     .maybeSingle();
   await admin.from("messaging_cache").upsert({
     user_id: account.user_id,
     workspace_id: account.workspace_id,
     social_account_id: account.id,
-    conversation_id: conversationId,
+    conversation_id: touch.conversationId,
     platform: "whatsapp",
-    participant_name: participantName,
-    participant_avatar: null,
-    last_message_preview: preview.slice(0, 200),
-    last_message_at: timestamp,
-    unread_count: (cached?.unread_count || 0) + 1,
+    // An owner-sent message carries the owner's own push name, which must not overwrite
+    // the name already resolved for the person on the other end.
+    participant_name: touch.participantName || cached?.participant_name || null,
+    participant_avatar: cached?.participant_avatar || null,
+    last_message_preview: touch.preview.slice(0, 200),
+    last_message_at: touch.timestamp,
+    unread_count: (cached?.unread_count || 0) + touch.unreadDelta,
     updated_at: new Date().toISOString(),
   }, { onConflict: "user_id,conversation_id" });
 }
 
-async function persistInboundMessage(admin: any, account: EvolutionAccount, message: any): Promise<boolean> {
-  if (!isInboundMessage(message)) return false;
-  const messageId = message?.key?.id;
-  const remoteJid = message?.key?.remoteJid;
-  if (!messageId || !remoteJid) return false;
+async function persistEvolutionMessage(admin: any, account: EvolutionAccount, message: any): Promise<boolean> {
+  const built = buildEvolutionMessageRow(account, message);
+  if (!built) return false;
+  const { conversationId, sentByOwner, row } = built;
+  const remoteJid = message.key.remoteJid;
 
-  const normalized = getMessageText(message);
-  const timestamp = messageTimestamp(message);
-  const conversationId = `wa_${account.platform_user_id}_${remoteJid.replace(/\D/g, "") || remoteJid}`;
-  const senderName = message?.pushName || remoteJid;
-  const { data: insertedRows } = await admin.from("whatsapp_messages").upsert({
-    user_id: account.user_id,
-    social_account_id: account.id,
-    conversation_id: conversationId,
-    message_id: messageId,
-    from_phone: remoteJid,
-    from_name: senderName,
-    to_phone: account.platform_user_id,
-    message_text: normalized.text,
-    message_type: normalized.type,
-    media_url: null,
-    media_type: normalized.mediaType,
-    media_metadata: normalized.mediaMetadata,
-    direction: "inbound",
-    status: "received",
-    timestamp,
-  }, { onConflict: "user_id,message_id", ignoreDuplicates: true }).select("id");
+  const { data: insertedRows, error: insertError } = await admin
+    .from("whatsapp_messages")
+    .upsert(row, { onConflict: "user_id,message_id", ignoreDuplicates: true })
+    .select("id");
 
+  // Without this a failed write is indistinguishable from the deliberate duplicate skip
+  // below, which is how a silent persistence failure could look like normal operation.
+  if (insertError) {
+    console.error("[whatsapp-evolution-webhook] Message persist failed:", insertError.message);
+    return false;
+  }
   if (!insertedRows || insertedRows.length === 0) return false;
-  await touchConversation(admin, account, conversationId, senderName, normalized.text, timestamp);
+  await touchConversation(admin, account, {
+    conversationId,
+    participantName: built.participantName,
+    preview: built.preview,
+    timestamp: built.timestamp,
+    unreadDelta: sentByOwner ? 0 : 1,
+  });
+  // Only a message from the contact is an inbound event for automations; echoing the
+  // operator's own reply back into n8n would retrigger their workflows on their own text.
+  if (sentByOwner) return true;
   await runInBackground("whatsapp evolution message dispatch", () => dispatchMessageEvent(
     admin,
     account.user_id,
@@ -185,14 +126,14 @@ async function persistInboundMessage(admin: any, account: EvolutionAccount, mess
       platform: "whatsapp",
       socialAccountId: account.id,
       conversationId,
-      sender: { id: remoteJid, name: senderName, phone: remoteJid },
+      sender: { id: remoteJid, name: built.participantName, phone: remoteJid },
       message: {
-        id: messageId,
-        text: normalized.text,
-        type: normalized.type,
+        id: row.message_id as string,
+        text: row.message_text as string,
+        type: row.message_type as string,
         attachments: [],
       },
-      timestamp,
+      timestamp: built.timestamp,
     }),
   ));
   return true;
@@ -250,7 +191,7 @@ Deno.serve(async (req) => {
 
     const event = normalizeEvolutionEvent(body.event);
     if (event === "MESSAGES_UPSERT") {
-      for (const message of messageItems(body)) await persistInboundMessage(admin, account, message);
+      for (const message of messageItems(body)) await persistEvolutionMessage(admin, account, message);
     } else if (event === "CONNECTION_UPDATE") {
       await handleConnectionUpdate(admin, account, body.data);
     } else if (event === "QRCODE_UPDATED") {
