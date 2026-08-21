@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { whatsappRetiredRoutes } from "@/components/whatsapp/waNav";
 import { Suspense } from "react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { PageLoader } from "@/components/PageLoader";
@@ -274,7 +275,7 @@ export function AnimatedRoutes() {
           <Route path="automation" element={<AnimatedPage><WhatsAppAutomation /></AnimatedPage>} />
           <Route path="profile" element={<AnimatedPage><WhatsAppBusinessProfile /></AnimatedPage>} />
           {/* Webhooks now live as a tab inside Setup; existing links and bookmarks land there. */}
-          <Route path="webhooks" element={<Navigate to="/messaging/whatsapp/setup?tab=webhooks" replace />} />
+          <Route path="webhooks" element={<Navigate to={whatsappRetiredRoutes.webhooks} replace />} />
           <Route path="scheduled" element={<AnimatedPage><WhatsAppScheduled /></AnimatedPage>} />
           <Route path="response-stats" element={<AnimatedPage><WhatsAppResponseStats /></AnimatedPage>} />
           <Route path="catalog" element={<AnimatedPage><WhatsAppCatalog /></AnimatedPage>} />

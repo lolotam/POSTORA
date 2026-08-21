@@ -41,15 +41,39 @@ Deno.test("never borrows another account's identity for a QR-only user", () => {
   // The original defect paired a global env token with this account's phone number. There is no
   // global fallback any more, so a QR-only user must be reported rather than quietly sent out
   // under someone else's WhatsApp identity.
-  assertEquals(resolveWhatsAppCloudCredentials([qrAccount]), { status: "requires_cloud_api" });
+  assertEquals(resolveWhatsAppCloudCredentials([qrAccount]), {
+    status: "requires_cloud_api",
+    reason: "qr_only",
+  });
+});
+
+Deno.test("separates a QR-only user from a broken Cloud API account", () => {
+  // Both are unusable, but the fix differs: one needs a Cloud API number connected, the other
+  // needs the existing one reconnected. Reporting both as Direct QR sends half of them the
+  // wrong way.
+  const broken = { ...cloudAccount, access_token: null };
+  assertEquals(resolveWhatsAppCloudCredentials([broken]), {
+    status: "requires_cloud_api",
+    reason: "incomplete_credentials",
+  });
+  assertEquals(resolveWhatsAppCloudCredentials([qrAccount, broken]), {
+    status: "requires_cloud_api",
+    reason: "incomplete_credentials",
+  });
 });
 
 Deno.test("reports a QR-only user separately from a user with nothing connected", () => {
-  assertEquals(resolveWhatsAppCloudCredentials([qrAccount]), { status: "requires_cloud_api" });
+  assertEquals(resolveWhatsAppCloudCredentials([qrAccount]), {
+    status: "requires_cloud_api",
+    reason: "qr_only",
+  });
   assertEquals(resolveWhatsAppCloudCredentials([]), { status: "none" });
 });
 
 Deno.test("ignores a Cloud API account that is missing half its credentials", () => {
   const incomplete = { ...cloudAccount, access_token: null };
-  assertEquals(resolveWhatsAppCloudCredentials([incomplete]), { status: "requires_cloud_api" });
+  assertEquals(resolveWhatsAppCloudCredentials([incomplete]), {
+    status: "requires_cloud_api",
+    reason: "incomplete_credentials",
+  });
 });

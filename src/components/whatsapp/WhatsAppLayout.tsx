@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, MessageCircle, Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { WhatsAppCoexistenceSetupBanner } from "@/components/messaging/WhatsAppCoexistenceSetupBanner";
@@ -33,17 +33,15 @@ export default function WhatsAppLayout() {
     setDrawerOpen(false);
   }, [pathname]);
 
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed((previous) => {
-      const next = !previous;
-      try {
-        window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(next));
-      } catch {
-        // A viewer who cannot persist the preference still gets it for this session.
-      }
-      return next;
-    });
-  }, []);
+  // Persisted from an effect rather than inside the updater: StrictMode runs updaters twice in
+  // development, and a writing updater would fire the side effect on a render React discards.
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(collapsed));
+    } catch {
+      // A viewer who cannot persist the preference still gets it for this session.
+    }
+  }, [collapsed]);
 
   if (!isLoading && !flags.msgWhatsapp) {
     return <Navigate to="/dashboard" replace />;
@@ -112,7 +110,7 @@ export default function WhatsAppLayout() {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={toggleCollapsed}
+                  onClick={() => setCollapsed((previous) => !previous)}
                   aria-expanded={!collapsed}
                   aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
                   className={cn("w-full gap-2 text-muted-foreground", collapsed && "px-0")}

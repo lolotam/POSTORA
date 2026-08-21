@@ -33,6 +33,22 @@ export function whatsappSectionRoute(path: string) {
   return path ? `${WHATSAPP_BASE_PATH}/${path}` : WHATSAPP_BASE_PATH;
 }
 
+/**
+ * Sections that left the nav but whose URLs are still out there in bookmarks and docs. Kept
+ * separate from whatsappNavItems precisely because a slug's absence from the nav says nothing
+ * about whether its links should keep working.
+ */
+export const whatsappRetiredRoutes: Record<string, string> = {
+  webhooks: `${WHATSAPP_BASE_PATH}/setup?tab=webhooks`,
+};
+
+/** Resolves a legacy `/messaging/whatsapp?tab=<slug>` deep link to the route serving it today. */
+export function whatsappLegacyTabTarget(tab: string | null | undefined): string | null {
+  if (!tab) return null;
+  if (tab in whatsappRetiredRoutes) return whatsappRetiredRoutes[tab];
+  return whatsappNavItems.some((item) => item.path === tab) ? whatsappSectionRoute(tab) : null;
+}
+
 export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "", label: "Dashboard", icon: LayoutDashboard, end: true },
   { path: "pipelines", label: "Pipelines", icon: Kanban },

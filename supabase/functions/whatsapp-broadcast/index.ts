@@ -79,7 +79,9 @@ Deno.serve(async (req) => {
         JSON.stringify(
           resolution.status === "requires_cloud_api"
             ? {
-              error: "Broadcasts require a Cloud API connection. This number is connected with Direct QR, which cannot send template messages.",
+              error: resolution.reason === "qr_only"
+                ? "Broadcasts require a Cloud API connection. This number is connected with Direct QR, which cannot send template messages."
+                : "This WhatsApp number is missing the Cloud API credentials needed to broadcast. Reconnect it from Setup.",
               code: "BROADCAST_REQUIRES_CLOUD_API",
             }
             : { error: "No connected WhatsApp Business account", code: "NO_WHATSAPP_ACCOUNT" },

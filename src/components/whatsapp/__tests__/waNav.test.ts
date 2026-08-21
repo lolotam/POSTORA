@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   whatsappAutomationTabs,
+  whatsappLegacyTabTarget,
   whatsappNavItems,
+  whatsappRetiredRoutes,
   whatsappSectionRoute,
   WHATSAPP_BASE_PATH,
 } from "../waNav";
@@ -33,6 +35,30 @@ describe("whatsappNavItems", () => {
     // repurpose even though nothing in the sidebar points at them any more.
     expect(whatsappNavItems.some((item) => item.path === "webhooks")).toBe(false);
     expect(whatsappSectionRoute("webhooks")).toBe(`${WHATSAPP_BASE_PATH}/webhooks`);
+  });
+});
+
+describe("whatsappLegacyTabTarget", () => {
+  it("still resolves ?tab= for a section that left the nav", () => {
+    // Resolving against the visible nav alone is what broke this: removing Webhooks from the
+    // sidebar silently stranded /messaging/whatsapp?tab=webhooks on the dashboard.
+    expect(whatsappLegacyTabTarget("webhooks")).toBe(whatsappRetiredRoutes.webhooks);
+  });
+
+  it("resolves ?tab= for sections still in the nav", () => {
+    expect(whatsappLegacyTabTarget("contacts")).toBe(`${WHATSAPP_BASE_PATH}/contacts`);
+  });
+
+  it("ignores an absent or unknown tab so the dashboard renders normally", () => {
+    expect(whatsappLegacyTabTarget(null)).toBeNull();
+    expect(whatsappLegacyTabTarget("")).toBeNull();
+    expect(whatsappLegacyTabTarget("not-a-section")).toBeNull();
+  });
+
+  it("points every retired route at a destination inside the section", () => {
+    for (const target of Object.values(whatsappRetiredRoutes)) {
+      expect(target.startsWith(`${WHATSAPP_BASE_PATH}/`)).toBe(true);
+    }
   });
 
   it("marks only the dashboard index route with end so it doesn't stay active on child routes", () => {

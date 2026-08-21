@@ -26,8 +26,12 @@ export interface CloudApiCredentials {
 
 export type CredentialResolution =
   | { status: "ok"; credentials: CloudApiCredentials }
-  /** The user has WhatsApp connected, but only through a mode Meta holds no Cloud API identity for. */
-  | { status: "requires_cloud_api" }
+  /**
+   * WhatsApp is connected but no account can reach the Cloud API. The reason decides what the
+   * user should actually do, and the two are not interchangeable: a QR session needs a different
+   * number connected, whereas a Cloud API account missing half its credentials needs reconnecting.
+   */
+  | { status: "requires_cloud_api"; reason: "qr_only" | "incomplete_credentials" }
   | { status: "none" };
 
 export function isCloudApiAccount(account: WhatsAppAccountRow): boolean {
@@ -50,5 +54,13 @@ export function resolveWhatsAppCloudCredentials(
     };
   }
 
-  return accounts.length > 0 ? { status: "requires_cloud_api" } : { status: "none" };
+  if (accounts.length === 0) return { status: "none" };
+
+  const everyAccountIsQr = accounts.every(
+    (candidate) => candidate.account_metadata?.connection_mode === "evolution_qr",
+  );
+  return {
+    status: "requires_cloud_api",
+    reason: everyAccountIsQr ? "qr_only" : "incomplete_credentials",
+  };
 }
