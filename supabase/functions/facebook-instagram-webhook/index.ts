@@ -15,10 +15,13 @@ const AUTO_REPLY_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
 
 const ACCOUNT_SELECT = "id, user_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token";
 
-// Finds the social_accounts row for a webhook entry.id. Tries the stored platform_user_id
-// first; Instagram accounts connected via direct login have been observed to expose a
-// different id inside webhook/conversation payloads than the one stored at connect time, so
-// this also checks account_metadata.ig_user_id as a fallback before giving up.
+// Finds the social_accounts row for a webhook entry.id. Instagram Login issues two ids per
+// account — an app-scoped one from /me?fields=id and the Instagram-scoped id (IGID) from
+// /me?fields=user_id — and messaging webhooks address the account by its IGID. Connect
+// stores the app-scoped id in platform_user_id/ig_user_id and the IGID in ig_igid, so all
+// three are tried: platform_user_id covers Facebook pages and older Graph-linked Instagram
+// accounts, ig_igid covers direct-login accounts, and ig_user_id stays as a fallback for
+// rows connected before ig_igid existed.
 async function findAccountForRecipient(
   adminClient: any,
   platform: "facebook" | "instagram",
@@ -35,14 +38,17 @@ async function findAccountForRecipient(
 
   if (platform !== "instagram") return null;
 
-  const { data: byMetadataId } = await adminClient
-    .from("social_accounts")
-    .select(ACCOUNT_SELECT)
-    .eq("platform", "instagram")
-    .eq("is_active", true)
-    .eq("account_metadata->>ig_user_id", recipientId)
-    .limit(1);
-  return byMetadataId && byMetadataId.length > 0 ? byMetadataId[0] : null;
+  for (const metadataKey of ["ig_igid", "ig_user_id"]) {
+    const { data } = await adminClient
+      .from("social_accounts")
+      .select(ACCOUNT_SELECT)
+      .eq("platform", "instagram")
+      .eq("is_active", true)
+      .eq(`account_metadata->>${metadataKey}`, recipientId)
+      .limit(1);
+    if (data && data.length > 0) return data[0];
+  }
+  return null;
 }
 
 function constantTimeEqual(left: string, right: string): boolean {

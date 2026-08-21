@@ -89,6 +89,10 @@ function configMissing(): boolean {
 
 interface InstagramProfile {
   id: string;
+  // Instagram Login returns two ids for the same account: `id` is app-scoped and
+  // `user_id` is the Instagram-scoped id (IGID). Messaging webhooks address the
+  // account by its IGID, so both have to be stored to route an inbound DM back.
+  user_id?: string;
   username?: string;
   account_type?: string;
   profile_picture_url?: string;
@@ -151,7 +155,7 @@ async function exchangeAndPersist(
 
   // Step 3: profile
   const profileResp = await fetch(
-    `https://graph.instagram.com/v22.0/me?fields=id,username,account_type,profile_picture_url&access_token=${finalAccessToken}`,
+    `https://graph.instagram.com/v22.0/me?fields=id,user_id,username,account_type,profile_picture_url&access_token=${finalAccessToken}`,
   );
   const profileData = (await profileResp.json()) as InstagramProfile & { error?: unknown };
 
@@ -160,6 +164,10 @@ async function exchangeAndPersist(
   }
 
   const igUserId = String(profileData.id || rawIgUserId);
+  // Kept separate from ig_user_id rather than replacing it: the app-scoped id is what
+  // the publishing and conversation endpoints address, so overwriting it would trade
+  // one broken surface for another.
+  const igScopedId = profileData.user_id ? String(profileData.user_id) : null;
   const username = profileData.username || `ig_${igUserId}`;
   const avatarUrl = await cacheAvatarToCloudinary(
     profileData.profile_picture_url,
@@ -199,6 +207,7 @@ async function exchangeAndPersist(
     ig_auth_type: "business_login",
     account_metadata: {
       ig_user_id: igUserId,
+      ig_igid: igScopedId,
       ig_username: username,
       account_type: profileData.account_type || "business_login",
       token_type: "long_lived",
