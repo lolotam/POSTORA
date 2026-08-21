@@ -79,8 +79,25 @@ export async function dispatchMessageEvent(
   payload: MessagePayload,
   options: DispatchOptions = {},
 ): Promise<void> {
-  const destinations = await loadDestinations(adminClient, userId, payload.platform);
-  const unique = dedupeDestinations(destinations);
+  const { configured, matching } = await loadDestinations(adminClient, userId, payload.platform);
+  const unique = dedupeDestinations(matching);
+  // A webhook is registered against the API key owner, while dispatch is scoped to the
+  // account that received the message. When those are different users the fan-out is empty,
+  // and without this trace that mismatch leaves no sign in the function logs at all.
+  //
+  // Severity, not silence: this runs for every inbound message, so a user who simply has no
+  // webhooks would otherwise warn on each one. Having webhooks but matching none is the
+  // actionable case (inactive, blank url, or an events list that omits this platform).
+  if (unique.length === 0) {
+    if (configured > 0) {
+      console.warn(
+        `[n8n-dispatch] ${configured} webhook(s) configured for user ${userId} but none subscribed to ${payloadEvent(payload.platform)}`,
+      );
+    } else {
+      console.log(`[n8n-dispatch] no webhook destinations for user ${userId} platform ${payload.platform}`);
+    }
+    return;
+  }
   const deadline = Date.now() + (options.deadlineMs || DEFAULT_DEADLINE_MS);
   let nextIndex = 0;
   let skipped = 0;
@@ -107,10 +124,16 @@ export async function dispatchMessageEvent(
   }
 }
 
-async function loadDestinations(adminClient: any, userId: string, platform: MessagePlatform): Promise<Destination[]> {
+async function loadDestinations(
+  adminClient: any,
+  userId: string,
+  platform: MessagePlatform,
+): Promise<{ configured: number; matching: Destination[] }> {
   const [settingsResult, legacyResult] = await Promise.all([
     adminClient.from("app_settings").select("key, value").like("key", `n8n_webhook_${userId}_%`),
-    adminClient.from("whatsapp_webhooks").select("id, url, secret, events, failure_count").eq("user_id", userId).eq("is_active", true),
+    // Inactive rows are kept here on purpose so both registries count "configured" the same
+    // way; the shared filter below drops them, as it already does for settings-registry rows.
+    adminClient.from("whatsapp_webhooks").select("id, url, secret, events, failure_count, is_active").eq("user_id", userId),
   ]);
   if (settingsResult.error) throw settingsResult.error;
   if (legacyResult.error) throw legacyResult.error;
@@ -132,12 +155,16 @@ async function loadDestinations(adminClient: any, userId: string, platform: Mess
     secret: row.secret,
     events: row.events,
     failureCount: Number(row.failure_count || 0),
-    isActive: true,
+    isActive: row.is_active === true,
   }));
-  return [...settings, ...legacy].filter((destination) =>
-    destination.isActive && destination.url &&
-    matchesSubscription(destination.events, payloadEvent(platform), destination.registry)
-  );
+  const configuredDestinations = [...settings, ...legacy];
+  return {
+    configured: configuredDestinations.length,
+    matching: configuredDestinations.filter((destination) =>
+      destination.isActive && destination.url &&
+      matchesSubscription(destination.events, payloadEvent(platform), destination.registry)
+    ),
+  };
 }
 
 function payloadEvent(platform: MessagePlatform): string {

@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildEvolutionMessageRow } from "./evolutionMessage.ts";
+import { buildEvolutionMessageRow, remoteNumberFor } from "./evolutionMessage.ts";
 
 const ACCOUNT = { id: "acc-1", user_id: "user-1", platform_user_id: "96597950350" };
 
@@ -102,4 +102,39 @@ Deno.test("each media kind gets a preview the inbox can render", async (t) => {
 Deno.test("a chat with no push name falls back to the contact number", () => {
   const built = buildEvolutionMessageRow(ACCOUNT, baileysMessage({ pushName: undefined }))!;
   assertEquals(built.participantName, "96555683677");
+});
+
+// Codex review on PR #14: Evolution can supply a multi-device JID carrying a
+// ":<device>" component. Stripping every non-digit spliced the device number onto
+// the subscriber number, fabricating a different phone number that reached both the
+// conversation id and the dispatched sender payload -- so automations, and the n8n
+// Message node whose recipient defaults to sender.id, could reply to the wrong number.
+Deno.test("a multi-device JID resolves to the subscriber number, not the device", () => {
+  assertEquals(remoteNumberFor("96597950350:12@s.whatsapp.net"), "96597950350");
+});
+
+Deno.test("remoteNumberFor leaves JIDs without a device component untouched", async (t) => {
+  const unchanged: Array<[string, string]> = [
+    ["96597950350@s.whatsapp.net", "96597950350"],
+    ["8801647336747@s.whatsapp.net", "8801647336747"],
+    ["96597950350", "96597950350"],
+  ];
+  for (const [jid, expected] of unchanged) {
+    await t.step(jid, () => assertEquals(remoteNumberFor(jid), expected));
+  }
+});
+
+Deno.test("a JID with no digits at all falls back to the raw value", () => {
+  assertEquals(remoteNumberFor("status@broadcast"), "status@broadcast");
+});
+
+Deno.test("a device-suffixed chat shares the conversation id of its plain form", () => {
+  const plain = buildEvolutionMessageRow(ACCOUNT, baileysMessage())!;
+  const multiDevice = buildEvolutionMessageRow(
+    ACCOUNT,
+    baileysMessage({
+      key: { id: "OTHER", fromMe: false, remoteJid: "96555683677:41@s.whatsapp.net" },
+    }),
+  )!;
+  assertEquals(multiDevice.conversationId, plain.conversationId);
 });

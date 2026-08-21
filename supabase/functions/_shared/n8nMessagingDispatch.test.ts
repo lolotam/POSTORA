@@ -151,7 +151,7 @@ Deno.test("legacy whatsapp_webhooks subscribers keep their original body and sig
   // envelope. Changing their payload or header silently breaks integrations.
   const admin = stubAdmin({
     settings: [],
-    legacy: [{ id: "legacy-1", url: "https://legacy.example", secret: "s3cret", events: ["message.received"], failure_count: 0 }],
+    legacy: [{ id: "legacy-1", url: "https://legacy.example", secret: "s3cret", events: ["message.received"], failure_count: 0, is_active: true }],
     updates: [],
   });
   let sent: any;
@@ -175,7 +175,7 @@ Deno.test("a legacy row with no events column still receives every message", asy
   // silently cut off existing subscribers.
   const admin = stubAdmin({
     settings: [],
-    legacy: [{ id: "legacy-2", url: "https://legacy2.example", secret: null, events: null, failure_count: 0 }],
+    legacy: [{ id: "legacy-2", url: "https://legacy2.example", secret: null, events: null, failure_count: 0, is_active: true }],
     updates: [],
   });
   let delivered = false;
@@ -188,6 +188,95 @@ Deno.test("a legacy row with no events column still receives every message", asy
   });
 
   assertEquals(delivered, true);
+});
+
+Deno.test("dispatchMessageEvent names the owner when nothing is subscribed", async () => {
+  // The tenancy mismatch this warns about — a webhook registered by one user for an account
+  // owned by another — used to need a database dump to spot, because an empty fan-out is
+  // indistinguishable from a successful one in the logs.
+  //
+  // CodeRabbit review on PR #14: this runs for every inbound message, so a user with no
+  // webhooks at all would warn on each one. That normal case stays traceable at log level;
+  // only a user who HAS webhooks but matches none is warned about.
+  const warnings: string[] = [];
+  const logs: string[] = [];
+  const originalWarn = console.warn;
+  const originalLog = console.log;
+  console.warn = (message: string) => { warnings.push(message); };
+  console.log = (message: string) => { logs.push(message); };
+  try {
+    let fetched = false;
+    await dispatchMessageEvent(
+      stubAdmin({ settings: [], legacy: [], updates: [] }),
+      "user-without-webhooks",
+      messagePayload,
+      { fetcher: (async () => { fetched = true; return new Response("{}"); }) as unknown as typeof fetch },
+    );
+    assertEquals(fetched, false);
+    assertEquals(warnings, []);
+    assertEquals(logs, [
+      "[n8n-dispatch] no webhook destinations for user user-without-webhooks platform whatsapp",
+    ]);
+  } finally {
+    console.warn = originalWarn;
+    console.log = originalLog;
+  }
+});
+
+Deno.test("a webhook that exists but is not subscribed to this platform is warned about", async () => {
+  // The actionable half of the empty fan-out: destinations are configured, so the operator
+  // can fix the events list, the is_active flag, or the blank url.
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message: string) => { warnings.push(message); };
+  try {
+    await dispatchMessageEvent(
+      stubAdmin({
+        settings: [{
+          key: "n8n_webhook_user-1_a",
+          value: { webhook_url: "https://example.test/hook", is_active: true, events: ["message.facebook"] },
+        }],
+        legacy: [],
+        updates: [],
+      }),
+      "user-1",
+      messagePayload,
+      { fetcher: (async () => new Response("{}")) as unknown as typeof fetch },
+    );
+    assertEquals(warnings, [
+      "[n8n-dispatch] 1 webhook(s) configured for user user-1 but none subscribed to message.whatsapp",
+    ]);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+Deno.test("an inactive legacy webhook counts as configured, like an inactive settings one", async () => {
+  // CodeRabbit round 2 on PR #14: the legacy query used to drop inactive rows in SQL while
+  // the settings registry kept them, so the same misconfiguration produced a different log
+  // line depending on which table it lived in. Both registries now share one rule.
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message: string) => { warnings.push(message); };
+  try {
+    let delivered = false;
+    await dispatchMessageEvent(
+      stubAdmin({
+        settings: [],
+        legacy: [{ id: "legacy-off", url: "https://off.example", secret: null, events: null, failure_count: 0, is_active: false }],
+        updates: [],
+      }),
+      "user-1",
+      messagePayload,
+      { fetcher: (async () => { delivered = true; return new Response("{}"); }) as unknown as typeof fetch },
+    );
+    assertEquals(delivered, false);
+    assertEquals(warnings, [
+      "[n8n-dispatch] 1 webhook(s) configured for user user-1 but none subscribed to message.whatsapp",
+    ]);
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 Deno.test("dispatchMessageEvent rejects a missing admin client query result", async () => {

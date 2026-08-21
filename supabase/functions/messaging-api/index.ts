@@ -1214,7 +1214,13 @@ Deno.serve(async (req) => {
         .select("*")
         .eq("social_account_id", social_account_id)
         .or(`conversation_id.eq.${normalizedConvId},conversation_id.eq.${conversation_id}`)
-        .order("timestamp", { ascending: true })
+        // Newest-first, like Graph `get_messages`, so the shared inbox pane can treat both
+        // platforms alike. Ascending would also make the limit keep the OLDEST hundred, which
+        // hid every recent message on threads longer than that.
+        .order("timestamp", { ascending: false })
+        // WhatsApp timestamps are second-granular and both ingest paths can land the same
+        // second, so the id keeps the page stable across refetches instead of shuffling ties.
+        .order("id", { ascending: false })
         .limit(100);
 
       if (msgsError) throw msgsError;
