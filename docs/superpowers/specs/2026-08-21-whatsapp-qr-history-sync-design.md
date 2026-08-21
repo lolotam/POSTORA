@@ -178,3 +178,87 @@ Gates: `deno check` on every changed function, `deno test supabase/functions/_sh
    (`compose up -d --no-deps functions` does not reload).
 4. Only then merge to `main` - main auto-deploys the frontend only, so a merged frontend
    calling undeployed functions is the failure mode to avoid.
+
+---
+
+# Revision after the Codex debate round (2026-08-21)
+
+Codex reviewed this design read-only and returned NEEDS REDESIGN with eight blocking
+findings. Seven are accepted, one is accepted only in part. Each verdict below was
+re-verified against the code rather than taken on trust.
+
+## Accepted - and why they were real
+
+**R1. `fromMe` needs more than a `direction` flip.** `MessagingInbox.tsx:42` sets
+`pageId = selectedAccount.platform_user_id`, and `ConversationDetail.tsx:276` decides the
+bubble side with `msg.from?.id === pageId`. `whatsapp_get_messages` maps
+`from.id = m.from_phone`. So an owner-sent message must store the **owner's digits** in
+`from_phone` and the remote party in `to_phone`, or it renders as received. The UI never
+reads `direction` at all. Commit 2 therefore swaps sender/recipient for `fromMe` and never
+increments unread for an owner-sent message.
+
+**R2. Durability - accepted in part.** Codex claimed `runInBackground` waits only 2s. That
+cap applies **only** when `EdgeRuntime.waitUntil` is absent (`background.ts:41-53`); this
+stack runs `supabase/edge-runtime:v1.67.4`, which provides it. The proposed job table with
+lease, cursor and scheduled worker is rejected as over-engineering for a 7s idempotent
+sweep. The real concern - a killed run leaving no completion record - is met by writing
+`last_sync_at` **only on successful completion**, so an interrupted sweep is simply re-run
+and every write is idempotent.
+
+**R3. The cooldown is not a lock.** Three triggers could start concurrent imports, and an
+early empty sweep would stamp `last_sync_at` and suppress the retry that Baileys warm-up
+needs. Replaced with an explicit lease: `sync_started_at` claimed by a conditional update
+that returns the claimed row (zero rows means another sweep owns it), plus `last_sync_at`
+set only when the sweep actually imported something.
+
+**R4. Manual sync cannot require workspace admin.** `findOwnedAccount`
+(`whatsapp-evolution-bridge/index.ts:135`) requires `social_accounts.user_id` to equal the
+caller, so a non-owner admin could never invoke the action. `sync_past_chats` therefore
+uses `findOwnedAccount` like every other bridge action; the spec's earlier "workspace
+admin" wording was wrong about the code.
+
+**R5. Reconnect under a new account row hides history.** Dedup is `(user_id, message_id)`
+with `ignoreDuplicates`, while inbox reads filter by `social_account_id`. Re-importing the
+same history under a new account row would skip every row and show empty conversations.
+The sweep therefore merges on conflict instead of ignoring, rebinding
+`social_account_id` and `conversation_id`. Safe because both sides derive from the same
+source message.
+
+**R6. Contacts were never persisted.** The design joined `findContacts` only for display
+names, but `whatsapp_list_conversations` derives `contact_id` exclusively from
+`whatsapp_contacts` (`messaging-api/index.ts:1133`). Without an upsert every imported chat
+stays detached from the CRM. The sweep now upserts contacts with `user_id`, the account's
+non-null `workspace_id`, digits-only `phone_number`, name and avatar - and never
+overwrites a display name a user has edited.
+
+**R7. A later sweep would erase live unread state.** Evolution reports `unreadCount: 0`
+everywhere, so blanket-upserting it would reset genuine unread counts accrued since
+linking. Evolution's value is used only when inserting a conversation Postora has not seen;
+existing rows keep their Postora unread count.
+
+**R8. QR-incompatible delete is exposed.** `delete_message`
+(`messaging-api/index.ts:731`) uses Meta Graph credentials with no Direct QR rejection,
+yet the UI renders delete for every message (`ConversationDetail.tsx:149`). A
+`rejectDirectQrCapability` guard is added so the action fails cleanly instead of
+attempting a Graph call with no token.
+
+## Additional ordering rule
+
+A history sweep must never regress live data: `messaging_cache.last_message_at`, preview,
+name and avatar are only updated when the incoming timestamp is **newer** than the stored
+one.
+
+## Revised migration
+
+`whatsapp_evolution_instances` gains two columns, not one:
+
+- `sync_started_at timestamptz` - the lease
+- `last_sync_at timestamptz` - successful completion
+
+## Deferred, recorded deliberately
+
+- `whatsapp_get_messages` caps at 100 rows (`messaging-api/index.ts:1188`); deeper history
+  needs pagination that this change does not add.
+- Group (`@g.us`) and privacy (`@lid`) chats remain unsupported.
+- `isInboundMessage` keeps its name this round; renaming it to an eligibility predicate is
+  a follow-up so the bug-fix diff stays reviewable.
