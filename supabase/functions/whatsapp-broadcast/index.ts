@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { resolveWhatsAppCloudCredentials } from "../_shared/whatsappCloudCredentials.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -63,18 +64,22 @@ Deno.serve(async (req) => {
 
     // Multi-tenant: send with the user's own connected WhatsApp account.
     // The shared env credentials are only a fallback for legacy admin setups.
-    const { data: waAccount } = await supabaseAdmin
+    // Broadcasts go out over the Cloud API, so Direct QR accounts cannot carry them; every
+    // active account is considered rather than only the newest, which may well be a QR one.
+    const { data: waAccounts } = await supabaseAdmin
       .from("social_accounts")
-      .select("platform_user_id, access_token")
+      .select("platform_user_id, access_token, account_metadata")
       .eq("user_id", user.id)
       .eq("platform", "whatsapp")
       .eq("is_active", true)
-      .order("connected_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order("connected_at", { ascending: false });
 
-    const whatsappToken = waAccount?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
-    const phoneNumberId = waAccount?.platform_user_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+    const resolution = resolveWhatsAppCloudCredentials(waAccounts || [], {
+      accessToken: Deno.env.get("WHATSAPP_ACCESS_TOKEN"),
+      phoneNumberId: Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"),
+    });
+    const whatsappToken = resolution.status === "ok" ? resolution.credentials.accessToken : null;
+    const phoneNumberId = resolution.status === "ok" ? resolution.credentials.phoneNumberId : null;
 
     if (!whatsappToken || !phoneNumberId) {
       return new Response(JSON.stringify({ error: "No connected WhatsApp Business account" }), {

@@ -6,6 +6,7 @@ const corsHeaders = {
 };
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
+import { resolveWhatsAppCloudCredentials } from "../_shared/whatsappCloudCredentials.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v21.0";
 
@@ -50,27 +51,41 @@ serve(async (req) => {
       });
     }
 
-    // Prefer the user's own connected WhatsApp account (from social_accounts);
-    // fall back to global env vars if none is connected.
-    const { data: waAccount } = await supabaseAdmin
+    // The business profile lives on Meta's Cloud API, so only Cloud-API-backed accounts can
+    // answer for it. Direct QR accounts run a self-hosted session with no Meta identity: their
+    // access_token is empty and platform_user_id holds a phone number rather than a Cloud API
+    // phone_number_id, so including them here sends Meta a number it cannot resolve.
+    const { data: waAccounts } = await supabaseAdmin
       .from("social_accounts")
-      .select("access_token, platform_user_id")
+      .select("access_token, platform_user_id, account_metadata")
       .eq("user_id", user.id)
       .eq("platform", "whatsapp")
       .eq("is_active", true)
-      .order("connected_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order("connected_at", { ascending: false });
 
-    const accessToken = waAccount?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
-    const phoneNumberId = waAccount?.platform_user_id || Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+    const resolution = resolveWhatsAppCloudCredentials(waAccounts || [], {
+      accessToken: Deno.env.get("WHATSAPP_ACCESS_TOKEN"),
+      phoneNumberId: Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"),
+    });
 
-    if (!accessToken || !phoneNumberId) {
-      return new Response(JSON.stringify({ error: "No connected WhatsApp Business account" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (resolution.status !== "ok") {
+      // Distinguishes "connected, but through a mode Meta holds no profile for" from "nothing
+      // connected", so the page can explain the mode instead of reporting a generic failure.
+      const requiresCloudApi = resolution.status === "requires_cloud_api";
+      return new Response(
+        JSON.stringify(
+          requiresCloudApi
+            ? {
+              error: "WhatsApp Business profiles are only available for Meta Cloud API numbers. This number is connected with Direct QR.",
+              code: "PROFILE_REQUIRES_CLOUD_API",
+            }
+            : { error: "No connected WhatsApp Business account", code: "NO_WHATSAPP_ACCOUNT" },
+        ),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
+
+    const { accessToken, phoneNumberId } = resolution.credentials;
 
     if (req.method === "GET") {
       const res = await fetch(

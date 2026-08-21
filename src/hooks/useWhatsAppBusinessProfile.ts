@@ -33,6 +33,29 @@ async function getAuthHeaders() {
 
 const BASE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/whatsapp-profile`;
 
+/** Codes describing account state rather than a transient failure, so retrying cannot help. */
+const TERMINAL_PROFILE_CODES = new Set(["PROFILE_REQUIRES_CLOUD_API", "NO_WHATSAPP_ACCOUNT"]);
+
+/** Carries the backend's machine-readable code so callers can branch without matching on prose. */
+export class WhatsAppProfileError extends Error {
+  readonly code?: string;
+
+  constructor(message: string, code?: string) {
+    super(message);
+    this.name = "WhatsAppProfileError";
+    this.code = code;
+  }
+}
+
+async function profileRequestError(res: Response, fallback: string): Promise<WhatsAppProfileError> {
+  const body = await res.json().catch(() => null);
+  // Meta explains the real cause in `details`; dropping it made an expired token
+  // indistinguishable from a wrong phone number once it reached the toast.
+  const metaMessage = body?.details?.error?.message;
+  const message = [body?.error || fallback, metaMessage].filter(Boolean).join(" — ");
+  return new WhatsAppProfileError(message, body?.code);
+}
+
 export function useWhatsAppBusinessProfile() {
   const queryClient = useQueryClient();
 
@@ -42,11 +65,15 @@ export function useWhatsAppBusinessProfile() {
       const headers = await getAuthHeaders();
       const res = await fetch(BASE_URL, { headers });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to fetch profile");
+        throw await profileRequestError(res, "Failed to fetch profile");
       }
       return res.json();
     },
+    // A connection mode without profiles is a permanent state, not a blip; retrying it three
+    // times only delays the explanation the page is ready to show.
+    retry: (failureCount, error) =>
+      !(error instanceof WhatsAppProfileError && TERMINAL_PROFILE_CODES.has(error.code ?? "")) &&
+      failureCount < 3,
   });
 
   const updateMutation = useMutation({
@@ -58,8 +85,7 @@ export function useWhatsAppBusinessProfile() {
         body: JSON.stringify(profile),
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to update profile");
+        throw await profileRequestError(res, "Failed to update profile");
       }
       return res.json();
     },
