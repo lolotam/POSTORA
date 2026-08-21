@@ -439,6 +439,23 @@
     @apply scroll-smooth;
   }
 
+  /* Now that the app runs full-bleed, a 16px root leaves controls and text looking undersized
+     on a large monitor. Tailwind's scale is rem-based, so stepping the root size scales type,
+     padding, control heights and gaps together — proportion is preserved instead of a handful
+     of font sizes growing out of step with the components around them. Laptops are deliberately
+     untouched; the step only applies where the extra width actually appears. */
+  @media (min-width: 1536px) {
+    html {
+      font-size: 17px;
+    }
+  }
+
+  @media (min-width: 1920px) {
+    html {
+      font-size: 18px;
+    }
+  }
+
   body {
     @apply bg-background text-foreground font-sans antialiased;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";

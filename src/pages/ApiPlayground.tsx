@@ -18,7 +18,7 @@ export default function ApiPlayground() {
     <div className="min-h-screen bg-background">
       <PlaygroundHeader isAuthenticated={!!state.user} />
 
-      <main className="container mx-auto px-6 py-8 max-w-7xl">
+      <main className="w-full px-6 py-8">
         {/* Hero */}
         <div className="mb-8">
           <div className="flex items-center justify-between">

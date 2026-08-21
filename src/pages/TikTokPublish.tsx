@@ -79,7 +79,7 @@ export default function TikTokPublish() {
   return (
     <div className="min-h-screen bg-white dark:bg-zinc-950">
       <header className="border-b border-zinc-200 dark:border-zinc-800 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+        <div className="w-full flex items-center justify-between">
           <Link to="/"><Logo size="sm" /></Link>
           <nav className="flex gap-4">
             <Link to="/tiktok-auth" className="text-sm font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors">
@@ -92,7 +92,7 @@ export default function TikTokPublish() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-6 py-10">
+      <main className="w-full px-6 py-10">
         {!connectedAccount ? (
           <div className="text-center py-16">
             <AlertCircle className="w-12 h-12 text-zinc-300 dark:text-zinc-600 mx-auto mb-4" />

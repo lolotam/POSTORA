@@ -29,7 +29,7 @@ export default function InstagramMessaging() {
 
   return (
     <DashboardLayout>
-      <div className="max-w-7xl mx-auto space-y-6">
+      <div className="w-full space-y-6">
         <Reveal>
           <div className="group flex items-center gap-4">
             <Icon3D icon={Camera} variant="rose" size="md" />
