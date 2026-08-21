@@ -89,6 +89,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
         message: messageText.trim(),
         platform,
         recipientPhone,
+        recipientId: conversation.participant_id,
       },
       {
         onSuccess: () => { setMessageText(""); toast.success("Message sent"); },

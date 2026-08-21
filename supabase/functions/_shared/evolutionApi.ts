@@ -27,6 +27,13 @@ export interface EvolutionSendResult {
   raw: unknown;
 }
 
+// Evolution registers webhook subscriptions under SCREAMING_SNAKE event names but sends
+// the dot-lowercase form ("connection.update") in the delivered body, so every consumer
+// has to normalize before matching.
+export function normalizeEvolutionEvent(event: unknown): string {
+  return String(event ?? "").replace(/[.-]/g, "_").toUpperCase();
+}
+
 type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 interface EvolutionApiOptions {
@@ -39,6 +46,10 @@ export interface EvolutionApi {
   createInstance(input: EvolutionCreateInstanceInput): Promise<unknown>;
   connect(instanceName: string): Promise<unknown>;
   connectionState(instanceName: string): Promise<unknown>;
+  fetchInstance(instanceName: string): Promise<unknown>;
+  findChats(instanceName: string): Promise<any[]>;
+  findContacts(instanceName: string): Promise<any[]>;
+  findMessages(instanceName: string, remoteJid: string): Promise<any[]>;
   logout(instanceName: string): Promise<unknown>;
   deleteInstance(instanceName: string): Promise<unknown>;
   sendText(instanceName: string, input: { number: string; text: string }): Promise<EvolutionSendResult>;
@@ -122,6 +133,41 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
     }),
     connect: (instanceName) => request(`/instance/connect/${encodeURIComponent(instanceName)}`),
     connectionState: (instanceName) => request(`/instance/connectionState/${encodeURIComponent(instanceName)}`),
+    // connectionState reports only the state, so the linked number and profile name
+    // have to come from here. The route always answers with a list.
+    fetchInstance: async (instanceName) => {
+      const payload = await request(`/instance/fetchInstances?instanceName=${encodeURIComponent(instanceName)}`);
+      return Array.isArray(payload) ? payload[0] ?? null : payload;
+    },
+    // Evolution keeps the chat and contact history Baileys pulled off the phone at link
+    // time. Nothing is pushed for it, so importing past conversations means reading it.
+    findChats: async (instanceName) => {
+      const payload = await request(`/chat/findChats/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return Array.isArray(payload) ? payload : [];
+    },
+    // findChats reports no participant names at all, so this is the only source for them.
+    // The route lives under /chat, not /contact -- the latter answers 404 on v2.3.7.
+    findContacts: async (instanceName) => {
+      const payload = await request(`/chat/findContacts/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      return Array.isArray(payload) ? payload : [];
+    },
+    // Unlike the other two this answers with a paged envelope, and it ignores `limit` --
+    // measured against v2.3.7, a 110-message chat came back as 3 pages of ~40. Only the
+    // newest page is imported, so the records are taken straight off the first response.
+    findMessages: async (instanceName, remoteJid) => {
+      const payload: any = await request(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+        method: "POST",
+        body: JSON.stringify({ where: { key: { remoteJid } } }),
+      });
+      const records = payload?.messages?.records;
+      return Array.isArray(records) ? records : [];
+    },
     logout: (instanceName) => request(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
     deleteInstance: (instanceName) => request(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
     sendText: async (instanceName, input) => sendResult(await request(`/message/sendText/${encodeURIComponent(instanceName)}`, {

@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { createEvolutionApi } from "./evolutionApi.ts";
+import { createEvolutionApi, normalizeEvolutionEvent } from "./evolutionApi.ts";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -90,4 +90,49 @@ Deno.test("Evolution API client rejects a request that exceeds its deadline", as
     Error,
     "Evolution API request timed out",
   );
+});
+
+Deno.test("Evolution event names normalize onto the registered subscription names", async (t) => {
+  // Regression (2026-08-21): Direct QR connect linked on the phone but never activated in
+  // Postora. Evolution subscribes with SCREAMING_SNAKE names but delivers the dot-lowercase
+  // form in the webhook body, so the handler's raw `body.event === "CONNECTION_UPDATE"`
+  // comparison never matched and every connection and message event was dropped.
+  const deliveries: Array<[unknown, string]> = [
+    ["connection.update", "CONNECTION_UPDATE"],
+    ["messages.upsert", "MESSAGES_UPSERT"],
+    ["qrcode.updated", "QRCODE_UPDATED"],
+    ["CONNECTION_UPDATE", "CONNECTION_UPDATE"],
+    ["connection-update", "CONNECTION_UPDATE"],
+    [undefined, ""],
+    [null, ""],
+  ];
+
+  for (const [delivered, registered] of deliveries) {
+    await t.step(`${String(delivered)} matches ${registered || "nothing"}`, () => {
+      assertEquals(normalizeEvolutionEvent(delivered), registered);
+    });
+  }
+});
+
+Deno.test("history reads unwrap the shapes Evolution actually returns", async (t) => {
+  // Measured against v2.3.7: findChats and findContacts answer with a bare array, but
+  // findMessages answers with a paged envelope. Treating the envelope as a list -- which
+  // the original design assumed -- silently imports nothing.
+  const cases: Array<[string, unknown, (api: ReturnType<typeof createEvolutionApi>) => Promise<any[]>, number]> = [
+    ["findChats array", [{ remoteJid: "1@s.whatsapp.net" }], (api) => api.findChats("i"), 1],
+    ["findContacts array", [{ remoteJid: "1@s.whatsapp.net" }, { remoteJid: "2@s.whatsapp.net" }], (api) => api.findContacts("i"), 2],
+    ["findMessages envelope", { messages: { total: 110, pages: 3, records: [{ key: { id: "a" } }] } }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 1],
+    ["findMessages empty envelope", { messages: { total: 0, records: [] } }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 0],
+    ["unexpected payload", { error: "nope" }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 0],
+  ];
+
+  for (const [label, payload, call, expected] of cases) {
+    await t.step(label, async () => {
+      const api = createEvolutionApi(async () => response(payload), {
+        baseUrl: "https://wa.postora.cloud",
+        apiKey: "k",
+      });
+      assertEquals((await call(api)).length, expected);
+    });
+  }
 });

@@ -1,6 +1,9 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedErrorResponse, restrictedJsonResponse } from "../_shared/cors.ts";
-import { createEvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
+import { createEvolutionApi, type EvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
+import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
+import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
+import { runInBackground } from "../_shared/background.ts";
 
 const EVOLUTION_EVENTS: EvolutionEvent[] = [
   "MESSAGES_UPSERT",
@@ -16,7 +19,7 @@ class BridgeError extends Error {
 }
 
 interface BridgeBody {
-  action: "create_and_get_qr" | "get_qr_status" | "logout_instance";
+  action: "create_and_get_qr" | "get_qr_status" | "logout_instance" | "sync_past_chats";
   social_account_id?: string;
   workspace_id?: string;
   risk_consent?: boolean;
@@ -28,6 +31,7 @@ interface EvolutionInstanceRow {
   instance_name: string;
   jwt_key: string;
   last_qr: string | null;
+  last_sync_at: string | null;
 }
 
 function clientIp(req: Request): string | null {
@@ -42,6 +46,13 @@ function extractQr(payload: any): string | null {
 
 function extractState(payload: any): string | null {
   return payload?.instance?.state || payload?.state || payload?.connectionStatus || null;
+}
+
+// Evolution runs in its own stack and can only reach the public gateway, while
+// SUPABASE_URL is the internal Kong hostname inside the edge runtime.
+function evolutionWebhookBaseUrl(internalUrl: string): string {
+  const base = Deno.env.get("SUPABASE_PUBLIC_URL") || internalUrl;
+  return base.endsWith("/") ? base.slice(0, -1) : base;
 }
 
 async function authenticateRequest(req: Request) {
@@ -63,7 +74,7 @@ async function authenticateRequest(req: Request) {
     user: data.user,
     userClient,
     admin: createClient(supabaseUrl, serviceRoleKey),
-    supabaseUrl,
+    webhookBaseUrl: evolutionWebhookBaseUrl(supabaseUrl),
   };
 }
 
@@ -140,7 +151,7 @@ async function findOwnedAccount(admin: any, userId: string, socialAccountId: str
 async function findInstance(admin: any, socialAccountId: string): Promise<EvolutionInstanceRow> {
   const { data, error } = await admin
     .from("whatsapp_evolution_instances")
-    .select("social_account_id, instance_name, jwt_key, last_qr")
+    .select("social_account_id, instance_name, jwt_key, last_qr, last_sync_at")
     .eq("social_account_id", socialAccountId)
     .maybeSingle();
   if (error) throw error;
@@ -205,7 +216,7 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
     await api.createInstance({
       instanceName,
       webhook: {
-        url: `${context.supabaseUrl}/functions/v1/whatsapp-evolution-webhook`,
+        url: `${context.webhookBaseUrl}/functions/v1/whatsapp-evolution-webhook`,
         headers: { jwt_key: jwtKey },
         events: EVOLUTION_EVENTS,
       },
@@ -229,9 +240,50 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
   }
 }
 
+function importHistory(admin: any, account: any, instanceName: string): Promise<void> {
+  return importEvolutionHistory({ admin, api: createEvolutionApi(), account, instanceName });
+}
+
+// Auto-import runs until one sweep succeeds and then stops, so the 2s status poll does not
+// re-import 300 chats forever. A retry is still possible while last_sync_at is unset, which
+// is what makes an early sweep against a half-warmed Baileys session recoverable.
+async function autoImportHistory(admin: any, account: any, instance: EvolutionInstanceRow): Promise<void> {
+  if (instance.last_sync_at) return;
+  await importHistory(admin, account, instance.instance_name);
+}
+
+async function syncPastChats(admin: any, userId: string, body: BridgeBody) {
+  if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
+  const account = await findOwnedAccount(admin, userId, body.social_account_id);
+  const instance = await findInstance(admin, body.social_account_id);
+  await runInBackground("whatsapp history sync", () => importHistory(admin, account, instance.instance_name));
+  return { success: true, message: "Importing your WhatsApp conversations" };
+}
+
+// The webhook is the primary activation path; this keeps a dropped delivery from
+// leaving an already-linked session permanently inactive in Postora.
+async function reconcileAccountConnection(reconciliation: {
+  admin: any;
+  api: EvolutionApi;
+  account: { id: string; platform_user_id: string; is_active: boolean };
+  instanceName: string;
+  state: string;
+}): Promise<string> {
+  const { admin, api, account, instanceName } = reconciliation;
+  const connection = reconciliation.state.toLowerCase();
+  if (connection === "open") {
+    if (account.is_active && !account.platform_user_id.startsWith("pending_")) return account.platform_user_id;
+    return await syncEvolutionAccountConnection(admin, account, connection, await api.fetchInstance(instanceName));
+  }
+  if (connection === "close" && account.is_active) {
+    await syncEvolutionAccountConnection(admin, account, connection, null);
+  }
+  return account.platform_user_id;
+}
+
 async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
-  await findOwnedAccount(admin, userId, body.social_account_id);
+  const account = await findOwnedAccount(admin, userId, body.social_account_id);
   const instance = await findInstance(admin, body.social_account_id);
   const api = createEvolutionApi();
   let qr = instance.last_qr;
@@ -243,6 +295,16 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   const state = extractState(statePayload);
   if (state) {
     await admin.from("whatsapp_evolution_instances").update({ last_connection_state: state }).eq("social_account_id", body.social_account_id);
+    // Reconciliation may have just replaced the provisional owner id, and conversation ids
+    // are built from it, so the sweep uses the value it returns rather than the one loaded
+    // at the top of this request.
+    const ownerNumber = await reconcileAccountConnection({
+      admin, api, account, instanceName: instance.instance_name, state,
+    });
+    if (state.toLowerCase() === "open") {
+      const linked = { ...account, platform_user_id: ownerNumber };
+      await runInBackground("whatsapp history sync", () => autoImportHistory(admin, linked, instance));
+    }
   }
   return { success: true, social_account_id: body.social_account_id, qr, state };
 }
@@ -275,6 +337,9 @@ Deno.serve(async (req) => {
     }
     if (body.action === "get_qr_status") {
       return restrictedJsonResponse(req, await getQrStatus(context.admin, context.user.id, body));
+    }
+    if (body.action === "sync_past_chats") {
+      return restrictedJsonResponse(req, await syncPastChats(context.admin, context.user.id, body));
     }
     if (body.action === "logout_instance") {
       return restrictedJsonResponse(req, await logoutInstance(context.admin, context.user.id, body));

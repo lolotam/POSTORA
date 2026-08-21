@@ -71,6 +71,32 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const [qrConnecting, setQrConnecting] = useState(false);
   const [switchTarget, setSwitchTarget] = useState<MessagingAccount | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<MessagingAccount | null>(null);
+  const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
+
+  // Direct QR imports history from the Evolution session rather than from Meta, so it does
+  // not share the coexistence sync hook. The sweep runs in the background on the server;
+  // the inbox picks the conversations up on its next refetch.
+  const syncPastChats = async (socialAccountId: string) => {
+    setSyncingAccountId(socialAccountId);
+    try {
+      const { error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
+        body: { action: "sync_past_chats", social_account_id: socialAccountId },
+      });
+      if (error) throw error;
+      toast({
+        title: "Importing your conversations",
+        description: "Past chats will appear in the inbox in a few seconds.",
+      });
+    } catch (error) {
+      toast({
+        title: "Could not import conversations",
+        description: error instanceof Error ? error.message : "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setSyncingAccountId(null);
+    }
+  };
 
   const handleConnect = (mode: "cloud_api" | "coexistence") => {
     if (tpStatus === "pending") {
@@ -202,6 +228,22 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                           <RefreshCw className="w-3.5 h-3.5" />
                         )}
                         Sync phone chats
+                      </Button>
+                    )}
+                    {isEvolutionQr && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={syncingAccountId === account.id}
+                        onClick={() => syncPastChats(account.id)}
+                        className="gap-1.5"
+                      >
+                        {syncingAccountId === account.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        )}
+                        Sync past chats
                       </Button>
                     )}
                     {!isCoexistence && cloudApiEnabled && (
