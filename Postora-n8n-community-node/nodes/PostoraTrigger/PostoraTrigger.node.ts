@@ -116,6 +116,10 @@ export class PostoraTrigger implements INodeType {
         const credentials = await this.getCredentials<{ baseUrl: string }>("postoraApi");
         const events = this.getNodeParameter("events") as string[];
         const callbackUrl = this.getNodeWebhookUrl("default");
+        // Without a callback URL every registration compares as mismatched, which would retire a
+        // perfectly good subscription and then fail in create() for the very same missing URL.
+        // Keep what is registered and let create() report the problem if it is ever reached.
+        if (!callbackUrl) return true;
 
         let listing: WebhookListing;
         try {

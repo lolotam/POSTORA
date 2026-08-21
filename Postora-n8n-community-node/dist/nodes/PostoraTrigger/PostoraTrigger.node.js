@@ -94,6 +94,11 @@ class PostoraTrigger {
                     const credentials = await this.getCredentials("postoraApi");
                     const events = this.getNodeParameter("events");
                     const callbackUrl = this.getNodeWebhookUrl("default");
+                    // Without a callback URL every registration compares as mismatched, which would retire a
+                    // perfectly good subscription and then fail in create() for the very same missing URL.
+                    // Keep what is registered and let create() report the problem if it is ever reached.
+                    if (!callbackUrl)
+                        return true;
                     let listing;
                     try {
                         listing = await this.helpers.httpRequestWithAuthentication.call(this, "postoraApi", { method: "GET", url: `${credentials.baseUrl}/api/v1/webhooks` });

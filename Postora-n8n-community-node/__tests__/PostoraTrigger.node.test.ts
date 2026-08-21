@@ -181,6 +181,20 @@ describe("Postora Trigger", () => {
     await expect(trigger.webhookMethods?.default?.checkExists.call(context as any)).resolves.toBe(false);
   });
 
+  it("keeps the saved subscription when n8n cannot supply a callback URL", async () => {
+    // Every registration would compare as mismatched against an undefined URL, so retiring one
+    // here would destroy a working subscription over a condition create() cannot recover from.
+    const { context, requests, staticData } = createHookContext({
+      staticData: { webhookId: "subscription-123" },
+      callbackUrl: undefined,
+    });
+    const trigger = new PostoraTrigger();
+
+    await expect(trigger.webhookMethods?.default?.checkExists.call(context as any)).resolves.toBe(true);
+    expect(requests).toEqual([]);
+    expect(staticData.webhookId).toBe("subscription-123");
+  });
+
   it("keeps the saved subscription when Postora is unreachable", async () => {
     const { context, staticData } = createHookContext({
       staticData: { webhookId: "subscription-123" },
