@@ -267,6 +267,7 @@ class Postora {
                     options: [
                         { name: "Account", value: "account" },
                         { name: "Media", value: "media" },
+                        { name: "Message", value: "message" },
                         { name: "Post", value: "post" },
                         { name: "Webhook", value: "webhook" },
                     ],
@@ -310,6 +311,19 @@ class Postora {
                     name: "operation",
                     type: "options",
                     noDataExpression: true,
+                    displayOptions: { show: { resource: ["message"] } },
+                    options: [
+                        { name: "Send", value: "send", description: "Send a message", action: "Send a message" },
+                        { name: "Reply", value: "reply", description: "Reply to an inbound message", action: "Reply to a message" },
+                    ],
+                    default: "reply",
+                },
+                // ── Webhook Operations ──
+                {
+                    displayName: "Operation",
+                    name: "operation",
+                    type: "options",
+                    noDataExpression: true,
                     displayOptions: { show: { resource: ["webhook"] } },
                     options: [
                         { name: "Register", value: "register", description: "Register a webhook", action: "Register a webhook" },
@@ -328,6 +342,78 @@ class Postora {
                     displayOptions: { show: { resource: ["account"] } },
                     options: [{ name: "List", value: "list", description: "List connected accounts", action: "List accounts" }],
                     default: "list",
+                },
+                // ═══════════════════════════════════
+                // Message → Send / Reply fields
+                // ═══════════════════════════════════
+                {
+                    displayName: "Platform",
+                    name: "messagePlatform",
+                    type: "options",
+                    options: [
+                        { name: "Auto-detect", value: "auto" },
+                        { name: "WhatsApp", value: "whatsapp" },
+                        { name: "Instagram", value: "instagram" },
+                        { name: "Facebook", value: "facebook" },
+                    ],
+                    default: "auto",
+                    displayOptions: { show: { resource: ["message"], operation: ["send", "reply"] } },
+                },
+                {
+                    displayName: "Social Account ID",
+                    name: "messageSocialAccountId",
+                    type: "string",
+                    default: "={{ $json.social_account_id }}",
+                    required: true,
+                    displayOptions: { show: { resource: ["message"], operation: ["send", "reply"] } },
+                },
+                {
+                    displayName: "Recipient ID / Phone",
+                    name: "messageRecipientId",
+                    type: "string",
+                    default: "={{ $json.sender.id || $json.sender.phone }}",
+                    required: true,
+                    displayOptions: { show: { resource: ["message"], operation: ["send", "reply"] } },
+                },
+                {
+                    displayName: "Message Text",
+                    name: "messageText",
+                    type: "string",
+                    typeOptions: { rows: 4 },
+                    default: "={{ $json.response }}",
+                    required: true,
+                    displayOptions: { show: { resource: ["message"], operation: ["send", "reply"] } },
+                },
+                {
+                    displayName: "Message Type",
+                    name: "messageType",
+                    type: "options",
+                    options: [
+                        { name: "Text", value: "text" },
+                        { name: "Media", value: "media" },
+                    ],
+                    default: "text",
+                    displayOptions: { show: { resource: ["message"], operation: ["send", "reply"] } },
+                },
+                {
+                    displayName: "Media URL",
+                    name: "messageMediaUrl",
+                    type: "string",
+                    default: "",
+                    displayOptions: { show: { resource: ["message"], operation: ["send", "reply"], messageType: ["media"] } },
+                },
+                {
+                    displayName: "Media Type",
+                    name: "messageMediaType",
+                    type: "options",
+                    options: [
+                        { name: "Image", value: "image" },
+                        { name: "Video", value: "video" },
+                        { name: "Audio", value: "audio" },
+                        { name: "Document", value: "document" },
+                    ],
+                    default: "image",
+                    displayOptions: { show: { resource: ["message"], operation: ["send", "reply"], messageType: ["media"] } },
                 },
                 // ═══════════════════════════════════
                 // Post → Create fields (reordered: Platform first)
@@ -967,6 +1053,32 @@ class Postora {
                     responseData = await this.helpers.httpRequestWithAuthentication.call(this, "postoraApi", {
                         method: "GET",
                         url: `${baseUrl}/api/v1/accounts`,
+                        json: true,
+                    });
+                }
+                // ── Message → Send / Reply ──
+                else if (resource === "message" && ["send", "reply"].includes(operation)) {
+                    const socialAccountId = requireParam(this.getNodeParameter("messageSocialAccountId", i, ""), "Social Account ID");
+                    const recipientId = requireParam(this.getNodeParameter("messageRecipientId", i, ""), "Recipient ID / Phone");
+                    const messageType = this.getNodeParameter("messageType", i, "text");
+                    const messageText = this.getNodeParameter("messageText", i, "");
+                    const messageBody = {
+                        social_account_id: socialAccountId,
+                        recipient_id: recipientId,
+                        message: messageText,
+                        message_type: messageType,
+                    };
+                    const platform = this.getNodeParameter("messagePlatform", i, "auto");
+                    if (platform !== "auto")
+                        messageBody.platform = platform;
+                    if (messageType === "media") {
+                        messageBody.media_url = requireParam(this.getNodeParameter("messageMediaUrl", i, ""), "Media URL");
+                        messageBody.media_type = this.getNodeParameter("messageMediaType", i, "image");
+                    }
+                    responseData = await this.helpers.httpRequestWithAuthentication.call(this, "postoraApi", {
+                        method: "POST",
+                        url: `${baseUrl}/api/v1/messages/reply`,
+                        body: messageBody,
                         json: true,
                     });
                 }
