@@ -186,7 +186,14 @@ export function useMessages(conversationId: string | null, socialAccountId: stri
 export function useSendMessage() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (params: { socialAccountId: string; conversationId: string; message: string; platform?: string; recipientPhone?: string }) => {
+    mutationFn: async (params: {
+      socialAccountId: string;
+      conversationId: string;
+      message: string;
+      platform?: string;
+      recipientPhone?: string;
+      recipientId?: string;
+    }) => {
       // WhatsApp uses a different action and requires recipient phone
       if (params.platform === "whatsapp" && params.recipientPhone) {
         return callMessagingApi("whatsapp_send_message", {
@@ -195,10 +202,13 @@ export function useSendMessage() {
           message: params.message,
         });
       }
+      // Instagram Login accounts cannot send to a conversation id, so the participant is
+      // passed along; the backend falls back to looking it up when an older client omits it.
       return callMessagingApi("send_message", {
         social_account_id: params.socialAccountId,
         conversation_id: params.conversationId,
         message: params.message,
+        recipient_id: params.recipientId,
       });
     },
     onSuccess: (_, vars) => {

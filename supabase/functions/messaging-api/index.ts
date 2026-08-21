@@ -131,7 +131,7 @@ Deno.serve(async (req) => {
     async function getAccountToken(socialAccountId: string) {
       const { data, error } = await adminClient
         .from("social_accounts")
-        .select("id, user_id, access_token, platform_user_id, platform_username, platform, ig_auth_type, account_metadata")
+        .select("id, user_id, access_token, platform_user_id, platform_username, platform, ig_auth_type, account_metadata, connection_mode")
         .eq("id", socialAccountId)
         .eq("user_id", user!.id)
         .single();
@@ -666,6 +666,19 @@ Deno.serve(async (req) => {
       return jsonResponse({ messages, paging: data.paging });
     }
 
+    // Older inbox clients call send_message without a recipient, having only ever needed the
+    // conversation id. Instagram Login cannot use that id to send, so the participant is
+    // recovered from the conversation rather than failing the reply.
+    async function resolveConversationRecipient(account: any, conversationId: string): Promise<string> {
+      const url = `${INSTAGRAM_GRAPH_API}/${conversationId}?fields=participants&access_token=${encodeURIComponent(account.access_token)}`;
+      const data = await graphFetch(url);
+      const participant = (data?.participants?.data || []).find(
+        (candidate: any) => candidate?.id !== account.platform_user_id && candidate?.username !== account.platform_username,
+      );
+      if (!participant?.id) throw new Error("Could not determine who to reply to in this conversation");
+      return participant.id;
+    }
+
     // ACTION: send_message
     if (action === "send_message") {
       const { social_account_id, conversation_id, message, recipient_id, use_human_agent_tag } = body;
@@ -686,6 +699,16 @@ Deno.serve(async (req) => {
           recipient: { id: recipient_id },
           messaging_type: "MESSAGE_TAG",
           tag: "HUMAN_AGENT",
+          message: { text: message },
+        };
+      } else if (isDirectInstagramAccount(account)) {
+        // graph.instagram.com has no conversation-reply shortcut. POSTing to the opaque
+        // conversation id there fails with "Object with ID 'aWdf...' does not exist", so an
+        // Instagram Login DM can only be answered through the Send API form -- the same one
+        // the webhook's auto-reply and send_media already use.
+        url = `${graphBase}/${pageId}/messages?access_token=${encodeURIComponent(pageToken)}`;
+        payload = {
+          recipient: { id: recipient_id || await resolveConversationRecipient(account, conversation_id) },
           message: { text: message },
         };
       } else {
@@ -734,6 +757,12 @@ Deno.serve(async (req) => {
       if (!social_account_id || !message_id) throw new Error("social_account_id and message_id required");
 
       const account = await getAccountToken(social_account_id);
+      // The inbox renders delete on every message, but this routes through Meta Graph.
+      // A Direct QR account has no Graph token, so without this the button fails with an
+      // opaque credentials error instead of saying the action is unavailable.
+      if (account.connection_mode === "evolution_qr") {
+        throw new Error("This action is not supported in Direct QR mode");
+      }
       const { graphBase, pageToken } = await getSendCredentials(adminClient, account);
       const url = `${graphBase}/${message_id}?access_token=${encodeURIComponent(pageToken)}`;
 
