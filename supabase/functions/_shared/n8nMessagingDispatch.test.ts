@@ -194,9 +194,16 @@ Deno.test("dispatchMessageEvent names the owner when nothing is subscribed", asy
   // The tenancy mismatch this warns about — a webhook registered by one user for an account
   // owned by another — used to need a database dump to spot, because an empty fan-out is
   // indistinguishable from a successful one in the logs.
+  //
+  // CodeRabbit review on PR #14: this runs for every inbound message, so a user with no
+  // webhooks at all would warn on each one. That normal case stays traceable at log level;
+  // only a user who HAS webhooks but matches none is warned about.
   const warnings: string[] = [];
+  const logs: string[] = [];
   const originalWarn = console.warn;
+  const originalLog = console.log;
   console.warn = (message: string) => { warnings.push(message); };
+  console.log = (message: string) => { logs.push(message); };
   try {
     let fetched = false;
     await dispatchMessageEvent(
@@ -206,8 +213,38 @@ Deno.test("dispatchMessageEvent names the owner when nothing is subscribed", asy
       { fetcher: (async () => { fetched = true; return new Response("{}"); }) as unknown as typeof fetch },
     );
     assertEquals(fetched, false);
-    assertEquals(warnings, [
+    assertEquals(warnings, []);
+    assertEquals(logs, [
       "[n8n-dispatch] no webhook destinations for user user-without-webhooks platform whatsapp",
+    ]);
+  } finally {
+    console.warn = originalWarn;
+    console.log = originalLog;
+  }
+});
+
+Deno.test("a webhook that exists but is not subscribed to this platform is warned about", async () => {
+  // The actionable half of the empty fan-out: destinations are configured, so the operator
+  // can fix the events list, the is_active flag, or the blank url.
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message: string) => { warnings.push(message); };
+  try {
+    await dispatchMessageEvent(
+      stubAdmin({
+        settings: [{
+          key: "n8n_webhook_user-1_a",
+          value: { webhook_url: "https://example.test/hook", is_active: true, events: ["message.facebook"] },
+        }],
+        legacy: [],
+        updates: [],
+      }),
+      "user-1",
+      messagePayload,
+      { fetcher: (async () => new Response("{}")) as unknown as typeof fetch },
+    );
+    assertEquals(warnings, [
+      "[n8n-dispatch] 1 webhook(s) configured for user user-1 but none subscribed to message.whatsapp",
     ]);
   } finally {
     console.warn = originalWarn;

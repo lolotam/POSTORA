@@ -11,12 +11,22 @@
  * timestamp itself rather than on the array order, which also keeps the pane
  * correct if it is ever served by an edge function older than this build.
  */
-export function sortMessagesForDisplay<T extends { created_time: string }>(
+export function sortMessagesForDisplay<T extends { created_time: string; id?: string }>(
   messages: readonly T[],
   platform?: string,
 ): T[] {
   if (platform !== "whatsapp") return [...messages].reverse();
-  return [...messages].sort(
-    (a, b) => new Date(a.created_time).getTime() - new Date(b.created_time).getTime(),
-  );
+  return [...messages].sort((a, b) => {
+    const byTime = new Date(a.created_time).getTime() - new Date(b.created_time).getTime();
+    if (byTime !== 0) return byTime;
+    // messaging-api breaks same-second ties on the row id, descending. Array.sort is
+    // stable, so leaving ties at 0 here would preserve that descending order and render
+    // a same-second run newest-first inside an otherwise oldest-first pane. The column is
+    // a uuid, which Postgres orders bytewise — equivalent to comparing the canonical
+    // string, so the same comparison reproduces the API order in ascending form.
+    const left = a.id ?? "";
+    const right = b.id ?? "";
+    if (left === right) return 0;
+    return left < right ? -1 : 1;
+  });
 }
