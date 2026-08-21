@@ -112,7 +112,13 @@ function conversationIdFor(account: EvolutionMessageAccount, remoteJid: string):
 }
 
 export function remoteNumberFor(remoteJid: string): string {
-  return remoteJid.replace(/\D/g, "") || remoteJid;
+  // Multi-device JIDs carry a ":<device>" component, e.g. "96597950350:12@s.whatsapp.net".
+  // Stripping every non-digit would splice that device number onto the subscriber number and
+  // yield "9659795035012" -- a different, fabricated phone number that then flows into both
+  // the conversation id and the dispatched sender payload. Take the local part first, the way
+  // ownerNumberFromJid already does for the account's own JID.
+  const local = remoteJid.split("@")[0].split(":")[0];
+  return local.replace(/\D/g, "") || remoteJid;
 }
 
 export function buildEvolutionMessageRow(
