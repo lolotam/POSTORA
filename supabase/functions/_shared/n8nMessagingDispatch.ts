@@ -81,6 +81,13 @@ export async function dispatchMessageEvent(
 ): Promise<void> {
   const destinations = await loadDestinations(adminClient, userId, payload.platform);
   const unique = dedupeDestinations(destinations);
+  // A webhook is registered against the API key owner, while dispatch is scoped to the
+  // account that received the message. When those are different users the fan-out is empty,
+  // and without this line that mismatch leaves no trace in the function logs at all.
+  if (unique.length === 0) {
+    console.warn(`[n8n-dispatch] no webhook destinations for user ${userId} platform ${payload.platform}`);
+    return;
+  }
   const deadline = Date.now() + (options.deadlineMs || DEFAULT_DEADLINE_MS);
   let nextIndex = 0;
   let skipped = 0;

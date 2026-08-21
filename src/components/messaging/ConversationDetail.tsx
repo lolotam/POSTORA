@@ -13,6 +13,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
 import { AiConversationModeSelect } from "./AiConversationModeSelect";
+import { sortMessagesForDisplay } from "@/lib/messageOrder";
 
 interface ConversationDetailProps {
   conversation: Conversation | null;
@@ -228,7 +229,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
     }
   };
 
-  const sortedMessages = [...messages].reverse();
+  const sortedMessages = sortMessagesForDisplay(messages, platform);
 
   return (
     <div className="flex flex-col h-full">

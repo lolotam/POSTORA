@@ -4,7 +4,7 @@ import { buildMessagePayload, dispatchMessageEvent } from "../_shared/n8nMessagi
 import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts";
 import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
 import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
-import { buildEvolutionMessageRow } from "../_shared/evolutionMessage.ts";
+import { buildEvolutionMessageRow, remoteNumberFor } from "../_shared/evolutionMessage.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 
@@ -98,7 +98,7 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
   const built = buildEvolutionMessageRow(account, message);
   if (!built) return false;
   const { conversationId, sentByOwner, row } = built;
-  const remoteJid = message.key.remoteJid;
+  const remoteNumber = remoteNumberFor(message.key.remoteJid);
 
   const { data: insertedRows, error: insertError } = await admin
     .from("whatsapp_messages")
@@ -129,7 +129,9 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
       platform: "whatsapp",
       socialAccountId: account.id,
       conversationId,
-      sender: { id: remoteJid, name: built.participantName, phone: remoteJid },
+      // The raw JID carries Evolution's "@s.whatsapp.net" suffix. Automations match on the
+      // same digits the Cloud path sends, so the suffix is stripped before it leaves Postora.
+      sender: { id: remoteNumber, name: built.participantName, phone: remoteNumber },
       message: {
         id: row.message_id as string,
         text: row.message_text as string,

@@ -190,6 +190,30 @@ Deno.test("a legacy row with no events column still receives every message", asy
   assertEquals(delivered, true);
 });
 
+Deno.test("dispatchMessageEvent names the owner when nothing is subscribed", async () => {
+  // The tenancy mismatch this warns about — a webhook registered by one user for an account
+  // owned by another — used to need a database dump to spot, because an empty fan-out is
+  // indistinguishable from a successful one in the logs.
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message: string) => { warnings.push(message); };
+  try {
+    let fetched = false;
+    await dispatchMessageEvent(
+      stubAdmin({ settings: [], legacy: [], updates: [] }),
+      "user-without-webhooks",
+      messagePayload,
+      { fetcher: (async () => { fetched = true; return new Response("{}"); }) as unknown as typeof fetch },
+    );
+    assertEquals(fetched, false);
+    assertEquals(warnings, [
+      "[n8n-dispatch] no webhook destinations for user user-without-webhooks platform whatsapp",
+    ]);
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
 Deno.test("dispatchMessageEvent rejects a missing admin client query result", async () => {
   await assertRejects(() => dispatchMessageEvent({} as any, "user-1", messagePayload));
 });
