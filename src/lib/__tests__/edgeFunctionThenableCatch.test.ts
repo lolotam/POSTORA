@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { it } from "vitest";
+import { expect, it } from "vitest";
 
 // Regression guard for the 2026-08-21 reset-password 500. PostgREST query
 // builders (`.rpc()`, `.from().select()`, ...) are `PromiseLike` — they expose
@@ -12,8 +12,10 @@ import { it } from "vitest";
 // Use `try { await builder } catch {}` instead.
 
 const FUNCTIONS_DIR = "supabase/functions";
+// The optional `<...>` matches TypeScript type arguments, e.g.
+// `.rpc<"cleanup_expired_otps">(...)`, which the builder methods accept.
 const BUILDER_CATCH =
-  /\.(?:rpc|select|insert|update|upsert|delete|maybeSingle|single)\s*\([^;]*?\)\s*\.catch\s*\(/s;
+  /\.(?:rpc|select|insert|update|upsert|delete|maybeSingle|single)\s*(?:<[^>()]*>)?\s*\([^;]*?\)\s*\.catch\s*\(/s;
 
 function collectFunctionSources(dir: string): string[] {
   const absolute = path.resolve(process.cwd(), dir);
@@ -36,4 +38,15 @@ it("no edge function calls .catch() on a PostgREST builder", () => {
       `PostgREST builders are PromiseLike and have no .catch(); wrap in try/await instead. Offenders:\n${offenders.join("\n")}`,
     );
   }
+});
+
+it.each([
+  ['admin.rpc("cleanup_expired_otps").catch(() => undefined)'],
+  ['admin.rpc<"cleanup_expired_otps">("cleanup_expired_otps").catch(() => undefined)'],
+])("the guard pattern recognises %s", (source) => {
+  expect(BUILDER_CATCH.test(source)).toBe(true);
+});
+
+it("the guard pattern ignores a correctly awaited builder", () => {
+  expect(BUILDER_CATCH.test('await admin.rpc("cleanup_expired_otps");')).toBe(false);
 });

@@ -200,9 +200,15 @@ serve(async (req) => {
     // former `.catch(...)` threw a synchronous TypeError and turned every
     // successful reset into a 500.
     try {
-      await admin.rpc("cleanup_expired_otps");
-    } catch (cleanupError) {
-      console.error("verify-reset-otp: cleanup_expired_otps failed (ignored):", cleanupError);
+      // PostgREST resolves with `{ data, error }` rather than rejecting, so a
+      // SQL-level failure only shows up in `error`; the catch covers transport
+      // failures. Either way the reset itself already succeeded.
+      const { error: cleanupError } = await admin.rpc("cleanup_expired_otps");
+      if (cleanupError) {
+        console.error("verify-reset-otp: cleanup_expired_otps failed (ignored):", cleanupError.message);
+      }
+    } catch (cleanupThrow) {
+      console.error("verify-reset-otp: cleanup_expired_otps threw (ignored):", cleanupThrow);
     }
 
     return jsonResponse(
