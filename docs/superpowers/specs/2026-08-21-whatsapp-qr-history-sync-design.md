@@ -60,7 +60,7 @@ feature brief and MUST be honoured by the implementation.
 | `POST /chat/findChats/{instance}` | returns a plain array; 0.20s |
 | `POST /chat/findMessages/{instance}` | returns `{messages:{total,pages,currentPage,records}}` - **not** an array; 0.10s |
 | `findMessages` `limit` parameter | **ignored** - 110 messages came back as 3 pages of ~40 |
-| `POST /contact/findContacts/{instance}` | returns a plain array; 7148 entries, 7146 with `pushName` |
+| `POST /chat/findContacts/{instance}` | returns a plain array; 7148 entries, 7146 with `pushName` |
 | Chat JID mix (332 total) | 307 `@s.whatsapp.net`, 13 `@lid`, 12 `@g.us` |
 | Participant names in `findChats` | **zero** - `pushName` is null on all 307 direct chats |
 | `lastMessage.pushName` on inbound | the phone number repeated as a string, not a name |
@@ -262,3 +262,69 @@ one.
 - Group (`@g.us`) and privacy (`@lid`) chats remain unsupported.
 - `isInboundMessage` keeps its name this round; renaming it to an eligibility predicate is
   a follow-up so the bug-fix diff stays reviewable.
+
+---
+
+# Revision after the Codex commit review and live verification (2026-08-21)
+
+The implementation was exercised end to end against the live instance before merge. That run
+found four defects no review had caught, and the Codex commit review found five more. Both
+sets are fixed below.
+
+## Found by running it
+
+1. **`/contact/findContacts` answers 404.** The route is `/chat/findContacts` on v2.3.7.
+   The table above has been corrected.
+2. **The PostgREST `or()` lease filter never matched.** An ISO timestamp contains a `.`, and
+   PostgREST splits an `or()` filter on that character, so the compare-and-set failed with
+   42703. The claim moved into `claim_whatsapp_history_sync`, a single SQL
+   `UPDATE ... WHERE` that is atomic without any filter encoding.
+3. **The lease was never released on failure.** A sweep that threw left `sync_started_at` set
+   for its whole window, and because a held lease returns early and silently, every retry in
+   that window reported success while doing nothing. Released in a `finally` now.
+4. **Duplicate message ids inside one page.** Evolution can return the same id twice, and
+   Postgres rejects an `ON CONFLICT` statement that touches a row twice (SQLSTATE 21000),
+   failing the whole batch. This cost 247 of 307 chats their messages until the rows were
+   deduplicated before the write.
+
+## Found by the Codex commit review
+
+5. **Contact lookup was scoped by workspace while the uniqueness key spans workspaces.**
+   `whatsapp_contacts` is unique on `(user_id, phone_number)`, so a contact the same user
+   holds in another workspace was invisible to the check and would have been moved and
+   renamed.
+6. **The "don't overwrite newer live state" guard was a read-then-write race.** A webhook
+   could advance a conversation between the read and the write.
+7. **Merging message rows erased live data.** `buildEvolutionMessageRow` always writes
+   `media_url: null`, while an outbound media send stores a real URL, so a later sweep would
+   have wiped attachment links.
+8. **Auto-import had no second attempt.** The QR screen stops polling shortly after `open`,
+   so a sweep that ran before Baileys finished loading history was never retried.
+9. **Dispatching to n8n after a failed inbox write risks double execution.** Meta retries a
+   failed delivery, and the insert is what makes dispatch at-most-once.
+
+## What changed as a result
+
+Findings 5, 6 and 7 shared one cause -- conflict rules expressed as read-then-write in the
+edge function -- and are now three SQL functions (`import_whatsapp_conversations`,
+`import_whatsapp_contacts`, `import_whatsapp_messages`) that state each rule directly on the
+conflict: a conversation only advances when the incoming record is newer, a contact is only
+renamed when the stored name is absent or is just the phone number, and a message row is only
+ever rebound to its account, never overwritten.
+
+Finding 8 is addressed by triggering the import from the connection webhook as well as the
+poller. Finding 9 is accepted: dispatch is tied to a successful insert again, and the failure
+is logged rather than silently swallowed.
+
+## Measured result of a full run
+
+    chatsDiscovered 332, chatsImported 307, chatsSkipped 25, messagesWritten 457, chatFailures 0
+
+307 conversations, 451 stored messages, 161 contacts, 159 conversations resolved to a real
+name. All 307 conversation ids match `wa_<owner>_<digits>`, and both directions are present
+(265 inbound, 186 outbound), confirming the `fromMe` fix on imported history.
+
+**The "roughly 12,000 messages" estimate earlier in this document was wrong.** It came from
+extrapolating the one chat that had 110 messages. Evolution holds about two messages for most
+chats, so the real total is ~450. Nothing is being dropped -- that is the entire history
+Baileys pulled off the phone, and deeper history is not available through this path.

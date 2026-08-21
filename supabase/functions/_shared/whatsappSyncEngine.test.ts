@@ -15,23 +15,15 @@ interface Write {
 
 // Stands in for the Supabase client. The database is a system boundary, so the assertions
 // below are on the rows the sweep would write, not on how the client was called.
-function fakeAdmin(seed: Record<string, any[]> = {}) {
+function fakeAdmin() {
   const writes: Write[] = [];
-  const from = (table: string) => {
-    const chain: any = {
-      select: () => chain,
-      eq: () => chain,
-      in: () => chain,
-      then: (resolve: (value: unknown) => void) => resolve({ data: seed[table] ?? [], error: null }),
-      upsert: (rows: any[]) => {
-        writes.push({ table, rows });
-        return Promise.resolve({ error: null });
-      },
-      update: () => chain,
-    };
-    return chain;
+  return {
+    writes,
+    rpc: (fn: string, args: { p_rows: any[] }) => {
+      writes.push({ table: fn, rows: args.p_rows });
+      return Promise.resolve({ data: args.p_rows.length, error: null });
+    },
   };
-  return { writes, from };
 }
 
 function chat(remoteJid: string, extra: Record<string, unknown> = {}) {
@@ -85,7 +77,7 @@ Deno.test("only chats that can be replied to are imported", async () => {
   assertEquals(outcome.chatsDiscovered, 3);
   assertEquals(outcome.chatsImported, 1);
   assertEquals(outcome.chatsSkipped, 2);
-  assertEquals(rowsFor(admin, "messaging_cache")[0].conversation_id, "wa_96597950350_96555683677");
+  assertEquals(rowsFor(admin, "import_whatsapp_conversations")[0].conversation_id, "wa_96597950350_96555683677");
 });
 
 Deno.test("participant names come from the contact book, not the chat list", async () => {
@@ -105,68 +97,11 @@ Deno.test("participant names come from the contact book, not the chat list", asy
     instanceName: "postora_acc-1",
   });
 
-  const cache = rowsFor(admin, "messaging_cache");
+  const cache = rowsFor(admin, "import_whatsapp_conversations");
   assertEquals(cache.find((r) => r.conversation_id.endsWith("96560000096")).participant_name, "Abu Tork");
   assertEquals(cache.find((r) => r.conversation_id.endsWith("96555683677")).participant_name, "96555683677");
   // Only the genuinely named contact is worth writing to the CRM.
-  assertEquals(rowsFor(admin, "whatsapp_contacts").map((r) => r.display_name), ["Abu Tork"]);
-});
-
-Deno.test("a sweep never clears unread messages that arrived after linking", async () => {
-  // Evolution reports unreadCount 0 for every chat, so adopting its value on a
-  // conversation Postora already tracks would wipe real unread state.
-  const admin = fakeAdmin({
-    messaging_cache: [{
-      conversation_id: "wa_96597950350_96555683677",
-      unread_count: 4,
-      last_message_at: "2020-01-01T00:00:00.000Z",
-      participant_name: "Abu Tork",
-    }],
-  });
-  await syncEvolutionHistory({
-    admin,
-    api: fakeApi({ chats: [chat("96555683677@s.whatsapp.net")] }),
-    account: ACCOUNT,
-    instanceName: "postora_acc-1",
-  });
-
-  assertEquals(rowsFor(admin, "messaging_cache")[0].unread_count, 4);
-});
-
-Deno.test("older history does not overwrite what the live webhook already wrote", async () => {
-  const admin = fakeAdmin({
-    messaging_cache: [{
-      conversation_id: "wa_96597950350_96555683677",
-      unread_count: 1,
-      last_message_at: "2099-01-01T00:00:00.000Z",
-      participant_name: "Abu Tork",
-    }],
-  });
-  await syncEvolutionHistory({
-    admin,
-    api: fakeApi({ chats: [chat("96555683677@s.whatsapp.net")] }),
-    account: ACCOUNT,
-    instanceName: "postora_acc-1",
-  });
-
-  assertEquals(rowsFor(admin, "messaging_cache"), []);
-});
-
-Deno.test("a name the user edited in the CRM outranks the one WhatsApp reports", async () => {
-  const admin = fakeAdmin({
-    whatsapp_contacts: [{ phone_number: "96560000096", display_name: "Best Customer" }],
-  });
-  await syncEvolutionHistory({
-    admin,
-    api: fakeApi({
-      chats: [chat("96560000096@s.whatsapp.net")],
-      contacts: [{ remoteJid: "96560000096@s.whatsapp.net", pushName: "Abu Tork" }],
-    }),
-    account: ACCOUNT,
-    instanceName: "postora_acc-1",
-  });
-
-  assertEquals(rowsFor(admin, "whatsapp_contacts"), []);
+  assertEquals(rowsFor(admin, "import_whatsapp_contacts").map((r) => r.display_name), ["Abu Tork"]);
 });
 
 Deno.test("one unreachable chat does not abandon the rest of the sweep", async () => {
@@ -212,9 +147,33 @@ Deno.test("imported messages carry the same shape the live webhook writes", asyn
     instanceName: "postora_acc-1",
   });
 
-  const message = rowsFor(admin, "whatsapp_messages")[0];
+  const message = rowsFor(admin, "import_whatsapp_messages")[0];
   assertEquals(message.from_phone, "96597950350");
   assertEquals(message.to_phone, "96555683677");
   assertEquals(message.direction, "outbound");
   assertEquals(message.conversation_id, "wa_96597950350_96555683677");
+});
+
+Deno.test("a page that repeats a message id is written once", async () => {
+  // 2026-08-21 incident: Evolution returned duplicate ids within a single page and Postgres
+  // rejected the whole batch with SQLSTATE 21000 ("ON CONFLICT DO UPDATE command cannot
+  // affect row a second time"), which cost 247 of 307 chats their messages.
+  const admin = fakeAdmin();
+  const duplicated = {
+    key: { id: "SAME", fromMe: false, remoteJid: "96555683677@s.whatsapp.net" },
+    message: { conversation: "hello" },
+    messageTimestamp: 1787268633,
+  };
+  const outcome = await syncEvolutionHistory({
+    admin,
+    api: fakeApi({
+      chats: [chat("96555683677@s.whatsapp.net")],
+      messages: { "96555683677@s.whatsapp.net": [duplicated, duplicated, { ...duplicated, key: { ...duplicated.key, id: "OTHER" } }] },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+
+  assertEquals(outcome.messagesWritten, 2);
+  assertEquals(rowsFor(admin, "import_whatsapp_messages").map((r) => r.message_id).sort(), ["OTHER", "SAME"]);
 });

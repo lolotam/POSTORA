@@ -149,8 +149,9 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
       return Array.isArray(payload) ? payload : [];
     },
     // findChats reports no participant names at all, so this is the only source for them.
+    // The route lives under /chat, not /contact -- the latter answers 404 on v2.3.7.
     findContacts: async (instanceName) => {
-      const payload = await request(`/contact/findContacts/${encodeURIComponent(instanceName)}`, {
+      const payload = await request(`/chat/findContacts/${encodeURIComponent(instanceName)}`, {
         method: "POST",
         body: JSON.stringify({}),
       });

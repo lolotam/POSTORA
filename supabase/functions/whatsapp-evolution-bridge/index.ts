@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedErrorResponse, restrictedJsonResponse } from "../_shared/cors.ts";
 import { createEvolutionApi, type EvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
 import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
-import { syncEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
+import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { runInBackground } from "../_shared/background.ts";
 
 const EVOLUTION_EVENTS: EvolutionEvent[] = [
@@ -240,40 +240,8 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
   }
 }
 
-// Three paths can decide to import history -- this poller, the connection webhook and the
-// manual button -- so the sweep is claimed before it runs. The update only matches a row
-// whose lease is absent or stale, and Postgres re-checks that predicate after taking the
-// row lock, so a second caller updates nothing and backs off.
-const SYNC_LEASE_MS = 5 * 60_000;
-
-async function claimHistorySync(admin: any, socialAccountId: string): Promise<boolean> {
-  const staleBefore = new Date(Date.now() - SYNC_LEASE_MS).toISOString();
-  const { data, error } = await admin
-    .from("whatsapp_evolution_instances")
-    .update({ sync_started_at: new Date().toISOString() })
-    .eq("social_account_id", socialAccountId)
-    .or(`sync_started_at.is.null,sync_started_at.lt.${staleBefore}`)
-    .select("social_account_id");
-  if (error) throw error;
-  return (data?.length || 0) > 0;
-}
-
-async function importHistory(admin: any, account: any, instanceName: string): Promise<void> {
-  if (!account.workspace_id) return;
-  if (!(await claimHistorySync(admin, account.id))) return;
-  const outcome = await syncEvolutionHistory({
-    admin,
-    api: createEvolutionApi(),
-    account,
-    instanceName,
-  });
-  console.log(`[whatsapp-sync] ${instanceName}: ${JSON.stringify(outcome)}`);
-  // Only a sweep that found something counts as done. Baileys may still be pulling history
-  // off the phone right after linking, and stamping an empty run as complete would make
-  // the inbox look permanently empty until someone pressed the button.
-  const completion: Record<string, unknown> = { sync_started_at: null };
-  if (outcome.chatsImported > 0) completion.last_sync_at = new Date().toISOString();
-  await admin.from("whatsapp_evolution_instances").update(completion).eq("social_account_id", account.id);
+function importHistory(admin: any, account: any, instanceName: string): Promise<void> {
+  return importEvolutionHistory({ admin, api: createEvolutionApi(), account, instanceName });
 }
 
 // Auto-import runs until one sweep succeeds and then stops, so the 2s status poll does not

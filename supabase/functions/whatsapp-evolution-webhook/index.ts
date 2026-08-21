@@ -5,6 +5,8 @@ import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts"
 import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
 import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
 import { buildEvolutionMessageRow } from "../_shared/evolutionMessage.ts";
+import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
+import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -23,6 +25,7 @@ interface EvolutionInstance {
   social_account_id: string;
   instance_name: string;
   jwt_key: string;
+  last_sync_at: string | null;
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -39,7 +42,7 @@ function messageItems(body: any): any[] {
 async function findInstance(admin: any, instanceName: string): Promise<EvolutionInstance | null> {
   const { data, error } = await admin
     .from("whatsapp_evolution_instances")
-    .select("social_account_id, instance_name, jwt_key")
+    .select("social_account_id, instance_name, jwt_key, last_sync_at")
     .eq("instance_name", instanceName)
     .maybeSingle();
   if (error) throw error;
@@ -139,7 +142,12 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
   return true;
 }
 
-async function handleConnectionUpdate(admin: any, account: EvolutionAccount, data: any): Promise<void> {
+async function handleConnectionUpdate(
+  admin: any,
+  account: EvolutionAccount,
+  instance: EvolutionInstance,
+  data: any,
+): Promise<void> {
   const state = String(data?.state || data?.connection || data?.status || "").toLowerCase();
   if (!state) return;
   await admin.from("whatsapp_evolution_instances")
@@ -147,6 +155,19 @@ async function handleConnectionUpdate(admin: any, account: EvolutionAccount, dat
     .eq("social_account_id", account.id);
 
   await syncEvolutionAccountConnection(admin, account, state, data);
+
+  // Evolution reports "open" more than once while a session settles, and the QR screen stops
+  // polling shortly after the first one. Importing from here too gives the sweep a later
+  // attempt, which matters because Baileys may still be pulling history off the phone when
+  // the connection first opens. The lease and last_sync_at keep it to one real run.
+  if (state === "open" && !instance.last_sync_at) {
+    await runInBackground("whatsapp history sync", () => importEvolutionHistory({
+      admin,
+      api: createEvolutionApi(),
+      account: { ...account, platform_user_id: account.platform_user_id },
+      instanceName: instance.instance_name,
+    }));
+  }
 }
 
 async function handleQrUpdate(admin: any, socialAccountId: string, data: any): Promise<void> {
@@ -193,7 +214,7 @@ Deno.serve(async (req) => {
     if (event === "MESSAGES_UPSERT") {
       for (const message of messageItems(body)) await persistEvolutionMessage(admin, account, message);
     } else if (event === "CONNECTION_UPDATE") {
-      await handleConnectionUpdate(admin, account, body.data);
+      await handleConnectionUpdate(admin, account, instance, body.data);
     } else if (event === "QRCODE_UPDATED") {
       await handleQrUpdate(admin, account.id, body.data);
     }
