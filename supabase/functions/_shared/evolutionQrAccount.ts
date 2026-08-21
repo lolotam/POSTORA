@@ -22,6 +22,16 @@ function extractProfileName(source: any): string | null {
   return typeof name === "string" && name.length > 0 ? name : null;
 }
 
+// Every other connection mode stores platform_user_id as digits, and the inbox reads
+// that form back to build conversation ids, resolve the reply recipient and decide
+// which bubbles are ours. Evolution reports "<number>[:<device>]@s.whatsapp.net", so
+// the number is extracted rather than the JID stored verbatim. Anything that is not a
+// plain number is rejected instead of being trimmed into a plausible-looking one.
+function ownerNumberFromJid(jid: string): string | null {
+  const local = jid.split("@")[0].split(":")[0];
+  return /^\d{5,}$/.test(local) ? local : null;
+}
+
 export async function syncEvolutionAccountConnection(
   admin: any,
   account: EvolutionQrAccount,
@@ -37,8 +47,9 @@ export async function syncEvolutionAccountConnection(
 
   const updates: Record<string, unknown> = { is_active: true };
   const ownerJid = extractOwnerJid(identity);
-  if (ownerJid && account.platform_user_id.startsWith("pending_")) {
-    updates.platform_user_id = ownerJid;
+  const ownerNumber = ownerJid ? ownerNumberFromJid(ownerJid) : null;
+  if (ownerNumber && account.platform_user_id.startsWith("pending_")) {
+    updates.platform_user_id = ownerNumber;
   }
   const profileName = extractProfileName(identity);
   if (profileName) updates.platform_username = profileName;

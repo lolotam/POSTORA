@@ -44,9 +44,31 @@ Deno.test("a linked session names the account from whichever identity source rep
       assertEquals(admin.updates[0].id, "acc-1");
       assertEquals(admin.updates[0].values, {
         is_active: true,
-        platform_user_id: "96597950350@s.whatsapp.net",
+        platform_user_id: "96597950350",
         platform_username: "Xsellpoint",
       });
+    });
+  }
+});
+
+Deno.test("the linked JID is stored as the bare number the inbox expects", async (t) => {
+  // 2026-08-21 incident: storing the raw JID broke participantPhone() in messaging-api,
+  // so replies from the conversation dialog were addressed to the whole conversation id.
+  // Every other connection mode stores digits, and the inbox reads that form back.
+  const cases: Array<[string, string, string | undefined]> = [
+    ["plain jid", "96597950350@s.whatsapp.net", "96597950350"],
+    ["device-suffixed jid", "96597950350:12@s.whatsapp.net", "96597950350"],
+    ["bare number", "96597950350", "96597950350"],
+    ["group jid", "120363301653814403@g.us", "120363301653814403"],
+    ["non-numeric jid", "not-a-number@s.whatsapp.net", undefined],
+    ["empty local part", "@s.whatsapp.net", undefined],
+  ];
+
+  for (const [label, ownerJid, expected] of cases) {
+    await t.step(label, async () => {
+      const admin = recordingAdmin();
+      await syncEvolutionAccountConnection(admin, PENDING, "open", { ownerJid });
+      assertEquals(admin.updates[0].values.platform_user_id, expected);
     });
   }
 });
@@ -54,7 +76,7 @@ Deno.test("a linked session names the account from whichever identity source rep
 Deno.test("an already-identified account keeps its number when it reconnects", async () => {
   // The poller re-runs every 2s, so activation must never overwrite a resolved number.
   const admin = recordingAdmin();
-  const connected = { id: "acc-2", platform_user_id: "96597950350@s.whatsapp.net" };
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
   await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" });
   assertEquals(admin.updates[0].values, { is_active: true });
 });
