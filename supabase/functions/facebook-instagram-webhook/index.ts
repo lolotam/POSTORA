@@ -165,12 +165,15 @@ Deno.serve(async (req) => {
             payload: event,
           });
 
-          // A failed inbox write must not also cost the user their automation. Only a
-          // genuine duplicate is skipped -- that one has already been dispatched.
+          // Dispatch stays tied to a successful insert, which is what makes the insert an
+          // idempotency claim: Meta retries a failed delivery, and dispatching on error too
+          // would run the user's workflow again when that retry finally persists. The
+          // failure is logged instead, because it was previously indistinguishable from a
+          // message that simply had nothing to dispatch.
           if (inboxResult === "error") {
-            console.error(`[fb-ig-webhook] Inbox persist failed for ${platform}; dispatching anyway`);
+            console.error(`[fb-ig-webhook] Inbox persist failed for ${platform}; automation not dispatched`);
           }
-          if (inboxResult !== "duplicate") {
+          if (inboxResult === "inserted") {
             await runInBackground("facebook-instagram message dispatch", () => dispatchMessageEvent(
               adminClient,
               account.user_id,
