@@ -20,23 +20,24 @@ const NOW = new Date(2026, 7, 19, 14, 30);
 interface StubOptions {
   rules?: Array<Record<string, unknown>>;
   rulesError?: string;
-  awayUsageCount?: number;
+  // Conversation-id prefixes that already have an away reply logged today. The stub honours
+  // the LIKE pattern the pipeline actually sends, so a query scoped to the wrong post (or to
+  // the whole account) changes the outcome rather than merely reading differently.
+  priorAwayReplyPrefixes?: string[];
 }
 
-// Records every table read and write so tests can assert on the side effects the pipeline is
-// responsible for, without standing up Postgres.
 function stubAdmin(options: StubOptions = {}) {
   const inserts: Array<{ table: string; row: Record<string, unknown> }> = [];
-  const likeFilters: string[] = [];
 
   const client = {
     from(table: string) {
+      let likePattern = "";
       const builder: Record<string, unknown> = {
         select: () => builder,
         eq: () => builder,
         gte: () => builder,
         like: (_column: string, pattern: string) => {
-          likeFilters.push(pattern);
+          likePattern = pattern;
           return builder;
         },
         order: () => builder,
@@ -48,14 +49,14 @@ function stubAdmin(options: StubOptions = {}) {
           resolve(
             table === "messenger_auto_replies"
               ? { data: options.rules || [], error: options.rulesError ? { message: options.rulesError } : null }
-              : { count: options.awayUsageCount ?? 0, error: null },
+              : { count: (options.priorAwayReplyPrefixes || []).filter((p) => p === likePattern).length, error: null },
           ),
       };
       return builder;
     },
   };
 
-  return { client, inserts, likeFilters };
+  return { client, inserts };
 }
 
 function keywordRule(overrides: Record<string, unknown> = {}) {
@@ -120,45 +121,46 @@ Deno.test("an unmatched comment is handed to the AI agent with its comment id", 
   assertEquals(inserts.length, 0);
 });
 
-Deno.test("the agent conversation id is scoped to this post and this commenter", async () => {
-  const { client } = stubAdmin({ rules: [] });
-  const calls: Array<{ url: string; body: unknown }> = [];
+// The agent thread is what carries reply history into the next public reply, so a wrong key
+// either loses continuity or leaks one post's conversation into another post's audience.
+Deno.test("agent threads are keyed by post and commenter, with platform-specific fallbacks", async () => {
+  const cases: Array<{ name: string; platform: string; input: typeof INPUT; expected: string }> = [
+    { name: "Meta comment", platform: "facebook", input: INPUT, expected: `${ACCOUNT.id}:comment:p1:a1` },
+    {
+      name: "Threads reply, which carries a handle but no author id",
+      platform: "threads",
+      input: { ...INPUT, author: { id: null, username: "fan" } },
+      expected: `${ACCOUNT.id}:comment:p1:fan`,
+    },
+    {
+      name: "Threads mention, which has no root post",
+      platform: "threads",
+      input: { ...INPUT, post: { id: null } },
+      expected: `${ACCOUNT.id}:comment:c1:a1`,
+    },
+    {
+      name: "anonymous event with neither a post nor an author",
+      platform: "facebook",
+      input: { ...INPUT, post: { id: null }, author: { id: null, username: null } },
+      expected: `${ACCOUNT.id}:comment:c1:c1`,
+    },
+  ];
 
-  await handleCommentInternally(client, ACCOUNT, INPUT, { fetcher: stubFetch(calls), now: NOW });
-
-  assertEquals((calls[0].body as Record<string, string>).conversation_id, `${ACCOUNT.id}:comment:p1:a1`);
-});
-
-Deno.test("a Threads reply with no author id falls back to the handle for continuity", async () => {
-  const { client } = stubAdmin({ rules: [] });
-  const calls: Array<{ url: string; body: unknown }> = [];
-
-  await handleCommentInternally(
-    client,
-    { ...ACCOUNT, platform: "threads" },
-    { ...INPUT, author: { id: null, username: "fan" } },
-    { fetcher: stubFetch(calls), now: NOW },
-  );
-
-  assertEquals((calls[0].body as Record<string, string>).conversation_id, `${ACCOUNT.id}:comment:p1:fan`);
-});
-
-Deno.test("a mention with no root post keys the thread by the mention itself", async () => {
-  const { client } = stubAdmin({ rules: [] });
-  const calls: Array<{ url: string; body: unknown }> = [];
-
-  await handleCommentInternally(client, ACCOUNT, { ...INPUT, post: { id: null } }, {
-    fetcher: stubFetch(calls),
-    now: NOW,
-  });
-
-  assertEquals((calls[0].body as Record<string, string>).conversation_id, `${ACCOUNT.id}:comment:c1:a1`);
+  for (const { name, platform, input, expected } of cases) {
+    const { client } = stubAdmin({ rules: [] });
+    const calls: Array<{ url: string; body: unknown }> = [];
+    await handleCommentInternally(client, { ...ACCOUNT, platform }, input, {
+      fetcher: stubFetch(calls),
+      now: NOW,
+    });
+    assertEquals((calls[0].body as Record<string, string>).conversation_id, expected, name);
+  }
 });
 
 Deno.test("an away rule that already answered on this post today does not answer again", async () => {
-  const { client, likeFilters } = stubAdmin({
+  const { client } = stubAdmin({
     rules: [keywordRule({ id: "rule-away", rule_type: "away", keywords: null })],
-    awayUsageCount: 1,
+    priorAwayReplyPrefixes: [`${ACCOUNT.id}:comment:p1:%`],
   });
   const calls: Array<{ url: string; body: unknown }> = [];
 
@@ -169,13 +171,14 @@ Deno.test("an away rule that already answered on this post today does not answer
 
   assertEquals(outcome, "rule_suppressed");
   assertEquals(calls.length, 0);
-  assertEquals(likeFilters, [`${ACCOUNT.id}:comment:p1:%`]);
 });
 
-Deno.test("an away rule with no prior reply on the post does answer", async () => {
+Deno.test("an away reply on a different post does not suppress this one", async () => {
+  // The guard is per post, not per account: one busy post must not silence the away notice
+  // everywhere else.
   const { client } = stubAdmin({
     rules: [keywordRule({ id: "rule-away", rule_type: "away", keywords: null })],
-    awayUsageCount: 0,
+    priorAwayReplyPrefixes: [`${ACCOUNT.id}:comment:some-other-post:%`],
   });
   const calls: Array<{ url: string; body: unknown }> = [];
 
@@ -183,6 +186,7 @@ Deno.test("an away rule with no prior reply on the post does answer", async () =
     await handleCommentInternally(client, ACCOUNT, INPUT, { fetcher: stubFetch(calls), now: NOW }),
     "rule_replied",
   );
+  assertStringIncludes(calls[0].url, "/c1/replies");
 });
 
 Deno.test("a rule reply the platform rejects still claims the comment", async () => {

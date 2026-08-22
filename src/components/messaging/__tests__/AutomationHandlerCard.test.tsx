@@ -47,19 +47,10 @@ describe("AutomationHandlerCard", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("offers the Postora AI Agent for comments as a selectable option", async () => {
-    // It shipped disabled with a "Coming in a later update" hint until the agent could
-    // actually answer public comments; enabling it is the user-facing half of that feature.
-    render(<AutomationHandlerCard platform="instagram" />);
-
-    fireEvent.keyDown(screen.getByTestId("comments-handler"), { key: "Enter" });
-    const option = await screen.findByRole("option", { name: "Postora AI Agent" });
-
-    expect(option).not.toHaveAttribute("data-disabled");
-    expect(screen.queryByText(/Coming in a later update/)).not.toBeInTheDocument();
-  });
-
-  it("saves the internal handler against the comments field when it is chosen", async () => {
+  it("lets the Postora AI Agent be chosen for comments and saves it", async () => {
+    // The option shipped disabled behind a "Coming in a later update" hint until the agent
+    // could actually answer public comments. Choosing it has to reach the comments field, not
+    // the messages one -- swapping those would silently retarget the account's DM automation.
     render(<AutomationHandlerCard platform="instagram" />);
 
     fireEvent.keyDown(screen.getByTestId("comments-handler"), { key: "Enter" });

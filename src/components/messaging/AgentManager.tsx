@@ -180,55 +180,55 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManage
                 </Dialog>
               )}
               {supportsAssignment(platform) ? (
-              <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
-                <DialogTrigger asChild>
-                  <Button size="sm">
-                    <ArrowRightLeft className="w-4 h-4 mr-1" />
-                    Assign
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Assign Conversation</DialogTitle>
-                    <DialogDescription>Select a conversation and agent to assign.</DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-3">
-                    <Select value={selectedConversation} onValueChange={setSelectedConversation}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select conversation" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {conversations.map((c) => (
-                          <SelectItem key={c.id} value={conversationKey(c)}>
-                            {c.participant_name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select agent" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {agents.filter((a) => a.status !== "offline").map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            <div className="flex items-center gap-2">
-                              <Circle className={`w-2 h-2 fill-current ${statusColors[a.status]}`} />
-                              {a.display_name}
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <DialogFooter>
-                    <Button onClick={handleAssign} disabled={assignConversation.isPending || !selectedConversation || !selectedAgent}>
-                      {assignConversation.isPending && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
+                <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
+                  <DialogTrigger asChild>
+                    <Button size="sm">
+                      <ArrowRightLeft className="w-4 h-4 mr-1" />
                       Assign
                     </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Assign Conversation</DialogTitle>
+                      <DialogDescription>Select a conversation and agent to assign.</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                      <Select value={selectedConversation} onValueChange={setSelectedConversation}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select conversation" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {conversations.map((c) => (
+                            <SelectItem key={c.id} value={conversationKey(c)}>
+                              {c.participant_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={selectedAgent} onValueChange={setSelectedAgent}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select agent" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {agents.filter((a) => a.status !== "offline").map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              <div className="flex items-center gap-2">
+                                <Circle className={`w-2 h-2 fill-current ${statusColors[a.status]}`} />
+                                {a.display_name}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <DialogFooter>
+                      <Button onClick={handleAssign} disabled={assignConversation.isPending || !selectedConversation || !selectedAgent}>
+                        {assignConversation.isPending && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
+                        Assign
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               ) : (
                 <span className="text-xs text-muted-foreground max-w-[18rem] text-right">
                   Threads has no direct messages, so there are no conversations to assign. Agent

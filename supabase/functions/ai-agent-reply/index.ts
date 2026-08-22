@@ -160,26 +160,19 @@ async function isCooldownActive(admin: any, threadId: string, cooldownSeconds: n
 // same post. Five hundred different people commenting once each would be five hundred model
 // calls and five hundred public replies with the cap never reached. Counting every comment
 // conversation on the account makes it an actual spend ceiling.
-async function isDailyCapReached(
-  admin: any,
-  userId: string,
-  conversationId: string,
-  cap: number,
-  accountId?: string,
-): Promise<boolean> {
+async function isDailyCapReached(admin: any, request: ReplyRequest, cap: number): Promise<boolean> {
   if (cap <= 0) return false;
   const midnightUtc = new Date();
   midnightUtc.setUTCHours(0, 0, 0, 0);
-  let query = admin
+  const counted = admin
     .from("ai_agent_logs")
     .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
+    .eq("user_id", request.user_id)
     .eq("status", "sent")
     .gte("created_at", midnightUtc.toISOString());
-  query = accountId && isCommentConversationId(conversationId)
-    ? query.like("conversation_id", commentConversationLikePrefix(accountId))
-    : query.eq("conversation_id", conversationId);
-  const { count } = await query;
+  const { count } = await (isCommentConversationId(request.conversation_id)
+    ? counted.like("conversation_id", commentConversationLikePrefix(request.social_account_id))
+    : counted.eq("conversation_id", request.conversation_id));
   return (count || 0) >= cap;
 }
 
@@ -441,13 +434,7 @@ Deno.serve(async (req) => {
         humanAssignedAndOnline: await isHumanAssignedAndOnline(admin, request.conversation_id),
         withinServiceWindow,
         cooldownActive: await isCooldownActive(admin, thread.id, config.reply_cooldown_seconds),
-        dailyCapReached: await isDailyCapReached(
-          admin,
-          request.user_id,
-          request.conversation_id,
-          config.daily_message_cap,
-          request.social_account_id,
-        ),
+        dailyCapReached: await isDailyCapReached(admin, request, config.daily_message_cap),
       });
       if (!gate.reply) {
         await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });

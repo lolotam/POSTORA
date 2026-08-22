@@ -110,13 +110,12 @@ export async function handleCommentInternally(
 ): Promise<CommentAutomationOutcome> {
   const fetcher = deps.fetcher ?? fetch;
   const now = deps.now ?? new Date();
+  // Threads mentions arrive without a root post and Threads replies without an author id, so
+  // both fall back to the comment's own id rather than collapsing every such event into one
+  // shared thread.
   const postId = input.post.id || input.comment.id;
-  const conversationId = buildCommentConversationId(
-    account.id,
-    postId,
-    input.author.id || input.author.username,
-    input.comment.id,
-  );
+  const authorKey = input.author.id || input.author.username || input.comment.id;
+  const conversationId = buildCommentConversationId(account.id, postId, authorKey);
 
   let match: ReturnType<typeof matchAutoReplyRule>;
   try {

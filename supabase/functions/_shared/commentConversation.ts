@@ -16,13 +16,11 @@
 
 const COMMENT_SEGMENT = "comment";
 
-export function buildCommentConversationId(
-  accountId: string,
-  postId: string | null | undefined,
-  authorKey: string | null | undefined,
-  commentId: string,
-): string {
-  return [accountId, COMMENT_SEGMENT, postId || commentId, authorKey || commentId].join(":");
+// Callers resolve their own fallbacks for postId and authorKey; both are platform-specific
+// (Threads mentions have no root post, Threads replies have no author id) and the caller is
+// the only place that knows which substitute is right.
+export function buildCommentConversationId(accountId: string, postId: string, authorKey: string): string {
+  return [accountId, COMMENT_SEGMENT, postId, authorKey].join(":");
 }
 
 // Matches every comment conversation on one account, for the account-wide daily cap.
