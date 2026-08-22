@@ -4,6 +4,33 @@
 
 This document provides comprehensive context for AI coding assistants (Codex, GPT, Gemini) to understand and work with the Postora codebase.
 
+---
+
+## 📐 Required reading before you touch code
+
+**Before editing anything under `src/**` or `supabase/functions/**` you MUST read `ARCHITECTURE.md`.** It defines layering, dependency direction, Edge Function shape, and the security rules new code has to follow. It is not auto-loaded — open it deliberately.
+
+The four agent documents and what each one owns:
+
+| File | Owns |
+|---|---|
+| `CLAUDE.md` | **Task Execution Workflow (authoritative)**, project facts, DB schema, MCP routing, deploy rules |
+| `AGENTS.md` | The same project context, mirrored for Codex |
+| `ARCHITECTURE.md` | Architecture rules — layering, dependency direction, Edge Function and security shape |
+| `PROJECT_AGENT.md` | Known hotspots, agent stop conditions, decision hierarchy, completion summary |
+
+Supporting evidence lives in `POSTORA_CLEAN_ARCHITECTURE_AUDIT.md`.
+
+**A fact belongs in exactly one of these files.** If you need to state something that already lives in another, link to it instead of copying it — these documents have already drifted from each other once.
+
+On conflict between `ARCHITECTURE.md` and the Task Execution Workflow below, **the workflow wins**.
+
+### Delegating to another agent (Codex / Grok / OpenCode / Antigravity)
+
+Nothing auto-loads `ARCHITECTURE.md` for a delegated implementer. **Every delegation brief must name `ARCHITECTURE.md` as required reading**, alongside the specific rule sections that apply to the task. A brief that omits it will produce code that violates the layering rules and fails the guard pass.
+
+---
+
 ## Project Overview
 
 **Postora** is a social media management platform that allows users to:
@@ -32,13 +59,15 @@ Follow these steps for every task, in order.
 4. **Backend access** — the Supabase stack (Postgres + edge functions) is self-hosted on the Contabo server documented in the [Supabase Project (Self-hosted)](#supabase-project-self-hosted) section below. The SSH MCP for this project is **`ssh-contabo-mcp`** (host access); Dokploy operations use **`dokploy-contaboo-mcp`**. Never use the musalam/Abdelaziz/curemed MCPs for Postora.
 
 ### n8n community node workflow
-- **Local copies** — the Postora n8n community node exists in exactly two local directories that must be kept in sync: `F:\N8N\Postora-n8n-community-node` (the real, GitHub-connected repo) and `F:\Postora_new\Postora-n8n-community-node` (a vendored, plain-files copy tracked inside this repo — no nested `.git`; do not reintroduce one). There is no separate `F:\Postora_new\n8n-community-node` path — an earlier version of this doc named that path in error.
-- **Apply changes twice** — any modification to the n8n node source, tests, package metadata, README, or build output must be applied to both local copies in the same task (`nodes/`, `__tests__/`, `README.md`, `package.json`, `dist/`). Do not update only one copy unless the user explicitly asks for a one-off experiment.
-- **Publishing source** — push and release only from `F:\N8N\Postora-n8n-community-node`, which maps to `https://github.com/lolotam/postora-n8n-community-node.git` and publishes the npm package `n8n-nodes-postora`.
-- **Postora repo commit** — after syncing the Postora-side vendored copy, commit and push those source/doc sync changes on the current feature branch of `https://github.com/lolotam/postora.git` as scoped files only. Never publish npm from the Postora repo copy.
-- **Release process** — for a production n8n node change, bump the standalone package version in `F:\N8N\Postora-n8n-community-node` (`package.json`), run `npx tsc --noEmit` + `npm test` + `npm run build`, commit, push to `main`, create a GitHub release (`gh release create vX.Y.Z ...` — the workflow triggers on release `created`, not on tag push alone), and verify `npm view n8n-nodes-postora version` after the publish workflow completes.
-- **Deployment model** — GitHub releases in `https://github.com/lolotam/postora-n8n-community-node.git` trigger the npm publishing workflow (`.github/workflows/publish.yml`). Current version: `1.1.11` (as of 2026-07-03).
-- **Current node capabilities** (v1.1.11) — Post → Create supports Media Source = None/URL/Binary Data/Media File ID (posts an already-uploaded file by UUID via `media_file_ids`, no re-upload); Media → Upload supports the same three sources plus SSRF-hardened URL downloading (every redirect hop validated *before* being followed — see that repo's README "Known limit" note on DNS rebinding). Backend: `supabase/functions/n8n-api/index.ts`'s `handleGetMediaById` (`GET /api/v1/media/:id`, ownership-scoped, non-enumerable 404) backs the Media File ID source. A jest suite (`__tests__/Postora.node.test.ts`) covers this — run it before every release.
+
+> **Canonical source: `CLAUDE.md` → "n8n community node workflow".** Do not maintain a second copy of these rules here — this section previously drifted out of sync with it — it pinned an outdated node version and still instructed agents to sync a vendored copy that had already been deleted on purpose.
+
+The two rules most often got wrong, restated only because getting them wrong is destructive:
+
+- **The node lives in exactly ONE local directory:** `F:\N8N\Postora-n8n-community-node` (the GitHub-connected repo, npm package `n8n-nodes-postora`). The vendored copy that used to sit under this repo was **deleted on 2026-08-22 — do not recreate it and do not sync node changes into this repo.** Ignore any older instruction to "apply changes twice".
+- **Backend changes only** (`supabase/functions/**`) are committed in this repo. The node's own source, tests, `package.json`, `README.md` and `dist/` are committed in the node repo, never here.
+
+For the release process, deployment model, and current node capabilities, read `CLAUDE.md`.
 
 ### After the task, before committing
 5. **Guard pass (always)** — run `clean-code-guard` on changed production code and `test-guard` on changed/added tests.
