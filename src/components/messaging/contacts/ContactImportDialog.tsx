@@ -191,6 +191,16 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
 
   const previewInvalid = parsed ? parsed.rows.length - buildContacts.valid.length : 0;
 
+  const phonesHeldByOtherWorkspaces = async (phones: string[]): Promise<Set<string>> => {
+    const { data, error } = await supabase
+      .from("whatsapp_contacts")
+      .select("phone_number")
+      .neq("workspace_id", activeWorkspaceId!)
+      .in("phone_number", phones);
+    if (error) throw error;
+    return new Set((data ?? []).map((row) => row.phone_number));
+  };
+
   const runImport = async () => {
     if (!session?.user?.id || !parsed || !activeWorkspaceId) return;
     setStep("running");
@@ -203,21 +213,34 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
 
     for (let i = 0; i < valid.length; i += BATCH) {
       const batch = valid.slice(i, i + BATCH);
-      const payload = batch.map(({ _rawPhone: _rp, ...c }) => ({
+      // The uniqueness key is (user_id, phone_number), which spans workspaces. An upsert
+      // on it would silently update a contact that lives in another workspace, so those
+      // rows are rejected up front instead of being counted as imported here.
+      const foreign = await phonesHeldByOtherWorkspaces(batch.map((b) => b.phone_number));
+      const importable = batch.filter((b) => !foreign.has(b.phone_number));
+      batch
+        .filter((b) => foreign.has(b.phone_number))
+        .forEach((b) =>
+          fails.push({
+            row: { phone: b._rawPhone, name: b.display_name || "" },
+            reason: "Already exists in another workspace",
+          }),
+        );
+      const payload = importable.map(({ _rawPhone: _rp, ...c }) => ({
         ...c,
         user_id: session.user.id,
         workspace_id: activeWorkspaceId,
       }));
-      const { error } = await supabase
-        .from("whatsapp_contacts")
-        .upsert(payload as never, { onConflict: "user_id,phone_number" });
+      const { error } = payload.length > 0
+        ? await supabase.from("whatsapp_contacts").upsert(payload as never, { onConflict: "user_id,phone_number" })
+        : { error: null };
 
       if (error) {
-        batch.forEach((b) =>
+        importable.forEach((b) =>
           fails.push({ row: { phone: b._rawPhone, name: b.display_name || "" }, reason: error.message }),
         );
       } else {
-        imported += batch.length;
+        imported += importable.length;
       }
       setProgress(Math.round(((i + batch.length) / valid.length) * 100));
     }
@@ -227,6 +250,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
       const { data: inserted } = await supabase
         .from("whatsapp_contacts")
         .select("id, phone_number")
+        .eq("workspace_id", activeWorkspaceId)
         .in("phone_number", phones);
       if (inserted && inserted.length > 0) {
         const memberRows = inserted.map((c) => ({
