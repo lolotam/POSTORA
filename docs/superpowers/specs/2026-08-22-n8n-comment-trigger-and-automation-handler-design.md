@@ -22,7 +22,7 @@ Let an n8n workflow auto-reply to public comments on Facebook, Instagram and Thr
 ## Existing facts this design builds on
 
 - `facebook-instagram-webhook/index.ts` already receives comment changes (`entry.changes`) and upserts them into `social_inbox_events` via `recordInboxEvent` (idempotent on `social_account_id, external_event_id`). They are never forwarded to n8n.
-- `threads-webhook` handles only `mentions`; `threads-replies` polls replies. Both have private copies of an n8n dispatcher; `threads.mention.*` events are dispatched but not in `ALLOWED_WEBHOOK_EVENTS`, so only `*` subscribers receive them.
+- `threads-webhook` handles only `mentions`; `threads-replies` is a UI-invoked read-only function (no server-side polling exists). Threads webhooks also offer a `replies` field (topic `moderate`, scope `threads_read_replies`). Both have private copies of an n8n dispatcher; `threads.mention.*` events are dispatched but not in `ALLOWED_WEBHOOK_EVENTS`, so only `*` subscribers receive them.
 - `_shared/n8nMessagingDispatch.ts` is the only signed, SSRF-guarded, failure-counting dispatcher (`dispatchMessageEvent`). Subscriptions live in `app_settings` rows keyed `n8n_webhook_{userId}_{webhookId}` with `{webhook_url, events, webhook_secret, is_active, …}`; legacy `whatsapp_webhooks` rows are also read.
 - `_shared/automationHandler.ts` defines `account_metadata.automation_handler: "internal" | "n8n"` (default `internal`). No UI writes it.
 - Web app: `src/pages/messaging/{Facebook,Instagram}Messaging.tsx` have tabs inbox / comments / auto-replies / agents / ai-agent; `ThreadsMentions.tsx` has mentions / replies tabs.
@@ -64,7 +64,7 @@ Let an n8n workflow auto-reply to public comments on Facebook, Instagram and Thr
 `kind`: FB/IG top-level comment → `comment`; FB/IG reply to a comment (has parent) → `reply`; Threads reply to the user's post → `reply`; Threads mention → `mention`. Threads mention events also keep their existing `threads.mention.created` dispatch (now deliverable) — unchanged payload, for backward compatibility.
 
 ### Own-comment suppression
-Before dispatch, drop the event when `author.id === account.platform_user_id` (FB page ID / IG user ID / Threads user ID). This prevents the n8n reply from re-triggering the workflow. No opt-out.
+Before dispatch, drop the event when the author is the connected account itself. Per platform: Facebook `from.id === platform_user_id`; Instagram `from.id` equals any of `platform_user_id`, `account_metadata.ig_igid`, `account_metadata.ig_user_id`; Threads `username === platform_username` or `id === platform_user_id`. This prevents the n8n reply from re-triggering the workflow. No opt-out.
 
 ### Gate
 Comments are dispatched only when `resolveCommentAutomationHandler(account.account_metadata) === "n8n"` (new helper in `_shared/automationHandler.ts`, reads `comment_automation_handler`, default `"off"`). Messages keep today's `automation_handler` gate. Valid values: `automation_handler ∈ {"internal","n8n","off"}`, `comment_automation_handler ∈ {"off","internal","n8n"}`. `"off"` for messages is newly accepted: skip rules, AI agent and n8n. Unknown values fall back to the defaults (`internal` / `off`).
@@ -74,7 +74,7 @@ Comments are dispatched only when `resolveCommentAutomationHandler(account.accou
 |---|---|---|
 | `facebook-instagram-webhook` | `entry.changes` loop, only when `recordInboxEvent` returns `"inserted"` | `comment` / `reply` |
 | `threads-webhook` | mention handler | `mention` |
-| `threads-replies` | when polling discovers a reply not yet in `social_inbox_events` (insert first, dispatch on `"inserted"`) | `reply` |
+| `threads-webhook` | new `replies` field handler (insert into `social_inbox_events` first, dispatch on `"inserted"`) | `reply` |
 
 All dispatches run via `runInBackground` so webhook processing never fails because of n8n.
 
@@ -83,8 +83,8 @@ All dispatches run via `runInBackground` so webhook processing never fails becau
 - `POST /api/v1/webhooks` body gains optional `platform` (`facebook|instagram|threads|whatsapp`) and `social_account_id`. If `social_account_id` is given it must belong to the caller's user (404-style rejection otherwise, non-enumerable) and, if `platform` is also given, match the account's platform. Both are stored in the `app_settings` value and returned by `GET /api/v1/webhooks`. Subscriptions without filters behave as before.
 - New endpoints, all `x-api-key` authed, ownership-scoped to the caller's `social_accounts`:
   - `POST /api/v1/comments/reply` `{ platform, social_account_id, comment_id, message }`
-  - `POST /api/v1/comments/hide` `{ platform, social_account_id, comment_id, hide?: boolean=true }` — FB/IG only; Threads → 400.
-  - `POST /api/v1/comments/delete` `{ platform, social_account_id, comment_id }`
+  - `POST /api/v1/comments/hide` `{ platform, social_account_id, comment_id, hide?: boolean=true }` — FB/IG via Graph `is_hidden`/`hide`; Threads via `/{reply_id}/manage_reply`.
+  - `POST /api/v1/comments/delete` `{ platform, social_account_id, comment_id }` — FB/IG only; Threads → 400 (Threads can only delete the account's own content).
   Implementation: extract the Graph-API logic from `comment-manager` (reply/hide/delete) into `_shared/commentActions.ts` used by both `comment-manager` and `n8n-api`; Threads reply/delete reuse the same Threads Graph calls as `threads-reply` / `threads-delete-post`. Responses: `{ success, platform_comment_id?, error? }`. Logged to `api_logs` like other n8n-api routes.
 
 ## §3 n8n node (apply to both local copies)
@@ -99,7 +99,7 @@ All dispatches run via `runInBackground` so webhook processing never fails becau
 - `webhook()` emits the request body verbatim.
 
 ### `nodes/Postora/Postora.node.ts` — new **Comment** resource
-- Operations: **Reply** (Platform: Facebook/Instagram/Threads; Account via existing `getAccounts`; Comment ID; Message), **Hide** (Facebook/Instagram; Comment ID; Hide/Unhide), **Delete** (all three; Comment ID). Calls §2 endpoints. `continueOnFail` honoured like other resources.
+- Operations: **Reply** (Platform: Facebook/Instagram/Threads; Account via existing `getAccounts`; Comment ID; Message), **Hide** (all three; Comment ID; Hide/Unhide), **Delete** (Facebook/Instagram; Comment ID). Calls §2 endpoints. `continueOnFail` honoured like other resources.
 
 ### Package
 - Register both new node class and resource in `package.json` `n8n.nodes`; version `1.2.1 → 1.3.0`; README sections "Comment Trigger" and "Comment resource" with the envelope example and the automation-handler prerequisite.
@@ -123,10 +123,11 @@ All dispatches run via `runInBackground` so webhook processing never fails becau
 - **Vitest:** `AutomationHandlerCard` (defaults, disabled option, save call) and `useAutomationHandlers`.
 - **Jest (node):** both test files; `npx tsc --noEmit`, `npm test`, `npm run build` before release.
 - **Guards:** `clean-code-guard`, `test-guard`, `docs-guard` (README).
-- **Deploy order:** edge functions first via `ssh-contabo-mcp` (`n8n-api`, `facebook-instagram-webhook`, `threads-webhook`, `threads-replies`, `threads-mentions`, `messaging-api`, `comment-manager`), then merge to `main` (frontend auto-deploys), then n8n node release `v1.3.0` from `F:\N8N\Postora-n8n-community-node` and verify `npm view n8n-nodes-postora version`.
+- **Deploy order:** edge functions first via `ssh-contabo-mcp` (`n8n-api`, `facebook-instagram-webhook`, `threads-webhook`, `threads-mentions`, `messaging-api`, `comment-manager`), then merge to `main` (frontend auto-deploys), then n8n node release `v1.3.0` from `F:\N8N\Postora-n8n-community-node` and verify `npm view n8n-nodes-postora version`.
 
 ## Risks
 
 - Meta permissions: comment webhooks need `pages_manage_engagement` / `instagram_manage_comments` — already in use by the comment manager, so no new review expected.
-- Threads `replies` webhook field availability is unverified; the design relies on `threads-replies` polling for replies regardless, so delivery works either way (with polling latency).
+- Threads `replies` webhook field must be subscribed in the Meta App Dashboard (Webhooks → Threads → `replies`) and the app needs `threads_read_replies`; without that manual step the code is correct but receives nothing.
+- `social_inbox_events.platform` CHECK must be extended to `threads` by migration **before** the new `threads-webhook` is deployed.
 - Users with existing `automation_handler = "n8n"` keep receiving messages; comments stay off until they opt in via the new card.
