@@ -26,6 +26,8 @@ import {
 } from "./tools.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
+import { replyToComment } from "../_shared/commentActions.ts";
+import { commentConversationLikePrefix, isCommentConversationId } from "../_shared/commentConversation.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 import {
   resolveDualEmbeddingConfig,
@@ -41,6 +43,10 @@ const HISTORY_LIMIT = 4;
 // For WhatsApp, recipient_phone is the customer's phone and phone_number_id
 // the business number. For Facebook/Instagram, recipient_phone carries the
 // sender PSID and phone_number_id is unused.
+//
+// comment_id turns the request into a reply to a public comment instead of a DM: the
+// delivery path becomes the platform's comment API and recipient_phone carries the comment
+// author's id (or handle on Threads) only so the request shape and log rows stay uniform.
 interface ReplyRequest {
   user_id: string;
   platform: string;
@@ -49,7 +55,13 @@ interface ReplyRequest {
   phone_number_id?: string;
   recipient_phone: string;
   inbound_text: string;
+  comment_id?: string;
 }
+
+// Comment text is attacker-controlled free text on a public surface. The prompt sees the
+// same bound the log row already applies, so a wall of text cannot push the persona and
+// knowledge blocks out of the model's attention.
+const MAX_INBOUND_CHARS = 2000;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -140,17 +152,27 @@ async function isCooldownActive(admin: any, threadId: string, cooldownSeconds: n
   return Date.now() - new Date(lastAssistant.created_at).getTime() < cooldownSeconds * 1000;
 }
 
-async function isDailyCapReached(admin: any, userId: string, conversationId: string, cap: number): Promise<boolean> {
+// daily_message_cap counts sent replies since UTC midnight. For DMs the unit is one
+// conversation; for comments it is the whole account.
+//
+// The difference matters: comment conversations are per (post, commenter), so a
+// per-conversation cap would only be reached by someone who commented `cap` times under the
+// same post. Five hundred different people commenting once each would be five hundred model
+// calls and five hundred public replies with the cap never reached. Counting every comment
+// conversation on the account makes it an actual spend ceiling.
+async function isDailyCapReached(admin: any, request: ReplyRequest, cap: number): Promise<boolean> {
   if (cap <= 0) return false;
   const midnightUtc = new Date();
   midnightUtc.setUTCHours(0, 0, 0, 0);
-  const { count } = await admin
+  const counted = admin
     .from("ai_agent_logs")
     .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .eq("conversation_id", conversationId)
+    .eq("user_id", request.user_id)
     .eq("status", "sent")
     .gte("created_at", midnightUtc.toISOString());
+  const { count } = await (isCommentConversationId(request.conversation_id)
+    ? counted.like("conversation_id", commentConversationLikePrefix(request.social_account_id))
+    : counted.eq("conversation_id", request.conversation_id));
   return (count || 0) >= cap;
 }
 
@@ -197,10 +219,36 @@ async function buildWhatsAppTextSender(admin: any, account: any, fallbackPhoneNu
   return async (recipientId, text) => (await transport.sendText({ recipientPhone: recipientId, text })).messageId || `ai_${Date.now()}`;
 }
 
+// Public comments are answered through the platform's comment API, which the comment
+// manager and the n8n Comment resource already share. That module is also where the Threads
+// two-step publish lives (create a container with reply_to_id, then publish it), so routing
+// Threads through here is what gives the Threads agent a delivery path at all -- Threads
+// exposes no DM API for the Send-API branch below to use.
+async function buildCommentReplySender(admin: any, request: ReplyRequest): Promise<TextSender> {
+  const { data: account, error } = await admin
+    .from("social_accounts")
+    .select("platform, access_token, platform_user_id, ig_auth_type, account_metadata")
+    .eq("id", request.social_account_id)
+    .eq("user_id", request.user_id)
+    .maybeSingle();
+  if (error || !account) throw new Error("Account not found for AI comment reply");
+
+  const commentId = request.comment_id!;
+  return async (_authorId, text) => {
+    // replyToComment reports failure by return value; TextSender's contract is to throw.
+    // Returning here instead would log a public reply that never happened as "sent".
+    const result = await replyToComment(account, commentId, text);
+    if (!result.success) throw new Error(result.error || "Comment reply failed");
+    return result.platform_comment_id || `ai_${Date.now()}`;
+  };
+}
+
 // Resolves how to deliver the reply for the request's platform. WhatsApp uses
 // the Cloud API messages endpoint; Facebook/Instagram use the page Send API
 // (shared credential resolution with the fb-ig webhook).
 async function buildReplySender(admin: any, request: ReplyRequest): Promise<TextSender> {
+  if (request.comment_id) return buildCommentReplySender(admin, request);
+
   if (request.platform === "whatsapp") {
     const { data: account, error } = await admin
       .from("social_accounts")
@@ -312,6 +360,8 @@ Deno.serve(async (req) => {
     const platform = typeof body.platform === "string" ? body.platform : "whatsapp";
     dryRun = true;
     actAsAdmin = body.act_as_admin === true;
+    // Built field by field rather than from the body: comment_id is the one field that makes
+    // this function post publicly, and it must never be reachable from a user JWT.
     request = {
       user_id: user.id,
       platform,
@@ -384,12 +434,7 @@ Deno.serve(async (req) => {
         humanAssignedAndOnline: await isHumanAssignedAndOnline(admin, request.conversation_id),
         withinServiceWindow,
         cooldownActive: await isCooldownActive(admin, thread.id, config.reply_cooldown_seconds),
-        dailyCapReached: await isDailyCapReached(
-          admin,
-          request.user_id,
-          request.conversation_id,
-          config.daily_message_cap,
-        ),
+        dailyCapReached: await isDailyCapReached(admin, request, config.daily_message_cap),
       });
       if (!gate.reply) {
         await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
@@ -468,10 +513,21 @@ Deno.serve(async (req) => {
       ].filter(Boolean),
       nowIso: new Date().toISOString(),
       isAdmin,
+      surface: request.comment_id ? "comment" : "dm",
     });
 
     const replySender = dryRun ? null : await buildReplySender(admin, request);
-    const adminNotifier = dryRun ? null : await buildAdminNotifier(admin, request);
+
+    // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
+    // no connected WhatsApp account, and awaiting it here made that throw abort the entire
+    // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
+    // even with no admin numbers configured. notifyAdmins already catches per recipient, which
+    // is where the failure belongs.
+    let adminNotifier: Promise<TextSender> | null = null;
+    const notifyAdmin: TextSender = async (recipientPhone, text) => {
+      adminNotifier ??= buildAdminNotifier(admin, request);
+      return await (await adminNotifier)(recipientPhone, text);
+    };
     const { data: cachedConversation } = await admin
       .from("messaging_cache")
       .select("participant_name")
@@ -496,8 +552,8 @@ Deno.serve(async (req) => {
           embeddingConfig,
         ),
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
-        if (!adminNotifier) return;
-        await adminNotifier(recipientPhone, text);
+        if (dryRun) return;
+        await notifyAdmin(recipientPhone, text);
       },
     };
 
@@ -515,7 +571,7 @@ Deno.serve(async (req) => {
     const messages: any[] = [
       { role: "system", content: systemPrompt },
       ...history,
-      { role: "user", content: request.inbound_text },
+      { role: "user", content: request.inbound_text.slice(0, MAX_INBOUND_CHARS) },
     ];
     const executedToolCalls: Array<{ name: string; arguments: unknown }> = [];
     let escalated = false;

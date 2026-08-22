@@ -4,6 +4,8 @@ import { resolveAutomationHandler, resolveCommentAutomationHandler } from "../_s
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
 import { buildCommentPayload, buildMessagePayload, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 import { isOwnComment } from "../_shared/commentAuthor.ts";
+import { matchAutoReplyRule } from "../_shared/autoReplyRules.ts";
+import { handleCommentInternally } from "../_shared/commentAutomation.ts";
 import { normalizeMetaCommentChange } from "./commentEvents.ts";
 
 const corsHeaders = {
@@ -238,17 +240,27 @@ Deno.serve(async (req) => {
 
           const normalized = normalizeMetaCommentChange(platform, change);
           if (!normalized) continue;
+          // The loop breaker, and it must stay ahead of both branches below: whatever replies
+          // here comes back as another comment event, and only this check ends that cycle.
           if (isOwnComment(account, normalized.author)) {
             console.log(`[fb-ig-webhook] skipped own ${platform} comment ${externalEventId}`);
             continue;
           }
-          if (resolveCommentAutomationHandler(account.account_metadata) !== "n8n") continue;
 
-          await runInBackground("facebook-instagram comment dispatch", () => dispatchN8nEvent(
-            adminClient,
-            account.user_id,
-            buildCommentPayload({ platform, socialAccountId: account.id, account, ...normalized }),
-          ));
+          const commentHandler = resolveCommentAutomationHandler(account.account_metadata);
+          if (commentHandler === "n8n") {
+            await runInBackground("facebook-instagram comment dispatch", () => dispatchN8nEvent(
+              adminClient,
+              account.user_id,
+              buildCommentPayload({ platform, socialAccountId: account.id, account, ...normalized }),
+            ));
+          } else if (commentHandler === "internal") {
+            await runInBackground("facebook-instagram comment automation", () => handleCommentInternally(
+              adminClient,
+              account,
+              { comment: normalized.comment, post: normalized.post, author: normalized.author },
+            ));
+          }
         }
 
         // Meta delivering an event that yields no message is indistinguishable from Meta
@@ -336,51 +348,11 @@ async function processAutoReplies(
 
     if (error || !rules || rules.length === 0) return false;
 
-    const now = new Date();
-    const currentDay = now.getDay(); // 0=Sun
-    const currentTime = now.toTimeString().slice(0, 5); // HH:MM
-
-    let matchedReply: string | null = null;
-    let matchedRuleId: string | null = null;
-
-    // Check away rules first
-    for (const rule of rules) {
-      if (rule.rule_type !== "away") continue;
-      if (rule.schedule_days && !rule.schedule_days.includes(currentDay)) continue;
-
-      if (rule.schedule_start && rule.schedule_end) {
-        const start = rule.schedule_start.slice(0, 5);
-        const end = rule.schedule_end.slice(0, 5);
-
-        if (start <= end) {
-          if (currentTime < start || currentTime > end) continue;
-        } else {
-          if (currentTime < start && currentTime > end) continue;
-        }
-      }
-
-      matchedReply = rule.reply_message;
-      matchedRuleId = rule.id;
-      console.log("[fb-ig-webhook] Away rule matched");
-      break;
-    }
-
-    // If no away rule matched, check keyword rules
-    if (!matchedReply) {
-      const lowerText = inboundText.toLowerCase();
-      for (const rule of rules) {
-        if (rule.rule_type !== "keyword" || !rule.keywords) continue;
-        const matched = rule.keywords.some((kw: string) => lowerText.includes(kw.toLowerCase()));
-        if (matched) {
-          matchedReply = rule.reply_message;
-          matchedRuleId = rule.id;
-          console.log("[fb-ig-webhook] Keyword rule matched");
-          break;
-        }
-      }
-    }
-
-    if (!matchedReply) return false;
+    const match = matchAutoReplyRule(rules, inboundText, new Date());
+    if (!match) return false;
+    console.log(`[fb-ig-webhook] ${match.ruleType} rule matched`);
+    const matchedReply = match.replyMessage;
+    const matchedRuleId = match.ruleId;
 
     // Skip auto-reply while a human agent is actively assigned to this
     // conversation. The rule still "claims" the message (return true): a

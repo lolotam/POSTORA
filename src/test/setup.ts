@@ -46,6 +46,18 @@ Object.defineProperty(window, "scrollTo", {
   value: vi.fn(),
 });
 
+// jsdom implements neither of these, and Radix primitives call both while opening a popover
+// or select. Without them any test that opens a shadcn Select throws from inside Radix's
+// effects rather than from the component under test.
+Object.defineProperty(Element.prototype, "scrollIntoView", {
+  writable: true,
+  value: vi.fn(),
+});
+
+for (const method of ["hasPointerCapture", "setPointerCapture", "releasePointerCapture"] as const) {
+  Object.defineProperty(Element.prototype, method, { writable: true, value: vi.fn() });
+}
+
 // Mock clipboard API
 Object.defineProperty(navigator, "clipboard", {
   writable: true,

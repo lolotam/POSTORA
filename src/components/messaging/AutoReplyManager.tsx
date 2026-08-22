@@ -115,7 +115,34 @@ function RuleForm({
   );
 }
 
+// Which surfaces these rules actually reach depends on the platform, and getting it wrong
+// sends users to write inbox copy for a public post or vice versa:
+//   WhatsApp            -- DMs only; it has no comments.
+//   Facebook/Instagram  -- DMs, plus public comments when the account's Comments handler is
+//                          set to the Postora AI Agent.
+//   Threads             -- public replies and mentions only; it has no DM API.
+const COPY = {
+  messageOnly: {
+    subtitle: "Set up automatic responses for incoming messages",
+    emptyState: "No auto-reply rules yet. Create one to automatically respond to messages.",
+  },
+  messageAndComment: {
+    subtitle: "Set up automatic responses for incoming messages and public comments",
+    emptyState: "No auto-reply rules yet. Create one to respond automatically to a message or a comment.",
+  },
+  commentOnly: {
+    subtitle: "Set up automatic public replies to comments and mentions",
+    emptyState: "No auto-reply rules yet. Create one to reply publicly when a comment or mention matches.",
+  },
+};
+
+function copyFor(platform?: MessengerPlatform) {
+  if (!platform) return COPY.messageOnly;
+  return platform === "threads" ? COPY.commentOnly : COPY.messageAndComment;
+}
+
 export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } = {}) {
+  const copy = copyFor(platform);
   const whatsapp = useWhatsAppAutoReplies(!platform);
   const messenger = useMessengerAutoReplies(platform ?? "facebook", !!platform);
   const { rules, isLoading, createRule, updateRule, deleteRule, toggleRule } = platform ? messenger : whatsapp;
@@ -131,7 +158,7 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">Auto-Reply Rules</h3>
-          <p className="text-sm text-muted-foreground">Set up automatic responses for incoming messages</p>
+          <p className="text-sm text-muted-foreground">{copy.subtitle}</p>
         </div>
         <Dialog open={showAdd} onOpenChange={setShowAdd}>
           <DialogTrigger asChild>
@@ -151,7 +178,7 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p>No auto-reply rules yet. Create one to automatically respond to messages.</p>
+            <p>{copy.emptyState}</p>
           </CardContent>
         </Card>
       ) : (

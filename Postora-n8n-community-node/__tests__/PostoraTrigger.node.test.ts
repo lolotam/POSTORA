@@ -50,7 +50,7 @@ function createHookContext(overrides: {
 }
 
 describe("Postora Trigger", () => {
-  it("offers the four messaging trigger events alongside post.completed", () => {
+  it("offers the messaging and comment trigger events alongside post.completed", () => {
     const trigger = new PostoraTrigger();
     const events = (trigger.description.properties?.find((property) => property.name === "events") as any).options;
 
@@ -60,6 +60,12 @@ describe("Postora Trigger", () => {
       "message.whatsapp",
       "message.instagram",
       "message.facebook",
+      "comment.received",
+      "comment.facebook",
+      "comment.instagram",
+      "comment.threads",
+      "threads.mention.created",
+      "threads.mention.replied",
     ]);
   });
 

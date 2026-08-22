@@ -26,14 +26,30 @@ const statusLabels: Record<string, string> = {
   offline: "Offline",
 };
 
-export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" | "facebook" | "instagram" } = {}) {
+export type AgentManagerPlatform = "whatsapp" | "facebook" | "instagram" | "threads";
+
+function supportsAssignment(platform: AgentManagerPlatform): boolean {
+  return platform !== "threads";
+}
+
+export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManagerPlatform } = {}) {
+  // Threads exposes no DM API, so it has no conversations to assign. Assignment records are
+  // not platform-scoped, so without this the Threads page would list -- and offer to unassign
+  // -- Facebook and WhatsApp conversations that have nothing to do with it. Only the agent
+  // roster and status controls are shared; those the AI agent's handover rules do read.
+  const canAssign = supportsAssignment(platform);
+
   const { agents, agentsLoading, myAgent, registerAgent, updateStatus } = useWhatsAppAgents();
   const { assignments, assignConversation, unassignConversation } = useConversationAssignments();
   const { data: history = [] } = useAssignmentHistory();
   const { accounts } = useMessagingAccounts();
   const account = accounts.find((a) => a.platform === platform);
   const messagingPlatform = platform === "whatsapp" ? "WHATSAPP" : platform === "instagram" ? "INSTAGRAM" : "MESSENGER";
-  const { data: conversations = [] } = useConversations(account?.id || null, messagingPlatform, { silent: true });
+  const { data: conversations = [] } = useConversations(
+    canAssign ? account?.id || null : null,
+    messagingPlatform,
+    { silent: true },
+  );
   // Facebook/Instagram conversations use assignment_key (stable across the inbound webhook and
   // this list) instead of Meta's own conversation id, which isn't present in webhook payloads.
   const conversationKey = (c: { id: string; assignment_key?: string }) => c.assignment_key || c.id;
@@ -104,10 +120,14 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" 
               <span className="text-muted-foreground">
                 {agents.filter((a) => a.status === "away").length} away
               </span>
-              <span className="text-muted-foreground">·</span>
-              <span className="text-muted-foreground">
-                {assignments.length} active assignments
-              </span>
+              {canAssign && (
+                <>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-muted-foreground">
+                    {assignments.length} active assignments
+                  </span>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {myAgent ? (
@@ -166,55 +186,62 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" 
                   </DialogContent>
                 </Dialog>
               )}
-              <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
-                <DialogTrigger asChild>
-                  <Button size="sm">
-                    <ArrowRightLeft className="w-4 h-4 mr-1" />
-                    Assign
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>Assign Conversation</DialogTitle>
-                    <DialogDescription>Select a conversation and agent to assign.</DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-3">
-                    <Select value={selectedConversation} onValueChange={setSelectedConversation}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select conversation" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {conversations.map((c) => (
-                          <SelectItem key={c.id} value={conversationKey(c)}>
-                            {c.participant_name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <Select value={selectedAgent} onValueChange={setSelectedAgent}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select agent" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {agents.filter((a) => a.status !== "offline").map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            <div className="flex items-center gap-2">
-                              <Circle className={`w-2 h-2 fill-current ${statusColors[a.status]}`} />
-                              {a.display_name}
-                            </div>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <DialogFooter>
-                    <Button onClick={handleAssign} disabled={assignConversation.isPending || !selectedConversation || !selectedAgent}>
-                      {assignConversation.isPending && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
+              {canAssign ? (
+                <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
+                  <DialogTrigger asChild>
+                    <Button size="sm">
+                      <ArrowRightLeft className="w-4 h-4 mr-1" />
                       Assign
                     </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Assign Conversation</DialogTitle>
+                      <DialogDescription>Select a conversation and agent to assign.</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                      <Select value={selectedConversation} onValueChange={setSelectedConversation}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select conversation" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {conversations.map((c) => (
+                            <SelectItem key={c.id} value={conversationKey(c)}>
+                              {c.participant_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Select value={selectedAgent} onValueChange={setSelectedAgent}>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select agent" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {agents.filter((a) => a.status !== "offline").map((a) => (
+                            <SelectItem key={a.id} value={a.id}>
+                              <div className="flex items-center gap-2">
+                                <Circle className={`w-2 h-2 fill-current ${statusColors[a.status]}`} />
+                                {a.display_name}
+                              </div>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <DialogFooter>
+                      <Button onClick={handleAssign} disabled={assignConversation.isPending || !selectedConversation || !selectedAgent}>
+                        {assignConversation.isPending && <Loader2 className="w-4 h-4 mr-1 animate-spin" />}
+                        Assign
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              ) : (
+                <span className="text-xs text-muted-foreground max-w-[18rem] text-right">
+                  Threads has no direct messages, so there are no conversations to assign. Agent
+                  status here still applies to the AI agent's handover rules.
+                </span>
+              )}
             </div>
           </div>
         </CardContent>
@@ -226,14 +253,18 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" 
             <Users className="w-4 h-4" />
             Agents
           </TabsTrigger>
-          <TabsTrigger value="assignments" className="gap-1.5">
-            <ArrowRightLeft className="w-4 h-4" />
-            Assignments
-          </TabsTrigger>
-          <TabsTrigger value="history" className="gap-1.5">
-            <History className="w-4 h-4" />
-            History
-          </TabsTrigger>
+          {canAssign && (
+            <>
+              <TabsTrigger value="assignments" className="gap-1.5">
+                <ArrowRightLeft className="w-4 h-4" />
+                Assignments
+              </TabsTrigger>
+              <TabsTrigger value="history" className="gap-1.5">
+                <History className="w-4 h-4" />
+                History
+              </TabsTrigger>
+            </>
+          )}
         </TabsList>
 
         <TabsContent value="agents" className="mt-4">
@@ -284,6 +315,7 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" 
           )}
         </TabsContent>
 
+        {canAssign && (
         <TabsContent value="assignments" className="mt-4">
           {assignments.length === 0 ? (
             <Card>
@@ -324,7 +356,9 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" 
             </ScrollArea>
           )}
         </TabsContent>
+        )}
 
+        {canAssign && (
         <TabsContent value="history" className="mt-4">
           {history.length === 0 ? (
             <Card>
@@ -365,6 +399,7 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" 
             </ScrollArea>
           )}
         </TabsContent>
+        )}
       </Tabs>
     </div>
   );

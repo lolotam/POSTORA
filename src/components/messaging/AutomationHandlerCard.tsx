@@ -30,7 +30,7 @@ const MESSAGE_OPTIONS: HandlerOption[] = [
 
 const COMMENT_OPTIONS: HandlerOption[] = [
   { value: "off", label: "Off" },
-  { value: "internal", label: "Postora AI Agent", disabled: true, hint: "Coming in a later update" },
+  { value: "internal", label: "Postora AI Agent" },
   { value: "n8n", label: "n8n" },
 ];
 
@@ -106,6 +106,11 @@ export function AutomationHandlerCard({ platform, accountId: controlledAccountId
           Comments reach n8n only while Comments is set to n8n. Messages are always sent to any
           subscribed n8n workflow so it can log or route them; this setting decides whether the
           Postora AI agent also replies.
+        </p>
+        <p className="text-xs text-muted-foreground">
+          Postora AI Agent on Comments replies <strong>publicly</strong>, using your Auto Replies
+          rules first and the AI agent for anything they do not match. Away rules post at most
+          once per post per day.
         </p>
       </CardContent>
     </Card>

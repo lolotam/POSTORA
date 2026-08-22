@@ -44,8 +44,14 @@ Selectable events:
 - **WhatsApp Message Received** (`message.whatsapp`)
 - **Instagram DM Received** (`message.instagram`)
 - **Facebook Message Received** (`message.facebook`)
+- **New Comment Received (All Platforms)** (`comment.received`) — Facebook/Instagram comments and replies, Threads replies and mentions.
+- **Facebook Comment Received** (`comment.facebook`)
+- **Instagram Comment Received** (`comment.instagram`)
+- **Threads Reply / Mention Received** (`comment.threads`)
+- **Threads Mention Created (legacy payload)** (`threads.mention.created`)
+- **Threads Mention Replied (legacy payload)** (`threads.mention.replied`)
 
-Selecting **New Message Received (All Platforms)** matches every platform, so you do not also need the per-platform events.
+Selecting **New Message Received (All Platforms)** or **New Comment Received (All Platforms)** matches all platforms, so you do not also need the per-platform events.
 
 Every `message.*` event carries the same body, so one workflow can serve several connected accounts:
 

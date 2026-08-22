@@ -21,6 +21,9 @@ import {
   Inbox,
   AlertTriangle,
   MessageCircle,
+  Bot,
+  UserCog,
+  Sparkles,
 } from "lucide-react";
 import { useOwnedThreadsAccounts } from "@/hooks/useOwnedThreadsAccounts";
 import {
@@ -43,6 +46,10 @@ import { useAuth } from "@/hooks/useAuth";
 import { formatDistanceToNow } from "date-fns";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
+import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
+import { AgentManager } from "@/components/messaging/AgentManager";
+import { AiAgentManager } from "@/components/messaging/AiAgentManager";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { messagingTabFromSearch } from "@/lib/messagingTab";
 
 interface ThreadsAccountOption {
@@ -76,8 +83,15 @@ function useThreadsAccountOptions() {
 
 export default function ThreadsMentions() {
   const { data: accounts = [], isLoading: accountsLoading } = useThreadsAccountOptions();
+  const { flags } = useFeatureFlags();
   const [searchParams, setSearchParams] = useSearchParams();
-  const tab = messagingTabFromSearch(searchParams.toString(), "mentions", ["mentions", "replies"]);
+  const tab = messagingTabFromSearch(searchParams.toString(), "mentions", [
+    "mentions",
+    "replies",
+    "auto-replies",
+    "agents",
+    "ai-agent",
+  ]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -216,6 +230,20 @@ export default function ThreadsMentions() {
                 <MessageCircle className="h-4 w-4 mr-1.5" />
                 Replies
               </TabsTrigger>
+              <TabsTrigger value="auto-replies" className="rounded-lg">
+                <Bot className="h-4 w-4 mr-1.5" />
+                Auto Replies
+              </TabsTrigger>
+              {flags.humanAgent && (
+                <TabsTrigger value="agents" className="rounded-lg">
+                  <UserCog className="h-4 w-4 mr-1.5" />
+                  Agents
+                </TabsTrigger>
+              )}
+              <TabsTrigger value="ai-agent" className="rounded-lg">
+                <Sparkles className="h-4 w-4 mr-1.5" />
+                AI Agent
+              </TabsTrigger>
             </TabsList>
 
             {/* MENTIONS TAB */}
@@ -353,6 +381,27 @@ export default function ThreadsMentions() {
             <TabsContent value="replies" className="mt-4">
               <AutomationHandlerCard platform="threads" accountId={selectedAccountId} />
               <ThreadsRepliesTab accountId={selectedAccountId} />
+            </TabsContent>
+
+            <TabsContent value="auto-replies" className="mt-4">
+              <GradientRingCard variant="indigo" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
+                <AutomationHandlerCard platform="threads" accountId={selectedAccountId} />
+                <AutoReplyManager platform="threads" />
+              </GradientRingCard>
+            </TabsContent>
+
+            {flags.humanAgent && (
+              <TabsContent value="agents" className="mt-4">
+                <GradientRingCard variant="indigo" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
+                  <AgentManager platform="threads" />
+                </GradientRingCard>
+              </TabsContent>
+            )}
+
+            <TabsContent value="ai-agent" className="mt-4">
+              <GradientRingCard variant="indigo" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
+                <AiAgentManager platform="threads" />
+              </GradientRingCard>
             </TabsContent>
           </Tabs>
           </ThreadsAuthorAvatarProvider>

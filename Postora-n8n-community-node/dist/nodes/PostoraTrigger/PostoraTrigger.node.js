@@ -56,6 +56,30 @@ class PostoraTrigger {
                             name: "Facebook Message Received",
                             value: "message.facebook",
                         },
+                        {
+                            name: "New Comment Received (All Platforms)",
+                            value: "comment.received",
+                        },
+                        {
+                            name: "Facebook Comment Received",
+                            value: "comment.facebook",
+                        },
+                        {
+                            name: "Instagram Comment Received",
+                            value: "comment.instagram",
+                        },
+                        {
+                            name: "Threads Reply / Mention Received",
+                            value: "comment.threads",
+                        },
+                        {
+                            name: "Threads Mention Created (legacy payload)",
+                            value: "threads.mention.created",
+                        },
+                        {
+                            name: "Threads Mention Replied (legacy payload)",
+                            value: "threads.mention.replied",
+                        },
                     ],
                     default: ["post.completed"],
                 },
