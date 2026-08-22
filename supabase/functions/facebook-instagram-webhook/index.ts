@@ -171,6 +171,8 @@ Deno.serve(async (req) => {
             payload: event,
           });
 
+          const automationHandler = resolveAutomationHandler(account.account_metadata);
+
           // Dispatch stays tied to a successful insert, which is what makes the insert an
           // idempotency claim: Meta retries a failed delivery, and dispatching on error too
           // would run the user's workflow again when that retry finally persists. The
@@ -179,7 +181,7 @@ Deno.serve(async (req) => {
           if (inboxResult === "error") {
             console.error(`[fb-ig-webhook] Inbox persist failed for ${platform}; automation not dispatched`);
           }
-          if (inboxResult === "inserted") {
+          if (inboxResult === "inserted" && automationHandler !== "off") {
             await runInBackground("facebook-instagram message dispatch", () => dispatchMessageEvent(
               adminClient,
               account.user_id,
@@ -206,7 +208,6 @@ Deno.serve(async (req) => {
 
           console.log(`[fb-ig-webhook] Received inbound ${platform} message`);
 
-          const automationHandler = resolveAutomationHandler(account.account_metadata);
           const ruleReplied = automationHandler === "internal"
             ? await processAutoReplies(adminClient, account, platform, conversationId, senderId, messageText)
             : false;
