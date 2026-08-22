@@ -1,0 +1,11 @@
+import { IExecuteFunctions, ILoadOptionsFunctions, INodeExecutionData, INodePropertyOptions, INodeType, INodeTypeDescription } from "n8n-workflow";
+export declare class Postora implements INodeType {
+    description: INodeTypeDescription;
+    methods: {
+        loadOptions: {
+            getAccounts(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]>;
+            getAccountsForListFilter(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]>;
+        };
+    };
+    execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]>;
+}

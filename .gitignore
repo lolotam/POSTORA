@@ -33,3 +33,6 @@ testsprite_tests/tmp/config.json
 
 # Stray graphify cache written under src/; the real graph lives in /graphify-out
 src/graphify-out/
+
+# Kilo agent worktrees — the community node must exist in exactly two copies (see CLAUDE.md)
+Postora-n8n-community-node/.kilo/

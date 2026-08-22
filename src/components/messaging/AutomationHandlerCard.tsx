@@ -57,8 +57,8 @@ export function AutomationHandlerCard({ platform }: AutomationHandlerCardProps) 
       <CardHeader className="pb-3">
         <CardTitle className="text-base">Automation</CardTitle>
         <CardDescription>
-          Exactly one handler answers each channel. Choosing n8n requires a Postora Comment
-          Trigger (or Postora Trigger) workflow in n8n.
+          Chooses which agent replies. Choosing n8n requires a Postora Comment Trigger (or
+          Postora Trigger) workflow in n8n.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -96,6 +96,12 @@ export function AutomationHandlerCard({ platform }: AutomationHandlerCardProps) 
           disabled={busy}
           onChange={(value) => save.mutate({ comment_automation_handler: value as CommentAutomationHandler })}
         />
+
+        <p className="text-xs text-muted-foreground">
+          Comments reach n8n only while Comments is set to n8n. Messages are always sent to any
+          subscribed n8n workflow so it can log or route them; this setting decides whether the
+          Postora AI agent also replies.
+        </p>
       </CardContent>
     </Card>
   );
