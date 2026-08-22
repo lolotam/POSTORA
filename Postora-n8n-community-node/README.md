@@ -47,6 +47,23 @@ Selectable events:
 
 Selecting **New Message Received (All Platforms)** matches every platform, so you do not also need the per-platform events.
 
+Every `message.*` event carries the same body, so one workflow can serve several connected accounts:
+
+```json
+{
+  "event": "message.received",
+  "platform": "instagram",
+  "social_account_id": "c32dd852-9f63-4bc0-a99a-eb951cb830bb",
+  "account": { "id": "c32dd852-…", "platform": "instagram", "name": "danatfuture", "username": "danatfuture", "handle": "@danatfuture" },
+  "conversation_id": "…",
+  "sender": { "id": "96555683677", "name": "Customer", "phone": "96555683677" },
+  "message": { "id": "…", "text": "Hello", "type": "text", "attachments": [] },
+  "timestamp": "2026-08-22T10:00:00.000Z"
+}
+```
+
+`account` identifies which of your connected accounts received the message: `name` is the platform username (or the WhatsApp number when the platform reports no username) and `handle` is the `@`-prefixed username on Instagram/Facebook (`null` for WhatsApp). To reply into the same conversation, pass `social_account_id` and `sender.id` to **Message → Reply** — the node's defaults already do this — and the pair uniquely routes the reply back to the right account and thread, however many accounts are connected. The reply response echoes the same `account` object.
+
 Changing the **Events** selection takes effect the next time the workflow is activated: on activation the node compares its selection against the subscription registered with Postora and re-registers when they differ. Before v1.2.1 the original subscription was kept regardless, so an edited selection was silently ignored — if you edited Events on an already-active workflow under an older version, deactivate and reactivate it once after upgrading.
 
 ### Account

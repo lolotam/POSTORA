@@ -1,4 +1,10 @@
 import { getSendCredentials, type SocialAccountForMessaging } from "./messengerCredentials.ts";
+import {
+  resolveWhatsAppTransport,
+  type WhatsAppSendMediaInput,
+  type WhatsAppTransport,
+  type WhatsAppTransportAccount,
+} from "./whatsappTransport.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v22.0";
 
@@ -6,6 +12,7 @@ export type OutboundMessageType = "text" | "media";
 
 export interface MessageSendAccount extends SocialAccountForMessaging {
   workspace_id: string | null;
+  connection_mode?: WhatsAppTransportAccount["connection_mode"];
 }
 
 export interface SendMessageInput {
@@ -24,16 +31,55 @@ interface SendMessageResult {
 }
 
 type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+type TransportResolver = (adminClient: any, account: WhatsAppTransportAccount) => Promise<WhatsAppTransport>;
 
 export async function sendMessage(
   adminClient: any,
   input: SendMessageInput,
   fetcher: Fetcher = fetch,
+  resolveTransport: TransportResolver = resolveWhatsAppTransport,
 ): Promise<SendMessageResult> {
   if (input.account.platform === "whatsapp") {
-    return sendWhatsAppMessage(adminClient, input, fetcher);
+    return input.account.connection_mode === "evolution_qr"
+      ? sendEvolutionWhatsAppMessage(adminClient, input, resolveTransport)
+      : sendWhatsAppMessage(adminClient, input, fetcher);
   }
   return sendMetaMessage(adminClient, input, fetcher);
+}
+
+// A QR-linked number has no Meta token: its messages go out through the Evolution
+// instance bound to the account, exactly as the in-app inbox sends them. Falling through to
+// the Graph API here used the global WHATSAPP_ACCESS_TOKEN and failed with OAuth code 190.
+async function sendEvolutionWhatsAppMessage(
+  adminClient: any,
+  input: SendMessageInput,
+  resolveTransport: TransportResolver,
+): Promise<SendMessageResult> {
+  if (input.messageType === "media" && !input.mediaUrl) throw new Error("media_url is required for media messages");
+  const { id, platform_user_id, access_token, account_metadata } = input.account;
+  const transport = await resolveTransport(adminClient, {
+    id, platform_user_id, access_token, account_metadata, connection_mode: "evolution_qr",
+  });
+  const recipientPhone = input.recipientId.replace(/\D/g, "");
+  const result = input.messageType === "text"
+    ? await transport.sendText({ recipientPhone, text: input.message })
+    : await transport.sendMedia(evolutionMediaInput(input, recipientPhone));
+  const messageId = result.messageId || `evo_${crypto.randomUUID()}`;
+  // The inbound side (webhook + history sync) keys QR threads by bare digits, so the
+  // outbound row must use the same digits or the reply lands in a separate thread.
+  await persistWhatsAppMessage(adminClient, { ...input, recipientId: recipientPhone }, messageId, platform_user_id);
+  return { messageId, data: result.raw };
+}
+
+function evolutionMediaInput(input: SendMessageInput, recipientPhone: string): WhatsAppSendMediaInput {
+  const mediaUrl = input.mediaUrl!;
+  return {
+    recipientPhone,
+    mediaUrl,
+    mediaType: (input.mediaType as WhatsAppSendMediaInput["mediaType"]) || "document",
+    caption: input.message || undefined,
+    fileName: mediaUrl.split("/").pop() || undefined,
+  };
 }
 
 async function sendWhatsAppMessage(adminClient: any, input: SendMessageInput, fetcher: Fetcher): Promise<SendMessageResult> {

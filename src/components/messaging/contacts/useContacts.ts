@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
 import type { ContactRecord } from "./contactCodecs";
 
 export const CONTACTS_PAGE_SIZE = 50;
@@ -96,6 +97,9 @@ export type ContactInput = Omit<ContactRecord, "id">;
 
 export function useContactMutations() {
   const { session } = useAuth();
+  // Contacts are workspace-scoped: the insert policy checks workspace_role(workspace_id),
+  // so a row without it is rejected by RLS before the NOT NULL constraint even runs.
+  const { activeWorkspaceId } = useWhatsAppWorkspaceContext();
   const qc = useQueryClient();
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["whatsapp-contacts"] });
@@ -106,9 +110,10 @@ export function useContactMutations() {
   const createContact = useMutation({
     mutationFn: async (input: ContactInput) => {
       if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!activeWorkspaceId) throw new Error("Select a workspace before adding contacts");
       const { error } = await supabase
         .from("whatsapp_contacts")
-        .insert({ ...input, user_id: session.user.id } as never);
+        .insert({ ...input, user_id: session.user.id, workspace_id: activeWorkspaceId } as never);
       if (error) throw error;
     },
     onSuccess: invalidate,

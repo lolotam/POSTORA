@@ -27,6 +27,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import Papa from "papaparse";
@@ -68,6 +69,7 @@ interface FailRow {
 
 export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogProps) {
   const { session } = useAuth();
+  const { activeWorkspaceId } = useWhatsAppWorkspaceContext();
   const { toast } = useToast();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -190,7 +192,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
   const previewInvalid = parsed ? parsed.rows.length - buildContacts.valid.length : 0;
 
   const runImport = async () => {
-    if (!session?.user?.id || !parsed) return;
+    if (!session?.user?.id || !parsed || !activeWorkspaceId) return;
     setStep("running");
     setProgress(0);
 
@@ -204,6 +206,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
       const payload = batch.map(({ _rawPhone: _rp, ...c }) => ({
         ...c,
         user_id: session.user.id,
+        workspace_id: activeWorkspaceId,
       }));
       const { error } = await supabase
         .from("whatsapp_contacts")

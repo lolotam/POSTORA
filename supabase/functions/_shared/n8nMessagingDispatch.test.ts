@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   buildMessagePayload,
+  describeMessagingAccount,
   dispatchMessageEvent,
   signMessagePayload,
   shouldDispatchInboundMessage,
@@ -21,11 +22,23 @@ Deno.test("buildMessagePayload emits the shared messaging envelope", () => {
     event: "message.received",
     platform: "whatsapp",
     social_account_id: "account-1",
+    account: { id: "account-1", platform: "whatsapp", name: "account-1", username: null, handle: null },
     conversation_id: "wa_123_96512345678",
     sender: { id: "96512345678", name: "Customer", phone: "+96512345678" },
     message: { id: "wamid.1", text: "Hello", type: "text", attachments: [] },
     timestamp: "2026-08-20T03:10:00.000Z",
   });
+});
+
+Deno.test("describeMessagingAccount labels handle platforms with @ and WhatsApp with its number", () => {
+  assertEquals(
+    describeMessagingAccount({ id: "ig-1", platform: "instagram", platform_user_id: "1789", platform_username: "danatfuture" }),
+    { id: "ig-1", platform: "instagram", name: "danatfuture", username: "danatfuture", handle: "@danatfuture" },
+  );
+  assertEquals(
+    describeMessagingAccount({ id: "wa-1", platform: "whatsapp", platform_user_id: "96566980961", platform_username: "" }),
+    { id: "wa-1", platform: "whatsapp", name: "96566980961", username: null, handle: null },
+  );
 });
 
 Deno.test("signMessagePayload signs the exact UTF-8 payload bytes", async () => {

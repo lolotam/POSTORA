@@ -33,6 +33,43 @@ Deno.test("sendMessage normalizes WhatsApp conversation IDs and persists the out
   assertEquals((rows.find((row) => row.table === "whatsapp_messages")?.value as any).conversation_id, "wa_phone-1_965 123 45678");
 });
 
+Deno.test("sendMessage sends a QR-linked WhatsApp account through the Evolution transport, not the Graph API", async () => {
+  const rows: Array<{ table: string; value: unknown }> = [];
+  const sent: unknown[] = [];
+  const result = await sendMessage(stubAdmin(rows), {
+    account: {
+      id: "account-qr",
+      user_id: "user-1",
+      workspace_id: "workspace-1",
+      platform: "whatsapp",
+      platform_user_id: "96566980961",
+      access_token: "",
+      platform_username: null,
+      ig_auth_type: null,
+      account_metadata: {},
+      connection_mode: "evolution_qr",
+    },
+    recipientId: "+965 5568 3677",
+    message: "Hello",
+    messageType: "text",
+  }, async () => {
+    throw new Error("Graph API must not be called for a QR account");
+  }, async (_admin, account) => {
+    assertEquals(account.connection_mode, "evolution_qr");
+    return {
+      async sendText(input) { sent.push(input); return { messageId: "evo.1", raw: { ok: true } }; },
+      async sendMedia() { throw new Error("unexpected media send"); },
+      async markRead() {},
+    };
+  });
+
+  assertEquals(sent, [{ recipientPhone: "96555683677", text: "Hello" }]);
+  assertEquals(result.messageId, "evo.1");
+  const stored = rows.find((row) => row.table === "whatsapp_messages")?.value as any;
+  assertEquals(stored.conversation_id, "wa_96566980961_96555683677");
+  assertEquals(stored.direction, "outbound");
+});
+
 Deno.test("sendMessage replies through the existing Meta conversation endpoint", async () => {
   const rows: Array<{ table: string; value: unknown }> = [];
   let requestUrl = "";
