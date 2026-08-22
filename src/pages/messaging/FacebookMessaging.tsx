@@ -9,6 +9,7 @@ import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { AgentManager } from "@/components/messaging/AgentManager";
 import { AiAgentManager } from "@/components/messaging/AiAgentManager";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
+import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { messagingTabFromSearch } from "@/lib/messagingTab";
 
 export default function FacebookMessaging() {
@@ -82,6 +83,7 @@ export default function FacebookMessaging() {
             )}
             <TabsContent value="auto-replies" className="mt-4">
               <GradientRingCard variant="sky" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
+                <AutomationHandlerCard platform="facebook" />
                 <AutoReplyManager platform="facebook" />
               </GradientRingCard>
             </TabsContent>
