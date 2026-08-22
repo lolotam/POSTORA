@@ -756,7 +756,7 @@ describe("Postora node — Comment → Reply / Hide / Delete", () => {
     });
   });
 
-  it("offers Reply, Hide and Delete, and marks Delete as Facebook/Instagram only", () => {
+  it("offers Reply, Hide and Delete across all three comment platforms", () => {
     const node = new Postora();
     const operation = node.description.properties.find(
       (property) =>
@@ -765,8 +765,6 @@ describe("Postora node — Comment → Reply / Hide / Delete", () => {
     ) as any;
 
     expect(operation.options.map((option: { value: string }) => option.value)).toEqual(["reply", "hide", "delete"]);
-    expect(operation.options.find((option: { value: string }) => option.value === "delete").description)
-      .toContain("Facebook and Instagram");
 
     const platform = node.description.properties.find((property) => property.name === "commentPlatform") as any;
     expect(platform.options.map((option: { value: string }) => option.value)).toEqual([
