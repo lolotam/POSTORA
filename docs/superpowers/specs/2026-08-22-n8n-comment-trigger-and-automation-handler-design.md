@@ -34,6 +34,7 @@ Let an n8n workflow auto-reply to public comments on Facebook, Instagram and Thr
 
 - `dispatchN8nEvent(admin, userId, envelope)` — event-agnostic. Loads destinations (unchanged: `app_settings` + legacy `whatsapp_webhooks`), matches, dedupes by URL, signs (`X-Postora-Signature: sha256=…`, `X-Postora-Event`, `X-Postora-Timestamp`), delivers via `postWebhook` with the existing concurrency cap, deadline and 10-failure auto-disable.
 - `matchesSubscription(sub, envelope)`: event matches if `sub.events` contains `*`, the exact event, or the platform alias (`comment.instagram` for `comment.received` on instagram; same rule as today's `message.*`). Additionally, if `sub.platform` is set it must equal `envelope.platform`; if `sub.social_account_id` is set it must equal `envelope.social_account_id`.
+- Legacy `whatsapp_webhooks` rows (null `events`) match **only** `message.*` events; comment envelopes never reach the legacy payload shape (which dereferences `sender.id` and would otherwise fail and auto-disable live WhatsApp webhooks).
 - `dispatchMessageEvent` stays as a thin wrapper around `dispatchN8nEvent` — no behaviour change for messages.
 - The private dispatcher copies in `threads-webhook/index.ts` and `threads-mentions/index.ts` are removed in favour of the shared one. (`process-post`'s and `n8n-api`'s copies are left alone — out of scope.)
 
