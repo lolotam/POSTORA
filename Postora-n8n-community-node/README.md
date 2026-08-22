@@ -83,9 +83,27 @@ Changing the **Events** selection takes effect the next time the workflow is act
 | Hide | Facebook, Instagram, Threads | `POST /api/v1/comments/hide` (`hide: true/false`) |
 | Delete | Facebook, Instagram | `POST /api/v1/comments/delete` |
 
-The field defaults are expressions that read a **Postora Comment Trigger** payload
-(`{{ $json.social_account_id }}`, `{{ $json.comment.id }}`), so a
-Comment Trigger → AI Agent → Comment Reply workflow needs no mapping beyond the reply text.
+The field defaults read a **Postora Comment Trigger** payload, falling back to the trigger by
+name when `$json` is not the trigger's output:
+`{{ $json.social_account_id ?? $('Postora Comment Trigger').first().json.social_account_id }}`.
+
+That fallback matters because `$json` is always the **immediately preceding** node's output, not
+the trigger's. In a Comment Trigger → AI Agent → Comment Reply workflow the AI Agent sits in
+between, so a bare `{{ $json.social_account_id }}` resolves to nothing and the node fails with
+`Required parameter 'Social Account ID' is missing or empty` — on a field that visibly contains
+an expression.
+
+Two things this does not cover, both of which need a manual edit:
+
+- **A renamed trigger, or the main Postora Trigger** instead of the Comment Trigger. Replace the
+  node name in the expression with the one on your canvas, or drag the field across from the
+  trigger's output panel and let n8n write the reference.
+- **Message.** Its default is `{{ $json.response }}`, which matches a Code/HTTP node that returns
+  a `response` field. n8n's built-in **AI Agent** returns `output`, so point it at
+  `{{ $json.output }}` when the reply text comes from an AI Agent.
+
+Defaults apply only when a node is first added — an existing node keeps whatever expressions were
+saved with it, so upgrading the package does not rewrite a workflow you already built.
 
 ### Account
 - **List** — List all connected social media accounts

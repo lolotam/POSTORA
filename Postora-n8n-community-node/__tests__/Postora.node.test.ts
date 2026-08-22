@@ -807,3 +807,33 @@ describe("Postora node — Comment → Delete platform guard", () => {
     ).rejects.toThrow("Use the Hide operation instead");
   });
 });
+
+// Production incident, 2026-08-22: a Comment Trigger → AI Agent → Comment Reply workflow
+// failed with "Required parameter 'Social Account ID' is missing or empty" on a field that
+// visibly contained an expression. `$json` is the AI Agent's output, not the trigger's, so
+// the old bare `{{ $json.social_account_id }}` default resolved to nothing.
+describe("Postora node — Comment fields survive a node between the trigger and the reply", () => {
+  const commentProperty = (name: string) =>
+    new Postora().description.properties.find((p: any) => p.name === name) as any;
+
+  it("falls back to the trigger by name when $json is another node's output", () => {
+    expect(commentProperty("commentSocialAccountId").default).toContain(
+      "$('Postora Comment Trigger').first().json.social_account_id",
+    );
+    expect(commentProperty("commentId").default).toContain("$('Postora Comment Trigger').first().json.comment");
+  });
+
+  it("short-circuits to $json so a directly wired trigger never resolves the fallback", () => {
+    // `??` before the fallback is what keeps the direct Trigger → Reply wiring working
+    // without requiring the trigger to carry that exact name.
+    expect(commentProperty("commentSocialAccountId").default).toMatch(/\$json\.social_account_id\s*\?\?/);
+  });
+
+  it("names the real cause when the account id still resolves to empty", async () => {
+    await expect(
+      run({
+        params: { resource: "comment", operation: "reply", commentSocialAccountId: "", commentId: "c1", commentMessage: "hi" },
+      }),
+    ).rejects.toThrow(/another node sits between the trigger and this one/i);
+  });
+});

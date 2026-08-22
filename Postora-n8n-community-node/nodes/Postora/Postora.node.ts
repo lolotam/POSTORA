@@ -61,18 +61,27 @@ function normalizeList(input: string | string[] | undefined | null): string[] {
 // Throws a clear, field-named error for a visible required parameter that came
 // back empty — so users see "Required parameter 'X' is empty" instead of n8n's
 // generic "Could not get parameter" when a field is hidden/blank.
-function requireParam(value: any, label: string): any {
+function requireParam(value: any, label: string, jsonPath?: string): any {
   const isEmpty =
     value === undefined ||
     value === null ||
     value === "" ||
     (Array.isArray(value) && value.length === 0);
-  if (isEmpty) {
-    throw new Error(
-      `Required parameter '${label}' is missing or empty. Open the node and fill in the '${label}' field, then run again.`,
-    );
-  }
-  return value;
+  if (!isEmpty) return value;
+  // A field left on its default looks filled in — it shows an expression — but `$json` is
+  // whatever the PREVIOUS node emitted, not the trigger. Put an AI Agent (or any transform)
+  // between the trigger and this node and the default silently resolves to nothing, which is
+  // the single most common way this error is reached. Say so, rather than telling someone to
+  // fill in a field they can see is already filled in.
+  const hint = jsonPath
+    ? ` If the field still holds its default \`{{ $json.${jsonPath} }}\` and another node sits between the` +
+      ` trigger and this one, \`$json\` is that node's output instead of the trigger's. Reference the trigger` +
+      ` directly: \`{{ $('Postora Comment Trigger').first().json.${jsonPath} }}\`, using the trigger's name` +
+      ` as it appears on your canvas.`
+    : "";
+  throw new Error(
+    `Required parameter '${label}' is missing or empty. Open the node and fill in the '${label}' field, then run again.${hint}`,
+  );
 }
 
 // Validates that a string is a UUID (v1–v5). Used to reject obviously-bad media file
@@ -424,7 +433,11 @@ export class Postora implements INodeType {
         displayName: "Social Account ID",
         name: "commentSocialAccountId",
         type: "string",
-        default: "={{ $json.social_account_id }}",
+        // `??` short-circuits: wired straight to a trigger, the right side never runs. With an
+        // AI Agent in between, `$json` is the agent's output and the fallback reaches back to
+        // the trigger. `.first()` rather than `.item` because paired-item tracking does not
+        // survive an AI Agent, and a comment trigger emits exactly one item anyway.
+        default: "={{ $json.social_account_id ?? $('Postora Comment Trigger').first().json.social_account_id }}",
         required: true,
         displayOptions: { show: { resource: ["comment"] } },
       },
@@ -434,7 +447,7 @@ export class Postora implements INodeType {
         type: "string",
         // Falls back to data.mention_id so the legacy threads.mention.* envelopes, which have
         // no `comment` object, still populate this field from a Comment Trigger.
-        default: "={{ $json.comment ? $json.comment.id : $json.data.mention_id }}",
+        default: "={{ ($json.comment ?? $('Postora Comment Trigger').first().json.comment)?.id ?? $json.data?.mention_id }}",
         required: true,
         displayOptions: { show: { resource: ["comment"] } },
       },
@@ -1281,8 +1294,12 @@ export class Postora implements INodeType {
           }
           const commentBody: Record<string, unknown> = {
             platform: commentPlatform,
-            social_account_id: requireParam(this.getNodeParameter("commentSocialAccountId", i, "") as string, "Social Account ID"),
-            comment_id: requireParam(this.getNodeParameter("commentId", i, "") as string, "Comment ID"),
+            social_account_id: requireParam(
+              this.getNodeParameter("commentSocialAccountId", i, "") as string,
+              "Social Account ID",
+              "social_account_id",
+            ),
+            comment_id: requireParam(this.getNodeParameter("commentId", i, "") as string, "Comment ID", "comment.id"),
           };
           if (operation === "reply") {
             commentBody.message = requireParam(this.getNodeParameter("commentMessage", i, "") as string, "Message");
