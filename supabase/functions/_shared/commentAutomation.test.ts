@@ -103,7 +103,7 @@ Deno.test("a matched rule replies to the comment and never reaches the AI agent"
 
   assertEquals(outcome, "rule_replied");
   assertEquals(calls.length, 1);
-  assertStringIncludes(calls[0].url, "/c1/replies");
+  assertStringIncludes(calls[0].url, "/c1/");
   assertEquals((calls[0].body as { message: string }).message, "DM us for a quote");
   assertEquals(inserts[0].table, "messenger_auto_reply_usage");
 });
@@ -189,7 +189,7 @@ Deno.test("an away reply on a different post does not suppress this one", async 
     await handleCommentInternally(client, ACCOUNT, INPUT, { fetcher: stubFetch(calls), now: NOW }),
     "rule_replied",
   );
-  assertStringIncludes(calls[0].url, "/c1/replies");
+  assertStringIncludes(calls[0].url, "/c1/");
 });
 
 Deno.test("a keyword rule does not repeat itself at the same commenter within the cooldown", async () => {
@@ -215,7 +215,7 @@ Deno.test("a keyword rule still answers a different commenter on the same post",
     await handleCommentInternally(client, ACCOUNT, INPUT, { fetcher: stubFetch(calls), now: NOW }),
     "rule_replied",
   );
-  assertStringIncludes(calls[0].url, "/c1/replies");
+  assertStringIncludes(calls[0].url, "/c1/");
 });
 
 Deno.test("usage is recorded even when the reply send throws, so the throttle still holds", async () => {

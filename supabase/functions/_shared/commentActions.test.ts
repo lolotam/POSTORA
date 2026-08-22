@@ -13,11 +13,63 @@ const fbAccount = { platform: "facebook", access_token: "tok", platform_user_id:
 const igDirect = { platform: "instagram", access_token: "tok", platform_user_id: "ig", ig_auth_type: "business_login", account_metadata: {} };
 const thAccount = { platform: "threads", access_token: "tok", platform_user_id: "th-1", ig_auth_type: null, account_metadata: {} };
 
-Deno.test("facebook reply posts to /{comment}/replies on graph.facebook.com", async () => {
+// Production incident, 2026-08-22: every Facebook comment reply failed with "Unsupported post
+// request ... does not support this operation". A Facebook comment object has no `/replies`
+// edge -- replying means posting a comment ON the comment. The previous version of this test
+// asserted the `/replies` URL the code happened to build, so it passed throughout while the
+// feature was broken against the real API. Verified by hand against Graph v22.0 on the same
+// comment: POST /{id}/replies rejected, POST /{id}/comments returned an id.
+Deno.test("facebook reply posts to the /comments edge, which is the one Meta accepts", async () => {
   const calls: Call[] = [];
   const result = await replyToComment(fbAccount, "c1", "Thanks!", fakeFetch(calls));
   assertEquals(result, { success: true, platform_comment_id: "new-1" });
-  assertEquals(calls[0].url, "https://graph.facebook.com/v22.0/c1/replies");
+  assertEquals(calls[0].url, "https://graph.facebook.com/v22.0/c1/comments");
+});
+
+// Instagram keeps `/replies`, and it is the platform that decides -- not the Graph host. A
+// Page-linked Instagram account is served by graph.facebook.com but still needs Instagram's
+// edge, so branching on the host instead of the platform would break exactly that account.
+Deno.test("instagram replies keep the /replies edge on either graph host", async () => {
+  const direct: Call[] = [];
+  await replyToComment(igDirect, "c1", "Thanks!", fakeFetch(direct));
+  assertEquals(direct[0].url, "https://graph.instagram.com/v22.0/c1/replies");
+
+  const pageLinked: Call[] = [];
+  await replyToComment(
+    { platform: "instagram", access_token: "tok", platform_user_id: "ig", ig_auth_type: "facebook_page", account_metadata: {} },
+    "c1",
+    "Thanks!",
+    fakeFetch(pageLinked),
+  );
+  assertEquals(pageLinked[0].url, "https://graph.facebook.com/v22.0/c1/replies");
+});
+
+// A hung Graph call used to sit until the isolate's wall-clock limit killed it, which reached
+// the caller as a bodiless gateway error. It is reported as a result now, and flagged apart
+// from a rejection so the API can answer 504 rather than 422.
+Deno.test("an unreachable platform is a flagged failure, not a thrown error", async () => {
+  const timeout = async () => {
+    throw Object.assign(new Error("signal timed out"), { name: "TimeoutError" });
+  };
+  const result = await replyToComment(fbAccount, "c1", "Thanks!", timeout as unknown as typeof fetch);
+  assertEquals(result.success, false);
+  assertEquals(result.upstreamUnavailable, true);
+
+  const refused = async () => {
+    throw new TypeError("connection refused");
+  };
+  const network = await replyToComment(fbAccount, "c1", "Thanks!", refused as unknown as typeof fetch);
+  assertEquals(network.upstreamUnavailable, true);
+});
+
+// A rejection is not an unreachable upstream: the platform answered, and its message is worth
+// showing. Only the transport failures above may set the flag.
+Deno.test("a platform rejection is not flagged as unreachable", async () => {
+  const calls: Call[] = [];
+  const result = await replyToComment(fbAccount, "c1", "Thanks!", fakeFetch(calls, { error: { message: "nope" } }, 400));
+  assertEquals(result.success, false);
+  assertEquals(result.upstreamUnavailable, undefined);
+  assertEquals(result.error, "nope");
 });
 
 Deno.test("direct-login instagram uses graph.instagram.com and hide uses the `hide` param", async () => {

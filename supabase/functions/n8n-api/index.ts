@@ -1860,7 +1860,15 @@ async function loadOwnedCommentAccount(req: Request, supabase: any, userId: stri
 function commentActionResponse(req: Request, result: CommentActionResult): Response {
   if (!result.success) {
     const detail = result.error && containsSensitiveInfo(result.error) ? 'the platform rejected the request' : result.error;
-    return apiError(req, `Comment action failed: ${detail}`, 502, 'COMMENT_ACTION_FAILED');
+    // A platform rejection is 422, not 502. It is not a gateway failure -- the request reached
+    // the platform and came back with a reason the caller can act on (a deleted comment, a
+    // missing permission). Sending 502 also meant Cloudflare replaced the body with its own
+    // "origin_bad_gateway" page, so that reason never reached the caller and the failure was
+    // indistinguishable from the origin being down. 504 stays for a genuinely unreachable
+    // upstream, where there is no platform message to lose.
+    const status = result.upstreamUnavailable ? 504 : 422;
+    const code = result.upstreamUnavailable ? 'PLATFORM_UNREACHABLE' : 'COMMENT_ACTION_FAILED';
+    return apiError(req, `Comment action failed: ${detail}`, status, code);
   }
   return new Response(
     JSON.stringify({ success: true, platform_comment_id: result.platform_comment_id }),
