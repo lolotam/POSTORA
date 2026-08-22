@@ -1,6 +1,7 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   buildCommentPayload,
+  buildMentionEnvelope,
   buildMessagePayload,
   describeMessagingAccount,
   dispatchMessageEvent,
@@ -397,4 +398,35 @@ Deno.test("message filters: a subscription pinned to another account does not re
     fetcher: async (url) => { requests.push(String(url)); return new Response(null, { status: 204 }); },
   });
   assertEquals(requests, []);
+});
+
+Deno.test("threads mention envelope keeps the legacy event/timestamp/data body", async () => {
+  // These subscribers predate the standardized envelope. The dispatcher now also signs the
+  // request and counts failures for them, which is additive; the body must not move.
+  const mention = {
+    id: "m-1", social_account_id: "acc-th", mention_author_username: "fan", mention_text: "hi",
+    mention_permalink: "https://threads.net/p/1", status: "new", sentiment: null, labels: [],
+    assigned_to: null, mentioned_at: "2026-08-22T10:00:00.000Z", source: "webhook",
+  };
+  const envelope = buildMentionEnvelope("threads.mention.created", "acc-th", mention);
+  assertEquals(envelope.event, "threads.mention.created");
+  assertEquals(envelope.data, {
+    mention_id: "m-1", social_account_id: "acc-th", platform: "threads", author_username: "fan",
+    mention_text: "hi", mention_permalink: "https://threads.net/p/1", status: "new", sentiment: null,
+    labels: [], assigned_to: null, mentioned_at: "2026-08-22T10:00:00.000Z", source: "webhook",
+  });
+
+  const headers: Array<Record<string, string>> = [];
+  const admin = stubAdmin({
+    settings: [{ key: "k", value: { webhook_url: "https://m.example", events: ["threads.mention.created"], is_active: true } }],
+    legacy: [],
+    updates: [],
+  });
+  await dispatchN8nEvent(admin, "user-1", envelope, {
+    fetcher: async (_url, init) => {
+      headers.push((init as RequestInit).headers as Record<string, string>);
+      return new Response(null, { status: 204 });
+    },
+  });
+  assertEquals(headers[0]["X-Postora-Event"], "threads.mention.created");
 });

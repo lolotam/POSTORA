@@ -154,6 +154,39 @@ export function buildCommentPayload(input: CommentPayloadInput): CommentPayload 
   };
 }
 
+// Threads mentions predate the comment envelope and have live n8n subscribers, so the
+// `data` body they receive is reproduced field for field. Only the routing fields the
+// dispatcher needs are added around it.
+// `event` is a plain string rather than a union: threads-mentions also emits
+// threads.mention.sentiment_updated / .labeled / .assigned, which reach wildcard
+// subscribers only (they are not in ALLOWED_WEBHOOK_EVENTS) but must keep flowing.
+export function buildMentionEnvelope(
+  event: string,
+  socialAccountId: string,
+  mention: any,
+): N8nEnvelope {
+  return {
+    event,
+    platform: "threads",
+    social_account_id: socialAccountId,
+    timestamp: new Date().toISOString(),
+    data: {
+      mention_id: mention.id,
+      social_account_id: mention.social_account_id,
+      platform: "threads",
+      author_username: mention.mention_author_username,
+      mention_text: mention.mention_text,
+      mention_permalink: mention.mention_permalink,
+      status: mention.status,
+      sentiment: mention.sentiment,
+      labels: mention.labels,
+      assigned_to: mention.assigned_to,
+      mentioned_at: mention.mentioned_at,
+      source: mention.source,
+    },
+  };
+}
+
 export async function signMessagePayload(payload: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",

@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
-import { postWebhook } from "../_shared/webhookSecurity.ts";
+import { buildMentionEnvelope, dispatchN8nEvent } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -116,65 +116,6 @@ async function createMentionNotification(
 /**
  * Fire-and-forget n8n webhook dispatch. Mirrors process-post / n8n-api pattern.
  */
-async function dispatchN8nEvent(
-  // deno-lint-ignore no-explicit-any
-  supabase: any,
-  userId: string,
-  event: string,
-  mention: MinimalMention,
-): Promise<void> {
-  try {
-    const { data: settings } = await supabase
-      .from("app_settings")
-      .select("value")
-      .like("key", `n8n_webhook_${userId}_%`);
-    if (!settings?.length) return;
-
-    const payload = {
-      event,
-      timestamp: new Date().toISOString(),
-      data: {
-        mention_id: mention.id,
-        social_account_id: mention.social_account_id,
-        platform: "threads",
-        author_username: mention.mention_author_username,
-        mention_text: mention.mention_text,
-        mention_permalink: mention.mention_permalink,
-        status: mention.status,
-        sentiment: mention.sentiment,
-        labels: mention.labels,
-        assigned_to: mention.assigned_to,
-        mentioned_at: mention.mentioned_at,
-        source: mention.source,
-      },
-    };
-
-    for (const setting of settings) {
-      // deno-lint-ignore no-explicit-any
-      const webhook = setting.value as any;
-      if (!webhook?.is_active) continue;
-      const events: string[] = Array.isArray(webhook.events) ? webhook.events : [];
-      if (!events.includes(event) && !events.includes("*")) continue;
-
-      try {
-        await postWebhook(webhook.webhook_url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Postora-Event": event,
-            "X-Postora-Timestamp": payload.timestamp,
-          },
-          body: JSON.stringify(payload),
-        });
-      } catch (err) {
-        console.error("n8n dispatch failed", webhook.webhook_url, (err as Error).message);
-      }
-    }
-  } catch (err) {
-    console.error("dispatchN8nEvent error", (err as Error).message);
-  }
-}
-
 function asyncFire(p: Promise<unknown>): void {
   // deno-lint-ignore no-explicit-any
   const er: any = (globalThis as any).EdgeRuntime;
@@ -410,7 +351,7 @@ Deno.serve(async (req) => {
         const wasExisting = existingMap.has(m.mention_id);
         if (!wasExisting && !m.notified_at) {
           asyncFire(createMentionNotification(supabase, m));
-          asyncFire(dispatchN8nEvent(supabase, userId, "threads.mention.created", m));
+          asyncFire(dispatchN8nEvent(supabase, userId, buildMentionEnvelope("threads.mention.created", m.social_account_id, m)));
         }
       }
 
@@ -520,7 +461,7 @@ Deno.serve(async (req) => {
       }
 
       for (const ev of events) {
-        asyncFire(dispatchN8nEvent(supabase, userId, ev, updated as MinimalMention));
+        asyncFire(dispatchN8nEvent(supabase, userId, buildMentionEnvelope(ev, (updated as MinimalMention).social_account_id, updated as MinimalMention)));
       }
 
       return jsonResponse({ success: true, mention: updated });
@@ -619,7 +560,7 @@ Deno.serve(async (req) => {
         return jsonResponse({ error: "persist_failed", detail: updErr.message }, 500);
       }
 
-      asyncFire(dispatchN8nEvent(supabase, userId, "threads.mention.replied", updated as MinimalMention));
+      asyncFire(dispatchN8nEvent(supabase, userId, buildMentionEnvelope("threads.mention.replied", (updated as MinimalMention).social_account_id, updated as MinimalMention)));
 
       return jsonResponse({ success: true, mention: updated });
     }
