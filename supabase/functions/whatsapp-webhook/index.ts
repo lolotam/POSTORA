@@ -16,6 +16,8 @@ interface WhatsAppAccount {
   id: string;
   user_id: string;
   workspace_id: string;
+  platform_user_id?: string | null;
+  platform_username?: string | null;
   access_token: string | null;
   account_metadata: Record<string, unknown> | null;
 }
@@ -163,7 +165,7 @@ Deno.serve(async (req) => {
 async function findWhatsAppAccount(adminClient: any, phoneNumberId: string): Promise<WhatsAppAccount | null> {
   const { data: accounts } = await adminClient
     .from("social_accounts")
-    .select("id, user_id, workspace_id, access_token, account_metadata")
+    .select("id, user_id, workspace_id, platform_user_id, platform_username, access_token, account_metadata")
     .eq("platform", "whatsapp")
     .eq("platform_user_id", phoneNumberId)
     .eq("is_active", true)
@@ -420,6 +422,7 @@ async function handleLiveMessages(
       buildMessagePayload({
         platform: "whatsapp",
         socialAccountId: account.id,
+        account: { id: account.id, platform: "whatsapp", platform_user_id: account.platform_user_id, platform_username: account.platform_username },
         conversationId,
         sender: { id: from, name: contactName, phone: from },
         message: {

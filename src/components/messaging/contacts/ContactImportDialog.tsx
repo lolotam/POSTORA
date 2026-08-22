@@ -27,6 +27,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import Papa from "papaparse";
@@ -66,8 +67,11 @@ interface FailRow {
   reason: string;
 }
 
+type ImportRow = ContactInput & { _rawPhone: string };
+
 export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogProps) {
   const { session } = useAuth();
+  const { activeWorkspaceId } = useWhatsAppWorkspaceContext();
   const { toast } = useToast();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -189,8 +193,46 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
 
   const previewInvalid = parsed ? parsed.rows.length - buildContacts.valid.length : 0;
 
+  // One statement per batch: the RPC decides same-workspace vs other-workspace on the
+  // conflict itself, so two concurrent imports cannot move a contact between workspaces
+  // the way a client-side lookup followed by an upsert could.
+  const importBatch = async (workspaceId: string, batch: ImportRow[]): Promise<{ imported: number; fails: FailRow[] }> => {
+    const rows = batch.map(({ _rawPhone: _rp, ...contact }) => contact);
+    const { data, error } = await supabase.rpc("import_whatsapp_contacts_to_workspace", {
+      p_workspace_id: workspaceId,
+      p_rows: rows as never,
+    });
+    if (error) throw error;
+    const rejected = new Set((data ?? []).filter((r) => r.outcome !== "imported").map((r) => r.imported_phone));
+    const fails = batch
+      .filter((b) => rejected.has(b.phone_number))
+      .map((b) => ({ row: { phone: b._rawPhone, name: b.display_name || "" }, reason: "Already exists in another workspace" }));
+    return { imported: batch.length - fails.length, fails };
+  };
+
+  const addImportedToGroup = async (workspaceId: string, phones: string[]) => {
+    const { data: inserted, error } = await supabase
+      .from("whatsapp_contacts")
+      .select("id, phone_number")
+      .eq("workspace_id", workspaceId)
+      .in("phone_number", phones);
+    if (error) throw error;
+    if (!inserted || inserted.length === 0) return;
+    const { error: memberError } = await supabase
+      .from("whatsapp_contact_group_members")
+      .upsert(inserted.map((c) => ({ group_id: targetGroupId, contact_id: c.id })), {
+        onConflict: "group_id,contact_id",
+        ignoreDuplicates: true,
+      });
+    if (memberError) throw memberError;
+  };
+
   const runImport = async () => {
     if (!session?.user?.id || !parsed) return;
+    if (!activeWorkspaceId) {
+      toast({ title: "Select a workspace before importing contacts", variant: "destructive" });
+      return;
+    }
     setStep("running");
     setProgress(0);
 
@@ -199,44 +241,22 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
     let imported = 0;
     const fails: FailRow[] = [];
 
-    for (let i = 0; i < valid.length; i += BATCH) {
-      const batch = valid.slice(i, i + BATCH);
-      const payload = batch.map(({ _rawPhone: _rp, ...c }) => ({
-        ...c,
-        user_id: session.user.id,
-      }));
-      const { error } = await supabase
-        .from("whatsapp_contacts")
-        .upsert(payload as never, { onConflict: "user_id,phone_number" });
-
-      if (error) {
-        batch.forEach((b) =>
-          fails.push({ row: { phone: b._rawPhone, name: b.display_name || "" }, reason: error.message }),
-        );
-      } else {
-        imported += batch.length;
+    try {
+      for (let i = 0; i < valid.length; i += BATCH) {
+        const batch = valid.slice(i, i + BATCH);
+        const outcome = await importBatch(activeWorkspaceId, batch);
+        imported += outcome.imported;
+        fails.push(...outcome.fails);
+        setProgress(Math.round(((i + batch.length) / valid.length) * 100));
       }
-      setProgress(Math.round(((i + batch.length) / valid.length) * 100));
-    }
-
-    if (targetGroupId !== "none" && imported > 0) {
-      const phones = valid.map((v) => v.phone_number);
-      const { data: inserted } = await supabase
-        .from("whatsapp_contacts")
-        .select("id, phone_number")
-        .in("phone_number", phones);
-      if (inserted && inserted.length > 0) {
-        const memberRows = inserted.map((c) => ({
-          group_id: targetGroupId,
-          contact_id: c.id,
-        }));
-        await supabase
-          .from("whatsapp_contact_group_members")
-          .upsert(memberRows, {
-            onConflict: "group_id,contact_id",
-            ignoreDuplicates: true,
-          });
+      if (targetGroupId !== "none" && imported > 0) {
+        await addImportedToGroup(activeWorkspaceId, valid.map((v) => v.phone_number));
       }
+    } catch (importError) {
+      const message = importError instanceof Error ? importError.message : "Import failed";
+      toast({ title: "Import failed", description: message, variant: "destructive" });
+      setStep("map");
+      return;
     }
 
     setResults({

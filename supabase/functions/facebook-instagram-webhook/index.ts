@@ -186,6 +186,7 @@ Deno.serve(async (req) => {
               buildMessagePayload({
                 platform,
                 socialAccountId: account.id,
+                account,
                 conversationId,
                 sender: {
                   id: senderId,

@@ -18,6 +18,7 @@ interface EvolutionAccount {
   user_id: string;
   workspace_id: string;
   platform_user_id: string;
+  platform_username?: string | null;
   account_metadata: Record<string, unknown> | null;
 }
 
@@ -52,7 +53,7 @@ async function findInstance(admin: any, instanceName: string): Promise<Evolution
 async function findAccount(admin: any, socialAccountId: string): Promise<EvolutionAccount | null> {
   const { data, error } = await admin
     .from("social_accounts")
-    .select("id, user_id, workspace_id, platform_user_id, account_metadata")
+    .select("id, user_id, workspace_id, platform_user_id, platform_username, account_metadata")
     .eq("id", socialAccountId)
     .eq("platform", "whatsapp")
     .eq("connection_mode", "evolution_qr")
@@ -128,6 +129,7 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
     buildMessagePayload({
       platform: "whatsapp",
       socialAccountId: account.id,
+      account: { id: account.id, platform: "whatsapp", platform_user_id: account.platform_user_id, platform_username: account.platform_username },
       conversationId,
       // The raw JID carries Evolution's "@s.whatsapp.net" suffix. Automations match on the
       // same digits the Cloud path sends, so the suffix is stripped before it leaves Postora.

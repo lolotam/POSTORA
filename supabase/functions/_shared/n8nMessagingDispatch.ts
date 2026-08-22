@@ -2,9 +2,40 @@ import { postWebhook } from "./webhookSecurity.ts";
 
 export type MessagePlatform = "whatsapp" | "instagram" | "facebook";
 
+export interface MessagingAccountSummary {
+  id: string;
+  platform: string;
+  // Display label: the platform username (e.g. "danatfuture", "Xsellpoint") or, when the
+  // platform gives none, the platform id (a WhatsApp number). Never null.
+  name: string;
+  username: string | null;
+  // "@danatfuture" for handle-based platforms; null where a handle makes no sense (WhatsApp).
+  handle: string | null;
+}
+
+export interface MessagingAccountSource {
+  id: string;
+  platform: string;
+  platform_user_id?: string | null;
+  platform_username?: string | null;
+}
+
+export function describeMessagingAccount(account: MessagingAccountSource): MessagingAccountSummary {
+  const username = account.platform_username?.trim() || null;
+  const handleable = account.platform === "instagram" || account.platform === "facebook";
+  return {
+    id: account.id,
+    platform: account.platform,
+    name: username || account.platform_user_id || account.id,
+    username,
+    handle: handleable && username ? `@${username.replace(/^@/, "")}` : null,
+  };
+}
+
 export interface MessagePayloadInput {
   platform: MessagePlatform;
   socialAccountId: string;
+  account?: MessagingAccountSource;
   conversationId: string;
   sender: { id: string; name: string | null; phone: string | null };
   message: { id: string; text: string; type: string; attachments: unknown[] };
@@ -15,6 +46,7 @@ export interface MessagePayload {
   event: "message.received";
   platform: MessagePlatform;
   social_account_id: string;
+  account: MessagingAccountSummary;
   conversation_id: string;
   sender: MessagePayloadInput["sender"];
   message: MessagePayloadInput["message"];
@@ -54,6 +86,7 @@ export function buildMessagePayload(input: MessagePayloadInput): MessagePayload 
     event: "message.received",
     platform: input.platform,
     social_account_id: input.socialAccountId,
+    account: describeMessagingAccount(input.account ?? { id: input.socialAccountId, platform: input.platform }),
     conversation_id: input.conversationId,
     sender: input.sender,
     message: input.message,

@@ -1,7 +1,8 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
-import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse } from "../_shared/errorSanitizer.ts";
+import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse, containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
-import { sendMessage, type MessageSendAccount } from "../_shared/messageSend.ts";
+import { EVOLUTION_MEDIA_TYPES, sendMessage, type MessageSendAccount } from "../_shared/messageSend.ts";
+import { describeMessagingAccount } from "../_shared/n8nMessagingDispatch.ts";
 import {
   type LinkedInDestinationSelection,
   listLinkedInDestinations,
@@ -1760,10 +1761,13 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
   if (messageType === 'media' && typeof body?.media_url !== 'string') {
     return apiError(req, 'media_url is required for media messages', 400, 'INVALID_MEDIA');
   }
+  if (messageType === 'media' && body?.media_type !== undefined && !EVOLUTION_MEDIA_TYPES.includes(body.media_type)) {
+    return apiError(req, `media_type must be one of ${EVOLUTION_MEDIA_TYPES.join(', ')}`, 400, 'INVALID_MEDIA_TYPE');
+  }
 
   const { data: account, error } = await supabase
     .from('social_accounts')
-    .select('id, user_id, workspace_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token')
+    .select('id, user_id, workspace_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token, connection_mode')
     .eq('id', accountId)
     .maybeSingle();
   if (error) return apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR');
@@ -1786,13 +1790,17 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
       mediaUrl: body.media_url,
       mediaType: body.media_type,
     });
-    return new Response(JSON.stringify({ success: true, message_id: result.messageId }), {
-      status: 200,
-      headers: { ...restrictedCorsHeaders(req), 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({ success: true, message_id: result.messageId, account: describeMessagingAccount(account) }),
+      { status: 200, headers: { ...restrictedCorsHeaders(req), 'Content-Type': 'application/json' } },
+    );
   } catch (sendError) {
     console.error('Message reply failed:', sendError);
-    return apiError(req, 'Failed to send message', 502, 'MESSAGE_SEND_FAILED');
+    // The upstream reason (token revoked, instance offline, bad recipient) is what the
+    // workflow author needs to act on; a bare 502 hid it in the function log.
+    const upstream = sendError instanceof Error ? sendError.message : String(sendError);
+    const detail = containsSensitiveInfo(upstream) ? 'the messaging provider rejected the request' : upstream;
+    return apiError(req, `Failed to send message: ${detail}`, 502, 'MESSAGE_SEND_FAILED');
   }
 }
 

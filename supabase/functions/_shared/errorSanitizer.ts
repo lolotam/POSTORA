@@ -101,7 +101,7 @@ const SAFE_ERROR_PATTERNS = [
 /**
  * Check if an error message contains sensitive information
  */
-function containsSensitiveInfo(message: string): boolean {
+export function containsSensitiveInfo(message: string): boolean {
   return SENSITIVE_PATTERNS.some(pattern => pattern.test(message));
 }
 

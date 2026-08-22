@@ -7206,6 +7206,10 @@ export type Database = {
         Args: { p_code: string; p_user_id?: string }
         Returns: boolean
       }
+      import_whatsapp_contacts_to_workspace: {
+        Args: { p_workspace_id: string; p_rows: Json }
+        Returns: { imported_phone: string; outcome: string }[]
+      }
       is_workspace_member: {
         Args: { p_user_id?: string; p_workspace_id: string }
         Returns: boolean
