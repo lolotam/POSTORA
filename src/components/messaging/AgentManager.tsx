@@ -26,14 +26,27 @@ const statusLabels: Record<string, string> = {
   offline: "Offline",
 };
 
-export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" | "facebook" | "instagram" } = {}) {
+export type AgentManagerPlatform = "whatsapp" | "facebook" | "instagram" | "threads";
+
+function supportsAssignment(platform: AgentManagerPlatform): boolean {
+  return platform !== "threads";
+}
+
+export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManagerPlatform } = {}) {
   const { agents, agentsLoading, myAgent, registerAgent, updateStatus } = useWhatsAppAgents();
   const { assignments, assignConversation, unassignConversation } = useConversationAssignments();
   const { data: history = [] } = useAssignmentHistory();
   const { accounts } = useMessagingAccounts();
   const account = accounts.find((a) => a.platform === platform);
   const messagingPlatform = platform === "whatsapp" ? "WHATSAPP" : platform === "instagram" ? "INSTAGRAM" : "MESSENGER";
-  const { data: conversations = [] } = useConversations(account?.id || null, messagingPlatform, { silent: true });
+  // Threads exposes no DM API, so it has no conversation records to assign. Passing a null
+  // account id disables the query outright rather than asking the API for a list that cannot
+  // exist; the roster and status controls below work the same on every platform.
+  const { data: conversations = [] } = useConversations(
+    supportsAssignment(platform) ? account?.id || null : null,
+    messagingPlatform,
+    { silent: true },
+  );
   // Facebook/Instagram conversations use assignment_key (stable across the inbound webhook and
   // this list) instead of Meta's own conversation id, which isn't present in webhook payloads.
   const conversationKey = (c: { id: string; assignment_key?: string }) => c.assignment_key || c.id;
@@ -166,6 +179,7 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" 
                   </DialogContent>
                 </Dialog>
               )}
+              {supportsAssignment(platform) ? (
               <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
                 <DialogTrigger asChild>
                   <Button size="sm">
@@ -215,6 +229,12 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: "whatsapp" 
                   </DialogFooter>
                 </DialogContent>
               </Dialog>
+              ) : (
+                <span className="text-xs text-muted-foreground max-w-[18rem] text-right">
+                  Threads has no direct messages, so there are no conversations to assign. Agent
+                  status here still applies to the AI agent's handover rules.
+                </span>
+              )}
             </div>
           </div>
         </CardContent>

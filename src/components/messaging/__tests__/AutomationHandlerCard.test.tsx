@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const save = { mutate: vi.fn(), isPending: false };
@@ -45,5 +45,33 @@ describe("AutomationHandlerCard", () => {
   it("renders nothing when no account of that platform is connected", () => {
     const { container } = render(<AutomationHandlerCard platform="facebook" />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("offers the Postora AI Agent for comments as a selectable option", async () => {
+    // It shipped disabled with a "Coming in a later update" hint until the agent could
+    // actually answer public comments; enabling it is the user-facing half of that feature.
+    render(<AutomationHandlerCard platform="instagram" />);
+
+    fireEvent.keyDown(screen.getByTestId("comments-handler"), { key: "Enter" });
+    const option = await screen.findByRole("option", { name: "Postora AI Agent" });
+
+    expect(option).not.toHaveAttribute("data-disabled");
+    expect(screen.queryByText(/Coming in a later update/)).not.toBeInTheDocument();
+  });
+
+  it("saves the internal handler against the comments field when it is chosen", async () => {
+    render(<AutomationHandlerCard platform="instagram" />);
+
+    fireEvent.keyDown(screen.getByTestId("comments-handler"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Postora AI Agent" }));
+
+    expect(save.mutate).toHaveBeenCalledWith({ comment_automation_handler: "internal" });
+  });
+
+  it("warns that the comment agent replies in public", () => {
+    // Choosing "Postora AI Agent" here starts posting under the account's own posts. The
+    // card is the only place a user is told that before it happens.
+    render(<AutomationHandlerCard platform="instagram" />);
+    expect(screen.getByText("publicly")).toBeInTheDocument();
   });
 });
