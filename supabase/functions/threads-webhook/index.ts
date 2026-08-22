@@ -24,14 +24,18 @@ const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const VERIFY_TOKEN = Deno.env.get("THREADS_WEBHOOK_VERIFY_TOKEN") || "";
 const APP_SECRET = Deno.env.get("THREADS_APP_SECRET") || "";
 
-async function verifySignature(rawBody: string, signatureHeader: string | null): Promise<boolean> {
-  if (!APP_SECRET) {
-    console.warn("[threads-webhook] THREADS_APP_SECRET not set — cannot verify signature");
-    return false;
-  }
-  if (!signatureHeader) return false;
+// Each rejection reason needs a different fix, so they are reported separately rather than
+// collapsed into one "invalid signature" line: `missing-header` is an unsigned probe and is
+// noise, while `mismatch` on a real Meta delivery means THREADS_APP_SECRET belongs to a
+// different app -- and telling those apart from the log is the whole point when the next
+// failure is a webhook that silently delivers nothing.
+type SignatureCheck = "ok" | "no-secret" | "missing-header" | "malformed-header" | "mismatch";
+
+async function verifySignature(rawBody: string, signatureHeader: string | null): Promise<SignatureCheck> {
+  if (!APP_SECRET) return "no-secret";
+  if (!signatureHeader) return "missing-header";
   const expectedPrefix = "sha256=";
-  if (!signatureHeader.startsWith(expectedPrefix)) return false;
+  if (!signatureHeader.startsWith(expectedPrefix)) return "malformed-header";
   const provided = signatureHeader.slice(expectedPrefix.length);
 
   const enc = new TextEncoder();
@@ -46,13 +50,13 @@ async function verifySignature(rawBody: string, signatureHeader: string | null):
   const calculated = Array.from(new Uint8Array(sigBuf))
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  if (calculated.length !== provided.length) return false;
+  if (calculated.length !== provided.length) return "mismatch";
   // constant-time compare
   let mismatch = 0;
   for (let i = 0; i < calculated.length; i++) {
     mismatch |= calculated.charCodeAt(i) ^ provided.charCodeAt(i);
   }
-  return mismatch === 0;
+  return mismatch === 0 ? "ok" : "mismatch";
 }
 
 interface NormalizedMention {
@@ -158,7 +162,10 @@ Deno.serve(async (req) => {
       console.log("[threads-webhook] verify ok");
       return new Response(challenge ?? "", { status: 200 });
     }
-    console.warn("[threads-webhook] verify failed");
+    // The token comes from THREADS_WEBHOOK_VERIFY_TOKEN. When it is unset this branch is
+    // unconditional, so the Meta App Dashboard can never verify the callback and the
+    // account receives no `replies` or `mentions` deliveries at all.
+    console.warn(`[threads-webhook] verify failed (verify_token configured: ${VERIFY_TOKEN ? "yes" : "no"})`);
     return new Response("Forbidden", { status: 403 });
   }
 
@@ -168,9 +175,9 @@ Deno.serve(async (req) => {
 
   const rawBody = await req.text();
   const sig = req.headers.get("x-hub-signature-256");
-  const valid = await verifySignature(rawBody, sig);
-  if (!valid) {
-    console.warn("[threads-webhook] invalid signature");
+  const check = await verifySignature(rawBody, sig);
+  if (check !== "ok") {
+    console.warn(`[threads-webhook] rejected POST: ${check}`);
     return new Response("Forbidden", { status: 403 });
   }
 
