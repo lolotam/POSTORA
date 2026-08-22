@@ -83,7 +83,7 @@ Changing the **Events** selection takes effect the next time the workflow is act
 | Hide | Facebook, Instagram, Threads | `POST /api/v1/comments/hide` (`hide: true/false`) |
 | Delete | Facebook, Instagram | `POST /api/v1/comments/delete` |
 
-**Platform** defaults to **Auto-detect**, which leaves the platform out of the
+**Platform** defaults to **Auto-detect** (added in v1.4.0), which leaves the platform out of the
 request entirely: Postora already knows whether the **Social Account ID** you send belongs to a
 Facebook, Instagram or Threads account, and derives the platform from it. That is why one Comment
 node handles a Comment Trigger set to **All** platforms without a Switch in front of it. Picking a
