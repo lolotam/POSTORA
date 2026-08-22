@@ -1,8 +1,10 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
+  buildCommentPayload,
   buildMessagePayload,
   describeMessagingAccount,
   dispatchMessageEvent,
+  dispatchN8nEvent,
   signMessagePayload,
   shouldDispatchInboundMessage,
 } from "./n8nMessagingDispatch.ts";
@@ -321,3 +323,78 @@ class Query {
     return this;
   }
 }
+
+const commentInput = {
+  platform: "instagram" as const,
+  socialAccountId: "account-ig",
+  account: { id: "account-ig", platform: "instagram", platform_user_id: "1789", platform_username: "mybrand" },
+  comment: { id: "c-1", kind: "comment" as const, text: "Nice!", parentCommentId: null, mediaUrl: null },
+  post: { id: "m-1", url: "https://instagram.com/p/abc", caption: null },
+  author: { id: "fan-1", name: null, username: "fan" },
+  timestamp: "2026-08-22T10:00:00.000Z",
+};
+
+Deno.test("buildCommentPayload emits the comment envelope", () => {
+  assertEquals(buildCommentPayload(commentInput), {
+    event: "comment.received",
+    platform: "instagram",
+    social_account_id: "account-ig",
+    account: { id: "account-ig", platform: "instagram", name: "mybrand", username: "mybrand", handle: "@mybrand" },
+    comment: { id: "c-1", kind: "comment", text: "Nice!", parent_comment_id: null, media_url: null },
+    post: { id: "m-1", url: "https://instagram.com/p/abc", caption: null },
+    author: { id: "fan-1", name: null, username: "fan" },
+    timestamp: "2026-08-22T10:00:00.000Z",
+  });
+});
+
+Deno.test("dispatchN8nEvent honours platform and account filters and comment aliases", async () => {
+  const requests: string[] = [];
+  const admin = stubAdmin({
+    settings: [
+      { key: "k_a", value: { webhook_url: "https://alias.example", events: ["comment.instagram"], is_active: true } },
+      { key: "k_b", value: { webhook_url: "https://generic.example", events: ["comment.received"], is_active: true } },
+      { key: "k_c", value: { webhook_url: "https://other-platform.example", events: ["comment.received"], platform: "facebook", is_active: true } },
+      { key: "k_d", value: { webhook_url: "https://other-account.example", events: ["comment.received"], social_account_id: "account-x", is_active: true } },
+      { key: "k_e", value: { webhook_url: "https://this-account.example", events: ["comment.received"], platform: "instagram", social_account_id: "account-ig", is_active: true } },
+      { key: "k_f", value: { webhook_url: "https://messages-only.example", events: ["message.received"], is_active: true } },
+    ],
+    legacy: [],
+    updates: [],
+  });
+  await dispatchN8nEvent(admin, "user-1", buildCommentPayload(commentInput), {
+    fetcher: async (url) => { requests.push(String(url)); return new Response(null, { status: 204 }); },
+  });
+  assertEquals(requests.sort(), ["https://alias.example", "https://generic.example", "https://this-account.example"]);
+});
+
+Deno.test("legacy whatsapp_webhooks rows never receive non-message events", async () => {
+  // toLegacyPayload reshapes the body as a message; a comment envelope would throw
+  // mid-reshape, count as a delivery failure, and eventually disable a live WhatsApp hook.
+  const requests: string[] = [];
+  const updates: Array<{ key: string; value: Record<string, unknown> }> = [];
+  const admin = stubAdmin({
+    settings: [],
+    legacy: [{ id: "legacy-1", url: "https://legacy.example", secret: null, events: null, failure_count: 0, is_active: true }],
+    updates,
+  });
+  await dispatchN8nEvent(admin, "user-1", buildCommentPayload(commentInput), {
+    fetcher: async (url) => { requests.push(String(url)); return new Response(null, { status: 204 }); },
+  });
+  assertEquals(requests, []);
+  assertEquals(updates, []);
+});
+
+Deno.test("message filters: a subscription pinned to another account does not receive this message", async () => {
+  const requests: string[] = [];
+  const admin = stubAdmin({
+    settings: [
+      { key: "k_a", value: { webhook_url: "https://pinned.example", events: ["message.received"], social_account_id: "account-2", is_active: true } },
+    ],
+    legacy: [],
+    updates: [],
+  });
+  await dispatchMessageEvent(admin, "user-1", messagePayload, {
+    fetcher: async (url) => { requests.push(String(url)); return new Response(null, { status: 204 }); },
+  });
+  assertEquals(requests, []);
+});
