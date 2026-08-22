@@ -344,8 +344,7 @@ async function processAutoReplies(
       .select("*")
       .eq("user_id", account.user_id)
       .eq("platform", platform)
-      .eq("is_active", true)
-      .order("created_at", { ascending: true });
+      .eq("is_active", true);
 
     if (error || !rules || rules.length === 0) return false;
 

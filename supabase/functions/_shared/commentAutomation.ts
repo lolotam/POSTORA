@@ -36,14 +36,15 @@ export interface CommentAutomationDeps {
   now?: Date;
 }
 
+// Unordered on purpose: matchAutoReplyRule owns precedence, so ordering it here too would
+// state the same rule in two places and let them drift.
 async function loadActiveRules(admin: any, account: CommentAutomationAccount): Promise<AutoReplyRule[]> {
   const { data, error } = await admin
     .from("messenger_auto_replies")
     .select("*")
     .eq("user_id", account.user_id)
     .eq("platform", account.platform)
-    .eq("is_active", true)
-    .order("created_at", { ascending: true });
+    .eq("is_active", true);
   if (error) throw new Error(error.message);
   return (data || []) as AutoReplyRule[];
 }
@@ -54,10 +55,12 @@ async function loadActiveRules(admin: any, account: CommentAutomationAccount): P
 // case ("price" -> "DM us for a quote") and stay per commenter.
 async function awayAlreadyPostedOnThisPost(
   admin: any,
-  account: CommentAutomationAccount,
-  ruleId: string,
-  postId: string,
-  now: Date,
+  { account, ruleId, postId, now }: {
+    account: CommentAutomationAccount;
+    ruleId: string;
+    postId: string;
+    now: Date;
+  },
 ): Promise<boolean> {
   const midnightUtc = new Date(now);
   midnightUtc.setUTCHours(0, 0, 0, 0);
@@ -134,7 +137,7 @@ export async function handleCommentInternally(
 
   if (
     match.ruleType === "away" &&
-    await awayAlreadyPostedOnThisPost(admin, account, match.ruleId, postId, now)
+    await awayAlreadyPostedOnThisPost(admin, { account, ruleId: match.ruleId, postId, now })
   ) {
     return "rule_suppressed";
   }
