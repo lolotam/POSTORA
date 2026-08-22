@@ -1,5 +1,20 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { sendMessage } from "./messageSend.ts";
+import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { sendMessage, type MessageSendAccount } from "./messageSend.ts";
+
+function qrAccount(): MessageSendAccount {
+  return {
+    id: "account-qr",
+    user_id: "user-1",
+    workspace_id: "workspace-1",
+    platform: "whatsapp",
+    platform_user_id: "96566980961",
+    access_token: "",
+    platform_username: null,
+    ig_auth_type: null,
+    account_metadata: {},
+    connection_mode: "evolution_qr",
+  };
+}
 
 Deno.test("sendMessage normalizes WhatsApp conversation IDs and persists the outbound row", async () => {
   const rows: Array<{ table: string; value: unknown }> = [];
@@ -37,18 +52,7 @@ Deno.test("sendMessage sends a QR-linked WhatsApp account through the Evolution 
   const rows: Array<{ table: string; value: unknown }> = [];
   const sent: unknown[] = [];
   const result = await sendMessage(stubAdmin(rows), {
-    account: {
-      id: "account-qr",
-      user_id: "user-1",
-      workspace_id: "workspace-1",
-      platform: "whatsapp",
-      platform_user_id: "96566980961",
-      access_token: "",
-      platform_username: null,
-      ig_auth_type: null,
-      account_metadata: {},
-      connection_mode: "evolution_qr",
-    },
+    account: qrAccount(),
     recipientId: "+965 5568 3677",
     message: "Hello",
     messageType: "text",
@@ -68,6 +72,25 @@ Deno.test("sendMessage sends a QR-linked WhatsApp account through the Evolution 
   const stored = rows.find((row) => row.table === "whatsapp_messages")?.value as any;
   assertEquals(stored.conversation_id, "wa_96566980961_96555683677");
   assertEquals(stored.direction, "outbound");
+});
+
+Deno.test("sendMessage rejects an unsupported QR media type before touching the transport", async () => {
+  const rows: Array<{ table: string; value: unknown }> = [];
+  await assertRejects(
+    () => sendMessage(stubAdmin(rows), {
+      account: qrAccount(),
+      recipientId: "96555683677",
+      message: "",
+      messageType: "media",
+      mediaUrl: "https://cdn.example.com/pack.webp",
+      mediaType: "sticker",
+    }, async () => { throw new Error("Graph API must not be called"); }, async () => {
+      throw new Error("transport must not be resolved for an invalid media type");
+    }),
+    Error,
+    'Unsupported media_type "sticker"',
+  );
+  assertEquals(rows, []);
 });
 
 Deno.test("sendMessage replies through the existing Meta conversation endpoint", async () => {

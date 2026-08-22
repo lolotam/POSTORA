@@ -9,6 +9,12 @@ import {
 const GRAPH_API = "https://graph.facebook.com/v22.0";
 
 export type OutboundMessageType = "text" | "media";
+export const EVOLUTION_MEDIA_TYPES = ["image", "video", "document", "audio"] as const;
+export type EvolutionMediaType = typeof EVOLUTION_MEDIA_TYPES[number];
+
+function isEvolutionMediaType(value: unknown): value is EvolutionMediaType {
+  return EVOLUTION_MEDIA_TYPES.includes(value as EvolutionMediaType);
+}
 
 export interface MessageSendAccount extends SocialAccountForMessaging {
   workspace_id: string | null;
@@ -56,14 +62,15 @@ async function sendEvolutionWhatsAppMessage(
   resolveTransport: TransportResolver,
 ): Promise<SendMessageResult> {
   if (input.messageType === "media" && !input.mediaUrl) throw new Error("media_url is required for media messages");
+  const recipientPhone = input.recipientId.replace(/\D/g, "");
+  const media = input.messageType === "media" ? evolutionMediaInput(input, recipientPhone) : null;
   const { id, platform_user_id, access_token, account_metadata } = input.account;
   const transport = await resolveTransport(adminClient, {
     id, platform_user_id, access_token, account_metadata, connection_mode: "evolution_qr",
   });
-  const recipientPhone = input.recipientId.replace(/\D/g, "");
-  const result = input.messageType === "text"
-    ? await transport.sendText({ recipientPhone, text: input.message })
-    : await transport.sendMedia(evolutionMediaInput(input, recipientPhone));
+  const result = media
+    ? await transport.sendMedia(media)
+    : await transport.sendText({ recipientPhone, text: input.message });
   const messageId = result.messageId || `evo_${crypto.randomUUID()}`;
   // The inbound side (webhook + history sync) keys QR threads by bare digits, so the
   // outbound row must use the same digits or the reply lands in a separate thread.
@@ -73,10 +80,14 @@ async function sendEvolutionWhatsAppMessage(
 
 function evolutionMediaInput(input: SendMessageInput, recipientPhone: string): WhatsAppSendMediaInput {
   const mediaUrl = input.mediaUrl!;
+  const mediaType = input.mediaType || "document";
+  if (!isEvolutionMediaType(mediaType)) {
+    throw new Error(`Unsupported media_type "${mediaType}"; expected one of ${EVOLUTION_MEDIA_TYPES.join(", ")}`);
+  }
   return {
     recipientPhone,
     mediaUrl,
-    mediaType: (input.mediaType as WhatsAppSendMediaInput["mediaType"]) || "document",
+    mediaType,
     caption: input.message || undefined,
     fileName: mediaUrl.split("/").pop() || undefined,
   };

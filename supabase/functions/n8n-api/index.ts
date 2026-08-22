@@ -1,7 +1,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse, containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
-import { sendMessage, type MessageSendAccount } from "../_shared/messageSend.ts";
+import { EVOLUTION_MEDIA_TYPES, sendMessage, type MessageSendAccount } from "../_shared/messageSend.ts";
 import { describeMessagingAccount } from "../_shared/n8nMessagingDispatch.ts";
 import {
   type LinkedInDestinationSelection,
@@ -1760,6 +1760,9 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
   }
   if (messageType === 'media' && typeof body?.media_url !== 'string') {
     return apiError(req, 'media_url is required for media messages', 400, 'INVALID_MEDIA');
+  }
+  if (messageType === 'media' && body?.media_type !== undefined && !EVOLUTION_MEDIA_TYPES.includes(body.media_type)) {
+    return apiError(req, `media_type must be one of ${EVOLUTION_MEDIA_TYPES.join(', ')}`, 400, 'INVALID_MEDIA_TYPE');
   }
 
   const { data: account, error } = await supabase

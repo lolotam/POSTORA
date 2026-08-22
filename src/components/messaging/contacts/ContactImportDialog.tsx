@@ -202,7 +202,11 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
   };
 
   const runImport = async () => {
-    if (!session?.user?.id || !parsed || !activeWorkspaceId) return;
+    if (!session?.user?.id || !parsed) return;
+    if (!activeWorkspaceId) {
+      toast({ title: "Select a workspace before importing contacts", variant: "destructive" });
+      return;
+    }
     setStep("running");
     setProgress(0);
 
