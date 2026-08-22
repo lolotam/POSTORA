@@ -1,3 +1,5 @@
+import { isDirectInstagramAccount } from "./messengerCredentials.ts";
+
 const GRAPH_API_VERSION = "v22.0";
 const FACEBOOK_GRAPH = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const INSTAGRAM_GRAPH = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
@@ -8,7 +10,7 @@ export interface CommentActionAccount {
   access_token: string | null;
   platform_user_id?: string | null;
   ig_auth_type?: string | null;
-  account_metadata?: unknown;
+  account_metadata?: Record<string, unknown> | null;
 }
 
 export interface CommentActionResult {
@@ -18,14 +20,6 @@ export interface CommentActionResult {
 }
 
 type Fetcher = typeof fetch;
-
-// Mirrors comment-manager's rule: Instagram business-login tokens must use graph.instagram.com.
-export function isDirectInstagramAccount(account: CommentActionAccount): boolean {
-  const meta = (account.account_metadata && typeof account.account_metadata === "object" ? account.account_metadata : {}) as Record<string, unknown>;
-  return account.platform === "instagram" && (
-    account.ig_auth_type === "business_login" || meta.flow === "direct" || meta.source === "instagram_business_login" || meta.token_type === "long_lived"
-  );
-}
 
 function metaBase(account: CommentActionAccount): string {
   return isDirectInstagramAccount(account) ? INSTAGRAM_GRAPH : FACEBOOK_GRAPH;

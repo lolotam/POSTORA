@@ -12,7 +12,13 @@ export interface SocialAccountForMessaging {
   access_token: string;
 }
 
-export function isDirectInstagramAccount(account: SocialAccountForMessaging): boolean {
+// Takes the structural minimum it actually reads rather than a full account row, so the
+// comment paths (which carry fewer columns) share this rule instead of copying it.
+export function isDirectInstagramAccount(account: {
+  platform?: string;
+  ig_auth_type?: string | null;
+  account_metadata?: Record<string, unknown> | null;
+}): boolean {
   if (account.platform !== "instagram") return false;
   const meta = account.account_metadata || {};
   return account.ig_auth_type === "business_login"

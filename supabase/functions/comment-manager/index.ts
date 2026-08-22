@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
+import { isDirectInstagramAccount } from "../_shared/messengerCredentials.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,16 +11,6 @@ const corsHeaders = {
 const GRAPH_API_VERSION = "v22.0";
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const INSTAGRAM_GRAPH_API_BASE = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
-
-function isDirectInstagramAccount(account: { platform?: string; ig_auth_type?: string | null; account_metadata?: Record<string, unknown> | null }) {
-  const meta = account.account_metadata || {};
-  return account.platform === "instagram" && (
-    account.ig_auth_type === "business_login" ||
-    meta.flow === "direct" ||
-    meta.source === "instagram_business_login" ||
-    meta.token_type === "long_lived"
-  );
-}
 
 async function graphJson(url: string) {
   const res = await fetch(url);
