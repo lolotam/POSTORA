@@ -115,7 +115,22 @@ function RuleForm({
   );
 }
 
+// Threads has no direct messages: rules there fire on public replies and mentions, and the
+// reply is posted in public. Describing them as message automation would have users writing
+// inbox copy for a comment thread.
+const COPY = {
+  message: {
+    subtitle: "Set up automatic responses for incoming messages",
+    emptyState: "No auto-reply rules yet. Create one to automatically respond to messages.",
+  },
+  comment: {
+    subtitle: "Set up automatic public replies to comments and mentions",
+    emptyState: "No auto-reply rules yet. Create one to reply publicly when a comment matches.",
+  },
+};
+
 export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } = {}) {
+  const copy = platform === "threads" ? COPY.comment : COPY.message;
   const whatsapp = useWhatsAppAutoReplies(!platform);
   const messenger = useMessengerAutoReplies(platform ?? "facebook", !!platform);
   const { rules, isLoading, createRule, updateRule, deleteRule, toggleRule } = platform ? messenger : whatsapp;
@@ -131,7 +146,7 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
       <div className="flex items-center justify-between">
         <div>
           <h3 className="text-lg font-semibold">Auto-Reply Rules</h3>
-          <p className="text-sm text-muted-foreground">Set up automatic responses for incoming messages</p>
+          <p className="text-sm text-muted-foreground">{copy.subtitle}</p>
         </div>
         <Dialog open={showAdd} onOpenChange={setShowAdd}>
           <DialogTrigger asChild>
@@ -151,7 +166,7 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p>No auto-reply rules yet. Create one to automatically respond to messages.</p>
+            <p>{copy.emptyState}</p>
           </CardContent>
         </Card>
       ) : (

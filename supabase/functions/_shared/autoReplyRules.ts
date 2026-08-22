@@ -53,9 +53,15 @@ function isWithinSchedule(rule: AutoReplyRule, now: Date): boolean {
     : !(current < start && current > end);
 }
 
+// Blank keywords are dropped, not matched. "".includes() is true for every string, so a
+// single empty or whitespace-only entry -- easy to save from the rules UI -- would make that
+// rule claim every message and every public comment, silencing the AI agent entirely.
 function matchesKeyword(rule: AutoReplyRule, lowerText: string): boolean {
   if (!rule.keywords?.length) return false;
-  return rule.keywords.some((keyword) => lowerText.includes(keyword.toLowerCase()));
+  return rule.keywords.some((keyword) => {
+    const needle = keyword.trim().toLowerCase();
+    return needle.length > 0 && lowerText.includes(needle);
+  });
 }
 
 // Away rules outrank keyword rules: when the business is closed, saying so beats answering

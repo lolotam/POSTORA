@@ -23,14 +23,22 @@ export function buildCommentConversationId(accountId: string, postId: string, au
   return [accountId, COMMENT_SEGMENT, postId, authorKey].join(":");
 }
 
+// `\`, `%` and `_` are all pattern syntax to LIKE. Account ids are UUIDs and contain none of
+// them, but post and comment ids are platform-issued: a Facebook post id is literally
+// `pageId_postId`, so an unescaped `_` there is a single-character wildcard and one post's
+// prefix would match a different post's conversations.
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
 // Matches every comment conversation on one account, for the account-wide daily cap.
 export function commentConversationLikePrefix(accountId: string): string {
-  return `${accountId}:${COMMENT_SEGMENT}:%`;
+  return `${escapeLike(accountId)}:${COMMENT_SEGMENT}:%`;
 }
 
 // Matches every commenter under one post, for the once-per-post away-reply guard.
 export function postConversationLikePrefix(accountId: string, postId: string): string {
-  return `${accountId}:${COMMENT_SEGMENT}:${postId}:%`;
+  return `${escapeLike(accountId)}:${COMMENT_SEGMENT}:${escapeLike(postId)}:%`;
 }
 
 export function isCommentConversationId(conversationId: string): boolean {

@@ -109,13 +109,30 @@ Deno.test("matching does not reorder the caller's array", () => {
   assertEquals(rules.map((r) => r.id), ["b", "a"]);
 });
 
-Deno.test("keyword rules with empty or null keywords are skipped rather than matching everything", () => {
+Deno.test("keyword rules with no usable keywords are skipped rather than matching everything", () => {
+  // "".includes() is true for every string, so a blank keyword saved from the rules UI would
+  // otherwise claim every message and public comment and silence the AI agent.
   assertEquals(
     matchAutoReplyRule([
       rule({ id: "null", rule_type: "keyword", keywords: null }),
-      rule({ id: "empty", rule_type: "keyword", keywords: [] }),
+      rule({ id: "empty-list", rule_type: "keyword", keywords: [] }),
+      rule({ id: "empty-string", rule_type: "keyword", keywords: [""] }),
+      rule({ id: "whitespace", rule_type: "keyword", keywords: ["   ", "\t"] }),
     ], "anything at all", WEDNESDAY_AFTERNOON),
     null,
+  );
+});
+
+Deno.test("a blank keyword alongside a real one does not widen the rule", () => {
+  const rules = [rule({ id: "kw", rule_type: "keyword", keywords: ["", "refund"] })];
+  assertEquals(matchAutoReplyRule(rules, "I want a refund", WEDNESDAY_AFTERNOON)?.ruleId, "kw");
+  assertEquals(matchAutoReplyRule(rules, "hello there", WEDNESDAY_AFTERNOON), null);
+});
+
+Deno.test("keywords stored with surrounding whitespace still match", () => {
+  assertEquals(
+    matchAutoReplyRule([rule({ id: "kw", rule_type: "keyword", keywords: [" price "] })], "the price?", WEDNESDAY_AFTERNOON)?.ruleId,
+    "kw",
   );
 });
 

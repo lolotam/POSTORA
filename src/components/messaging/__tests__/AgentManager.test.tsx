@@ -15,8 +15,16 @@ vi.mock("@/hooks/useWhatsAppAgents", () => ({
     registerAgent: { mutate: vi.fn(), isPending: false },
     updateStatus: { mutate: vi.fn(), isPending: false },
   }),
+  // Assignment records are global, not platform-scoped — this one belongs to a Facebook
+  // conversation and must never surface on the Threads page.
   useConversationAssignments: () => ({
-    assignments: [],
+    assignments: [{
+      id: "as1",
+      conversation_id: "fb1_9001",
+      agent_id: "ag1",
+      assigned_at: "2026-08-22T00:00:00.000Z",
+      notes: null,
+    }],
     assignConversation: { mutate: vi.fn(), isPending: false },
     unassignConversation: { mutate: vi.fn(), isPending: false },
   }),
@@ -51,7 +59,25 @@ describe("AgentManager", () => {
     expect(screen.getByText(/no direct messages/i)).toBeInTheDocument();
   });
 
+  it("hides every assignment surface on Threads, including other platforms' assignments", () => {
+    // Assignment rows are not platform-scoped. Showing them here would let a Threads user
+    // read and unassign live Facebook and WhatsApp conversations.
+    render(<AgentManager platform="threads" />);
+
+    expect(screen.queryByRole("tab", { name: /assignments/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /history/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/active assignments/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the assignment surfaces on a platform that has conversations", () => {
+    render(<AgentManager platform="facebook" />);
+
+    expect(screen.getByRole("tab", { name: /assignments/i })).toBeInTheDocument();
+    expect(screen.getByText(/1 active assignments/i)).toBeInTheDocument();
+  });
+
   it("still shows the shared agent roster on Threads", () => {
+    // The roster is genuinely shared — the AI agent's handover rules read agent status.
     render(<AgentManager platform="threads" />);
     expect(screen.getByText("Sara")).toBeInTheDocument();
   });

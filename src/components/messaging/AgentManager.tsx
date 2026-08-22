@@ -33,17 +33,20 @@ function supportsAssignment(platform: AgentManagerPlatform): boolean {
 }
 
 export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManagerPlatform } = {}) {
+  // Threads exposes no DM API, so it has no conversations to assign. Assignment records are
+  // not platform-scoped, so without this the Threads page would list -- and offer to unassign
+  // -- Facebook and WhatsApp conversations that have nothing to do with it. Only the agent
+  // roster and status controls are shared; those the AI agent's handover rules do read.
+  const canAssign = supportsAssignment(platform);
+
   const { agents, agentsLoading, myAgent, registerAgent, updateStatus } = useWhatsAppAgents();
   const { assignments, assignConversation, unassignConversation } = useConversationAssignments();
   const { data: history = [] } = useAssignmentHistory();
   const { accounts } = useMessagingAccounts();
   const account = accounts.find((a) => a.platform === platform);
   const messagingPlatform = platform === "whatsapp" ? "WHATSAPP" : platform === "instagram" ? "INSTAGRAM" : "MESSENGER";
-  // Threads exposes no DM API, so it has no conversation records to assign. Passing a null
-  // account id disables the query outright rather than asking the API for a list that cannot
-  // exist; the roster and status controls below work the same on every platform.
   const { data: conversations = [] } = useConversations(
-    supportsAssignment(platform) ? account?.id || null : null,
+    canAssign ? account?.id || null : null,
     messagingPlatform,
     { silent: true },
   );
@@ -117,10 +120,14 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManage
               <span className="text-muted-foreground">
                 {agents.filter((a) => a.status === "away").length} away
               </span>
-              <span className="text-muted-foreground">·</span>
-              <span className="text-muted-foreground">
-                {assignments.length} active assignments
-              </span>
+              {canAssign && (
+                <>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-muted-foreground">
+                    {assignments.length} active assignments
+                  </span>
+                </>
+              )}
             </div>
             <div className="flex items-center gap-2">
               {myAgent ? (
@@ -179,7 +186,7 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManage
                   </DialogContent>
                 </Dialog>
               )}
-              {supportsAssignment(platform) ? (
+              {canAssign ? (
                 <Dialog open={assignOpen} onOpenChange={setAssignOpen}>
                   <DialogTrigger asChild>
                     <Button size="sm">
@@ -246,14 +253,18 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManage
             <Users className="w-4 h-4" />
             Agents
           </TabsTrigger>
-          <TabsTrigger value="assignments" className="gap-1.5">
-            <ArrowRightLeft className="w-4 h-4" />
-            Assignments
-          </TabsTrigger>
-          <TabsTrigger value="history" className="gap-1.5">
-            <History className="w-4 h-4" />
-            History
-          </TabsTrigger>
+          {canAssign && (
+            <>
+              <TabsTrigger value="assignments" className="gap-1.5">
+                <ArrowRightLeft className="w-4 h-4" />
+                Assignments
+              </TabsTrigger>
+              <TabsTrigger value="history" className="gap-1.5">
+                <History className="w-4 h-4" />
+                History
+              </TabsTrigger>
+            </>
+          )}
         </TabsList>
 
         <TabsContent value="agents" className="mt-4">
@@ -304,6 +315,7 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManage
           )}
         </TabsContent>
 
+        {canAssign && (
         <TabsContent value="assignments" className="mt-4">
           {assignments.length === 0 ? (
             <Card>
@@ -344,7 +356,9 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManage
             </ScrollArea>
           )}
         </TabsContent>
+        )}
 
+        {canAssign && (
         <TabsContent value="history" className="mt-4">
           {history.length === 0 ? (
             <Card>
@@ -385,6 +399,7 @@ export function AgentManager({ platform = "whatsapp" }: { platform?: AgentManage
             </ScrollArea>
           )}
         </TabsContent>
+        )}
       </Tabs>
     </div>
   );

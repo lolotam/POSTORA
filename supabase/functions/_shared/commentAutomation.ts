@@ -4,7 +4,7 @@
 // here. Shared by facebook-instagram-webhook and threads-webhook so the two surfaces cannot
 // drift apart.
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { matchAutoReplyRule, type AutoReplyRule } from "./autoReplyRules.ts";
+import { matchAutoReplyRule, type AutoReplyMatch, type AutoReplyRule } from "./autoReplyRules.ts";
 import { replyToComment } from "./commentActions.ts";
 import { buildCommentConversationId, postConversationLikePrefix } from "./commentConversation.ts";
 
@@ -49,28 +49,41 @@ async function loadActiveRules(admin: any, account: CommentAutomationAccount): P
   return (data || []) as AutoReplyRule[];
 }
 
-// An away message is written for a private inbox ("we're closed, we'll get back to you
-// tomorrow"). Posted under every comment on a busy post it reads as spam, so on the public
-// surface it goes out at most once per post per day. Keyword rules are the natural public
-// case ("price" -> "DM us for a quote") and stay per commenter.
-async function awayAlreadyPostedOnThisPost(
+// The DM path throttles auto-replies with a module-level Map, which edge isolates recycle.
+// The public surface uses the usage table instead, so a burst of comments landing across
+// isolates is still throttled. The two rule kinds need different scopes:
+//
+//   away    -- once per post per day. An away message is written for a private inbox ("we're
+//              closed, back tomorrow"); posted under every comment on a busy post it is spam.
+//   keyword -- once per commenter per post per KEYWORD_COOLDOWN_MS. Answering each new
+//              commenter is the point ("price" -> "DM us for a quote"), but repeating the
+//              same canned line at one person firing off five comments is not.
+const KEYWORD_COOLDOWN_MS = 5 * 60 * 1000;
+
+async function ruleAlreadyReplied(
   admin: any,
-  { account, ruleId, postId, now }: {
+  { account, match, conversationId, postId, now }: {
     account: CommentAutomationAccount;
-    ruleId: string;
+    match: AutoReplyMatch;
+    conversationId: string;
     postId: string;
     now: Date;
   },
 ): Promise<boolean> {
-  const midnightUtc = new Date(now);
-  midnightUtc.setUTCHours(0, 0, 0, 0);
-  const { count } = await admin
+  const since = new Date(now);
+  if (match.ruleType === "away") since.setUTCHours(0, 0, 0, 0);
+  else since.setTime(since.getTime() - KEYWORD_COOLDOWN_MS);
+
+  const scoped = admin
     .from("messenger_auto_reply_usage")
     .select("id", { count: "exact", head: true })
     .eq("user_id", account.user_id)
-    .eq("auto_reply_rule_id", ruleId)
-    .like("conversation_id", postConversationLikePrefix(account.id, postId))
-    .gte("triggered_at", midnightUtc.toISOString());
+    .eq("auto_reply_rule_id", match.ruleId)
+    .gte("triggered_at", since.toISOString());
+
+  const { count } = await (match.ruleType === "away"
+    ? scoped.like("conversation_id", postConversationLikePrefix(account.id, postId))
+    : scoped.eq("conversation_id", conversationId));
   return (count || 0) > 0;
 }
 
@@ -135,26 +148,24 @@ export async function handleCommentInternally(
     return "agent_dispatched";
   }
 
-  if (
-    match.ruleType === "away" &&
-    await awayAlreadyPostedOnThisPost(admin, { account, ruleId: match.ruleId, postId, now })
-  ) {
+  if (await ruleAlreadyReplied(admin, { account, match, conversationId, postId, now })) {
     return "rule_suppressed";
   }
 
-  const result = await replyToComment(account, input.comment.id, match.replyMessage, fetcher);
-  if (!result.success) {
-    console.error(`[comment-automation] rule reply failed: ${result.error}`);
+  // Recorded in `finally`, before any send failure can propagate. The usage row is the
+  // throttle -- if a network error skipped it, the next comment would retry a send that is
+  // already known to be failing, and an away rule would post again on the same post.
+  try {
+    const result = await replyToComment(account, input.comment.id, match.replyMessage, fetcher);
+    if (!result.success) console.error(`[comment-automation] rule reply failed: ${result.error}`);
+  } finally {
+    const { error: usageError } = await admin.from("messenger_auto_reply_usage").insert({
+      user_id: account.user_id,
+      auto_reply_rule_id: match.ruleId,
+      conversation_id: conversationId,
+    });
+    if (usageError) console.warn("[comment-automation] usage log failed:", usageError.message);
   }
-
-  // Written even when the send failed: the row is what the once-per-post away guard reads,
-  // and a platform that rejected one reply will reject the next one on the same post too.
-  const { error: usageError } = await admin.from("messenger_auto_reply_usage").insert({
-    user_id: account.user_id,
-    auto_reply_rule_id: match.ruleId,
-    conversation_id: conversationId,
-  });
-  if (usageError) console.warn("[comment-automation] usage log failed:", usageError.message);
 
   // A matched rule claims the comment whether or not the send succeeded, so a failing rule
   // never falls through to the AI -- same precedence the DM path uses.

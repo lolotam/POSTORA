@@ -33,7 +33,7 @@ So the design is **one seam, not two**: `ai-agent-reply` gains a comment-reply s
 
 ### Reply routing
 
-```
+```text
 comment webhook (fb-ig | threads)
   └─ recordInboxEvent            (unchanged; always runs, drives the realtime UI)
   └─ isOwnComment?  → stop       (loop breaker — MUST stay before the branch)
@@ -98,11 +98,15 @@ if (request.comment_id) {
 
 ### D2 — `conversation_id` is per (post, commenter)
 
-```
-`${account.id}_comment_${postKey}_${authorKey}`
+```text
+`${account.id}:comment:${postKey}:${authorKey}`
 postKey   = post.id ?? comment.id       // Threads mentions carry no root post
 authorKey = author.id ?? author.username ?? comment.id
 ```
+
+Colon-separated, not underscore-separated. The DM surface keeps its historical
+`${accountId}_${senderId}` shape, so the two cannot be confused — and, more importantly,
+the segments are used to build `LIKE` prefixes below.
 
 - **Per comment** would give every comment its own `ai_threads` row, so `reply_cooldown_seconds` and `daily_message_cap` — both keyed on `conversation_id` — could never fire. A busy post would mean one LLM call and one public reply per comment with no ceiling.
 - **Per commenter, account-wide** (the first draft of this spec) leaks context across posts. The agent replays the last 4 turns of that thread, so something a person said under post A can surface in a **public** reply under post B, in front of a different audience. On a public surface that is a privacy failure, not just a relevance bug.
@@ -117,12 +121,12 @@ Threads wrinkle: `normalizeThreadsReply` sets `author.id = null` always — Thre
 For comment requests the cap counts **all comment conversations on the account** instead:
 
 ```sql
-conversation_id LIKE '<account.id>\_comment\_%' ESCAPE '\'
+conversation_id LIKE '<account.id>:comment:%'
 ```
 
 No new column and no new config field — the account id is already embedded in the conversation id by D2. `daily_message_cap` therefore means "DMs per conversation per day" for messages and "comment replies per account per day" for comments. This asymmetry is deliberate and documented in the code.
 
-**The escape is load-bearing.** `_` is a single-character wildcard in SQL `LIKE`, so an unescaped `<uuid>_comment_%` would also match `<uuid>Xcomment_…`. A shared `escapeLikePattern` helper escapes `\`, `%` and `_` in the account id prefix.
+**Escaping is load-bearing on the post prefix.** `\`, `%` and `_` are all `LIKE` pattern syntax. Account ids are UUIDs and contain none of them, but the once-per-post guard's prefix embeds a *platform* id — and a Facebook post id is literally `pageId_postId`. Unescaped, that `_` is a single-character wildcard and one post's prefix matches other posts' conversations, suppressing an away reply that should have gone out. `commentConversation.ts` escapes every dynamic segment.
 
 Only rows with `status = 'sent'` consume cap — errors and skips do not, matching the existing DM behaviour.
 
@@ -141,7 +145,14 @@ Away rules are evaluated before keyword rules (existing precedence, preserved). 
 
 **Rule ordering becomes deterministic.** `messenger_auto_replies` has no ordering constraint, and the current query relies on whatever order Postgres returns, so "the first matching keyword rule" is undefined today. The shared matcher orders candidates by `created_at, id` — oldest rule wins — which is stable across replicas and vacuum. This is a latent-bug fix for the DM path as well.
 
-**Away rules apply to comments too**, as the brief specifies, with one guard. The surface is opt-in behind a handler that defaults to `off`, so no existing account changes behaviour. But an away message written for DMs ("We're closed, we'll get back to you tomorrow") posted publicly under *every* comment on a busy post is spam, not service. So on the comment surface an away rule fires **at most once per post per away window**: before sending, the pipeline checks `messenger_auto_reply_usage` for any row whose `conversation_id` matches this account and post prefix inside the window. Keyword rules are unaffected — they are the natural public-comment case ("price" → "DM us for a quote") and stay per commenter.
+**Away rules apply to comments too**, as the brief specifies, with one guard. The surface is opt-in behind a handler that defaults to `off`, so no existing account changes behaviour. But an away message written for DMs ("We're closed, we'll get back to you tomorrow") posted publicly under *every* comment on a busy post is spam, not service. So on the comment surface both rule kinds are throttled against `messenger_auto_reply_usage`, at different scopes:
+
+| Rule | Scope | Window |
+|---|---|---|
+| away | every commenter under one post (`LIKE` post prefix) | since UTC midnight |
+| keyword | one commenter on one post (exact `conversation_id`) | 5 minutes |
+
+An away notice belongs on a post once, not under every comment on it. A keyword rule is the natural public-comment case ("price" → "DM us for a quote") and should answer every *new* commenter — but not repeat the same canned line at one person firing off five comments. The usage table is the throttle rather than the DM path's module-level `Map` because edge isolates recycle, so a burst landing across isolates would slip through an in-memory cooldown.
 
 No `scope` column is added — that would be a schema change and a user migration with no caller today. The away-on-public behaviour is called out in the PR description and release notes.
 
@@ -185,7 +196,7 @@ The frontend auto-deploys on merge to `main`, and the frontend is what un-disabl
 
 - `replyToComment` failures throw inside the sender, so `ai-agent-reply` logs `status: "error"` with Meta's `error_user_msg` and mirrors it to `system_logs` — the existing path, no new handling.
 - A rule-matched comment reply that fails to send is logged and **still claims the comment** (precedence is decided by the match, not the send result — same rule as the DM path), so a failed rule reply does not fall through to the AI.
-- Rule *evaluation* that throws returns "no match", letting the AI answer as a fallback (existing DM semantics, preserved).
+- Rule *evaluation* that throws **aborts the comment** (see D4). The DM path returns "no match" and lets the AI answer as a fallback; publicly, replying while the rule configuration is in an unknown state is the worse outcome, so the two surfaces deliberately differ here.
 - Webhook handlers keep returning 200 on internal failure. Meta retries non-200, and the inbox insert is the idempotency claim — a retry after a partial failure must not re-run automation.
 
 ### D10 — bounded public input, no empty replies

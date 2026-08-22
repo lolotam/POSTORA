@@ -20,10 +20,11 @@ const NOW = new Date(2026, 7, 19, 14, 30);
 interface StubOptions {
   rules?: Array<Record<string, unknown>>;
   rulesError?: string;
-  // Conversation-id prefixes that already have an away reply logged today. The stub honours
-  // the LIKE pattern the pipeline actually sends, so a query scoped to the wrong post (or to
-  // the whole account) changes the outcome rather than merely reading differently.
-  priorAwayReplyPrefixes?: string[];
+  // Usage rows already recorded, addressed the way the pipeline queries for them: away rules
+  // look up a post-scoped LIKE prefix, keyword rules an exact conversation id. The stub
+  // honours whichever the pipeline sent, so a lookup scoped to the wrong thing changes the
+  // outcome rather than merely reading differently.
+  priorUsage?: string[];
 }
 
 function stubAdmin(options: StubOptions = {}) {
@@ -31,13 +32,16 @@ function stubAdmin(options: StubOptions = {}) {
 
   const client = {
     from(table: string) {
-      let likePattern = "";
+      let usageKey = "";
       const builder: Record<string, unknown> = {
         select: () => builder,
-        eq: () => builder,
+        eq: (column: string, value: string) => {
+          if (column === "conversation_id") usageKey = value;
+          return builder;
+        },
         gte: () => builder,
         like: (_column: string, pattern: string) => {
-          likePattern = pattern;
+          usageKey = pattern;
           return builder;
         },
         order: () => builder,
@@ -49,7 +53,7 @@ function stubAdmin(options: StubOptions = {}) {
           resolve(
             table === "messenger_auto_replies"
               ? { data: options.rules || [], error: options.rulesError ? { message: options.rulesError } : null }
-              : { count: (options.priorAwayReplyPrefixes || []).filter((p) => p === likePattern).length, error: null },
+              : { count: (options.priorUsage || []).filter((key) => key === usageKey).length, error: null },
           ),
       };
       return builder;
@@ -157,11 +161,10 @@ Deno.test("agent threads are keyed by post and commenter, with platform-specific
   }
 });
 
+const awayRule = keywordRule({ id: "rule-away", rule_type: "away", keywords: null });
+
 Deno.test("an away rule that already answered on this post today does not answer again", async () => {
-  const { client } = stubAdmin({
-    rules: [keywordRule({ id: "rule-away", rule_type: "away", keywords: null })],
-    priorAwayReplyPrefixes: [`${ACCOUNT.id}:comment:p1:%`],
-  });
+  const { client } = stubAdmin({ rules: [awayRule], priorUsage: [`${ACCOUNT.id}:comment:p1:%`] });
   const calls: Array<{ url: string; body: unknown }> = [];
 
   const outcome = await handleCommentInternally(client, ACCOUNT, INPUT, {
@@ -174,11 +177,11 @@ Deno.test("an away rule that already answered on this post today does not answer
 });
 
 Deno.test("an away reply on a different post does not suppress this one", async () => {
-  // The guard is per post, not per account: one busy post must not silence the away notice
+  // The away guard is per post, not per account: one busy post must not silence the notice
   // everywhere else.
   const { client } = stubAdmin({
-    rules: [keywordRule({ id: "rule-away", rule_type: "away", keywords: null })],
-    priorAwayReplyPrefixes: [`${ACCOUNT.id}:comment:some-other-post:%`],
+    rules: [awayRule],
+    priorUsage: [`${ACCOUNT.id}:comment:some-other-post:%`],
   });
   const calls: Array<{ url: string; body: unknown }> = [];
 
@@ -187,6 +190,43 @@ Deno.test("an away reply on a different post does not suppress this one", async 
     "rule_replied",
   );
   assertStringIncludes(calls[0].url, "/c1/replies");
+});
+
+Deno.test("a keyword rule does not repeat itself at the same commenter within the cooldown", async () => {
+  const { client } = stubAdmin({ rules: [keywordRule()], priorUsage: [`${ACCOUNT.id}:comment:p1:a1`] });
+  const calls: Array<{ url: string; body: unknown }> = [];
+
+  const outcome = await handleCommentInternally(client, ACCOUNT, INPUT, {
+    fetcher: stubFetch(calls),
+    now: NOW,
+  });
+
+  assertEquals(outcome, "rule_suppressed");
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("a keyword rule still answers a different commenter on the same post", async () => {
+  // Keyword throttling is per commenter, not per post -- everyone asking the price deserves
+  // the answer, the same person asking five times does not deserve it five times.
+  const { client } = stubAdmin({ rules: [keywordRule()], priorUsage: [`${ACCOUNT.id}:comment:p1:someone-else`] });
+  const calls: Array<{ url: string; body: unknown }> = [];
+
+  assertEquals(
+    await handleCommentInternally(client, ACCOUNT, INPUT, { fetcher: stubFetch(calls), now: NOW }),
+    "rule_replied",
+  );
+  assertStringIncludes(calls[0].url, "/c1/replies");
+});
+
+Deno.test("usage is recorded even when the reply send throws, so the throttle still holds", async () => {
+  const { client, inserts } = stubAdmin({ rules: [keywordRule()] });
+  const exploding = (() => Promise.reject(new Error("socket hang up"))) as unknown as typeof fetch;
+
+  await handleCommentInternally(client, ACCOUNT, INPUT, { fetcher: exploding, now: NOW })
+    .catch(() => {});
+
+  assertEquals(inserts[0].table, "messenger_auto_reply_usage");
+  assertEquals(inserts[0].row.conversation_id, `${ACCOUNT.id}:comment:p1:a1`);
 });
 
 Deno.test("a rule reply the platform rejects still claims the comment", async () => {
