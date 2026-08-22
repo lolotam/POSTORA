@@ -225,25 +225,30 @@ Deno.serve(async (req) => {
         }
 
         for (const change of entry?.changes || []) {
+          // Normalized before the inbox claim, not after. The Page-level `feed` subscription
+          // that delivers comments also delivers likes, edits and removals, and every one of
+          // those carries the same `comment_id`. Claiming the idempotency slot first would let
+          // a like on a comment consume that comment's only claim; the real comment then reads
+          // back as a duplicate and is dropped, silently and permanently. Meta does not
+          // guarantee delivery order, so this is not a theoretical race.
+          const normalized = normalizeMetaCommentChange(platform, change);
+          if (!normalized) continue;
+
           const account = await findAccountForRecipient(adminClient, platform, recipientId);
-          const externalEventId = change?.value?.comment_id || change?.value?.id;
-          if (!account || !externalEventId) continue;
+          if (!account) continue;
 
           const inboxResult = await recordInboxEvent(adminClient, {
             account,
             platform,
             eventType: "comment",
-            externalEventId: String(externalEventId),
+            externalEventId: normalized.comment.id,
             payload: change,
           });
           if (inboxResult !== "inserted") continue;
-
-          const normalized = normalizeMetaCommentChange(platform, change);
-          if (!normalized) continue;
           // The loop breaker, and it must stay ahead of both branches below: whatever replies
           // here comes back as another comment event, and only this check ends that cycle.
           if (isOwnComment(account, normalized.author)) {
-            console.log(`[fb-ig-webhook] skipped own ${platform} comment ${externalEventId}`);
+            console.log(`[fb-ig-webhook] skipped own ${platform} comment ${normalized.comment.id}`);
             continue;
           }
 

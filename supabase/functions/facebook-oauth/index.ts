@@ -182,13 +182,19 @@ async function exchangeForLongLivedToken(shortLivedToken: string): Promise<{ tok
   return { token: shortLivedToken, expiresAt: expiresDate.toISOString() };
 }
 
-// Subscribes a connected Page to the webhook fields the messaging inbox needs (messages,
-// messaging_postbacks). Best-effort: without this, the Page never sends any webhook events,
-// but a failure here shouldn't block the page connection itself.
+// Meta gates delivery on the intersection of two subscriptions: the app-level fields in the
+// App Dashboard, and the per-Page fields registered here. `feed` is what carries comment
+// events, so omitting it meant the comment webhook path never received a single event no
+// matter how the app was configured. POST replaces the whole set rather than adding to it,
+// so every field the Page needs has to be listed on each call.
+const PAGE_WEBHOOK_FIELDS = "messages,messaging_postbacks,feed";
+
+// Best-effort: without this, the Page never sends any webhook events, but a failure here
+// shouldn't block the page connection itself.
 async function subscribePageToWebhooks(pageId: string, pageToken: string): Promise<void> {
   try {
     const res = await fetch(
-      `https://graph.facebook.com/v18.0/${pageId}/subscribed_apps?subscribed_fields=messages,messaging_postbacks&access_token=${pageToken}`,
+      `https://graph.facebook.com/v18.0/${pageId}/subscribed_apps?subscribed_fields=${PAGE_WEBHOOK_FIELDS}&access_token=${pageToken}`,
       { method: "POST" },
     );
     if (!res.ok) {

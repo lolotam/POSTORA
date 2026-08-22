@@ -39,14 +39,18 @@ const IG_SCOPES = [
   "instagram_business_manage_insights",
 ].join(",");
 
+// `comments` is what carries comment events; without it Meta delivers none, regardless of the
+// app-level subscription. POST replaces the whole set, so both fields go on every call.
+const IG_WEBHOOK_FIELDS = "messages,comments";
+
 // Best-effort: subscribes a direct-login Instagram account (no linked Facebook Page) to
-// messaging webhooks via the Instagram Graph API's own subscribed_apps endpoint. Unverified
-// against live traffic — direct-login accounts are a newer product surface and Meta's docs are
-// thinner here than for Page-linked subscriptions. A failure here doesn't block the connection.
+// messaging and comment webhooks via the Instagram Graph API's own subscribed_apps endpoint.
+// Confirmed against live traffic on 2026-08-22 while backfilling existing accounts. A failure
+// here doesn't block the connection.
 async function subscribeDirectAccountToWebhooks(igUserId: string, accessToken: string): Promise<void> {
   try {
     const res = await fetch(
-      `https://graph.instagram.com/v22.0/${igUserId}/subscribed_apps?subscribed_fields=messages&access_token=${accessToken}`,
+      `https://graph.instagram.com/v22.0/${igUserId}/subscribed_apps?subscribed_fields=${IG_WEBHOOK_FIELDS}&access_token=${accessToken}`,
       { method: "POST" },
     );
     if (!res.ok) {

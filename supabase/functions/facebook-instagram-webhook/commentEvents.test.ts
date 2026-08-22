@@ -44,3 +44,28 @@ Deno.test("instagram comments change → comment input", () => {
 Deno.test("unrelated fields are ignored", () => {
   assertEquals(normalizeMetaCommentChange("instagram", { field: "mentions", value: {} }), null);
 });
+
+// A like on a comment arrives on the same `feed` subscription and carries the SAME
+// `comment_id` as the comment it is attached to. The webhook uses the normalized comment id
+// as its idempotency claim precisely because of this: if a raw `value.comment_id` were
+// claimed instead, this event would consume the real comment's only claim and the comment
+// would be dropped as a duplicate. Meta does not guarantee delivery order.
+Deno.test("a like carrying a comment_id is not a comment", () => {
+  assertEquals(
+    normalizeMetaCommentChange("facebook", {
+      field: "feed",
+      value: { item: "like", verb: "add", comment_id: "17841400000000000", post_id: "123_456" },
+    }),
+    null,
+  );
+});
+
+// Same hazard for edits and reactions, which the `feed` subscription also delivers.
+Deno.test("edits and reactions on a comment are not new comments", () => {
+  for (const value of [
+    { item: "comment", verb: "edited", comment_id: "c1", message: "changed" },
+    { item: "reaction", verb: "add", comment_id: "c1" },
+  ]) {
+    assertEquals(normalizeMetaCommentChange("facebook", { field: "feed", value }), null);
+  }
+});
