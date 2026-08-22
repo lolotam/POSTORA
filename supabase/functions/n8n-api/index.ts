@@ -3,6 +3,8 @@ import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse, conta
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { EVOLUTION_MEDIA_TYPES, sendMessage, type MessageSendAccount } from "../_shared/messageSend.ts";
 import { describeMessagingAccount } from "../_shared/n8nMessagingDispatch.ts";
+import { type CommentActionResult, deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
+import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import {
   type LinkedInDestinationSelection,
   listLinkedInDestinations,
@@ -19,12 +21,18 @@ const RATE_LIMITS: Record<string, { requests: number; windowMs: number }> = {
   '/api/v1/accounts': { requests: 100, windowMs: 60 * 60 * 1000 }, // 100 queries per hour
   '/api/v1/webhooks': { requests: 30, windowMs: 60 * 60 * 1000 }, // 30 webhook operations per hour
   '/api/v1/messages/reply': { requests: 60, windowMs: 60 * 60 * 1000 },
+  '/api/v1/comments/reply': { requests: 120, windowMs: 60 * 60 * 1000 },
+  '/api/v1/comments/hide': { requests: 120, windowMs: 60 * 60 * 1000 },
+  '/api/v1/comments/delete': { requests: 60, windowMs: 60 * 60 * 1000 },
   'default': { requests: 100, windowMs: 60 * 60 * 1000 }, // Default: 100 requests per hour
 };
 
 const ALLOWED_WEBHOOK_EVENTS = new Set([
   'post.completed', 'post.failed', 'post.published',
-  'message.received', 'message.whatsapp', 'message.instagram', 'message.facebook', '*',
+  'message.received', 'message.whatsapp', 'message.instagram', 'message.facebook',
+  'comment.received', 'comment.facebook', 'comment.instagram', 'comment.threads',
+  'threads.mention.created', 'threads.mention.replied',
+  '*',
 ]);
 
 // Check rate limit using api_logs table
@@ -1468,6 +1476,23 @@ async function handleRegisterWebhook(req: Request, supabase: any, userId: string
     );
   }
 
+  const parsedFilters = parseSubscriptionFilters(body);
+  if (!parsedFilters.ok) return apiError(req, parsedFilters.error, 400, 'INVALID_FILTER');
+  const { filters } = parsedFilters;
+  if (filters.social_account_id) {
+    const { data: account } = await supabase
+      .from('social_accounts')
+      .select('id, user_id, platform')
+      .eq('id', filters.social_account_id)
+      .maybeSingle();
+    if (!account || account.user_id !== userId) {
+      return apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND');
+    }
+    if (filters.platform && filters.platform !== account.platform) {
+      return apiError(req, 'platform does not match the selected social account', 400, 'INVALID_PLATFORM');
+    }
+  }
+
   // Create webhook entry in app_settings with user-specific key
   const webhookId = crypto.randomUUID();
   const webhookKey = `n8n_webhook_${userId}_${webhookId}`;
@@ -1482,6 +1507,7 @@ async function handleRegisterWebhook(req: Request, supabase: any, userId: string
         user_id: userId,
         webhook_url,
         events: subscribedEvents,
+        ...filters,
         webhook_secret: webhookSecret,
         created_at: new Date().toISOString(),
         is_active: true
@@ -1506,6 +1532,7 @@ async function handleRegisterWebhook(req: Request, supabase: any, userId: string
         id: webhookId,
         webhook_url,
         events: subscribedEvents,
+        ...filters,
         webhook_secret: webhookSecret,
         status: 'active'
       }
@@ -1536,6 +1563,8 @@ async function handleGetWebhooks(req: Request, supabase: any, userId: string) {
     id: s.value.webhook_id,
     webhook_url: s.value.webhook_url,
     events: s.value.events,
+    platform: s.value.platform ?? null,
+    social_account_id: s.value.social_account_id ?? null,
     is_active: s.value.is_active,
     created_at: s.value.created_at
   }));
@@ -1802,6 +1831,65 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
     const detail = containsSensitiveInfo(upstream) ? 'the messaging provider rejected the request' : upstream;
     return apiError(req, `Failed to send message: ${detail}`, 502, 'MESSAGE_SEND_FAILED');
   }
+}
+
+async function loadOwnedCommentAccount(req: Request, supabase: any, userId: string, body: any) {
+  const accountId = typeof body?.social_account_id === 'string' ? body.social_account_id : '';
+  const commentId = typeof body?.comment_id === 'string' ? body.comment_id.trim() : '';
+  if (!accountId || !commentId) {
+    return { error: apiError(req, 'social_account_id and comment_id are required', 400, 'INVALID_COMMENT_REQUEST') };
+  }
+  const { data: account, error } = await supabase
+    .from('social_accounts')
+    .select('id, user_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token')
+    .eq('id', accountId)
+    .maybeSingle();
+  if (error) return { error: apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR') };
+  if (!account || account.user_id !== userId) {
+    return { error: apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND') };
+  }
+  if (!['facebook', 'instagram', 'threads'].includes(account.platform)) {
+    return { error: apiError(req, 'Comments are supported for Facebook, Instagram and Threads accounts', 400, 'INVALID_PLATFORM') };
+  }
+  if (typeof body?.platform === 'string' && body.platform && body.platform !== account.platform) {
+    return { error: apiError(req, 'platform does not match the selected social account', 400, 'INVALID_PLATFORM') };
+  }
+  return { account, commentId };
+}
+
+function commentActionResponse(req: Request, result: CommentActionResult): Response {
+  if (!result.success) {
+    const detail = result.error && containsSensitiveInfo(result.error) ? 'the platform rejected the request' : result.error;
+    return apiError(req, `Comment action failed: ${detail}`, 502, 'COMMENT_ACTION_FAILED');
+  }
+  return new Response(
+    JSON.stringify({ success: true, platform_comment_id: result.platform_comment_id }),
+    { status: 200, headers: { ...restrictedCorsHeaders(req), 'Content-Type': 'application/json' } },
+  );
+}
+
+async function handleCommentReply(req: Request, supabase: any, userId: string, body: any) {
+  const loaded = await loadOwnedCommentAccount(req, supabase, userId, body);
+  if (loaded.error) return loaded.error;
+  const message = typeof body?.message === 'string' ? body.message.trim() : '';
+  if (!message) return apiError(req, 'message is required', 400, 'INVALID_COMMENT_REQUEST');
+  return commentActionResponse(req, await replyToComment(loaded.account, loaded.commentId, message));
+}
+
+async function handleCommentHide(req: Request, supabase: any, userId: string, body: any) {
+  const loaded = await loadOwnedCommentAccount(req, supabase, userId, body);
+  if (loaded.error) return loaded.error;
+  const hide = body?.hide === undefined ? true : body.hide === true || body.hide === 'true';
+  return commentActionResponse(req, await hideComment(loaded.account, loaded.commentId, hide));
+}
+
+async function handleCommentDelete(req: Request, supabase: any, userId: string, body: any) {
+  const loaded = await loadOwnedCommentAccount(req, supabase, userId, body);
+  if (loaded.error) return loaded.error;
+  if (loaded.account.platform === 'threads') {
+    return apiError(req, 'Threads replies cannot be deleted through the API; use hide instead.', 400, 'UNSUPPORTED_PLATFORM');
+  }
+  return commentActionResponse(req, await deleteComment(loaded.account, loaded.commentId));
 }
 
 // Standardized API error helper
@@ -2082,6 +2170,12 @@ Deno.serve(async (req) => {
     } else if (path === '/api/v1/messages/reply' && req.method === 'POST') {
       const body = await parseRequestBody(req);
       response = await handleMessageReply(req, supabaseAdmin, userId, body);
+    } else if (path === '/api/v1/comments/reply' && req.method === 'POST') {
+      response = await handleCommentReply(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/comments/hide' && req.method === 'POST') {
+      response = await handleCommentHide(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/comments/delete' && req.method === 'POST') {
+      response = await handleCommentDelete(req, supabaseAdmin, userId, await parseRequestBody(req));
     } else {
       // 404 for unknown routes
       response = apiError(req, 'Not Found', 404, 'NOT_FOUND', {
@@ -2096,7 +2190,10 @@ Deno.serve(async (req) => {
           'GET /api/v1/webhooks',
           'DELETE /api/v1/webhooks/:id',
           'POST /api/v1/webhooks/test',
-          'POST /api/v1/messages/reply'
+          'POST /api/v1/messages/reply',
+          'POST /api/v1/comments/reply',
+          'POST /api/v1/comments/hide',
+          'POST /api/v1/comments/delete'
         ]
       });
     }
