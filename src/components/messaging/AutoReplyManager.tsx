@@ -115,22 +115,34 @@ function RuleForm({
   );
 }
 
-// Threads has no direct messages: rules there fire on public replies and mentions, and the
-// reply is posted in public. Describing them as message automation would have users writing
-// inbox copy for a comment thread.
+// Which surfaces these rules actually reach depends on the platform, and getting it wrong
+// sends users to write inbox copy for a public post or vice versa:
+//   WhatsApp            -- DMs only; it has no comments.
+//   Facebook/Instagram  -- DMs, plus public comments when the account's Comments handler is
+//                          set to the Postora AI Agent.
+//   Threads             -- public replies and mentions only; it has no DM API.
 const COPY = {
-  message: {
+  messageOnly: {
     subtitle: "Set up automatic responses for incoming messages",
     emptyState: "No auto-reply rules yet. Create one to automatically respond to messages.",
   },
-  comment: {
+  messageAndComment: {
+    subtitle: "Set up automatic responses for incoming messages and public comments",
+    emptyState: "No auto-reply rules yet. Create one to respond automatically to a message or a comment.",
+  },
+  commentOnly: {
     subtitle: "Set up automatic public replies to comments and mentions",
-    emptyState: "No auto-reply rules yet. Create one to reply publicly when a comment matches.",
+    emptyState: "No auto-reply rules yet. Create one to reply publicly when a comment or mention matches.",
   },
 };
 
+function copyFor(platform?: MessengerPlatform) {
+  if (!platform) return COPY.messageOnly;
+  return platform === "threads" ? COPY.commentOnly : COPY.messageAndComment;
+}
+
 export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } = {}) {
-  const copy = platform === "threads" ? COPY.comment : COPY.message;
+  const copy = copyFor(platform);
   const whatsapp = useWhatsAppAutoReplies(!platform);
   const messenger = useMessengerAutoReplies(platform ?? "facebook", !!platform);
   const { rules, isLoading, createRule, updateRule, deleteRule, toggleRule } = platform ? messenger : whatsapp;

@@ -126,7 +126,7 @@ conversation_id LIKE '<account.id>:comment:%'
 
 No new column and no new config field — the account id is already embedded in the conversation id by D2. `daily_message_cap` therefore means "DMs per conversation per day" for messages and "comment replies per account per day" for comments. This asymmetry is deliberate and documented in the code.
 
-**Escaping is load-bearing on the post prefix.** `\`, `%` and `_` are all `LIKE` pattern syntax. Account ids are UUIDs and contain none of them, but the once-per-post guard's prefix embeds a *platform* id — and a Facebook post id is literally `pageId_postId`. Unescaped, that `_` is a single-character wildcard and one post's prefix matches other posts' conversations, suppressing an away reply that should have gone out. `commentConversation.ts` escapes every dynamic segment.
+**Escaping is load-bearing on the post-prefix.** `\`, `%` and `_` are all `LIKE` pattern syntax. Account ids are UUIDs and contain none of them, but the once-per-post guard's prefix embeds a *platform* id — and a Facebook post id is literally `pageId_postId`. Unescaped, that `_` is a single-character wildcard and one post's prefix matches other posts' conversations, suppressing an away reply that should have gone out. `commentConversation.ts` escapes every dynamic segment.
 
 Only rows with `status = 'sent'` consume cap — errors and skips do not, matching the existing DM behaviour.
 
@@ -149,7 +149,7 @@ Away rules are evaluated before keyword rules (existing precedence, preserved). 
 
 | Rule | Scope | Window |
 |---|---|---|
-| away | every commenter under one post (`LIKE` post prefix) | since UTC midnight |
+| away | every commenter under one post (`LIKE` post-prefix) | since UTC midnight |
 | keyword | one commenter on one post (exact `conversation_id`) | 5 minutes |
 
 An away notice belongs on a post once, not under every comment on it. A keyword rule is the natural public-comment case ("price" → "DM us for a quote") and should answer every *new* commenter — but not repeat the same canned line at one person firing off five comments. The usage table is the throttle rather than the DM path's module-level `Map` because edge isolates recycle, so a burst landing across isolates would slip through an in-memory cooldown.
