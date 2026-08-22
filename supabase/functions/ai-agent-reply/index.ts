@@ -517,7 +517,17 @@ Deno.serve(async (req) => {
     });
 
     const replySender = dryRun ? null : await buildReplySender(admin, request);
-    const adminNotifier = dryRun ? null : await buildAdminNotifier(admin, request);
+
+    // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
+    // no connected WhatsApp account, and awaiting it here made that throw abort the entire
+    // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
+    // even with no admin numbers configured. notifyAdmins already catches per recipient, which
+    // is where the failure belongs.
+    let adminNotifier: Promise<TextSender> | null = null;
+    const notifyAdmin: TextSender = async (recipientPhone, text) => {
+      adminNotifier ??= buildAdminNotifier(admin, request);
+      return await (await adminNotifier)(recipientPhone, text);
+    };
     const { data: cachedConversation } = await admin
       .from("messaging_cache")
       .select("participant_name")
@@ -542,8 +552,8 @@ Deno.serve(async (req) => {
           embeddingConfig,
         ),
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
-        if (!adminNotifier) return;
-        await adminNotifier(recipientPhone, text);
+        if (dryRun) return;
+        await notifyAdmin(recipientPhone, text);
       },
     };
 
