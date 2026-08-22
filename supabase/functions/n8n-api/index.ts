@@ -5,6 +5,7 @@ import { EVOLUTION_MEDIA_TYPES, sendMessage, type MessageSendAccount } from "../
 import { describeMessagingAccount } from "../_shared/n8nMessagingDispatch.ts";
 import { type CommentActionResult, deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
+import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import {
   type LinkedInDestinationSelection,
   listLinkedInDestinations,
@@ -64,14 +65,23 @@ async function checkRateLimit(
   const remaining = Math.max(0, config.requests - currentCount);
   const allowed = currentCount < config.requests;
 
-  // Log this request
-  await supabase.from('api_logs').insert({
+  // Log this request. The insert error is checked rather than discarded: this row is
+  // both the audit trail and the counter the block above reads, so a silent failure
+  // leaves `currentCount` at 0 forever and the limit above never binds. That is
+  // exactly what a raw multi-hop `x-forwarded-for` did to the `inet` column here.
+  const { error: logError } = await supabase.from('api_logs').insert({
     user_id: userId,
     endpoint: endpoint,
     method: method,
     ip_address: ipAddress,
     status_code: allowed ? 200 : 429,
   });
+  if (logError) {
+    console.error(
+      `[n8n-api] api_logs insert failed for ${method} ${endpoint} (rate limiting is not counting this request):`,
+      logError.message,
+    );
+  }
 
   return {
     allowed,
@@ -1733,8 +1743,7 @@ async function handleGetMediaById(req: Request, supabase: any, userId: string, m
   const corsHeaders = restrictedCorsHeaders(req);
 
   // Malformed UUID → 400 (do this before any DB query)
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!UUID_RE.test(mediaId)) {
+  if (!isValidUuid(mediaId)) {
     return apiError(req, `'${mediaId}' is not a valid UUID.`, 400, 'INVALID_UUID');
   }
 
@@ -1773,6 +1782,35 @@ async function handleGetMediaById(req: Request, supabase: any, userId: string, m
   );
 }
 
+/**
+ * Records why an account lookup was refused. The client keeps a single
+ * non-enumerable 404 either way — a caller must not learn whether an id it does not
+ * own exists — but the operator needs the two cases apart, because a cross-tenant
+ * n8n credential and a stale id are different fixes and the response cannot say which.
+ * Ids only: no tokens, no request body.
+ */
+/**
+ * `social_accounts.id` is a uuid column, so a page id or a username makes Postgres
+ * raise 22P02, which surfaces as a 500 and reads as a server fault. Reject it up
+ * front as the client error it is, and name what the field actually wants.
+ */
+function invalidAccountIdError(req: Request, accountId: string) {
+  return apiError(
+    req,
+    `social_account_id must be a Postora account UUID (from the trigger payload or GET /api/v1/accounts), not '${accountId}'.`,
+    400,
+    'INVALID_ACCOUNT_ID',
+  );
+}
+
+function logAccountAccessDenied(scope: string, accountId: string, callerId: string, ownerId: string | null) {
+  if (ownerId === null) {
+    console.warn(`[n8n-api] ${scope}: no social account ${accountId} exists (caller ${callerId})`);
+    return;
+  }
+  console.warn(`[n8n-api] ${scope}: Tenancy mismatch: account owner ${ownerId} !== caller ${callerId} (account ${accountId})`);
+}
+
 async function handleMessageReply(req: Request, supabase: any, userId: string, body: any) {
   const accountId = typeof body?.social_account_id === 'string' ? body.social_account_id : '';
   const recipientId = typeof body?.recipient_id === 'string'
@@ -1794,6 +1832,8 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
     return apiError(req, `media_type must be one of ${EVOLUTION_MEDIA_TYPES.join(', ')}`, 400, 'INVALID_MEDIA_TYPE');
   }
 
+  if (!isValidUuid(accountId)) return invalidAccountIdError(req, accountId);
+
   const { data: account, error } = await supabase
     .from('social_accounts')
     .select('id, user_id, workspace_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token, connection_mode')
@@ -1801,6 +1841,7 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
     .maybeSingle();
   if (error) return apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR');
   if (!account || account.user_id !== userId) {
+    logAccountAccessDenied('messages/reply', accountId, userId, account?.user_id ?? null);
     return apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND');
   }
 
@@ -1839,6 +1880,7 @@ async function loadOwnedCommentAccount(req: Request, supabase: any, userId: stri
   if (!accountId || !commentId) {
     return { error: apiError(req, 'social_account_id and comment_id are required', 400, 'INVALID_COMMENT_REQUEST') };
   }
+  if (!isValidUuid(accountId)) return { error: invalidAccountIdError(req, accountId) };
   const { data: account, error } = await supabase
     .from('social_accounts')
     .select('id, user_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token')
@@ -1846,6 +1888,7 @@ async function loadOwnedCommentAccount(req: Request, supabase: any, userId: stri
     .maybeSingle();
   if (error) return { error: apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR') };
   if (!account || account.user_id !== userId) {
+    logAccountAccessDenied('comments', accountId, userId, account?.user_id ?? null);
     return { error: apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND') };
   }
   if (!['facebook', 'instagram', 'threads'].includes(account.platform)) {
@@ -2037,7 +2080,7 @@ Deno.serve(async (req) => {
     const userPreferredTimezone = authResult.preferredTimezone;
 
     // Check rate limit
-    const ipAddress = req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip');
+    const ipAddress = clientIpFromHeaders(req.headers);
     const rateLimit = await checkRateLimit(supabaseAdmin, userId, path, req.method, ipAddress);
 
     if (!rateLimit.allowed) {
