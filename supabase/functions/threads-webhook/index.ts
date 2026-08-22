@@ -186,19 +186,42 @@ Deno.serve(async (req) => {
   try {
     payload = JSON.parse(rawBody);
   } catch {
+    console.warn("[threads-webhook] rejected POST: body is not JSON");
     return new Response("Bad request", { status: 400 });
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  const entries = payload?.entry || [];
   let processed = 0;
 
   const ACCOUNT_SELECT = "id, user_id, platform, platform_user_id, platform_username, account_metadata, access_token";
 
-  for (const change of extractThreadsChanges(payload)) {
-    if (change.field !== "mentions" && change.field !== "replies") continue;
+  // Everything that turns a delivery away above this point names itself in the log. The
+  // three skips below did not, so a delivery Meta recorded as successful could vanish here
+  // and leave nothing at all to read -- which is what made "Meta never sent it" and "we
+  // received it and dropped it" indistinguishable. Shapes only: no comment text, no author.
+  const changes = extractThreadsChanges(payload);
+  if (changes.length === 0) {
+    console.warn(
+      `[threads-webhook] delivery parsed 0 changes (object=${payload?.object ?? "none"}, top-level keys: ${
+        Object.keys(payload ?? {}).join(", ") || "none"
+      })`,
+    );
+  }
+
+  for (const change of changes) {
+    if (change.field !== "mentions" && change.field !== "replies") {
+      console.warn(`[threads-webhook] ignoring field '${change.field}' -- only mentions and replies are handled`);
+      continue;
+    }
     const threadsUserId = change.targetId || change.value?.recipient_id || change.value?.root_post?.owner_id;
-    if (!threadsUserId) continue;
+    if (!threadsUserId) {
+      console.warn(
+        `[threads-webhook] '${change.field}' delivery carried no threads user id (value keys: ${
+          Object.keys(change.value ?? {}).join(", ") || "none"
+        })`,
+      );
+      continue;
+    }
 
     const { data: account } = await supabase
       .from("social_accounts")
