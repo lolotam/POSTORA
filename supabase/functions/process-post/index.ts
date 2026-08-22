@@ -4,8 +4,13 @@
  * ============================================================================
  * 
  * This function processes posts and publishes content to multiple social media
- * platforms. Due to Supabase Edge Function limitations, all code must be in
- * this single file - imports from other files are not supported.
+ * platforms.
+ *
+ * NOTE: cross-file imports ARE supported and this file already uses them —
+ * shared logic lives in ../_shared. An earlier version of this comment claimed
+ * the opposite, which taught contributors to keep piling code in here.
+ * New provider logic MUST be extracted to ../_shared, not added below.
+ * See ARCHITECTURE.md §41.
  * 
  * TABLE OF CONTENTS
  * ═════════════════
