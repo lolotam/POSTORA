@@ -5,6 +5,12 @@ import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspace
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
 import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
+import {
+  COMMENT_AUTOMATION_HANDLERS,
+  MESSAGE_AUTOMATION_HANDLERS,
+  resolveAutomationHandler,
+  resolveCommentAutomationHandler,
+} from "../_shared/automationHandler.ts";
 
 // Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
 // before that window closes rather than serving a dead link from messaging_cache.
@@ -311,6 +317,60 @@ Deno.serve(async (req) => {
       if (typeof value !== "string" || !value.trim().startsWith("+")) return null;
       const normalized = `+${value.trim().slice(1).replace(/[\s-]/g, "")}`;
       return /^\+[1-9]\d{1,14}$/.test(normalized) ? normalized : null;
+    }
+
+    // ACTION: get_automation_handlers
+    if (action === "get_automation_handlers") {
+      const account = await getAccountToken(String(body.social_account_id || ""));
+      return jsonResponse({
+        social_account_id: account.id,
+        platform: account.platform,
+        automation_handler: resolveAutomationHandler(account.account_metadata),
+        comment_automation_handler: resolveCommentAutomationHandler(account.account_metadata),
+      });
+    }
+
+    // ACTION: set_automation_handlers
+    if (action === "set_automation_handlers") {
+      // getAccountToken already scopes the lookup to this user, so an unowned id 404s here
+      // before the RPC is ever reached.
+      const account = await getAccountToken(String(body.social_account_id || ""));
+      const patch: Record<string, string> = {};
+
+      if (body.automation_handler !== undefined) {
+        if (!(MESSAGE_AUTOMATION_HANDLERS as readonly unknown[]).includes(body.automation_handler)) {
+          return jsonResponse({ error: "automation_handler must be internal, n8n or off" }, 400);
+        }
+        patch.automation_handler = body.automation_handler;
+      }
+
+      if (body.comment_automation_handler !== undefined) {
+        if (!(COMMENT_AUTOMATION_HANDLERS as readonly unknown[]).includes(body.comment_automation_handler)) {
+          return jsonResponse({ error: "comment_automation_handler must be off, internal or n8n" }, 400);
+        }
+        if (body.comment_automation_handler === "internal") {
+          return jsonResponse({ error: "The Postora AI agent does not handle comments yet" }, 400);
+        }
+        patch.comment_automation_handler = body.comment_automation_handler;
+      }
+
+      if (Object.keys(patch).length === 0) return jsonResponse({ error: "Nothing to update" }, 400);
+
+      // Atomic jsonb merge inside the row lock. A read-merge-write here would clobber a
+      // concurrent update to any other account_metadata key (ig_igid, flow, token_type).
+      // anonClient carries the caller's JWT, which the RPC needs: it self-scopes on auth.uid().
+      const { data: merged, error } = await anonClient.rpc("patch_account_metadata", {
+        p_account_id: account.id,
+        p_patch: patch,
+      });
+      if (error) throw error;
+
+      return jsonResponse({
+        social_account_id: account.id,
+        platform: account.platform,
+        automation_handler: resolveAutomationHandler(merged),
+        comment_automation_handler: resolveCommentAutomationHandler(merged),
+      });
     }
 
     // ACTION: ai_get_config
