@@ -59,6 +59,9 @@ Deno.test("an unreachable platform is a flagged failure, not a thrown error", as
     throw new TypeError("connection refused");
   };
   const network = await replyToComment(fbAccount, "c1", "Thanks!", refused as unknown as typeof fetch);
+  // Both halves matter: the flag alone would still pass if the result came back successful,
+  // and commentActionResponse would then answer 200 for a request that never reached Meta.
+  assertEquals(network.success, false);
   assertEquals(network.upstreamUnavailable, true);
 });
 
