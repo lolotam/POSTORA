@@ -259,7 +259,9 @@ Deno.serve(async (req) => {
       try {
         const profUrl =
           `https://graph.threads.net/v1.0/${encodeURIComponent(norm.author_id)}?fields=threads_profile_picture_url&access_token=${encodeURIComponent(account.access_token)}`;
-        const profRes = await fetch(profUrl);
+        // Bounded: this runs inside Meta's webhook request, which Meta retries when we are
+        // slow, so a hanging profile lookup would turn one mention into repeated deliveries.
+        const profRes = await fetch(profUrl, { signal: AbortSignal.timeout(5_000) });
         const profJson = await profRes.json().catch(() => ({}));
         if (profRes.ok && typeof profJson?.threads_profile_picture_url === "string") {
           const raw = profJson.threads_profile_picture_url as string;

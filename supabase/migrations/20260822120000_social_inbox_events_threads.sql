@@ -41,6 +41,11 @@ AS $function$
 DECLARE
   v_metadata jsonb;
 BEGIN
+  -- jsonb || NULL is NULL, so a null patch would erase every key rather than change none.
+  IF p_patch IS NULL OR jsonb_typeof(p_patch) <> 'object' THEN
+    RAISE EXCEPTION 'p_patch must be a jsonb object';
+  END IF;
+
   UPDATE public.social_accounts
   SET account_metadata = COALESCE(account_metadata, '{}'::jsonb) || p_patch
   WHERE id = p_account_id AND user_id = auth.uid()

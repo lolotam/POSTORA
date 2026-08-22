@@ -432,7 +432,9 @@ export class Postora implements INodeType {
         displayName: "Comment ID",
         name: "commentId",
         type: "string",
-        default: "={{ $json.comment.id }}",
+        // Falls back to data.mention_id so the legacy threads.mention.* envelopes, which have
+        // no `comment` object, still populate this field from a Comment Trigger.
+        default: "={{ $json.comment ? $json.comment.id : $json.data.mention_id }}",
         required: true,
         displayOptions: { show: { resource: ["comment"] } },
       },
@@ -1271,8 +1273,14 @@ export class Postora implements INodeType {
 
         // ── Comment → Reply / Hide / Delete ──
         else if (resource === "comment" && ["reply", "hide", "delete"].includes(operation)) {
+          const commentPlatform = this.getNodeParameter("commentPlatform", i, "facebook") as string;
+          // Threads only lets an account delete its own posts, so deleting someone else's
+          // reply is refused upstream. Say so here instead of surfacing a raw API error.
+          if (operation === "delete" && commentPlatform === "threads") {
+            throw new Error("Threads replies cannot be deleted. Use the Hide operation instead.");
+          }
           const commentBody: Record<string, unknown> = {
-            platform: this.getNodeParameter("commentPlatform", i, "facebook") as string,
+            platform: commentPlatform,
             social_account_id: requireParam(this.getNodeParameter("commentSocialAccountId", i, "") as string, "Social Account ID"),
             comment_id: requireParam(this.getNodeParameter("commentId", i, "") as string, "Comment ID"),
           };

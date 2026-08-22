@@ -351,7 +351,7 @@ export default function ThreadsMentions() {
 
             {/* REPLIES TAB */}
             <TabsContent value="replies" className="mt-4">
-              <AutomationHandlerCard platform="threads" />
+              <AutomationHandlerCard platform="threads" accountId={selectedAccountId} />
               <ThreadsRepliesTab accountId={selectedAccountId} />
             </TabsContent>
           </Tabs>

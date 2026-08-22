@@ -790,3 +790,20 @@ describe("Postora node — Comment → Reply / Hide / Delete", () => {
     ).rejects.toThrow("Comment ID");
   });
 });
+
+describe("Postora node — Comment → Delete platform guard", () => {
+  it("refuses Threads deletes before calling the API", async () => {
+    await expect(
+      run({
+        params: {
+          resource: "comment",
+          operation: "delete",
+          commentPlatform: "threads",
+          commentSocialAccountId: "acc-1",
+          commentId: "r-1",
+        },
+        http: () => ({}),
+      }),
+    ).rejects.toThrow("Use the Hide operation instead");
+  });
+});

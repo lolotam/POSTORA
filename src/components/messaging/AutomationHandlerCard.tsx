@@ -10,6 +10,9 @@ import {
 
 interface AutomationHandlerCardProps {
   platform: "facebook" | "instagram" | "threads";
+  // When the host page already owns an account selection, pass it in so a handler change
+  // can never be saved against a different account than the one on screen.
+  accountId?: string | null;
 }
 
 interface HandlerOption {
@@ -34,7 +37,7 @@ const COMMENT_OPTIONS: HandlerOption[] = [
 // Which agent answers this account. Messages and comments are chosen separately, and each is
 // a single-choice dropdown rather than a set of toggles so two agents can never answer the
 // same item.
-export function AutomationHandlerCard({ platform }: AutomationHandlerCardProps) {
+export function AutomationHandlerCard({ platform, accountId: controlledAccountId }: AutomationHandlerCardProps) {
   const { data: socialAccounts = [] } = useSocialAccounts();
   const accounts = useMemo(
     () => socialAccounts.filter((account) => account.platform === platform && account.is_active),
@@ -42,9 +45,11 @@ export function AutomationHandlerCard({ platform }: AutomationHandlerCardProps) 
   );
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const accountId = selectedId && accounts.some((account) => account.id === selectedId)
+  const isControlled = controlledAccountId !== undefined;
+  const ownAccountId = selectedId && accounts.some((account) => account.id === selectedId)
     ? selectedId
     : accounts[0]?.id ?? null;
+  const accountId = isControlled ? controlledAccountId : ownAccountId;
 
   const { handlers, isLoading, save } = useAutomationHandlers(accountId);
 
@@ -62,7 +67,7 @@ export function AutomationHandlerCard({ platform }: AutomationHandlerCardProps) 
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {accounts.length > 1 && (
+        {!isControlled && accounts.length > 1 && (
           <Select value={accountId ?? ""} onValueChange={setSelectedId}>
             <SelectTrigger className="w-full max-w-xs" data-testid="automation-account">
               <SelectValue placeholder="Select account" />
