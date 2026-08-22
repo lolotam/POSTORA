@@ -17,6 +17,22 @@
 > Not yet created: the `openapi/` directory this document treats as the canonical contract.
 >
 > The `.md` is canonical; `POSTORA_PARTNER_API_PRD_v1.0.docx` is a stale export and is not maintained.
+>
+> **Open contract questions — resolve before any implementation starts.**
+> Automated review of this document (PR #23) flagged five under-specified areas.
+> They are recorded rather than answered, because settling them is spec design,
+> not documentation work:
+>
+> 1. **Account selection** (§13) — the contract for choosing which connected
+>    account an operation targets is not defined.
+> 2. **Legacy → v1 scope mapping** (§13) — compatibility is claimed but the
+>    mapping from existing partner-api scopes is not stated.
+> 3. **Webhook HMAC** (§22) — signature encoding and the replay window are
+>    unspecified.
+> 4. **Event identifier naming** (§22–23) — the webhook contract uses more than
+>    one name for the same event id.
+> 5. **Idempotency** (§24) — public behavior for indeterminate outcomes and for
+>    key expiry is undefined.
 
 ---
 

@@ -1242,9 +1242,9 @@ Before completion:
 
 Editing a file under `supabase/functions/**` in this repository changes **nothing in production**. The self-hosted stack serves Edge Functions from a Docker volume that drifts from the repo; a merged commit does not reach it.
 
-Deployment is done by copying the changed files into the functions volume via `ssh-contabo-mcp` and restarting the container — see `docs/runbooks/deploy-edge-function.md` and `CLAUDE.md`.
+That is why the checklist has an eleventh step at all: in most repositories "merged" implies "deployed", and here it does not.
 
-**Never run `npx supabase functions deploy`.** It targets Supabase Cloud and fails against this stack.
+**The deployment procedure itself is not documented here** — it lives in `CLAUDE.md` (Task Execution Workflow → Deployment) and `docs/runbooks/deploy-edge-function.md`. Follow it there.
 
 A backend change that passes lint, tests and review but was never redeployed is **not done**.
 

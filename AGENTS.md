@@ -10,16 +10,7 @@ This document provides comprehensive context for AI coding assistants (Codex, GP
 
 **Before editing anything under `src/**` or `supabase/functions/**` you MUST read `ARCHITECTURE.md`.** It defines layering, dependency direction, Edge Function shape, and the security rules new code has to follow. It is not auto-loaded — open it deliberately.
 
-The four agent documents and what each one owns:
-
-| File | Owns |
-|---|---|
-| `CLAUDE.md` | **Task Execution Workflow (authoritative)**, project facts, DB schema, MCP routing, deploy rules |
-| `AGENTS.md` | The same project context, mirrored for Codex |
-| `ARCHITECTURE.md` | Architecture rules — layering, dependency direction, Edge Function and security shape |
-| `PROJECT_AGENT.md` | Known hotspots, agent stop conditions, decision hierarchy, completion summary |
-
-Supporting evidence lives in `POSTORA_CLEAN_ARCHITECTURE_AUDIT.md`.
+There are four agent documents. **`ARCHITECTURE.md` §0 owns the map of which document owns what** — read it there rather than looking for a copy here.
 
 **A fact belongs in exactly one of these files.** If you need to state something that already lives in another, link to it instead of copying it — these documents have already drifted from each other once.
 
@@ -27,7 +18,9 @@ On conflict between `ARCHITECTURE.md` and the Task Execution Workflow below, **t
 
 ### Delegating to another agent (Codex / Grok / OpenCode / Antigravity)
 
-Nothing auto-loads `ARCHITECTURE.md` for a delegated implementer. **Every delegation brief must name `ARCHITECTURE.md` as required reading**, alongside the specific rule sections that apply to the task. A brief that omits it will produce code that violates the layering rules and fails the guard pass.
+Nothing auto-loads `ARCHITECTURE.md` for a delegated implementer. **Every delegation brief must name `ARCHITECTURE.md` as required reading**, alongside the specific rule sections that apply to the task.
+
+No tooling checks this. The architecture hook only prints a reminder on `Edit`/`Write` inside this session and never blocks anything, so a brief that omits the rules produces work that nothing catches until human review.
 
 ---
 
@@ -62,12 +55,11 @@ Follow these steps for every task, in order.
 
 > **Canonical source: `CLAUDE.md` → "n8n community node workflow".** Do not maintain a second copy of these rules here — this section previously drifted out of sync with it — it pinned an outdated node version and still instructed agents to sync a vendored copy that had already been deleted on purpose.
 
-The two rules most often got wrong, restated only because getting them wrong is destructive:
+One rule is repeated here, and only because acting on the stale version is destructive rather than merely wrong:
 
-- **The node lives in exactly ONE local directory:** `F:\N8N\Postora-n8n-community-node` (the GitHub-connected repo, npm package `n8n-nodes-postora`). The vendored copy that used to sit under this repo was **deleted on 2026-08-22 — do not recreate it and do not sync node changes into this repo.** Ignore any older instruction to "apply changes twice".
-- **Backend changes only** (`supabase/functions/**`) are committed in this repo. The node's own source, tests, `package.json`, `README.md` and `dist/` are committed in the node repo, never here.
+- **The node lives in exactly ONE local directory**, outside this repository. The vendored copy that used to sit under this repo was **deleted on 2026-08-22 — do not recreate it and do not sync node changes into this repo.** Ignore any older instruction to "apply changes twice".
 
-For the release process, deployment model, and current node capabilities, read `CLAUDE.md`.
+Everything else — the directory path, release process, deployment model, and current node capabilities — is in `CLAUDE.md`. Read it there.
 
 ### After the task, before committing
 5. **Guard pass (always)** — run `clean-code-guard` on changed production code and `test-guard` on changed/added tests.

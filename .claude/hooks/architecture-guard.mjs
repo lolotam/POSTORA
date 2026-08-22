@@ -14,6 +14,16 @@
 
 const WATCHED = [/(^|\/)src\//, /(^|\/)supabase\/functions\//];
 
+/**
+ * Collects the PreToolUse payload from stdin.
+ *
+ * Resolves with whatever arrived — never rejects, and never resolves twice —
+ * so a stdin problem cannot turn into a failed tool call. Caps the wait at 2s
+ * because a stream that is never closed would otherwise hang the Edit/Write
+ * this hook is gating; a late reminder is worth less than a blocked edit costs.
+ *
+ * @returns {Promise<string>} raw payload, or '' if none arrived in time.
+ */
 function readStdin() {
   return new Promise((resolve) => {
     let data = '';
