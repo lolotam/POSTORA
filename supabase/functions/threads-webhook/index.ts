@@ -237,7 +237,14 @@ Deno.serve(async (req) => {
 
     if (change.field === "replies") {
       const normalized = normalizeThreadsReply(change.value);
-      if (!normalized) continue;
+      if (!normalized) {
+        console.warn(
+          `[threads-webhook] replies delivery for ${threadsUserId} had no reply id (value keys: ${
+            Object.keys(change.value ?? {}).join(", ") || "none"
+          })`,
+        );
+        continue;
+      }
 
       // The insert is the idempotency claim: Meta retries deliveries, and only the first
       // one to persist may run the user's workflow.
@@ -253,7 +260,12 @@ Deno.serve(async (req) => {
         console.error("[threads-webhook] inbox persist failed", inboxError.message);
         continue;
       }
-      if (!inserted?.length) continue;
+      // Meta retries, so a repeat is normal and not an error -- but it is the difference
+      // between "the workflow ran once" and "nothing happened", so it has to be visible.
+      if (!inserted?.length) {
+        console.log(`[threads-webhook] duplicate reply ${normalized.comment.id}, already processed`);
+        continue;
+      }
       processed += 1;
 
       // The loop breaker, and it must stay ahead of both branches below: whatever replies
@@ -281,7 +293,14 @@ Deno.serve(async (req) => {
     }
 
     const norm = normalizeMentionEvent(change.value, change.targetId);
-    if (!norm) continue;
+    if (!norm) {
+      console.warn(
+        `[threads-webhook] mentions delivery had no usable id or user (value keys: ${
+          Object.keys(change.value ?? {}).join(", ") || "none"
+        })`,
+      );
+      continue;
+    }
 
 
     // Check if exists
