@@ -22,7 +22,8 @@ export interface MessagingAccountSource {
 
 export function describeMessagingAccount(account: MessagingAccountSource): MessagingAccountSummary {
   const username = account.platform_username?.trim() || null;
-  const handleable = account.platform === "instagram" || account.platform === "facebook";
+  const handleable = account.platform === "instagram" || account.platform === "facebook" ||
+    account.platform === "threads";
   return {
     id: account.id,
     platform: account.platform,
@@ -30,6 +31,17 @@ export function describeMessagingAccount(account: MessagingAccountSource): Messa
     username,
     handle: handleable && username ? `@${username.replace(/^@/, "")}` : null,
   };
+}
+
+// Any envelope this module can deliver. `event` drives subscription matching; `platform`
+// and `social_account_id` drive the optional per-subscription filters. Everything else a
+// given event carries rides along untouched.
+export interface N8nEnvelope {
+  event: string;
+  platform: string;
+  social_account_id: string;
+  timestamp: string;
+  [key: string]: unknown;
 }
 
 export interface MessagePayloadInput {
@@ -42,7 +54,7 @@ export interface MessagePayloadInput {
   timestamp?: string;
 }
 
-export interface MessagePayload {
+export interface MessagePayload extends N8nEnvelope {
   event: "message.received";
   platform: MessagePlatform;
   social_account_id: string;
@@ -50,6 +62,30 @@ export interface MessagePayload {
   conversation_id: string;
   sender: MessagePayloadInput["sender"];
   message: MessagePayloadInput["message"];
+  timestamp: string;
+}
+
+export type CommentPlatform = "facebook" | "instagram" | "threads";
+export type CommentKind = "comment" | "reply" | "mention";
+
+export interface CommentPayloadInput {
+  platform: CommentPlatform;
+  socialAccountId: string;
+  account?: MessagingAccountSource;
+  comment: { id: string; kind: CommentKind; text: string; parentCommentId: string | null; mediaUrl: string | null };
+  post: { id: string | null; url: string | null; caption: string | null };
+  author: { id: string | null; name: string | null; username: string | null };
+  timestamp?: string;
+}
+
+export interface CommentPayload extends N8nEnvelope {
+  event: "comment.received";
+  platform: CommentPlatform;
+  social_account_id: string;
+  account: MessagingAccountSummary;
+  comment: { id: string; kind: CommentKind; text: string; parent_comment_id: string | null; media_url: string | null };
+  post: CommentPayloadInput["post"];
+  author: CommentPayloadInput["author"];
   timestamp: string;
 }
 
@@ -74,6 +110,11 @@ interface Destination {
   events: unknown;
   failureCount: number;
   isActive: boolean;
+  // Optional per-subscription filters. Only the settings registry can carry them; a
+  // destination that omits one accepts every value for it, which is what every
+  // subscription registered before filters existed does.
+  platform?: string;
+  socialAccountId?: string;
   settingValue?: Record<string, unknown>;
 }
 
@@ -94,6 +135,58 @@ export function buildMessagePayload(input: MessagePayloadInput): MessagePayload 
   };
 }
 
+export function buildCommentPayload(input: CommentPayloadInput): CommentPayload {
+  return {
+    event: "comment.received",
+    platform: input.platform,
+    social_account_id: input.socialAccountId,
+    account: describeMessagingAccount(input.account ?? { id: input.socialAccountId, platform: input.platform }),
+    comment: {
+      id: input.comment.id,
+      kind: input.comment.kind,
+      text: input.comment.text,
+      parent_comment_id: input.comment.parentCommentId,
+      media_url: input.comment.mediaUrl,
+    },
+    post: input.post,
+    author: input.author,
+    timestamp: input.timestamp || new Date().toISOString(),
+  };
+}
+
+// Threads mentions predate the comment envelope and have live n8n subscribers, so the
+// `data` body they receive is reproduced field for field. Only the routing fields the
+// dispatcher needs are added around it.
+// `event` is a plain string rather than a union: threads-mentions also emits
+// threads.mention.sentiment_updated / .labeled / .assigned, which reach wildcard
+// subscribers only (they are not in ALLOWED_WEBHOOK_EVENTS) but must keep flowing.
+export function buildMentionEnvelope(
+  event: string,
+  socialAccountId: string,
+  mention: any,
+): N8nEnvelope {
+  return {
+    event,
+    platform: "threads",
+    social_account_id: socialAccountId,
+    timestamp: new Date().toISOString(),
+    data: {
+      mention_id: mention.id,
+      social_account_id: mention.social_account_id,
+      platform: "threads",
+      author_username: mention.mention_author_username,
+      mention_text: mention.mention_text,
+      mention_permalink: mention.mention_permalink,
+      status: mention.status,
+      sentiment: mention.sentiment,
+      labels: mention.labels,
+      assigned_to: mention.assigned_to,
+      mentioned_at: mention.mentioned_at,
+      source: mention.source,
+    },
+  };
+}
+
 export async function signMessagePayload(payload: string, secret: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
@@ -106,13 +199,22 @@ export async function signMessagePayload(payload: string, secret: string): Promi
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function dispatchMessageEvent(
+export function dispatchMessageEvent(
   adminClient: any,
   userId: string,
   payload: MessagePayload,
   options: DispatchOptions = {},
 ): Promise<void> {
-  const { configured, matching } = await loadDestinations(adminClient, userId, payload.platform);
+  return dispatchN8nEvent(adminClient, userId, payload, options);
+}
+
+export async function dispatchN8nEvent(
+  adminClient: any,
+  userId: string,
+  payload: N8nEnvelope,
+  options: DispatchOptions = {},
+): Promise<void> {
+  const { configured, matching } = await loadDestinations(adminClient, userId, payload);
   const unique = dedupeDestinations(matching);
   // A webhook is registered against the API key owner, while dispatch is scoped to the
   // account that received the message. When those are different users the fan-out is empty,
@@ -124,7 +226,7 @@ export async function dispatchMessageEvent(
   if (unique.length === 0) {
     if (configured > 0) {
       console.warn(
-        `[n8n-dispatch] ${configured} webhook(s) configured for user ${userId} but none subscribed to ${payloadEvent(payload.platform)}`,
+        `[n8n-dispatch] ${configured} webhook(s) configured for user ${userId} but none subscribed to ${aliasEvent(payload)}`,
       );
     } else {
       console.log(`[n8n-dispatch] no webhook destinations for user ${userId} platform ${payload.platform}`);
@@ -160,7 +262,7 @@ export async function dispatchMessageEvent(
 async function loadDestinations(
   adminClient: any,
   userId: string,
-  platform: MessagePlatform,
+  payload: N8nEnvelope,
 ): Promise<{ configured: number; matching: Destination[] }> {
   const [settingsResult, legacyResult] = await Promise.all([
     adminClient.from("app_settings").select("key, value").like("key", `n8n_webhook_${userId}_%`),
@@ -179,6 +281,10 @@ async function loadDestinations(
     events: row.value?.events,
     failureCount: Number(row.value?.failure_count || 0),
     isActive: row.value?.is_active === true,
+    platform: typeof row.value?.platform === "string" && row.value.platform ? row.value.platform : undefined,
+    socialAccountId: typeof row.value?.social_account_id === "string" && row.value.social_account_id
+      ? row.value.social_account_id
+      : undefined,
     settingValue: row.value || {},
   }));
   const legacy = (legacyResult.data || []).map((row: any): Destination => ({
@@ -194,22 +300,32 @@ async function loadDestinations(
   return {
     configured: configuredDestinations.length,
     matching: configuredDestinations.filter((destination) =>
-      destination.isActive && destination.url &&
-      matchesSubscription(destination.events, payloadEvent(platform), destination.registry)
+      destination.isActive && destination.url && matchesSubscription(destination, payload)
     ),
   };
 }
 
-function payloadEvent(platform: MessagePlatform): string {
-  return `message.${platform}`;
+// "message.received" on whatsapp also matches a "message.whatsapp" subscription, and
+// "comment.received" on instagram also matches "comment.instagram".
+function aliasEvent(payload: N8nEnvelope): string {
+  const [family] = payload.event.split(".");
+  return `${family}.${payload.platform}`;
 }
 
-function matchesSubscription(events: unknown, platformEvent: string, registry: Destination["registry"]): boolean {
+function matchesSubscription(destination: Destination, payload: N8nEnvelope): boolean {
+  const { events, registry } = destination;
+  // whatsapp_webhooks predates the standardized envelope and its delivery path reshapes
+  // the body as a message (toLegacyPayload reads sender/message). A comment or mention
+  // envelope reaching it would throw mid-reshape, count as a delivery failure, and after
+  // ten of them silently auto-disable a live WhatsApp webhook. Message events only.
+  if (registry === "legacy" && !payload.event.startsWith("message.")) return false;
+  if (destination.platform && destination.platform !== payload.platform) return false;
+  if (destination.socialAccountId && destination.socialAccountId !== payload.social_account_id) return false;
   // whatsapp_webhooks rows with a null events column historically received every
   // event; narrowing that here would silently cut off existing subscribers.
   if (events === null || events === undefined) return registry === "legacy";
   if (!Array.isArray(events)) return false;
-  return events.includes("*") || events.includes("message.received") || events.includes(platformEvent);
+  return events.includes("*") || events.includes(payload.event) || events.includes(aliasEvent(payload));
 }
 
 function dedupeDestinations(destinations: Destination[]): Destination[] {
@@ -224,14 +340,15 @@ function dedupeDestinations(destinations: Destination[]): Destination[] {
 async function deliverToDestination(
   adminClient: any,
   destination: Destination,
-  payload: MessagePayload,
+  payload: N8nEnvelope,
   fetcher: typeof fetch,
 ): Promise<void> {
   // whatsapp_webhooks predates the standardized envelope and has live external
   // subscribers, so it keeps its original body and signature header. Only the
   // n8n registry gets the new schema.
+  // Only message envelopes ever reach a legacy destination (see matchesSubscription).
   const legacy = destination.registry === "legacy";
-  const body = JSON.stringify(legacy ? toLegacyPayload(payload) : payload);
+  const body = JSON.stringify(legacy ? toLegacyPayload(payload as unknown as MessagePayload) : payload);
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   if (!legacy) {
     headers["X-Postora-Event"] = payload.event;

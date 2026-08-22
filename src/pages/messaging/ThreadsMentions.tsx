@@ -42,6 +42,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { formatDistanceToNow } from "date-fns";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
+import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { messagingTabFromSearch } from "@/lib/messagingTab";
 
 interface ThreadsAccountOption {
@@ -350,6 +351,7 @@ export default function ThreadsMentions() {
 
             {/* REPLIES TAB */}
             <TabsContent value="replies" className="mt-4">
+              <AutomationHandlerCard platform="threads" accountId={selectedAccountId} />
               <ThreadsRepliesTab accountId={selectedAccountId} />
             </TabsContent>
           </Tabs>

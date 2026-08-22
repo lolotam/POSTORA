@@ -1,4 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import { deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
+import { isDirectInstagramAccount } from "../_shared/messengerCredentials.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -9,16 +11,6 @@ const corsHeaders = {
 const GRAPH_API_VERSION = "v22.0";
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const INSTAGRAM_GRAPH_API_BASE = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
-
-function isDirectInstagramAccount(account: { platform?: string; ig_auth_type?: string | null; account_metadata?: Record<string, unknown> | null }) {
-  const meta = account.account_metadata || {};
-  return account.platform === "instagram" && (
-    account.ig_auth_type === "business_login" ||
-    meta.flow === "direct" ||
-    meta.source === "instagram_business_login" ||
-    meta.token_type === "long_lived"
-  );
-}
 
 async function graphJson(url: string) {
   const res = await fetch(url);
@@ -134,11 +126,11 @@ Deno.serve(async (req) => {
 
     // Get access token for the social account
     let accessToken: string | null = null;
-    let socialAccount: { access_token: string; platform: string; ig_auth_type?: string | null; account_metadata?: Record<string, unknown> | null } | null = null;
+    let socialAccount: { access_token: string; platform: string; platform_user_id?: string | null; ig_auth_type?: string | null; account_metadata?: Record<string, unknown> | null } | null = null;
     if (social_account_id) {
       const { data: account } = await supabase
         .from("social_accounts")
-        .select("access_token, platform, ig_auth_type, account_metadata")
+        .select("access_token, platform, platform_user_id, ig_auth_type, account_metadata")
         .eq("id", social_account_id)
         .eq("user_id", user.id)
         .single();
@@ -223,16 +215,13 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
-          ? INSTAGRAM_GRAPH_API_BASE
-          : GRAPH_API_BASE;
-        const url = `${apiBase}/${comment_id}/replies`;
-        const res = await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, access_token: accessToken }),
-        });
-        result = await res.json();
+        const replyResult = await replyToComment(socialAccount!, comment_id, message);
+        // Shared module returns { success, platform_comment_id?, error? }; the
+        // client still expects the raw Graph JSON shape ({ id } on success,
+        // Graph-style { error } on failure), so adapt before responding.
+        result = replyResult.success
+          ? { id: replyResult.platform_comment_id }
+          : { error: { message: replyResult.error } };
         break;
       }
 
@@ -243,19 +232,8 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const isHidden = body.is_hidden !== undefined ? body.is_hidden : true;
-        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
-          ? INSTAGRAM_GRAPH_API_BASE
-          : GRAPH_API_BASE;
-        // Instagram's Graph API rejects `is_hidden` on comment objects (confirmed
-        // live: IGApiException "The parameter hide is required") — it uses `hide`
-        // instead. Facebook comment objects use `is_hidden`. This must key off the
-        // comment's platform, not the account's login flow: business-login IG
-        // comments still live on graph.facebook.com but are IG comment objects.
-        const hideParam = socialAccount?.platform === "instagram" ? "hide" : "is_hidden";
-        const url = `${apiBase}/${comment_id}?${hideParam}=${isHidden}&access_token=${encodeURIComponent(accessToken)}`;
-        const res = await fetch(url, { method: "POST" });
-        result = await res.json();
+        const hideResult = await hideComment(socialAccount!, comment_id, body.is_hidden !== undefined ? body.is_hidden : true);
+        result = hideResult.success ? { success: true } : { error: { message: hideResult.error } };
         break;
       }
 
@@ -266,12 +244,8 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const apiBase = socialAccount && isDirectInstagramAccount(socialAccount)
-          ? INSTAGRAM_GRAPH_API_BASE
-          : GRAPH_API_BASE;
-        const url = `${apiBase}/${comment_id}?access_token=${encodeURIComponent(accessToken)}`;
-        const res = await fetch(url, { method: "DELETE" });
-        result = await res.json();
+        const deleteResult = await deleteComment(socialAccount!, comment_id);
+        result = deleteResult.success ? { success: true } : { error: { message: deleteResult.error } };
         break;
       }
 

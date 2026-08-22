@@ -1,8 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
-import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
+import { resolveAutomationHandler, resolveCommentAutomationHandler } from "../_shared/automationHandler.ts";
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
-import { buildMessagePayload, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
+import { buildCommentPayload, buildMessagePayload, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
+import { isOwnComment } from "../_shared/commentAuthor.ts";
+import { normalizeMetaCommentChange } from "./commentEvents.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -171,6 +173,8 @@ Deno.serve(async (req) => {
             payload: event,
           });
 
+          const automationHandler = resolveAutomationHandler(account.account_metadata);
+
           // Dispatch stays tied to a successful insert, which is what makes the insert an
           // idempotency claim: Meta retries a failed delivery, and dispatching on error too
           // would run the user's workflow again when that retry finally persists. The
@@ -179,7 +183,7 @@ Deno.serve(async (req) => {
           if (inboxResult === "error") {
             console.error(`[fb-ig-webhook] Inbox persist failed for ${platform}; automation not dispatched`);
           }
-          if (inboxResult === "inserted") {
+          if (inboxResult === "inserted" && automationHandler !== "off") {
             await runInBackground("facebook-instagram message dispatch", () => dispatchMessageEvent(
               adminClient,
               account.user_id,
@@ -206,7 +210,6 @@ Deno.serve(async (req) => {
 
           console.log(`[fb-ig-webhook] Received inbound ${platform} message`);
 
-          const automationHandler = resolveAutomationHandler(account.account_metadata);
           const ruleReplied = automationHandler === "internal"
             ? await processAutoReplies(adminClient, account, platform, conversationId, senderId, messageText)
             : false;
@@ -222,15 +225,30 @@ Deno.serve(async (req) => {
         for (const change of entry?.changes || []) {
           const account = await findAccountForRecipient(adminClient, platform, recipientId);
           const externalEventId = change?.value?.comment_id || change?.value?.id;
-          if (account && externalEventId) {
-            await recordInboxEvent(adminClient, {
-              account,
-              platform,
-              eventType: "comment",
-              externalEventId: String(externalEventId),
-              payload: change,
-            });
+          if (!account || !externalEventId) continue;
+
+          const inboxResult = await recordInboxEvent(adminClient, {
+            account,
+            platform,
+            eventType: "comment",
+            externalEventId: String(externalEventId),
+            payload: change,
+          });
+          if (inboxResult !== "inserted") continue;
+
+          const normalized = normalizeMetaCommentChange(platform, change);
+          if (!normalized) continue;
+          if (isOwnComment(account, normalized.author)) {
+            console.log(`[fb-ig-webhook] skipped own ${platform} comment ${externalEventId}`);
+            continue;
           }
+          if (resolveCommentAutomationHandler(account.account_metadata) !== "n8n") continue;
+
+          await runInBackground("facebook-instagram comment dispatch", () => dispatchN8nEvent(
+            adminClient,
+            account.user_id,
+            buildCommentPayload({ platform, socialAccountId: account.id, account, ...normalized }),
+          ));
         }
 
         // Meta delivering an event that yields no message is indistinguishable from Meta

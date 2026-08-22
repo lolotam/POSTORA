@@ -3,7 +3,15 @@
 // Mirrors whatsapp-webhook patterns. verify_jwt = false (public endpoint).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
-import { postWebhook } from "../_shared/webhookSecurity.ts";
+import { runInBackground } from "../_shared/background.ts";
+import { resolveCommentAutomationHandler } from "../_shared/automationHandler.ts";
+import { isOwnComment } from "../_shared/commentAuthor.ts";
+import {
+  buildCommentPayload,
+  buildMentionEnvelope,
+  dispatchN8nEvent,
+} from "../_shared/n8nMessagingDispatch.ts";
+import { extractThreadsChanges, normalizeThreadsReply } from "./replyEvents.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -133,59 +141,6 @@ async function createMentionNotification(
   }
 }
 
-async function dispatchN8nEvent(
-  // deno-lint-ignore no-explicit-any
-  supabase: any,
-  userId: string,
-  event: string,
-  // deno-lint-ignore no-explicit-any
-  mention: any,
-): Promise<void> {
-  try {
-    const { data: settings } = await supabase
-      .from("app_settings")
-      .select("value")
-      .like("key", `n8n_webhook_${userId}_%`);
-    if (!settings?.length) return;
-    const payload = {
-      event,
-      timestamp: new Date().toISOString(),
-      data: {
-        mention_id: mention.id,
-        social_account_id: mention.social_account_id,
-        platform: "threads",
-        author_username: mention.mention_author_username,
-        mention_text: mention.mention_text,
-        mention_permalink: mention.mention_permalink,
-        status: mention.status,
-        sentiment: mention.sentiment,
-        labels: mention.labels,
-        assigned_to: mention.assigned_to,
-        mentioned_at: mention.mentioned_at,
-        source: mention.source,
-      },
-    };
-    for (const s of settings) {
-      // deno-lint-ignore no-explicit-any
-      const wh = (s as any).value;
-      if (!wh?.is_active) continue;
-      const events: string[] = Array.isArray(wh.events) ? wh.events : [];
-      if (!events.includes(event) && !events.includes("*")) continue;
-      try {
-        await postWebhook(wh.webhook_url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-Postora-Event": event },
-          body: JSON.stringify(payload),
-        });
-      } catch (e) {
-        console.error("[threads-webhook] n8n dispatch error", (e as Error).message);
-      }
-    }
-  } catch (err) {
-    console.error("[threads-webhook] dispatchN8nEvent error", (err as Error).message);
-  }
-}
-
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -230,97 +185,160 @@ Deno.serve(async (req) => {
   const entries = payload?.entry || [];
   let processed = 0;
 
-  for (const entry of entries) {
-    const entryId = entry?.id ? String(entry.id) : null;
-    const changes = entry?.changes || [];
-    for (const change of changes) {
-      if (change?.field !== "mentions") continue;
-      const norm = normalizeMentionEvent(change.value, entryId);
-      if (!norm) continue;
+  const ACCOUNT_SELECT = "id, user_id, platform, platform_user_id, platform_username, account_metadata, access_token";
 
-      // Look up the social account by Threads user id
-      const { data: account } = await supabase
-        .from("social_accounts")
-        .select("id, user_id, platform_username, access_token")
-        .eq("platform", "threads")
-        .eq("platform_user_id", norm.threads_user_id)
-        .eq("is_active", true)
-        .maybeSingle();
-      if (!account) {
-        console.warn(`[threads-webhook] no account for threads_user_id=${norm.threads_user_id}`);
-        continue;
-      }
+  for (const change of extractThreadsChanges(payload)) {
+    if (change.field !== "mentions" && change.field !== "replies") continue;
+    const threadsUserId = change.targetId || change.value?.recipient_id || change.value?.root_post?.owner_id;
+    if (!threadsUserId) continue;
 
-      // Check if exists
-      const { data: existing } = await supabase
-        .from("threads_mentions")
-        .select("id, notified_at, mention_author_avatar_url")
-        .eq("social_account_id", account.id)
-        .eq("mention_id", norm.mention_id)
-        .maybeSingle();
+    const { data: account } = await supabase
+      .from("social_accounts")
+      .select(ACCOUNT_SELECT)
+      .eq("platform", "threads")
+      .eq("platform_user_id", String(threadsUserId))
+      .eq("is_active", true)
+      .maybeSingle();
+    if (!account) {
+      console.warn(`[threads-webhook] no account for threads_user_id=${threadsUserId}`);
+      continue;
+    }
 
-      const nowIso = new Date().toISOString();
+    if (change.field === "replies") {
+      const normalized = normalizeThreadsReply(change.value);
+      if (!normalized) continue;
 
-      // Best-effort: fetch mention author's profile picture from Threads API.
-      let authorAvatarUrl: string | null = null;
-      if (norm.author_id && account.access_token) {
-        try {
-          const profUrl =
-            `https://graph.threads.net/v1.0/${encodeURIComponent(norm.author_id)}?fields=threads_profile_picture_url&access_token=${encodeURIComponent(account.access_token)}`;
-          const profRes = await fetch(profUrl);
-          const profJson = await profRes.json().catch(() => ({}));
-          if (profRes.ok && typeof profJson?.threads_profile_picture_url === "string") {
-            const raw = profJson.threads_profile_picture_url as string;
-            const cached = await cacheAvatarToCloudinary(
-              raw,
-              account.user_id,
-              "threads-author",
-              norm.author_id,
-            );
-            authorAvatarUrl = cached ?? raw;
-          }
-        } catch (_e) {
-          authorAvatarUrl = null;
-        }
-      }
-      // Preserve any prior avatar URL so an empty fetch doesn't wipe it out.
-      if (!authorAvatarUrl && (existing as any)?.mention_author_avatar_url) {
-        authorAvatarUrl = (existing as any).mention_author_avatar_url;
-      }
-
-      const upsertRow = {
+      // The insert is the idempotency claim: Meta retries deliveries, and only the first
+      // one to persist may run the user's workflow.
+      const { data: inserted, error: inboxError } = await supabase.from("social_inbox_events").upsert({
         user_id: account.user_id,
         social_account_id: account.id,
-        threads_media_id: norm.mention_id,
-        mention_id: norm.mention_id,
-        mention_author_id: norm.author_id,
-        mention_author_username: norm.username,
-        mention_author_avatar_url: authorAvatarUrl,
-        mention_text: norm.text,
-        mention_permalink: norm.permalink,
-        mentioned_at: norm.mentioned_at,
-        source: "webhook",
-        last_synced_at: nowIso,
-        raw_response: norm.raw as unknown as Record<string, unknown>,
-      };
-
-      const { data: upserted, error: upErr } = await supabase
-        .from("threads_mentions")
-        .upsert(upsertRow, { onConflict: "social_account_id,mention_id" })
-        .select("*")
-        .maybeSingle();
-      if (upErr) {
-        console.error("[threads-webhook] upsert err", upErr.message);
+        platform: "threads",
+        event_type: "comment",
+        external_event_id: normalized.comment.id,
+        payload: change.value,
+      }, { onConflict: "social_account_id,external_event_id", ignoreDuplicates: true }).select("id");
+      if (inboxError) {
+        console.error("[threads-webhook] inbox persist failed", inboxError.message);
         continue;
       }
+      if (!inserted?.length) continue;
       processed += 1;
 
-      // Notify + n8n only when row was newly created
-      const isNew = !existing;
-      if (isNew && upserted) {
-        await createMentionNotification(supabase, upserted);
-        await dispatchN8nEvent(supabase, account.user_id, "threads.mention.created", upserted);
+      if (isOwnComment(account, normalized.author)) {
+        console.log(`[threads-webhook] skipped own reply ${normalized.comment.id}`);
+        continue;
       }
+      if (resolveCommentAutomationHandler(account.account_metadata) !== "n8n") continue;
+
+      await runInBackground("threads reply dispatch", () => dispatchN8nEvent(
+        supabase,
+        account.user_id,
+        buildCommentPayload({ platform: "threads", socialAccountId: account.id, account, ...normalized }),
+      ));
+      continue;
+    }
+
+    const norm = normalizeMentionEvent(change.value, change.targetId);
+    if (!norm) continue;
+
+
+    // Check if exists
+    const { data: existing } = await supabase
+      .from("threads_mentions")
+      .select("id, notified_at, mention_author_avatar_url")
+      .eq("social_account_id", account.id)
+      .eq("mention_id", norm.mention_id)
+      .maybeSingle();
+
+    const nowIso = new Date().toISOString();
+
+    // Best-effort: fetch mention author's profile picture from Threads API.
+    let authorAvatarUrl: string | null = null;
+    if (norm.author_id && account.access_token) {
+      try {
+        const profUrl =
+          `https://graph.threads.net/v1.0/${encodeURIComponent(norm.author_id)}?fields=threads_profile_picture_url&access_token=${encodeURIComponent(account.access_token)}`;
+        // Bounded: this runs inside Meta's webhook request, which Meta retries when we are
+        // slow, so a hanging profile lookup would turn one mention into repeated deliveries.
+        const profRes = await fetch(profUrl, { signal: AbortSignal.timeout(5_000) });
+        const profJson = await profRes.json().catch(() => ({}));
+        if (profRes.ok && typeof profJson?.threads_profile_picture_url === "string") {
+          const raw = profJson.threads_profile_picture_url as string;
+          const cached = await cacheAvatarToCloudinary(
+            raw,
+            account.user_id,
+            "threads-author",
+            norm.author_id,
+          );
+          authorAvatarUrl = cached ?? raw;
+        }
+      } catch (_e) {
+        authorAvatarUrl = null;
+      }
+    }
+    // Preserve any prior avatar URL so an empty fetch doesn't wipe it out.
+    if (!authorAvatarUrl && (existing as any)?.mention_author_avatar_url) {
+      authorAvatarUrl = (existing as any).mention_author_avatar_url;
+    }
+
+    const upsertRow = {
+      user_id: account.user_id,
+      social_account_id: account.id,
+      threads_media_id: norm.mention_id,
+      mention_id: norm.mention_id,
+      mention_author_id: norm.author_id,
+      mention_author_username: norm.username,
+      mention_author_avatar_url: authorAvatarUrl,
+      mention_text: norm.text,
+      mention_permalink: norm.permalink,
+      mentioned_at: norm.mentioned_at,
+      source: "webhook",
+      last_synced_at: nowIso,
+      raw_response: norm.raw as unknown as Record<string, unknown>,
+    };
+
+    const { data: upserted, error: upErr } = await supabase
+      .from("threads_mentions")
+      .upsert(upsertRow, { onConflict: "social_account_id,mention_id" })
+      .select("*")
+      .maybeSingle();
+    if (upErr) {
+      console.error("[threads-webhook] upsert err", upErr.message);
+      continue;
+    }
+    processed += 1;
+
+    // Notify + n8n only when row was newly created
+    const isNew = !existing;
+    if (isNew && upserted) {
+      await createMentionNotification(supabase, upserted);
+      await runInBackground("threads mention dispatch", async () => {
+        await dispatchN8nEvent(supabase, account.user_id, buildMentionEnvelope("threads.mention.created", account.id, upserted));
+        // A mention is also a comment-shaped event, so subscribers of the unified
+        // comment.received stream get it too — but only when this account routes
+        // comments to n8n, and never when the account mentioned itself.
+        if (
+          resolveCommentAutomationHandler(account.account_metadata) === "n8n" &&
+          !isOwnComment(account, { id: norm.author_id || null, username: norm.username || null })
+        ) {
+          await dispatchN8nEvent(supabase, account.user_id, buildCommentPayload({
+            platform: "threads",
+            socialAccountId: account.id,
+            account,
+            comment: {
+              id: norm.mention_id,
+              kind: "mention",
+              text: norm.text || "",
+              parentCommentId: null,
+              mediaUrl: norm.permalink || null,
+            },
+            post: { id: null, url: null, caption: null },
+            author: { id: norm.author_id || null, name: null, username: norm.username || null },
+            timestamp: norm.mentioned_at || undefined,
+          }));
+        }
+      });
     }
   }
 

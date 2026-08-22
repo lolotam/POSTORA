@@ -416,26 +416,29 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
-    await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
-      adminClient,
-      account.user_id,
-      buildMessagePayload({
-        platform: "whatsapp",
-        socialAccountId: account.id,
-        account: { id: account.id, platform: "whatsapp", platform_user_id: account.platform_user_id, platform_username: account.platform_username },
-        conversationId,
-        sender: { id: from, name: contactName, phone: from },
-        message: {
-          id: messageId,
-          text: messageText,
-          type: msgType,
-          attachments: mediaUrl ? [{ url: mediaUrl, type: mediaType, metadata: mediaMetadata }] : [],
-        },
-        timestamp: msgTimestamp,
-      }),
-    ));
-
     const automationHandler = resolveAutomationHandler(account.account_metadata);
+
+    if (automationHandler !== "off") {
+      await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
+        adminClient,
+        account.user_id,
+        buildMessagePayload({
+          platform: "whatsapp",
+          socialAccountId: account.id,
+          account: { id: account.id, platform: "whatsapp", platform_user_id: account.platform_user_id, platform_username: account.platform_username },
+          conversationId,
+          sender: { id: from, name: contactName, phone: from },
+          message: {
+            id: messageId,
+            text: messageText,
+            type: msgType,
+            attachments: mediaUrl ? [{ url: mediaUrl, type: mediaType, metadata: mediaMetadata }] : [],
+          },
+          timestamp: msgTimestamp,
+        }),
+      ));
+    }
+
     const ruleReplied = automationHandler === "internal"
       ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken)
       : false;
