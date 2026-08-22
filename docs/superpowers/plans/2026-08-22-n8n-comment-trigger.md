@@ -33,7 +33,7 @@
 | `supabase/functions/threads-mentions/index.ts` | Use shared dispatcher |
 | `supabase/functions/n8n-api/index.ts` | Allowlist, filters on register/list, `/api/v1/comments/*` |
 | `supabase/functions/messaging-api/index.ts` | `get_automation_handlers` / `set_automation_handlers` |
-| `supabase/migrations/20260822120000_social_inbox_events_threads.sql` | Allow `threads` platform |
+| `supabase/migrations/20260822120000_social_inbox_events_threads.sql` | Allow `threads` platform + atomic `patch_account_metadata` RPC |
 | `src/hooks/useAutomationHandlers.ts` | Query + mutation for the switch |
 | `src/components/messaging/AutomationHandlerCard.tsx` | The switch UI |
 | `src/pages/messaging/{FacebookMessaging,InstagramMessaging,ThreadsMentions}.tsx` | Mount the card |
@@ -503,7 +503,7 @@ git commit -m "feat(n8n): event-agnostic dispatcher with comment envelope and pl
 
 ---
 
-### Task 4: Migration — allow `threads` in `social_inbox_events`
+### Task 4: Migration — allow `threads` in `social_inbox_events` + atomic metadata patch RPC
 
 **Files:**
 - Create: `supabase/migrations/20260822120000_social_inbox_events_threads.sql`
@@ -518,7 +518,39 @@ ALTER TABLE public.social_inbox_events
 ALTER TABLE public.social_inbox_events
   ADD CONSTRAINT social_inbox_events_platform_check
   CHECK (platform IN ('facebook', 'instagram', 'threads'));
+
+-- Atomic metadata patch. A read-merge-write from an edge function loses concurrent
+-- updates to other account_metadata keys (ig_igid, flow, token_type); the || merge
+-- happens inside the row lock instead.
+CREATE OR REPLACE FUNCTION public.patch_account_metadata(
+  p_account_id uuid,
+  p_patch jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_metadata jsonb;
+BEGIN
+  UPDATE public.social_accounts
+  SET account_metadata = COALESCE(account_metadata, '{}'::jsonb) || p_patch
+  WHERE id = p_account_id AND user_id = auth.uid()
+  RETURNING account_metadata INTO v_metadata;
+
+  IF v_metadata IS NULL THEN
+    RAISE EXCEPTION 'Account not found or access denied';
+  END IF;
+  RETURN v_metadata;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.patch_account_metadata(uuid, jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.patch_account_metadata(uuid, jsonb) TO authenticated;
 ```
+
+The function is `SECURITY DEFINER` but self-scopes with `auth.uid()`, so it cannot patch another user's account. `messaging-api` must therefore call it through the **user-scoped** client (`anonClient`), not `adminClient`.
 
 - [ ] **Step 2: Confirm the constraint name on the live DB**
 
@@ -790,6 +822,44 @@ export function normalizeThreadsReply(value: any): ThreadsReplyInput | null {
 ```
 
 - [ ] **Step 4: Run tests** — 4 passed.
+
+- [ ] **Step 4b: Add a mention-envelope regression test** (append to `supabase/functions/_shared/n8nMessagingDispatch.test.ts`)
+
+Existing `threads.mention.*` subscribers must keep the exact body they receive today. The shared dispatcher additionally signs the request and counts failures — additive headers are fine, a changed body is not.
+
+```ts
+import { buildMentionEnvelope } from "./n8nMessagingDispatch.ts";
+
+Deno.test("threads mention envelope keeps the legacy event/timestamp/data body", async () => {
+  const mention = {
+    id: "m-1", social_account_id: "acc-th", mention_author_username: "fan", mention_text: "hi",
+    mention_permalink: "https://threads.net/p/1", status: "new", sentiment: null, labels: [],
+    assigned_to: null, mentioned_at: "2026-08-22T10:00:00.000Z", source: "webhook",
+  };
+  const envelope = buildMentionEnvelope("threads.mention.created", "acc-th", mention);
+  assertEquals(envelope.event, "threads.mention.created");
+  assertEquals(envelope.data, {
+    mention_id: "m-1", social_account_id: "acc-th", platform: "threads", author_username: "fan",
+    mention_text: "hi", mention_permalink: "https://threads.net/p/1", status: "new", sentiment: null,
+    labels: [], assigned_to: null, mentioned_at: "2026-08-22T10:00:00.000Z", source: "webhook",
+  });
+
+  const headers: Array<Record<string, string>> = [];
+  const admin = stubAdmin({
+    settings: [{ key: "k", value: { webhook_url: "https://m.example", events: ["threads.mention.created"], is_active: true } }],
+    legacy: [],
+    updates: [],
+  });
+  await dispatchN8nEvent(admin, "user-1", envelope, {
+    fetcher: async (_url, init) => { headers.push((init as RequestInit).headers as Record<string, string>); return new Response(null, { status: 204 }); },
+  });
+  assertEquals(headers[0]["X-Postora-Event"], "threads.mention.created");
+});
+```
+
+Run: `deno test --allow-env --allow-net supabase/functions/_shared/n8nMessagingDispatch.test.ts` → passes.
+
+**Behaviour change to accept and document:** mentions now go through failure counting (auto-disable after 10 consecutive failures), URL dedupe, and the 5-way concurrency cap; previously they had none of these. This is the intended unification, not a regression.
 
 - [ ] **Step 5: Rewrite the POST handler loop in `threads-webhook/index.ts`**
 
@@ -1133,7 +1203,7 @@ In `supabase/functions/comment-manager/index.ts` import `{ replyToComment, hideC
       }
 ```
 
-The frontend (`useCommentInbox.ts`) expects the raw Graph JSON today (`{ id }` / `{ success: true }` / Graph `error`). Check `useCommentInbox.ts:178-220` for how it reads the response and keep compatibility: return `{ id: result.platform_comment_id, success: result.success, error: result.error }` for reply, and `{ success, error }` for hide/delete. Run `npx vitest run src/hooks/__tests__/useCommentInbox.test.ts` — must stay green.
+**Preserve comment-manager's outward contract with an adapter — the frontend must receive exactly what it receives today.** The frontend (`useCommentInbox.ts`) expects the raw Graph JSON today (`{ id }` / `{ success: true }` / Graph `error`). Check `useCommentInbox.ts:178-220` for how it reads the response and keep compatibility: return `{ id: result.platform_comment_id, success: result.success, error: result.error }` for reply, and `{ success, error }` for hide/delete. Run `npx vitest run src/hooks/__tests__/useCommentInbox.test.ts` — must stay green.
 
 Delete the now-unused local `isDirectInstagramAccount` from `comment-manager` if nothing else there uses it (`get_ig_comments` still does — keep it, or import the shared one).
 
@@ -1360,7 +1430,7 @@ git commit -m "feat(n8n-api): comment events, subscription filters and /api/v1/c
       });
     }
 
-    // ACTION: set_automation_handlers — read-merge-write so other metadata keys (ig_igid, flow, …) survive.
+    // ACTION: set_automation_handlers — atomic jsonb merge via RPC so other metadata keys (ig_igid, flow, …) survive.
     if (action === "set_automation_handlers") {
       const account = await getAccountToken(String(body.social_account_id || ""));
       const patch: Record<string, string> = {};
@@ -1381,17 +1451,18 @@ git commit -m "feat(n8n-api): comment events, subscription filters and /api/v1/c
       }
       if (Object.keys(patch).length === 0) return jsonResponse({ error: "Nothing to update" }, 400);
 
-      const existing = (account.account_metadata && typeof account.account_metadata === "object") ? account.account_metadata as Record<string, unknown> : {};
-      const { error } = await adminClient
-        .from("social_accounts")
-        .update({ account_metadata: { ...existing, ...patch } })
-        .eq("id", account.id)
-        .eq("user_id", user.id);
+      // Atomic jsonb merge inside the row lock. A read-merge-write here would clobber
+      // concurrent updates to other account_metadata keys (ig_igid, flow, token_type).
+      // anonClient (the caller's JWT), not adminClient - the RPC self-scopes on auth.uid().
+      const { data: merged, error } = await anonClient.rpc("patch_account_metadata", {
+        p_account_id: account.id,
+        p_patch: patch,
+      });
       if (error) throw error;
       return jsonResponse({
         social_account_id: account.id,
-        automation_handler: resolveAutomationHandler({ ...existing, ...patch }),
-        comment_automation_handler: resolveCommentAutomationHandler({ ...existing, ...patch }),
+        automation_handler: resolveAutomationHandler(merged),
+        comment_automation_handler: resolveCommentAutomationHandler(merged),
       });
     }
 ```
@@ -2346,6 +2417,8 @@ All green. Commit any guard fixes scoped to touched files.
 ---
 
 ### Task 16: Deploy (ordered) and verify
+
+> **⚠️ Ordering is the mitigation for the single-PR risk.** Merging to `main` auto-deploys the frontend, while edge functions deploy manually. If the PR merged first, the new Automation card would let users select `n8n` while the Comment resource still 404s against the old `n8n-api`. Therefore: **migration → edge functions → smoke → only then merge.** Steps 1-4 all happen while the PR is still open.
 
 - [ ] **Step 1: Migration first** — apply `20260822120000_social_inbox_events_threads.sql` on the self-hosted DB (via `supabase_postora_mcp` `execute_sql`, or `psql` inside the db container through `ssh-contabo-mcp`). Verify: `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname='social_inbox_events_platform_check';` includes `threads`.
 - [ ] **Step 2: Edge functions** — per `docs/runbooks/deploy-edge-function.md` via `ssh-contabo-mcp`: copy `_shared/` (changed files) and `n8n-api`, `facebook-instagram-webhook`, `threads-webhook`, `threads-mentions`, `messaging-api`, `comment-manager` into `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`, verify SHA256, `docker compose up -d --no-deps functions`.
