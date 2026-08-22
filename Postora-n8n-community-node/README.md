@@ -66,8 +66,61 @@ Every `message.*` event carries the same body, so one workflow can serve several
 
 Changing the **Events** selection takes effect the next time the workflow is activated: on activation the node compares its selection against the subscription registered with Postora and re-registers when they differ. Before v1.2.1 the original subscription was kept regardless, so an edited selection was silently ignored — if you edited Events on an already-active workflow under an older version, deactivate and reactivate it once after upgrading.
 
+### Comment
+- **Reply** — Reply to a comment, reply, or mention (Facebook, Instagram, Threads)
+- **Hide** — Hide or unhide a comment (Facebook, Instagram, Threads)
+- **Delete** — Delete a comment (Facebook and Instagram only — Threads does not allow deleting other people's replies; hide them instead)
+
+| Operation | Platforms | Endpoint |
+|---|---|---|
+| Reply | Facebook, Instagram, Threads | `POST /api/v1/comments/reply` |
+| Hide | Facebook, Instagram, Threads | `POST /api/v1/comments/hide` (`hide: true/false`) |
+| Delete | Facebook, Instagram | `POST /api/v1/comments/delete` |
+
+The field defaults are expressions that read a **Postora Comment Trigger** payload
+(`{{ $json.social_account_id }}`, `{{ $json.comment.id }}`), so a
+Comment Trigger → AI Agent → Comment Reply workflow needs no mapping beyond the reply text.
+
 ### Account
 - **List** — List all connected social media accounts
+
+## Postora Comment Trigger
+
+A second trigger node, separate from **Postora Trigger**. It fires when a new comment,
+reply, or mention arrives on a connected Facebook, Instagram, or Threads account.
+
+| Property | Meaning |
+|---|---|
+| **Platform** | All, Facebook, Instagram, or Threads |
+| **Account** | Loaded from your connected accounts and filtered by Platform. "All accounts" applies no account filter |
+| **Events** | `comment.received` (default). Threads replies and mentions arrive as `comment.received` with `comment.kind` set to `reply` or `mention` |
+
+**Prerequisite — the trigger receives nothing without it:** in Postora, open the platform's
+Messaging page → **Auto Replies** → **Automation**, and set **Comments** to **n8n** for that
+account. Registering the trigger alone does not start delivery.
+
+Comments authored by the connected account itself are never delivered. Without that
+suppression an auto-reply workflow would receive its own reply as a new comment and answer
+itself in a loop.
+
+Example payload:
+
+```json
+{
+  "event": "comment.received",
+  "platform": "instagram",
+  "social_account_id": "c32dd852-9f63-4bc0-a99a-eb951cb830bb",
+  "account": { "id": "c32dd852-…", "platform": "instagram", "name": "danatfuture", "username": "danatfuture", "handle": "@danatfuture" },
+  "comment": { "id": "17891234567890", "kind": "comment", "text": "Love this!", "parent_comment_id": null, "media_url": null },
+  "post": { "id": "17845678901234", "url": null, "caption": null },
+  "author": { "id": "1234567890", "name": null, "username": "fan" },
+  "timestamp": "2026-08-22T10:00:00.000Z"
+}
+```
+
+`comment.kind` distinguishes a top-level `comment` from a `reply` under another comment and,
+on Threads, from a `mention` of your account. To answer, pass `social_account_id` and
+`comment.id` to **Comment → Reply** — the node's defaults already do this.
 
 ## Credentials
 

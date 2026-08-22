@@ -333,6 +333,7 @@ export class Postora implements INodeType {
         noDataExpression: true,
         options: [
           { name: "Account", value: "account" },
+          { name: "Comment", value: "comment" },
           { name: "Media", value: "media" },
           { name: "Message", value: "message" },
           { name: "Post", value: "post" },
@@ -387,6 +388,70 @@ export class Postora implements INodeType {
           { name: "Reply", value: "reply", description: "Reply to an inbound message", action: "Reply to a message" },
         ],
         default: "reply",
+      },
+
+      // ── Comment Operations ──
+      {
+        displayName: "Operation",
+        name: "operation",
+        type: "options",
+        noDataExpression: true,
+        displayOptions: { show: { resource: ["comment"] } },
+        options: [
+          { name: "Reply", value: "reply", description: "Reply to a comment, reply or mention", action: "Reply to a comment" },
+          { name: "Hide", value: "hide", description: "Hide or unhide a comment", action: "Hide a comment" },
+          { name: "Delete", value: "delete", description: "Delete a comment (Facebook and Instagram only)", action: "Delete a comment" },
+        ],
+        default: "reply",
+      },
+
+      // ═══════════════════════════════════
+      // Comment → Reply / Hide / Delete fields
+      // ═══════════════════════════════════
+      {
+        displayName: "Platform",
+        name: "commentPlatform",
+        type: "options",
+        options: [
+          { name: "Facebook", value: "facebook" },
+          { name: "Instagram", value: "instagram" },
+          { name: "Threads", value: "threads" },
+        ],
+        default: "facebook",
+        displayOptions: { show: { resource: ["comment"] } },
+      },
+      {
+        displayName: "Social Account ID",
+        name: "commentSocialAccountId",
+        type: "string",
+        default: "={{ $json.social_account_id }}",
+        required: true,
+        displayOptions: { show: { resource: ["comment"] } },
+      },
+      {
+        displayName: "Comment ID",
+        name: "commentId",
+        type: "string",
+        default: "={{ $json.comment.id }}",
+        required: true,
+        displayOptions: { show: { resource: ["comment"] } },
+      },
+      {
+        displayName: "Message",
+        name: "commentMessage",
+        type: "string",
+        typeOptions: { rows: 4 },
+        default: "={{ $json.response }}",
+        required: true,
+        displayOptions: { show: { resource: ["comment"], operation: ["reply"] } },
+      },
+      {
+        displayName: "Hide",
+        name: "commentHide",
+        type: "boolean",
+        default: true,
+        description: "Whether to hide (true) or unhide (false) the comment",
+        displayOptions: { show: { resource: ["comment"], operation: ["hide"] } },
       },
 
       // ── Webhook Operations ──
@@ -1199,6 +1264,31 @@ export class Postora implements INodeType {
               method: "POST",
               url: `${baseUrl}/api/v1/messages/reply`,
               body: messageBody,
+              json: true,
+            },
+          );
+        }
+
+        // ── Comment → Reply / Hide / Delete ──
+        else if (resource === "comment" && ["reply", "hide", "delete"].includes(operation)) {
+          const commentBody: Record<string, unknown> = {
+            platform: this.getNodeParameter("commentPlatform", i, "facebook") as string,
+            social_account_id: requireParam(this.getNodeParameter("commentSocialAccountId", i, "") as string, "Social Account ID"),
+            comment_id: requireParam(this.getNodeParameter("commentId", i, "") as string, "Comment ID"),
+          };
+          if (operation === "reply") {
+            commentBody.message = requireParam(this.getNodeParameter("commentMessage", i, "") as string, "Message");
+          }
+          if (operation === "hide") {
+            commentBody.hide = this.getNodeParameter("commentHide", i, true) as boolean;
+          }
+          responseData = await this.helpers.httpRequestWithAuthentication.call(
+            this as unknown as IAllExecuteFunctions,
+            "postoraApi",
+            {
+              method: "POST",
+              url: `${baseUrl}/api/v1/comments/${operation}`,
+              body: commentBody,
               json: true,
             },
           );

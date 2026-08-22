@@ -690,3 +690,105 @@ describe("Postora node — output shape is identical across sources", () => {
     expect(shape(binary.result[0].json)).toEqual(shape(mfid.result[0].json));
   });
 });
+
+describe("Postora node — Comment → Reply / Hide / Delete", () => {
+  it("replies to a comment through /api/v1/comments/reply", async () => {
+    const { result, callLog } = await run({
+      params: {
+        resource: "comment",
+        operation: "reply",
+        commentPlatform: "instagram",
+        commentSocialAccountId: "acc-1",
+        commentId: "c-1",
+        commentMessage: "Thanks!",
+      },
+      http: () => ({ success: true, platform_comment_id: "r-1" }),
+    });
+
+    expect(callLog[0]).toMatchObject({
+      method: "POST",
+      url: "https://example.test/api/v1/comments/reply",
+      body: { platform: "instagram", social_account_id: "acc-1", comment_id: "c-1", message: "Thanks!" },
+      json: true,
+    });
+    expect(result[0].json).toEqual({ success: true, platform_comment_id: "r-1" });
+  });
+
+  it("hides a comment with an explicit hide flag", async () => {
+    const { callLog } = await run({
+      params: {
+        resource: "comment",
+        operation: "hide",
+        commentPlatform: "facebook",
+        commentSocialAccountId: "acc-1",
+        commentId: "c-1",
+        commentHide: false,
+      },
+      http: () => ({ success: true }),
+    });
+
+    expect(callLog[0].url).toBe("https://example.test/api/v1/comments/hide");
+    expect(callLog[0].body).toEqual({
+      platform: "facebook",
+      social_account_id: "acc-1",
+      comment_id: "c-1",
+      hide: false,
+    });
+  });
+
+  it("deletes a comment without sending a message or hide flag", async () => {
+    const { callLog } = await run({
+      params: {
+        resource: "comment",
+        operation: "delete",
+        commentPlatform: "facebook",
+        commentSocialAccountId: "acc-1",
+        commentId: "c-1",
+      },
+      http: () => ({ success: true }),
+    });
+
+    expect(callLog[0].url).toBe("https://example.test/api/v1/comments/delete");
+    expect(callLog[0].body).toEqual({
+      platform: "facebook",
+      social_account_id: "acc-1",
+      comment_id: "c-1",
+    });
+  });
+
+  it("offers Reply, Hide and Delete, and marks Delete as Facebook/Instagram only", () => {
+    const node = new Postora();
+    const operation = node.description.properties.find(
+      (property) =>
+        property.name === "operation" &&
+        ((property.displayOptions?.show?.resource as string[]) || []).includes("comment"),
+    ) as any;
+
+    expect(operation.options.map((option: { value: string }) => option.value)).toEqual(["reply", "hide", "delete"]);
+    expect(operation.options.find((option: { value: string }) => option.value === "delete").description)
+      .toContain("Facebook and Instagram");
+
+    const platform = node.description.properties.find((property) => property.name === "commentPlatform") as any;
+    expect(platform.options.map((option: { value: string }) => option.value)).toEqual([
+      "facebook",
+      "instagram",
+      "threads",
+    ]);
+  });
+
+  it("throws a clear error when Comment ID is empty", async () => {
+    await expect(
+      run({
+        params: {
+          resource: "comment",
+          operation: "reply",
+          commentPlatform: "facebook",
+          commentSocialAccountId: "acc-1",
+          commentId: "",
+          commentMessage: "hi",
+        },
+        http: () => ({}),
+      }),
+    ).rejects.toThrow("Comment ID");
+  });
+});
