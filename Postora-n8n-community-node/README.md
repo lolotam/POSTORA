@@ -83,6 +83,18 @@ Changing the **Events** selection takes effect the next time the workflow is act
 | Hide | Facebook, Instagram, Threads | `POST /api/v1/comments/hide` (`hide: true/false`) |
 | Delete | Facebook, Instagram | `POST /api/v1/comments/delete` |
 
+**Platform** defaults to **Auto-detect**, which leaves the platform out of the
+request entirely: Postora already knows whether the **Social Account ID** you send belongs to a
+Facebook, Instagram or Threads account, and derives the platform from it. That is why one Comment
+node handles a Comment Trigger set to **All** platforms without a Switch in front of it. Picking a
+platform explicitly is only useful as a safety check — the API then rejects the call with
+`platform does not match the selected social account` when the account is not on that platform.
+
+On Auto-detect the node reads the incoming `platform` field where it can, purely so a **Delete**
+aimed at Threads fails immediately with "Use the Hide operation instead" rather than after a round
+trip. When it cannot read one — an AI Agent in between with a renamed trigger, for instance — the
+API's own Threads guard still refuses the delete.
+
 The field defaults read a **Postora Comment Trigger** payload, falling back to the trigger by
 name when `$json` is not the trigger's output:
 `{{ $json.social_account_id ?? $('Postora Comment Trigger').first().json.social_account_id }}`.

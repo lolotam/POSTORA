@@ -768,10 +768,12 @@ describe("Postora node — Comment → Reply / Hide / Delete", () => {
 
     const platform = node.description.properties.find((property) => property.name === "commentPlatform") as any;
     expect(platform.options.map((option: { value: string }) => option.value)).toEqual([
+      "auto",
       "facebook",
       "instagram",
       "threads",
     ]);
+    expect(platform.default).toBe("auto");
   });
 
   it("throws a clear error when Comment ID is empty", async () => {
@@ -788,6 +790,72 @@ describe("Postora node — Comment → Reply / Hide / Delete", () => {
         http: () => ({}),
       }),
     ).rejects.toThrow("Comment ID");
+  });
+});
+
+// The API resolves the platform from social_account_id and only cross-checks a supplied
+// `platform`, so Auto-Detect sends none: a stale value could only cause a false mismatch.
+describe("Postora node — Comment → Platform Auto-Detect", () => {
+  it("omits platform from the request so the API derives it from the account", async () => {
+    const { callLog } = await run({
+      params: {
+        resource: "comment",
+        operation: "reply",
+        commentPlatform: "auto",
+        commentPlatformDetected: "instagram",
+        commentSocialAccountId: "acc-1",
+        commentId: "c-1",
+        commentMessage: "Thanks!",
+      },
+      http: () => ({ success: true, platform_comment_id: "r-1" }),
+    });
+
+    expect(callLog[0].body).toEqual({ social_account_id: "acc-1", comment_id: "c-1", message: "Thanks!" });
+    expect(callLog[0].body).not.toHaveProperty("platform");
+  });
+
+  it("guards a Threads delete locally when the payload reveals the platform", async () => {
+    await expect(
+      run({
+        params: {
+          resource: "comment",
+          operation: "delete",
+          commentPlatform: "auto",
+          commentPlatformDetected: "threads",
+          commentSocialAccountId: "acc-1",
+          commentId: "r-1",
+        },
+        http: () => ({}),
+      }),
+    ).rejects.toThrow("Use the Hide operation instead");
+  });
+
+  it("still calls the API when the platform cannot be detected — the API guards Threads too", async () => {
+    const { callLog } = await run({
+      params: {
+        resource: "comment",
+        operation: "delete",
+        commentPlatform: "auto",
+        commentPlatformDetected: "",
+        commentSocialAccountId: "acc-1",
+        commentId: "c-1",
+      },
+      http: () => ({ success: true }),
+    });
+
+    expect(callLog[0].url).toBe("https://example.test/api/v1/comments/delete");
+    expect(callLog[0].body).toEqual({ social_account_id: "acc-1", comment_id: "c-1" });
+  });
+
+  it("reads the detected platform from the trigger when a node sits in between", () => {
+    const detected = new Postora().description.properties.find(
+      (property: any) => property.name === "commentPlatformDetected",
+    ) as any;
+
+    expect(detected.type).toBe("hidden");
+    expect(detected.default).toMatch(/\$json\.platform\s*\?\?/);
+    expect(detected.default).toContain("$('Postora Comment Trigger').first().json.platform");
+    expect(detected.displayOptions.show.commentPlatform).toEqual(["auto"]);
   });
 });
 

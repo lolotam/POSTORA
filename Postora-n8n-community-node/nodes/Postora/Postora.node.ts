@@ -91,6 +91,22 @@ function isValidUuid(value: string): boolean {
   return typeof value === "string" && UUID_RE.test(value.trim());
 }
 
+// Platform "Auto-Detect": the API resolves the platform from social_account_id on its own and
+// treats a supplied `platform` purely as a cross-check, so auto sends no platform at all. The
+// value read here is used only to decide whether the Threads-delete guard can fire locally —
+// when it cannot be read the API's own Threads guard still catches the delete, so returning
+// nothing is a valid outcome rather than a failure.
+function detectCommentPlatform(ctx: IExecuteFunctions, itemIndex: number): string | undefined {
+  let detected: unknown;
+  try {
+    detected = ctx.getNodeParameter("commentPlatformDetected", itemIndex, "");
+  } catch {
+    // The default expression reaches for a Comment Trigger this workflow does not have.
+    return undefined;
+  }
+  return typeof detected === "string" ? detected.trim().toLowerCase() : undefined;
+}
+
 const mediaSourceOptions = [
   { name: "None (text-only post)", value: "none" },
   { name: "URL (paste https:// links)", value: "url" },
@@ -422,12 +438,27 @@ export class Postora implements INodeType {
         name: "commentPlatform",
         type: "options",
         options: [
+          { name: "Auto-detect", value: "auto" },
           { name: "Facebook", value: "facebook" },
           { name: "Instagram", value: "instagram" },
           { name: "Threads", value: "threads" },
         ],
-        default: "facebook",
+        default: "auto",
+        description:
+          "Auto-detect leaves the platform out of the request so the API resolves it from the Social Account ID — " +
+          "the account already knows whether it is Facebook, Instagram or Threads. Pick a platform explicitly only " +
+          "to have the API reject the call when the account does not match it.",
         displayOptions: { show: { resource: ["comment"] } },
+      },
+      {
+        // Read only to decide whether the Threads-delete guard below should fire before the
+        // request goes out. It never reaches the API: on Auto-Detect the platform is omitted
+        // entirely, because a stale value here could only produce a spurious mismatch error.
+        displayName: "Detected Platform",
+        name: "commentPlatformDetected",
+        type: "hidden",
+        default: "={{ $json.platform ?? $('Postora Comment Trigger').first().json.platform }}",
+        displayOptions: { show: { resource: ["comment"], commentPlatform: ["auto"] } },
       },
       {
         displayName: "Social Account ID",
@@ -1286,14 +1317,15 @@ export class Postora implements INodeType {
 
         // ── Comment → Reply / Hide / Delete ──
         else if (resource === "comment" && ["reply", "hide", "delete"].includes(operation)) {
-          const commentPlatform = this.getNodeParameter("commentPlatform", i, "facebook") as string;
+          const commentPlatform = this.getNodeParameter("commentPlatform", i, "auto") as string;
+          const isAutoPlatform = commentPlatform === "auto";
+          const resolvedPlatform = isAutoPlatform ? detectCommentPlatform(this, i) : commentPlatform;
           // Threads only lets an account delete its own posts, so deleting someone else's
           // reply is refused upstream. Say so here instead of surfacing a raw API error.
-          if (operation === "delete" && commentPlatform === "threads") {
+          if (operation === "delete" && resolvedPlatform === "threads") {
             throw new Error("Threads replies cannot be deleted. Use the Hide operation instead.");
           }
           const commentBody: Record<string, unknown> = {
-            platform: commentPlatform,
             social_account_id: requireParam(
               this.getNodeParameter("commentSocialAccountId", i, "") as string,
               "Social Account ID",
@@ -1301,6 +1333,8 @@ export class Postora implements INodeType {
             ),
             comment_id: requireParam(this.getNodeParameter("commentId", i, "") as string, "Comment ID", "comment.id"),
           };
+          // Left out on Auto-detect so the API derives it from the account, as Message → Reply does.
+          if (!isAutoPlatform) commentBody.platform = commentPlatform;
           if (operation === "reply") {
             commentBody.message = requireParam(this.getNodeParameter("commentMessage", i, "") as string, "Message");
           }
