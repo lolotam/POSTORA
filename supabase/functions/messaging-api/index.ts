@@ -306,7 +306,9 @@ Deno.serve(async (req) => {
       return cacheParticipantAvatar(req, profilePic);
     }
 
-    const supportedAiAgentPlatforms = ["whatsapp", "facebook", "instagram"];
+    // Threads has no DM API, so its agent only ever answers public replies and mentions.
+    // It still needs a config row, engagement modes and threads like the others.
+    const supportedAiAgentPlatforms = ["whatsapp", "facebook", "instagram", "threads"];
     const supportedAiAgentModes = ["ai_first", "human_first", "human_then_ai"];
 
     function isAiAgentPlatform(value: unknown): value is string {

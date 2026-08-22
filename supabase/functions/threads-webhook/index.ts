@@ -6,6 +6,7 @@ import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { runInBackground } from "../_shared/background.ts";
 import { resolveCommentAutomationHandler } from "../_shared/automationHandler.ts";
 import { isOwnComment } from "../_shared/commentAuthor.ts";
+import { handleCommentInternally } from "../_shared/commentAutomation.ts";
 import {
   buildCommentPayload,
   buildMentionEnvelope,
@@ -225,17 +226,27 @@ Deno.serve(async (req) => {
       if (!inserted?.length) continue;
       processed += 1;
 
+      // The loop breaker, and it must stay ahead of both branches below: whatever replies
+      // here comes back as another reply event, and only this check ends that cycle.
       if (isOwnComment(account, normalized.author)) {
         console.log(`[threads-webhook] skipped own reply ${normalized.comment.id}`);
         continue;
       }
-      if (resolveCommentAutomationHandler(account.account_metadata) !== "n8n") continue;
 
-      await runInBackground("threads reply dispatch", () => dispatchN8nEvent(
-        supabase,
-        account.user_id,
-        buildCommentPayload({ platform: "threads", socialAccountId: account.id, account, ...normalized }),
-      ));
+      const replyHandler = resolveCommentAutomationHandler(account.account_metadata);
+      if (replyHandler === "n8n") {
+        await runInBackground("threads reply dispatch", () => dispatchN8nEvent(
+          supabase,
+          account.user_id,
+          buildCommentPayload({ platform: "threads", socialAccountId: account.id, account, ...normalized }),
+        ));
+      } else if (replyHandler === "internal") {
+        await runInBackground("threads reply automation", () => handleCommentInternally(
+          supabase,
+          account,
+          { comment: normalized.comment, post: normalized.post, author: normalized.author },
+        ));
+      }
       continue;
     }
 
@@ -315,28 +326,39 @@ Deno.serve(async (req) => {
       await createMentionNotification(supabase, upserted);
       await runInBackground("threads mention dispatch", async () => {
         await dispatchN8nEvent(supabase, account.user_id, buildMentionEnvelope("threads.mention.created", account.id, upserted));
-        // A mention is also a comment-shaped event, so subscribers of the unified
-        // comment.received stream get it too — but only when this account routes
-        // comments to n8n, and never when the account mentioned itself.
-        if (
-          resolveCommentAutomationHandler(account.account_metadata) === "n8n" &&
-          !isOwnComment(account, { id: norm.author_id || null, username: norm.username || null })
-        ) {
+
+        // A mention is also a comment-shaped event, so it feeds the same automation as a
+        // reply. This matters more on Threads than anywhere else: the `replies` webhook
+        // field needs a manual subscription in the Meta App Dashboard, so for accounts that
+        // have not done it, mentions are the ONLY comment events that arrive. Hooking only
+        // replies would leave the Threads agent looking dead.
+        const mentionAuthor = { id: norm.author_id || null, name: null, username: norm.username || null };
+        if (isOwnComment(account, mentionAuthor)) return;
+
+        const mentionHandler = resolveCommentAutomationHandler(account.account_metadata);
+        const mentionComment = {
+          id: norm.mention_id,
+          kind: "mention" as const,
+          text: norm.text || "",
+          parentCommentId: null,
+          mediaUrl: norm.permalink || null,
+        };
+        if (mentionHandler === "n8n") {
           await dispatchN8nEvent(supabase, account.user_id, buildCommentPayload({
             platform: "threads",
             socialAccountId: account.id,
             account,
-            comment: {
-              id: norm.mention_id,
-              kind: "mention",
-              text: norm.text || "",
-              parentCommentId: null,
-              mediaUrl: norm.permalink || null,
-            },
+            comment: mentionComment,
             post: { id: null, url: null, caption: null },
-            author: { id: norm.author_id || null, name: null, username: norm.username || null },
+            author: mentionAuthor,
             timestamp: norm.mentioned_at || undefined,
           }));
+        } else if (mentionHandler === "internal") {
+          await handleCommentInternally(supabase, account, {
+            comment: { id: mentionComment.id, text: mentionComment.text },
+            post: { id: null },
+            author: mentionAuthor,
+          });
         }
       });
     }
