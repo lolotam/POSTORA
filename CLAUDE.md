@@ -4,6 +4,26 @@
 
 This document provides comprehensive context for AI coding assistants (Claude, GPT, Gemini) to understand and work with the Postora codebase.
 
+---
+
+## 📐 Required reading before you touch code
+
+**Before editing anything under `src/**` or `supabase/functions/**` you MUST read `ARCHITECTURE.md`.** It defines layering, dependency direction, Edge Function shape, and the security rules new code has to follow. It is not auto-loaded — open it deliberately.
+
+There are four agent documents. **`ARCHITECTURE.md` §0 owns the map of which document owns what** — read it there rather than looking for a copy here.
+
+**A fact belongs in exactly one of these files.** If you need to state something that already lives in another, link to it instead of copying it — these documents have already drifted from each other once.
+
+On conflict between `ARCHITECTURE.md` and the Task Execution Workflow below, **the workflow wins**.
+
+### Delegating to another agent (Codex / Grok / OpenCode / Antigravity)
+
+Nothing auto-loads `ARCHITECTURE.md` for a delegated implementer. **Every delegation brief must name `ARCHITECTURE.md` as required reading**, alongside the specific rule sections that apply to the task.
+
+No tooling checks this. The architecture hook only prints a reminder on `Edit`/`Write` inside this session and never blocks anything, so a brief that omits the rules produces work that nothing catches until human review.
+
+---
+
 ## Task Execution Workflow (MANDATORY)
 
 Follow these steps for every task, in order:
@@ -485,9 +505,8 @@ OPENAI_API_KEY
 ## Common Tasks
 
 ### Deploy Edge Function
-```bash
-npx supabase functions deploy [function-name] --project-ref efruibswazzuuupgyzmf
-```
+
+Self-hosted — do **not** use `npx supabase functions deploy` (that targets Supabase Cloud and fails here). Follow the procedure in **Task Execution Workflow → step 7** above, or see `docs/runbooks/deploy-edge-function.md` for exact paths and SHA256 verification.
 
 ### Run Locally
 ```bash
