@@ -23,13 +23,15 @@ Merging `main` auto-deploys the frontend only.
 - `supabase/functions/_shared/rate-limiter.ts` and
   `supabase/functions/ecommerce-whatsapp-api/index.ts` keep their own hardcoded
   limits.
-- Stripe / billing does not learn about quotas here. Plan assignment is unchanged.
+- Plan *assignment* is unchanged: which plan a user is on, Stripe price IDs, and
+  the checkout flow are untouched. `stripe-webhook` is modified only to stop
+  writing quota numbers (R4a).
 
 ---
 
 ## 1. Problem
 
-Three separate defects, one root cause: plan entitlements have no single home.
+Four separate defects, one root cause: plan entitlements have no single home.
 
 ### 1.1 `/admin/plan-quotas` is write-only
 
@@ -47,24 +49,50 @@ app_settings where key='plan_quotas': 0 rows
 Zero rows — the page has never completed a save. **There is no admin-tuned data
 to preserve**, so the new home can be chosen freely.
 
-### 1.2 The database enforces free-tier limits on paying users
+### 1.2 Eight hardcoded copies of the same table, kept in sync by overwrite
 
-`enforce_post_quota_on_insert()` (migration `20260804120000_enforce_post_quotas.sql`,
-lines 108-131) auto-inserts a `user_quotas` row with hardcoded free values
-(`max_profiles=2, max_social_accounts=3, max_posts_per_month=30,
-max_posts_per_day=2, max_media_uploads_per_day=20`) for **every** user, then
-enforces that row. Nothing re-syncs it when a user subscribes.
+The plan numbers are duplicated verbatim in **eight** places — five in
+TypeScript, three in SQL:
 
-All 7 current paying users happen to hold correct rows, set by hand:
+| # | Copy | Location | Free values it writes |
+|---|---|---|---|
+| 1 | Client resolution | `src/hooks/useQuotas.tsx:29-51` (`PLAN_QUOTAS`) | 2/3/30/2/20 |
+| 2 | Admin page defaults | `src/pages/admin/AdminPlanQuotas.tsx:39-66` (`DEFAULT_QUOTAS`) | 2/3/30/2/20 |
+| 3 | Stripe events | `supabase/functions/stripe-webhook/index.ts:20-46` | 2/3/30/2/20 |
+| 4 | Manual re-sync | `supabase/functions/sync-user-quotas/index.ts:26-48` | 2/3/30/2/20 |
+| 5 | Backfill utility | `supabase/functions/backfill-subscription/index.ts:19-45` | 2/3/30/2/20 |
+| 6 | Post trigger | `enforce_post_quota_on_insert()` | 2/3/30/2/20 |
+| 7 | Signup trigger | `handle_new_user_quota()` on `auth.users` | **1 profile / 4 accounts** / 30 |
+| 8 | Subscription trigger | `set_user_quotas_for_plan()`, called by `handle_subscription_change()` on `user_subscriptions` | **1 post/day** / 30 / 2 / 3 / 20 |
 
-```text
-business | -1 | -1   (x3)
-pro      | 30 | 500  (x4)
-```
+Columns are `profiles/accounts/month/day/uploads`.
 
-So the defect is latent, not active. The **next** paid signup is capped at 2
-posts/day by the trigger while `useQuotas` shows them 30 — a silent, confusing
-failure at exactly the moment a customer starts paying.
+**Copies 7 and 8 explain every anomaly in the live data of §2.**
+`handle_new_user_quota` writes `max_profiles=1, max_social_accounts=4` at
+signup — that is the 46-row bucket. `set_user_quotas_for_plan` declares free as
+`max_posts_per_day = 1` — that is the 12-row legacy bucket. Neither value
+appears in any TypeScript copy, so the frontend has been showing numbers the
+database never agreed with.
+
+`stripe-webhook` writes `PLAN_QUOTAS[planSlug]` wholesale into `user_quotas` on
+subscription create, plan change, and cancellation, and `handle_subscription_change`
+does the same from a database trigger. That is how the 7 current paying users
+hold correct rows. Two consequences:
+
+- **An admin's deliberate per-user grant is destroyed by the next Stripe event
+  for that user** — the webhook `update`s the whole quota object, not a diff.
+- Editing a plan's numbers requires changing eight copies across five files and
+  three database functions, then redeploying three edge functions. Nothing on
+  `/admin/plan-quotas` participates.
+
+The copies have already drifted from each other: all five TypeScript copies
+declare free `max_social_accounts = 3`, while copy 7 writes `4` — which is what
+46 live free users actually hold (§2).
+
+**This is why R4a exists.** Under NULL-means-inherit, a webhook that keeps
+writing concrete values would hand every subscriber an explicit override equal
+to their plan at that moment — later plan edits would then never reach a single
+paying user, silently defeating this entire change.
 
 ### 1.3 The client and the database disagree by construction
 
@@ -102,7 +130,7 @@ max_posts_per_day=2, max_posts_per_month=20, max_media_uploads_per_day=20`.
 neither the column defaults nor the trigger's literals. A rule of the form
 "NULL it if it equals the known default" would therefore leave 46 rows pinned at
 `max_profiles=1`, *below* the free plan's 2, silently capping every free user.
-§4.3 states the rule that avoids this.
+§3 R3 states the rule that avoids this.
 
 The lone `none | -1 …` row is the admin account (`dr.vet.waleedtam@gmail.com`),
 which must keep its unlimited grant.
@@ -222,13 +250,54 @@ deliberate and visible in `/admin/users`.
 `FOR UPDATE` lock target and counter home — but inserts **NULL** limits instead
 of the free-tier literals. The row becomes purely counters + lock.
 
-Both `enforce_post_quota_on_insert()` and `can_create_post()` read their limits
-from `effective_user_quotas(user_id)` instead of selecting `user_quotas.max_*`
-directly. Admin bypass, the `-1` unlimited check, the real-usage `COUNT(*)`
-recount, and the `POST_QUOTA_*` error codes are all unchanged.
+All three limit **readers** resolve through `effective_user_quotas(user_id)`
+instead of selecting `user_quotas.max_*` directly:
 
-This is what makes a new Pro subscriber inherit 30/day with no manual step —
-the fix for §1.2.
+- `can_create_post()`
+- `enforce_post_quota_on_insert()`
+- `can_upload_media()`
+
+Admin bypass, the `-1` unlimited check, the real-usage `COUNT(*)` recount, and
+the `POST_QUOTA_*` error codes are all unchanged.
+
+All three limit **writers** stop writing limits (copies 6, 7, 8 of §1.2):
+
+- `enforce_post_quota_on_insert()` — inserts NULL limits, as above.
+- `handle_new_user_quota()` — inserts NULL limits; it exists to create the
+  counter row at signup, not to decide entitlements.
+- `set_user_quotas_for_plan(p_user_id, p_plan_slug)` — rewritten to **clear**
+  the five override columns to NULL rather than write plan values, so a
+  subscription change makes the user inherit their new plan. Its signature is
+  preserved because `handle_subscription_change()` calls it; the `p_plan_slug`
+  argument becomes unused and is documented as retained for compatibility.
+
+`increment_media_uploads()`, `reserve_ai_generation_quota()` and
+`release_ai_generation_quota()` touch counters only and are not modified.
+
+### R4a — Edge functions stop writing plan values
+
+`stripe-webhook`, `sync-user-quotas` and `backfill-subscription` each hold a
+`PLAN_QUOTAS` constant and `update`/`insert` it wholesale into `user_quotas`
+(copies 3, 4, 5 of §1.2). All three:
+
+- delete their `PLAN_QUOTAS` constant;
+- write `{ max_profiles: null, max_social_accounts: null, max_posts_per_month: null,
+  max_posts_per_day: null, max_media_uploads_per_day: null }` in place of the
+  plan object, so the user inherits from `subscription_plans`;
+- keep every other field they write (counters, reset dates, `user_id`) unchanged.
+
+**Without this requirement the change is inert for paying users.** A webhook
+that keeps writing concrete numbers converts every subscriber into a permanent
+explicit override at their plan's values as of that moment, and no later edit on
+`/admin/plan-quotas` would ever reach them.
+
+This also narrows the second consequence in §1.2. An admin's deliberate per-user
+grant now survives every ordinary Stripe event — renewal, payment succeeded,
+payment failed — because those paths no longer touch the limit columns at all.
+A **plan change** still clears the grant back to inherit, which is the intended
+reading: moving a user to a different plan resets what they are entitled to.
+Admins re-granting after a plan change is a deliberate, visible step, not the
+silent wholesale overwrite that happens today.
 
 ### R5 — Client resolution (`src/hooks/useQuotas.tsx`)
 
@@ -324,10 +393,23 @@ dashboard.
 2. Verify: `SELECT slug, profile_limit, max_posts_per_day FROM subscription_plans;`
    returns the three seeded rows.
 3. Verify the backfill matches the R3 table.
-4. Redeploy `n8n-api` per `docs/runbooks/deploy-edge-function.md` (copy into the
-   functions volume, verify SHA256, `docker compose -p postorasupabase-supabase-j8axyh
-   up -d --no-deps functions`).
-5. **Then** merge to `main`.
+4. Redeploy **four** edge functions per `docs/runbooks/deploy-edge-function.md`
+   (copy into the functions volume, verify SHA256, then
+   `docker compose -p postorasupabase-supabase-j8axyh up -d --no-deps functions`
+   once for all four):
+   - `n8n-api` (R8)
+   - `stripe-webhook`, `sync-user-quotas`, `backfill-subscription` (R4a)
+5. Verify no writer still sends plan values:
+   `grep -rn "PLAN_QUOTAS" supabase/functions/` returns nothing.
+6. **Then** merge to `main`.
+
+`stripe-webhook` is the ordering risk inside step 4: while the migration is
+applied but the old webhook is still deployed, a Stripe event would write
+concrete plan values into `user_quotas` and re-create an override for that user.
+The window is minutes and the fix is a one-line `UPDATE … SET max_* = NULL` for
+any user whose row gained values during it. Check with:
+`SELECT user_id FROM user_quotas WHERE max_posts_per_day IS NOT NULL;` — it must
+return only the admin row.
 
 ---
 
@@ -335,8 +417,8 @@ dashboard.
 
 1. Editing Pro's monthly posts to 1000 on `/admin/plan-quotas` is visible in a
    Pro user's dashboard on next refresh, with no code change or redeploy.
-2. A user with no `user_quotas` override on the Pro plan can create a 3rd post in
-   a day (today's trigger blocks at 2).
+2. A Pro user whose `user_quotas` limits are all NULL can create their 3rd post
+   of the day — proving the trigger resolves the plan rather than the row.
 3. A user with `user_quotas.max_posts_per_day = 1` is blocked at 1 even on
    Business — override lowers, not just raises.
 4. After backfill, `SELECT count(*) FROM user_quotas WHERE max_posts_per_day IS NOT NULL`
@@ -347,8 +429,11 @@ dashboard.
    editing it on either is visible on the other.
 7. A Free-tier API key exceeding the Free `tier_rate_limits` row for a
    `/api/v1/*` endpoint receives `429`.
-8. Gates green: `npx tsc --noEmit`, `npm test`, `npm run build`,
-   `deno test supabase/functions/n8n-api/`.
+8. After a subscription create/change/cancel event, the affected user's five
+   `user_quotas.max_*` columns are NULL — no writer re-creates an override.
+9. `grep -rn "PLAN_QUOTAS" supabase/functions/ src/` returns nothing.
+10. Gates green: `npx tsc --noEmit`, `npm test`, `npm run build`,
+    `deno test supabase/functions/n8n-api/`.
 
 ---
 
@@ -364,6 +449,9 @@ per the rehearsal pattern in memory — `supabase start` is broken locally):
 - The trigger admits a Pro user's 3rd daily post.
 - The trigger still blocks a Free user's 3rd daily post.
 - The trigger inserts NULL limits, not literals, for a brand-new user.
+- `handle_new_user_quota` inserts NULL limits at signup.
+- `set_user_quotas_for_plan` clears the five override columns to NULL.
+- `can_upload_media` resolves the plan's upload limit for a NULL override.
 
 **Frontend** (vitest):
 
