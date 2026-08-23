@@ -223,12 +223,15 @@ export default function AdminPlans() {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Profile Limit (-1 for unlimited)</Label>
+                  <Label>Social Profiles</Label>
                   <Input
                     type="number"
                     value={newPlan.profile_limit}
                     onChange={(e) => setNewPlan({ ...newPlan, profile_limit: e.target.value })}
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Shared with the Plan Quotas page — editing here changes both.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Features (one per line)</Label>
@@ -378,7 +381,7 @@ export default function AdminPlans() {
                   </div>
                 </div>
                 <div className="space-y-2">
-                  <Label>Profile Limit (-1 for unlimited)</Label>
+                  <Label>Social Profiles</Label>
                   <Input
                     type="number"
                     value={editingPlan.profile_limit}
@@ -389,6 +392,9 @@ export default function AdminPlans() {
                       })
                     }
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Shared with the Plan Quotas page — editing here changes both.
+                  </p>
                 </div>
                 <div className="space-y-2">
                   <Label>Features (one per line)</Label>

@@ -3,6 +3,9 @@ import {
   ENDPOINT_LABELS,
   ENDPOINT_CATEGORY_ORDER,
   groupByEndpointCategory,
+  TIER_ENFORCING_ENDPOINTS,
+  endpointEnforcesTierLimits,
+  endpointEnforcesDailyTierLimit,
 } from "../AdminRateLimits";
 
 // The 14 endpoints seeded by supabase/migrations/20260823120000_unify_rate_limits.sql.
@@ -76,5 +79,49 @@ describe("AdminRateLimits category bucketing", () => {
     ]);
     expect(groups.map((g) => g.category)).toEqual(["AI Generation", "Other"]);
     expect(groups[groups.length - 1].items.map((i) => i.endpoint)).toEqual(["/api/v1/some-future-endpoint"]);
+  });
+});
+
+describe("endpointEnforcesTierLimits", () => {
+  it("is true for the AI endpoints that read tier_rate_limits", () => {
+    expect(endpointEnforcesTierLimits("generate-caption")).toBe(true);
+    expect(endpointEnforcesTierLimits("generate-image")).toBe(true);
+  });
+
+  it("is true for n8n endpoints once the resolver consults tiers", () => {
+    expect(endpointEnforcesTierLimits("/api/v1/post")).toBe(true);
+  });
+
+  it("is false for generate-hashtags, which has no rate limiting code", () => {
+    expect(endpointEnforcesTierLimits("generate-hashtags")).toBe(false);
+  });
+
+  it("is false for post-create, which has a row but no consumer", () => {
+    expect(endpointEnforcesTierLimits("post-create")).toBe(false);
+  });
+});
+
+describe("TIER_ENFORCING_ENDPOINTS", () => {
+  it("only lists endpoints seeded in the migration", () => {
+    for (const endpoint of TIER_ENFORCING_ENDPOINTS) {
+      expect(SEEDED_ENDPOINTS, `${endpoint} is not a seeded endpoint`).toContain(endpoint);
+    }
+  });
+});
+
+describe("endpointEnforcesDailyTierLimit", () => {
+  it("is true for the AI endpoints, which enforce the daily column", () => {
+    expect(endpointEnforcesDailyTierLimit("generate-caption")).toBe(true);
+    expect(endpointEnforcesDailyTierLimit("generate-image")).toBe(true);
+  });
+
+  it("is false for n8n endpoints, where only the hourly column is enforced", () => {
+    expect(endpointEnforcesDailyTierLimit("/api/v1/post")).toBe(false);
+    expect(endpointEnforcesDailyTierLimit("/api/v1/upload-media")).toBe(false);
+  });
+
+  it("is false for endpoints with no tier enforcement at all", () => {
+    expect(endpointEnforcesDailyTierLimit("generate-hashtags")).toBe(false);
+    expect(endpointEnforcesDailyTierLimit("post-create")).toBe(false);
   });
 });
