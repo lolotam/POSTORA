@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { buildMentionEnvelope, dispatchN8nEvent } from "../_shared/n8nMessagingDispatch.ts";
+import { ingestThreadsComment } from "../_shared/threadsCommentIngest.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -57,6 +58,7 @@ interface MinimalMention {
   user_id: string;
   social_account_id: string;
   mention_id: string;
+  mention_author_id: string | null;
   mention_author_username: string | null;
   mention_text: string | null;
   mention_permalink: string | null;
@@ -156,7 +158,7 @@ Deno.serve(async (req) => {
 
       const { data: account, error: accountErr } = await supabase
         .from("social_accounts")
-        .select("id, user_id, platform, platform_user_id, platform_username, access_token, token_expires_at, is_active")
+        .select("id, user_id, platform, platform_user_id, platform_username, access_token, token_expires_at, is_active, account_metadata")
         .eq("id", social_account_id)
         .maybeSingle();
 
@@ -352,6 +354,23 @@ Deno.serve(async (req) => {
         if (!wasExisting && !m.notified_at) {
           asyncFire(createMentionNotification(supabase, m));
           asyncFire(dispatchN8nEvent(supabase, userId, buildMentionEnvelope("threads.mention.created", m.social_account_id, m)));
+          // The legacy envelope above routes on `threads.mention.created`, whose family alias
+          // resolves to "threads.threads" — so it reaches a wildcard subscriber and nothing
+          // else. Every comment trigger in n8n subscribes to `comment.received`, which is why
+          // mentions discovered here used to look like they were never sent. The shared door
+          // emits that shape and dedupes it against whatever the webhook or poller already saw.
+          asyncFire(ingestThreadsComment(supabase, account, {
+            comment: {
+              id: m.mention_id,
+              kind: "mention",
+              text: m.mention_text || "",
+              parentCommentId: null,
+              mediaUrl: m.mention_permalink || null,
+            },
+            post: { id: null, url: null, caption: null },
+            author: { id: m.mention_author_id || null, name: null, username: m.mention_author_username },
+            timestamp: m.mentioned_at || undefined,
+          }, { rawPayload: m }));
         }
       }
 
