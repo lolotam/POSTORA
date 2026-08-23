@@ -107,6 +107,28 @@ describe("TIER_ENFORCING_ENDPOINTS", () => {
       expect(SEEDED_ENDPOINTS, `${endpoint} is not a seeded endpoint`).toContain(endpoint);
     }
   });
+
+  // Minor fix 2 (2026-08-23 final review): the membership check above only
+  // catches a bad ADDITION (an endpoint that shouldn't be there). It says
+  // nothing if an endpoint is silently dropped from the list — every array
+  // is trivially "only" seeded endpoints once it's empty. Pin the exact,
+  // ordered list so an omission fails here too.
+  it("lists exactly these 12 endpoints, in this order", () => {
+    expect(TIER_ENFORCING_ENDPOINTS).toEqual([
+      "generate-caption",
+      "generate-image",
+      "/api/v1/post",
+      "/api/v1/upload-media",
+      "/api/v1/posts",
+      "/api/v1/accounts",
+      "/api/v1/webhooks",
+      "/api/v1/media",
+      "/api/v1/messages/reply",
+      "/api/v1/comments/reply",
+      "/api/v1/comments/hide",
+      "/api/v1/comments/delete",
+    ]);
+  });
 });
 
 describe("endpointEnforcesDailyTierLimit", () => {
