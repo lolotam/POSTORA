@@ -45,6 +45,16 @@ docker cp supabase/migrations/<file>.sql postorasupabase-supabase-j8axyh-supabas
 docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -d quota_rehearsal -v ON_ERROR_STOP=1 -f /tmp/m.sql
 ```
 
+**Schema traps in fixtures (verified on prod):**
+
+- `posts` has three NOT NULL columns: `id` (defaulted), `user_id`, and **`platforms`**, which
+  has NO default. Every `INSERT INTO posts` in a fixture must supply `platforms`, e.g.
+  `'{facebook}'`. Omitting it fails the insert.
+- The legacy trigger `handle_subscription_change` -> `set_user_quotas_for_plan` RE-STAMPS the
+  `user_quotas` limit columns on every `user_subscriptions` INSERT. Always INSERT the
+  subscription FIRST, then UPDATE `user_quotas` to your test values — the reverse order is
+  silently overwritten. (Removed by Task 4; a trap for Tasks 2, 3 and 5.)
+
 **Two harness gotchas, both hit during verification:**
 
 1. `psql -c "stmt1; stmt2"` runs as **one implicit transaction** — any error rolls back the whole batch and earlier statements vanish. Use one `-c` per statement when a step must survive a later failure.
@@ -463,7 +473,7 @@ BEGIN
   -- Pro plan, no override: the 3rd post of the day must be allowed
   INSERT INTO user_subscriptions (user_id, plan_id, status)
   SELECT u, id, 'active' FROM subscription_plans WHERE slug='pro';
-  INSERT INTO posts (user_id, caption) VALUES (u,'a'),(u,'b');
+  INSERT INTO posts (user_id, caption, platforms) VALUES (u,'a','{facebook}'),(u,'b','{facebook}');
   SELECT can_create_post(u) INTO ok;
   ASSERT ok, 'pro user must not be blocked at 2 posts/day';
 
@@ -656,7 +666,7 @@ BEGIN
 
   -- the post trigger must seed NULL limits for a user with no row
   DELETE FROM user_quotas WHERE user_id=u;
-  INSERT INTO posts (user_id, caption) VALUES (u,'first');
+  INSERT INTO posts (user_id, caption, platforms) VALUES (u,'first','{facebook}');
   SELECT * INTO v FROM user_quotas WHERE user_id=u;
   ASSERT v.max_posts_per_day IS NULL, 'post trigger must not write free literals';
   ASSERT v.posts_today = 1,           'post trigger must still count';
