@@ -20,6 +20,7 @@ import { Loader2, Plus, Trash2, GripVertical, Pencil } from "lucide-react";
 import { useAllSubscriptionPlans, useUpdateSubscriptionPlan, useCreateSubscriptionPlan, useDeleteSubscriptionPlan, SubscriptionPlan } from "@/hooks/useSubscriptionPlans";
 import { FREE_TIER_FALLBACK } from "@/hooks/useQuotas";
 import { useToast } from "@/hooks/use-toast";
+import { validateQuotaFieldInput } from "@/lib/quotaValidation";
 
 /**
  * An empty input means "no explicit limit on this plan" — NULL, which falls
@@ -29,13 +30,12 @@ import { useToast } from "@/hooks/use-toast";
  * silently reset a cleared field to 2 instead of letting it inherit).
  * Mirrors AdminPlanQuotas.tsx's parseQuotaInput(), which sends NULL for the
  * same subscription_plans.profile_limit column.
+ *
+ * F8 (CodeRabbit round 1): delegates to the shared
+ * src/lib/quotaValidation.ts, which additionally rejects (rather than
+ * silently truncating) a fractional value or one below -1.
  */
-const parseQuotaInput = (raw: string): number | null => {
-  const trimmed = raw.trim();
-  if (trimmed === "") return null;
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isNaN(parsed) ? null : parsed;
-};
+const parseQuotaInput = (raw: string): number | null => validateQuotaFieldInput(raw).value;
 
 export default function AdminPlans() {
   const { data: plans = [], isLoading } = useAllSubscriptionPlans();
@@ -57,6 +57,10 @@ export default function AdminPlans() {
     is_active: true,
     sort_order: 0,
   });
+  // F8 (CodeRabbit round 1): visible validation error for the create-plan
+  // profile_limit field, and for the edit-plan one below.
+  const [newPlanProfileLimitError, setNewPlanProfileLimitError] = useState<string | null>(null);
+  const [editPlanProfileLimitError, setEditPlanProfileLimitError] = useState<string | null>(null);
 
   const handleToggleActive = async (plan: SubscriptionPlan) => {
     try {
@@ -102,13 +106,24 @@ export default function AdminPlans() {
   };
 
   const handleCreatePlan = async () => {
+    // F8: re-validate at submit time even though the field's onChange
+    // already tracks an error - defence in depth against a stale/disabled
+    // check being bypassed.
+    const { value: profileLimit, error: profileLimitError } = validateQuotaFieldInput(
+      newPlan.profile_limit,
+    );
+    if (profileLimitError) {
+      setNewPlanProfileLimitError(profileLimitError);
+      return;
+    }
+
     try {
       await createPlanMutation.mutateAsync({
         name: newPlan.name,
         slug: newPlan.slug,
         price_monthly: parseFloat(newPlan.price_monthly) || 0,
         price_yearly: parseFloat(newPlan.price_yearly) || 0,
-        profile_limit: parseQuotaInput(newPlan.profile_limit),
+        profile_limit: profileLimit,
         features: newPlan.features.split("\n").filter((f) => f.trim()),
         is_popular: newPlan.is_popular,
         is_active: newPlan.is_active,
@@ -130,6 +145,7 @@ export default function AdminPlans() {
         is_active: true,
         sort_order: 0,
       });
+      setNewPlanProfileLimitError(null);
     } catch (error) {
       toast({
         title: "Error",
@@ -244,11 +260,19 @@ export default function AdminPlans() {
                   <Input
                     type="number"
                     value={newPlan.profile_limit}
-                    onChange={(e) => setNewPlan({ ...newPlan, profile_limit: e.target.value })}
+                    aria-invalid={!!newPlanProfileLimitError}
+                    onChange={(e) => {
+                      setNewPlan({ ...newPlan, profile_limit: e.target.value });
+                      setNewPlanProfileLimitError(validateQuotaFieldInput(e.target.value).error);
+                    }}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Use -1 for unlimited. Shared with the Plan Quotas page — editing here changes both.
-                  </p>
+                  {newPlanProfileLimitError ? (
+                    <p className="text-xs text-destructive">{newPlanProfileLimitError}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Use -1 for unlimited. Shared with the Plan Quotas page — editing here changes both.
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>Features (one per line)</Label>
@@ -271,7 +295,10 @@ export default function AdminPlans() {
                 <Button variant="outline" onClick={() => setIsCreateOpen(false)}>
                   Cancel
                 </Button>
-                <Button onClick={handleCreatePlan} disabled={createPlanMutation.isPending}>
+                <Button
+                  onClick={handleCreatePlan}
+                  disabled={createPlanMutation.isPending || !!newPlanProfileLimitError}
+                >
                   {createPlanMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Create Plan
                 </Button>
@@ -317,7 +344,10 @@ export default function AdminPlans() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => setEditingPlan(plan)}
+                      onClick={() => {
+                        setEditingPlan(plan);
+                        setEditPlanProfileLimitError(null);
+                      }}
                     >
                       <Pencil className="w-4 h-4" />
                     </Button>
@@ -406,16 +436,20 @@ export default function AdminPlans() {
                     type="number"
                     value={editingPlan.profile_limit ?? ""}
                     placeholder="Empty inherits the Free default"
-                    onChange={(e) =>
-                      setEditingPlan({
-                        ...editingPlan,
-                        profile_limit: parseQuotaInput(e.target.value),
-                      })
-                    }
+                    aria-invalid={!!editPlanProfileLimitError}
+                    onChange={(e) => {
+                      const { value, error } = validateQuotaFieldInput(e.target.value);
+                      setEditPlanProfileLimitError(error);
+                      if (!error) setEditingPlan({ ...editingPlan, profile_limit: value });
+                    }}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Use -1 for unlimited. Shared with the Plan Quotas page — editing here changes both.
-                  </p>
+                  {editPlanProfileLimitError ? (
+                    <p className="text-xs text-destructive">{editPlanProfileLimitError}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      Use -1 for unlimited. Shared with the Plan Quotas page — editing here changes both.
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>Features (one per line)</Label>
@@ -436,7 +470,7 @@ export default function AdminPlans() {
               <Button variant="outline" onClick={() => setEditingPlan(null)}>
                 Cancel
               </Button>
-              <Button onClick={handleSaveEdit} disabled={updatePlanMutation.isPending}>
+              <Button onClick={handleSaveEdit} disabled={updatePlanMutation.isPending || !!editPlanProfileLimitError}>
                 {updatePlanMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                 Save Changes
               </Button>

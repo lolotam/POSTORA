@@ -24,6 +24,7 @@ import {
 import { Loader2, Save, Settings, Users, FileText, Calendar, ImagePlus, Share2, Zap, Crown, Edit } from "lucide-react";
 import { usePlanQuotas } from "@/hooks/usePlanQuotas";
 import type { PlanQuota } from "@/hooks/usePlanQuotas";
+import { validateQuotaFieldInput } from "@/lib/quotaValidation";
 
 type QuotaFormValues = {
   plan_slug: string;
@@ -34,17 +35,7 @@ type QuotaFormValues = {
   max_media_uploads_per_day: number | null;
 };
 
-/**
- * An empty input means "no explicit limit on the plan" — i.e. NULL, which
- * falls back to the built-in Free-tier default in effective_user_quotas.
- * It must be sent as NULL, never coerced to 0 (0 would mean "allow zero").
- */
-const parseQuotaInput = (raw: string): number | null => {
-  const trimmed = raw.trim();
-  if (trimmed === "") return null;
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isNaN(parsed) ? null : parsed;
-};
+type QuotaFieldName = keyof Omit<QuotaFormValues, "plan_slug">;
 
 export default function AdminPlanQuotas() {
   const [editPlan, setEditPlan] = useState<PlanQuota | null>(null);
@@ -58,6 +49,16 @@ export default function AdminPlanQuotas() {
   });
   const { quotas, isLoading, updateQuota } = usePlanQuotas();
 
+  // F8 (CodeRabbit round 1): per-field validation error text (null = valid).
+  const [fieldErrors, setFieldErrors] = useState<Record<QuotaFieldName, string | null>>({
+    profile_limit: null,
+    max_social_accounts: null,
+    max_posts_per_month: null,
+    max_posts_per_day: null,
+    max_media_uploads_per_day: null,
+  });
+  const hasFieldErrors = Object.values(fieldErrors).some(Boolean);
+
   const handleEditPlan = (plan: PlanQuota) => {
     setEditPlan(plan);
     setFormData({
@@ -68,6 +69,22 @@ export default function AdminPlanQuotas() {
       max_posts_per_day: plan.max_posts_per_day,
       max_media_uploads_per_day: plan.max_media_uploads_per_day,
     });
+    setFieldErrors({
+      profile_limit: null,
+      max_social_accounts: null,
+      max_posts_per_month: null,
+      max_posts_per_day: null,
+      max_media_uploads_per_day: null,
+    });
+  };
+
+  // F8: validates before updating the numeric state - an invalid keystroke
+  // (fractional, or below -1) never reaches formData, it only surfaces as a
+  // visible error next to the field.
+  const handleQuotaFieldChange = (field: QuotaFieldName, raw: string) => {
+    const { value, error } = validateQuotaFieldInput(raw);
+    setFieldErrors((prev) => ({ ...prev, [field]: error }));
+    if (!error) setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleSave = () => {
@@ -247,8 +264,12 @@ export default function AdminPlanQuotas() {
                 min={-1}
                 value={formData.profile_limit ?? ""}
                 placeholder="Empty inherits Free default (2)"
-                onChange={(e) => setFormData({ ...formData, profile_limit: parseQuotaInput(e.target.value) })}
+                aria-invalid={!!fieldErrors.profile_limit}
+                onChange={(e) => handleQuotaFieldChange("profile_limit", e.target.value)}
               />
+              {fieldErrors.profile_limit && (
+                <p className="text-xs text-destructive">{fieldErrors.profile_limit}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxSocialAccounts" className="flex items-center gap-2">
@@ -261,8 +282,12 @@ export default function AdminPlanQuotas() {
                 min={-1}
                 value={formData.max_social_accounts ?? ""}
                 placeholder="Empty inherits Free default (3)"
-                onChange={(e) => setFormData({ ...formData, max_social_accounts: parseQuotaInput(e.target.value) })}
+                aria-invalid={!!fieldErrors.max_social_accounts}
+                onChange={(e) => handleQuotaFieldChange("max_social_accounts", e.target.value)}
               />
+              {fieldErrors.max_social_accounts && (
+                <p className="text-xs text-destructive">{fieldErrors.max_social_accounts}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxPostsMonth" className="flex items-center gap-2">
@@ -275,8 +300,12 @@ export default function AdminPlanQuotas() {
                 min={-1}
                 value={formData.max_posts_per_month ?? ""}
                 placeholder="Empty inherits Free default (30)"
-                onChange={(e) => setFormData({ ...formData, max_posts_per_month: parseQuotaInput(e.target.value) })}
+                aria-invalid={!!fieldErrors.max_posts_per_month}
+                onChange={(e) => handleQuotaFieldChange("max_posts_per_month", e.target.value)}
               />
+              {fieldErrors.max_posts_per_month && (
+                <p className="text-xs text-destructive">{fieldErrors.max_posts_per_month}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxPostsDay" className="flex items-center gap-2">
@@ -289,8 +318,12 @@ export default function AdminPlanQuotas() {
                 min={-1}
                 value={formData.max_posts_per_day ?? ""}
                 placeholder="Empty inherits Free default (2)"
-                onChange={(e) => setFormData({ ...formData, max_posts_per_day: parseQuotaInput(e.target.value) })}
+                aria-invalid={!!fieldErrors.max_posts_per_day}
+                onChange={(e) => handleQuotaFieldChange("max_posts_per_day", e.target.value)}
               />
+              {fieldErrors.max_posts_per_day && (
+                <p className="text-xs text-destructive">{fieldErrors.max_posts_per_day}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxUploads" className="flex items-center gap-2">
@@ -303,15 +336,19 @@ export default function AdminPlanQuotas() {
                 min={-1}
                 value={formData.max_media_uploads_per_day ?? ""}
                 placeholder="Empty inherits Free default (20)"
-                onChange={(e) => setFormData({ ...formData, max_media_uploads_per_day: parseQuotaInput(e.target.value) })}
+                aria-invalid={!!fieldErrors.max_media_uploads_per_day}
+                onChange={(e) => handleQuotaFieldChange("max_media_uploads_per_day", e.target.value)}
               />
+              {fieldErrors.max_media_uploads_per_day && (
+                <p className="text-xs text-destructive">{fieldErrors.max_media_uploads_per_day}</p>
+              )}
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditPlan(null)}>
               Cancel
             </Button>
-            <Button onClick={handleSave} disabled={updateQuota.isPending} className="gap-2">
+            <Button onClick={handleSave} disabled={updateQuota.isPending || hasFieldErrors} className="gap-2">
               {updateQuota.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
