@@ -129,10 +129,17 @@ DECLARE
   v_current_uploads integer;
   v_reset_date timestamptz;
   v_max_uploads integer;
+  v_is_admin boolean;
 BEGIN
   IF p_user_id IS NULL THEN
     RETURN false;
   END IF;
+
+  -- Fix round 1: admin bypass parity with can_upload_media/can_create_post
+  -- (CLAUDE.md: "Admins bypass all subscription limits"). Only the "at the
+  -- limit" block below is skipped for admins - they still fall through to
+  -- the same counter update, so counting is never bypassed, only blocking.
+  v_is_admin := public.has_role(p_user_id, 'admin'::public.app_role);
 
   SELECT e.max_media_uploads_per_day INTO v_max_uploads
   FROM public.effective_user_quotas(p_user_id) e;
@@ -171,8 +178,9 @@ BEGIN
     RETURN true;
   END IF;
 
-  -- At the limit: block, do not increment.
-  IF COALESCE(v_current_uploads, 0) >= v_max_uploads THEN
+  -- At the limit: block, do not increment. Admins bypass the block but
+  -- still get counted by the increment below.
+  IF NOT v_is_admin AND COALESCE(v_current_uploads, 0) >= v_max_uploads THEN
     RETURN false;
   END IF;
 
