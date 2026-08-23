@@ -83,9 +83,11 @@ completely different bytes and still receiving the old copy (`cf-cache-status:
 HIT`). No Cloudflare API token exists on the Contabo host or in this repo, so
 this step is manual:
 
-> Cloudflare dashboard → zone `walidmohamed.com` → **Caching → Configuration →
-> Purge Cache → Custom Purge → By URL**, and purge exactly
-> `https://openinary.walidmohamed.com/t/postora.cloud/logo2.png`
+> In the Cloudflare dashboard, open the zone serving
+> `openinary.walidmohamed.com` and run a **single-file / purge-by-URL** purge for
+> exactly `https://openinary.walidmohamed.com/t/postora.cloud/logo2.png`.
+> (Cloudflare moves this control between releases — find it under the zone's
+> caching settings rather than following a fixed menu path from here.)
 
 Confirm with `curl -sI` on that URL: `cf-cache-status` should read `MISS` (then
 `HIT` on the next request) and `age` should restart near `0`.
