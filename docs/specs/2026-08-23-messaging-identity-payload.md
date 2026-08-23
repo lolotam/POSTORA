@@ -1,7 +1,9 @@
 # Spec — Space-free account handles and an enriched `sender` in messaging payloads
 
 Date: 2026-08-23
-Revision 2 (after Codex round 1 - 5 blocking objections, all folded in; see section 7).
+Revision 3. Codex round 1 raised 5 blocking objections (section 7); round 2 confirmed 2
+resolved, 3 partial, and raised 4 more (section 8). All are folded in. The debate is
+capped at two rounds, so the round-2 dispositions stand as recorded.
 Task 2 of the queued set. Depends on nothing in the rate-limits work, but touches
 `_shared/n8nMessagingDispatch.ts`, which is identical on `main` and on the
 rate-limits branch, so it can be branched from either.
@@ -89,15 +91,27 @@ compares case-insensitively but never reads this summary, so nothing internal
 requires lowercasing — whereas a live subscriber may compare `account.username`
 case-sensitively. Step 5 therefore returns `"MyBrand"` unchanged. Lowercasing is
 confined to step 6, which fires only for values already changing shape (a
-display name with spaces), so it cannot alter a value anyone is matching
-successfully today.
+display name with spaces). That does **not** mean nobody is affected — a
+subscriber may be matching `"Danat Future Company"` exactly today, and it will
+break. The accurate claim is narrower: such a subscriber breaks on the space
+replacement regardless, so the lowercasing rides along on an already-breaking
+change rather than widening the blast radius. R4 states the surface precisely.
 
 Step 5 also fixes the ordering bug Codex flagged: because the trim happens
 first, `" Brand "` has no *internal* whitespace and returns as `"Brand"` rather
 than being slugified to `"brand"`.
 
-- `name` keeps the raw `platform_username` (display name, spaces intact),
-  falling back to `platform_user_id`, then `id` — unchanged from today.
+- `name` keeps today's behaviour **exactly**: the `platform_username`
+  **trimmed** (spaces *within* the display name intact, surrounding whitespace
+  removed), falling back to `platform_user_id`, then `id`.
+
+  Revision 2 wrongly said "the raw `platform_username` … unchanged from today".
+  Those are not the same thing — today's line is
+  `const username = account.platform_username?.trim() || null` and then
+  `name: username || account.platform_user_id || account.id`, so `name` is
+  already trimmed. Taking the raw value would have been a silent contract
+  change to every message and comment payload, dressed up as a no-op
+  (Codex r2 #1). A regression test pins the trimmed behaviour.
 - `handle` is `@${username}` for handle-based platforms (instagram, facebook,
   threads) and `null` for WhatsApp or when `username` is `null`. Since `username`
   is now space-free by construction, `handle` is too.
@@ -136,8 +150,9 @@ export interface MessagingPersonSummary {
 ```
 
 `MessagePayloadInput["sender"]` and `MessagePayload["sender"]` both become
-`MessagingPersonSummary`. `username` is space-free by the same slug rule as R1,
-and `handle` is `@${username}` or `null`.
+`MessagingPersonSummary`. When a real sender username source exists it is run
+through the same `normalizeHandleUsername` as R1 so it cannot contain spaces;
+absent such a source it is `null` — see the table below and Codex r2 #2.
 
 **Sources are limited to data already present in each code path.** No new Graph
 API profile lookups: the task says "resolved from conversation/profile where
@@ -146,14 +161,26 @@ with their own rate-limit and permission consequences.
 
 | Platform | id | name | username / handle | phone |
 |---|---|---|---|---|
-| facebook / instagram | PSID / IGSID | `event.sender?.name` | derived from the name when present, else `null` | `null` |
+| facebook / instagram | PSID / IGSID | `event.sender?.name` | `null` | `null` |
 | whatsapp (Cloud) | `from` (digits) | `contactName` | `null` | `from` |
 | whatsapp (Evolution) | `remoteNumber` (digits) | `built.participantName` | `null` | `remoteNumber` |
 
-WhatsApp never gets a handle — consistent with `account.handle` being `null`
-there. Facebook/Instagram usually resolve `username` to `null` because Meta
-messaging webhooks do not carry a sender username; that is the graceful
-fallback the task allows, not a gap.
+**A sender's `username`/`handle` is never derived from their display name — it
+is `null` unless a real username source exists** (Codex r2 #2). None of the
+three webhook paths carries one today, so in practice it is always `null`.
+
+This is deliberately *different* from the account rule in R1, and the
+difference is the subject, not the transformation. Slugging **your own page's**
+display name produces a label for an account you control, which the task brief
+explicitly accepts. Slugging **a member of the public's** name produces
+`"Jane Doe"` → `@jane_doe` — a handle that may well belong to a different real
+person, presented by Postora as if it were that sender's. Fabricating identity
+for a third party is a different act from labelling your own brand, so the
+answer here is `null`.
+
+`null` also satisfies the task's "must not contain spaces" requirement
+trivially, and if a real source appears later (a stored contact username, an
+explicit profile fetch) it can populate the same field without a shape change.
 
 `phone` becomes `null` for facebook/instagram rather than
 `event.sender?.phone || null`, since Meta messaging webhooks never populate it.
@@ -164,6 +191,36 @@ The username/handle derivation is one rule used by both `account` and `sender`,
 so it lives in one exported function in `n8nMessagingDispatch.ts` and is called
 twice. Duplicating it into the three webhook call sites would be the
 duplicated-knowledge kind of DRY violation.
+
+### R4 - backward compatibility for live subscribers (Codex r2 #3)
+
+Documented rather than versioned. A payload version negotiation is
+disproportionate for a single-operator platform, but the exact surface that
+moves has to be written down, because "we changed a payload" is not something a
+workflow author can act on.
+
+**What changes, precisely:**
+
+| Field | Changes when | Effect on a subscriber |
+|---|---|---|
+| `account.username` | `platform_username` contains internal whitespace (Facebook Pages, some WhatsApp profile names) | **Breaking** for anyone matching the old spaced string exactly |
+| `account.handle` | same condition | same |
+| `account.username` / `handle` | `platform_username` already space-free (Instagram, Threads) | **No change** - value and case both preserved |
+| `account.name` | never | pinned by a regression test |
+| `sender.username` / `sender.handle` | new keys, always `null` today | **Additive only** |
+| `sender.phone` on facebook/instagram | was `event.sender?.phone \|\| null`, now `null` | no observed change - Meta never populated it |
+
+The earlier claim that lowercasing "cannot alter a value anyone is matching
+successfully today" was sloppy and Codex was right to reject it: a subscriber
+may be matching `"Danat Future Company"` exactly right now. The accurate
+statement is that such a subscriber breaks either way, because the spaces
+themselves are being replaced - the lowercasing is subsumed by a change that is
+already breaking, and does not widen the blast radius.
+
+The n8n node itself is unaffected: `PostoraTrigger.node.ts:488` passes the body
+through verbatim. The residual exposure is a user's own downstream node doing a
+whole-object comparison, a JSON-schema validation, or a hash/snapshot of the
+payload. The PR body must say so plainly.
 
 ## 4. Non-goals
 
@@ -207,6 +264,20 @@ duplicated-knowledge kind of DRY violation.
   - a Meta sender with no `name` yields `name: null` rather than `undefined`;
   - `sender` carries all five keys for each of the three webhook paths.
 
+  *per-webhook mapping (Codex r2 #4) - shared-builder tests alone cannot prove
+  each webhook wires its own available fields correctly:*
+  - facebook-instagram-webhook maps `event.sender.name` to `sender.name`, and
+    yields `username`, `handle` and `phone` as `null`;
+  - whatsapp-webhook (Cloud) maps `from` to both `id` and `phone`, and
+    `contactName` to `name`;
+  - whatsapp-evolution-webhook maps `remoteNumber` (suffix already stripped) to
+    both `id` and `phone`, and `built.participantName` to `name`;
+  - a sender name that is absent, empty, or whitespace-only yields `null`, not
+    `undefined` and not `""`;
+  - **`account.name` regression**: a `platform_username` of `" Danat Future
+    Company "` still yields `name` as the trimmed `"Danat Future Company"`,
+    proving the trim behaviour was not silently dropped.
+
 - **n8n node compatibility (Codex r1 #4) — already checked, no node release
   needed.** `PostoraTrigger.node.ts:488` emits
   `workflowData: [[{ json: this.getBodyData() }]]` — the webhook body passes
@@ -238,3 +309,26 @@ Pages and WhatsApp profile names.
 | 3 | "same shape as `account`" is false, and adding two mostly-null fields is schema expansion, not enrichment | **Accepted** - R2 reworded. This is schema *consistency*; the substantive fix in this task is R1. The value is that `sender.username` becomes an explicit `null` instead of `undefined`. |
 | 4 | internal consumers survive, but the n8n node and live workflows are unvalidated | **Accepted and resolved** - checked directly: `PostoraTrigger.node.ts:488` passes `this.getBodyData()` through with no schema validation, so extra keys cannot break the node. No node release needed. Residual risk for a user's own whole-object comparison is recorded in section 6. |
 | 5 | acceptance coverage insufficient | **Accepted** - section 5 expanded with Unicode whitespace, multiple leading `@`, wrong-platform metadata, malformed `ig_username`, case preservation, and full assertions on the comment payload and the reply-API response rather than `message.received` alone. |
+
+---
+
+## 8. Codex round-2 objections and disposition
+
+Round 2 confirmed objections 1 and 3 fully resolved, 2/4/5 partially, and
+returned four remaining blockers. All four are accepted.
+
+| # | Objection | Disposition |
+|---|---|---|
+| 1 | R1 silently changes `account.name`: today's code trims `platform_username` before assigning `name`, but the spec asked for the raw value and called that unchanged | **Accepted - a real bug caught before implementation.** R1 now pins today's trimmed behaviour explicitly and a regression test asserts it. Shipping "raw" would have been a silent contract change to every message and comment payload, presented as a no-op. |
+| 2 | R2 fabricates sender usernames from Meta display names; `"Jane Doe"` becoming `@jane_doe` is misleading identity data | **Accepted.** A sender's `username`/`handle` is now `null` unless a real username source exists, and no webhook path has one today. The account-side slug stands, because the subject differs: labelling your own page is not the same act as manufacturing a handle for a member of the public that may belong to someone else. |
+| 3 | backward compatibility for live subscribers unresolved; node pass-through only proves the node accepts extra keys | **Accepted, documented rather than versioned.** New R4 states field by field what changes, for whom, and what stays fixed. Payload version negotiation is disproportionate here; an accurate written surface is not. The sloppy "cannot alter a value anyone is matching today" claim is corrected rather than defended. |
+| 4 | acceptance tests omit webhook-level verification of sender derivation and both regressions above | **Accepted.** Section 5 gains per-webhook mapping tests for all three paths plus the `account.name` trim regression. Codex is right that shared-builder tests cannot prove each webhook wires its own fields correctly. |
+
+### Round-2 findings that needed no change
+
+Codex independently confirmed the internal blast radius in section 2 is
+accurate: subscription matching uses `platform` and `social_account_id`;
+`toLegacyPayload` reads only `sender.id` and `sender.name`, both preserved;
+conversation ids, inbox dedup, auto-reply rules and AI dispatch all consume
+separate values rather than the payload objects. It also confirmed the
+candidate resolution order and the decision to avoid new Graph calls.
