@@ -3962,6 +3962,10 @@ export type Database = {
           id: string
           is_active: boolean | null
           is_popular: boolean | null
+          max_media_uploads_per_day: number | null
+          max_posts_per_day: number | null
+          max_posts_per_month: number | null
+          max_social_accounts: number | null
           name: string
           price_monthly: number | null
           price_yearly: number | null
@@ -3976,6 +3980,10 @@ export type Database = {
           id?: string
           is_active?: boolean | null
           is_popular?: boolean | null
+          max_media_uploads_per_day?: number | null
+          max_posts_per_day?: number | null
+          max_posts_per_month?: number | null
+          max_social_accounts?: number | null
           name: string
           price_monthly?: number | null
           price_yearly?: number | null
@@ -3990,6 +3998,10 @@ export type Database = {
           id?: string
           is_active?: boolean | null
           is_popular?: boolean | null
+          max_media_uploads_per_day?: number | null
+          max_posts_per_day?: number | null
+          max_posts_per_month?: number | null
+          max_social_accounts?: number | null
           name?: string
           price_monthly?: number | null
           price_yearly?: number | null
@@ -6933,6 +6945,16 @@ export type Database = {
           p_subject: string
         }
         Returns: string
+      }
+      effective_user_quotas: {
+        Args: { p_user_id: string }
+        Returns: {
+          max_profiles: number
+          max_social_accounts: number
+          max_posts_per_month: number
+          max_posts_per_day: number
+          max_media_uploads_per_day: number
+        }[]
       }
       ensure_personal_workspace: {
         Args: { p_user_id: string }
