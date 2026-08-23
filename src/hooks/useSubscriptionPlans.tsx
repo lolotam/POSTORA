@@ -8,7 +8,14 @@ export interface SubscriptionPlan {
   price_monthly: number | null;
   price_yearly: number | null;
   features: string[];
-  profile_limit: number;
+  // NULL means "no explicit limit on this plan" — it falls back to the
+  // built-in Free-tier default (FREE_TIER_FALLBACK.max_profiles in
+  // useQuotas.tsx) through effective_user_quotas(). AdminPlanQuotas already
+  // writes NULL here (it is the same subscription_plans.profile_limit
+  // column), so this must match types.ts's generated `number | null`
+  // instead of lying that it is always a number (I2/minor-3, 2026-08-23
+  // final review).
+  profile_limit: number | null;
   is_popular: boolean;
   is_active: boolean;
   sort_order: number;

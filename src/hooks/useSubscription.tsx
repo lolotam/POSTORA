@@ -91,12 +91,24 @@ export function useSubscription() {
         console.error("Failed to check Stripe subscription:", err);
       }
 
-      // Also check database for subscription record
+      // Also check database for subscription record. 'past_due' counts as
+      // subscribed alongside 'active' (C1, 2026-08-23 final review):
+      // dunning is a payment-collection state, not an entitlement state,
+      // and effective_user_quotas() now resolves the same population. The
+      // ORDER BY + LIMIT 1 mirrors that SQL arbiter's own tie-break -
+      // filtering on IN(...) instead of a single .eq() can return more than
+      // one row, and .maybeSingle() throws on 2+ rows, which would make
+      // this hook fall back to "unsubscribed" for exactly the user this
+      // fix is meant to protect.
       const { data: subscriptionData, error: subError } = await supabase
         .from("user_subscriptions")
         .select("*")
         .eq("user_id", user.id)
-        .eq("status", "active")
+        .in("status", ["active", "past_due"])
+        .order("current_period_end", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       if (subError) {
@@ -155,7 +167,8 @@ export function useSubscription() {
 
   // Determine subscription status - prefer Stripe data, fall back to database
   const isSubscribedViaStripe = stripeData?.subscribed === true;
-  const isSubscribedViaDb = !!dbSubscription && dbSubscription.status === "active";
+  const isSubscribedViaDb =
+    !!dbSubscription && (dbSubscription.status === "active" || dbSubscription.status === "past_due");
   // Also treat admin-assigned "subscriber" role as subscribed
   const isSubscribedViaRole = isSubscriber || isAdmin;
   const isSubscribed = isSubscribedViaStripe || isSubscribedViaDb || isSubscribedViaRole;

@@ -5,19 +5,25 @@ import { useToast } from "@/hooks/use-toast";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useSubscription } from "@/hooks/useSubscription";
 
+// Round-2 fix (final review I2): the five max_* columns are NULL-means-inherit
+// (see resolvePlanLimits below and supabase/migrations/20260823140100). This
+// interface previously declared them non-null `number`, which was a lying
+// type that let every `?? <hardcoded default>` consumer compile without the
+// compiler ever flagging them. types.ts (the generated Supabase schema) has
+// always had these correctly as `number | null` — this interface must match it.
 export interface UserQuota {
   id: string;
   user_id: string;
-  max_profiles: number;
-  max_social_accounts: number;
-  max_posts_per_month: number;
+  max_profiles: number | null;
+  max_social_accounts: number | null;
+  max_posts_per_month: number | null;
   posts_this_month: number;
-  max_posts_per_day: number;
+  max_posts_per_day: number | null;
   posts_today: number;
   daily_reset_date: string;
   quota_reset_date: string;
   media_uploads_today: number;
-  max_media_uploads_per_day: number;
+  max_media_uploads_per_day: number | null;
   media_daily_reset_date: string;
   created_at: string;
   updated_at: string;
@@ -488,19 +494,23 @@ export function useAdminQuotas() {
       maxMediaUploadsPerDay,
     }: {
       userId: string;
-      maxProfiles: number;
-      maxSocialAccounts: number;
-      maxPostsPerMonth: number;
-      maxPostsPerDay: number;
-      maxMediaUploadsPerDay?: number;
+      // null is a real, deliberate value here: "clear this override, inherit
+      // from the plan". Widened from `number` so an admin can actually send
+      // it - Record<string, number> made NULL unrepresentable and the only
+      // way to clear an override was a role change.
+      maxProfiles: number | null;
+      maxSocialAccounts: number | null;
+      maxPostsPerMonth: number | null;
+      maxPostsPerDay: number | null;
+      maxMediaUploadsPerDay?: number | null;
     }) => {
-      const updateData: Record<string, number> = {
+      const updateData: Record<string, number | null> = {
         max_profiles: maxProfiles,
         max_social_accounts: maxSocialAccounts,
         max_posts_per_month: maxPostsPerMonth,
         max_posts_per_day: maxPostsPerDay,
       };
-      
+
       if (maxMediaUploadsPerDay !== undefined) {
         updateData.max_media_uploads_per_day = maxMediaUploadsPerDay;
       }
@@ -541,19 +551,19 @@ export function useAdminQuotas() {
       maxMediaUploadsPerDay,
     }: {
       userIds: string[];
-      maxProfiles: number;
-      maxSocialAccounts: number;
-      maxPostsPerMonth: number;
-      maxPostsPerDay: number;
-      maxMediaUploadsPerDay?: number;
+      maxProfiles: number | null;
+      maxSocialAccounts: number | null;
+      maxPostsPerMonth: number | null;
+      maxPostsPerDay: number | null;
+      maxMediaUploadsPerDay?: number | null;
     }) => {
-      const updateData: Record<string, number> = {
+      const updateData: Record<string, number | null> = {
         max_profiles: maxProfiles,
         max_social_accounts: maxSocialAccounts,
         max_posts_per_month: maxPostsPerMonth,
         max_posts_per_day: maxPostsPerDay,
       };
-      
+
       if (maxMediaUploadsPerDay !== undefined) {
         updateData.max_media_uploads_per_day = maxMediaUploadsPerDay;
       }
