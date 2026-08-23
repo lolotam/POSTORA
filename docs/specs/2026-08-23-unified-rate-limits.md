@@ -328,7 +328,7 @@ in-memory map; a seeded table with old code is simply ignored.
 | 5 | priority edge cases undefined and untested | **Accepted** — rules written into R2; the full case list is now an acceptance gate |
 | 6 | pure-resolver tests can pass while production is broken | **Accepted** — adapter tests against a stub client, `checkRateLimit` tests, and a post-deploy live check added |
 | 7 | `Date.now() + windowMs` is not the true rolling reset | **Accepted as documented semantics** — R2b defines the header as a conservative upper bound; computing the true reset would need a `min(created_at)` query nothing consumes |
-| 8 | the upsert clobbers admin-edited values on re-run | **Accepted** — R1 now states one-time-baseline semantics and "do not re-run"; the plan no longer claims re-run idempotence for values |
+| 8 | the upsert clobbers admin-edited values on re-run | **Accepted, and superseded by the round-2 fix** — R1 first tried to document the hazard; Codex round 2 rightly rejected a comment as protection, so the upsert now carries `WHERE rate_limit_settings.updated_at = rate_limit_settings.created_at`. Replay is now mechanically safe: admin-edited rows are skipped, not clobbered. The trade-off is that a skipped row also does not receive a changed seed value without an explicit manual `UPDATE`, which is why §5 checks pristineness before applying. |
 | 9 | completion cannot close on merge | **Accepted** — completion gates now include prod migration, redeploy, and a live no-redeploy verification |
 
 ## 8. Codex round-2 objections and disposition

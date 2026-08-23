@@ -244,5 +244,10 @@ bump 1.8.0 → 1.9.0, push, `gh release create`. Verify
 - **Two extra queries per n8n request** — accepted; matches `generate-caption`.
 - **Seed/code ordering** — safe in both directions by design (fallback map), but
   neither alone completes the goal; both are Step 8 gates.
-- **One-time migration semantics** — re-running the seed after admin tuning would
-  clobber values. Stated in the migration header and the spec.
+- **Guarded migration replay** — the upsert's
+  `WHERE rate_limit_settings.updated_at = rate_limit_settings.created_at` makes a
+  replay safe: an admin-edited row is skipped rather than clobbered. The
+  trade-off runs the other way — a skipped row will **not** pick up a changed
+  seed value either, and applying it needs an explicit manual `UPDATE`. That is
+  why Step 8 checks pristineness before applying instead of assuming the seed
+  landed everywhere.

@@ -68,15 +68,21 @@ export const FALLBACK_RATE_LIMITS: Record<string, { requests: number; windowMs: 
  * latter is the 60/hr write budget for creating a post; fetching one post and
  * listing posts are the same operational family (300/hr). An unrecognised path
  * returns itself and falls to `default` at lookup time, exactly as before.
+ *
+ * The method is part of the match because the router pairs each of these paths
+ * with exactly one method. `POST /api/v1/post/<id>` is a 404, and billing a 404
+ * against the real list-posts budget would let an unroutable request eat a
+ * quota it can never use. A wrong-method request keeps its raw path and falls
+ * to `default`.
  */
-export function rateLimitKeyForPath(path: string): string {
+export function rateLimitKeyForPath(path: string, method: string): string {
   // Order matters: the /api/v1/media/upload alias must win over the
   // /api/v1/media/<id> pattern below it.
-  if (path === '/api/v1/media/upload') return '/api/v1/upload-media';
-  if (path === '/api/v1/webhooks/test') return '/api/v1/webhooks';
-  if (/^\/api\/v1\/webhooks\/[^/]+$/.test(path)) return '/api/v1/webhooks';
-  if (/^\/api\/v1\/media\/[^/]+$/.test(path)) return '/api/v1/media';
-  if (/^\/api\/v1\/post\/[^/]+$/.test(path)) return '/api/v1/posts';
+  if (method === 'POST' && path === '/api/v1/media/upload') return '/api/v1/upload-media';
+  if (method === 'POST' && path === '/api/v1/webhooks/test') return '/api/v1/webhooks';
+  if (method === 'DELETE' && /^\/api\/v1\/webhooks\/[^/]+$/.test(path)) return '/api/v1/webhooks';
+  if (method === 'GET' && /^\/api\/v1\/media\/[^/]+$/.test(path)) return '/api/v1/media';
+  if (method === 'GET' && /^\/api\/v1\/post\/[^/]+$/.test(path)) return '/api/v1/posts';
   return path;
 }
 

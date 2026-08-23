@@ -2128,7 +2128,7 @@ export async function handleRequest(req: Request): Promise<Response> {
     // resolved config is computed once and drives both the counter and the
     // X-RateLimit-* headers.
     const ipAddress = clientIpFromHeaders(req.headers);
-    const rateLimitKey = rateLimitKeyForPath(path);
+    const rateLimitKey = rateLimitKeyForPath(path, req.method);
     const rateLimitConfig = await resolveRateLimit(rateLimitKey, {
       fetchUserOverride: (endpointKey) => fetchUserOverride(supabaseAdmin, userId, endpointKey),
       fetchGlobalSetting: (endpointKey) => fetchGlobalSetting(supabaseAdmin, endpointKey),
@@ -2137,11 +2137,18 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     if (!rateLimit.allowed) {
       console.log('Rate limit exceeded for user:', userId, 'on endpoint:', path);
-      return apiError(req, 
-        `Too many requests. Please try again after ${rateLimit.resetAt.toISOString()}`,
-        429,
-        'RATE_LIMIT_EXCEEDED',
-        { retry_after: Math.ceil((rateLimit.resetAt.getTime() - Date.now()) / 1000) }
+      // The throttled client is the one that most needs these headers — it has to
+      // know when to retry — so the 429 carries them too, not just the responses
+      // that reach a route handler.
+      return withRateLimitHeaders(
+        apiError(req,
+          `Too many requests. Please try again after ${rateLimit.resetAt.toISOString()}`,
+          429,
+          'RATE_LIMIT_EXCEEDED',
+          { retry_after: Math.ceil((rateLimit.resetAt.getTime() - Date.now()) / 1000) }
+        ),
+        rateLimit,
+        rateLimitConfig,
       );
     }
 

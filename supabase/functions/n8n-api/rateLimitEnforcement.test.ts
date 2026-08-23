@@ -163,3 +163,34 @@ Deno.test("tripwire: withRateLimitHeaders performs no lookup of its own", () => 
   const helperSource = withRateLimitHeaders.toString();
   assertEquals(helperSource.includes("RATE_LIMITS["), false);
 });
+
+// The 429 branch returns before the router reaches withRateLimitHeaders, so it
+// needs its own wrapping. A throttled client is precisely the one that has to
+// read X-RateLimit-Reset to know when to retry, and it was the only response
+// shape shipping without those headers.
+Deno.test("a 429 response carries the rate limit headers", () => {
+  const resetAt = new Date("2030-01-01T00:00:00Z");
+  const config: ResolvedRateLimit = { requests: 600, windowMs: HOUR, enforced: true, source: "global_setting" };
+  const throttled = new Response(JSON.stringify({ error: "Too many requests" }), {
+    status: 429,
+    headers: { "Content-Type": "application/json" },
+  });
+
+  const response = withRateLimitHeaders(throttled, { remaining: 0, resetAt }, config);
+
+  assertEquals(response.status, 429);
+  assertEquals(response.headers.get("X-RateLimit-Limit"), "600");
+  assertEquals(response.headers.get("X-RateLimit-Remaining"), "0");
+  assertEquals(response.headers.get("X-RateLimit-Reset"), resetAt.toISOString());
+  // Wrapping must not drop the headers the error response already carried.
+  assertEquals(response.headers.get("Content-Type"), "application/json");
+});
+
+Deno.test("tripwire: the router wraps its 429 response in withRateLimitHeaders", () => {
+  // Guards the early-return path the other tests cannot reach: the router
+  // returns before route handling when a limit is exceeded, so a future edit
+  // could drop the wrap without failing any behavioural test above.
+  const routerSource = handleRequest.toString();
+  const throttleBranch = routerSource.slice(routerSource.indexOf("RATE_LIMIT_EXCEEDED") - 400);
+  assertEquals(throttleBranch.includes("withRateLimitHeaders("), true);
+});

@@ -140,24 +140,50 @@ Deno.test("expires_at boundaries: null and future are live, exactly-now is expir
 
 // --- Path normalization (spec R2a) ---
 
+const UUID = "d41f6c78-3ac4-42b9-ae2c-7a5c7fa09dfb";
+
 Deno.test("rateLimitKeyForPath covers every row of the spec R2a table", () => {
-  assertEquals(rateLimitKeyForPath("/api/v1/media/upload"), "/api/v1/upload-media");
-  assertEquals(rateLimitKeyForPath("/api/v1/webhooks/test"), "/api/v1/webhooks");
-  assertEquals(rateLimitKeyForPath("/api/v1/webhooks/d41f6c78-3ac4-42b9-ae2c-7a5c7fa09dfb"), "/api/v1/webhooks");
-  assertEquals(rateLimitKeyForPath("/api/v1/media/d41f6c78-3ac4-42b9-ae2c-7a5c7fa09dfb"), "/api/v1/media");
+  assertEquals(rateLimitKeyForPath("/api/v1/media/upload", "POST"), "/api/v1/upload-media");
+  assertEquals(rateLimitKeyForPath("/api/v1/webhooks/test", "POST"), "/api/v1/webhooks");
+  assertEquals(rateLimitKeyForPath(`/api/v1/webhooks/${UUID}`, "DELETE"), "/api/v1/webhooks");
+  assertEquals(rateLimitKeyForPath(`/api/v1/media/${UUID}`, "GET"), "/api/v1/media");
   // A single-post read shares the /api/v1/posts READ budget, never the
   // /api/v1/post write budget — the difference between 300/hr and 60/hr.
-  assertEquals(rateLimitKeyForPath("/api/v1/post/d41f6c78-3ac4-42b9-ae2c-7a5c7fa09dfb"), "/api/v1/posts");
-  assertEquals(rateLimitKeyForPath("/api/v1/post/d41f6c78-3ac4-42b9-ae2c-7a5c7fa09dfb") !== "/api/v1/post", true);
+  assertEquals(rateLimitKeyForPath(`/api/v1/post/${UUID}`, "GET"), "/api/v1/posts");
+  assertEquals(rateLimitKeyForPath(`/api/v1/post/${UUID}`, "GET") !== "/api/v1/post", true);
 });
 
 Deno.test("rateLimitKeyForPath passes canonical paths and unknown paths through unchanged", () => {
   for (const canonical of Object.keys(FALLBACK_RATE_LIMITS)) {
     if (canonical === "default") continue;
-    assertEquals(rateLimitKeyForPath(canonical), canonical);
+    assertEquals(rateLimitKeyForPath(canonical, "GET"), canonical);
+    assertEquals(rateLimitKeyForPath(canonical, "POST"), canonical);
   }
-  assertEquals(rateLimitKeyForPath("/api/v1/not-a-thing"), "/api/v1/not-a-thing");
-  assertEquals(rateLimitKeyForPath("/api/v1/webhooks/test/extra"), "/api/v1/webhooks/test/extra");
+  assertEquals(rateLimitKeyForPath("/api/v1/not-a-thing", "GET"), "/api/v1/not-a-thing");
+  assertEquals(rateLimitKeyForPath("/api/v1/webhooks/test/extra", "POST"), "/api/v1/webhooks/test/extra");
+});
+
+Deno.test("a path matched with the wrong method keeps its raw path and never bills a real budget", () => {
+  // The router pairs each of these paths with exactly one method, so any other
+  // method is a 404. Mapping it anyway would let an unroutable request eat a
+  // quota it can never spend — e.g. POST /api/v1/post/<id> consuming the
+  // 300/hr list-posts budget.
+  assertEquals(rateLimitKeyForPath(`/api/v1/post/${UUID}`, "POST"), `/api/v1/post/${UUID}`);
+  assertEquals(rateLimitKeyForPath(`/api/v1/post/${UUID}`, "DELETE"), `/api/v1/post/${UUID}`);
+  assertEquals(rateLimitKeyForPath(`/api/v1/media/${UUID}`, "POST"), `/api/v1/media/${UUID}`);
+  assertEquals(rateLimitKeyForPath(`/api/v1/webhooks/${UUID}`, "GET"), `/api/v1/webhooks/${UUID}`);
+
+  // These two are NOT wrong-method cases, and both still map — the router does
+  // route them, just to a different handler than the path's name suggests:
+  //   GET    /api/v1/media/upload  -> handleGetMediaById with the id "upload"
+  //   DELETE /api/v1/webhooks/test -> handleDeleteWebhook with the id "test"
+  // Each therefore belongs on its family's budget, which is what these assert.
+  assertEquals(rateLimitKeyForPath("/api/v1/media/upload", "GET"), "/api/v1/media");
+  assertEquals(rateLimitKeyForPath("/api/v1/webhooks/test", "DELETE"), "/api/v1/webhooks");
+
+  // And an unmapped path resolves to the default budget, not to a real one.
+  const unroutable = rateLimitKeyForPath(`/api/v1/post/${UUID}`, "POST");
+  assertEquals(FALLBACK_RATE_LIMITS[unroutable], undefined);
 });
 
 // --- Supabase adapters (stub client: assert the filters actually passed) ---
