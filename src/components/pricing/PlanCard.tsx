@@ -2,6 +2,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Loader2, Check, Zap, Sparkles, Building2 } from "lucide-react";
 import { SubscriptionPlan } from "@/hooks/useSubscriptionPlans";
+import { FREE_TIER_FALLBACK } from "@/hooks/useQuotas";
 import { GradientRingCard, Icon3D, type GradientKey } from "@/components/fx";
 
 const planIcons: Record<string, typeof Zap> = {
@@ -68,7 +69,12 @@ export function PlanCard({ plan, isYearly, isAdmin, planSlug, isSubscribed, load
           <div>
             <h3 className="text-xl font-bold tracking-tight">{plan.name}</h3>
             <p className="text-sm text-muted-foreground">
-              {plan.profile_limit === -1 ? "Unlimited profiles" : `Up to ${plan.profile_limit} profiles`}
+              {plan.profile_limit === -1
+                ? "Unlimited profiles"
+                // NULL falls back through effective_user_quotas() to the
+                // same free-tier default used everywhere else — never a
+                // second hardcoded literal here.
+                : `Up to ${plan.profile_limit ?? FREE_TIER_FALLBACK.max_profiles} profiles`}
             </p>
           </div>
         </div>

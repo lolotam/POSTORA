@@ -66,7 +66,7 @@ export default function Profiles() {
   const { data: allAccounts = [], isLoading: accountsLoading, refetch, isFetching } = useAllSocialAccounts();
   const ensureDefaultProfile = useEnsureDefaultProfile();
   const disconnectAccountMutation = useDisconnectAccountFromProfile();
-  const { quota, canConnectSocialAccount } = useQuotas();
+  const { canConnectSocialAccount, planLimits } = useQuotas();
 
   useRealtimeSocialAccounts();
 
@@ -112,7 +112,11 @@ export default function Profiles() {
         setUpgradeModal({
           open: true,
           type: "social_account",
-          max: quota?.max_social_accounts ?? 4,
+          // planLimits is the already-resolved value (override -> plan ->
+          // free literal); the raw quota row is normally NULL post-backfill,
+          // so `quota?.max_social_accounts ?? 4` ignored both per-user
+          // overrides and any plan edit (I2, 2026-08-23 final review).
+          max: planLimits.max_social_accounts,
         });
         return;
       }

@@ -1,5 +1,6 @@
 import { Check, Sparkles, ImagePlus, Hash } from "lucide-react";
 import { SubscriptionPlan } from "@/hooks/useSubscriptionPlans";
+import { FREE_TIER_FALLBACK } from "@/hooks/useQuotas";
 
 interface TierRateLimit {
   plan_slug: string;
@@ -23,7 +24,15 @@ export function PlanComparison({ plans, tierLimits }: PlanComparisonProps) {
   };
 
   const rows = [
-    { label: "Social Profiles", render: (plan: SubscriptionPlan) => plan.profile_limit === -1 ? "Unlimited" : String(plan.profile_limit) },
+    {
+      label: "Social Profiles",
+      render: (plan: SubscriptionPlan) =>
+        plan.profile_limit === -1
+          ? "Unlimited"
+          // NULL falls back through effective_user_quotas() to the same
+          // free-tier default used everywhere else.
+          : String(plan.profile_limit ?? FREE_TIER_FALLBACK.max_profiles),
+    },
     { label: "Scheduling", render: (plan: SubscriptionPlan) => plan.slug === "free" ? "Basic" : "Unlimited" },
     { label: "AI Caption Generation", icon: <Sparkles className="w-4 h-4" />, render: (plan: SubscriptionPlan) => formatRateLimit(getRateLimit(plan.slug, "generate-caption")) },
     { label: "AI Image Generation", icon: <ImagePlus className="w-4 h-4" />, render: (plan: SubscriptionPlan) => formatRateLimit(getRateLimit(plan.slug, "generate-image")) },

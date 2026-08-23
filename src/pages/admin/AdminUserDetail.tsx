@@ -58,6 +58,7 @@ import {
   PostDetailsDialog,
 } from "@/components/history";
 import type { PlatformPost } from "@/hooks/usePosts";
+import { formatQuotaValue } from "./AdminUsers";
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
@@ -721,19 +722,19 @@ export default function AdminUserDetail() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                     <div className="space-y-1">
                       <p className="text-muted-foreground flex items-center gap-1"><Globe className="w-3 h-3" /> Accounts</p>
-                      <p className="font-medium">{socialAccounts.filter((a: any) => a.is_active).length} / {(quotas as any).max_social_accounts === -1 ? "∞" : (quotas as any).max_social_accounts}</p>
+                      <p className="font-medium">{socialAccounts.filter((a: any) => a.is_active).length} / {formatQuotaValue((quotas as any).max_social_accounts)}</p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-muted-foreground flex items-center gap-1"><FileText className="w-3 h-3" /> Posts/Month</p>
-                      <p className="font-medium">{(quotas as any).posts_this_month ?? 0} / {(quotas as any).max_posts_per_month === -1 ? "∞" : (quotas as any).max_posts_per_month}</p>
+                      <p className="font-medium">{(quotas as any).posts_this_month ?? 0} / {formatQuotaValue((quotas as any).max_posts_per_month)}</p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-muted-foreground flex items-center gap-1"><Calendar className="w-3 h-3" /> Posts/Day</p>
-                      <p className="font-medium">{(quotas as any).posts_today ?? 0} / {(quotas as any).max_posts_per_day === -1 ? "∞" : (quotas as any).max_posts_per_day}</p>
+                      <p className="font-medium">{(quotas as any).posts_today ?? 0} / {formatQuotaValue((quotas as any).max_posts_per_day)}</p>
                     </div>
                     <div className="space-y-1">
                       <p className="text-muted-foreground flex items-center gap-1"><ImagePlus className="w-3 h-3" /> Uploads/Day</p>
-                      <p className="font-medium">{(quotas as any).media_uploads_today ?? 0} / {(quotas as any).max_media_uploads_per_day === -1 ? "∞" : (quotas as any).max_media_uploads_per_day}</p>
+                      <p className="font-medium">{(quotas as any).media_uploads_today ?? 0} / {formatQuotaValue((quotas as any).max_media_uploads_per_day)}</p>
                     </div>
                   </div>
                 </CardContent>

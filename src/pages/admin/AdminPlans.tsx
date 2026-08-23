@@ -18,7 +18,24 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, Plus, Trash2, GripVertical, Pencil } from "lucide-react";
 import { useAllSubscriptionPlans, useUpdateSubscriptionPlan, useCreateSubscriptionPlan, useDeleteSubscriptionPlan, SubscriptionPlan } from "@/hooks/useSubscriptionPlans";
+import { FREE_TIER_FALLBACK } from "@/hooks/useQuotas";
 import { useToast } from "@/hooks/use-toast";
+
+/**
+ * An empty input means "no explicit limit on this plan" — NULL, which falls
+ * back to the built-in Free-tier default through effective_user_quotas().
+ * Must be sent as NULL, never coerced to a hardcoded number (minor-3,
+ * 2026-08-23 final review — this used to be `parseInt(...) || 2`, which
+ * silently reset a cleared field to 2 instead of letting it inherit).
+ * Mirrors AdminPlanQuotas.tsx's parseQuotaInput(), which sends NULL for the
+ * same subscription_plans.profile_limit column.
+ */
+const parseQuotaInput = (raw: string): number | null => {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+};
 
 export default function AdminPlans() {
   const { data: plans = [], isLoading } = useAllSubscriptionPlans();
@@ -91,7 +108,7 @@ export default function AdminPlans() {
         slug: newPlan.slug,
         price_monthly: parseFloat(newPlan.price_monthly) || 0,
         price_yearly: parseFloat(newPlan.price_yearly) || 0,
-        profile_limit: parseInt(newPlan.profile_limit) || 2,
+        profile_limit: parseQuotaInput(newPlan.profile_limit),
         features: newPlan.features.split("\n").filter((f) => f.trim()),
         is_popular: newPlan.is_popular,
         is_active: newPlan.is_active,
@@ -230,7 +247,7 @@ export default function AdminPlans() {
                     onChange={(e) => setNewPlan({ ...newPlan, profile_limit: e.target.value })}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Shared with the Plan Quotas page — editing here changes both.
+                    Use -1 for unlimited. Shared with the Plan Quotas page — editing here changes both.
                   </p>
                 </div>
                 <div className="space-y-2">
@@ -289,7 +306,10 @@ export default function AdminPlans() {
                       </CardTitle>
                       <CardDescription>
                         ${plan.price_monthly}/mo • ${plan.price_yearly}/yr •{" "}
-                        {plan.profile_limit === -1 ? "Unlimited" : plan.profile_limit} profiles
+                        {plan.profile_limit === -1
+                          ? "Unlimited"
+                          : plan.profile_limit ?? FREE_TIER_FALLBACK.max_profiles}{" "}
+                        profiles
                       </CardDescription>
                     </div>
                   </div>
@@ -384,16 +404,17 @@ export default function AdminPlans() {
                   <Label>Social Profiles</Label>
                   <Input
                     type="number"
-                    value={editingPlan.profile_limit}
+                    value={editingPlan.profile_limit ?? ""}
+                    placeholder="Empty inherits the Free default"
                     onChange={(e) =>
                       setEditingPlan({
                         ...editingPlan,
-                        profile_limit: parseInt(e.target.value) || 2,
+                        profile_limit: parseQuotaInput(e.target.value),
                       })
                     }
                   />
                   <p className="text-xs text-muted-foreground">
-                    Shared with the Plan Quotas page — editing here changes both.
+                    Use -1 for unlimited. Shared with the Plan Quotas page — editing here changes both.
                   </p>
                 </div>
                 <div className="space-y-2">

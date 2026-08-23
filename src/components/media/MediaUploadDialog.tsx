@@ -68,7 +68,7 @@ export function MediaUploadDialog({
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const { toast } = useToast();
-  const { canUploadMedia, incrementMediaUpload, quota } = useQuotas();
+  const { canUploadMedia, incrementMediaUpload, quota, planLimits } = useQuotas();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
 
   // Check quota when files are added
@@ -296,8 +296,12 @@ export function MediaUploadDialog({
     onClose();
   };
 
-  // Calculate remaining uploads
-  const maxUploads = quota?.max_media_uploads_per_day ?? 20;
+  // Calculate remaining uploads. planLimits is the already-resolved value
+  // from useQuotas() (override -> plan -> free literal, same as the SQL
+  // arbiter) — the raw quota row's max_media_uploads_per_day is normally
+  // NULL (inherit), so falling back to a hardcoded 20 here ignored both
+  // per-user overrides and any plan edit (I2, 2026-08-23 final review).
+  const maxUploads = planLimits.max_media_uploads_per_day;
   const usedUploads = quota?.media_uploads_today ?? 0;
   const remainingUploads = maxUploads === -1 ? "Unlimited" : Math.max(0, maxUploads - usedUploads);
 
@@ -581,7 +585,7 @@ export function MediaUploadDialog({
           open={showUpgradeModal}
           onOpenChange={setShowUpgradeModal}
           limitType="media_upload"
-          maxAllowed={quota?.max_media_uploads_per_day ?? 20}
+          maxAllowed={maxUploads}
         />
       </DialogContent>
     </Dialog>
