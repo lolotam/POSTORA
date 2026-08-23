@@ -1,9 +1,20 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type Mock } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ReactNode } from "react";
 import { useSubscription } from "../useSubscription";
 import { supabase } from "@/integrations/supabase/client";
+
+// F10 (CodeRabbit round 1, 2026-08-23): `supabase` here is the real,
+// strongly-typed export from @/integrations/supabase/client — the
+// vi.mock(...) factory below only changes what it resolves to at runtime,
+// not what TypeScript believes its shape is. `supabase.from` / .functions.invoke
+// are typed as the real Supabase client methods, which have no .mockImplementation
+// / .mockResolvedValue members, so exercising them as test doubles needs a
+// cast. `as unknown as Mock` (Vitest's own mock function type) replaces the
+// `as any` this file used to have, without weakening it to `any`.
+const mockedFrom = supabase.from as unknown as Mock;
+const mockedInvoke = supabase.functions.invoke as unknown as Mock;
 
 // C1 (2026-08-23 final review): dunning must not silently downgrade a
 // paying customer. Stripe keeps a subscription "past_due" (not cancelled)
@@ -35,11 +46,31 @@ interface ChainCall {
   args: unknown[];
 }
 
-function makeChain(result: { data: unknown; error?: unknown }) {
+// F10: a typed recursive interface for the fluent Supabase query-builder
+// chain, replacing the `const chain: any = {}` this file used to build it
+// with. Each fluent method returns FluentChain itself (the recursion), and
+// the two terminal methods resolve the fake result.
+interface FluentChain {
+  select(...args: unknown[]): FluentChain;
+  eq(...args: unknown[]): FluentChain;
+  in(...args: unknown[]): FluentChain;
+  order(...args: unknown[]): FluentChain;
+  limit(...args: unknown[]): FluentChain;
+  maybeSingle(): Promise<{ data: unknown; error?: unknown }>;
+  single(): Promise<{ data: unknown; error?: unknown }>;
+}
+
+const FLUENT_METHODS = ["select", "eq", "in", "order", "limit"] as const;
+type FluentMethodName = (typeof FLUENT_METHODS)[number];
+
+function makeChain(result: { data: unknown; error?: unknown }): {
+  chain: FluentChain;
+  calls: ChainCall[];
+} {
   const calls: ChainCall[] = [];
-  const chain: any = {};
-  for (const method of ["select", "eq", "in", "order", "limit"]) {
-    chain[method] = (...args: unknown[]) => {
+  const chain = {} as FluentChain;
+  for (const method of FLUENT_METHODS) {
+    chain[method as FluentMethodName] = (...args: unknown[]) => {
       calls.push({ method, args });
       return chain;
     };
@@ -61,7 +92,7 @@ function createWrapper() {
 describe("useSubscription — dunning entitlement", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    (supabase.functions.invoke as any).mockResolvedValue({ data: null, error: null });
+    mockedInvoke.mockResolvedValue({ data: null, error: null });
   });
 
   it("treats a past_due db subscription as subscribed, not downgraded to free", async () => {
@@ -89,7 +120,7 @@ describe("useSubscription — dunning entitlement", () => {
       error: null,
     });
 
-    (supabase.from as any).mockImplementation((table: string) => {
+    mockedFrom.mockImplementation((table: string) => {
       if (table === "user_subscriptions") return subChain.chain;
       if (table === "subscription_plans") return planChain.chain;
       throw new Error(`unexpected table ${table}`);
@@ -115,7 +146,7 @@ describe("useSubscription — dunning entitlement", () => {
     // deterministically — an unordered IN(...) with .maybeSingle() throws
     // on 2 rows, which would make this hook fall back to "unsubscribed".
     const subChain = makeChain({ data: null, error: null });
-    (supabase.from as any).mockImplementation((table: string) => {
+    mockedFrom.mockImplementation((table: string) => {
       if (table === "user_subscriptions") return subChain.chain;
       throw new Error(`unexpected table ${table}`);
     });
