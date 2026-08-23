@@ -27,7 +27,17 @@ const ENTITLEMENT_PREDICATE = "status IN ('active', 'past_due')";
 // A bare active-only equality test on a user_subscriptions status column,
 // as it existed before the fix. Matches "us.status = 'active'" and
 // "s.status = 'active'" but not the IN(...) predicate above.
-const STALE_ACTIVE_ONLY_TEST = /\b\w+\.status = 'active'\b/;
+//
+// F7 (CodeRabbit round 1, 2026-08-23): the trailing \b used to sit AFTER
+// the closing quote ("...'active'\b"). Both characters adjacent to that
+// position are non-word (the quote itself, and whatever follows — a
+// newline/space in this SQL text), so \b can never match there and this
+// regex could never match ANY input — the two "has no remaining
+// active-only equality test" assertions below passed vacuously regardless
+// of what the migration file contained. Moving \b to right after "active"
+// (a word char) and before the closing quote (non-word) restores a real
+// word boundary, so the pattern can actually match.
+const STALE_ACTIVE_ONLY_TEST = /\b\w+\.status = 'active\b'/;
 
 describe("effective_user_quotas() entitlement predicate (migration 20260823140100)", () => {
   it("treats past_due as entitled in both the plan branch and the free-plan fallback branch", () => {
