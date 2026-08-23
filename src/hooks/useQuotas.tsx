@@ -23,33 +23,46 @@ export interface UserQuota {
   updated_at: string;
 }
 
-// Plan-based quota limits (matches stripe-webhook PLAN_QUOTAS and /pricing page)
-// FREE: 2 profiles, 3 accounts, 30 posts/mo, 2 posts/day, 20 uploads/day
-// PRO: 15 profiles, 30 accounts, 500 posts/mo, 30 posts/day, unlimited uploads
-// BUSINESS: unlimited everything
-const PLAN_QUOTAS = {
-  free: {
-    max_profiles: 2,
-    max_social_accounts: 3,
-    max_posts_per_month: 30,
-    max_posts_per_day: 2,
-    max_media_uploads_per_day: 20,
-  },
-  pro: {
-    max_profiles: 15,
-    max_social_accounts: 30,
-    max_posts_per_month: 500,
-    max_posts_per_day: 30,
-    max_media_uploads_per_day: -1, // unlimited
-  },
-  business: {
-    max_profiles: -1, // unlimited
-    max_social_accounts: -1,
-    max_posts_per_month: -1,
-    max_posts_per_day: -1,
-    max_media_uploads_per_day: -1,
-  },
+/** Last-resort limits, used ONLY when the subscription_plans query fails.
+ *  The database's effective_user_quotas() holds the same numbers; these two
+ *  must stay in sync so an outage never enforces something the DB disagrees with. */
+export const FREE_TIER_FALLBACK: QuotaLimits = {
+  max_profiles: 2,
+  max_social_accounts: 3,
+  max_posts_per_month: 30,
+  max_posts_per_day: 2,
+  max_media_uploads_per_day: 20,
 };
+
+export interface QuotaLimits {
+  max_profiles: number;
+  max_social_accounts: number;
+  max_posts_per_month: number;
+  max_posts_per_day: number;
+  max_media_uploads_per_day: number;
+}
+
+type PlanRow = (Partial<QuotaLimits> & { profile_limit?: number | null }) | null;
+
+/** Mirrors the SQL arbiter effective_user_quotas(): override -> plan -> fallback,
+ *  resolved per column. A null override column means inherit, NOT zero. */
+export function resolvePlanLimits(plan: PlanRow, override: Partial<QuotaLimits> | null): QuotaLimits {
+  const pick = (o: number | null | undefined, p: number | null | undefined, f: number) =>
+    o ?? p ?? f;
+  return {
+    max_profiles: pick(override?.max_profiles, plan?.profile_limit, FREE_TIER_FALLBACK.max_profiles),
+    max_social_accounts: pick(override?.max_social_accounts, plan?.max_social_accounts, FREE_TIER_FALLBACK.max_social_accounts),
+    max_posts_per_month: pick(override?.max_posts_per_month, plan?.max_posts_per_month, FREE_TIER_FALLBACK.max_posts_per_month),
+    max_posts_per_day: pick(override?.max_posts_per_day, plan?.max_posts_per_day, FREE_TIER_FALLBACK.max_posts_per_day),
+    max_media_uploads_per_day: pick(override?.max_media_uploads_per_day, plan?.max_media_uploads_per_day, FREE_TIER_FALLBACK.max_media_uploads_per_day),
+  };
+}
+
+/** The denial message must quote the resolved limit (which may be a lowered plan
+ *  value), never a hardcoded free-tier default. */
+export function mediaUploadLimitMessage(max: number): string {
+  return `You've reached your daily limit of ${max} media uploads. Upgrade to Pro for unlimited uploads.`;
+}
 
 export function useQuotas() {
   const { user } = useAuth();
@@ -60,9 +73,8 @@ export function useQuotas() {
 
   // Determine effective limits based on subscription
   const effectivePlanSlug = isSubscribed ? planSlug : "free";
-  const basePlanLimits = PLAN_QUOTAS[effectivePlanSlug as keyof typeof PLAN_QUOTAS] || PLAN_QUOTAS.free;
 
-  // Use the higher of plan-based limits vs actual DB quotas (admin may have set higher values)
+  // Per-user override row (user_quotas). NULL columns mean inherit from the plan.
   const { data: dbQuotaLimits } = useQuery({
     queryKey: ["user-quota-limits", user?.id],
     queryFn: async () => {
@@ -79,21 +91,31 @@ export function useQuotas() {
     staleTime: 60_000,
   });
 
-  // Helper: pick the more permissive limit (-1 = unlimited wins always)
-  const pickMax = (a: number, b: number) => {
-    if (a === -1 || b === -1) return -1;
-    return Math.max(a, b);
-  };
-
-  const planLimits = dbQuotaLimits
-    ? {
-        max_profiles: pickMax(basePlanLimits.max_profiles, dbQuotaLimits.max_profiles),
-        max_social_accounts: pickMax(basePlanLimits.max_social_accounts, dbQuotaLimits.max_social_accounts),
-        max_posts_per_month: pickMax(basePlanLimits.max_posts_per_month, dbQuotaLimits.max_posts_per_month),
-        max_posts_per_day: pickMax(basePlanLimits.max_posts_per_day, dbQuotaLimits.max_posts_per_day),
-        max_media_uploads_per_day: pickMax(basePlanLimits.max_media_uploads_per_day, dbQuotaLimits.max_media_uploads_per_day),
+  // A dedicated plan query rather than useSubscription: that hook returns
+  // dbSubscription: null for a user with no subscription row, so it never
+  // carries a plan row for free users — who are the majority.
+  const { data: planRow } = useQuery({
+    queryKey: ["plan-entitlements", effectivePlanSlug],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("subscription_plans")
+        .select("profile_limit, max_social_accounts, max_posts_per_month, max_posts_per_day, max_media_uploads_per_day")
+        .eq("slug", effectivePlanSlug)
+        .maybeSingle();
+      if (error) {
+        console.error("Error fetching plan entitlements:", error);
+        return null;
       }
-    : basePlanLimits;
+      return data;
+    },
+    staleTime: 60_000,
+  });
+
+  // Resolution order mirrors the SQL arbiter effective_user_quotas():
+  // per-user override -> plan -> FREE_TIER_FALLBACK. A NULL override column
+  // means inherit from the plan; the old pickMax() "higher of the two" logic
+  // is gone — an admin override may legitimately LOWER a limit.
+  const planLimits = resolvePlanLimits(planRow ?? null, dbQuotaLimits ?? null);
 
   const { data: quota, isLoading } = useQuery({
     queryKey: ["user-quota", user?.id],
@@ -371,17 +393,9 @@ export function useQuotas() {
     }
 
     if (!data) {
-      // Get quota info for message
-      const { data: quotaData } = await supabase
-        .from("user_quotas")
-        .select("media_uploads_today, max_media_uploads_per_day")
-        .eq("user_id", user.id)
-        .single();
-
-      const max = quotaData?.max_media_uploads_per_day ?? 20;
       return {
         allowed: false,
-        message: `You've reached your daily limit of ${max} media uploads. Upgrade to Pro for unlimited uploads.`,
+        message: mediaUploadLimitMessage(maxMediaUploads),
         remaining: 0,
       };
     }
