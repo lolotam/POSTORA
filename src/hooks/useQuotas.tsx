@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -135,30 +135,59 @@ export function useQuotas() {
   // closed the wrong window: it never questioned whether effectivePlanSlug
   // ITSELF was trustworthy yet.
   //
-  // Refs mirror the latest render's values so getReadyPlanLimits() (a
-  // closure that may have been created on an earlier, still-loading render)
-  // can read the CURRENT state instead of the stale snapshot it captured.
-  // A resolver queue + effect (rather than polling) wakes any in-flight
-  // getReadyPlanLimits() call the moment isSubscriptionLoading flips to
-  // false on a later render.
+  // Refs mirror the latest COMMITTED render's values so getReadyPlanLimits()
+  // (a closure that may have been created on an earlier, still-loading
+  // render) can read the CURRENT state instead of the stale snapshot it
+  // captured. A resolver queue + effect (rather than polling) wakes any
+  // in-flight getReadyPlanLimits() call the moment isSubscriptionLoading
+  // flips to false on a later render.
+  //
+  // R3 fix (CodeRabbit round 3, 2026-08-23): the refs used to be written
+  // directly in the render body (`ref.current = value` with no effect).
+  // React may call a component's render function without ever committing
+  // the result - a render superseded by a higher-priority update, or one
+  // thrown away under concurrent rendering - and a plain render-phase write
+  // has no way to distinguish "this render committed" from "this render was
+  // discarded." A ref mutated during a discarded render would keep a value
+  // that was never actually part of committed state, so
+  // waitForSubscriptionSettled() and effectivePlanSlugRef consumers could
+  // act on work React threw away - on this hook, an entitlement decision
+  // made against a plan slug that was never real. Writing both refs inside
+  // useEffect fixes this: effects only run after a commit, so the refs are
+  // guaranteed to mirror committed state.
+  //
+  // The flush is done in THIS SAME effect body, after the ref writes -
+  // values first, wake second - so a waiter woken here can never read a ref
+  // that still holds the previous render's value. Deliberately this effect
+  // returns NO cleanup: an earlier version returned flushSubscriptionReadyWaiters
+  // as this effect's cleanup, which fires on every dependency change (not
+  // just unmount) - including a render where effectivePlanSlug changes while
+  // isSubscriptionLoading is STILL true, which would wake a waiter before it
+  // should be woken. The unmount-only flush lives in its own effect below.
   const isSubscriptionLoadingRef = useRef(isSubscriptionLoading);
-  isSubscriptionLoadingRef.current = isSubscriptionLoading;
   const effectivePlanSlugRef = useRef(effectivePlanSlug);
-  effectivePlanSlugRef.current = effectivePlanSlug;
   const subscriptionReadyWaitersRef = useRef<Array<() => void>>([]);
 
-  const flushSubscriptionReadyWaiters = () => {
+  const flushSubscriptionReadyWaiters = useCallback(() => {
     if (subscriptionReadyWaitersRef.current.length === 0) return;
     const waiters = subscriptionReadyWaitersRef.current;
     subscriptionReadyWaitersRef.current = [];
     waiters.forEach((resolve) => resolve());
-  };
+  }, []);
 
   useEffect(() => {
+    isSubscriptionLoadingRef.current = isSubscriptionLoading;
+    effectivePlanSlugRef.current = effectivePlanSlug;
     if (!isSubscriptionLoading) flushSubscriptionReadyWaiters();
-    // Unmounting must not leave a canX() caller awaiting forever.
+  }, [isSubscriptionLoading, effectivePlanSlug, flushSubscriptionReadyWaiters]);
+
+  // Unmount-only, deliberately separate from the effect above: an empty
+  // dependency array means this effect's cleanup runs exactly once, on
+  // unmount, never on an intermediate isSubscriptionLoading/effectivePlanSlug
+  // change. Unmounting must not leave a canX() caller awaiting forever.
+  useEffect(() => {
     return flushSubscriptionReadyWaiters;
-  }, [isSubscriptionLoading]);
+  }, [flushSubscriptionReadyWaiters]);
 
   const waitForSubscriptionSettled = (): Promise<void> => {
     if (!isSubscriptionLoadingRef.current) return Promise.resolve();
