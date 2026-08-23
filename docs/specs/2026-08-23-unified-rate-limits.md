@@ -254,7 +254,7 @@ in-memory map; a seeded table with old code is simply ignored.
 - `withRateLimitHeaders` test proving the header reflects a resolved value that
   **differs** from the fallback map — the one assertion a seeds-equal-fallbacks
   smoke test cannot make.
-- `npx tsc --noEmit`, `npm test` (baseline 474 passed / 0 failed), `npm run build`.
+- `npx tsc --noEmit`, `npm test` (baseline 659 passed | 15 skipped | 0 failed, 2026-08-23), `npm run build`.
 - `clean-code-guard` clean on changed production code; `test-guard` clean on tests.
 - Codex approves the spec + plan (≤2 rounds); PR bot review resolved (≤2 rounds).
 

@@ -154,7 +154,7 @@ priority order breaks.
 
 - `deno test supabase/functions/n8n-api/`
 - `npx tsc --noEmit`
-- `npm test` (baseline 474 passed / 0 failed)
+- `npm test` (baseline 659 passed | 15 skipped | 0 failed, 2026-08-23)
 - `npm run build`
 
 All four green before the PR opens.
