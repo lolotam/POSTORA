@@ -1,14 +1,17 @@
-// Meta Threads webhook receiver — verifies signature + upserts mentions.
-// GET = hub.challenge verification. POST = mention events.
+// Meta Threads webhook receiver — verifies signature, then hands mentions and replies to
+// the shared ingest door. GET = hub.challenge verification. POST = mention/reply events.
+//
+// Not the only source of Threads comments, and not the reliable one: Meta's Threads
+// Webhooks product offers only `replies` and `delete` (there is no `mentions` field — that
+// permission unlocks a GET, not a subscription), and `replies` has never delivered here.
+// threads-poll-replies covers the same ground by polling; both go through
+// ingestThreadsComment so a comment seen twice still fires once.
 // Mirrors whatsapp-webhook patterns. verify_jwt = false (public endpoint).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { runInBackground } from "../_shared/background.ts";
-import { resolveCommentAutomationHandler } from "../_shared/automationHandler.ts";
-import { isOwnComment } from "../_shared/commentAuthor.ts";
-import { handleCommentInternally } from "../_shared/commentAutomation.ts";
+import { ingestThreadsComment } from "../_shared/threadsCommentIngest.ts";
 import {
-  buildCommentPayload,
   buildMentionEnvelope,
   dispatchN8nEvent,
 } from "../_shared/n8nMessagingDispatch.ts";
@@ -246,49 +249,14 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // The insert is the idempotency claim: Meta retries deliveries, and only the first
-      // one to persist may run the user's workflow.
-      const { data: inserted, error: inboxError } = await supabase.from("social_inbox_events").upsert({
-        user_id: account.user_id,
-        social_account_id: account.id,
-        platform: "threads",
-        event_type: "comment",
-        external_event_id: normalized.comment.id,
-        payload: change.value,
-      }, { onConflict: "social_account_id,external_event_id", ignoreDuplicates: true }).select("id");
-      if (inboxError) {
-        console.error("[threads-webhook] inbox persist failed", inboxError.message);
-        continue;
-      }
-      // Meta retries, so a repeat is normal and not an error -- but it is the difference
-      // between "the workflow ran once" and "nothing happened", so it has to be visible.
-      if (!inserted?.length) {
-        console.log(`[threads-webhook] duplicate reply ${normalized.comment.id}, already processed`);
-        continue;
-      }
-      processed += 1;
-
-      // The loop breaker, and it must stay ahead of both branches below: whatever replies
-      // here comes back as another reply event, and only this check ends that cycle.
-      if (isOwnComment(account, normalized.author)) {
-        console.log(`[threads-webhook] skipped own reply ${normalized.comment.id}`);
-        continue;
-      }
-
-      const replyHandler = resolveCommentAutomationHandler(account.account_metadata);
-      if (replyHandler === "n8n") {
-        await runInBackground("threads reply dispatch", () => dispatchN8nEvent(
-          supabase,
-          account.user_id,
-          buildCommentPayload({ platform: "threads", socialAccountId: account.id, account, ...normalized }),
-        ));
-      } else if (replyHandler === "internal") {
-        await runInBackground("threads reply automation", () => handleCommentInternally(
-          supabase,
-          account,
-          { comment: normalized.comment, post: normalized.post, author: normalized.author },
-        ));
-      }
+      // Dedupe, own-comment suppression and handler routing all live in the ingest door, so
+      // that a reply Meta delivers and the same reply threads-poll-replies reads back from
+      // Graph cannot both run the workflow. Whichever arrives first claims it.
+      const outcome = await ingestThreadsComment(supabase, account, normalized, { rawPayload: change.value });
+      // A repeat is normal — Meta retries, and the poller covers the same ground — but it is
+      // the difference between "the workflow ran once" and "nothing happened", so say which.
+      console.log(`[threads-webhook] reply ${normalized.comment.id}: ${outcome}`);
+      if (outcome !== "duplicate" && outcome !== "persist_failed") processed += 1;
       continue;
     }
 
@@ -374,41 +342,27 @@ Deno.serve(async (req) => {
     if (isNew && upserted) {
       await createMentionNotification(supabase, upserted);
       await runInBackground("threads mention dispatch", async () => {
+        // Unconditional and outside the ingest door: this legacy envelope predates the comment
+        // shape and has its own live subscribers, whose delivery must not start depending on
+        // an automation handler they never set.
         await dispatchN8nEvent(supabase, account.user_id, buildMentionEnvelope("threads.mention.created", account.id, upserted));
 
         // A mention is also a comment-shaped event, so it feeds the same automation as a
-        // reply. This matters more on Threads than anywhere else: the `replies` webhook
-        // field needs a manual subscription in the Meta App Dashboard, so for accounts that
-        // have not done it, mentions are the ONLY comment events that arrive. Hooking only
-        // replies would leave the Threads agent looking dead.
-        const mentionAuthor = { id: norm.author_id || null, name: null, username: norm.username || null };
-        if (isOwnComment(account, mentionAuthor)) return;
-
-        const mentionHandler = resolveCommentAutomationHandler(account.account_metadata);
-        const mentionComment = {
-          id: norm.mention_id,
-          kind: "mention" as const,
-          text: norm.text || "",
-          parentCommentId: null,
-          mediaUrl: norm.permalink || null,
-        };
-        if (mentionHandler === "n8n") {
-          await dispatchN8nEvent(supabase, account.user_id, buildCommentPayload({
-            platform: "threads",
-            socialAccountId: account.id,
-            account,
-            comment: mentionComment,
-            post: { id: null, url: null, caption: null },
-            author: mentionAuthor,
-            timestamp: norm.mentioned_at || undefined,
-          }));
-        } else if (mentionHandler === "internal") {
-          await handleCommentInternally(supabase, account, {
-            comment: { id: mentionComment.id, text: mentionComment.text },
-            post: { id: null },
-            author: mentionAuthor,
-          });
-        }
+        // reply. Routing it through the shared door is what keeps a mention that is *also* a
+        // reply — the same id arriving from the mentions field and from the poller — to a
+        // single fire.
+        await ingestThreadsComment(supabase, account, {
+          comment: {
+            id: norm.mention_id,
+            kind: "mention",
+            text: norm.text || "",
+            parentCommentId: null,
+            mediaUrl: norm.permalink || null,
+          },
+          post: { id: null, url: null, caption: null },
+          author: { id: norm.author_id || null, name: null, username: norm.username || null },
+          timestamp: norm.mentioned_at || undefined,
+        }, { rawPayload: change.value });
       });
     }
   }
