@@ -1,7 +1,10 @@
 # Spec — Unify platform-wide rate limiting under AdminRateLimits
 
 Date: 2026-08-23
-Revision 2 (after Codex round 1 — 9 blocking objections addressed, see §7).
+Revision 3. Codex round 1 raised 9 blocking objections (§7); round 2 confirmed 6
+resolved, 2 partial, 1 unresolved, and raised 3 remaining blockers (§8). All 12
+distinct objections are folded in. The debate is capped at two rounds, so the
+round-2 dispositions stand as recorded rather than being re-litigated.
 
 **Goal:** every rate limit that `n8n-api` enforces becomes configurable from the
 admin Rate Limits page without an edge-function redeploy, alongside the AI
@@ -91,12 +94,30 @@ ergonomics**.
 - `ON CONFLICT (endpoint) DO UPDATE SET display_name, max_requests, window_minutes`.
 - **`is_active` is never overwritten on conflict** — an admin's deliberate disable
   is the one piece of state that must survive.
-- **Overwrite semantics, stated explicitly** (Codex #8): this migration is a
-  **one-time baseline**. Postgres applies it once; the `DO UPDATE` exists so it
-  converges the four pre-existing AI/web rows onto the new baseline on that single
-  application, not so it can be replayed. It is *not* idempotent with respect to
-  admin-tuned numbers: replaying it by hand after admins have tuned values would
-  clobber `max_requests` / `window_minutes` / `display_name`. Do not re-run it.
+- **Replay is mechanically guarded, not merely documented** (Codex r1 #8, r2 #2).
+  A comment saying "do not re-run" is no protection when the deploy runbook pipes
+  this file straight through `psql`. The upsert therefore carries a `WHERE` clause:
+
+  ```sql
+  ON CONFLICT (endpoint) DO UPDATE SET
+    display_name   = EXCLUDED.display_name,
+    max_requests   = EXCLUDED.max_requests,
+    window_minutes = EXCLUDED.window_minutes
+  WHERE rate_limit_settings.updated_at = rate_limit_settings.created_at;
+  ```
+
+  `rate_limit_settings` has a `BEFORE UPDATE` trigger
+  (`update_rate_limit_settings_updated_at`) that stamps `updated_at`, so a row an
+  admin has ever edited has `updated_at > created_at` and is skipped silently by
+  Postgres — no error, no clobber. A pristine row converges onto the new baseline.
+  This makes the file safe to replay.
+
+  **Consequence to check at deploy time:** if one of the four pre-existing prod
+  rows was ever admin-edited, the guard also skips its intended raise (e.g.
+  caption 20→60). The live values read on 2026-08-23 (20/30/10/60) are exactly the
+  original migration defaults, which suggests none were edited — but §5 now
+  verifies pristineness *before* applying, so a skip becomes an explicit decision
+  rather than a silent no-op.
 - **Behaviour change to state loudly:** this raises the four existing AI/web rows
   (caption 20→60, image 10→30, hashtags 30→60, `post-create` renamed to
   "Web App Post Creation"). These values come from the task brief and are intentional.
@@ -145,6 +166,12 @@ never match a settings row:
 | `/api/v1/webhooks/test` | `/api/v1/webhooks` |
 | `/api/v1/webhooks/<uuid>` (DELETE) | `/api/v1/webhooks` |
 | `/api/v1/media/<uuid>` (GET) | `/api/v1/media` |
+| `/api/v1/post/<id>` (GET, index.ts:2204) | `/api/v1/posts` |
+
+`GET /api/v1/post/<id>` maps to the **`/api/v1/posts` read budget (300/hr)**, not
+to `/api/v1/post` — the latter is the *write* budget (60/hr) for creating a post.
+Fetching one post and listing posts are the same operational family, the way the
+webhook routes share one budget. No 15th seed row is added.
 
 `rateLimitKeyForPath(path)` in the new module maps a request path to its canonical
 key before lookup, and the router passes that key to both `checkRateLimit` and the
@@ -223,9 +250,17 @@ vendored copy under this repo was deleted on 2026-08-22 and must not return.
 Merging to `main` auto-deploys **the frontend only**. The backend needs two manual
 steps over `ssh-contabo-mcp`:
 
-1. Apply the seed migration:
+1. **Pristineness check, before applying anything:**
+   ```sql
+   SELECT endpoint, updated_at = created_at AS pristine FROM rate_limit_settings;
+   ```
+   Any row reporting `pristine = false` will be skipped by the R1 replay guard.
+   If one of the four AI/web rows is non-pristine, decide explicitly whether to
+   apply its new value with a manual `UPDATE` — never let the skip pass silently.
+2. Apply the seed migration:
    `docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -d postgres -f ...`
-2. Copy changed `supabase/functions/n8n-api/*` into the functions volume, verify
+   then verify all 14 rows hold the intended values.
+3. Copy changed `supabase/functions/n8n-api/*` into the functions volume, verify
    SHA256, then `docker compose up -d --no-deps functions`.
 
 Ordering is safe either way: new code with an unseeded table falls back to the
@@ -254,6 +289,20 @@ in-memory map; a seeded table with old code is simply ignored.
 - `withRateLimitHeaders` test proving the header reflects a resolved value that
   **differs** from the fallback map — the one assertion a seeds-equal-fallbacks
   smoke test cannot make.
+- **Malformed *global* row** (not just a malformed override) falls through to the
+  fallback map (Codex r2 #3).
+- **Router-wiring tripwire** (Codex r2 #3). `index.ts` calls `Deno.serve` at import
+  time, so a genuine in-process router test would require restructuring a
+  2258-line file into an exported handler — a refactor riskier than the gap it
+  closes. Instead, two cheap source-text assertions act as regression tripwires,
+  labelled honestly as such in the test file: `index.ts` contains
+  `rateLimitKeyForPath(` at the router call site, and `withRateLimitHeaders` no
+  longer contains `RATE_LIMITS[`. The **authoritative** end-to-end proof is the
+  post-deploy live check below, not these.
+- **Admin UI, pure parts only**: every seeded endpoint has an `ENDPOINT_LABELS`
+  entry; the category bucketing helper groups the three categories correctly; an
+  unrecognised endpoint lands in "Other". No full component render — the existing
+  suite has no admin-page render harness to reuse.
 - `npx tsc --noEmit`, `npm test` (baseline 659 passed | 15 skipped | 0 failed, 2026-08-23), `npm run build`.
 - `clean-code-guard` clean on changed production code; `test-guard` clean on tests.
 - Codex approves the spec + plan (≤2 rounds); PR bot review resolved (≤2 rounds).
@@ -281,3 +330,26 @@ in-memory map; a seeded table with old code is simply ignored.
 | 7 | `Date.now() + windowMs` is not the true rolling reset | **Accepted as documented semantics** — R2b defines the header as a conservative upper bound; computing the true reset would need a `min(created_at)` query nothing consumes |
 | 8 | the upsert clobbers admin-edited values on re-run | **Accepted** — R1 now states one-time-baseline semantics and "do not re-run"; the plan no longer claims re-run idempotence for values |
 | 9 | completion cannot close on merge | **Accepted** — completion gates now include prod migration, redeploy, and a live no-redeploy verification |
+
+## 8. Codex round-2 objections and disposition
+
+Round 2 confirmed 6 of the 9 round-1 objections fully resolved, 2 partially, 1 not,
+and returned three remaining blockers. All three are accepted and folded in below.
+The debate is capped at two rounds, so no round 3 was run; this table is the
+record of the disposition and is repeated in the PR body.
+
+| # | Objection | Disposition |
+|---|---|---|
+| 1 | `GET /api/v1/post/<id>` (index.ts:2204) is missing from R2a, so it stays on the hardcoded `default` budget | **Accepted** - added to the R2a table, mapped to the `/api/v1/posts` read budget (not the `/api/v1/post` write budget), with a test case. No new seed row. |
+| 2 | "Do not replay" documents the clobber without preventing it, and the runbook pipes the file through psql | **Accepted** - the upsert now carries `WHERE rate_limit_settings.updated_at = rate_limit_settings.created_at`, which the existing BEFORE UPDATE trigger makes a real mechanical guard. Deployment gains a pre-apply pristineness check so a guarded skip is an explicit decision. |
+| 3 | Acceptance suite lacks router wiring, malformed-global validation, and admin UI coverage | **Accepted with a stated trade-off** - malformed-global and the admin UI pure parts get real tests. Router wiring gets source-text tripwires rather than an in-process router test, because `index.ts` calls `Deno.serve` at import and restructuring 2258 lines is riskier than the gap; the post-deploy live check is the authoritative end-to-end proof. |
+
+### Round-2 sanity checks Codex endorsed
+
+- A live user override outranking a disabled global setting is **not** privilege
+  escalation - it imposes a user-specific cap while everyone else is unmetered,
+  and the admin UI already states that overrides supersede global settings.
+- The `unmetered` marker is sound given `n8n-api` is the verified sole writer of
+  `/api/v1/*` rows and metered rows leave `request_data` null.
+- Sharing one budget across register/list/test/delete webhooks is sound: one
+  operational family, still per-user isolated.

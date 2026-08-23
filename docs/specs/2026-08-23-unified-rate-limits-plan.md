@@ -1,6 +1,6 @@
 # Implementation plan — Unified rate limits
 
-Revision 2 (after Codex round 1). Companion to
+Revision 3 (after Codex rounds 1 and 2). Companion to
 `docs/specs/2026-08-23-unified-rate-limits.md`. Ordered, each step independently
 reviewable. The orchestrator commits; Grok produces diffs.
 
@@ -21,13 +21,20 @@ Single `INSERT ... ON CONFLICT (endpoint) DO UPDATE` over the 14 rows in spec R1
 `display_name`, `max_requests`, `window_minutes` — `is_active` is deliberately
 absent so an admin's disable survives.
 
-A header comment states the one-time-baseline semantics from spec R1: this file is
-applied once and must not be replayed after admins tune values, because the
-`DO UPDATE` would clobber them.
+The `DO UPDATE` carries the replay guard from spec R1:
 
-**Verify:** applying twice against a scratch database leaves 14 rows and does not
-flip a row whose `is_active` was manually set to `false`. (Value idempotence is
-explicitly *not* claimed — see above.)
+```sql
+WHERE rate_limit_settings.updated_at = rate_limit_settings.created_at
+```
+
+so a row an admin has ever edited is skipped by Postgres rather than clobbered
+(Codex r2 #2 — a comment is not protection when the runbook pipes this file
+through `psql`).
+
+**Verify:** apply twice against a scratch database. After the second run there are
+14 rows; a row whose `is_active` was manually set to `false` is still `false`; and
+a row whose `max_requests` was manually changed still holds the manual value
+rather than the seed value.
 
 ## Step 2 — Resolver module
 
@@ -47,7 +54,9 @@ Exports:
 - `FALLBACK_RATE_LIMITS` — the map moved out of `index.ts`, numbers updated to
   match the R1 seed, plus the existing `default` entry.
 - `rateLimitKeyForPath(path)` — normalizes a request path to its canonical
-  settings key per spec R2a. Unrecognised paths return unchanged.
+  settings key per spec R2a, including `GET /api/v1/post/<id>` → `/api/v1/posts`
+  (the read budget, **not** the `/api/v1/post` write budget). Unrecognised paths
+  return unchanged.
 - `resolveRateLimit(endpointKey, deps)` — `deps` carries two injected async
   functions (`fetchUserOverride`, `fetchGlobalSetting`) so tests need no DB.
   Priority: live user override → global setting → fallback map → `default`.
@@ -105,8 +114,13 @@ priority order breaks.
 11. malformed `window_minutes` (0, negative, NaN) skipped
 12. `expires_at` null / future / exactly-now boundary
 
+11b. malformed **global** row (`max_requests: 0`) falls through to the fallback
+    map (Codex r2 #3 - the round-1 list only covered a malformed override)
+
 *Path normalization:*
-13. every row of the spec R2a table, plus an unrecognised path passing through
+13. every row of the spec R2a table - including `GET /api/v1/post/<id>` mapping to
+    `/api/v1/posts` and NOT to `/api/v1/post` - plus an unrecognised path passing
+    through unchanged
 
 *Adapters (stub client):*
 14. `fetchUserOverride` passes the correct `user_id` and `endpoint` filters
@@ -121,9 +135,28 @@ priority order breaks.
 19. `resetAt` is strictly greater than the request time
 20. `withRateLimitHeaders` reports a resolved limit that **differs** from the
     fallback map value — the assertion a seeds-equal-fallbacks smoke test cannot
-    make (Codex #3)
+    make (Codex r1 #3)
+21. **router-wiring tripwires** (Codex r2 #3), each carrying a comment saying
+    plainly that they are source-text regression guards, not an integration test:
+    `index.ts` contains `rateLimitKeyForPath(` at the router call site, and the
+    body of `withRateLimitHeaders` no longer contains `RATE_LIMITS[`. A real
+    in-process router test would need `index.ts` restructured away from a
+    top-level `Deno.serve`, which is riskier than the gap it closes; the Step 8
+    live check is the authoritative end-to-end proof.
 
-**Verify:** `deno test supabase/functions/n8n-api/`.
+**File:** admin-UI unit test (new, vitest — place it beside whatever convention
+the existing `src` tests use)
+
+22. every endpoint seeded in the migration has an `ENDPOINT_LABELS` entry
+23. the category bucketing helper puts each endpoint in the right category and
+    preserves category order
+24. an unrecognised endpoint lands in the trailing "Other" group
+
+Export the label map and the bucketing helper from `AdminRateLimits.tsx` (or a
+small sibling module) so these stay plain unit tests. Do **not** add a full
+component render — the suite has no admin-page render harness to reuse.
+
+**Verify:** `deno test supabase/functions/n8n-api/` and `npm test`.
 
 ## Step 4 — Admin UI
 
@@ -171,8 +204,12 @@ rounds, then merge.
 
 After merge (frontend auto-deploys):
 
-1. `ssh-contabo-mcp` → apply `20260823120000_unify_rate_limits.sql` inside
-   `postorasupabase-supabase-j8axyh-supabase-db`.
+1. `ssh-contabo-mcp` → **first** run the pristineness check from spec §5:
+   `SELECT endpoint, updated_at = created_at AS pristine FROM rate_limit_settings;`
+   Any `pristine = false` row will be skipped by the replay guard — decide
+   explicitly whether to apply its value by hand rather than letting the skip pass
+   silently. Then apply `20260823120000_unify_rate_limits.sql` inside
+   `postorasupabase-supabase-j8axyh-supabase-db` and verify all 14 rows.
 2. `ssh-contabo-mcp` → copy `supabase/functions/n8n-api/{index.ts,rateLimitConfig.ts}`
    into the functions volume, verify SHA256, `docker compose up -d --no-deps functions`.
 3. Live check: set a user override to a distinctive value in the admin UI, call an
