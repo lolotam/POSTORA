@@ -18,6 +18,12 @@ const IMPORT_BATCH = 500;
 // time. The budget stops short of the lease so the completion write still lands.
 const SWEEP_BUDGET_MS = 240_000;
 
+/** Contact numbers must not reach the logs. The last four digits are enough to correlate
+ *  one chat's lines with each other while the number itself stays out. */
+function maskNumber(number: string): string {
+  return number.length <= 4 ? "***" : `***${number.slice(-4)}`;
+}
+
 export interface SyncAccount {
   id: string;
   user_id: string;
@@ -196,7 +202,13 @@ export async function syncEvolutionHistory(deps: {
       } catch (error) {
         // One unreachable chat must not abandon the other three hundred.
         outcome.chatFailures += 1;
-        console.error(`[whatsapp-sync] ${chat.number} failed:`, error instanceof Error ? error.message : error);
+        // chat.number is a contact's phone number. The instance plus a masked suffix is
+        // enough to correlate the failure across log lines without putting someone's
+        // number in a log that outlives the request.
+        console.error(
+          `[whatsapp-sync] ${instanceName} chat ${maskNumber(chat.number)} failed:`,
+          error instanceof Error ? error.message : error,
+        );
         return;
       }
       chatsSwept += 1;
