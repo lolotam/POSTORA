@@ -296,5 +296,13 @@ problem.
 3. **Dokploy UI:** set `CONFIG_SESSION_PHONE_CLIENT=Postora` on the Evolution
    service, redeploy it (brief session reconnect).
 4. **Post-deploy:** read the existing `oauth_clients` row's
-   `registration_response`; RFC 7592 in-place PUT if supported, else targeted
-   delete + immediate re-authorization. No secret leaves the database.
+   `registration_response`. If it carries `registration_client_uri` +
+   `registration_access_token`, validate the URI is HTTPS on an allowed
+   Higgsfield issuer host and do an RFC 7592 in-place PUT; persist any rotated
+   secret it returns.
+
+   **If RFC 7592 is unsupported, do NOT delete the row** — §5 R4.2 and §6b #4.
+   One registration can be shared by several platform and BYO connections that
+   query it directly, so deleting it would break all of them to fix a cosmetic
+   defect. Instead enumerate the dependent connections and schedule a
+   coordinated re-authorization. No secret leaves the database.

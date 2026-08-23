@@ -128,9 +128,13 @@ export async function syncEvolutionAccountConnection(
     ownerNumber && !account.platform_user_id.startsWith("pending_") &&
     ownerNumber !== account.platform_user_id
   ) {
+    // The numbers themselves stay out of the log: these are the end user's and their
+    // contact's phone numbers, and a function log is not the place for them. The account
+    // id identifies the row, and account_metadata.number_mismatch is the durable record
+    // for anyone diagnosing it.
     console.error(
-      `[evolution-qr] account ${account.id}: linked number ${ownerNumber} does not match stored ` +
-        `${account.platform_user_id}; conversations may be split across two identities`,
+      `[evolution-qr] account ${account.id}: the linked number does not match the stored one; ` +
+        `conversations may be split across two identities`,
     );
     // Read-modify-merge on the named key: account_metadata already carries the
     // connection mode and the consent trail, and replacing the object would erase them.

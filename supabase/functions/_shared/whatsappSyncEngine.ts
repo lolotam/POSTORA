@@ -185,8 +185,12 @@ export async function syncEvolutionHistory(deps: {
         return;
       }
       try {
-        const records = await api.findMessages(instanceName, chat.remoteJid, { deadlineAt });
-        const rows = messageRows(account, records);
+        const page = await api.findMessages(instanceName, chat.remoteJid, { deadlineAt });
+        // A chat that stopped at its deadline or page ceiling has more history waiting.
+        // Carrying that up is what stops the completion write below from claiming the
+        // account is fully imported when it is not.
+        if (!page.complete) outcome.truncated = true;
+        const rows = messageRows(account, page.records);
         await importRows(admin, "import_whatsapp_messages", rows);
         outcome.messagesWritten += rows.length;
       } catch (error) {
