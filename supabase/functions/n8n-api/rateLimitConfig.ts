@@ -3,9 +3,9 @@
 // The authoritative numbers live in the database so an admin can change them
 // from the Rate Limits page without redeploying this function; the previous
 // module-level constant survives only as the fallback for when the database is
-// unreachable or holds no row. This mirrors the resolution shape
-// generate-caption already uses (user override -> global setting -> fallback),
-// minus the tier table, which n8n-api has never consulted.
+// unreachable or holds no row. Resolution order: user override ->
+// tier rate limit (per plan) -> global setting -> fallback, mirroring the
+// shape generate-caption already uses.
 //
 // Like requestGuards.ts, this module is deliberately dependency-free and takes
 // injected query functions so the whole priority order is unit-testable
@@ -16,7 +16,7 @@ export interface ResolvedRateLimit {
   windowMs: number;
   /** false => unmetered: an admin disabled the global limit for this endpoint */
   enforced: boolean;
-  source: 'user_override' | 'global_setting' | 'fallback';
+  source: 'user_override' | 'tier_limit' | 'global_setting' | 'fallback';
 }
 
 /** A `user_rate_limits` row, as selected by {@link fetchUserOverride}. */
@@ -24,6 +24,13 @@ export interface UserOverrideRow {
   max_requests: number | null;
   window_minutes: number | null;
   expires_at: string | null;
+}
+
+/** A `tier_rate_limits` row, as selected by {@link fetchTierLimit}. */
+export interface TierLimitRow {
+  max_requests_per_hour: number | null;
+  max_requests_per_day: number | null;
+  is_active: boolean | null;
 }
 
 /** A `rate_limit_settings` row, as selected by {@link fetchGlobalSetting}. */
@@ -116,6 +123,8 @@ function overrideLive(expiresAt: string | null): boolean {
  *  adapters below for the production implementation. */
 export interface RateLimitDeps {
   fetchUserOverride: (endpointKey: string) => Promise<UserOverrideRow | null>;
+  fetchPlanSlug: () => Promise<string | null>;
+  fetchTierLimit: (planSlug: string, endpointKey: string) => Promise<TierLimitRow | null>;
   fetchGlobalSetting: (endpointKey: string) => Promise<GlobalSettingRow | null>;
 }
 
@@ -124,9 +133,11 @@ export interface RateLimitDeps {
  *
  * 1. live, well-formed user override — the most specific statement an admin
  *    can make, so it outranks even a disabled global setting;
- * 2. global setting — `is_active = false` means unlimited (allow, enforce no
+ * 2. tier rate limit for the caller's plan — only max_requests_per_hour is
+ *    enforced (see the comment at the tier block below);
+ * 3. global setting — `is_active = false` means unlimited (allow, enforce no
  *    cap), matching the meaning generate-caption already gives the toggle;
- * 3. the fallback map above, then `default`.
+ * 4. the fallback map above, then `default`.
  *
  * An expired or malformed row at any level is skipped entirely and resolution
  * continues. A rejecting query is caught and logged here rather than thrown: a
@@ -149,6 +160,32 @@ export async function resolveRateLimit(
     }
   } catch (error) {
     console.error(`[n8n-api] user_rate_limits lookup failed for ${endpointKey}:`, error);
+  }
+
+  // Tier limits are per (plan, endpoint). Only max_requests_per_hour is
+  // enforced: checkRateLimit counts one window per request, so the daily half
+  // of the row has no consumer. The admin UI says so rather than implying a
+  // cap that never fires.
+  try {
+    const planSlug = await deps.fetchPlanSlug();
+    if (planSlug) {
+      const tier = await deps.fetchTierLimit(planSlug, endpointKey);
+      if (
+        tier && tier.is_active !== false &&
+        typeof tier.max_requests_per_hour === 'number' &&
+        Number.isFinite(tier.max_requests_per_hour) &&
+        tier.max_requests_per_hour > 0
+      ) {
+        return {
+          requests: tier.max_requests_per_hour,
+          windowMs: 60 * 60 * 1000,
+          enforced: true,
+          source: 'tier_limit',
+        };
+      }
+    }
+  } catch (error) {
+    console.error(`[n8n-api] tier_rate_limits lookup failed for ${endpointKey}:`, error);
   }
 
   try {
@@ -202,5 +239,38 @@ export async function fetchGlobalSetting(
     .eq('endpoint', endpointKey)
     .maybeSingle();
   if (error) throw new Error(`rate_limit_settings lookup failed: ${error.message}`);
+  return data ?? null;
+}
+
+/**
+ * Resolves the caller's plan slug from their active subscription. A caller
+ * with no active subscription row is a Free user, not a plan-less one — most
+ * free users have no user_subscriptions row at all — so a missing row resolves
+ * 'free' (amendment A7) rather than null, keeping the free tier limits in
+ * play for exactly the population they are meant to constrain.
+ */
+export async function fetchPlanSlug(supabase: any, userId: string): Promise<string | null> {
+  const { data, error } = await supabase
+    .from('user_subscriptions')
+    .select('subscription_plans(slug)')
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .maybeSingle();
+  if (error) throw new Error(`user_subscriptions lookup failed: ${error.message}`);
+  return data?.subscription_plans?.slug ?? 'free';
+}
+
+export async function fetchTierLimit(
+  supabase: any,
+  planSlug: string,
+  endpointKey: string,
+): Promise<TierLimitRow | null> {
+  const { data, error } = await supabase
+    .from('tier_rate_limits')
+    .select('max_requests_per_hour, max_requests_per_day, is_active')
+    .eq('plan_slug', planSlug)
+    .eq('endpoint', endpointKey)
+    .maybeSingle();
+  if (error) throw new Error(`tier_rate_limits lookup failed: ${error.message}`);
   return data ?? null;
 }
