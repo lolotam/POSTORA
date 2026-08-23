@@ -118,10 +118,16 @@ Deno.test("history reads unwrap the shapes Evolution actually returns", async (t
   // Measured against v2.3.7: findChats and findContacts answer with a bare array, but
   // findMessages answers with a paged envelope. Treating the envelope as a list -- which
   // the original design assumed -- silently imports nothing.
-  const cases: Array<[string, unknown, (api: ReturnType<typeof createEvolutionApi>) => Promise<any[]>, number]> = [
+  // findMessages returns { records, complete }; the others still return bare arrays, so
+  // each case normalises to the record list before counting.
+  const recordsOf = (value: any): any[] => Array.isArray(value) ? value : value.records;
+  const cases: Array<[string, unknown, (api: ReturnType<typeof createEvolutionApi>) => Promise<any>, number]> = [
     ["findChats array", [{ remoteJid: "1@s.whatsapp.net" }], (api) => api.findChats("i"), 1],
     ["findContacts array", [{ remoteJid: "1@s.whatsapp.net" }, { remoteJid: "2@s.whatsapp.net" }], (api) => api.findContacts("i"), 2],
-    ["findMessages envelope", { messages: { total: 110, pages: 3, records: [{ key: { id: "a" } }] } }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 1],
+    // pages: 1 keeps this a single-page unwrapping case. Multi-page walking is covered
+    // by its own test below, with a stub that actually serves different pages -- a stub
+    // that returns the same page forever would just walk to the ceiling.
+    ["findMessages envelope", { messages: { total: 1, pages: 1, records: [{ key: { id: "a" } }] } }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 1],
     ["findMessages empty envelope", { messages: { total: 0, records: [] } }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 0],
     ["unexpected payload", { error: "nope" }, (api) => api.findMessages("i", "1@s.whatsapp.net"), 0],
   ];
@@ -132,7 +138,63 @@ Deno.test("history reads unwrap the shapes Evolution actually returns", async (t
         baseUrl: "https://wa.postora.cloud",
         apiKey: "k",
       });
-      assertEquals((await call(api)).length, expected);
+      assertEquals(recordsOf(await call(api)).length, expected);
     });
   }
+});
+
+// The bug this guards: findMessages caps a page at ~40 rows regardless of the offset
+// asked for, so stopping on `records.length < offset` ends every chat at page one and
+// silently restores the single-page behaviour pagination exists to replace. These pages
+// are all SHORTER than the offset of 50 and must still all be walked.
+Deno.test("findMessages walks every page even when each is shorter than the offset", async () => {
+  const pages: Record<number, unknown[]> = {
+    1: Array.from({ length: 40 }, (_, i) => ({ key: { id: `p1-${i}` } })),
+    2: Array.from({ length: 40 }, (_, i) => ({ key: { id: `p2-${i}` } })),
+    3: Array.from({ length: 30 }, (_, i) => ({ key: { id: `p3-${i}` } })),
+  };
+  const requested: number[] = [];
+  const api = createEvolutionApi(async (_url, init) => {
+    const body = JSON.parse(String((init as RequestInit).body));
+    requested.push(body.page);
+    return response({ messages: { total: 110, pages: 3, records: pages[body.page] ?? [] } });
+  }, { baseUrl: "https://wa.postora.cloud", apiKey: "k" });
+
+  const result = await api.findMessages("i", "1@s.whatsapp.net");
+
+  assertEquals(requested, [1, 2, 3]);
+  assertEquals(result.records.length, 110);
+  assertEquals(result.complete, true);
+});
+
+Deno.test("findMessages reports incomplete when it stops at the page ceiling", async () => {
+  // A server claiming more pages than the ceiling allows must not be reported as a
+  // finished chat, or the caller records a partial import as a completed sweep.
+  const api = createEvolutionApi(async (_url, init) => {
+    const body = JSON.parse(String((init as RequestInit).body));
+    return response({
+      messages: { total: 5000, pages: 100, records: [{ key: { id: `p${body.page}` } }] },
+    });
+  }, { baseUrl: "https://wa.postora.cloud", apiKey: "k" });
+
+  const result = await api.findMessages("i", "1@s.whatsapp.net");
+
+  assertEquals(result.records.length, 20);
+  assertEquals(result.complete, false);
+});
+
+Deno.test("findMessages treats a bare array as one page and never re-requests it", async () => {
+  // A deployment that ignores `page` answers with the bare array shape. Asking again
+  // would accumulate the same rows nineteen more times.
+  let calls = 0;
+  const api = createEvolutionApi(async () => {
+    calls += 1;
+    return response([{ key: { id: "a" } }, { key: { id: "b" } }]);
+  }, { baseUrl: "https://wa.postora.cloud", apiKey: "k" });
+
+  const result = await api.findMessages("i", "1@s.whatsapp.net");
+
+  assertEquals(calls, 1);
+  assertEquals(result.records.length, 2);
+  assertEquals(result.complete, true);
 });

@@ -27,6 +27,25 @@ export interface EvolutionSendResult {
   raw: unknown;
 }
 
+export interface FindMessagesOptions {
+  /** Epoch ms. Checked between pages so one chat cannot burn the whole sweep budget. */
+  deadlineAt?: number;
+}
+
+export interface FindMessagesResult {
+  records: any[];
+  /** false when the walk stopped early (deadline or page ceiling) rather than reaching
+   *  the end of the chat. The caller must not record such a sweep as complete. */
+  complete: boolean;
+}
+
+/** WhatsApp JIDs are phone numbers. Logs keep only enough to correlate a chat across
+ *  lines -- the last four digits -- so a support trace never carries a full number. */
+function maskJid(remoteJid: string): string {
+  const local = remoteJid.split("@")[0].split(":")[0];
+  return local.length <= 4 ? "***" : `***${local.slice(-4)}`;
+}
+
 // Evolution registers webhook subscriptions under SCREAMING_SNAKE event names but sends
 // the dot-lowercase form ("connection.update") in the delivered body, so every consumer
 // has to normalize before matching.
@@ -49,7 +68,7 @@ export interface EvolutionApi {
   fetchInstance(instanceName: string): Promise<unknown>;
   findChats(instanceName: string): Promise<any[]>;
   findContacts(instanceName: string): Promise<any[]>;
-  findMessages(instanceName: string, remoteJid: string): Promise<any[]>;
+  findMessages(instanceName: string, remoteJid: string, options?: FindMessagesOptions): Promise<FindMessagesResult>;
   logout(instanceName: string): Promise<unknown>;
   deleteInstance(instanceName: string): Promise<unknown>;
   sendText(instanceName: string, input: { number: string; text: string }): Promise<EvolutionSendResult>;
@@ -157,16 +176,62 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
       });
       return Array.isArray(payload) ? payload : [];
     },
-    // Unlike the other two this answers with a paged envelope, and it ignores `limit` --
-    // measured against v2.3.7, a 110-message chat came back as 3 pages of ~40. Only the
-    // newest page is imported, so the records are taken straight off the first response.
-    findMessages: async (instanceName, remoteJid) => {
-      const payload: any = await request(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
-        method: "POST",
-        body: JSON.stringify({ where: { key: { remoteJid } } }),
-      });
-      const records = payload?.messages?.records;
-      return Array.isArray(records) ? records : [];
+    // Unlike the other two this answers with a paged envelope, and it caps a page at its
+    // own size rather than the `offset` asked for -- measured against v2.3.7, a
+    // 110-message chat came back as 3 pages of ~40 against offset 50. `messages.pages` is
+    // therefore the terminator, NOT a short page: stopping on `length < offset` would end
+    // every chat at page one and silently restore the single-page behaviour this replaces.
+    // All pages accumulate into one array so the caller's single-batch message-id dedup
+    // still covers duplicates that straddle a page boundary. `complete: false` marks a
+    // deadline or ceiling exit so the caller can refuse to record the sweep as finished.
+    findMessages: async (instanceName, remoteJid, options) => {
+      const offset = 50;
+      const pageCeiling = 20;
+      const records: any[] = [];
+      for (let page = 1; page <= pageCeiling; page++) {
+        const payload: any = await request(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+          method: "POST",
+          body: JSON.stringify({ page, offset, where: { key: { remoteJid } } }),
+        });
+        // Some deployments ignore `page` and answer with the bare array the chat and
+        // contact routes use. That response is everything the server will ever send for
+        // this filter -- re-requesting it as pages 2..20 would accumulate the same rows
+        // nineteen times over.
+        if (Array.isArray(payload)) {
+          records.push(...payload);
+          return { records, complete: true };
+        }
+        const pageRecords = payload?.messages?.records;
+        if (!Array.isArray(pageRecords)) return { records, complete: true };
+        records.push(...pageRecords);
+
+        // `pages` is the authority, and it has to be, because this route caps a page at
+        // its own size regardless of the `offset` asked for: measured on v2.3.7 a page
+        // comes back with ~40 rows against offset 50. Treating a short page as the last
+        // one would therefore stop every chat after page one and quietly reinstate the
+        // single-page behaviour this function exists to replace. `pages` is trusted only
+        // as a finite positive number, since a garbage value could loop a server that
+        // answers every page with the same batch.
+        const pages = Number(payload?.messages?.pages);
+        if (Number.isFinite(pages) && pages > 0) {
+          if (page >= pages) return { records, complete: true };
+        } else if (pageRecords.length === 0) {
+          // No usable page count: an empty page is the only safe stop signal, because a
+          // short-but-non-empty page may still be followed by more.
+          return { records, complete: true };
+        }
+
+        if (options?.deadlineAt !== undefined && Date.now() >= options.deadlineAt) {
+          console.log(
+            `[evolution-api] findMessages ${instanceName} ${maskJid(remoteJid)}: out of time after page ${page}`,
+          );
+          return { records, complete: false };
+        }
+      }
+      console.log(
+        `[evolution-api] findMessages ${instanceName} ${maskJid(remoteJid)}: stopped at the ${pageCeiling}-page ceiling`,
+      );
+      return { records, complete: false };
     },
     logout: (instanceName) => request(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
     deleteInstance: (instanceName) => request(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),

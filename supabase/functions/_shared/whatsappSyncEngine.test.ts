@@ -48,7 +48,9 @@ function fakeApi(options: {
     findContacts: () => Promise.resolve(options.contacts ?? []),
     findMessages: (_instance: string, remoteJid: string) => {
       if (options.failOn === remoteJid) return Promise.reject(new Error("evolution unreachable"));
-      return Promise.resolve(options.messages?.[remoteJid] ?? []);
+      // findMessages now returns { records, complete }: the flag is what stops a
+      // deadline- or ceiling-truncated chat being recorded as a finished sweep.
+      return Promise.resolve({ records: options.messages?.[remoteJid] ?? [], complete: true });
     },
   } as any;
 }

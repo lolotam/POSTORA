@@ -14,6 +14,15 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import {
   MessageSquare,
   Phone,
   Shield,
@@ -66,12 +75,25 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const { status: tpStatus, isLoading: tpLoading } = useWhatsAppTpStatus();
 
   const [pendingMode, setPendingMode] = useState<"cloud_api" | "coexistence" | null>(null);
+  const [qrNameOpen, setQrNameOpen] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
+  const [connectionName, setConnectionName] = useState<string | null>(null);
   const [qrDisclaimerOpen, setQrDisclaimerOpen] = useState(false);
   const [qrAccountId, setQrAccountId] = useState<string | null>(null);
   const [qrConnecting, setQrConnecting] = useState(false);
   const [switchTarget, setSwitchTarget] = useState<MessagingAccount | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<MessagingAccount | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
+
+  // Mirrors the bridge's validation (trim, non-empty, <= 60) so an invalid name is
+  // never sent for the server to substitute.
+  const trimmedName = nameDraft.trim();
+  const confirmConnectionName = () => {
+    if (!trimmedName || trimmedName.length > 60) return;
+    setConnectionName(trimmedName);
+    setQrNameOpen(false);
+    setQrDisclaimerOpen(true);
+  };
 
   // Direct QR imports history from the Evolution session rather than from Meta, so it does
   // not share the coexistence sync hook. The sweep runs in the background on the server;
@@ -414,7 +436,15 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                   <li className="flex items-start gap-2"><Check className="w-4 h-4 text-purple-600 mt-0.5 shrink-0" />Text and media replies in Postora</li>
                   <li className="flex items-start gap-2"><X className="w-4 h-4 text-destructive mt-0.5 shrink-0" />Templates and interactive catalog sends unavailable</li>
                 </ul>
-                <Button onClick={() => setQrDisclaimerOpen(true)} disabled={qrConnecting} variant="outline" className="w-full gap-2 border-purple-600/40">
+                <Button
+                  onClick={() => {
+                    setNameDraft("");
+                    setQrNameOpen(true);
+                  }}
+                  disabled={qrConnecting}
+                  variant="outline"
+                  className="w-full gap-2 border-purple-600/40"
+                >
                   {qrConnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
                   Connect with QR code
                 </Button>
@@ -517,6 +547,44 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
         </div>
       )}
 
+      {/* The connection name is collected here, before create_and_get_qr fires — the QR
+          scanner that mounts afterwards only polls status, and the webhook can activate
+          the account before a name sent from there would land. */}
+      <Dialog open={qrNameOpen} onOpenChange={setQrNameOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Name this connection</DialogTitle>
+            <DialogDescription>
+              A label for this WhatsApp number in Postora, e.g. "Main line" or "Support".
+              You can't change it after connecting.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={nameDraft}
+            onChange={(e) => setNameDraft(e.target.value)}
+            maxLength={60}
+            autoFocus
+            aria-label="Connection name"
+            placeholder="e.g. Main line"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && trimmedName && trimmedName.length <= 60) confirmConnectionName();
+            }}
+          />
+          <p className="text-xs text-muted-foreground">{trimmedName.length}/60 characters</p>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setQrNameOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button disabled={!trimmedName} onClick={confirmConnectionName}>
+              Continue
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <WhatsAppQrDisclaimerDialog
         open={qrDisclaimerOpen}
         onOpenChange={setQrDisclaimerOpen}
@@ -525,7 +593,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
           setQrConnecting(true);
           try {
             const { data, error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
-              body: { action: "create_and_get_qr", risk_consent: true },
+              body: { action: "create_and_get_qr", risk_consent: true, connection_name: connectionName },
             });
             if (error || data?.error) throw new Error(error?.message || data?.error || "Unable to start QR connection");
             setQrAccountId(data.social_account_id);

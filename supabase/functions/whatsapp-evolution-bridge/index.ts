@@ -1,7 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedErrorResponse, restrictedJsonResponse } from "../_shared/cors.ts";
 import { createEvolutionApi, type EvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
-import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
+import {
+  findOwnedEvolutionAccount,
+  mergeDisplayName,
+  normalizeConnectionName,
+  syncEvolutionAccountConnection,
+} from "../_shared/evolutionQrAccount.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { runInBackground } from "../_shared/background.ts";
 
@@ -24,6 +29,7 @@ interface BridgeBody {
   workspace_id?: string;
   risk_consent?: boolean;
   refresh_qr?: boolean;
+  connection_name?: string;
 }
 
 interface EvolutionInstanceRow {
@@ -136,14 +142,9 @@ async function enforceAccountQuota(admin: any, userId: string): Promise<void> {
 }
 
 async function findOwnedAccount(admin: any, userId: string, socialAccountId: string) {
-  const { data, error } = await admin
-    .from("social_accounts")
-    .select("id, user_id, workspace_id, platform, connection_mode, platform_user_id, platform_username, is_active")
-    .eq("id", socialAccountId)
-    .eq("user_id", userId)
-    .eq("platform", "whatsapp")
-    .maybeSingle();
-  if (error) throw error;
+  // Owner check lives in the shared lookup; this wrapper only maps "not yours (or not
+  // a Direct QR account)" to the HTTP error.
+  const data = await findOwnedEvolutionAccount(admin, userId, socialAccountId);
   if (!data || data.connection_mode !== "evolution_qr") throw new BridgeError("WhatsApp Direct QR account not found", 404);
   return data;
 }
@@ -173,6 +174,12 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
   );
   await enforceAccountQuota(context.admin, context.user.id);
   if (body.risk_consent !== true) throw new BridgeError("Risk consent is required before connecting Direct QR mode", 400);
+  // Collected before the QR flow starts, not in the scanner that mounts afterwards: the
+  // webhook can activate the account while the scanner is still polling, which would
+  // make the name arrive after activation has already run. Invalid input is rejected,
+  // never silently substituted.
+  const connectionName = normalizeConnectionName(body.connection_name);
+  if (!connectionName) throw new BridgeError("A connection name of 1 to 60 characters is required", 400);
 
   const socialAccountId = crypto.randomUUID();
   const instanceName = `postora_${socialAccountId}`;
@@ -180,11 +187,15 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
   const jwtKey = btoa(String.fromCharCode(...jwtKeyBytes))
     .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
   const consentAcceptedAt = new Date().toISOString();
-  const metadata = {
+  // The name is persisted to BOTH platform_username (what the UI renders) and a merged
+  // account_metadata.display_name (the durable marker that keeps a later reconnect's
+  // profileName from clobbering the user's choice). platform_user_id stays on the
+  // pending_ placeholder until activation resolves it to the linked number.
+  const metadata = mergeDisplayName({
     connection_mode: "evolution_qr",
     risk_consent_accepted_at: consentAcceptedAt,
     risk_consent_user_ip: clientIp(req),
-  };
+  }, connectionName);
 
   const { error: accountError } = await context.admin.from("social_accounts").insert({
     id: socialAccountId,
@@ -192,7 +203,7 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
     workspace_id: workspaceId,
     platform: "whatsapp",
     platform_user_id: `pending_${socialAccountId}`,
-    platform_username: null,
+    platform_username: connectionName,
     access_token: "",
     connection_mode: "evolution_qr",
     account_metadata: metadata,

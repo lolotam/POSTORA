@@ -1,5 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { syncEvolutionAccountConnection } from "./evolutionQrAccount.ts";
+import {
+  findOwnedEvolutionAccount,
+  mergeDisplayName,
+  normalizeConnectionName,
+  syncEvolutionAccountConnection,
+} from "./evolutionQrAccount.ts";
 
 interface RecordedUpdate {
   table: string;
@@ -8,8 +13,9 @@ interface RecordedUpdate {
 }
 
 // Stands in for the Supabase client -- the database is a system boundary, and the
-// assertions below are on the rows it would write, not on how it was called.
-function recordingAdmin(): { updates: RecordedUpdate[]; from: (table: string) => unknown } {
+// assertions below are on the rows it would write, not on how it was called. The
+// optional metadata is what a select of account_metadata would return.
+function recordingAdmin(metadata: Record<string, unknown> | null = null) {
   const updates: RecordedUpdate[] = [];
   return {
     updates,
@@ -19,6 +25,15 @@ function recordingAdmin(): { updates: RecordedUpdate[]; from: (table: string) =>
           updates.push({ table, values, id });
           return Promise.resolve({ error: null });
         },
+      }),
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve({
+              data: metadata === null ? null : { account_metadata: metadata },
+              error: null,
+            }),
+        }),
       }),
     }),
   };
@@ -73,12 +88,28 @@ Deno.test("the linked JID is stored as the bare number the inbox expects", async
   }
 });
 
-Deno.test("an already-identified account keeps its number when it reconnects", async () => {
+Deno.test("an already-identified account keeps its number when the same phone reconnects", async () => {
   // The poller re-runs every 2s, so activation must never overwrite a resolved number.
   const admin = recordingAdmin();
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
-  await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" });
+  await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
   assertEquals(admin.updates[0].values, { is_active: true });
+});
+
+Deno.test("a reconnect from a DIFFERENT number keeps the stored id but flags the mismatch", async () => {
+  // This case used to be indistinguishable from the one above, which is the hazard: the
+  // stored platform_user_id stays put (conversation ids are built from it), so a rename
+  // could quietly present someone else's phone as the same account. Migrating the
+  // identity is out of scope; detecting it is not.
+  const admin = recordingAdmin();
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" });
+  assertEquals(admin.updates[0].values, {
+    is_active: true,
+    account_metadata: { number_mismatch: true },
+  });
+  // The number itself is deliberately NOT changed.
+  assertEquals(admin.updates[0].values.platform_user_id, undefined);
 });
 
 Deno.test("a linked session with no identity payload still activates the account", async () => {
