@@ -102,6 +102,34 @@ interface UserWithRole {
 
 const PLATFORMS = ["facebook", "instagram", "tiktok", "youtube", "pinterest", "twitter"] as const;
 
+/**
+ * Round-2 fix (final review C2): NULL in user_quotas.max_* means "inherit
+ * from the plan" (see effective_user_quotas()), never zero and never a
+ * hardcoded number. Renders it as the word "inherit" so it is never
+ * confused with a real override value. Mirrors AdminPlanQuotas.tsx's
+ * formatLimit(), which solved the identical problem for plan-level quotas.
+ */
+export function formatQuotaValue(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "inherit";
+  return value === -1 ? "∞" : value.toString();
+}
+
+/**
+ * An empty (or unparseable) field means "no override" — NULL, which falls
+ * back to the plan through effective_user_quotas(). It must never be
+ * coerced to a hardcoded number (the old `parseInt(e.target.value) || 1`
+ * pattern), or an admin saving the form without touching a field would
+ * silently overwrite that field to a fixed value instead of leaving it as
+ * the number they actually saw. Mirrors AdminPlanQuotas.tsx's
+ * parseQuotaInput().
+ */
+export function parseQuotaFieldInput(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
 // Auth Status Debug Component
 function AuthStatusDebug() {
   const [authStatus, setAuthStatus] = useState<{
@@ -376,10 +404,14 @@ export default function AdminUsers() {
   const [deleteUser, setDeleteUser] = useState<UserWithRole | null>(null);
   const [editQuotaUser, setEditQuotaUser] = useState<UserWithRole | null>(null);
   
-  const [quotaMaxSocialAccounts, setQuotaMaxSocialAccounts] = useState(4);
-  const [quotaMaxPosts, setQuotaMaxPosts] = useState(30);
-  const [quotaMaxPostsPerDay, setQuotaMaxPostsPerDay] = useState(2);
-  const [quotaMaxMediaUploads, setQuotaMaxMediaUploads] = useState(20);
+  // null = inherit from the plan (see formatQuotaValue/parseQuotaFieldInput
+  // above). These used to default to hardcoded numbers, which meant saving
+  // the dialog without touching a field silently pinned that field's value.
+  const [quotaMaxProfiles, setQuotaMaxProfiles] = useState<number | null>(null);
+  const [quotaMaxSocialAccounts, setQuotaMaxSocialAccounts] = useState<number | null>(null);
+  const [quotaMaxPosts, setQuotaMaxPosts] = useState<number | null>(null);
+  const [quotaMaxPostsPerDay, setQuotaMaxPostsPerDay] = useState<number | null>(null);
+  const [quotaMaxMediaUploads, setQuotaMaxMediaUploads] = useState<number | null>(null);
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [showBulkEditDialog, setShowBulkEditDialog] = useState(false);
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
@@ -438,7 +470,13 @@ export default function AdminUsers() {
             name
           )
         `)
-        .in("status", ["active", "trialing"]);
+        // 'past_due' counts as subscribed alongside 'active' (C1, 2026-08-23
+        // final review) - a dunning Pro/Business user must not show as
+        // "free" here, matching effective_user_quotas(). 'trialing' never
+        // actually reaches this column (subscriptionStatus.ts maps it to
+        // 'active' before it's written; the status check constraint permits
+        // only active|cancelled|expired|past_due), so it is dropped as dead.
+        .in("status", ["active", "past_due"]);
 
       if (subscriptionsError) throw subscriptionsError;
 
@@ -502,7 +540,17 @@ export default function AdminUsers() {
         } else if (userPlanMap[profile.id]) {
           planSlug = userPlanMap[profile.id];
         } else if (userRole?.role === "subscriber" && userQuota) {
-          // Subscriber without subscription record — derive plan from quotas
+          // Subscriber without subscription record — derive plan from quotas.
+          //
+          // Reviewed and documented (C2, 2026-08-23 final review), left
+          // as-is: post-backfill, max_profiles is NULL on nearly every row,
+          // which fails both comparisons below and falls through to the
+          // "free" initialized above. That is the best available answer —
+          // there is no subscription row here to read a real plan from, and
+          // NULL no longer carries a "this was set to X" signal the way a
+          // pre-backfill numeric override did. This heuristic now only
+          // fires for the rare row still holding a genuine numeric
+          // override that exceeds its plan.
           if ((userQuota as any).max_profiles === -1) planSlug = "business";
           else if ((userQuota as any).max_profiles >= 5) planSlug = "pro";
         }
@@ -703,20 +751,29 @@ export default function AdminUsers() {
     },
   });
 
+  // C2 fix: prefill with the raw override (null stays null = inherit),
+  // never `|| <hardcoded default>` — that coerced NULL into a number the
+  // admin never typed, so an untouched Save silently pinned it.
   const handleEditQuota = (user: UserWithRole) => {
     setEditQuotaUser(user);
-    
-    setQuotaMaxSocialAccounts(user.quota?.max_social_accounts || 4);
-    setQuotaMaxPosts(user.quota?.max_posts_per_month || 30);
-    setQuotaMaxPostsPerDay(user.quota?.max_posts_per_day || 2);
-    setQuotaMaxMediaUploads(user.quota?.max_media_uploads_per_day || 20);
+
+    setQuotaMaxProfiles(user.quota?.max_profiles ?? null);
+    setQuotaMaxSocialAccounts(user.quota?.max_social_accounts ?? null);
+    setQuotaMaxPosts(user.quota?.max_posts_per_month ?? null);
+    setQuotaMaxPostsPerDay(user.quota?.max_posts_per_day ?? null);
+    setQuotaMaxMediaUploads(user.quota?.max_media_uploads_per_day ?? null);
   };
 
+  // C2 fix: write exactly what the dialog shows the admin. maxProfiles used
+  // to be `editQuotaUser.quota?.max_profiles || 1`, which rewrote it to 1
+  // on every save regardless of the field's real value (there was no UI
+  // control for it at all) — a Pro user's profile limit got permanently
+  // capped near free tier the moment an admin opened and saved this dialog.
   const handleSaveQuota = () => {
     if (!editQuotaUser) return;
     updateQuota({
       userId: editQuotaUser.id,
-      maxProfiles: editQuotaUser.quota?.max_profiles || 1,
+      maxProfiles: quotaMaxProfiles,
       maxSocialAccounts: quotaMaxSocialAccounts,
       maxPostsPerMonth: quotaMaxPosts,
       maxPostsPerDay: quotaMaxPostsPerDay,
@@ -725,19 +782,22 @@ export default function AdminUsers() {
     setEditQuotaUser(null);
   };
 
+  // Bulk edit opens with every field at "inherit" (null), not a hardcoded
+  // number pinning every selected user to the same value unless the admin
+  // explicitly types one.
   const handleBulkEditQuota = () => {
-    
-    setQuotaMaxSocialAccounts(4);
-    setQuotaMaxPosts(30);
-    setQuotaMaxPostsPerDay(2);
-    setQuotaMaxMediaUploads(20);
+    setQuotaMaxProfiles(null);
+    setQuotaMaxSocialAccounts(null);
+    setQuotaMaxPosts(null);
+    setQuotaMaxPostsPerDay(null);
+    setQuotaMaxMediaUploads(null);
     setShowBulkEditDialog(true);
   };
 
   const handleSaveBulkQuota = () => {
     bulkUpdateQuota({
       userIds: selectedUsers,
-      maxProfiles: 1,
+      maxProfiles: quotaMaxProfiles,
       maxSocialAccounts: quotaMaxSocialAccounts,
       maxPostsPerMonth: quotaMaxPosts,
       maxPostsPerDay: quotaMaxPostsPerDay,
@@ -1157,19 +1217,19 @@ export default function AdminUsers() {
                           <div className="text-xs space-y-1">
                             <div className="flex items-center gap-1">
                               <span className="w-3 h-3 text-muted-foreground text-center">📱</span>
-                              <span>{user.social_accounts?.length || 0}/{user.quota?.max_social_accounts === -1 ? '∞' : user.quota?.max_social_accounts ?? 4} accounts</span>
+                              <span>{user.social_accounts?.length || 0}/{formatQuotaValue(user.quota?.max_social_accounts)} accounts</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <FileText className="w-3 h-3 text-muted-foreground" />
-                              <span>{user.quota?.posts_this_month ?? 0}/{user.quota?.max_posts_per_month === -1 ? '∞' : user.quota?.max_posts_per_month ?? 30} posts/mo</span>
+                              <span>{user.quota?.posts_this_month ?? 0}/{formatQuotaValue(user.quota?.max_posts_per_month)} posts/mo</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <Calendar className="w-3 h-3 text-muted-foreground" />
-                              <span>{user.quota?.posts_today ?? 0}/{user.quota?.max_posts_per_day === -1 ? '∞' : user.quota?.max_posts_per_day ?? 2} posts/day</span>
+                              <span>{user.quota?.posts_today ?? 0}/{formatQuotaValue(user.quota?.max_posts_per_day)} posts/day</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <ImagePlus className="w-3 h-3 text-muted-foreground" />
-                              <span>{user.quota?.media_uploads_today ?? 0}/{user.quota?.max_media_uploads_per_day === -1 ? '∞' : user.quota?.max_media_uploads_per_day ?? 20} uploads/day</span>
+                              <span>{user.quota?.media_uploads_today ?? 0}/{formatQuotaValue(user.quota?.max_media_uploads_per_day)} uploads/day</span>
                             </div>
                           </div>
                         )}
@@ -1278,15 +1338,28 @@ export default function AdminUsers() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
+              <Label htmlFor="maxProfiles">Max Social Profiles</Label>
+              <Input
+                id="maxProfiles"
+                type="number"
+                min={-1}
+                value={quotaMaxProfiles ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxProfiles(parseQuotaFieldInput(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="maxSocialAccounts">Max Social Media Accounts</Label>
               <Input
                 id="maxSocialAccounts"
                 type="number"
                 min={-1}
-                value={quotaMaxSocialAccounts}
-                onChange={(e) => setQuotaMaxSocialAccounts(parseInt(e.target.value) || 1)}
+                value={quotaMaxSocialAccounts ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxSocialAccounts(parseQuotaFieldInput(e.target.value))}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxPosts">Max Posts Per Month</Label>
@@ -1294,10 +1367,11 @@ export default function AdminUsers() {
                 id="maxPosts"
                 type="number"
                 min={-1}
-                value={quotaMaxPosts}
-                onChange={(e) => setQuotaMaxPosts(parseInt(e.target.value) || 1)}
+                value={quotaMaxPosts ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxPosts(parseQuotaFieldInput(e.target.value))}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxPostsPerDay">Max Posts Per Day</Label>
@@ -1305,10 +1379,11 @@ export default function AdminUsers() {
                 id="maxPostsPerDay"
                 type="number"
                 min={-1}
-                value={quotaMaxPostsPerDay}
-                onChange={(e) => setQuotaMaxPostsPerDay(parseInt(e.target.value) || 1)}
+                value={quotaMaxPostsPerDay ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxPostsPerDay(parseQuotaFieldInput(e.target.value))}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxMediaUploads">Max Media Uploads Per Day</Label>
@@ -1316,10 +1391,11 @@ export default function AdminUsers() {
                 id="maxMediaUploads"
                 type="number"
                 min={-1}
-                value={quotaMaxMediaUploads}
-                onChange={(e) => setQuotaMaxMediaUploads(parseInt(e.target.value) || 1)}
+                value={quotaMaxMediaUploads ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxMediaUploads(parseQuotaFieldInput(e.target.value))}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
             </div>
           </div>
           <DialogFooter>
@@ -1340,20 +1416,34 @@ export default function AdminUsers() {
           <DialogHeader>
             <DialogTitle>Bulk Edit Quotas</DialogTitle>
             <DialogDescription>
-              Set quotas for {selectedUsers.length} selected user{selectedUsers.length > 1 ? 's' : ''}.
+              Set quotas for {selectedUsers.length} selected user{selectedUsers.length > 1 ? 's' : ''}. Leave a field
+              empty to clear that override and have those users inherit it from their plan.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="bulkMaxProfiles">Max Social Profiles</Label>
+              <Input
+                id="bulkMaxProfiles"
+                type="number"
+                min={-1}
+                value={quotaMaxProfiles ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxProfiles(parseQuotaFieldInput(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+            </div>
             <div className="space-y-2">
               <Label htmlFor="bulkMaxSocialAccounts">Max Social Media Accounts</Label>
               <Input
                 id="bulkMaxSocialAccounts"
                 type="number"
                 min={-1}
-                value={quotaMaxSocialAccounts}
-                onChange={(e) => setQuotaMaxSocialAccounts(parseInt(e.target.value) || 1)}
+                value={quotaMaxSocialAccounts ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxSocialAccounts(parseQuotaFieldInput(e.target.value))}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="bulkMaxPosts">Max Posts Per Month</Label>
@@ -1361,10 +1451,11 @@ export default function AdminUsers() {
                 id="bulkMaxPosts"
                 type="number"
                 min={-1}
-                value={quotaMaxPosts}
-                onChange={(e) => setQuotaMaxPosts(parseInt(e.target.value) || 1)}
+                value={quotaMaxPosts ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxPosts(parseQuotaFieldInput(e.target.value))}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="bulkMaxPostsPerDay">Max Posts Per Day</Label>
@@ -1372,10 +1463,11 @@ export default function AdminUsers() {
                 id="bulkMaxPostsPerDay"
                 type="number"
                 min={-1}
-                value={quotaMaxPostsPerDay}
-                onChange={(e) => setQuotaMaxPostsPerDay(parseInt(e.target.value) || 1)}
+                value={quotaMaxPostsPerDay ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxPostsPerDay(parseQuotaFieldInput(e.target.value))}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="bulkMaxMediaUploads">Max Media Uploads Per Day</Label>
@@ -1383,10 +1475,11 @@ export default function AdminUsers() {
                 id="bulkMaxMediaUploads"
                 type="number"
                 min={-1}
-                value={quotaMaxMediaUploads}
-                onChange={(e) => setQuotaMaxMediaUploads(parseInt(e.target.value) || 1)}
+                value={quotaMaxMediaUploads ?? ""}
+                placeholder="Empty inherits from plan"
+                onChange={(e) => setQuotaMaxMediaUploads(parseQuotaFieldInput(e.target.value))}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
             </div>
           </div>
           <DialogFooter>
