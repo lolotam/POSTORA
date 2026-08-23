@@ -10,6 +10,17 @@
 -- The trailing free literals are a last-resort guard for a missing or unseeded
 -- 'free' plan row. They are unreachable in normal operation and are the ONLY
 -- hardcoded quota numbers left in the system.
+--
+-- Round-2 fix (final review C1): a subscription counts as entitling while
+-- status is 'active' OR 'past_due'. Dunning is a payment-collection state,
+-- not an entitlement state - Stripe keeps the subscription open for the
+-- whole 2-3 week retry window, and stripe-webhook/index.ts writes
+-- status: "past_due" on invoice.payment_failed rather than cancelling
+-- anything. Treating 'past_due' as unentitled would downgrade a paying
+-- customer to free limits the moment a card fails, which is exactly the
+-- invariant the backfill migration (20260823140400) exists to prevent.
+-- 20260823140400's plan-selection CTE must match this predicate exactly -
+-- they are two implementations of one rule.
 
 CREATE OR REPLACE FUNCTION public.effective_user_quotas(p_user_id uuid)
 RETURNS TABLE (
@@ -30,7 +41,7 @@ AS $$
     FROM public.subscription_plans sp
     WHERE sp.id = (
       SELECT us.plan_id FROM public.user_subscriptions us
-      WHERE us.user_id = p_user_id AND us.status = 'active'
+      WHERE us.user_id = p_user_id AND us.status IN ('active', 'past_due')
       -- Round-1 amendment A5: full three-part tie-breaker. There is no
       -- uniqueness constraint on active subscriptions, so two active rows
       -- with equal or NULL current_period_end must still resolve
@@ -39,14 +50,14 @@ AS $$
       LIMIT 1
     )
     UNION ALL
-    -- Fallback branch: no active subscription -> the free plan row.
+    -- Fallback branch: no active/past_due subscription -> the free plan row.
     SELECT sp.profile_limit, sp.max_social_accounts, sp.max_posts_per_month,
            sp.max_posts_per_day, sp.max_media_uploads_per_day
     FROM public.subscription_plans sp
     WHERE sp.slug = 'free'
       AND NOT EXISTS (
         SELECT 1 FROM public.user_subscriptions us
-        WHERE us.user_id = p_user_id AND us.status = 'active'
+        WHERE us.user_id = p_user_id AND us.status IN ('active', 'past_due')
       )
     LIMIT 1
   ),

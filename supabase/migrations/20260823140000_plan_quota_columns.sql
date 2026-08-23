@@ -16,7 +16,8 @@ COMMENT ON COLUMN public.subscription_plans.max_posts_per_day IS
   '-1 = unlimited. Resolved through effective_user_quotas(); never read directly.';
 
 -- Round-1 amendment A1: omitted INSERT columns on user_quotas take these
--- defaults (2/4/2/20/20), which would make every new row a pinned override
+-- defaults, in column order profiles/accounts/month/day/uploads
+-- (2/4/20/2/20), which would make every new row a pinned override
 -- instead of inheriting its plan. NULL must mean inherit.
 ALTER TABLE public.user_quotas
   ALTER COLUMN max_profiles              DROP DEFAULT,
@@ -56,6 +57,10 @@ WHERE slug = 'business';
 -- actually subscribed to, active or not. The existing active-only public
 -- policy is unchanged.
 --
+-- Round-2 fix (final review C1): 'past_due' counts as subscribed here too,
+-- matching effective_user_quotas() (20260823140100) - a dunning customer
+-- must still be able to read the plan they are entitled to.
+--
 -- CREATE POLICY has no IF NOT EXISTS clause, so this is guarded explicitly
 -- to keep the migration replayable.
 DO $$
@@ -63,13 +68,13 @@ BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM pg_policies
     WHERE schemaname = 'public' AND tablename = 'subscription_plans'
-      AND policyname = 'Users can view their own active plan'
+      AND policyname = 'Users can view their own subscribed plan'
   ) THEN
-    CREATE POLICY "Users can view their own active plan"
+    CREATE POLICY "Users can view their own subscribed plan"
       ON public.subscription_plans FOR SELECT TO authenticated
       USING (EXISTS (
         SELECT 1 FROM public.user_subscriptions us
-        WHERE us.user_id = auth.uid() AND us.status = 'active' AND us.plan_id = subscription_plans.id
+        WHERE us.user_id = auth.uid() AND us.status IN ('active', 'past_due') AND us.plan_id = subscription_plans.id
       ));
   END IF;
 END $$;

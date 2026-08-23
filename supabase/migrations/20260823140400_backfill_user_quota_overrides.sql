@@ -12,21 +12,36 @@
 -- Rule: NULL a column unless the stored value is strictly MORE permissive than
 -- what the plan resolves to. -1 is the most permissive value of all.
 
--- Round-1 amendment A5: guard against duplicate active subscriptions before
--- touching any row. There is no uniqueness constraint on
--- user_subscriptions(user_id) WHERE status = 'active', so an unresolved
--- duplicate would leave the tie-break below (and effective_user_quotas())
--- silently picking a winner with no record of the decision. Fail loudly
--- instead - these must be resolved by hand before this migration runs.
+-- Round-1 amendment A5: guard against duplicate active/past_due subscriptions
+-- before touching any row. There is no uniqueness constraint on
+-- user_subscriptions(user_id) WHERE status IN ('active', 'past_due'), so an
+-- unresolved duplicate would leave the tie-break below (and
+-- effective_user_quotas()) silently picking a winner with no record of the
+-- decision. Fail loudly instead - these must be resolved by hand before this
+-- migration runs.
+--
+-- Round-2 fix (final review C1): widened from status = 'active' to
+-- IN ('active', 'past_due') to match the entitlement predicate below and in
+-- effective_user_quotas() (20260823140100) - dunning is not a downgrade, so a
+-- user with one active row and one past_due row is just as ambiguous a
+-- duplicate as two active rows.
 DO $$
 BEGIN
   ASSERT NOT EXISTS (
     SELECT 1 FROM public.user_subscriptions
-    WHERE status = 'active'
+    WHERE status IN ('active', 'past_due')
     GROUP BY user_id
     HAVING count(*) > 1
-  ), 'duplicate active subscriptions must be resolved before backfilling';
+  ), 'duplicate active/past_due subscriptions must be resolved before backfilling';
 END $$;
+
+-- Round-2 fix (final review I4): one-time pre-backfill snapshot for rollback.
+-- The UPDATE below overwrites all five override columns on every row in a
+-- single statement with no copy anywhere else, so without this the previous
+-- values are gone the moment the migration commits. May be dropped once this
+-- migration has been verified in production.
+CREATE TABLE IF NOT EXISTS public.user_quotas_backup_20260823 AS
+SELECT * FROM public.user_quotas;
 
 WITH resolved AS (
   SELECT
@@ -50,7 +65,10 @@ WITH resolved AS (
   FROM public.user_quotas uq
   LEFT JOIN LATERAL (
     SELECT s.plan_id FROM public.user_subscriptions s
-    WHERE s.user_id = uq.user_id AND s.status = 'active'
+    -- Round-2 fix (final review C1): IN ('active', 'past_due'), matching
+    -- effective_user_quotas() exactly - these are two implementations of one
+    -- rule and must not diverge on which subscriptions entitle.
+    WHERE s.user_id = uq.user_id AND s.status IN ('active', 'past_due')
     -- Round-1 amendment A5: the same three-clause deterministic tie-break
     -- used by effective_user_quotas(). Divergence here is exactly how the
     -- backfill and the arbiter would come to disagree on an ambiguous row.
