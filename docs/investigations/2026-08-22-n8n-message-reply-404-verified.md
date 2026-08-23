@@ -169,7 +169,12 @@ Grok's **Fix 3** (workspace-wide ACL) is also inapplicable here: all three danat
 
 Per the table in §2: put the correct credential on the node, or stop feeding it another tenant's trigger. One workflow per Postora tenant is the safe shape.
 
-### Fix 1 — n8n node hardening (`F:\N8N\Postora-n8n-community-node` **and** the vendored `F:\Postora_new\Postora-n8n-community-node`, same task; no nested `.git` in the vendored copy)
+### Fix 1 — n8n node hardening (`F:\N8N\Postora-n8n-community-node`, the only node location)
+
+> This section originally said to apply the change to a vendored copy under this
+> repo as well. That copy was deleted on 2026-08-22 and must not be recreated —
+> following the old instruction would reintroduce divergent node source. Publish
+> only from `F:\N8N\Postora-n8n-community-node`.
 
 Message fields still carry the pre-fix defaults; the Comment fields were patched today (`Postora.node.ts:471`) and Message was not.
 
@@ -211,7 +216,7 @@ In `handleMessageReply` **and** `loadOwnedCommentAccount`:
 3. Add a regression test asserting that a comma-separated `X-Forwarded-For` yields a single valid IP.
 4. After deploy, re-verify: two calls to `/api/v1/accounts` must produce two `api_logs` rows and `x-ratelimit-remaining` must decrement.
 
-> Note for whoever ships this: fixing the insert **re-arms rate limiting**, which has effectively been off. Confirm the configured limits (`/api/v1/messages/reply` = 60/h, `/api/v1/comments/reply` = 120/h) are workable for current automation volume before deploying, or the fix will land as an outage.
+> Note for whoever ships this: fixing the insert **re-arms rate limiting**, which has effectively been off. Confirm the configured limits are workable for current automation volume before deploying, or the fix will land as an outage. Do not read the numbers from this document — since the unified rate-limits change they live in the `rate_limit_settings` table and are editable from the admin Rate Limits page, and the values that were current when this was written (60/h and 120/h) are no longer the deployed ones.
 
 ### Deployment
 

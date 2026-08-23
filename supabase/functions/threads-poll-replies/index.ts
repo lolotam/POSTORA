@@ -18,6 +18,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { resolveCommentAutomationHandler } from "../_shared/automationHandler.ts";
 import { ingestThreadsComment } from "../_shared/threadsCommentIngest.ts";
 import { metaGet, STANDARD_REPLY_FIELDS } from "../_shared/threads-reply-helpers.ts";
@@ -139,6 +140,15 @@ async function pollMentions(admin: any, account: ThreadsAccount, dispatch: boole
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+
+  // The cron job already sends `Authorization: Bearer <get_cron_secret()>`, but nothing
+  // was checking it. Without this an anonymous caller could drive the whole sweep:
+  // burning Meta Graph quota against every connected Threads account and firing the
+  // n8n workflows and AI agent that each new comment dispatches. Checked before the
+  // service-role client is created, so an unauthenticated request never reaches the
+  // database at all. Same guard every other cron-invoked function here uses.
+  const cronAuth = verifyCronAuth(req);
+  if (!cronAuth.ok) return cronAuth.response;
 
   const admin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   const { data: accounts, error } = await admin
