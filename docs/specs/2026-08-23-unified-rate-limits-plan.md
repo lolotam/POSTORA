@@ -138,11 +138,17 @@ priority order breaks.
     make (Codex r1 #3)
 21. **router-wiring tripwires** (Codex r2 #3), each carrying a comment saying
     plainly that they are source-text regression guards, not an integration test:
-    `index.ts` contains `rateLimitKeyForPath(` at the router call site, and the
-    body of `withRateLimitHeaders` no longer contains `RATE_LIMITS[`. A real
-    in-process router test would need `index.ts` restructured away from a
-    top-level `Deno.serve`, which is riskier than the gap it closes; the Step 8
-    live check is the authoritative end-to-end proof.
+    the router calls `rateLimitKeyForPath(`, the body of `withRateLimitHeaders`
+    no longer contains `RATE_LIMITS[`, and the 429 branch is wrapped in
+    `withRateLimitHeaders`.
+
+    `index.ts` exports `handleRequest` and calls `Deno.serve` only under
+    `import.meta.main`, so importing it binds no port and the tests above use the
+    real functions. A full end-to-end handler test is still out of scope for a
+    different reason: `handleRequest` authenticates an API key against Supabase
+    before reaching rate limiting, so driving it needs an authenticated request
+    against a stubbed database — more machinery than the risk warrants. The Step
+    8 live check is the authoritative end-to-end proof.
 
 **File:** admin-UI unit test (new, vitest — place it beside whatever convention
 the existing `src` tests use)

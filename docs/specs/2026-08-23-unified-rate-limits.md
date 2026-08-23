@@ -15,7 +15,7 @@ endpoints that are already DB-backed.
 live call confirms an admin edit takes effect. Merging `main` auto-deploys the
 frontend only; enforcement is unchanged until steps 2–4 of §5 run.
 
-### Deliberately NOT in scope (stated to bound the goal honestly)
+## Deliberately NOT in scope (stated to bound the goal honestly)
 
 - `generate-hashtags` has a `rate_limit_settings` row but **no enforcement code**
   today. `post-create` likewise has a row and no consumer. Both rows pre-date this
@@ -38,7 +38,7 @@ edits those tables — but only ever lists the four seeded AI/web rows.
 
 Live state confirmed on prod (`ssh-contabo-mcp`, 2026-08-23):
 
-```
+```text
 rate_limit_settings: generate-caption(20/60), generate-hashtags(30/60),
                      generate-image(10/60), post-create(60/60)   -- 4 rows
 tier_rate_limits:    9 rows, AI endpoints only
@@ -291,14 +291,23 @@ in-memory map; a seeded table with old code is simply ignored.
   smoke test cannot make.
 - **Malformed *global* row** (not just a malformed override) falls through to the
   fallback map (Codex r2 #3).
-- **Router-wiring tripwire** (Codex r2 #3). `index.ts` calls `Deno.serve` at import
-  time, so a genuine in-process router test would require restructuring a
-  2258-line file into an exported handler — a refactor riskier than the gap it
-  closes. Instead, two cheap source-text assertions act as regression tripwires,
-  labelled honestly as such in the test file: `index.ts` contains
-  `rateLimitKeyForPath(` at the router call site, and `withRateLimitHeaders` no
-  longer contains `RATE_LIMITS[`. The **authoritative** end-to-end proof is the
-  post-deploy live check below, not these.
+- **Router-wiring tripwires** (Codex r2 #3). The implementation went further than
+  this spec first proposed: `index.ts` now exports `handleRequest` and calls
+  `Deno.serve` only under `import.meta.main`, so importing the module is
+  side-effect free and the tests exercise the **real** `checkRateLimit` and
+  `withRateLimitHeaders` rather than copies. (`import.meta.main` was verified
+  true under `supabase/edge-runtime:v1.67.4`, the image this stack runs, so the
+  server still binds in production.)
+
+  What remains out of reach is a full end-to-end handler test: `handleRequest`
+  authenticates an API key and reaches Supabase before it ever gets to rate
+  limiting, so driving it would mean standing up an authenticated request
+  against a stubbed database — more machinery than the risk warrants. The gap is
+  covered instead by three `Function.prototype.toString()` tripwires over the
+  live exported functions: the router calls `rateLimitKeyForPath(`, the header
+  helper no longer contains `RATE_LIMITS[`, and the 429 branch is wrapped in
+  `withRateLimitHeaders`. They are labelled as regression guards in the test
+  file. The **authoritative** end-to-end proof is the post-deploy live check.
 - **Admin UI, pure parts only**: every seeded endpoint has an `ENDPOINT_LABELS`
   entry; the category bucketing helper groups the three categories correctly; an
   unrecognised endpoint lands in "Other". No full component render — the existing
