@@ -1,9 +1,11 @@
 # Spec — WhatsApp QR naming & history sweep, Higgsfield consent logo
 
 Date: 2026-08-23
-**Revision 2** — Codex round 1 returned 12 blocking objections. All are folded
-in; §6 records each disposition. Parts 1 and 4 are substantially rewritten,
-and one requirement (R3.2) was **withdrawn as a fix for a non-existent bug**.
+**Revision 3** — Codex round 1 returned 12 blocking objections; round 2
+resolved 8 and returned 6 more. All are folded in (§6, §6b). Parts 1 and 4 are
+substantially rewritten, and one requirement (R3.2) was **withdrawn as a fix
+for a non-existent bug**. The debate is capped at two rounds, so the round-2
+dispositions stand as recorded.
 
 Branch `feat/whatsapp-qr-and-higgsfield-logo` off `main`. Four parts, one PR,
 four scoped commits — they share a deploy.
@@ -47,7 +49,13 @@ it.
 
 - **R1.1** — the name is collected in `WhatsAppSetup` **before**
   `create_and_get_qr`, and sent as a field on that action.
-- **R1.2** — the bridge validates it and persists it at creation time.
+- **R1.2** — the bridge validates it and **persists it at creation time to
+  BOTH `platform_username` and a merged `account_metadata.display_name`**
+  (Codex r2 #1). Writing only `platform_username` would leave the durable
+  precedence marker unset, so the very first reconnect that carries a
+  `profileName` would clobber the user's chosen name. Testing the request
+  payload alone does not prove this — the acceptance gate asserts the **stored
+  row**.
 
 ### Precedence must live inside the helper (Codex #2)
 
@@ -142,11 +150,26 @@ pairing. So one cheap detection is added, without migration:
   is treated as a single page and never re-requested (a server ignoring `page`
   would otherwise be asked 20 times for the same 50 rows). `pages` is validated
   as a finite positive number before being trusted.
-- **R3.4 — a time budget, not a page count (Codex #6)** — the ceiling bounds
-  one chat, not the sweep. A `Date.now()` deadline (~60s) is checked **between
-  chats**; on expiry the sweep stops, logs chats done and chats remaining, and
-  returns partial. A re-run resumes naturally because the upserts are
-  idempotent. No continuation-token machinery.
+- **R3.4 — a time budget threaded all the way down (Codex #6, r2 #2)** — the
+  page ceiling bounds one chat, not the sweep, and a deadline checked only
+  *between* chats does not even bound one chat: 20 sequential `findMessages`
+  calls at a 10s timeout each is ~200s inside a single chat, and chats run
+  `CHAT_CONCURRENCY` at a time (`whatsappSyncEngine.ts:168`). So the deadline is
+  **passed into pagination and checked between pages**, between chats, and
+  before starting another concurrency batch. On expiry the sweep stops, logs
+  chats done and remaining, and returns partial.
+
+- **R3.6 — a truncated sweep MUST be recorded as incomplete (Codex r2 #3). This
+  is the requirement that prevents silent, permanent data loss.**
+  `whatsappSyncEngine.ts:231` computes
+  `sweptCleanly = chatsImported > 0 && chatFailures === 0` and, when messages
+  were written, stamps `last_sync_at`. A deadline-truncated sweep has **zero
+  failures** — it did not fail, it stopped — so it would satisfy that test,
+  stamp completion, and, in the words of the existing comment, *"permanently
+  disable the retry"* for every chat it never reached. Truncation must
+  therefore be an explicit outcome that makes `sweptCleanly` false, leaving
+  `last_sync_at` unset so a later trigger resumes. A test asserts
+  `last_sync_at` is **not** written on a truncated run.
 - **R3.5** — when either bound is hit, log it. Silent truncation reads as "we
   imported everything".
 - **Noted, out of scope:** `conversationRows` / `contactRows` do not dedupe
@@ -172,9 +195,18 @@ pairing. So one cheap detection is added, without migration:
      RFC 7592 `registration_client_uri` + `registration_access_token`, do an
      **in-place PUT**. The `client_id` survives, refresh keeps working, no
      re-authorization;
-  3. only if 7592 is unsupported, fall back to a **targeted** delete matching
-     `provider_code` **and** `redirect_uri` (never all Higgsfield rows),
-     immediately followed by re-authorization.
+  3. if 7592 is unsupported, **do not delete the row** (Codex r2 #4). One
+     registration can be shared by several platform and BYO connections, and
+     the BYO paths query that client directly, so deleting it breaks all of
+     them at once. Instead: keep the old client, enumerate its dependents, and
+     schedule a coordinated re-authorization. An unbranded consent screen is a
+     cosmetic defect; breaking every Higgsfield connection to fix it is not a
+     trade worth making.
+  4. **Validate before trusting the management URI** (Codex r2 #5): the stored
+     `registration_client_uri` must be **HTTPS on an allowed Higgsfield issuer
+     host** before the registration access token is transmitted to it —
+     otherwise a tampered stored value exfiltrates that token. Persist any
+     rotated `client_secret` or management token the PUT returns.
 - **R4.3 — secrets (Codex #9)** — `oauth_clients` holds `client_secret` and
   possibly a registration access token inside `registration_response`. The row
   stays queryable in the database as its own backup: **do not dump it to a
@@ -198,6 +230,29 @@ pairing. So one cheap detection is added, without migration:
 | 11 | acceptance split too generous | **Accepted** — §7 rewritten; the create-payload, metadata survival, cross-tenant, exact logo URI and pagination request bodies are all machine gates now |
 | 12 | rescan identity is a data-integrity hazard, and no rescan UI exists | **Accepted as scoped-out with detection** — §2 states the hazard in full; R1.8 adds `number_mismatch` logging without attempting migration |
 
+## 6b. Codex round-2 objections and disposition
+
+Round 2 confirmed 8 of the 12 round-1 objections fully resolved and returned six
+more. All six are accepted. The debate is capped at two rounds.
+
+| # | Objection | Disposition |
+|---|---|---|
+| 1 | creation must write the name to BOTH columns and be tested on the stored row, not the payload | **Accepted** - R1.2; without the metadata marker the first reconnect clobbers the name |
+| 2 | the deadline must be honoured between PAGES too - one chat can burn ~200s in 20 sequential 10s timeouts, and chats run concurrently | **Accepted** - R3.4 threads the deadline into pagination, between chats, and before starting another batch |
+| 3 | a truncated sweep would be recorded as COMPLETE, permanently skipping the remaining chats | **Accepted - the most serious finding.** Verified at whatsappSyncEngine.ts:231: a truncated run has zero failures, so it satisfies sweptCleanly and stamps last_sync_at, which the code's own comment says permanently disables the retry. New R3.6 makes truncation an explicit incomplete outcome |
+| 4 | the delete fallback breaks every platform and BYO connection sharing that client | **Accepted** - the fallback no longer deletes. Keep the client, enumerate dependents, schedule a coordinated re-authorization |
+| 5 | RFC 7592 must host-validate registration_client_uri before sending the access token, and persist rotated credentials | **Accepted** - HTTPS + allowed-issuer-host check, else a tampered stored value exfiltrates the token |
+| 6 | pass-count baselines can mask a new failure | **Accepted** - acceptance compares the exact set of failing test names, captured from a stashed tree |
+
+### Round-2 findings that needed no change
+
+Codex confirmed: writing the name to both fields is the correct design; the name
+belongs in Postora metadata and must NOT be sent to Evolution's createInstance
+(that is a different label); pagination has no off-by-one or infinite-loop risk;
+cross-page message-id dedup works because one accumulated array reaches
+messageRows; and the four-part PR is scope aggregation, not a correctness
+problem.
+
 ## 7. Acceptance criteria
 
 **Machine-verifiable — these gate the merge:**
@@ -216,11 +271,14 @@ pairing. So one cheap detection is added, without migration:
   between chats and logs done/remaining.
 - Part 4: the registration body carries `client_uri` and a `logo_uri` that is
   **exactly** `https://postora.cloud/favicon.png`.
-- `deno check` on every changed function; `deno test supabase/functions/_shared/`
-  at or above the **183 passed / 8 failed** baseline (those 8 are pre-existing
-  in `whatsappPartnerOps.test.ts` and neighbours — establish the baseline before
-  reading that suite's red as a regression); `npx tsc --noEmit`; `npm test` at
-  or above **663 passed / 15 skipped / 0 failed**; `npm run build`.
+- `deno check` on every changed function; `npx tsc --noEmit`; `npm test` at or
+  above **663 passed / 15 skipped / 0 failed**; `npm run build`.
+- `deno test supabase/functions/_shared/` — **compare the exact set of failing
+  test names, not the counts** (Codex r2 #6). The 8 known failures are
+  pre-existing in `whatsappPartnerOps.test.ts` and neighbours; a pass/fail
+  tally would hide a new failure that coincided with an old one being fixed.
+  Capture the failing-test identities on a stashed tree first, then assert the
+  set is unchanged.
 - `clean-code-guard` and `test-guard` clean.
 
 **User-verifiable — follow-up, cannot gate a merge:**
