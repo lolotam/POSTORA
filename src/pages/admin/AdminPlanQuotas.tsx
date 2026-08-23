@@ -37,58 +37,77 @@ type QuotaFormValues = {
 
 type QuotaFieldName = keyof Omit<QuotaFormValues, "plan_slug">;
 
+// R5 (CodeRabbit round 2, 2026-08-23): raw string per field, always shown in
+// the Input regardless of validity. See the comment on handleQuotaFieldChange
+// below for why formData's numeric snapshot is no longer written on every
+// keystroke.
+type QuotaRawValues = Record<QuotaFieldName, string>;
+
+const EMPTY_RAW_VALUES: QuotaRawValues = {
+  profile_limit: "",
+  max_social_accounts: "",
+  max_posts_per_month: "",
+  max_posts_per_day: "",
+  max_media_uploads_per_day: "",
+};
+
+const EMPTY_FIELD_ERRORS: Record<QuotaFieldName, string | null> = {
+  profile_limit: null,
+  max_social_accounts: null,
+  max_posts_per_month: null,
+  max_posts_per_day: null,
+  max_media_uploads_per_day: null,
+};
+
+function toRawQuotaValue(value: number | null): string {
+  return value === null ? "" : String(value);
+}
+
 export default function AdminPlanQuotas() {
   const [editPlan, setEditPlan] = useState<PlanQuota | null>(null);
-  const [formData, setFormData] = useState<QuotaFormValues>({
-    plan_slug: "",
-    profile_limit: null,
-    max_social_accounts: null,
-    max_posts_per_month: null,
-    max_posts_per_day: null,
-    max_media_uploads_per_day: null,
-  });
+  // R5: the raw text the admin typed, kept verbatim - never snapped back to
+  // the last valid number. Converted to a number only in handleSave().
+  const [rawFieldValues, setRawFieldValues] = useState<QuotaRawValues>(EMPTY_RAW_VALUES);
   const { quotas, isLoading, updateQuota } = usePlanQuotas();
 
   // F8 (CodeRabbit round 1): per-field validation error text (null = valid).
-  const [fieldErrors, setFieldErrors] = useState<Record<QuotaFieldName, string | null>>({
-    profile_limit: null,
-    max_social_accounts: null,
-    max_posts_per_month: null,
-    max_posts_per_day: null,
-    max_media_uploads_per_day: null,
-  });
+  const [fieldErrors, setFieldErrors] = useState<Record<QuotaFieldName, string | null>>(EMPTY_FIELD_ERRORS);
   const hasFieldErrors = Object.values(fieldErrors).some(Boolean);
 
   const handleEditPlan = (plan: PlanQuota) => {
     setEditPlan(plan);
-    setFormData({
-      plan_slug: plan.plan_slug,
-      profile_limit: plan.profile_limit,
-      max_social_accounts: plan.max_social_accounts,
-      max_posts_per_month: plan.max_posts_per_month,
-      max_posts_per_day: plan.max_posts_per_day,
-      max_media_uploads_per_day: plan.max_media_uploads_per_day,
+    setRawFieldValues({
+      profile_limit: toRawQuotaValue(plan.profile_limit),
+      max_social_accounts: toRawQuotaValue(plan.max_social_accounts),
+      max_posts_per_month: toRawQuotaValue(plan.max_posts_per_month),
+      max_posts_per_day: toRawQuotaValue(plan.max_posts_per_day),
+      max_media_uploads_per_day: toRawQuotaValue(plan.max_media_uploads_per_day),
     });
-    setFieldErrors({
-      profile_limit: null,
-      max_social_accounts: null,
-      max_posts_per_month: null,
-      max_posts_per_day: null,
-      max_media_uploads_per_day: null,
-    });
+    setFieldErrors(EMPTY_FIELD_ERRORS);
   };
 
-  // F8: validates before updating the numeric state - an invalid keystroke
-  // (fractional, or below -1) never reaches formData, it only surfaces as a
-  // visible error next to the field.
+  // R5 (CodeRabbit round 2): the raw string is ALWAYS written, so the admin
+  // always sees exactly what they typed. Validation only ever updates the
+  // error message next to the field - it used to gate whether formData's
+  // numeric snapshot updated at all, which meant a rejected keystroke made
+  // the controlled Input snap back to the last valid number with no way to
+  // see or correct what was actually typed.
   const handleQuotaFieldChange = (field: QuotaFieldName, raw: string) => {
-    const { value, error } = validateQuotaFieldInput(raw);
+    setRawFieldValues((prev) => ({ ...prev, [field]: raw }));
+    const { error } = validateQuotaFieldInput(raw);
     setFieldErrors((prev) => ({ ...prev, [field]: error }));
-    if (!error) setFormData((prev) => ({ ...prev, [field]: value }));
   };
 
   const handleSave = () => {
-    if (!editPlan) return;
+    if (!editPlan || hasFieldErrors) return;
+    const formData: QuotaFormValues = {
+      plan_slug: editPlan.plan_slug,
+      profile_limit: validateQuotaFieldInput(rawFieldValues.profile_limit).value,
+      max_social_accounts: validateQuotaFieldInput(rawFieldValues.max_social_accounts).value,
+      max_posts_per_month: validateQuotaFieldInput(rawFieldValues.max_posts_per_month).value,
+      max_posts_per_day: validateQuotaFieldInput(rawFieldValues.max_posts_per_day).value,
+      max_media_uploads_per_day: validateQuotaFieldInput(rawFieldValues.max_media_uploads_per_day).value,
+    };
     updateQuota.mutate(
       { ...editPlan, ...formData },
       { onSuccess: () => setEditPlan(null) }
@@ -262,7 +281,7 @@ export default function AdminPlanQuotas() {
                 id="profileLimit"
                 type="number"
                 min={-1}
-                value={formData.profile_limit ?? ""}
+                value={rawFieldValues.profile_limit}
                 placeholder="Empty inherits Free default (2)"
                 aria-invalid={!!fieldErrors.profile_limit}
                 onChange={(e) => handleQuotaFieldChange("profile_limit", e.target.value)}
@@ -280,7 +299,7 @@ export default function AdminPlanQuotas() {
                 id="maxSocialAccounts"
                 type="number"
                 min={-1}
-                value={formData.max_social_accounts ?? ""}
+                value={rawFieldValues.max_social_accounts}
                 placeholder="Empty inherits Free default (3)"
                 aria-invalid={!!fieldErrors.max_social_accounts}
                 onChange={(e) => handleQuotaFieldChange("max_social_accounts", e.target.value)}
@@ -298,7 +317,7 @@ export default function AdminPlanQuotas() {
                 id="maxPostsMonth"
                 type="number"
                 min={-1}
-                value={formData.max_posts_per_month ?? ""}
+                value={rawFieldValues.max_posts_per_month}
                 placeholder="Empty inherits Free default (30)"
                 aria-invalid={!!fieldErrors.max_posts_per_month}
                 onChange={(e) => handleQuotaFieldChange("max_posts_per_month", e.target.value)}
@@ -316,7 +335,7 @@ export default function AdminPlanQuotas() {
                 id="maxPostsDay"
                 type="number"
                 min={-1}
-                value={formData.max_posts_per_day ?? ""}
+                value={rawFieldValues.max_posts_per_day}
                 placeholder="Empty inherits Free default (2)"
                 aria-invalid={!!fieldErrors.max_posts_per_day}
                 onChange={(e) => handleQuotaFieldChange("max_posts_per_day", e.target.value)}
@@ -334,7 +353,7 @@ export default function AdminPlanQuotas() {
                 id="maxUploads"
                 type="number"
                 min={-1}
-                value={formData.max_media_uploads_per_day ?? ""}
+                value={rawFieldValues.max_media_uploads_per_day}
                 placeholder="Empty inherits Free default (20)"
                 aria-invalid={!!fieldErrors.max_media_uploads_per_day}
                 onChange={(e) => handleQuotaFieldChange("max_media_uploads_per_day", e.target.value)}

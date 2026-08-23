@@ -116,6 +116,12 @@ export function formatQuotaValue(value: number | null | undefined): string {
   return value === -1 ? "∞" : value.toString();
 }
 
+/** R5 (CodeRabbit round 2): seeds a quota edit dialog's raw string state
+ *  from a stored override. Mirrors AdminPlanQuotas.tsx's toRawQuotaValue(). */
+function toRawQuotaValue(value: number | null | undefined): string {
+  return value === null || value === undefined ? "" : String(value);
+}
+
 /**
  * An empty (or unparseable) field means "no override" — NULL, which falls
  * back to the plan through effective_user_quotas(). It must never be
@@ -427,11 +433,19 @@ export default function AdminUsers() {
   // null = inherit from the plan (see formatQuotaValue/parseQuotaFieldInput
   // above). These used to default to hardcoded numbers, which meant saving
   // the dialog without touching a field silently pinned that field's value.
-  const [quotaMaxProfiles, setQuotaMaxProfiles] = useState<number | null>(null);
-  const [quotaMaxSocialAccounts, setQuotaMaxSocialAccounts] = useState<number | null>(null);
-  const [quotaMaxPosts, setQuotaMaxPosts] = useState<number | null>(null);
-  const [quotaMaxPostsPerDay, setQuotaMaxPostsPerDay] = useState<number | null>(null);
-  const [quotaMaxMediaUploads, setQuotaMaxMediaUploads] = useState<number | null>(null);
+  //
+  // R5 (CodeRabbit round 2, 2026-08-23): these hold the RAW STRING the admin
+  // typed, not the parsed number - handleQuotaFieldChange() used to gate
+  // writing the numeric state on validation passing, so a rejected keystroke
+  // made the controlled Input snap back to the last valid number while an
+  // error appeared beside it, with no way to see or correct what was
+  // actually typed. Converted to a number only in handleSaveQuota() /
+  // handleSaveBulkQuota(). "" means inherit (mirrors AdminPlanQuotas.tsx).
+  const [quotaMaxProfiles, setQuotaMaxProfiles] = useState<string>("");
+  const [quotaMaxSocialAccounts, setQuotaMaxSocialAccounts] = useState<string>("");
+  const [quotaMaxPosts, setQuotaMaxPosts] = useState<string>("");
+  const [quotaMaxPostsPerDay, setQuotaMaxPostsPerDay] = useState<string>("");
+  const [quotaMaxMediaUploads, setQuotaMaxMediaUploads] = useState<string>("");
   // F8: per-field validation error text (null = valid). Shared between the
   // single-user and bulk-edit dialogs, same as the value state above -
   // invalid input never updates the numeric state, it only surfaces here.
@@ -815,11 +829,11 @@ export default function AdminUsers() {
   const handleEditQuota = (user: UserWithRole) => {
     setEditQuotaUser(user);
 
-    setQuotaMaxProfiles(user.quota?.max_profiles ?? null);
-    setQuotaMaxSocialAccounts(user.quota?.max_social_accounts ?? null);
-    setQuotaMaxPosts(user.quota?.max_posts_per_month ?? null);
-    setQuotaMaxPostsPerDay(user.quota?.max_posts_per_day ?? null);
-    setQuotaMaxMediaUploads(user.quota?.max_media_uploads_per_day ?? null);
+    setQuotaMaxProfiles(toRawQuotaValue(user.quota?.max_profiles ?? null));
+    setQuotaMaxSocialAccounts(toRawQuotaValue(user.quota?.max_social_accounts ?? null));
+    setQuotaMaxPosts(toRawQuotaValue(user.quota?.max_posts_per_month ?? null));
+    setQuotaMaxPostsPerDay(toRawQuotaValue(user.quota?.max_posts_per_day ?? null));
+    setQuotaMaxMediaUploads(toRawQuotaValue(user.quota?.max_media_uploads_per_day ?? null));
     setQuotaFieldErrors({
       maxProfiles: null,
       maxSocialAccounts: null,
@@ -829,19 +843,20 @@ export default function AdminUsers() {
     });
   };
 
-  // F8 (CodeRabbit round 1): validates before updating the numeric state.
-  // An invalid keystroke (fractional, or below -1) never reaches the
-  // numeric state at all - it only surfaces as a visible error next to the
-  // field, so the value that eventually saves is always one that actually
-  // passed validation.
+  // R5 (CodeRabbit round 2, 2026-08-23): the raw string is ALWAYS written,
+  // so the admin always sees exactly what they typed. Validation only ever
+  // updates the error message next to the field - it used to gate whether
+  // the numeric state updated at all (F8, round 1), which meant a rejected
+  // keystroke made the controlled Input snap back to the last valid number
+  // with no way to see or correct what was actually typed.
   const handleQuotaFieldChange = (
     field: keyof typeof quotaFieldErrors,
-    setValue: (value: number | null) => void,
+    setRawValue: (value: string) => void,
     raw: string,
   ) => {
-    const { value, error } = validateQuotaFieldInput(raw);
+    setRawValue(raw);
+    const { error } = validateQuotaFieldInput(raw);
     setQuotaFieldErrors((prev) => ({ ...prev, [field]: error }));
-    if (!error) setValue(value);
   };
 
   // C2 fix: write exactly what the dialog shows the admin. maxProfiles used
@@ -849,28 +864,31 @@ export default function AdminUsers() {
   // on every save regardless of the field's real value (there was no UI
   // control for it at all) — a Pro user's profile limit got permanently
   // capped near free tier the moment an admin opened and saved this dialog.
+  //
+  // R5: the raw strings are converted to numbers here, at save time, not on
+  // every keystroke.
   const handleSaveQuota = () => {
-    if (!editQuotaUser) return;
+    if (!editQuotaUser || hasQuotaFieldErrors) return;
     updateQuota({
       userId: editQuotaUser.id,
-      maxProfiles: quotaMaxProfiles,
-      maxSocialAccounts: quotaMaxSocialAccounts,
-      maxPostsPerMonth: quotaMaxPosts,
-      maxPostsPerDay: quotaMaxPostsPerDay,
-      maxMediaUploadsPerDay: quotaMaxMediaUploads,
+      maxProfiles: validateQuotaFieldInput(quotaMaxProfiles).value,
+      maxSocialAccounts: validateQuotaFieldInput(quotaMaxSocialAccounts).value,
+      maxPostsPerMonth: validateQuotaFieldInput(quotaMaxPosts).value,
+      maxPostsPerDay: validateQuotaFieldInput(quotaMaxPostsPerDay).value,
+      maxMediaUploadsPerDay: validateQuotaFieldInput(quotaMaxMediaUploads).value,
     });
     setEditQuotaUser(null);
   };
 
-  // Bulk edit opens with every field at "inherit" (null), not a hardcoded
+  // Bulk edit opens with every field at "inherit" (empty), not a hardcoded
   // number pinning every selected user to the same value unless the admin
   // explicitly types one.
   const handleBulkEditQuota = () => {
-    setQuotaMaxProfiles(null);
-    setQuotaMaxSocialAccounts(null);
-    setQuotaMaxPosts(null);
-    setQuotaMaxPostsPerDay(null);
-    setQuotaMaxMediaUploads(null);
+    setQuotaMaxProfiles("");
+    setQuotaMaxSocialAccounts("");
+    setQuotaMaxPosts("");
+    setQuotaMaxPostsPerDay("");
+    setQuotaMaxMediaUploads("");
     setQuotaFieldErrors({
       maxProfiles: null,
       maxSocialAccounts: null,
@@ -882,13 +900,14 @@ export default function AdminUsers() {
   };
 
   const handleSaveBulkQuota = () => {
+    if (hasQuotaFieldErrors) return;
     bulkUpdateQuota({
       userIds: selectedUsers,
-      maxProfiles: quotaMaxProfiles,
-      maxSocialAccounts: quotaMaxSocialAccounts,
-      maxPostsPerMonth: quotaMaxPosts,
-      maxPostsPerDay: quotaMaxPostsPerDay,
-      maxMediaUploadsPerDay: quotaMaxMediaUploads,
+      maxProfiles: validateQuotaFieldInput(quotaMaxProfiles).value,
+      maxSocialAccounts: validateQuotaFieldInput(quotaMaxSocialAccounts).value,
+      maxPostsPerMonth: validateQuotaFieldInput(quotaMaxPosts).value,
+      maxPostsPerDay: validateQuotaFieldInput(quotaMaxPostsPerDay).value,
+      maxMediaUploadsPerDay: validateQuotaFieldInput(quotaMaxMediaUploads).value,
     });
     setShowBulkEditDialog(false);
     setSelectedUsers([]);
@@ -1440,7 +1459,7 @@ export default function AdminUsers() {
                 id="maxProfiles"
                 type="number"
                 min={-1}
-                value={quotaMaxProfiles ?? ""}
+                value={quotaMaxProfiles}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxProfiles}
                 onChange={(e) => handleQuotaFieldChange("maxProfiles", setQuotaMaxProfiles, e.target.value)}
@@ -1457,7 +1476,7 @@ export default function AdminUsers() {
                 id="maxSocialAccounts"
                 type="number"
                 min={-1}
-                value={quotaMaxSocialAccounts ?? ""}
+                value={quotaMaxSocialAccounts}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxSocialAccounts}
                 onChange={(e) =>
@@ -1476,7 +1495,7 @@ export default function AdminUsers() {
                 id="maxPosts"
                 type="number"
                 min={-1}
-                value={quotaMaxPosts ?? ""}
+                value={quotaMaxPosts}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxPosts}
                 onChange={(e) => handleQuotaFieldChange("maxPosts", setQuotaMaxPosts, e.target.value)}
@@ -1493,7 +1512,7 @@ export default function AdminUsers() {
                 id="maxPostsPerDay"
                 type="number"
                 min={-1}
-                value={quotaMaxPostsPerDay ?? ""}
+                value={quotaMaxPostsPerDay}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxPostsPerDay}
                 onChange={(e) => handleQuotaFieldChange("maxPostsPerDay", setQuotaMaxPostsPerDay, e.target.value)}
@@ -1510,7 +1529,7 @@ export default function AdminUsers() {
                 id="maxMediaUploads"
                 type="number"
                 min={-1}
-                value={quotaMaxMediaUploads ?? ""}
+                value={quotaMaxMediaUploads}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxMediaUploads}
                 onChange={(e) =>
@@ -1553,7 +1572,7 @@ export default function AdminUsers() {
                 id="bulkMaxProfiles"
                 type="number"
                 min={-1}
-                value={quotaMaxProfiles ?? ""}
+                value={quotaMaxProfiles}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxProfiles}
                 onChange={(e) => handleQuotaFieldChange("maxProfiles", setQuotaMaxProfiles, e.target.value)}
@@ -1570,7 +1589,7 @@ export default function AdminUsers() {
                 id="bulkMaxSocialAccounts"
                 type="number"
                 min={-1}
-                value={quotaMaxSocialAccounts ?? ""}
+                value={quotaMaxSocialAccounts}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxSocialAccounts}
                 onChange={(e) =>
@@ -1589,7 +1608,7 @@ export default function AdminUsers() {
                 id="bulkMaxPosts"
                 type="number"
                 min={-1}
-                value={quotaMaxPosts ?? ""}
+                value={quotaMaxPosts}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxPosts}
                 onChange={(e) => handleQuotaFieldChange("maxPosts", setQuotaMaxPosts, e.target.value)}
@@ -1606,7 +1625,7 @@ export default function AdminUsers() {
                 id="bulkMaxPostsPerDay"
                 type="number"
                 min={-1}
-                value={quotaMaxPostsPerDay ?? ""}
+                value={quotaMaxPostsPerDay}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxPostsPerDay}
                 onChange={(e) => handleQuotaFieldChange("maxPostsPerDay", setQuotaMaxPostsPerDay, e.target.value)}
@@ -1623,7 +1642,7 @@ export default function AdminUsers() {
                 id="bulkMaxMediaUploads"
                 type="number"
                 min={-1}
-                value={quotaMaxMediaUploads ?? ""}
+                value={quotaMaxMediaUploads}
                 placeholder="Empty inherits from plan"
                 aria-invalid={!!quotaFieldErrors.maxMediaUploads}
                 onChange={(e) =>
