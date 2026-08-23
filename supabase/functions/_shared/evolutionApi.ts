@@ -27,6 +27,11 @@ export interface EvolutionSendResult {
   raw: unknown;
 }
 
+export interface FindMessagesOptions {
+  /** Epoch ms. Checked between pages so one chat cannot burn the whole sweep budget. */
+  deadlineAt?: number;
+}
+
 // Evolution registers webhook subscriptions under SCREAMING_SNAKE event names but sends
 // the dot-lowercase form ("connection.update") in the delivered body, so every consumer
 // has to normalize before matching.
@@ -49,7 +54,7 @@ export interface EvolutionApi {
   fetchInstance(instanceName: string): Promise<unknown>;
   findChats(instanceName: string): Promise<any[]>;
   findContacts(instanceName: string): Promise<any[]>;
-  findMessages(instanceName: string, remoteJid: string): Promise<any[]>;
+  findMessages(instanceName: string, remoteJid: string, options?: FindMessagesOptions): Promise<any[]>;
   logout(instanceName: string): Promise<unknown>;
   deleteInstance(instanceName: string): Promise<unknown>;
   sendText(instanceName: string, input: { number: string; text: string }): Promise<EvolutionSendResult>;
@@ -158,15 +163,48 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
       return Array.isArray(payload) ? payload : [];
     },
     // Unlike the other two this answers with a paged envelope, and it ignores `limit` --
-    // measured against v2.3.7, a 110-message chat came back as 3 pages of ~40. Only the
-    // newest page is imported, so the records are taken straight off the first response.
-    findMessages: async (instanceName, remoteJid) => {
-      const payload: any = await request(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
-        method: "POST",
-        body: JSON.stringify({ where: { key: { remoteJid } } }),
-      });
-      const records = payload?.messages?.records;
-      return Array.isArray(records) ? records : [];
+    // measured against v2.3.7, a 110-message chat came back as 3 pages of ~40. All pages
+    // are accumulated into one array so the caller's single-batch message-id dedup still
+    // covers duplicates that straddle a page boundary. Stops on a short page, on
+    // page >= messages.pages, or at a hard ceiling so a runaway count cannot pin the
+    // sweep; whichever bound fires first wins.
+    findMessages: async (instanceName, remoteJid, options) => {
+      const offset = 50;
+      const pageCeiling = 20;
+      const records: any[] = [];
+      for (let page = 1; page <= pageCeiling; page++) {
+        const payload: any = await request(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
+          method: "POST",
+          body: JSON.stringify({ page, offset, where: { key: { remoteJid } } }),
+        });
+        // Some deployments ignore `page` and answer with the bare array the chat and
+        // contact routes use. That response is everything the server will ever send for
+        // this filter -- re-requesting it as pages 2..20 would accumulate the same rows
+        // nineteen times over.
+        if (Array.isArray(payload)) {
+          records.push(...payload);
+          return records;
+        }
+        const pageRecords = payload?.messages?.records;
+        if (!Array.isArray(pageRecords)) return records;
+        records.push(...pageRecords);
+        if (pageRecords.length < offset) return records;
+        // pages is trusted only as a finite positive number; anything else could loop a
+        // server that answers every page with the same full batch.
+        const pages = Number(payload?.messages?.pages);
+        if (!Number.isFinite(pages) || pages <= 0) return records;
+        if (page >= pages) return records;
+        if (options?.deadlineAt !== undefined && Date.now() >= options.deadlineAt) {
+          console.log(
+            `[evolution-api] findMessages ${instanceName} ${remoteJid}: out of time after page ${page} of ${pages}`,
+          );
+          return records;
+        }
+      }
+      console.log(
+        `[evolution-api] findMessages ${instanceName} ${remoteJid}: stopped at the ${pageCeiling}-page ceiling`,
+      );
+      return records;
     },
     logout: (instanceName) => request(`/instance/logout/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),
     deleteInstance: (instanceName) => request(`/instance/delete/${encodeURIComponent(instanceName)}`, { method: "DELETE" }),

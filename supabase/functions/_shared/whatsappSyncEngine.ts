@@ -12,6 +12,12 @@ const DIRECT_JID_SUFFIX = "@s.whatsapp.net";
 const CHAT_CONCURRENCY = 5;
 const IMPORT_BATCH = 500;
 
+// The whole sweep -- every chat, every page -- must fit inside the 300s lease, and the
+// per-chat page ceiling alone cannot guarantee that: 20 sequential findMessages calls at
+// a 10s timeout each is ~200s inside a single chat, and chats run CHAT_CONCURRENCY at a
+// time. The budget stops short of the lease so the completion write still lands.
+const SWEEP_BUDGET_MS = 240_000;
+
 export interface SyncAccount {
   id: string;
   user_id: string;
@@ -25,6 +31,7 @@ export interface SyncOutcome {
   chatsSkipped: number;
   messagesWritten: number;
   chatFailures: number;
+  truncated: boolean;
 }
 
 interface ChatSummary {
@@ -55,12 +62,6 @@ function realName(candidate: unknown, number: string): string | null {
   const name = typeof candidate === "string" ? candidate.trim() : "";
   if (!name || name === number) return null;
   return /^[\d\s+\-()]+$/.test(name) ? null : name;
-}
-
-async function inChunks<T>(items: T[], size: number, run: (item: T) => Promise<void>): Promise<void> {
-  for (let index = 0; index < items.length; index += size) {
-    await Promise.all(items.slice(index, index + size).map(run));
-  }
 }
 
 function summarizeChats(chats: any[], contacts: any[], account: SyncAccount): ChatSummary[] {
@@ -145,8 +146,10 @@ export async function syncEvolutionHistory(deps: {
   api: EvolutionApi;
   account: SyncAccount;
   instanceName: string;
+  deadlineAt?: number;
 }): Promise<SyncOutcome> {
   const { admin, api, account, instanceName } = deps;
+  const deadlineAt = deps.deadlineAt ?? Date.now() + SWEEP_BUDGET_MS;
   const [chats, contacts] = await Promise.all([
     api.findChats(instanceName),
     api.findContacts(instanceName),
@@ -159,24 +162,50 @@ export async function syncEvolutionHistory(deps: {
     chatsSkipped: chats.length - summaries.length,
     messagesWritten: 0,
     chatFailures: 0,
+    truncated: false,
   };
   if (summaries.length === 0) return outcome;
 
   await importRows(admin, "import_whatsapp_conversations", conversationRows(account, summaries));
   await importRows(admin, "import_whatsapp_contacts", contactRows(account, summaries));
 
-  await inChunks(summaries, CHAT_CONCURRENCY, async (chat) => {
-    try {
-      const records = await api.findMessages(instanceName, chat.remoteJid);
-      const rows = messageRows(account, records);
-      await importRows(admin, "import_whatsapp_messages", rows);
-      outcome.messagesWritten += rows.length;
-    } catch (error) {
-      // One unreachable chat must not abandon the other three hundred.
-      outcome.chatFailures += 1;
-      console.error(`[whatsapp-sync] ${chat.number} failed:`, error instanceof Error ? error.message : error);
+  let chatsSwept = 0;
+  for (let index = 0; index < summaries.length; index += CHAT_CONCURRENCY) {
+    // Checked before each batch rather than only between chats: without this the sweep
+    // would keep starting new batches while earlier ones slowly exhausted the budget.
+    if (Date.now() >= deadlineAt) {
+      outcome.truncated = true;
+      break;
     }
-  });
+    await Promise.all(summaries.slice(index, index + CHAT_CONCURRENCY).map(async (chat) => {
+      // And between chats: a batch that outlived the budget must not drag the rest of
+      // its own batch past the deadline too.
+      if (Date.now() >= deadlineAt) {
+        outcome.truncated = true;
+        return;
+      }
+      try {
+        const records = await api.findMessages(instanceName, chat.remoteJid, { deadlineAt });
+        const rows = messageRows(account, records);
+        await importRows(admin, "import_whatsapp_messages", rows);
+        outcome.messagesWritten += rows.length;
+      } catch (error) {
+        // One unreachable chat must not abandon the other three hundred.
+        outcome.chatFailures += 1;
+        console.error(`[whatsapp-sync] ${chat.number} failed:`, error instanceof Error ? error.message : error);
+        return;
+      }
+      chatsSwept += 1;
+    }));
+  }
+  // A truncated run did not fail -- it stopped. Logging the split is what separates
+  // "imported everything" from "imported what fit in the budget".
+  if (outcome.truncated) {
+    console.log(
+      `[whatsapp-sync] ${instanceName}: deadline reached at ${chatsSwept}/${summaries.length} chats, ` +
+        `${summaries.length - chatsSwept} not reached; sweep recorded as incomplete`,
+    );
+  }
 
   return outcome;
 }
@@ -191,6 +220,7 @@ export async function importEvolutionHistory(deps: {
   api: EvolutionApi;
   account: SyncAccount;
   instanceName: string;
+  deadlineAt?: number;
 }): Promise<void> {
   const { admin, account, instanceName } = deps;
   // Both exits are silent by nature -- a misconfigured account and a sweep already running
@@ -227,8 +257,10 @@ export async function importEvolutionHistory(deps: {
     // zero messages has not succeeded -- recording it would permanently disable the retry
     // that a warming session depends on. Leaving last_sync_at unset lets a later trigger try
     // again, while the lease keeps that retry to once per lease window rather than once per
-    // status poll.
-    const sweptCleanly = outcome.chatsImported > 0 && outcome.chatFailures === 0;
+    // status poll. A deadline-truncated sweep has zero failures -- it stopped, it did not
+    // fail -- so without the explicit truncated outcome it would satisfy this test, stamp
+    // completion, and permanently skip every chat it never reached.
+    const sweptCleanly = outcome.chatsImported > 0 && outcome.chatFailures === 0 && !outcome.truncated;
     if (sweptCleanly && outcome.messagesWritten > 0) {
       completion.last_sync_at = new Date().toISOString();
     }
