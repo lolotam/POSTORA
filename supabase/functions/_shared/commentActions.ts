@@ -104,6 +104,34 @@ export async function replyToComment(account: CommentActionAccount, commentId: s
   return { success: true, platform_comment_id: String(outcome.data.id) };
 }
 
+// Production incident, 2026-08-23: an n8n reply failed with "media <container id> not found"
+// from threads_publish, and publishing that same container by hand a minute later succeeded.
+// Threads prepares a container asynchronously -- even a TEXT one -- and publishing before its
+// status is FINISHED is refused as if the id did not exist. The in-app threads-reply function
+// already polls for this; the n8n path did not.
+const CONTAINER_POLL_MS = 1_500;
+const CONTAINER_POLL_ATTEMPTS = 6;
+
+async function waitForThreadsContainer(fetcher: Fetcher, containerId: string, token: string): Promise<GraphOutcome> {
+  let last: GraphOutcome = { ok: true, data: { status: "IN_PROGRESS" } };
+  for (let attempt = 0; attempt < CONTAINER_POLL_ATTEMPTS; attempt += 1) {
+    last = await callGraph(
+      fetcher,
+      `${THREADS_GRAPH}/${encodeURIComponent(containerId)}?fields=status,error_message&access_token=${encodeURIComponent(token)}`,
+      { method: "GET" },
+      "Threads did not report the reply container's status.",
+    );
+    if (!last.ok) return last;
+    const status = String(last.data?.status || "").toUpperCase();
+    if (status === "FINISHED") return last;
+    if (status === "ERROR" || status === "EXPIRED") {
+      return { ok: false, failure: failure(last.data, `Threads reply container ${status}.`) };
+    }
+    await new Promise((resolve) => setTimeout(resolve, CONTAINER_POLL_MS));
+  }
+  return { ok: false, failure: { success: false, error: "Threads did not finish preparing the reply in time. Try again." } };
+}
+
 async function replyOnThreads(account: CommentActionAccount, token: string, replyToId: string, text: string, fetcher: Fetcher): Promise<CommentActionResult> {
   const userId = encodeURIComponent(String(account.platform_user_id || ""));
   const container = await callGraph(
@@ -114,6 +142,9 @@ async function replyOnThreads(account: CommentActionAccount, token: string, repl
   );
   if (!container.ok) return container.failure;
   if (!container.data?.id) return failure(container.data, "Threads rejected the reply container.");
+
+  const ready = await waitForThreadsContainer(fetcher, String(container.data.id), token);
+  if (!ready.ok) return ready.failure;
 
   const publish = await callGraph(
     fetcher,

@@ -5,6 +5,14 @@ import { EVOLUTION_MEDIA_TYPES, sendMessage, type MessageSendAccount } from "../
 import { describeMessagingAccount } from "../_shared/n8nMessagingDispatch.ts";
 import { type CommentActionResult, deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
+import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
+import {
+  fetchGlobalSetting,
+  fetchUserOverride,
+  rateLimitKeyForPath,
+  resolveRateLimit,
+  type ResolvedRateLimit,
+} from "./rateLimitConfig.ts";
 import {
   type LinkedInDestinationSelection,
   listLinkedInDestinations,
@@ -13,19 +21,10 @@ import {
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
-// Rate limiting configuration
-const RATE_LIMITS: Record<string, { requests: number; windowMs: number }> = {
-  '/api/v1/post': { requests: 30, windowMs: 60 * 60 * 1000 }, // 30 posts per hour
-  '/api/v1/upload-media': { requests: 60, windowMs: 60 * 60 * 1000 }, // 60 uploads per hour
-  '/api/v1/posts': { requests: 100, windowMs: 60 * 60 * 1000 }, // 100 queries per hour
-  '/api/v1/accounts': { requests: 100, windowMs: 60 * 60 * 1000 }, // 100 queries per hour
-  '/api/v1/webhooks': { requests: 30, windowMs: 60 * 60 * 1000 }, // 30 webhook operations per hour
-  '/api/v1/messages/reply': { requests: 60, windowMs: 60 * 60 * 1000 },
-  '/api/v1/comments/reply': { requests: 120, windowMs: 60 * 60 * 1000 },
-  '/api/v1/comments/hide': { requests: 120, windowMs: 60 * 60 * 1000 },
-  '/api/v1/comments/delete': { requests: 60, windowMs: 60 * 60 * 1000 },
-  'default': { requests: 100, windowMs: 60 * 60 * 1000 }, // Default: 100 requests per hour
-};
+// Rate limiting configuration lives in ./rateLimitConfig.ts: limits resolve
+// per request from user_rate_limits -> rate_limit_settings -> the in-memory
+// fallback map, so an admin can change any number without redeploying this
+// function.
 
 const ALLOWED_WEBHOOK_EVENTS = new Set([
   'post.completed', 'post.failed', 'post.published',
@@ -35,48 +34,92 @@ const ALLOWED_WEBHOOK_EVENTS = new Set([
   '*',
 ]);
 
-// Check rate limit using api_logs table
-async function checkRateLimit(
+// Check rate limit using api_logs table. Takes the already-resolved config (see
+// ./rateLimitConfig.ts) instead of looking one up, so the counter and the
+// X-RateLimit-* headers always describe the same limit.
+export async function checkRateLimit(
   supabase: any,
   userId: string,
   endpoint: string,
   method: string,
-  ipAddress: string | null
+  ipAddress: string | null,
+  config: ResolvedRateLimit
 ): Promise<{ allowed: boolean; remaining: number; resetAt: Date }> {
-  const config = RATE_LIMITS[endpoint] || RATE_LIMITS['default'];
+  // Conservative upper bound on the true reset: the window is rolling, so
+  // quota can reopen earlier as individual api_logs rows age out, but
+  // now + windowMs is never earlier than the real reset. The previous
+  // windowStart + windowMs always evaluated to exactly "now", which was
+  // strictly wrong.
+  const resetAt = new Date(Date.now() + config.windowMs);
+
+  // Unmetered endpoint (an admin disabled the global limit): no count query,
+  // but the api_logs row is still the audit trail. It carries a
+  // `rate_limit: 'unmetered'` marker and the metered count below filters on
+  // `request_data IS NULL`, so traffic that accrued while the limit was off
+  // never throttles anyone the moment an admin re-enables it.
+  if (!config.enforced) {
+    const { error: logError } = await supabase.from('api_logs').insert({
+      user_id: userId,
+      endpoint: endpoint,
+      method: method,
+      ip_address: ipAddress,
+      status_code: 200,
+      request_data: { rate_limit: 'unmetered' },
+    });
+    if (logError) {
+      console.error(
+        `[n8n-api] api_logs insert failed for ${method} ${endpoint} (unmetered audit row missing):`,
+        logError.message,
+      );
+    }
+    return { allowed: true, remaining: config.requests, resetAt };
+  }
+
   const windowStart = new Date(Date.now() - config.windowMs);
 
-  // Count recent requests for this user and endpoint
+  // Count recent requests for this user and endpoint. `.is('request_data', null)`
+  // excludes the unmetered marker rows written above.
   const { count, error } = await supabase
     .from('api_logs')
     .select('*', { count: 'exact', head: true })
     .eq('user_id', userId)
     .eq('endpoint', endpoint)
+    .is('request_data', null)
     .gte('created_at', windowStart.toISOString());
 
   if (error) {
     console.error('Error checking rate limit:', error);
     // If we can't check rate limit, allow the request but log it
-    return { allowed: true, remaining: config.requests, resetAt: new Date(Date.now() + config.windowMs) };
+    return { allowed: true, remaining: config.requests, resetAt };
   }
 
   const currentCount = count || 0;
   const remaining = Math.max(0, config.requests - currentCount);
   const allowed = currentCount < config.requests;
 
-  // Log this request
-  await supabase.from('api_logs').insert({
+  // Log this request. The insert error is checked rather than discarded: this row is
+  // both the audit trail and the counter the block above reads, so a silent failure
+  // leaves `currentCount` at 0 forever and the limit above never binds. That is
+  // exactly what a raw multi-hop `x-forwarded-for` did to the `inet` column here.
+  // Metered rows leave request_data null so the count filter above stays exact.
+  const { error: logError } = await supabase.from('api_logs').insert({
     user_id: userId,
     endpoint: endpoint,
     method: method,
     ip_address: ipAddress,
     status_code: allowed ? 200 : 429,
   });
+  if (logError) {
+    console.error(
+      `[n8n-api] api_logs insert failed for ${method} ${endpoint} (rate limiting is not counting this request):`,
+      logError.message,
+    );
+  }
 
   return {
     allowed,
     remaining,
-    resetAt: new Date(windowStart.getTime() + config.windowMs)
+    resetAt
   };
 }
 
@@ -1733,8 +1776,7 @@ async function handleGetMediaById(req: Request, supabase: any, userId: string, m
   const corsHeaders = restrictedCorsHeaders(req);
 
   // Malformed UUID → 400 (do this before any DB query)
-  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-  if (!UUID_RE.test(mediaId)) {
+  if (!isValidUuid(mediaId)) {
     return apiError(req, `'${mediaId}' is not a valid UUID.`, 400, 'INVALID_UUID');
   }
 
@@ -1773,6 +1815,35 @@ async function handleGetMediaById(req: Request, supabase: any, userId: string, m
   );
 }
 
+/**
+ * Records why an account lookup was refused. The client keeps a single
+ * non-enumerable 404 either way — a caller must not learn whether an id it does not
+ * own exists — but the operator needs the two cases apart, because a cross-tenant
+ * n8n credential and a stale id are different fixes and the response cannot say which.
+ * Ids only: no tokens, no request body.
+ */
+/**
+ * `social_accounts.id` is a uuid column, so a page id or a username makes Postgres
+ * raise 22P02, which surfaces as a 500 and reads as a server fault. Reject it up
+ * front as the client error it is, and name what the field actually wants.
+ */
+function invalidAccountIdError(req: Request, accountId: string) {
+  return apiError(
+    req,
+    `social_account_id must be a Postora account UUID (from the trigger payload or GET /api/v1/accounts), not '${accountId}'.`,
+    400,
+    'INVALID_ACCOUNT_ID',
+  );
+}
+
+function logAccountAccessDenied(scope: string, accountId: string, callerId: string, ownerId: string | null) {
+  if (ownerId === null) {
+    console.warn(`[n8n-api] ${scope}: no social account ${accountId} exists (caller ${callerId})`);
+    return;
+  }
+  console.warn(`[n8n-api] ${scope}: Tenancy mismatch: account owner ${ownerId} !== caller ${callerId} (account ${accountId})`);
+}
+
 async function handleMessageReply(req: Request, supabase: any, userId: string, body: any) {
   const accountId = typeof body?.social_account_id === 'string' ? body.social_account_id : '';
   const recipientId = typeof body?.recipient_id === 'string'
@@ -1794,6 +1865,8 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
     return apiError(req, `media_type must be one of ${EVOLUTION_MEDIA_TYPES.join(', ')}`, 400, 'INVALID_MEDIA_TYPE');
   }
 
+  if (!isValidUuid(accountId)) return invalidAccountIdError(req, accountId);
+
   const { data: account, error } = await supabase
     .from('social_accounts')
     .select('id, user_id, workspace_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token, connection_mode')
@@ -1801,6 +1874,7 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
     .maybeSingle();
   if (error) return apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR');
   if (!account || account.user_id !== userId) {
+    logAccountAccessDenied('messages/reply', accountId, userId, account?.user_id ?? null);
     return apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND');
   }
 
@@ -1839,6 +1913,7 @@ async function loadOwnedCommentAccount(req: Request, supabase: any, userId: stri
   if (!accountId || !commentId) {
     return { error: apiError(req, 'social_account_id and comment_id are required', 400, 'INVALID_COMMENT_REQUEST') };
   }
+  if (!isValidUuid(accountId)) return { error: invalidAccountIdError(req, accountId) };
   const { data: account, error } = await supabase
     .from('social_accounts')
     .select('id, user_id, platform, platform_user_id, platform_username, ig_auth_type, account_metadata, access_token')
@@ -1846,6 +1921,7 @@ async function loadOwnedCommentAccount(req: Request, supabase: any, userId: stri
     .maybeSingle();
   if (error) return { error: apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR') };
   if (!account || account.user_id !== userId) {
+    logAccountAccessDenied('comments', accountId, userId, account?.user_id ?? null);
     return { error: apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND') };
   }
   if (!['facebook', 'instagram', 'threads'].includes(account.platform)) {
@@ -1916,9 +1992,14 @@ function apiError(req: Request, message: string, status: number, code?: string, 
   );
 }
 
-// Add rate limit headers to any response
-function withRateLimitHeaders(response: Response, rateLimit: { remaining: number; resetAt: Date }, endpoint: string): Response {
-  const config = RATE_LIMITS[endpoint] || RATE_LIMITS['default'];
+// Add rate limit headers to any response. Takes the already-resolved config and
+// performs no lookup of its own: if it looked the endpoint up again it would
+// advertise the fallback number while checkRateLimit enforces the resolved one,
+// and a smoke test could not catch it because the seeds equal the fallbacks.
+// Unmetered endpoints report the resolved value as both limit and remaining
+// (checkRateLimit sets remaining = config.requests on that path), so clients
+// see a well-formed, non-throttling response rather than missing headers.
+export function withRateLimitHeaders(response: Response, rateLimit: { remaining: number; resetAt: Date }, config: ResolvedRateLimit): Response {
   const headers = new Headers(response.headers);
   headers.set('X-RateLimit-Limit', config.requests.toString());
   headers.set('X-RateLimit-Remaining', rateLimit.remaining.toString());
@@ -1978,7 +2059,12 @@ async function sendWebhookNotification(
   }
 }
 
-Deno.serve(async (req) => {
+// The router is a named, exported function so the Deno test suite
+// (rateLimitEnforcement.test.ts) can import this module without binding a
+// port and assert on the live handler source. `import.meta.main` is true
+// whenever this file is executed as the entrypoint — which is how the edge
+// runtime runs it — so the server still binds in every deployed environment.
+export async function handleRequest(req: Request): Promise<Response> {
   const corsHeaders = restrictedCorsHeaders(req);
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -2036,17 +2122,33 @@ Deno.serve(async (req) => {
     const userId = authResult.userId;
     const userPreferredTimezone = authResult.preferredTimezone;
 
-    // Check rate limit
-    const ipAddress = req.headers.get('x-forwarded-for') || req.headers.get('cf-connecting-ip');
-    const rateLimit = await checkRateLimit(supabaseAdmin, userId, path, req.method, ipAddress);
+    // Check rate limit. One canonical key per budget: aliases and
+    // parameterized routes (/api/v1/webhooks/<id>, GET /api/v1/post/<id>, ...)
+    // share their family's budget rather than falling to `default`. The
+    // resolved config is computed once and drives both the counter and the
+    // X-RateLimit-* headers.
+    const ipAddress = clientIpFromHeaders(req.headers);
+    const rateLimitKey = rateLimitKeyForPath(path, req.method);
+    const rateLimitConfig = await resolveRateLimit(rateLimitKey, {
+      fetchUserOverride: (endpointKey) => fetchUserOverride(supabaseAdmin, userId, endpointKey),
+      fetchGlobalSetting: (endpointKey) => fetchGlobalSetting(supabaseAdmin, endpointKey),
+    });
+    const rateLimit = await checkRateLimit(supabaseAdmin, userId, rateLimitKey, req.method, ipAddress, rateLimitConfig);
 
     if (!rateLimit.allowed) {
       console.log('Rate limit exceeded for user:', userId, 'on endpoint:', path);
-      return apiError(req, 
-        `Too many requests. Please try again after ${rateLimit.resetAt.toISOString()}`,
-        429,
-        'RATE_LIMIT_EXCEEDED',
-        { retry_after: Math.ceil((rateLimit.resetAt.getTime() - Date.now()) / 1000) }
+      // The throttled client is the one that most needs these headers — it has to
+      // know when to retry — so the 429 carries them too, not just the responses
+      // that reach a route handler.
+      return withRateLimitHeaders(
+        apiError(req,
+          `Too many requests. Please try again after ${rateLimit.resetAt.toISOString()}`,
+          429,
+          'RATE_LIMIT_EXCEEDED',
+          { retry_after: Math.ceil((rateLimit.resetAt.getTime() - Date.now()) / 1000) }
+        ),
+        rateLimit,
+        rateLimitConfig,
       );
     }
 
@@ -2206,10 +2308,14 @@ Deno.serve(async (req) => {
       });
     }
 
-    return withRateLimitHeaders(response, rateLimit, path);
+    return withRateLimitHeaders(response, rateLimit, rateLimitConfig);
 
   } catch (error: unknown) {
     console.error('n8n API error:', error);
     return getSafeErrorResponse(error, 'Internal server error. Please try again.');
   }
-});
+}
+
+if (import.meta.main) {
+  Deno.serve(handleRequest);
+}

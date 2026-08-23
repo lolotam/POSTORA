@@ -33,15 +33,25 @@ export function extractThreadsChanges(payload: any): ThreadsChange[] {
 
 export type ThreadsReplyInput = Omit<CommentPayloadInput, "platform" | "socialAccountId" | "account">;
 
+// A reply under your own post that tags you is, to the person who wrote it, a mention — and
+// that is what the workflow branches on. Threads files it under the post's replies all the
+// same, so the distinction has to be made here from the text. Case-insensitive: Threads
+// handles are, and the tag is typed by hand.
+export function mentionsHandle(text: unknown, handle: string | null | undefined): boolean {
+  if (!handle || typeof text !== "string") return false;
+  const bare = handle.replace(/^@/, "").toLowerCase();
+  return new RegExp(`(^|[^\\w.])@${bare.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w.])`, "i").test(text);
+}
+
 // Threads reply payloads carry the author only as a username — there is no author id field —
 // so own-reply suppression downstream has to match on the handle.
-export function normalizeThreadsReply(value: any): ThreadsReplyInput | null {
+export function normalizeThreadsReply(value: any, accountHandle?: string | null): ThreadsReplyInput | null {
   if (!value?.id) return null;
   const parsed = value.timestamp ? new Date(value.timestamp) : null;
   return {
     comment: {
       id: String(value.id),
-      kind: "reply",
+      kind: mentionsHandle(value.text, accountHandle) ? "mention" : "reply",
       text: String(value.text || ""),
       parentCommentId: value.replied_to?.id ? String(value.replied_to.id) : null,
       mediaUrl: value.permalink || null,
@@ -54,4 +64,19 @@ export function normalizeThreadsReply(value: any): ThreadsReplyInput | null {
     author: { id: null, name: null, username: value.username || null },
     timestamp: parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : undefined,
   };
+}
+
+// Which id names the connected account differs by field. A mention's `target_id` is the
+// mentioned user; a reply's `target_id` is the media that was replied to, and the post owner
+// is carried inside the value instead. Reading `target_id` first for both meant a genuine
+// reply delivery would look up an account by a media id, find nothing, and be dropped as
+// "no account" -- so the value's owner fields win for replies and `target_id` is only a last
+// resort there.
+export function threadsUserIdFor(change: ThreadsChange): string | null {
+  const value = change.value ?? {};
+  const fromValue = value.root_post?.owner_id || value.recipient_id || null;
+  const candidate = change.field === "replies"
+    ? fromValue || change.targetId
+    : change.targetId || fromValue;
+  return candidate ? String(candidate) : null;
 }
