@@ -1917,9 +1917,31 @@ separate test that a *throwing* plan lookup degrades to the global setting.
 planned deployment state. Add a migration
 `supabase/migrations/20260823140500_seed_n8n_tier_rate_limits.sql` inserting rows for the
 ten `/api/v1/*` endpoints across `free`, `pro` and `business`, with
-`ON CONFLICT (plan_slug, endpoint) DO NOTHING` so a replay is inert. Free values sit below
-the corresponding `rate_limit_settings` global; pro and business above it. State the chosen
-numbers in the migration comment.
+`ON CONFLICT (plan_slug, endpoint) DO NOTHING` so a replay is inert. The constraint
+`tier_rate_limits_plan_slug_endpoint_key UNIQUE (plan_slug, endpoint)` exists — verified.
+
+Use these exact `max_requests_per_hour` values. They are derived from the live
+`rate_limit_settings` globals (read from prod) as free = 25%, pro = 2x, business = 5x, so
+free is always stricter than the global and the paid tiers are always looser:
+
+| endpoint | global | free | pro | business |
+|---|---|---|---|---|
+| `/api/v1/post` | 60 | 15 | 120 | 300 |
+| `/api/v1/upload-media` | 120 | 30 | 240 | 600 |
+| `/api/v1/posts` | 300 | 75 | 600 | 1500 |
+| `/api/v1/accounts` | 300 | 75 | 600 | 1500 |
+| `/api/v1/webhooks` | 60 | 15 | 120 | 300 |
+| `/api/v1/media` | 300 | 75 | 600 | 1500 |
+| `/api/v1/messages/reply` | 600 | 150 | 1200 | 3000 |
+| `/api/v1/comments/reply` | 1200 | 300 | 2400 | 6000 |
+| `/api/v1/comments/hide` | 600 | 150 | 1200 | 3000 |
+| `/api/v1/comments/delete` | 300 | 75 | 600 | 1500 |
+
+Set `max_requests_per_day = max_requests_per_hour * 24` for every row, and state in the
+migration comment that **`n8n-api` enforces only the hourly value** (per A9) — the daily
+column is stored for parity with the AI endpoints and has no consumer for these rows.
+
+Set `is_active = true` on every seeded row.
 
 ---
 
