@@ -225,6 +225,16 @@ export async function getOrRegisterClient(
       // Consent-screen branding. logo_uri must stay a live square asset: /logo.png
       // 404s and the og-image is 1536x1024 (wrong shape for a consent avatar), and a
       // dead image renders worse than the placeholder.
+      //
+      // Changing this string only affects a FUTURE registration. Higgsfield's dynamic
+      // registration returns no registration_client_uri and no registration_access_token
+      // (verified 2026-08-24 against the stored row), so RFC 7592 cannot update the
+      // client already registered here, and re-registering would mint a new client_id
+      // and break every stored refresh token. The consent screen is Clerk's, which
+      // renders the client logo as a circular avatar, so the artwork has to be a
+      // full-bleed square mark -- a framed card with a wordmark shrinks to nothing
+      // inside that crop. The only lever on the live client is the BYTES at the URL
+      // below; see docs/runbooks/higgsfield-consent-logo.md.
       client_uri: "https://postora.cloud",
       logo_uri: "https://openinary.walidmohamed.com/t/postora.cloud/logo2.png",
       redirect_uris: [redirectUri],
