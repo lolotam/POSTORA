@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -119,10 +120,52 @@ export function useQuotas() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const { isAdmin } = useUserRole();
-  const { planSlug, isSubscribed } = useSubscription();
+  const { planSlug, isSubscribed, isLoading: isSubscriptionLoading } = useSubscription();
 
   // Determine effective limits based on subscription
   const effectivePlanSlug = isSubscribed ? planSlug : "free";
+
+  // R2 fix (CodeRabbit round 2, 2026-08-23): effectivePlanSlug above is
+  // derived from useSubscription(), which is ITSELF a pending react-query
+  // query on first render. While it is pending, isSubscribed defaults to
+  // false, so effectivePlanSlug defaults to "free" - and getReadyPlanLimits()
+  // below used to dutifully await the FREE plan-entitlements row and hand
+  // Free-tier limits to a paying user whose subscription simply hadn't
+  // loaded yet. The F6 readiness gate (awaiting the plan/override queries)
+  // closed the wrong window: it never questioned whether effectivePlanSlug
+  // ITSELF was trustworthy yet.
+  //
+  // Refs mirror the latest render's values so getReadyPlanLimits() (a
+  // closure that may have been created on an earlier, still-loading render)
+  // can read the CURRENT state instead of the stale snapshot it captured.
+  // A resolver queue + effect (rather than polling) wakes any in-flight
+  // getReadyPlanLimits() call the moment isSubscriptionLoading flips to
+  // false on a later render.
+  const isSubscriptionLoadingRef = useRef(isSubscriptionLoading);
+  isSubscriptionLoadingRef.current = isSubscriptionLoading;
+  const effectivePlanSlugRef = useRef(effectivePlanSlug);
+  effectivePlanSlugRef.current = effectivePlanSlug;
+  const subscriptionReadyWaitersRef = useRef<Array<() => void>>([]);
+
+  const flushSubscriptionReadyWaiters = () => {
+    if (subscriptionReadyWaitersRef.current.length === 0) return;
+    const waiters = subscriptionReadyWaitersRef.current;
+    subscriptionReadyWaitersRef.current = [];
+    waiters.forEach((resolve) => resolve());
+  };
+
+  useEffect(() => {
+    if (!isSubscriptionLoading) flushSubscriptionReadyWaiters();
+    // Unmounting must not leave a canX() caller awaiting forever.
+    return flushSubscriptionReadyWaiters;
+  }, [isSubscriptionLoading]);
+
+  const waitForSubscriptionSettled = (): Promise<void> => {
+    if (!isSubscriptionLoadingRef.current) return Promise.resolve();
+    return new Promise((resolve) => {
+      subscriptionReadyWaitersRef.current.push(resolve);
+    });
+  };
 
   // Per-user override row (user_quotas). NULL columns mean inherit from the plan.
   const { data: dbQuotaLimits, isLoading: isLoadingDbQuotaLimits } = useQuery(
@@ -158,9 +201,16 @@ export function useQuotas() {
   // may take a moment longer while data is in flight.
   const getReadyPlanLimits = async (): Promise<QuotaLimits> => {
     if (!user?.id) return planLimits;
+
+    // R2: must not derive the plan-entitlements lookup below from
+    // effectivePlanSlug while useSubscription()'s own query is still
+    // pending - see the comment above waitForSubscriptionSettled().
+    await waitForSubscriptionSettled();
+    const resolvedPlanSlug = effectivePlanSlugRef.current;
+
     const [db, plan] = await Promise.all([
       queryClient.ensureQueryData(dbQuotaLimitsQueryOptions(user.id)),
-      queryClient.ensureQueryData(planEntitlementsQueryOptions(effectivePlanSlug)),
+      queryClient.ensureQueryData(planEntitlementsQueryOptions(resolvedPlanSlug)),
     ]);
     return resolvePlanLimits(plan ?? null, db ?? null);
   };

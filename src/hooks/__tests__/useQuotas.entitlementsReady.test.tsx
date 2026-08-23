@@ -29,7 +29,7 @@ vi.mock("../useUserRole", () => ({
 }));
 
 vi.mock("../useSubscription", () => ({
-  useSubscription: () => ({ planSlug: "pro", isSubscribed: true }),
+  useSubscription: () => ({ planSlug: "pro", isSubscribed: true, isLoading: false }),
 }));
 
 vi.mock("../use-toast", () => ({
