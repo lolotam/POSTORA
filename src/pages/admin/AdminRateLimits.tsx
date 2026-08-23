@@ -135,6 +135,35 @@ export function groupByEndpointCategory<T extends { endpoint: string }>(items: T
   return groups.filter((group) => group.items.length > 0);
 }
 
+/** Endpoints whose runtime actually consults tier_rate_limits. generate-hashtags
+ *  and post-create own rows but have no enforcement code, so showing them a tier
+ *  control would promise a limit nothing reads. */
+export const TIER_ENFORCING_ENDPOINTS = [
+  "generate-caption",
+  "generate-image",
+  "/api/v1/post",
+  "/api/v1/upload-media",
+  "/api/v1/posts",
+  "/api/v1/accounts",
+  "/api/v1/webhooks",
+  "/api/v1/media",
+  "/api/v1/messages/reply",
+  "/api/v1/comments/reply",
+  "/api/v1/comments/hide",
+  "/api/v1/comments/delete",
+] as const;
+
+export function endpointEnforcesTierLimits(endpoint: string): boolean {
+  return (TIER_ENFORCING_ENDPOINTS as readonly string[]).includes(endpoint);
+}
+
+/** Endpoints whose runtime enforces ONLY max_requests_per_hour. The daily column exists
+ *  on the row but has no consumer for these, so the field is disabled rather than shown
+ *  as an editable limit. */
+export function endpointEnforcesDailyTierLimit(endpoint: string): boolean {
+  return endpoint === "generate-caption" || endpoint === "generate-image";
+}
+
 export default function AdminRateLimits() {
   const { toast } = useToast();
   const [globalSettings, setGlobalSettings] = useState<RateLimitSetting[]>([]);
@@ -487,7 +516,21 @@ export default function AdminRateLimits() {
                           </TableRow>
                         </TableHeader>
                         <TableBody>
-                          {planTiers.map((tier) => (
+                          {planTiers.map((tier) => {
+                            if (!endpointEnforcesTierLimits(tier.endpoint)) {
+                              return (
+                                <TableRow key={tier.id}>
+                                  <TableCell>
+                                    <p className="font-medium text-muted-foreground">{ENDPOINT_LABELS[tier.endpoint] || tier.endpoint}</p>
+                                    <p className="text-xs text-muted-foreground">{tier.endpoint}</p>
+                                  </TableCell>
+                                  <TableCell colSpan={4} className="text-xs text-muted-foreground">
+                                    No tier enforcement for this endpoint — global limit only.
+                                  </TableCell>
+                                </TableRow>
+                              );
+                            }
+                            return (
                             <TableRow key={tier.id}>
                               <TableCell>
                                 <p className="font-medium">{ENDPOINT_LABELS[tier.endpoint] || tier.endpoint}</p>
@@ -556,6 +599,7 @@ export default function AdminRateLimits() {
                                           <Input
                                             type="number"
                                             min={1}
+                                            disabled={!endpointEnforcesDailyTierLimit(editingTier.endpoint)}
                                             value={editingTier.max_requests_per_day}
                                             onChange={(e) =>
                                               setEditingTier({
@@ -565,7 +609,9 @@ export default function AdminRateLimits() {
                                             }
                                           />
                                           <p className="text-xs text-muted-foreground">
-                                            Maximum requests allowed per day (24 hours)
+                                            {endpointEnforcesDailyTierLimit(editingTier.endpoint)
+                                              ? "Maximum requests allowed per day (24 hours)"
+                                              : "Hourly only - the daily value is not enforced for this endpoint."}
                                           </p>
                                         </div>
                                         <div className="flex items-center justify-between">
@@ -603,7 +649,8 @@ export default function AdminRateLimits() {
                                 </Dialog>
                               </TableCell>
                             </TableRow>
-                          ))}
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </div>
