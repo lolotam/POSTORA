@@ -68,6 +68,42 @@ $$;
 COMMENT ON FUNCTION public.set_user_quotas_for_plan(uuid, text) IS
   'Clears per-user overrides so the user inherits their plan. p_plan_slug retained for caller compatibility and intentionally unused.';
 
+-- Round-1 review fix (F4): handle_subscription_change() previously called
+-- set_user_quotas_for_plan() unconditionally on every fire. The trigger is
+-- "AFTER INSERT OR UPDATE OF plan_id" - Postgres's "UPDATE OF column" fires
+-- whenever that column is named in the UPDATE's SET list, not only when its
+-- VALUE actually changes. src/pages/admin/AdminUsers.tsx's
+-- applySubscriptionPlan() always does `UPDATE ... SET plan_id = <planId>`
+-- even when reassigning the SAME plan, so re-picking a subscriber's current
+-- plan in the admin UI silently cleared every per-user override - destroying
+-- a deliberate admin grant for no reason.
+--
+-- Fix: only clear on a REAL entitlement change - a first-time INSERT, or an
+-- UPDATE whose plan_id actually differs from what it was.
+CREATE OR REPLACE FUNCTION public.handle_subscription_change()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_plan_slug text;
+BEGIN
+  IF TG_OP = 'INSERT' OR OLD.plan_id IS DISTINCT FROM NEW.plan_id THEN
+    SELECT slug INTO v_plan_slug
+    FROM subscription_plans
+    WHERE id = NEW.plan_id;
+
+    PERFORM set_user_quotas_for_plan(NEW.user_id, v_plan_slug);
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+COMMENT ON FUNCTION public.handle_subscription_change() IS
+  'Trigger fn: clears per-user quota overrides only on a real plan_id change (INSERT, or UPDATE where the value differs) - not on every UPDATE OF plan_id firing.';
+
 CREATE OR REPLACE FUNCTION public.enforce_post_quota_on_insert()
 RETURNS trigger
 LANGUAGE plpgsql

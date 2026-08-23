@@ -118,6 +118,24 @@ COMMENT ON FUNCTION public.can_upload_media(uuid) IS
 -- Fix: resolve the limit via effective_user_quotas(), and insert a missing
 -- row with a NULL limit (inherit), not a hardcoded 20. Reset-window and
 -- increment behaviour are otherwise unchanged.
+--
+-- Round-1 review fix (F1): this had a TOCTOU race. It used to read
+-- media_uploads_today with no lock, check the limit, then increment -
+-- two concurrent requests at 19 of 20 could both pass the check and both
+-- increment, yielding two uploads out of one remaining slot. Two concurrent
+-- FIRST uploads had the same problem one level up: both could enter the
+-- missing-row branch, and the second INSERT would fail on the
+-- user_quotas.user_id unique key (which src/hooks/useQuotas.tsx used to
+-- treat as "RPC errored -> allow the upload" - see that file's incrementMediaUpload).
+--
+-- Fix: INSERT ... ON CONFLICT (user_id) DO NOTHING first (absorbs the
+-- concurrent-first-upload race with no exception), then SELECT ... FOR
+-- UPDATE to serialize concurrent callers for this user before the
+-- limit/increment decision - exactly the pattern enforce_post_quota_on_insert
+-- already uses in 20260823140300_quota_writers_clear_overrides.sql. The
+-- initial row is created with media_uploads_today = 0 (not 1), so a brand
+-- new user's first call goes through the same reset/limit/increment checks
+-- as every subsequent call, instead of unconditionally returning true.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.increment_media_uploads(p_user_id uuid)
 RETURNS boolean
@@ -130,6 +148,7 @@ DECLARE
   v_reset_date timestamptz;
   v_max_uploads integer;
   v_is_admin boolean;
+  v_next_reset timestamptz := (CURRENT_DATE + interval '1 day')::timestamptz;
 BEGIN
   IF p_user_id IS NULL THEN
     RETURN false;
@@ -144,28 +163,28 @@ BEGIN
   SELECT e.max_media_uploads_per_day INTO v_max_uploads
   FROM public.effective_user_quotas(p_user_id) e;
 
+  -- The row exists to be locked and to hold counters. Limit stays NULL so
+  -- it keeps inheriting from the plan through effective_user_quotas().
+  INSERT INTO public.user_quotas (
+    user_id, media_uploads_today, max_media_uploads_per_day, media_daily_reset_date
+  ) VALUES (
+    p_user_id, 0, NULL, v_next_reset
+  )
+  ON CONFLICT (user_id) DO NOTHING;
+
+  -- Serialize concurrent callers for this user.
+  PERFORM 1 FROM public.user_quotas WHERE user_id = p_user_id FOR UPDATE;
+
   SELECT uq.media_uploads_today, uq.media_daily_reset_date
   INTO v_current_uploads, v_reset_date
   FROM public.user_quotas uq
   WHERE uq.user_id = p_user_id;
 
-  -- No counter row yet: create one. The limit column stays NULL so it keeps
-  -- inheriting from the plan through effective_user_quotas() going forward,
-  -- instead of being pinned to a hardcoded free-tier number.
-  IF NOT FOUND THEN
-    INSERT INTO public.user_quotas (
-      user_id, media_uploads_today, max_media_uploads_per_day, media_daily_reset_date
-    ) VALUES (
-      p_user_id, 1, NULL, (CURRENT_DATE + interval '1 day')::timestamptz
-    );
-    RETURN true;
-  END IF;
-
   -- Reset if past the reset window: nothing consumed yet this window.
   IF v_reset_date IS NULL OR v_reset_date <= now() THEN
     UPDATE public.user_quotas
     SET media_uploads_today = 1,
-        media_daily_reset_date = (CURRENT_DATE + interval '1 day')::timestamptz
+        media_daily_reset_date = v_next_reset
     WHERE user_id = p_user_id;
     RETURN true;
   END IF;
