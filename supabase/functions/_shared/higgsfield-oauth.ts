@@ -222,6 +222,11 @@ export async function getOrRegisterClient(
       // Shown on Higgsfield's consent screen — this is what a user sees when
       // authorizing, so it must name this product, not the one this was ported from.
       client_name: "Postora",
+      // Consent-screen branding. logo_uri must stay a live square asset: /logo.png
+      // 404s and the og-image is 1536x1024 (wrong shape for a consent avatar), and a
+      // dead image renders worse than the placeholder.
+      client_uri: "https://postora.cloud",
+      logo_uri: "https://postora.cloud/favicon.png",
       redirect_uris: [redirectUri],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
