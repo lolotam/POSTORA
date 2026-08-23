@@ -15,36 +15,17 @@ const PRICE_TO_PLAN: Record<string, string> = {
   "price_1SpPLj0hJJ11XlNOqjV6RUAz": "business",
 };
 
-// Plan quotas based on plan slug
-const PLAN_QUOTAS: Record<string, {
-  max_profiles: number;
-  max_social_accounts: number;
-  max_posts_per_month: number;
-  max_posts_per_day: number;
-  max_media_uploads_per_day: number;
-}> = {
-  free: {
-    max_profiles: 2,
-    max_social_accounts: 3,
-    max_posts_per_month: 30,
-    max_posts_per_day: 2,
-    max_media_uploads_per_day: 20,
-  },
-  pro: {
-    max_profiles: 15,
-    max_social_accounts: 30,
-    max_posts_per_month: 500,
-    max_posts_per_day: 30,
-    max_media_uploads_per_day: -1,
-  },
-  business: {
-    max_profiles: -1,
-    max_social_accounts: -1,
-    max_posts_per_month: -1,
-    max_posts_per_day: -1,
-    max_media_uploads_per_day: -1,
-  },
-};
+// Limits live on subscription_plans and resolve through effective_user_quotas().
+// Writing concrete numbers here would convert every subscriber into a permanent
+// override at their plan's values as of that moment, and later edits on
+// /admin/plan-quotas would never reach a paying user.
+const CLEARED_QUOTA_OVERRIDES = {
+  max_profiles: null,
+  max_social_accounts: null,
+  max_posts_per_month: null,
+  max_posts_per_day: null,
+  max_media_uploads_per_day: null,
+} as const;
 
 const logStep = (step: string, details?: unknown) => {
   const detailsStr = details ? ` - ${JSON.stringify(details)}` : "";
@@ -213,10 +194,10 @@ Deno.serve(async (req) => {
       logStep("User role unchanged", { existingRole: existingRole.role });
     }
 
-    // Update user quotas
-    const quotas = PLAN_QUOTAS[planSlug] || PLAN_QUOTAS.pro;
-    
-    await supabase
+    // Clear overrides so the backfilled plan resolves through the arbiter
+    const quotas = CLEARED_QUOTA_OVERRIDES;
+
+    const { error: quotaUpsertError } = await supabase
       .from("user_quotas")
       .upsert({
         user_id: profile.id,
@@ -225,7 +206,11 @@ Deno.serve(async (req) => {
         onConflict: "user_id",
       });
 
-    logStep("User quotas updated", { quotas });
+    if (quotaUpsertError) {
+      logStep("Quota override clear failed", { userId: profile.id, error: quotaUpsertError });
+    } else {
+      logStep("User quota overrides cleared", { quotas });
+    }
 
     return new Response(
       JSON.stringify({

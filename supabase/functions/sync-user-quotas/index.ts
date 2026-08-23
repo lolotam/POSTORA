@@ -19,33 +19,17 @@ const PRICE_TO_PLAN: Record<string, string> = {
   "price_1SpPLj0hJJ11XlNOqjV6RUAz": "business", // Business Yearly
 };
 
-// Plan-based quota limits (matches stripe-webhook PLAN_QUOTAS and /pricing page)
-// FREE: 2 profiles, 3 accounts, 30 posts/mo, 1 posts/day, 20 uploads/day
-// PRO: 15 profiles, 30 accounts, 500 posts/mo, 30 posts/day, unlimited uploads
-// BUSINESS: unlimited everything
-const PLAN_QUOTAS = {
-  free: {
-    max_profiles: 2,
-    max_social_accounts: 3,
-    max_posts_per_month: 30,
-    max_posts_per_day: 2,
-    max_media_uploads_per_day: 20,
-  },
-  pro: {
-    max_profiles: 15,
-    max_social_accounts: 30,
-    max_posts_per_month: 500,
-    max_posts_per_day: 30,
-    max_media_uploads_per_day: -1, // unlimited
-  },
-  business: {
-    max_profiles: -1, // unlimited
-    max_social_accounts: -1,
-    max_posts_per_month: -1,
-    max_posts_per_day: -1,
-    max_media_uploads_per_day: -1,
-  },
-};
+// Limits live on subscription_plans and resolve through effective_user_quotas().
+// Writing concrete numbers here would convert every subscriber into a permanent
+// override at their plan's values as of that moment, and later edits on
+// /admin/plan-quotas would never reach a paying user.
+const CLEARED_QUOTA_OVERRIDES = {
+  max_profiles: null,
+  max_social_accounts: null,
+  max_posts_per_month: null,
+  max_posts_per_day: null,
+  max_media_uploads_per_day: null,
+} as const;
 
 const logStep = (step: string, details?: unknown) => {
   const detailsStr = details ? ` - ${JSON.stringify(details)}` : "";
@@ -232,19 +216,13 @@ async function syncUserQuotas(
 
   logStep("Determined plan", { userId, planSlug });
 
-  // Get quota limits for the plan
-  const quotaLimits = PLAN_QUOTAS[planSlug as keyof typeof PLAN_QUOTAS] || PLAN_QUOTAS.free;
-
-  // Update or create user_quotas
+  // Stamp NULL (inherit) instead of plan numbers so the arbiter resolves the
+  // plan's current values on every read.
   const { error: upsertError } = await supabase
     .from("user_quotas")
     .upsert({
       user_id: userId,
-      max_profiles: quotaLimits.max_profiles,
-      max_social_accounts: quotaLimits.max_social_accounts,
-      max_posts_per_month: quotaLimits.max_posts_per_month,
-      max_posts_per_day: quotaLimits.max_posts_per_day,
-      max_media_uploads_per_day: quotaLimits.max_media_uploads_per_day,
+      ...CLEARED_QUOTA_OVERRIDES,
       updated_at: new Date().toISOString(),
     }, {
       onConflict: "user_id",

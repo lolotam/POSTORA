@@ -1,6 +1,12 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@18.5.0";
 
+import {
+  mapStripeSubscriptionStatus,
+  type PermittedSubscriptionStatus,
+} from "./subscriptionStatus.ts";
+import { shouldClearQuotaOverrides } from "./overrideClearing.ts";
+
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY");
@@ -16,36 +22,17 @@ const PRICE_TO_PLAN: Record<string, string> = {
   "price_1SpPLj0hJJ11XlNOqjV6RUAz": "business",  // $499.99/year
 };
 
-// Plan quotas based on plan slug
-const PLAN_QUOTAS: Record<string, { 
-  max_profiles: number; 
-  max_social_accounts: number; 
-  max_posts_per_month: number; 
-  max_posts_per_day: number;
-  max_media_uploads_per_day: number;
-}> = {
-  free: { 
-    max_profiles: 2, 
-    max_social_accounts: 3, 
-    max_posts_per_month: 30, 
-    max_posts_per_day: 2,
-    max_media_uploads_per_day: 20,
-  },
-  pro: { 
-    max_profiles: 15, 
-    max_social_accounts: 30, 
-    max_posts_per_month: 500, 
-    max_posts_per_day: 30,
-    max_media_uploads_per_day: -1, // unlimited
-  },
-  business: { 
-    max_profiles: -1, 
-    max_social_accounts: -1, 
-    max_posts_per_month: -1, 
-    max_posts_per_day: -1,
-    max_media_uploads_per_day: -1,
-  },
-};
+// Limits live on subscription_plans and resolve through effective_user_quotas().
+// Writing concrete numbers here would convert every subscriber into a permanent
+// override at their plan's values as of that moment, and later edits on
+// /admin/plan-quotas would never reach a paying user.
+const CLEARED_QUOTA_OVERRIDES = {
+  max_profiles: null,
+  max_social_accounts: null,
+  max_posts_per_month: null,
+  max_posts_per_day: null,
+  max_media_uploads_per_day: null,
+} as const;
 
 const logStep = (step: string, details?: unknown) => {
   const detailsStr = details ? ` - ${JSON.stringify(details)}` : "";
@@ -278,14 +265,18 @@ Deno.serve(async (req) => {
         }
 
         // Update user role to subscriber
-        const { data: existingRole } = await supabase
+        const { data: existingRole, error: roleLookupError } = await supabase
           .from("user_roles")
           .select("role")
           .eq("user_id", userId)
-          .single();
+          .maybeSingle();
+
+        if (roleLookupError) {
+          logStep("Role lookup failed", { userId, error: roleLookupError });
+        }
 
         if (!existingRole || existingRole.role === "user") {
-          await supabase
+          const { error: roleUpsertError } = await supabase
             .from("user_roles")
             .upsert({
               user_id: userId,
@@ -293,33 +284,67 @@ Deno.serve(async (req) => {
             }, {
               onConflict: "user_id",
             });
+
+          if (roleUpsertError) {
+            logStep("Role update to subscriber failed", { userId, error: roleUpsertError });
+          }
         }
 
-        // Update or create user quotas based on plan
-        const quotas = PLAN_QUOTAS[planSlug || "pro"] || PLAN_QUOTAS.pro;
-        
-        // First try to update, if no rows affected, insert new record
-        const { data: existingQuota } = await supabase
-          .from("user_quotas")
-          .select("id")
-          .eq("user_id", userId)
-          .single();
+        // New subscription = clear any overrides so the plan resolves through
+        // the arbiter — but only if the subscription upsert above actually
+        // landed. On a failed write plan_id never moved, and the existing
+        // override is what still describes the customer's entitlements.
+        // Checkout is the create path: previousPlanId is null because the
+        // upsert itself establishes the plan.
+        const clearCheckoutOverrides = shouldClearQuotaOverrides({
+          previousPlanId: null,
+          resolvedPlanId: planId,
+          subscriptionWriteFailed: Boolean(subError),
+        });
 
-        if (existingQuota) {
-          await supabase
-            .from("user_quotas")
-            .update(quotas)
-            .eq("user_id", userId);
+        if (!clearCheckoutOverrides) {
+          logStep(
+            "Skipping quota override clear: subscription write failed, stale override kept as the customer's safety net",
+            { userId, planId, subscriptionError: subError },
+          );
         } else {
-          await supabase
-            .from("user_quotas")
-            .insert({
-              user_id: userId,
-              ...quotas,
-            });
-        }
+          const quotas = CLEARED_QUOTA_OVERRIDES;
 
-        logStep(`Subscription created for user ${userId} on plan ${planSlug}`, { quotas });
+          // First try to update, if no rows affected, insert new record
+          const { data: existingQuota, error: quotaLookupError } = await supabase
+            .from("user_quotas")
+            .select("id")
+            .eq("user_id", userId)
+            .maybeSingle();
+
+          if (quotaLookupError) {
+            logStep("Quota lookup failed", { userId, error: quotaLookupError });
+          }
+
+          if (existingQuota) {
+            const { error: quotaUpdateError } = await supabase
+              .from("user_quotas")
+              .update(quotas)
+              .eq("user_id", userId);
+
+            if (quotaUpdateError) {
+              logStep("Quota override clear failed", { userId, error: quotaUpdateError });
+            }
+          } else {
+            const { error: quotaInsertError } = await supabase
+              .from("user_quotas")
+              .insert({
+                user_id: userId,
+                ...quotas,
+              });
+
+            if (quotaInsertError) {
+              logStep("Quota row insert failed", { userId, error: quotaInsertError });
+            }
+          }
+
+          logStep(`Subscription created for user ${userId} on plan ${planSlug}`, { quotas });
+        }
 
         // Process referral if present
         if (referralCode) {
@@ -364,11 +389,15 @@ Deno.serve(async (req) => {
       case "customer.subscription.updated": {
         const subscription = event.data.object as Stripe.Subscription;
         
-        const { data: userSub } = await supabase
+        const { data: userSub, error: userSubError } = await supabase
           .from("user_subscriptions")
           .select("user_id, plan_id")
           .eq("stripe_subscription_id", subscription.id)
-          .single();
+          .maybeSingle();
+
+        if (userSubError) {
+          logStep("Subscription lookup failed", { subscriptionId: subscription.id, error: userSubError });
+        }
 
         if (userSub) {
           resolvedUserId = userSub.user_id;
@@ -383,38 +412,115 @@ Deno.serve(async (req) => {
             newPlanSlug,
           });
 
-          await supabase
+          // Resolve the event's plan slug to a subscription_plans.id. This
+          // block must run on every plan-bearing event: without writing
+          // plan_id, an upgrading customer silently inherits their OLD plan,
+          // because the arbiter resolves entitlements from
+          // user_subscriptions.plan_id.
+          let newPlanId: string | null = null;
+          if (newPlanSlug) {
+            const { data: planRow, error: planError } = await supabase
+              .from("subscription_plans")
+              .select("id")
+              .eq("slug", newPlanSlug)
+              .maybeSingle();
+
+            if (planError) {
+              logStep("Plan lookup by slug failed", { newPlanSlug, error: planError });
+            } else {
+              newPlanId = planRow?.id ?? null;
+              if (!newPlanId) {
+                logStep("No subscription_plans row for slug", { newPlanSlug });
+              }
+            }
+          }
+
+          // plan_id moves only on a REAL plan change, decided by comparing
+          // against the stored row (Round-1 amendment A3). The override
+          // clear below reuses this via shouldClearQuotaOverrides(), which
+          // additionally refuses to clear when this update write fails.
+          const changedPlanId =
+            newPlanId !== null && newPlanId !== userSub.plan_id
+              ? newPlanId
+              : null;
+
+          const subscriptionUpdate: {
+            status: PermittedSubscriptionStatus;
+            current_period_start: string;
+            current_period_end: string;
+            cancel_at_period_end: boolean;
+            plan_id?: string;
+          } = {
+            status: mapStripeSubscriptionStatus(subscription.status),
+            current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
+            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+            cancel_at_period_end: subscription.cancel_at_period_end,
+          };
+          if (changedPlanId) {
+            subscriptionUpdate.plan_id = changedPlanId;
+          }
+
+          const { error: subUpdateError } = await supabase
             .from("user_subscriptions")
-            .update({
-              status: subscription.status === "active" ? "active" : subscription.status,
-              current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-              current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-              cancel_at_period_end: subscription.cancel_at_period_end,
-            })
+            .update(subscriptionUpdate)
             .eq("stripe_subscription_id", subscription.id);
 
-          // Update quotas if plan changed - ensure quota record exists
-          if (newPlanSlug && PLAN_QUOTAS[newPlanSlug]) {
-            const { data: existingQuota } = await supabase
+          if (subUpdateError) {
+            logStep("Subscription update failed", { subscriptionId: subscription.id, error: subUpdateError });
+          }
+
+          // Clear overrides only when the plan really changed AND the
+          // subscription update above landed. On a failed write plan_id
+          // never moved, so the stale override stays as the customer's
+          // safety net. This event also fires for ordinary renewals and
+          // payment-method changes; clearing there would erase deliberate
+          // admin overrides (spec R4a).
+          const clearUpdateOverrides = shouldClearQuotaOverrides({
+            previousPlanId: userSub.plan_id,
+            resolvedPlanId: newPlanId,
+            subscriptionWriteFailed: Boolean(subUpdateError),
+          });
+
+          if (clearUpdateOverrides) {
+            const quotas = CLEARED_QUOTA_OVERRIDES;
+
+            const { data: existingQuota, error: quotaLookupError } = await supabase
               .from("user_quotas")
               .select("id")
               .eq("user_id", userSub.user_id)
-              .single();
+              .maybeSingle();
+
+            if (quotaLookupError) {
+              logStep("Quota lookup failed", { userId: userSub.user_id, error: quotaLookupError });
+            }
 
             if (existingQuota) {
-              await supabase
+              const { error: quotaUpdateError } = await supabase
                 .from("user_quotas")
-                .update(PLAN_QUOTAS[newPlanSlug])
+                .update(quotas)
                 .eq("user_id", userSub.user_id);
+
+              if (quotaUpdateError) {
+                logStep("Quota override clear failed", { userId: userSub.user_id, error: quotaUpdateError });
+              }
             } else {
-              await supabase
+              const { error: quotaInsertError } = await supabase
                 .from("user_quotas")
                 .insert({
                   user_id: userSub.user_id,
-                  ...PLAN_QUOTAS[newPlanSlug],
+                  ...quotas,
                 });
+
+              if (quotaInsertError) {
+                logStep("Quota row insert failed", { userId: userSub.user_id, error: quotaInsertError });
+              }
             }
-            logStep(`Updated quotas for user ${userSub.user_id} to plan ${newPlanSlug}`);
+            logStep(`Plan changed to ${newPlanSlug} for user ${userSub.user_id}, overrides cleared`);
+          } else if (changedPlanId && subUpdateError) {
+            logStep(
+              "Skipping quota override clear: subscription write failed, stale override kept as the customer's safety net",
+              { userId: userSub.user_id, plannedPlanId: changedPlanId, subscriptionError: subUpdateError },
+            );
           }
 
           // Send cancellation email if user cancelled
@@ -433,48 +539,77 @@ Deno.serve(async (req) => {
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
         
-        const { data: userSub } = await supabase
+        const { data: userSub, error: userSubError } = await supabase
           .from("user_subscriptions")
           .select("user_id")
           .eq("stripe_subscription_id", subscription.id)
-          .single();
+          .maybeSingle();
+
+        if (userSubError) {
+          logStep("Subscription lookup failed", { subscriptionId: subscription.id, error: userSubError });
+        }
 
         if (userSub) {
           resolvedUserId = userSub.user_id;
           logStep("Subscription deleted", { userId: userSub.user_id });
 
-          await supabase
+          // "cancelled" with two Ls — user_subscriptions_status_check
+          // rejects Stripe's one-L "canceled".
+          const { error: subUpdateError } = await supabase
             .from("user_subscriptions")
-            .update({ status: "canceled" })
+            .update({ status: "cancelled" })
             .eq("stripe_subscription_id", subscription.id);
 
-          await supabase
+          if (subUpdateError) {
+            logStep("Subscription cancellation write failed", { subscriptionId: subscription.id, error: subUpdateError });
+          }
+
+          const { error: roleUpdateError } = await supabase
             .from("user_roles")
             .update({ role: "user" })
             .eq("user_id", userSub.user_id);
 
-          // Reset to free tier quotas - ensure quota record exists
-          const { data: existingQuota } = await supabase
+          if (roleUpdateError) {
+            logStep("Role downgrade to user failed", { userId: userSub.user_id, error: roleUpdateError });
+          }
+
+          // Cancellation clears overrides; the arbiter then resolves the
+          // non-active subscription to the free plan.
+          const quotas = CLEARED_QUOTA_OVERRIDES;
+
+          const { data: existingQuota, error: quotaLookupError } = await supabase
             .from("user_quotas")
             .select("id")
             .eq("user_id", userSub.user_id)
-            .single();
+            .maybeSingle();
+
+          if (quotaLookupError) {
+            logStep("Quota lookup failed", { userId: userSub.user_id, error: quotaLookupError });
+          }
 
           if (existingQuota) {
-            await supabase
+            const { error: quotaUpdateError } = await supabase
               .from("user_quotas")
-              .update(PLAN_QUOTAS.free)
+              .update(quotas)
               .eq("user_id", userSub.user_id);
+
+            if (quotaUpdateError) {
+              logStep("Quota override clear failed", { userId: userSub.user_id, error: quotaUpdateError });
+            }
           } else {
-            await supabase
+            const { error: quotaInsertError } = await supabase
               .from("user_quotas")
               .insert({
                 user_id: userSub.user_id,
-                ...PLAN_QUOTAS.free,
+                ...quotas,
               });
+
+            if (quotaInsertError) {
+              logStep("Quota row insert failed", { userId: userSub.user_id, error: quotaInsertError });
+            }
           }
 
-          logStep(`Subscription canceled for user ${userSub.user_id}, reset to free tier`);
+          logStep(`Subscription cancelled for user ${userSub.user_id}, quota overrides cleared`);
         }
         break;
       }
