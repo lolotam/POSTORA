@@ -80,6 +80,27 @@ export async function findOwnedEvolutionAccount(
   return (data as OwnedEvolutionAccount | null) ?? null;
 }
 
+// The user-chosen-name marker lives in account_metadata, and syncEvolutionAccountConnection
+// is the only writer of platform_username on the WhatsApp path -- but it has three call
+// sites (bridge open, bridge close reconciliation, webhook connection.update). Reading the
+// metadata there rather than taking it as an argument means no caller can silently omit it
+// and let the phone profile clobber the user's name on a reconnect.
+async function loadAccountMetadata(
+  admin: any,
+  accountId: string,
+): Promise<Record<string, unknown>> {
+  const { data, error } = await admin
+    .from("social_accounts")
+    .select("account_metadata")
+    .eq("id", accountId)
+    .maybeSingle();
+  if (error) throw error;
+  const stored = data?.account_metadata;
+  return stored && typeof stored === "object" && !Array.isArray(stored)
+    ? { ...(stored as Record<string, unknown>) }
+    : {};
+}
+
 // Returns the owner number now stored for the account. Callers need it because activation
 // replaces a provisional "pending_<uuid>" placeholder, and anything that builds conversation
 // ids straight afterwards would otherwise use the stale value it passed in -- writing a whole
@@ -92,7 +113,11 @@ export async function syncEvolutionAccountConnection(
 ): Promise<string> {
   const connection = state.toLowerCase();
   if (connection === "close") {
-    await admin.from("social_accounts").update({ is_active: false }).eq("id", account.id);
+    const { error } = await admin
+      .from("social_accounts")
+      .update({ is_active: false })
+      .eq("id", account.id);
+    if (error) throw error;
     return account.platform_user_id;
   }
   if (connection !== "open") return account.platform_user_id;
@@ -100,34 +125,13 @@ export async function syncEvolutionAccountConnection(
   const updates: Record<string, unknown> = { is_active: true };
   const ownerJid = extractOwnerJid(identity);
   const ownerNumber = ownerJid ? ownerNumberFromJid(ownerJid) : null;
-  if (ownerNumber && account.platform_user_id.startsWith("pending_")) {
-    updates.platform_user_id = ownerNumber;
-  }
+  const isProvisional = account.platform_user_id.startsWith("pending_");
+  const metadata = await loadAccountMetadata(admin, account.id);
 
-  // The user-chosen-name marker lives in account_metadata, and this helper is the only
-  // writer of platform_username on the WhatsApp path -- but it has three call sites
-  // (bridge open, bridge close reconciliation, webhook connection.update). Loading the
-  // metadata here rather than taking it as an argument means no caller can silently
-  // omit it and let the phone profile clobber the user's name on a reconnect.
-  const { data: stored, error: metadataError } = await admin
-    .from("social_accounts")
-    .select("account_metadata")
-    .eq("id", account.id)
-    .maybeSingle();
-  if (metadataError) throw metadataError;
-  const existing = stored?.account_metadata;
-  const metadata: Record<string, unknown> =
-    existing && typeof existing === "object" && !Array.isArray(existing)
-      ? { ...(existing as Record<string, unknown>) }
-      : {};
-
-  // Re-pairing a different number leaves platform_user_id at the old value (the update
-  // is gated on the pending_ placeholder), and a rename can mask that. Migration is out
-  // of scope, so the mismatch is detected and flagged for follow-up instead.
-  if (
-    ownerNumber && !account.platform_user_id.startsWith("pending_") &&
-    ownerNumber !== account.platform_user_id
-  ) {
+  // Re-pairing a different number leaves platform_user_id at the old value (the claim
+  // below is gated on the pending_ placeholder), and a rename can mask that. Migration is
+  // out of scope, so the mismatch is detected and flagged for follow-up instead.
+  if (ownerNumber && !isProvisional && ownerNumber !== account.platform_user_id) {
     // The numbers themselves stay out of the log: these are the end user's and their
     // contact's phone numbers, and a function log is not the place for them. The account
     // id identifies the row, and account_metadata.number_mismatch is the durable record
@@ -146,6 +150,30 @@ export async function syncEvolutionAccountConnection(
   if (profileName && !metadata.display_name) {
     updates.platform_username = profileName;
   }
-  await admin.from("social_accounts").update(updates).eq("id", account.id);
-  return (updates.platform_user_id as string) ?? account.platform_user_id;
+  // This write used to be issued without looking at its result. Claiming the owner number
+  // through it could raise 23505 against
+  // social_accounts_user_id_platform_platform_user_id_key when the same phone was already
+  // linked, and the discarded error left the connection inactive on its pending_ id with
+  // nothing logged anywhere -- the QR screen simply never finished.
+  const { error: updateError } = await admin
+    .from("social_accounts")
+    .update(updates)
+    .eq("id", account.id);
+  if (updateError) throw updateError;
+
+  // Only a provisional row takes on an identity. A row that already resolved to a number
+  // keeps it even when a different phone pairs into the session -- the mismatch flag above
+  // is the record of that, because rewriting the number would orphan every conversation id
+  // already derived from it.
+  if (!ownerNumber || !isProvisional) return account.platform_user_id;
+
+  // Identity is claimed in SQL because resolving that collision is a multi-statement merge
+  // (move the older session's messages, release its unique key, take the number) and a
+  // half-applied merge would leave two rows deriving the same conversation ids.
+  const { data: claimed, error: claimError } = await admin.rpc("activate_evolution_qr_account", {
+    p_account_id: account.id,
+    p_owner_number: ownerNumber,
+  });
+  if (claimError) throw claimError;
+  return (claimed as string | null) ?? account.platform_user_id;
 }

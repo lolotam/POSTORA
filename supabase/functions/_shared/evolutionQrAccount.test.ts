@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   findOwnedEvolutionAccount,
   mergeDisplayName,
@@ -12,18 +12,38 @@ interface RecordedUpdate {
   id: unknown;
 }
 
+interface RecordedRpc {
+  name: string;
+  args: Record<string, unknown>;
+}
+
 // Stands in for the Supabase client -- the database is a system boundary, and the
 // assertions below are on the rows it would write, not on how it was called. The
-// optional metadata is what a select of account_metadata would return.
-function recordingAdmin(metadata: Record<string, unknown> | null = null) {
+// optional metadata is what a select of account_metadata would return. Claiming the owner
+// number goes through an RPC, so the stub answers it with the number it was asked for,
+// which is what activate_evolution_qr_account returns once the merge resolves.
+function recordingAdmin(
+  metadata: Record<string, unknown> | null = null,
+  overrides: { updateError?: unknown; rpcError?: unknown } = {},
+) {
   const updates: RecordedUpdate[] = [];
+  const rpcs: RecordedRpc[] = [];
   return {
     updates,
+    rpcs,
+    rpc: (name: string, args: Record<string, unknown>) => {
+      rpcs.push({ name, args });
+      return Promise.resolve(
+        overrides.rpcError
+          ? { data: null, error: overrides.rpcError }
+          : { data: args.p_owner_number as string, error: null },
+      );
+    },
     from: (table: string) => ({
       update: (values: Record<string, unknown>) => ({
         eq: (_column: string, id: unknown) => {
           updates.push({ table, values, id });
-          return Promise.resolve({ error: null });
+          return Promise.resolve({ error: overrides.updateError ?? null });
         },
       }),
       select: () => ({
@@ -57,11 +77,16 @@ Deno.test("a linked session names the account from whichever identity source rep
       assertEquals(admin.updates.length, 1);
       assertEquals(admin.updates[0].table, "social_accounts");
       assertEquals(admin.updates[0].id, "acc-1");
+      // The number is no longer part of this update: claiming it can collide with an
+      // earlier connection for the same phone, so it goes through the RPC that merges them.
       assertEquals(admin.updates[0].values, {
         is_active: true,
-        platform_user_id: "96597950350",
         platform_username: "Xsellpoint",
       });
+      assertEquals(admin.rpcs, [{
+        name: "activate_evolution_qr_account",
+        args: { p_account_id: "acc-1", p_owner_number: "96597950350" },
+      }]);
     });
   }
 });
@@ -83,7 +108,7 @@ Deno.test("the linked JID is stored as the bare number the inbox expects", async
     await t.step(label, async () => {
       const admin = recordingAdmin();
       await syncEvolutionAccountConnection(admin, PENDING, "open", { ownerJid });
-      assertEquals(admin.updates[0].values.platform_user_id, expected);
+      assertEquals(admin.rpcs[0]?.args.p_owner_number, expected);
     });
   }
 });
@@ -108,8 +133,38 @@ Deno.test("a reconnect from a DIFFERENT number keeps the stored id but flags the
     is_active: true,
     account_metadata: { number_mismatch: true },
   });
-  // The number itself is deliberately NOT changed.
+  // The number itself is deliberately NOT changed, so no identity claim is attempted.
   assertEquals(admin.updates[0].values.platform_user_id, undefined);
+  assertEquals(admin.rpcs, []);
+});
+
+Deno.test("a rejected write is surfaced instead of being swallowed", async (t) => {
+  // 2026-08-23 incident: neither update looked at its result. Claiming a number that another
+  // connection of the same user already held raised 23505 against
+  // social_accounts_user_id_platform_platform_user_id_key, and the connection stayed inactive
+  // on its pending_ id with nothing logged anywhere -- the QR screen simply never finished.
+  const states: Array<[string, string, unknown]> = [
+    ["activating", "open", { ownerJid: "96597950350@s.whatsapp.net" }],
+    ["deactivating", "close", null],
+  ];
+
+  for (const [label, state, identity] of states) {
+    await t.step(label, async () => {
+      const admin = recordingAdmin(null, { updateError: { code: "23505", message: "duplicate key" } });
+      await assertRejects(() => syncEvolutionAccountConnection(admin, PENDING, state, identity));
+      // The identity claim is never attempted once the row itself could not be written.
+      assertEquals(admin.rpcs, []);
+    });
+  }
+});
+
+Deno.test("a rejected identity claim is surfaced instead of being swallowed", async () => {
+  // The claim is the statement that can collide, so its error is the one that must not be
+  // lost: swallowing it is what left a paired session stuck on its placeholder id.
+  const admin = recordingAdmin(null, { rpcError: { code: "23505", message: "duplicate key" } });
+  await assertRejects(
+    () => syncEvolutionAccountConnection(admin, PENDING, "open", { ownerJid: "96597950350@s.whatsapp.net" }),
+  );
 });
 
 Deno.test("a linked session with no identity payload still activates the account", async () => {
