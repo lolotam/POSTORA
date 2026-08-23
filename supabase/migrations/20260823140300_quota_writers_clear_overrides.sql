@@ -80,6 +80,16 @@ COMMENT ON FUNCTION public.set_user_quotas_for_plan(uuid, text) IS
 --
 -- Fix: only clear on a REAL entitlement change - a first-time INSERT, or an
 -- UPDATE whose plan_id actually differs from what it was.
+--
+-- Round-2 fix (R1, CodeRabbit round 2, 2026-08-23): the previous version of
+-- this guard read `IF TG_OP = 'INSERT' OR OLD.plan_id IS DISTINCT FROM
+-- NEW.plan_id THEN`. OLD is NOT ASSIGNED on an INSERT trigger, and
+-- PostgreSQL does not guarantee left-to-right evaluation of OR operands -
+-- so on subscription creation this could evaluate `OLD.plan_id` and raise
+-- "record \"old\" is not assigned yet", failing the INSERT and breaking
+-- subscription creation entirely. Split into explicit TG_OP branches so
+-- OLD is never referenced on the INSERT path, instead of relying on
+-- short-circuit evaluation.
 CREATE OR REPLACE FUNCTION public.handle_subscription_change()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -89,7 +99,13 @@ AS $$
 DECLARE
   v_plan_slug text;
 BEGIN
-  IF TG_OP = 'INSERT' OR OLD.plan_id IS DISTINCT FROM NEW.plan_id THEN
+  IF TG_OP = 'INSERT' THEN
+    SELECT slug INTO v_plan_slug
+    FROM subscription_plans
+    WHERE id = NEW.plan_id;
+
+    PERFORM set_user_quotas_for_plan(NEW.user_id, v_plan_slug);
+  ELSIF OLD.plan_id IS DISTINCT FROM NEW.plan_id THEN
     SELECT slug INTO v_plan_slug
     FROM subscription_plans
     WHERE id = NEW.plan_id;
@@ -102,7 +118,7 @@ END;
 $$;
 
 COMMENT ON FUNCTION public.handle_subscription_change() IS
-  'Trigger fn: clears per-user quota overrides only on a real plan_id change (INSERT, or UPDATE where the value differs) - not on every UPDATE OF plan_id firing.';
+  'Trigger fn: clears per-user quota overrides only on a real plan_id change (INSERT, or UPDATE where the value differs) - branches explicitly on TG_OP so OLD is never referenced on the INSERT path, where it is unassigned.';
 
 CREATE OR REPLACE FUNCTION public.enforce_post_quota_on_insert()
 RETURNS trigger
