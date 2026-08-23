@@ -465,3 +465,110 @@ per the rehearsal pattern in memory — `supabase start` is broken locally):
 - It prefers a tier row over the global setting.
 - It falls through to the global setting when no tier row matches.
 - It degrades to the in-memory map when the plan lookup errors.
+
+---
+
+## 9. Codex round-1 objections and disposition
+
+One adversarial read-only round (codex-cli 0.147.0, thread `01a02e70`), run before any
+implementation. **All 15 objections accepted; no false positives.** Five were verified
+against the production database rather than accepted on reading. The amendments below
+are binding and supersede the requirement text above where they conflict.
+
+| # | Severity | Objection | Disposition |
+|---|---|---|---|
+| 1 | BLOCKER | Omitted INSERT columns take `user_quotas` defaults (2/4/2/20/20), not NULL | **A1** |
+| 2 | BLOCKER | `increment_media_uploads()` reads the media limit; NULL makes it an unlimited bypass | **A2** |
+| 3 | BLOCKER | `stripe-webhook` never writes `plan_id`; clearing overrides inherits the old plan | **A3** |
+| 4 | BLOCKER | Backfill compares against nullable plan columns instead of plan-or-literal | **A4** |
+| 5 | BLOCKER | No uniqueness on active subscriptions; arbiter and backfill can disagree | **A5** |
+| 6 | MAJOR | `subscription_plans` public policy is `is_active = true` only | **A6** |
+| 7 | BLOCKER | Free users have no subscription row, so the tier step is skipped | **A7** |
+| 8 | MAJOR | No `tier_rate_limits` rows exist for n8n endpoints and no admin insert path | **A8** |
+| 9 | MAJOR | UI would advertise a daily n8n cap that is never enforced | **A9** |
+| 10 | MAJOR | `usePlanQuotas` maps NULL to `0` and persists zeroes on save | **A10** |
+| 11 | MINOR | Media denial message reads the raw override, not the resolved limit | **A11** |
+| 12 | MAJOR | Admin page "Important Notes" markup becomes false and destructive | **A12** |
+| 13 | MAJOR | The invariant assertion does not compare before against after | **A13** |
+| 14 | MAJOR | `SECURITY DEFINER` arbiter granted to `authenticated` leaks other users' limits | **A14** |
+| 15 | MINOR | Whole-row seed guard is not idempotent per column | **A15** |
+
+### Verified against production before acceptance
+
+- **#1** — `user_quotas` column defaults are `max_profiles=2, max_social_accounts=4,
+  max_posts_per_day=2, max_posts_per_month=20, max_media_uploads_per_day=20`. The
+  plan's own Task 4 assertions would have failed on first run.
+- **#2** — `increment_media_uploads()` selects `max_media_uploads_per_day`. With NULL,
+  both `v_max_uploads = -1` and `v_current_uploads >= v_max_uploads` evaluate to NULL,
+  so it increments unconditionally. Its missing-row branch hardcodes `20`.
+- **#3** — `stripe-webhook/index.ts:386-394` writes `status`, both period columns and
+  `cancel_at_period_end`, and never `plan_id`. The `user_subscriptions_status_check`
+  constraint permits `active|cancelled|expired|past_due` — not the `canceled` Stripe sends.
+- **#6** — the policy is literally `(is_active = true)`. §3 R1's "no policy change is
+  required and none is made" was wrong.
+- **#7** — 66 users hold `user_quotas` rows against 7 active subscriptions, so most free
+  users have no `user_subscriptions` row at all.
+
+### Binding amendments
+
+**A1** — Task 1's migration additionally issues
+`ALTER TABLE public.user_quotas ALTER COLUMN <col> DROP DEFAULT` for all five limit
+columns, and every rewritten INSERT names all five columns explicitly with `NULL`.
+Belt and braces: the dropped default is the real fix, the explicit NULL documents intent.
+
+**A2** — `increment_media_uploads()` joins the reader list of R4. It resolves its limit
+through `effective_user_quotas()`, and its missing-row branch inserts NULL limits.
+
+**A3** — R4a is extended. `stripe-webhook` must, in addition to clearing overrides:
+resolve the new plan's `id` from `newPlanSlug` and write `plan_id` on an actual plan
+change; write a status permitted by `user_subscriptions_status_check` (`cancelled`, not
+`canceled`); check and log every database error instead of discarding it; and clear
+overrides **only** on a create, plan change, or cancellation — not on every
+`customer.subscription.updated` event, which would erase deliberate admin grants.
+
+**A4** — The backfill COALESCEs every resolved plan column to its free literal before
+the CASE ladder, mirroring `effective_user_quotas()` exactly. This supersedes the
+narrower "keep the override when the plan column is NULL" rule.
+
+**A5** — Both the arbiter and the backfill select the active subscription with
+`ORDER BY current_period_end DESC NULLS LAST, created_at DESC, id DESC`. A pre-migration
+assertion fails the deployment if any user holds more than one active subscription. No
+uniqueness constraint is added — none is needed at 0 duplicates, and one could fail on
+legacy rows.
+
+**A6** — A new owner-scoped SELECT policy lets an authenticated user read the
+`subscription_plans` row referenced by their own active subscription, regardless of
+`is_active`. The existing active-only public policy is unchanged.
+
+**A7** — `fetchPlanSlug()` resolves a caller with no active subscription to `'free'`,
+not NULL. The test asserting the tier step is skipped is inverted: a Free tier row must
+outrank the global setting.
+
+**A8** — A migration seeds `tier_rate_limits` rows for the n8n endpoints across all three
+plans. Without them acceptance criterion 7 cannot pass, because `AdminRateLimits` has no
+insert path — it only updates rows the table already returns.
+
+**A9** — The admin UI disables the daily field for endpoints whose runtime enforces only
+the hourly value, with an explicit "hourly only" notice.
+
+**A10** — `usePlanQuotas` preserves NULL rather than coercing to `0`, and never persists
+a `0` that originated as NULL.
+
+**A11** — The media-limit denial message uses the resolved limit, not a fresh read of
+`user_quotas.max_media_uploads_per_day`.
+
+**A12** — The admin page's "Important Notes" markup is rewritten for NULL-inheritance and
+immediate effect, and warns that the sync action clears per-user overrides.
+
+**A13** — The backfill test snapshots all five effective values for every fixture before
+the migration and asserts, after it, that no value decreased under `-1`-aware
+comparison. A Business fixture is added.
+
+**A14** — `effective_user_quotas()` is granted to `service_role` only. No client path
+calls it, and the SQL readers that do are `SECURITY DEFINER` executing as the definer,
+so they need no grant. Revoking is safer than an `auth.uid()` guard and cannot break the
+post trigger, which runs with `auth.uid()` NULL.
+
+**A15** — Each plan column is seeded independently with
+`COALESCE(<existing>, <seed>)` rather than guarding the whole row on one column, so a
+partially-seeded row is repaired and an edited column is preserved.
