@@ -55,3 +55,18 @@ export function normalizeThreadsReply(value: any): ThreadsReplyInput | null {
     timestamp: parsed && !Number.isNaN(parsed.getTime()) ? parsed.toISOString() : undefined,
   };
 }
+
+// Which id names the connected account differs by field. A mention's `target_id` is the
+// mentioned user; a reply's `target_id` is the media that was replied to, and the post owner
+// is carried inside the value instead. Reading `target_id` first for both meant a genuine
+// reply delivery would look up an account by a media id, find nothing, and be dropped as
+// "no account" -- so the value's owner fields win for replies and `target_id` is only a last
+// resort there.
+export function threadsUserIdFor(change: ThreadsChange): string | null {
+  const value = change.value ?? {};
+  const fromValue = value.root_post?.owner_id || value.recipient_id || null;
+  const candidate = change.field === "replies"
+    ? fromValue || change.targetId
+    : change.targetId || fromValue;
+  return candidate ? String(candidate) : null;
+}

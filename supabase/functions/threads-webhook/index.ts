@@ -15,7 +15,7 @@ import {
   buildMentionEnvelope,
   dispatchN8nEvent,
 } from "../_shared/n8nMessagingDispatch.ts";
-import { extractThreadsChanges, normalizeThreadsReply } from "./replyEvents.ts";
+import { extractThreadsChanges, normalizeThreadsReply, threadsUserIdFor } from "./replyEvents.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -216,7 +216,7 @@ Deno.serve(async (req) => {
       console.warn(`[threads-webhook] ignoring field '${change.field}' -- only mentions and replies are handled`);
       continue;
     }
-    const threadsUserId = change.targetId || change.value?.recipient_id || change.value?.root_post?.owner_id;
+    const threadsUserId = threadsUserIdFor(change);
     if (!threadsUserId) {
       console.warn(
         `[threads-webhook] '${change.field}' delivery carried no threads user id (value keys: ${
