@@ -87,18 +87,40 @@ Deno.test("facebook hide uses is_hidden", async () => {
   assertEquals(calls[0].url, "https://graph.facebook.com/v22.0/c1?is_hidden=false&access_token=tok");
 });
 
-Deno.test("threads reply creates a container then publishes", async () => {
+// Production incident, 2026-08-23: n8n replies failed with "media <container id> not found"
+// from threads_publish while the same container published fine moments later. Threads builds
+// a container asynchronously, so publish must wait for status FINISHED.
+Deno.test("threads reply waits for the container to finish before publishing", async () => {
   const calls: Call[] = [];
-  let n = 0;
+  const statuses = ["IN_PROGRESS", "FINISHED"];
   const fetcher = async (url: RequestInfo | URL, init?: RequestInit) => {
     calls.push({ url: String(url), init });
-    n += 1;
-    return new Response(JSON.stringify({ id: n === 1 ? "container-1" : "reply-1" }), { status: 200 });
+    const target = String(url);
+    if (target.includes("fields=status")) {
+      return new Response(JSON.stringify({ status: statuses.shift() }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: target.endsWith("/threads") ? "container-1" : "reply-1" }), { status: 200 });
   };
   const result = await replyToComment(thAccount, "r0", "Hi", fetcher);
   assertEquals(result, { success: true, platform_comment_id: "reply-1" });
-  assertEquals(calls[0].url, "https://graph.threads.net/v1.0/th-1/threads");
-  assertEquals(calls[1].url, "https://graph.threads.net/v1.0/th-1/threads_publish");
+  assertEquals(calls.map((c) => c.url.replace(/\?.*$/, "")), [
+    "https://graph.threads.net/v1.0/th-1/threads",
+    "https://graph.threads.net/v1.0/container-1",
+    "https://graph.threads.net/v1.0/container-1",
+    "https://graph.threads.net/v1.0/th-1/threads_publish",
+  ]);
+});
+
+Deno.test("threads reply reports a container that errored instead of publishing it", async () => {
+  const fetcher = async (url: RequestInfo | URL) => {
+    const target = String(url);
+    if (target.includes("fields=status")) {
+      return new Response(JSON.stringify({ status: "ERROR", error_message: "Text too long" }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ id: "container-1" }), { status: 200 });
+  };
+  const result = await replyToComment(thAccount, "r0", "Hi", fetcher);
+  assertEquals(result, { success: false, error: "Threads reply container ERROR." });
 });
 
 Deno.test("threads hide uses manage_reply and delete is refused", async () => {
