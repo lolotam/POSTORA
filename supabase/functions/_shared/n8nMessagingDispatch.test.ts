@@ -1,11 +1,13 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   buildCommentPayload,
-  buildMentionEnvelope,
   buildMessagePayload,
+  buildMessagingSender,
+  buildMentionEnvelope,
   describeMessagingAccount,
   dispatchMessageEvent,
   dispatchN8nEvent,
+  normalizeHandleUsername,
   signMessagePayload,
   shouldDispatchInboundMessage,
 } from "./n8nMessagingDispatch.ts";
@@ -14,7 +16,9 @@ const messageInput = {
   platform: "whatsapp" as const,
   socialAccountId: "account-1",
   conversationId: "wa_123_96512345678",
-  sender: { id: "96512345678", name: "Customer", phone: "+96512345678" },
+  // Built literal, not via buildMessagingSender, so the pass-through of an arbitrary
+  // five-field sender is asserted rather than the builder's own output.
+  sender: { id: "96512345678", name: "Customer", phone: "+96512345678", username: null, handle: null },
   message: { id: "wamid.1", text: "Hello", type: "text", attachments: [] },
   timestamp: "2026-08-20T03:10:00.000Z",
 };
@@ -27,7 +31,7 @@ Deno.test("buildMessagePayload emits the shared messaging envelope", () => {
     social_account_id: "account-1",
     account: { id: "account-1", platform: "whatsapp", name: "account-1", username: null, handle: null },
     conversation_id: "wa_123_96512345678",
-    sender: { id: "96512345678", name: "Customer", phone: "+96512345678" },
+    sender: { id: "96512345678", name: "Customer", phone: "+96512345678", username: null, handle: null },
     message: { id: "wamid.1", text: "Hello", type: "text", attachments: [] },
     timestamp: "2026-08-20T03:10:00.000Z",
   });
@@ -429,4 +433,257 @@ Deno.test("threads mention envelope keeps the legacy event/timestamp/data body",
     },
   });
   assertEquals(headers[0]["X-Postora-Event"], "threads.mention.created");
+});
+
+// --- normalizeHandleUsername: the single username rule (spec R1) ---
+
+Deno.test("normalizeHandleUsername slugifies a spaced display name", () => {
+  assertEquals(normalizeHandleUsername("Danat Future Company"), "danat_future_company");
+});
+
+Deno.test("normalizeHandleUsername passes space-free input through unchanged, case preserved", () => {
+  assertEquals(normalizeHandleUsername("MyBrand"), "MyBrand");
+  assertEquals(normalizeHandleUsername("danatfuture"), "danatfuture");
+});
+
+Deno.test("normalizeHandleUsername trims surrounding whitespace before the slug branch", () => {
+  // The trim happens first, so " Brand " has no internal whitespace and keeps its case.
+  assertEquals(normalizeHandleUsername(" Brand "), "Brand");
+});
+
+Deno.test("normalizeHandleUsername collapses internal whitespace runs to one underscore, lowercased", () => {
+  assertEquals(normalizeHandleUsername("My  Brand"), "my_brand");
+  assertEquals(normalizeHandleUsername("a  b   c"), "a_b_c");
+});
+
+Deno.test("normalizeHandleUsername treats Unicode whitespace as whitespace", () => {
+  assertEquals(normalizeHandleUsername("\u00A0Brand\u00A0"), "Brand"); // non-breaking space
+  assertEquals(normalizeHandleUsername("A\u3000B"), "a_b"); // ideographic space
+});
+
+Deno.test("normalizeHandleUsername strips every leading @, so handle is never doubled", () => {
+  assertEquals(normalizeHandleUsername("@brand"), "brand");
+  assertEquals(normalizeHandleUsername("@@@brand"), "brand");
+  assertEquals(normalizeHandleUsername("brand"), "brand");
+  assertEquals(
+    describeMessagingAccount({ id: "ig-1", platform: "instagram", platform_user_id: "1", platform_username: "@@brand" }).handle,
+    "@brand",
+  );
+});
+
+Deno.test("normalizeHandleUsername yields null for empty, whitespace-only, and non-string input", () => {
+  assertEquals(normalizeHandleUsername(""), null);
+  assertEquals(normalizeHandleUsername("   "), null);
+  assertEquals(normalizeHandleUsername("\u00A0\u3000"), null);
+  assertEquals(normalizeHandleUsername(undefined), null);
+  assertEquals(normalizeHandleUsername(null), null);
+  assertEquals(normalizeHandleUsername(123), null);
+  assertEquals(normalizeHandleUsername({}), null);
+});
+
+// --- platform gating of ig_username (spec R1) ---
+
+Deno.test("ig_username on an instagram row wins over platform_username", () => {
+  assertEquals(
+    describeMessagingAccount({
+      id: "ig-1",
+      platform: "instagram",
+      platform_user_id: "1789",
+      platform_username: "fallback",
+      account_metadata: { ig_username: "igbrand" },
+    }).username,
+    "igbrand",
+  );
+});
+
+Deno.test("ig_username on a facebook or whatsapp row is ignored", () => {
+  assertEquals(
+    describeMessagingAccount({
+      id: "fb-1",
+      platform: "facebook",
+      platform_user_id: "102",
+      platform_username: "fbbrand",
+      account_metadata: { ig_username: "igbrand" },
+    }).username,
+    "fbbrand",
+  );
+  assertEquals(
+    describeMessagingAccount({
+      id: "wa-1",
+      platform: "whatsapp",
+      platform_user_id: "965",
+      platform_username: "wabrand",
+      account_metadata: { ig_username: "igbrand" },
+    }).username,
+    "wabrand",
+  );
+});
+
+Deno.test("malformed ig_username falls through to platform_username rather than null", () => {
+  for (const igUsername of [123, "", "   "]) {
+    assertEquals(
+      describeMessagingAccount({
+        id: "ig-1",
+        platform: "instagram",
+        platform_user_id: "1789",
+        platform_username: "fallback",
+        account_metadata: { ig_username: igUsername },
+      }).username,
+      "fallback",
+    );
+  }
+});
+
+Deno.test("WhatsApp yields handle null regardless of username", () => {
+  assertEquals(
+    describeMessagingAccount({ id: "wa-1", platform: "whatsapp", platform_user_id: "965", platform_username: "wabrand" }).handle,
+    null,
+  );
+});
+
+// --- account.name regression + spaced display name (spec R1, Codex r2 #1) ---
+
+Deno.test("account.name keeps the trimmed display name while username and handle go space-free", () => {
+  assertEquals(
+    describeMessagingAccount({
+      id: "fb-1",
+      platform: "facebook",
+      platform_user_id: "102",
+      platform_username: " Danat Future Company ",
+    }),
+    {
+      id: "fb-1",
+      platform: "facebook",
+      // Trimmed, internal spaces intact — today's behaviour, not the raw value.
+      name: "Danat Future Company",
+      username: "danat_future_company",
+      handle: "@danat_future_company",
+    },
+  );
+});
+
+Deno.test("account.name falls back to platform_user_id, then id, when the username is unusable", () => {
+  assertEquals(describeMessagingAccount({ id: "wa-1", platform: "whatsapp", platform_user_id: "965", platform_username: "  " }).name, "965");
+  assertEquals(describeMessagingAccount({ id: "x-1", platform: "facebook" }).name, "x-1");
+});
+
+// --- comment.received asserted in full with a spaced Page name (describeMessagingAccount
+// feeds message payloads, comment payloads, and the reply-API response alike) ---
+
+Deno.test("comment.received for a Facebook Page carries the space-free account summary", () => {
+  assertEquals(
+    buildCommentPayload({
+      platform: "facebook",
+      socialAccountId: "fb-acc",
+      account: { id: "fb-acc", platform: "facebook", platform_user_id: "102", platform_username: "Danat Future Company" },
+      comment: { id: "c-2", kind: "comment", text: "Hi", parentCommentId: null, mediaUrl: null },
+      post: { id: null, url: null, caption: null },
+      author: { id: "999", name: "Jane Doe", username: null },
+      timestamp: "2026-08-23T00:00:00.000Z",
+    }),
+    {
+      event: "comment.received",
+      platform: "facebook",
+      social_account_id: "fb-acc",
+      account: {
+        id: "fb-acc",
+        platform: "facebook",
+        name: "Danat Future Company",
+        username: "danat_future_company",
+        handle: "@danat_future_company",
+      },
+      comment: { id: "c-2", kind: "comment", text: "Hi", parent_comment_id: null, media_url: null },
+      post: { id: null, url: null, caption: null },
+      author: { id: "999", name: "Jane Doe", username: null },
+      timestamp: "2026-08-23T00:00:00.000Z",
+    },
+  );
+});
+
+// --- sender: five keys, per-webhook mapping (spec R2) ---
+// The three webhook paths call buildMessagingSender with exactly the fields each has
+// available (facebook-instagram-webhook/index.ts, whatsapp-webhook/index.ts,
+// whatsapp-evolution-webhook/index.ts); importing those modules here would start their
+// Deno.serve servers, so each path is exercised through the shared builder with its own
+// argument shape.
+
+Deno.test("facebook/instagram sender mapping: event.sender.name to name; username, handle, phone null", () => {
+  assertEquals(
+    buildMessagingSender({ platform: "facebook", id: "psid-1", name: "Jane Doe" }),
+    { id: "psid-1", name: "Jane Doe", username: null, handle: null, phone: null },
+  );
+  // A Meta messaging webhook usually carries only the sender id.
+  assertEquals(
+    buildMessagingSender({ platform: "instagram", id: "igsid-1" }),
+    { id: "igsid-1", name: null, username: null, handle: null, phone: null },
+  );
+});
+
+Deno.test("whatsapp Cloud sender mapping: from to both id and phone, contactName to name", () => {
+  assertEquals(
+    buildMessagingSender({ platform: "whatsapp", id: "96512345678", name: "Ahmed", phone: "96512345678" }),
+    { id: "96512345678", name: "Ahmed", username: null, handle: null, phone: "96512345678" },
+  );
+});
+
+Deno.test("whatsapp Evolution sender mapping: remoteNumber to both id and phone, participantName to name", () => {
+  assertEquals(
+    buildMessagingSender({ platform: "whatsapp", id: "96597950350", name: "Sara", phone: "96597950350" }),
+    { id: "96597950350", name: "Sara", username: null, handle: null, phone: "96597950350" },
+  );
+});
+
+Deno.test("a sender name that is absent, empty, or whitespace-only yields null, not undefined or \"\"", () => {
+  assertEquals(buildMessagingSender({ platform: "facebook", id: "x", name: undefined }).name, null);
+  assertEquals(buildMessagingSender({ platform: "facebook", id: "x", name: "" }).name, null);
+  assertEquals(buildMessagingSender({ platform: "facebook", id: "x", name: "   " }).name, null);
+});
+
+// --- legacy and settings wire stability ---
+
+Deno.test("toLegacyPayload body is byte-for-byte unchanged: it reads only sender.id and sender.name", async () => {
+  const admin = stubAdmin({
+    settings: [],
+    legacy: [{ id: "legacy-3", url: "https://legacy3.example", secret: null, events: null, failure_count: 0, is_active: true }],
+    updates: [],
+  });
+  let sent: any;
+
+  await dispatchMessageEvent(admin, "user-1", messagePayload, {
+    fetcher: async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response(null, { status: 204 });
+    },
+  });
+
+  assertEquals(sent, {
+    event: "message.received",
+    timestamp: "2026-08-20T03:10:00.000Z",
+    data: {
+      from: "96512345678",
+      contact_name: "Customer",
+      message: "Hello",
+      message_type: "text",
+      conversation_id: "wa_123_96512345678",
+      phone_number_id: "account-1",
+    },
+  });
+});
+
+Deno.test("the settings registry body carries the five-key sender untouched", async () => {
+  const admin = stubAdmin({
+    settings: [{ key: "k", value: { webhook_url: "https://settings.example", events: ["message.received"], is_active: true } }],
+    legacy: [],
+    updates: [],
+  });
+  let sent: any;
+
+  await dispatchMessageEvent(admin, "user-1", messagePayload, {
+    fetcher: async (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response(null, { status: 204 });
+    },
+  });
+
+  assertEquals(sent.sender, { id: "96512345678", name: "Customer", username: null, handle: null, phone: "+96512345678" });
 });
