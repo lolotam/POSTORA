@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
+import { ENTITLED_SUBSCRIPTION_STATUSES } from "@/lib/subscriptionStatus";
 
 interface RateLimitState {
   limitPerHour: number;
@@ -74,7 +75,10 @@ export function useAIRateLimit(): UseAIRateLimitReturn {
     setIsLoading(true);
 
     try {
-      // Get user's subscription plan
+      // Get user's subscription plan. F5 (CodeRabbit round 1): "active"
+      // alone silently rate-limited a dunning (past_due) customer to
+      // Free-tier AI usage while their card was just being retried -
+      // effective_user_quotas() still entitles them for that window.
       const { data: subscription } = await supabase
         .from("user_subscriptions")
         .select(`
@@ -83,7 +87,9 @@ export function useAIRateLimit(): UseAIRateLimitReturn {
           subscription_plans!inner (slug)
         `)
         .eq("user_id", user.id)
-        .eq("status", "active")
+        .in("status", ENTITLED_SUBSCRIPTION_STATUSES)
+        .order("created_at", { ascending: false })
+        .limit(1)
         .maybeSingle();
 
       const planSlug = subscription?.subscription_plans?.slug || "free";

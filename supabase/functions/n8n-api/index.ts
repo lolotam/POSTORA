@@ -8,6 +8,8 @@ import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import {
   fetchGlobalSetting,
+  fetchPlanSlug,
+  fetchTierLimit,
   fetchUserOverride,
   rateLimitKeyForPath,
   resolveRateLimit,
@@ -22,9 +24,9 @@ import {
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
 // Rate limiting configuration lives in ./rateLimitConfig.ts: limits resolve
-// per request from user_rate_limits -> rate_limit_settings -> the in-memory
-// fallback map, so an admin can change any number without redeploying this
-// function.
+// per request from user_rate_limits -> tier_rate_limits (per plan) ->
+// rate_limit_settings -> the in-memory fallback map, so an admin can change
+// any number without redeploying this function.
 
 const ALLOWED_WEBHOOK_EVENTS = new Set([
   'post.completed', 'post.failed', 'post.published',
@@ -2131,6 +2133,8 @@ export async function handleRequest(req: Request): Promise<Response> {
     const rateLimitKey = rateLimitKeyForPath(path, req.method);
     const rateLimitConfig = await resolveRateLimit(rateLimitKey, {
       fetchUserOverride: (endpointKey) => fetchUserOverride(supabaseAdmin, userId, endpointKey),
+      fetchPlanSlug: () => fetchPlanSlug(supabaseAdmin, userId),
+      fetchTierLimit: (planSlug, endpointKey) => fetchTierLimit(supabaseAdmin, planSlug, endpointKey),
       fetchGlobalSetting: (endpointKey) => fetchGlobalSetting(supabaseAdmin, endpointKey),
     });
     const rateLimit = await checkRateLimit(supabaseAdmin, userId, rateLimitKey, req.method, ipAddress, rateLimitConfig);

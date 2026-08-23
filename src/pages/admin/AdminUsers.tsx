@@ -63,6 +63,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
 import { useAdminQuotas, UserQuota } from "@/hooks/useQuotas";
+import { ENTITLED_SUBSCRIPTION_STATUSES } from "@/lib/subscriptionStatus";
+import { validateQuotaFieldInput } from "@/lib/quotaValidation";
 
 type AppRole = "user" | "admin" | "subscriber";
 type PlanSlug = "free" | "pro" | "business";
@@ -101,6 +103,58 @@ interface UserWithRole {
 }
 
 const PLATFORMS = ["facebook", "instagram", "tiktok", "youtube", "pinterest", "twitter"] as const;
+
+/**
+ * Round-2 fix (final review C2): NULL in user_quotas.max_* means "inherit
+ * from the plan" (see effective_user_quotas()), never zero and never a
+ * hardcoded number. Renders it as the word "inherit" so it is never
+ * confused with a real override value. Mirrors AdminPlanQuotas.tsx's
+ * formatLimit(), which solved the identical problem for plan-level quotas.
+ */
+export function formatQuotaValue(value: number | null | undefined): string {
+  if (value === null || value === undefined) return "inherit";
+  return value === -1 ? "∞" : value.toString();
+}
+
+/** R5 (CodeRabbit round 2): seeds a quota edit dialog's raw string state
+ *  from a stored override. Mirrors AdminPlanQuotas.tsx's toRawQuotaValue(). */
+function toRawQuotaValue(value: number | null | undefined): string {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+/**
+ * An empty (or unparseable) field means "no override" — NULL, which falls
+ * back to the plan through effective_user_quotas(). It must never be
+ * coerced to a hardcoded number (the old `parseInt(e.target.value) || 1`
+ * pattern), or an admin saving the form without touching a field would
+ * silently overwrite that field to a fixed value instead of leaving it as
+ * the number they actually saw. Mirrors AdminPlanQuotas.tsx's
+ * parseQuotaInput().
+ *
+ * F8 (CodeRabbit round 1): re-exported from the shared
+ * src/lib/quotaValidation.ts so AdminUsers.tsx, AdminPlanQuotas.tsx and
+ * AdminPlans.tsx apply the identical validation rule instead of each
+ * carrying its own parseInt()-based copy.
+ */
+export { parseQuotaFieldInput, validateQuotaFieldInput, QUOTA_FIELD_ERROR_MESSAGE } from "@/lib/quotaValidation";
+
+/**
+ * F4 (CodeRabbit round 1): mirrors the SQL guard added to
+ * handle_subscription_change() (supabase/migrations/20260823140300) -
+ * set_user_quotas_for_plan() must only run on a REAL entitlement change.
+ * changeRoleMutation used to call it unconditionally, which cleared a
+ * deliberate per-user override every time an admin reassigned a subscriber
+ * to the plan they already had. An unknown current plan (null/undefined —
+ * e.g. a user whose plan could not be determined) fails safe by syncing,
+ * matching the pre-fix behaviour for that case.
+ */
+export function shouldSyncQuotasForPlanChange(
+  currentPlanSlug: string | null | undefined,
+  targetPlanSlug: string,
+): boolean {
+  if (currentPlanSlug == null) return true;
+  return currentPlanSlug !== targetPlanSlug;
+}
 
 // Auth Status Debug Component
 function AuthStatusDebug() {
@@ -376,10 +430,39 @@ export default function AdminUsers() {
   const [deleteUser, setDeleteUser] = useState<UserWithRole | null>(null);
   const [editQuotaUser, setEditQuotaUser] = useState<UserWithRole | null>(null);
   
-  const [quotaMaxSocialAccounts, setQuotaMaxSocialAccounts] = useState(4);
-  const [quotaMaxPosts, setQuotaMaxPosts] = useState(30);
-  const [quotaMaxPostsPerDay, setQuotaMaxPostsPerDay] = useState(2);
-  const [quotaMaxMediaUploads, setQuotaMaxMediaUploads] = useState(20);
+  // null = inherit from the plan (see formatQuotaValue/parseQuotaFieldInput
+  // above). These used to default to hardcoded numbers, which meant saving
+  // the dialog without touching a field silently pinned that field's value.
+  //
+  // R5 (CodeRabbit round 2, 2026-08-23): these hold the RAW STRING the admin
+  // typed, not the parsed number - handleQuotaFieldChange() used to gate
+  // writing the numeric state on validation passing, so a rejected keystroke
+  // made the controlled Input snap back to the last valid number while an
+  // error appeared beside it, with no way to see or correct what was
+  // actually typed. Converted to a number only in handleSaveQuota() /
+  // handleSaveBulkQuota(). "" means inherit (mirrors AdminPlanQuotas.tsx).
+  const [quotaMaxProfiles, setQuotaMaxProfiles] = useState<string>("");
+  const [quotaMaxSocialAccounts, setQuotaMaxSocialAccounts] = useState<string>("");
+  const [quotaMaxPosts, setQuotaMaxPosts] = useState<string>("");
+  const [quotaMaxPostsPerDay, setQuotaMaxPostsPerDay] = useState<string>("");
+  const [quotaMaxMediaUploads, setQuotaMaxMediaUploads] = useState<string>("");
+  // F8: per-field validation error text (null = valid). Shared between the
+  // single-user and bulk-edit dialogs, same as the value state above -
+  // invalid input never updates the numeric state, it only surfaces here.
+  const [quotaFieldErrors, setQuotaFieldErrors] = useState<{
+    maxProfiles: string | null;
+    maxSocialAccounts: string | null;
+    maxPosts: string | null;
+    maxPostsPerDay: string | null;
+    maxMediaUploads: string | null;
+  }>({
+    maxProfiles: null,
+    maxSocialAccounts: null,
+    maxPosts: null,
+    maxPostsPerDay: null,
+    maxMediaUploads: null,
+  });
+  const hasQuotaFieldErrors = Object.values(quotaFieldErrors).some(Boolean);
   const [selectedUsers, setSelectedUsers] = useState<string[]>([]);
   const [showBulkEditDialog, setShowBulkEditDialog] = useState(false);
   const [showBulkDeleteDialog, setShowBulkDeleteDialog] = useState(false);
@@ -438,7 +521,14 @@ export default function AdminUsers() {
             name
           )
         `)
-        .in("status", ["active", "trialing"]);
+        // 'past_due' counts as subscribed alongside 'active' (C1, 2026-08-23
+        // final review) - a dunning Pro/Business user must not show as
+        // "free" here, matching effective_user_quotas(). 'trialing' never
+        // actually reaches this column (subscriptionStatus.ts maps it to
+        // 'active' before it's written; the status check constraint permits
+        // only active|cancelled|expired|past_due), so it is dropped as dead.
+        // F5: sourced from the single shared predicate, not a local literal.
+        .in("status", ENTITLED_SUBSCRIPTION_STATUSES);
 
       if (subscriptionsError) throw subscriptionsError;
 
@@ -502,7 +592,17 @@ export default function AdminUsers() {
         } else if (userPlanMap[profile.id]) {
           planSlug = userPlanMap[profile.id];
         } else if (userRole?.role === "subscriber" && userQuota) {
-          // Subscriber without subscription record — derive plan from quotas
+          // Subscriber without subscription record — derive plan from quotas.
+          //
+          // Reviewed and documented (C2, 2026-08-23 final review), left
+          // as-is: post-backfill, max_profiles is NULL on nearly every row,
+          // which fails both comparisons below and falls through to the
+          // "free" initialized above. That is the best available answer —
+          // there is no subscription row here to read a real plan from, and
+          // NULL no longer carries a "this was set to X" signal the way a
+          // pre-backfill numeric override did. This heuristic now only
+          // fires for the rare row still holding a genuine numeric
+          // override that exceeds its plan.
           if ((userQuota as any).max_profiles === -1) planSlug = "business";
           else if ((userQuota as any).max_profiles >= 5) planSlug = "pro";
         }
@@ -575,7 +675,11 @@ export default function AdminUsers() {
     if (error) throw error;
   };
 
-  // Point the user's single active subscription at the selected plan
+  // Point the user's single active (or past_due/dunning) subscription at the
+  // selected plan. F5: widened from `.eq("status", "active")` - a dunning
+  // user's existing row must be updated in place, not left behind while a
+  // second "active" row gets created for the new plan (which used to leave
+  // a stale past_due row the arbiter could still resolve against).
   const applySubscriptionPlan = async (userId: string, planSlug: string) => {
     const planId = await fetchPlanIdBySlug(planSlug);
 
@@ -583,7 +687,7 @@ export default function AdminUsers() {
       .from("user_subscriptions")
       .select("id")
       .eq("user_id", userId)
-      .eq("status", "active")
+      .in("status", ENTITLED_SUBSCRIPTION_STATUSES)
       .order("created_at", { ascending: false });
     if (activeError) throw activeError;
 
@@ -630,12 +734,16 @@ export default function AdminUsers() {
     if (data?.error) throw new Error(data.error);
   };
 
+  // F5: widened from `.eq("status", "active")` - downgrading a dunning
+  // (past_due) user to Free must cancel their existing row too, or it stays
+  // behind as a stale past_due row that effective_user_quotas() still
+  // resolves as entitled after the admin "downgraded" them.
   const cancelActiveSubscriptions = async (userId: string) => {
     const { error } = await supabase
       .from("user_subscriptions")
       .update({ status: "cancelled", updated_at: new Date().toISOString() })
       .eq("user_id", userId)
-      .eq("status", "active");
+      .in("status", ENTITLED_SUBSCRIPTION_STATUSES);
     if (error) throw error;
   };
 
@@ -646,11 +754,16 @@ export default function AdminUsers() {
       newRole,
       planSlug,
       stripeSubscriptionIdToCancel,
+      currentPlanSlug,
     }: {
       userId: string;
       newRole: AppRole;
       planSlug?: string;
       stripeSubscriptionIdToCancel?: string;
+      // F4: the user's plan_slug as already known to the admin-users list
+      // (before this mutation runs). Used only to decide whether the
+      // entitlement is actually changing - never sent to the server.
+      currentPlanSlug?: string | null;
     }) => {
       await supabase.from("user_roles").delete().eq("user_id", userId);
       const { error } = await supabase.from("user_roles").insert({
@@ -675,13 +788,20 @@ export default function AdminUsers() {
         await cancelActiveSubscriptions(userId);
       }
 
-      // Auto-update quotas via SECURITY DEFINER DB function (bypasses RLS).
-      // Also covers re-assigning the same plan, where the plan_id trigger does not fire.
-      const { error: quotaError } = await supabase.rpc("set_user_quotas_for_plan", {
-        p_user_id: userId,
-        p_plan_slug: plan,
-      });
-      if (quotaError) throw quotaError;
+      // F4 (CodeRabbit round 1): only sync quotas (which clears per-user
+      // overrides) when the entitlement is actually changing. This used to
+      // run unconditionally - "also covers re-assigning the same plan,
+      // where the plan_id trigger does not fire" was true but backwards:
+      // reassigning the SAME plan is exactly the case where nothing should
+      // be cleared. A real change still needs this call because the SQL
+      // trigger only fires off user_subscriptions writes, not user_roles.
+      if (shouldSyncQuotasForPlanChange(currentPlanSlug, plan)) {
+        const { error: quotaError } = await supabase.rpc("set_user_quotas_for_plan", {
+          p_user_id: userId,
+          p_plan_slug: plan,
+        });
+        if (quotaError) throw quotaError;
+      }
     },
     onSuccess: async () => {
       await queryClient.refetchQueries({ queryKey: ["admin-users"] });
@@ -703,45 +823,91 @@ export default function AdminUsers() {
     },
   });
 
+  // C2 fix: prefill with the raw override (null stays null = inherit),
+  // never `|| <hardcoded default>` — that coerced NULL into a number the
+  // admin never typed, so an untouched Save silently pinned it.
   const handleEditQuota = (user: UserWithRole) => {
     setEditQuotaUser(user);
-    
-    setQuotaMaxSocialAccounts(user.quota?.max_social_accounts || 4);
-    setQuotaMaxPosts(user.quota?.max_posts_per_month || 30);
-    setQuotaMaxPostsPerDay(user.quota?.max_posts_per_day || 2);
-    setQuotaMaxMediaUploads(user.quota?.max_media_uploads_per_day || 20);
+
+    setQuotaMaxProfiles(toRawQuotaValue(user.quota?.max_profiles ?? null));
+    setQuotaMaxSocialAccounts(toRawQuotaValue(user.quota?.max_social_accounts ?? null));
+    setQuotaMaxPosts(toRawQuotaValue(user.quota?.max_posts_per_month ?? null));
+    setQuotaMaxPostsPerDay(toRawQuotaValue(user.quota?.max_posts_per_day ?? null));
+    setQuotaMaxMediaUploads(toRawQuotaValue(user.quota?.max_media_uploads_per_day ?? null));
+    setQuotaFieldErrors({
+      maxProfiles: null,
+      maxSocialAccounts: null,
+      maxPosts: null,
+      maxPostsPerDay: null,
+      maxMediaUploads: null,
+    });
   };
 
+  // R5 (CodeRabbit round 2, 2026-08-23): the raw string is ALWAYS written,
+  // so the admin always sees exactly what they typed. Validation only ever
+  // updates the error message next to the field - it used to gate whether
+  // the numeric state updated at all (F8, round 1), which meant a rejected
+  // keystroke made the controlled Input snap back to the last valid number
+  // with no way to see or correct what was actually typed.
+  const handleQuotaFieldChange = (
+    field: keyof typeof quotaFieldErrors,
+    setRawValue: (value: string) => void,
+    raw: string,
+  ) => {
+    setRawValue(raw);
+    const { error } = validateQuotaFieldInput(raw);
+    setQuotaFieldErrors((prev) => ({ ...prev, [field]: error }));
+  };
+
+  // C2 fix: write exactly what the dialog shows the admin. maxProfiles used
+  // to be `editQuotaUser.quota?.max_profiles || 1`, which rewrote it to 1
+  // on every save regardless of the field's real value (there was no UI
+  // control for it at all) — a Pro user's profile limit got permanently
+  // capped near free tier the moment an admin opened and saved this dialog.
+  //
+  // R5: the raw strings are converted to numbers here, at save time, not on
+  // every keystroke.
   const handleSaveQuota = () => {
-    if (!editQuotaUser) return;
+    if (!editQuotaUser || hasQuotaFieldErrors) return;
     updateQuota({
       userId: editQuotaUser.id,
-      maxProfiles: editQuotaUser.quota?.max_profiles || 1,
-      maxSocialAccounts: quotaMaxSocialAccounts,
-      maxPostsPerMonth: quotaMaxPosts,
-      maxPostsPerDay: quotaMaxPostsPerDay,
-      maxMediaUploadsPerDay: quotaMaxMediaUploads,
+      maxProfiles: validateQuotaFieldInput(quotaMaxProfiles).value,
+      maxSocialAccounts: validateQuotaFieldInput(quotaMaxSocialAccounts).value,
+      maxPostsPerMonth: validateQuotaFieldInput(quotaMaxPosts).value,
+      maxPostsPerDay: validateQuotaFieldInput(quotaMaxPostsPerDay).value,
+      maxMediaUploadsPerDay: validateQuotaFieldInput(quotaMaxMediaUploads).value,
     });
     setEditQuotaUser(null);
   };
 
+  // Bulk edit opens with every field at "inherit" (empty), not a hardcoded
+  // number pinning every selected user to the same value unless the admin
+  // explicitly types one.
   const handleBulkEditQuota = () => {
-    
-    setQuotaMaxSocialAccounts(4);
-    setQuotaMaxPosts(30);
-    setQuotaMaxPostsPerDay(2);
-    setQuotaMaxMediaUploads(20);
+    setQuotaMaxProfiles("");
+    setQuotaMaxSocialAccounts("");
+    setQuotaMaxPosts("");
+    setQuotaMaxPostsPerDay("");
+    setQuotaMaxMediaUploads("");
+    setQuotaFieldErrors({
+      maxProfiles: null,
+      maxSocialAccounts: null,
+      maxPosts: null,
+      maxPostsPerDay: null,
+      maxMediaUploads: null,
+    });
     setShowBulkEditDialog(true);
   };
 
   const handleSaveBulkQuota = () => {
+    if (hasQuotaFieldErrors) return;
     bulkUpdateQuota({
       userIds: selectedUsers,
-      maxProfiles: 1,
-      maxSocialAccounts: quotaMaxSocialAccounts,
-      maxPostsPerMonth: quotaMaxPosts,
-      maxPostsPerDay: quotaMaxPostsPerDay,
-      maxMediaUploadsPerDay: quotaMaxMediaUploads,
+      maxProfiles: validateQuotaFieldInput(quotaMaxProfiles).value,
+      maxSocialAccounts: validateQuotaFieldInput(quotaMaxSocialAccounts).value,
+      maxPostsPerMonth: validateQuotaFieldInput(quotaMaxPosts).value,
+      maxPostsPerDay: validateQuotaFieldInput(quotaMaxPostsPerDay).value,
+      maxMediaUploadsPerDay: validateQuotaFieldInput(quotaMaxMediaUploads).value,
     });
     setShowBulkEditDialog(false);
     setSelectedUsers([]);
@@ -1157,19 +1323,19 @@ export default function AdminUsers() {
                           <div className="text-xs space-y-1">
                             <div className="flex items-center gap-1">
                               <span className="w-3 h-3 text-muted-foreground text-center">📱</span>
-                              <span>{user.social_accounts?.length || 0}/{user.quota?.max_social_accounts === -1 ? '∞' : user.quota?.max_social_accounts ?? 4} accounts</span>
+                              <span>{user.social_accounts?.length || 0}/{formatQuotaValue(user.quota?.max_social_accounts)} accounts</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <FileText className="w-3 h-3 text-muted-foreground" />
-                              <span>{user.quota?.posts_this_month ?? 0}/{user.quota?.max_posts_per_month === -1 ? '∞' : user.quota?.max_posts_per_month ?? 30} posts/mo</span>
+                              <span>{user.quota?.posts_this_month ?? 0}/{formatQuotaValue(user.quota?.max_posts_per_month)} posts/mo</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <Calendar className="w-3 h-3 text-muted-foreground" />
-                              <span>{user.quota?.posts_today ?? 0}/{user.quota?.max_posts_per_day === -1 ? '∞' : user.quota?.max_posts_per_day ?? 2} posts/day</span>
+                              <span>{user.quota?.posts_today ?? 0}/{formatQuotaValue(user.quota?.max_posts_per_day)} posts/day</span>
                             </div>
                             <div className="flex items-center gap-1">
                               <ImagePlus className="w-3 h-3 text-muted-foreground" />
-                              <span>{user.quota?.media_uploads_today ?? 0}/{user.quota?.max_media_uploads_per_day === -1 ? '∞' : user.quota?.max_media_uploads_per_day ?? 20} uploads/day</span>
+                              <span>{user.quota?.media_uploads_today ?? 0}/{formatQuotaValue(user.quota?.max_media_uploads_per_day)} uploads/day</span>
                             </div>
                           </div>
                         )}
@@ -1214,7 +1380,11 @@ export default function AdminUsers() {
                                   setCancelStripeOnDowngrade(true);
                                   return;
                                 }
-                                changeRoleMutation.mutate({ userId: user.id, newRole: "user" });
+                                changeRoleMutation.mutate({
+                                  userId: user.id,
+                                  newRole: "user",
+                                  currentPlanSlug: user.plan_slug,
+                                });
                               }}
                               disabled={user.role === "user" && user.plan_slug === "free"}
                             >
@@ -1235,7 +1405,13 @@ export default function AdminUsers() {
                               {user.role === "subscriber" ? "Change Plan" : "Set as Subscriber"}
                             </DropdownMenuItem>
                             <DropdownMenuItem
-                              onClick={() => changeRoleMutation.mutate({ userId: user.id, newRole: "admin" })}
+                              onClick={() =>
+                                changeRoleMutation.mutate({
+                                  userId: user.id,
+                                  newRole: "admin",
+                                  currentPlanSlug: user.plan_slug,
+                                })
+                              }
                               disabled={user.role === "admin"}
                             >
                               <Shield className="w-4 h-4 mr-2" />
@@ -1278,15 +1454,40 @@ export default function AdminUsers() {
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
+              <Label htmlFor="maxProfiles">Max Social Profiles</Label>
+              <Input
+                id="maxProfiles"
+                type="number"
+                min={-1}
+                value={quotaMaxProfiles}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxProfiles}
+                onChange={(e) => handleQuotaFieldChange("maxProfiles", setQuotaMaxProfiles, e.target.value)}
+              />
+              {quotaFieldErrors.maxProfiles ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxProfiles}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
+            </div>
+            <div className="space-y-2">
               <Label htmlFor="maxSocialAccounts">Max Social Media Accounts</Label>
               <Input
                 id="maxSocialAccounts"
                 type="number"
                 min={-1}
                 value={quotaMaxSocialAccounts}
-                onChange={(e) => setQuotaMaxSocialAccounts(parseInt(e.target.value) || 1)}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxSocialAccounts}
+                onChange={(e) =>
+                  handleQuotaFieldChange("maxSocialAccounts", setQuotaMaxSocialAccounts, e.target.value)
+                }
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              {quotaFieldErrors.maxSocialAccounts ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxSocialAccounts}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxPosts">Max Posts Per Month</Label>
@@ -1295,9 +1496,15 @@ export default function AdminUsers() {
                 type="number"
                 min={-1}
                 value={quotaMaxPosts}
-                onChange={(e) => setQuotaMaxPosts(parseInt(e.target.value) || 1)}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxPosts}
+                onChange={(e) => handleQuotaFieldChange("maxPosts", setQuotaMaxPosts, e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              {quotaFieldErrors.maxPosts ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxPosts}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxPostsPerDay">Max Posts Per Day</Label>
@@ -1306,9 +1513,15 @@ export default function AdminUsers() {
                 type="number"
                 min={-1}
                 value={quotaMaxPostsPerDay}
-                onChange={(e) => setQuotaMaxPostsPerDay(parseInt(e.target.value) || 1)}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxPostsPerDay}
+                onChange={(e) => handleQuotaFieldChange("maxPostsPerDay", setQuotaMaxPostsPerDay, e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              {quotaFieldErrors.maxPostsPerDay ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxPostsPerDay}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxMediaUploads">Max Media Uploads Per Day</Label>
@@ -1317,16 +1530,24 @@ export default function AdminUsers() {
                 type="number"
                 min={-1}
                 value={quotaMaxMediaUploads}
-                onChange={(e) => setQuotaMaxMediaUploads(parseInt(e.target.value) || 1)}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxMediaUploads}
+                onChange={(e) =>
+                  handleQuotaFieldChange("maxMediaUploads", setQuotaMaxMediaUploads, e.target.value)
+                }
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              {quotaFieldErrors.maxMediaUploads ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxMediaUploads}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditQuotaUser(null)}>
               Cancel
             </Button>
-            <Button onClick={handleSaveQuota} disabled={isUpdating}>
+            <Button onClick={handleSaveQuota} disabled={isUpdating || hasQuotaFieldErrors}>
               {isUpdating && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Save Changes
             </Button>
@@ -1340,10 +1561,28 @@ export default function AdminUsers() {
           <DialogHeader>
             <DialogTitle>Bulk Edit Quotas</DialogTitle>
             <DialogDescription>
-              Set quotas for {selectedUsers.length} selected user{selectedUsers.length > 1 ? 's' : ''}.
+              Set quotas for {selectedUsers.length} selected user{selectedUsers.length > 1 ? 's' : ''}. Leave a field
+              empty to clear that override and have those users inherit it from their plan.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label htmlFor="bulkMaxProfiles">Max Social Profiles</Label>
+              <Input
+                id="bulkMaxProfiles"
+                type="number"
+                min={-1}
+                value={quotaMaxProfiles}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxProfiles}
+                onChange={(e) => handleQuotaFieldChange("maxProfiles", setQuotaMaxProfiles, e.target.value)}
+              />
+              {quotaFieldErrors.maxProfiles ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxProfiles}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
+            </div>
             <div className="space-y-2">
               <Label htmlFor="bulkMaxSocialAccounts">Max Social Media Accounts</Label>
               <Input
@@ -1351,9 +1590,17 @@ export default function AdminUsers() {
                 type="number"
                 min={-1}
                 value={quotaMaxSocialAccounts}
-                onChange={(e) => setQuotaMaxSocialAccounts(parseInt(e.target.value) || 1)}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxSocialAccounts}
+                onChange={(e) =>
+                  handleQuotaFieldChange("maxSocialAccounts", setQuotaMaxSocialAccounts, e.target.value)
+                }
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              {quotaFieldErrors.maxSocialAccounts ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxSocialAccounts}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="bulkMaxPosts">Max Posts Per Month</Label>
@@ -1362,9 +1609,15 @@ export default function AdminUsers() {
                 type="number"
                 min={-1}
                 value={quotaMaxPosts}
-                onChange={(e) => setQuotaMaxPosts(parseInt(e.target.value) || 1)}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxPosts}
+                onChange={(e) => handleQuotaFieldChange("maxPosts", setQuotaMaxPosts, e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              {quotaFieldErrors.maxPosts ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxPosts}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="bulkMaxPostsPerDay">Max Posts Per Day</Label>
@@ -1373,9 +1626,15 @@ export default function AdminUsers() {
                 type="number"
                 min={-1}
                 value={quotaMaxPostsPerDay}
-                onChange={(e) => setQuotaMaxPostsPerDay(parseInt(e.target.value) || 1)}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxPostsPerDay}
+                onChange={(e) => handleQuotaFieldChange("maxPostsPerDay", setQuotaMaxPostsPerDay, e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              {quotaFieldErrors.maxPostsPerDay ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxPostsPerDay}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="bulkMaxMediaUploads">Max Media Uploads Per Day</Label>
@@ -1384,16 +1643,24 @@ export default function AdminUsers() {
                 type="number"
                 min={-1}
                 value={quotaMaxMediaUploads}
-                onChange={(e) => setQuotaMaxMediaUploads(parseInt(e.target.value) || 1)}
+                placeholder="Empty inherits from plan"
+                aria-invalid={!!quotaFieldErrors.maxMediaUploads}
+                onChange={(e) =>
+                  handleQuotaFieldChange("maxMediaUploads", setQuotaMaxMediaUploads, e.target.value)
+                }
               />
-              <p className="text-xs text-muted-foreground">Use -1 for unlimited</p>
+              {quotaFieldErrors.maxMediaUploads ? (
+                <p className="text-xs text-destructive">{quotaFieldErrors.maxMediaUploads}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Use -1 for unlimited. Leave empty to inherit from the plan.</p>
+              )}
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowBulkEditDialog(false)}>
               Cancel
             </Button>
-            <Button onClick={handleSaveBulkQuota} disabled={isBulkUpdating}>
+            <Button onClick={handleSaveBulkQuota} disabled={isBulkUpdating || hasQuotaFieldErrors}>
               {isBulkUpdating && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
               Update {selectedUsers.length} User{selectedUsers.length > 1 ? 's' : ''}
             </Button>
@@ -1493,6 +1760,7 @@ export default function AdminUsers() {
                   stripeSubscriptionIdToCancel: cancelStripeOnDowngrade
                     ? downgradeUser.stripe_subscription_id ?? undefined
                     : undefined,
+                  currentPlanSlug: downgradeUser.plan_slug,
                 });
               }}
             >
@@ -1568,6 +1836,8 @@ export default function AdminUsers() {
                     userId: subscriberPlanUser.id,
                     newRole: "subscriber",
                     planSlug: selectedSubscriberPlan,
+                    currentPlanSlug:
+                      subscriberPlanUser.role === "subscriber" ? subscriberPlanUser.plan_slug : null,
                   });
                 }
               }}

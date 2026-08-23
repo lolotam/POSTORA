@@ -15,6 +15,7 @@ import {
   HIGGSFIELD_CALLBACK_PATH,
   isHiggsfieldOAuthCallback,
 } from "@/lib/higgsfieldOAuthReturn";
+import { ENTITLED_SUBSCRIPTION_STATUSES } from "@/lib/subscriptionStatus";
 
 const authSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -116,11 +117,17 @@ export default function Auth() {
         // Check if user has a subscription — if not, send to pricing
         const checkSubscription = async () => {
           try {
+            // F5 (CodeRabbit round 1): "active" alone sent a dunning
+            // (past_due) customer to /pricing on login instead of
+            // /dashboard, even though effective_user_quotas() still
+            // entitles them for the whole Stripe retry window.
             const { data: sub } = await supabase
               .from("user_subscriptions")
               .select("id")
               .eq("user_id", user.id)
-              .eq("status", "active")
+              .in("status", ENTITLED_SUBSCRIPTION_STATUSES)
+              .order("created_at", { ascending: false })
+              .limit(1)
               .maybeSingle();
 
             if (sub) {

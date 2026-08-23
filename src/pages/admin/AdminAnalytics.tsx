@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Users, Activity, TrendingUp, Database, HardDrive, Zap, RefreshCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { ENTITLED_SUBSCRIPTION_STATUSES } from "@/lib/subscriptionStatus";
 import { format, subDays, subHours, startOfDay, endOfDay, eachDayOfInterval } from "date-fns";
 import { useState } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from "recharts";
@@ -62,11 +63,13 @@ export default function AdminAnalytics() {
       
       const activeUsers = new Set(activePosts?.map(p => p.user_id) || []).size;
 
-      // Users with subscriptions
+      // Users with subscriptions. F5: a dunning (past_due) subscriber is
+      // still a paying customer during Stripe's retry window and must count
+      // here too, or the conversion rate below undercounts them.
       const { count: subscribers } = await supabase
         .from("user_subscriptions")
         .select("id", { count: "exact", head: true })
-        .eq("status", "active");
+        .in("status", ENTITLED_SUBSCRIPTION_STATUSES);
 
       return {
         totalUsers: totalUsers || 0,

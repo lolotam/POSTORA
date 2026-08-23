@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,168 +22,100 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Loader2, Save, Settings, Users, FileText, Calendar, ImagePlus, Share2, Zap, Crown, Edit } from "lucide-react";
-import { supabase } from "@/integrations/supabase/client";
-import { useToast } from "@/hooks/use-toast";
+import { usePlanQuotas } from "@/hooks/usePlanQuotas";
+import type { PlanQuota } from "@/hooks/usePlanQuotas";
+import { validateQuotaFieldInput } from "@/lib/quotaValidation";
 
-interface PlanQuota {
+type QuotaFormValues = {
   plan_slug: string;
-  plan_name: string;
-  max_profiles: number;
-  max_social_accounts: number;
-  max_posts_per_month: number;
-  max_posts_per_day: number;
-  max_media_uploads_per_day: number;
-}
+  profile_limit: number | null;
+  max_social_accounts: number | null;
+  max_posts_per_month: number | null;
+  max_posts_per_day: number | null;
+  max_media_uploads_per_day: number | null;
+};
 
-// Default quotas that match the hardcoded values
-const DEFAULT_QUOTAS: PlanQuota[] = [
-  {
-    plan_slug: "free",
-    plan_name: "Free",
-    max_profiles: 2,
-    max_social_accounts: 3,
-    max_posts_per_month: 30,
-    max_posts_per_day: 2,
-    max_media_uploads_per_day: 20,
-  },
-  {
-    plan_slug: "pro",
-    plan_name: "Pro",
-    max_profiles: 15,
-    max_social_accounts: 30,
-    max_posts_per_month: 500,
-    max_posts_per_day: 30,
-    max_media_uploads_per_day: -1,
-  },
-  {
-    plan_slug: "business",
-    plan_name: "Business",
-    max_profiles: -1,
-    max_social_accounts: -1,
-    max_posts_per_month: -1,
-    max_posts_per_day: -1,
-    max_media_uploads_per_day: -1,
-  },
-];
+type QuotaFieldName = keyof Omit<QuotaFormValues, "plan_slug">;
+
+// R5 (CodeRabbit round 2, 2026-08-23): raw string per field, always shown in
+// the Input regardless of validity. See the comment on handleQuotaFieldChange
+// below for why formData's numeric snapshot is no longer written on every
+// keystroke.
+type QuotaRawValues = Record<QuotaFieldName, string>;
+
+const EMPTY_RAW_VALUES: QuotaRawValues = {
+  profile_limit: "",
+  max_social_accounts: "",
+  max_posts_per_month: "",
+  max_posts_per_day: "",
+  max_media_uploads_per_day: "",
+};
+
+const EMPTY_FIELD_ERRORS: Record<QuotaFieldName, string | null> = {
+  profile_limit: null,
+  max_social_accounts: null,
+  max_posts_per_month: null,
+  max_posts_per_day: null,
+  max_media_uploads_per_day: null,
+};
+
+function toRawQuotaValue(value: number | null): string {
+  return value === null ? "" : String(value);
+}
 
 export default function AdminPlanQuotas() {
   const [editPlan, setEditPlan] = useState<PlanQuota | null>(null);
-  const [formData, setFormData] = useState<Omit<PlanQuota, "plan_name">>({
-    plan_slug: "",
-    max_profiles: 0,
-    max_social_accounts: 0,
-    max_posts_per_month: 0,
-    max_posts_per_day: 0,
-    max_media_uploads_per_day: 0,
-  });
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
+  // R5: the raw text the admin typed, kept verbatim - never snapped back to
+  // the last valid number. Converted to a number only in handleSave().
+  const [rawFieldValues, setRawFieldValues] = useState<QuotaRawValues>(EMPTY_RAW_VALUES);
+  const { quotas, isLoading, updateQuota } = usePlanQuotas();
 
-  // Fetch plan quotas from app_settings or use defaults
-  const { data: quotas = DEFAULT_QUOTAS, isLoading } = useQuery({
-    queryKey: ["plan-quotas"],
-    queryFn: async (): Promise<PlanQuota[]> => {
-      const { data: settings, error } = await supabase
-        .from("app_settings")
-        .select("*")
-        .eq("key", "plan_quotas")
-        .maybeSingle();
-
-      if (error) {
-        console.error("Error fetching plan quotas:", error);
-        return DEFAULT_QUOTAS;
-      }
-
-      if (settings?.value) {
-        try {
-          const parsed = settings.value as unknown as PlanQuota[];
-          return Array.isArray(parsed) ? parsed : DEFAULT_QUOTAS;
-        } catch {
-          return DEFAULT_QUOTAS;
-        }
-      }
-
-      return DEFAULT_QUOTAS;
-    },
-  });
-
-  // Update plan quotas mutation
-  const updateQuotasMutation = useMutation({
-    mutationFn: async (updatedQuotas: PlanQuota[]) => {
-      const { data: existing } = await supabase
-        .from("app_settings")
-        .select("id")
-        .eq("key", "plan_quotas")
-        .maybeSingle();
-
-      // Convert to JSON-compatible format
-      const jsonValue = JSON.parse(JSON.stringify(updatedQuotas));
-
-      if (existing) {
-        const { error } = await supabase
-          .from("app_settings")
-          .update({
-            value: jsonValue,
-            description: "Plan-based quota limits for profiles, social accounts, posts, and media uploads",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("key", "plan_quotas");
-
-        if (error) throw error;
-      } else {
-        const { error } = await supabase
-          .from("app_settings")
-          .insert([{
-            key: "plan_quotas",
-            value: jsonValue,
-            description: "Plan-based quota limits for profiles, social accounts, posts, and media uploads",
-          }]);
-
-        if (error) throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["plan-quotas"] });
-      toast({
-        title: "Quotas updated",
-        description: "Plan quotas have been saved successfully.",
-      });
-      setEditPlan(null);
-    },
-    onError: (error) => {
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to update quotas",
-        variant: "destructive",
-      });
-    },
-  });
+  // F8 (CodeRabbit round 1): per-field validation error text (null = valid).
+  const [fieldErrors, setFieldErrors] = useState<Record<QuotaFieldName, string | null>>(EMPTY_FIELD_ERRORS);
+  const hasFieldErrors = Object.values(fieldErrors).some(Boolean);
 
   const handleEditPlan = (plan: PlanQuota) => {
     setEditPlan(plan);
-    setFormData({
-      plan_slug: plan.plan_slug,
-      max_profiles: plan.max_profiles,
-      max_social_accounts: plan.max_social_accounts,
-      max_posts_per_month: plan.max_posts_per_month,
-      max_posts_per_day: plan.max_posts_per_day,
-      max_media_uploads_per_day: plan.max_media_uploads_per_day,
+    setRawFieldValues({
+      profile_limit: toRawQuotaValue(plan.profile_limit),
+      max_social_accounts: toRawQuotaValue(plan.max_social_accounts),
+      max_posts_per_month: toRawQuotaValue(plan.max_posts_per_month),
+      max_posts_per_day: toRawQuotaValue(plan.max_posts_per_day),
+      max_media_uploads_per_day: toRawQuotaValue(plan.max_media_uploads_per_day),
     });
+    setFieldErrors(EMPTY_FIELD_ERRORS);
+  };
+
+  // R5 (CodeRabbit round 2): the raw string is ALWAYS written, so the admin
+  // always sees exactly what they typed. Validation only ever updates the
+  // error message next to the field - it used to gate whether formData's
+  // numeric snapshot updated at all, which meant a rejected keystroke made
+  // the controlled Input snap back to the last valid number with no way to
+  // see or correct what was actually typed.
+  const handleQuotaFieldChange = (field: QuotaFieldName, raw: string) => {
+    setRawFieldValues((prev) => ({ ...prev, [field]: raw }));
+    const { error } = validateQuotaFieldInput(raw);
+    setFieldErrors((prev) => ({ ...prev, [field]: error }));
   };
 
   const handleSave = () => {
-    if (!editPlan) return;
-
-    const updatedQuotas = quotas.map((q) =>
-      q.plan_slug === editPlan.plan_slug
-        ? { ...q, ...formData, plan_name: editPlan.plan_name }
-        : q
+    if (!editPlan || hasFieldErrors) return;
+    const formData: QuotaFormValues = {
+      plan_slug: editPlan.plan_slug,
+      profile_limit: validateQuotaFieldInput(rawFieldValues.profile_limit).value,
+      max_social_accounts: validateQuotaFieldInput(rawFieldValues.max_social_accounts).value,
+      max_posts_per_month: validateQuotaFieldInput(rawFieldValues.max_posts_per_month).value,
+      max_posts_per_day: validateQuotaFieldInput(rawFieldValues.max_posts_per_day).value,
+      max_media_uploads_per_day: validateQuotaFieldInput(rawFieldValues.max_media_uploads_per_day).value,
+    };
+    updateQuota.mutate(
+      { ...editPlan, ...formData },
+      { onSuccess: () => setEditPlan(null) }
     );
-
-    updateQuotasMutation.mutate(updatedQuotas);
   };
 
-  const formatLimit = (value: number) => {
+  const formatLimit = (value: number | null) => {
+    if (value === null) return "inherit";
     return value === -1 ? "∞" : value.toString();
   };
 
@@ -233,7 +164,7 @@ export default function AdminPlanQuotas() {
             </CardTitle>
             <CardDescription>
               Set the maximum limits for profiles, social accounts, posts, and media uploads for each plan.
-              Use -1 for unlimited.
+              Use -1 for unlimited. Leave a field empty to inherit the built-in Free-tier default.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -285,7 +216,7 @@ export default function AdminPlanQuotas() {
                       <TableRow key={plan.plan_slug}>
                         <TableCell>{getPlanBadge(plan.plan_slug)}</TableCell>
                         <TableCell className="text-center font-mono">
-                          {formatLimit(plan.max_profiles)}
+                          {formatLimit(plan.profile_limit)}
                         </TableCell>
                         <TableCell className="text-center font-mono">
                           {formatLimit(plan.max_social_accounts)}
@@ -323,10 +254,10 @@ export default function AdminPlanQuotas() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm text-muted-foreground">
             <p>• <strong>-1</strong> means unlimited for that resource.</p>
-            <p>• Changes here affect how quotas are displayed in the admin panel and the /profiles page.</p>
-            <p>• To apply quota changes to existing users, use the <strong>Sync Quotas</strong> button in the Users Management page.</p>
-            <p>• New subscribers will automatically get the quotas defined here when their subscription is activated via Stripe webhook.</p>
-            <p>• For immediate effect on edge functions (stripe-webhook, sync-user-quotas), the values should match the database.</p>
+            <p>• <strong>Empty (NULL)</strong> means the plan inherits the built-in Free-tier default for that quota (2 profiles, 3 social accounts, 30 posts/month, 2 posts/day, 20 uploads/day). An empty field is saved as NULL — <strong>0 is a real value</strong> that means "this plan allows zero", so never enter 0 to mean inherit.</p>
+            <p>• Quotas are saved directly to the <strong>subscription_plans</strong> table and <strong>take effect immediately</strong> — every quota check resolves through the database, so users on the plan inherit new values on their next action. No sync step is required.</p>
+            <p>• Per-user overrides on the Users Management page win over plan values — they can raise or lower a limit for a single user.</p>
+            <p className="text-destructive">• <strong>Warning:</strong> the <strong>Sync Quotas</strong> action on the Users Management page <strong>clears per-user overrides</strong>, resetting every affected user back to these plan values. Running it will erase deliberate per-user grants — use it only when that is exactly what you intend.</p>
           </CardContent>
         </Card>
       </div>
@@ -337,22 +268,27 @@ export default function AdminPlanQuotas() {
           <DialogHeader>
             <DialogTitle>Edit {editPlan?.plan_name} Plan Quotas</DialogTitle>
             <DialogDescription>
-              Update the quota limits for this plan. Use -1 for unlimited.
+              Update the quota limits for this plan. Use -1 for unlimited. Leave a field empty to inherit the Free-tier default.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label htmlFor="maxProfiles" className="flex items-center gap-2">
+              <Label htmlFor="profileLimit" className="flex items-center gap-2">
                 <Users className="w-4 h-4" />
-                Max Profiles
+                Social Profiles (shared with Plans page)
               </Label>
               <Input
-                id="maxProfiles"
+                id="profileLimit"
                 type="number"
                 min={-1}
-                value={formData.max_profiles}
-                onChange={(e) => setFormData({ ...formData, max_profiles: parseInt(e.target.value) || 0 })}
+                value={rawFieldValues.profile_limit}
+                placeholder="Empty inherits Free default (2)"
+                aria-invalid={!!fieldErrors.profile_limit}
+                onChange={(e) => handleQuotaFieldChange("profile_limit", e.target.value)}
               />
+              {fieldErrors.profile_limit && (
+                <p className="text-xs text-destructive">{fieldErrors.profile_limit}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxSocialAccounts" className="flex items-center gap-2">
@@ -363,9 +299,14 @@ export default function AdminPlanQuotas() {
                 id="maxSocialAccounts"
                 type="number"
                 min={-1}
-                value={formData.max_social_accounts}
-                onChange={(e) => setFormData({ ...formData, max_social_accounts: parseInt(e.target.value) || 0 })}
+                value={rawFieldValues.max_social_accounts}
+                placeholder="Empty inherits Free default (3)"
+                aria-invalid={!!fieldErrors.max_social_accounts}
+                onChange={(e) => handleQuotaFieldChange("max_social_accounts", e.target.value)}
               />
+              {fieldErrors.max_social_accounts && (
+                <p className="text-xs text-destructive">{fieldErrors.max_social_accounts}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxPostsMonth" className="flex items-center gap-2">
@@ -376,9 +317,14 @@ export default function AdminPlanQuotas() {
                 id="maxPostsMonth"
                 type="number"
                 min={-1}
-                value={formData.max_posts_per_month}
-                onChange={(e) => setFormData({ ...formData, max_posts_per_month: parseInt(e.target.value) || 0 })}
+                value={rawFieldValues.max_posts_per_month}
+                placeholder="Empty inherits Free default (30)"
+                aria-invalid={!!fieldErrors.max_posts_per_month}
+                onChange={(e) => handleQuotaFieldChange("max_posts_per_month", e.target.value)}
               />
+              {fieldErrors.max_posts_per_month && (
+                <p className="text-xs text-destructive">{fieldErrors.max_posts_per_month}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxPostsDay" className="flex items-center gap-2">
@@ -389,9 +335,14 @@ export default function AdminPlanQuotas() {
                 id="maxPostsDay"
                 type="number"
                 min={-1}
-                value={formData.max_posts_per_day}
-                onChange={(e) => setFormData({ ...formData, max_posts_per_day: parseInt(e.target.value) || 0 })}
+                value={rawFieldValues.max_posts_per_day}
+                placeholder="Empty inherits Free default (2)"
+                aria-invalid={!!fieldErrors.max_posts_per_day}
+                onChange={(e) => handleQuotaFieldChange("max_posts_per_day", e.target.value)}
               />
+              {fieldErrors.max_posts_per_day && (
+                <p className="text-xs text-destructive">{fieldErrors.max_posts_per_day}</p>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="maxUploads" className="flex items-center gap-2">
@@ -402,17 +353,22 @@ export default function AdminPlanQuotas() {
                 id="maxUploads"
                 type="number"
                 min={-1}
-                value={formData.max_media_uploads_per_day}
-                onChange={(e) => setFormData({ ...formData, max_media_uploads_per_day: parseInt(e.target.value) || 0 })}
+                value={rawFieldValues.max_media_uploads_per_day}
+                placeholder="Empty inherits Free default (20)"
+                aria-invalid={!!fieldErrors.max_media_uploads_per_day}
+                onChange={(e) => handleQuotaFieldChange("max_media_uploads_per_day", e.target.value)}
               />
+              {fieldErrors.max_media_uploads_per_day && (
+                <p className="text-xs text-destructive">{fieldErrors.max_media_uploads_per_day}</p>
+              )}
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditPlan(null)}>
               Cancel
             </Button>
-            <Button onClick={handleSave} disabled={updateQuotasMutation.isPending} className="gap-2">
-              {updateQuotasMutation.isPending ? (
+            <Button onClick={handleSave} disabled={updateQuota.isPending || hasFieldErrors} className="gap-2">
+              {updateQuota.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Save className="w-4 h-4" />
