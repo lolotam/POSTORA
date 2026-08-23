@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
-import { buildMessagePayload, dispatchMessageEvent } from "../_shared/n8nMessagingDispatch.ts";
+import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent } from "../_shared/n8nMessagingDispatch.ts";
 import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts";
 import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
 import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
@@ -133,7 +133,13 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
       conversationId,
       // The raw JID carries Evolution's "@s.whatsapp.net" suffix. Automations match on the
       // same digits the Cloud path sends, so the suffix is stripped before it leaves Postora.
-      sender: { id: remoteNumber, name: built.participantName, phone: remoteNumber },
+      // remoteNumber is digits-only and serves as both sender id and phone.
+      sender: buildMessagingSender({
+        platform: "whatsapp",
+        id: remoteNumber,
+        name: built.participantName,
+        phone: remoteNumber,
+      }),
       message: {
         id: row.message_id as string,
         text: row.message_text as string,
