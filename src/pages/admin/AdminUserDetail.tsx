@@ -13,6 +13,7 @@ import { allPlatforms } from "@/lib/platformConstants";
 import { isTokenExpired, formatTokenExpiry } from "@/lib/tokenUtils";
 import { TokenLifetimeInfo, ReconnectionFrequencyBadge } from "@/components/profiles/TokenLifetimeInfo";
 import { supabase } from "@/integrations/supabase/client";
+import { ENTITLED_SUBSCRIPTION_STATUSES } from "@/lib/subscriptionStatus";
 import { format } from "date-fns";
 import { toast } from "sonner";
 import {
@@ -140,6 +141,16 @@ export default function AdminUserDetail() {
   });
 
   // Fetch subscription + plan
+  //
+  // F5 (CodeRabbit round 1, 2026-08-23): this used to filter
+  // `.in("status", ["active", "trialing"])`, which never included
+  // "past_due" - a dunning user showed as paid in AdminUsers.tsx's list
+  // (already fixed) but Free here. "trialing" was dead: subscriptionStatus.ts
+  // (stripe-webhook) maps it to "active" before it ever reaches this column.
+  // Use the single shared entitlement predicate instead. The ORDER BY +
+  // LIMIT(1) mirrors useSubscription.tsx's own fix for the same widening:
+  // an IN(...) with no uniqueness constraint on active subscriptions can
+  // return 2+ rows, and .maybeSingle() throws on that.
   const { data: subscription } = useQuery({
     queryKey: ["admin-user-subscription", userId],
     queryFn: async () => {
@@ -147,7 +158,11 @@ export default function AdminUserDetail() {
         .from("user_subscriptions")
         .select(`*, subscription_plans:plan_id (slug, name)`)
         .eq("user_id", userId!)
-        .in("status", ["active", "trialing"])
+        .in("status", ENTITLED_SUBSCRIPTION_STATUSES)
+        .order("current_period_end", { ascending: false, nullsFirst: false })
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false })
+        .limit(1)
         .maybeSingle();
       if (error) throw error;
       return data;

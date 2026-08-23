@@ -8,6 +8,7 @@ import { Loader2, Users, CreditCard, DollarSign, TrendingUp, RefreshCw } from "l
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
 import { toast } from "sonner";
+import { ENTITLED_SUBSCRIPTION_STATUSES } from "@/lib/subscriptionStatus";
 
 export default function AdminDashboard() {
   const queryClient = useQueryClient();
@@ -38,9 +39,15 @@ export default function AdminDashboard() {
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ["admin-stats"],
     queryFn: async () => {
+      // F5 (CodeRabbit round 1): "active" alone undercounted paying
+      // customers - a dunning (past_due) subscriber is still a paying
+      // customer during Stripe's retry window and must be counted here too.
       const [usersResult, subscriptionsResult, messagesResult] = await Promise.all([
         supabase.from("profiles").select("id", { count: "exact", head: true }),
-        supabase.from("user_subscriptions").select("id", { count: "exact", head: true }).eq("status", "active"),
+        supabase
+          .from("user_subscriptions")
+          .select("id", { count: "exact", head: true })
+          .in("status", ENTITLED_SUBSCRIPTION_STATUSES),
         supabase.from("support_messages").select("id", { count: "exact", head: true }).eq("status", "open"),
       ]);
 

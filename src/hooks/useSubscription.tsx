@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useUserRole } from "@/hooks/useUserRole";
+import { ENTITLED_SUBSCRIPTION_STATUSES, isEntitledSubscriptionStatus } from "@/lib/subscriptionStatus";
 
 // Stripe Price ID to plan mapping
 const PRICE_TO_PLAN: Record<string, string> = {
@@ -104,7 +105,7 @@ export function useSubscription() {
         .from("user_subscriptions")
         .select("*")
         .eq("user_id", user.id)
-        .in("status", ["active", "past_due"])
+        .in("status", ENTITLED_SUBSCRIPTION_STATUSES)
         .order("current_period_end", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: false })
         .order("id", { ascending: false })
@@ -168,7 +169,7 @@ export function useSubscription() {
   // Determine subscription status - prefer Stripe data, fall back to database
   const isSubscribedViaStripe = stripeData?.subscribed === true;
   const isSubscribedViaDb =
-    !!dbSubscription && (dbSubscription.status === "active" || dbSubscription.status === "past_due");
+    !!dbSubscription && isEntitledSubscriptionStatus(dbSubscription.status);
   // Also treat admin-assigned "subscriber" role as subscribed
   const isSubscribedViaRole = isSubscriber || isAdmin;
   const isSubscribed = isSubscribedViaStripe || isSubscribedViaDb || isSubscribedViaRole;
