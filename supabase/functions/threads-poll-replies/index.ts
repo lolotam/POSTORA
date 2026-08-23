@@ -91,12 +91,48 @@ async function pollAccount(admin: any, account: ThreadsAccount): Promise<number>
       // the ingest door rather than instead of it — that one still guards the webhook path,
       // where no such field is delivered.
       if (reply?.is_reply_owned_by_me === true) continue;
-      const normalized = normalizeThreadsReply({ ...reply, root_post: reply?.root_post ?? { id: postId } });
+      const normalized = normalizeThreadsReply(
+        { ...reply, root_post: reply?.root_post ?? { id: postId } },
+        account.platform_username,
+      );
       if (!normalized) continue;
 
       const outcome = await ingestThreadsComment(admin, account, normalized, { rawPayload: reply, dispatch });
       if (outcome === "dispatched_n8n" || outcome === "automated_internally") dispatched += 1;
     }
+  }
+  dispatched += await pollMentions(admin, account, dispatch);
+  return dispatched;
+}
+
+// Mentions on other people's posts never appear in the account's own conversations, so they
+// need their own read. The same ingest door dedupes a mention that was also seen as a reply
+// under the account's own post — one comment, one fire, whichever read got there first.
+async function pollMentions(admin: any, account: ThreadsAccount, dispatch: boolean): Promise<number> {
+  const result = await metaGet("/me/mentions", account.access_token!, {
+    fields: "id,text,timestamp,permalink,username,user{id,username},root_post,replied_to",
+    limit: 25,
+  });
+  if (!result.ok || result.data?.error) {
+    console.warn(`[threads-poll] ${account.platform_username}: listing mentions failed`);
+    return 0;
+  }
+  let dispatched = 0;
+  for (const mention of (Array.isArray(result.data?.data) ? result.data.data : [])) {
+    if (!mention?.id) continue;
+    const outcome = await ingestThreadsComment(admin, account, {
+      comment: {
+        id: String(mention.id),
+        kind: "mention",
+        text: String(mention.text || ""),
+        parentCommentId: mention.replied_to?.id ? String(mention.replied_to.id) : null,
+        mediaUrl: mention.permalink || null,
+      },
+      post: { id: mention.root_post?.id ? String(mention.root_post.id) : null, url: null, caption: null },
+      author: { id: mention.user?.id ? String(mention.user.id) : null, name: null, username: mention.username || mention.user?.username || null },
+      timestamp: mention.timestamp || undefined,
+    }, { rawPayload: mention, dispatch });
+    if (outcome === "dispatched_n8n" || outcome === "automated_internally") dispatched += 1;
   }
   return dispatched;
 }

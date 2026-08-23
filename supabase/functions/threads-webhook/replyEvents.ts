@@ -33,15 +33,25 @@ export function extractThreadsChanges(payload: any): ThreadsChange[] {
 
 export type ThreadsReplyInput = Omit<CommentPayloadInput, "platform" | "socialAccountId" | "account">;
 
+// A reply under your own post that tags you is, to the person who wrote it, a mention — and
+// that is what the workflow branches on. Threads files it under the post's replies all the
+// same, so the distinction has to be made here from the text. Case-insensitive: Threads
+// handles are, and the tag is typed by hand.
+export function mentionsHandle(text: unknown, handle: string | null | undefined): boolean {
+  if (!handle || typeof text !== "string") return false;
+  const bare = handle.replace(/^@/, "").toLowerCase();
+  return new RegExp(`(^|[^\\w.])@${bare.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w.])`, "i").test(text);
+}
+
 // Threads reply payloads carry the author only as a username — there is no author id field —
 // so own-reply suppression downstream has to match on the handle.
-export function normalizeThreadsReply(value: any): ThreadsReplyInput | null {
+export function normalizeThreadsReply(value: any, accountHandle?: string | null): ThreadsReplyInput | null {
   if (!value?.id) return null;
   const parsed = value.timestamp ? new Date(value.timestamp) : null;
   return {
     comment: {
       id: String(value.id),
-      kind: "reply",
+      kind: mentionsHandle(value.text, accountHandle) ? "mention" : "reply",
       text: String(value.text || ""),
       parentCommentId: value.replied_to?.id ? String(value.replied_to.id) : null,
       mediaUrl: value.permalink || null,

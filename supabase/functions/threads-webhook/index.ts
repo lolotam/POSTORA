@@ -239,7 +239,7 @@ Deno.serve(async (req) => {
     }
 
     if (change.field === "replies") {
-      const normalized = normalizeThreadsReply(change.value);
+      const normalized = normalizeThreadsReply(change.value, account.platform_username);
       if (!normalized) {
         console.warn(
           `[threads-webhook] replies delivery for ${threadsUserId} had no reply id (value keys: ${

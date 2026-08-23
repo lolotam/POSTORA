@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { extractThreadsChanges, normalizeThreadsReply, threadsUserIdFor } from "./replyEvents.ts";
+import { extractThreadsChanges, mentionsHandle, normalizeThreadsReply, threadsUserIdFor } from "./replyEvents.ts";
 
 Deno.test("extractThreadsChanges reads entry/changes envelopes", () => {
   const out = extractThreadsChanges({ entry: [{ id: "th-1", changes: [{ field: "replies", value: { id: "r1" } }] }] });
@@ -61,4 +61,21 @@ Deno.test("threadsUserIdFor keeps target_id first for mentions, where it is the 
     "28097456199906758",
   );
   assertEquals(threadsUserIdFor({ targetId: null, field: "mentions", value: {} }), null);
+});
+
+// Production report, 2026-08-23: a reply reading "@danatfuture" under danatfuture's own post
+// reached n8n as kind "reply". The workflow branches on kind, so a tagged reply is a mention.
+Deno.test("a reply that tags the account's handle is a mention, any other reply stays a reply", () => {
+  const tagged = normalizeThreadsReply({ id: "1", text: "hey @DanatFuture, price?" }, "danatfuture");
+  assertEquals(tagged?.comment.kind, "mention");
+  const plain = normalizeThreadsReply({ id: "2", text: "nice post" }, "danatfuture");
+  assertEquals(plain?.comment.kind, "reply");
+});
+
+Deno.test("mentionsHandle matches the whole handle only", () => {
+  assertEquals(mentionsHandle("@danatfuture.kw here", "danatfuture"), false);
+  assertEquals(mentionsHandle("email@danatfuture", "danatfuture"), false);
+  assertEquals(mentionsHandle("(@danatfuture)", "@danatfuture"), true);
+  assertEquals(mentionsHandle("@vigrox.kw hi", "vigrox.kw"), true);
+  assertEquals(mentionsHandle(undefined, "danatfuture"), false);
 });
