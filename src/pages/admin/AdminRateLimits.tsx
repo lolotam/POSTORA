@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -69,11 +69,71 @@ const PLAN_COLORS: Record<string, string> = {
   business: "bg-amber-500/10 text-amber-600",
 };
 
-const ENDPOINT_LABELS: Record<string, string> = {
-  "generate-caption": "AI Captions",
-  "generate-image": "AI Images",
-  "generate-hashtags": "AI Hashtags",
+// One human-readable title per seeded endpoint (migration
+// 20260823120000_unify_rate_limits.sql). Used wherever the raw endpoint key
+// would otherwise be shown (tier tables, toasts, override dropdown labels).
+export const ENDPOINT_LABELS: Record<string, string> = {
+  "generate-caption": "AI Caption Generation",
+  "generate-image": "AI Image Generation",
+  "generate-hashtags": "AI Hashtag Generation",
+  "post-create": "Web App Post Creation",
+  "/api/v1/post": "n8n: Post Creation",
+  "/api/v1/upload-media": "n8n: Media Upload",
+  "/api/v1/webhooks": "n8n: Webhooks",
+  "/api/v1/accounts": "n8n: List Accounts",
+  "/api/v1/posts": "n8n: List Posts",
+  "/api/v1/media": "n8n: Get Media by ID",
+  "/api/v1/messages/reply": "n8n: Message Reply",
+  "/api/v1/comments/reply": "n8n: Comment Reply",
+  "/api/v1/comments/hide": "n8n: Comment Hide",
+  "/api/v1/comments/delete": "n8n: Comment Delete",
 };
+
+// Category ordering for the Global Defaults table and the override endpoint
+// dropdown. Anything not listed here lands in a trailing "Other" group so a
+// future seeded endpoint still renders instead of disappearing.
+export const ENDPOINT_CATEGORY_ORDER = [
+  "AI Generation",
+  "Postora Web App",
+  "n8n / REST API",
+] as const;
+
+const ENDPOINT_CATEGORIES: Record<string, string> = {
+  "generate-caption": "AI Generation",
+  "generate-image": "AI Generation",
+  "generate-hashtags": "AI Generation",
+  "post-create": "Postora Web App",
+  "/api/v1/post": "n8n / REST API",
+  "/api/v1/upload-media": "n8n / REST API",
+  "/api/v1/webhooks": "n8n / REST API",
+  "/api/v1/accounts": "n8n / REST API",
+  "/api/v1/posts": "n8n / REST API",
+  "/api/v1/media": "n8n / REST API",
+  "/api/v1/messages/reply": "n8n / REST API",
+  "/api/v1/comments/reply": "n8n / REST API",
+  "/api/v1/comments/hide": "n8n / REST API",
+  "/api/v1/comments/delete": "n8n / REST API",
+};
+
+export interface EndpointCategoryGroup<T> {
+  category: string;
+  items: T[];
+}
+
+/** Buckets items by endpoint category, preserving the category order above
+ *  (then a trailing "Other" group, only when non-empty). Items keep their
+ *  original relative order inside a category. */
+export function groupByEndpointCategory<T extends { endpoint: string }>(items: T[]): EndpointCategoryGroup<T>[] {
+  const groups: EndpointCategoryGroup<T>[] = [...ENDPOINT_CATEGORY_ORDER, "Other"].map((category) => ({
+    category,
+    items: [] as T[],
+  }));
+  const groupByCategory = new Map(groups.map((group) => [group.category, group]));
+  for (const item of items) {
+    groupByCategory.get(ENDPOINT_CATEGORIES[item.endpoint] ?? "Other")?.items.push(item);
+  }
+  return groups.filter((group) => group.items.length > 0);
+}
 
 export default function AdminRateLimits() {
   const { toast } = useToast();
@@ -561,137 +621,142 @@ export default function AdminRateLimits() {
                   These limits apply when tier-based limits are not configured or disabled
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Endpoint</TableHead>
-                      <TableHead>Limit</TableHead>
-                      <TableHead>Window</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {globalSettings.map((setting) => (
-                      <TableRow key={setting.id}>
-                        <TableCell>
-                          <div>
-                            <p className="font-medium">{setting.display_name}</p>
-                            <p className="text-xs text-muted-foreground">{setting.endpoint}</p>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Zap className="w-4 h-4 text-primary" />
-                            {setting.max_requests} requests
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex items-center gap-1">
-                            <Clock className="w-4 h-4 text-muted-foreground" />
-                            {setting.window_minutes} min
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={setting.is_active ? "default" : "secondary"}>
-                            {setting.is_active ? "Active" : "Disabled"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Dialog
-                            open={editingGlobal?.id === setting.id}
-                            onOpenChange={(open) => {
-                              if (open) setEditingGlobal({ ...setting });
-                              else setEditingGlobal(null);
-                            }}
-                          >
-                            <DialogTrigger asChild>
-                              <Button variant="ghost" size="sm">
-                                <Pencil className="w-4 h-4" />
-                              </Button>
-                            </DialogTrigger>
-                            <DialogContent>
-                              <DialogHeader>
-                                <DialogTitle>Edit {setting.display_name}</DialogTitle>
-                                <DialogDescription>
-                                  Configure fallback rate limiting for this endpoint
-                                </DialogDescription>
-                              </DialogHeader>
-                              {editingGlobal && (
-                                <div className="space-y-4 py-4">
-                                  <div className="space-y-2">
-                                    <Label>Max Requests</Label>
-                                    <Input
-                                      type="number"
-                                      min={1}
-                                      value={editingGlobal.max_requests}
-                                      onChange={(e) =>
-                                        setEditingGlobal({
-                                          ...editingGlobal,
-                                          max_requests: parseInt(e.target.value) || 1,
-                                        })
-                                      }
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                      Maximum number of requests allowed per window
-                                    </p>
-                                  </div>
-                                  <div className="space-y-2">
-                                    <Label>Time Window (minutes)</Label>
-                                    <Input
-                                      type="number"
-                                      min={1}
-                                      value={editingGlobal.window_minutes}
-                                      onChange={(e) =>
-                                        setEditingGlobal({
-                                          ...editingGlobal,
-                                          window_minutes: parseInt(e.target.value) || 60,
-                                        })
-                                      }
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                      Time period in which requests are counted
-                                    </p>
-                                  </div>
-                                  <div className="flex items-center justify-between">
-                                    <div className="space-y-0.5">
-                                      <Label>Active</Label>
-                                      <p className="text-xs text-muted-foreground">
-                                        Enable or disable rate limiting for this endpoint
-                                      </p>
+              <CardContent className="space-y-6">
+                {groupByEndpointCategory(globalSettings).map((group) => (
+                  <div key={group.category} className="space-y-3">
+                    <h3 className="font-semibold">{group.category}</h3>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Endpoint</TableHead>
+                          <TableHead>Limit</TableHead>
+                          <TableHead>Window</TableHead>
+                          <TableHead>Status</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {group.items.map((setting) => (
+                          <TableRow key={setting.id}>
+                            <TableCell>
+                              <div>
+                                <p className="font-medium">{setting.display_name}</p>
+                                <p className="text-xs text-muted-foreground">{setting.endpoint}</p>
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Zap className="w-4 h-4 text-primary" />
+                                {setting.max_requests} requests
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex items-center gap-1">
+                                <Clock className="w-4 h-4 text-muted-foreground" />
+                                {setting.window_minutes} min
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge variant={setting.is_active ? "default" : "secondary"}>
+                                {setting.is_active ? "Active" : "Disabled"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Dialog
+                                open={editingGlobal?.id === setting.id}
+                                onOpenChange={(open) => {
+                                  if (open) setEditingGlobal({ ...setting });
+                                  else setEditingGlobal(null);
+                                }}
+                              >
+                                <DialogTrigger asChild>
+                                  <Button variant="ghost" size="sm">
+                                    <Pencil className="w-4 h-4" />
+                                  </Button>
+                                </DialogTrigger>
+                                <DialogContent>
+                                  <DialogHeader>
+                                    <DialogTitle>Edit {setting.display_name}</DialogTitle>
+                                    <DialogDescription>
+                                      Configure fallback rate limiting for this endpoint
+                                    </DialogDescription>
+                                  </DialogHeader>
+                                  {editingGlobal && (
+                                    <div className="space-y-4 py-4">
+                                      <div className="space-y-2">
+                                        <Label>Max Requests</Label>
+                                        <Input
+                                          type="number"
+                                          min={1}
+                                          value={editingGlobal.max_requests}
+                                          onChange={(e) =>
+                                            setEditingGlobal({
+                                              ...editingGlobal,
+                                              max_requests: parseInt(e.target.value) || 1,
+                                            })
+                                          }
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                          Maximum number of requests allowed per window
+                                        </p>
+                                      </div>
+                                      <div className="space-y-2">
+                                        <Label>Time Window (minutes)</Label>
+                                        <Input
+                                          type="number"
+                                          min={1}
+                                          value={editingGlobal.window_minutes}
+                                          onChange={(e) =>
+                                            setEditingGlobal({
+                                              ...editingGlobal,
+                                              window_minutes: parseInt(e.target.value) || 60,
+                                            })
+                                          }
+                                        />
+                                        <p className="text-xs text-muted-foreground">
+                                          Time period in which requests are counted
+                                        </p>
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <div className="space-y-0.5">
+                                          <Label>Active</Label>
+                                          <p className="text-xs text-muted-foreground">
+                                            Enable or disable rate limiting for this endpoint
+                                          </p>
+                                        </div>
+                                        <Switch
+                                          checked={editingGlobal.is_active}
+                                          onCheckedChange={(checked) =>
+                                            setEditingGlobal({
+                                              ...editingGlobal,
+                                              is_active: checked,
+                                            })
+                                          }
+                                        />
+                                      </div>
                                     </div>
-                                    <Switch
-                                      checked={editingGlobal.is_active}
-                                      onCheckedChange={(checked) =>
-                                        setEditingGlobal({
-                                          ...editingGlobal,
-                                          is_active: checked,
-                                        })
-                                      }
-                                    />
-                                  </div>
-                                </div>
-                              )}
-                              <DialogFooter>
-                                <Button variant="outline" onClick={() => setEditingGlobal(null)}>
-                                  Cancel
-                                </Button>
-                                <Button
-                                  onClick={() => editingGlobal && updateGlobalSetting(editingGlobal)}
-                                  disabled={isSaving}
-                                >
-                                  {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                                  Save Changes
-                                </Button>
-                              </DialogFooter>
-                            </DialogContent>
-                          </Dialog>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                                  )}
+                                  <DialogFooter>
+                                    <Button variant="outline" onClick={() => setEditingGlobal(null)}>
+                                      Cancel
+                                    </Button>
+                                    <Button
+                                      onClick={() => editingGlobal && updateGlobalSetting(editingGlobal)}
+                                      disabled={isSaving}
+                                    >
+                                      {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                                      Save Changes
+                                    </Button>
+                                  </DialogFooter>
+                                </DialogContent>
+                              </Dialog>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                ))}
               </CardContent>
             </Card>
           </TabsContent>
@@ -768,10 +833,15 @@ export default function AdminRateLimits() {
                             <SelectValue placeholder="Select an endpoint" />
                           </SelectTrigger>
                           <SelectContent>
-                            {globalSettings.map((setting) => (
-                              <SelectItem key={setting.endpoint} value={setting.endpoint}>
-                                {setting.display_name}
-                              </SelectItem>
+                            {groupByEndpointCategory(globalSettings).map((group) => (
+                              <SelectGroup key={group.category}>
+                                <SelectLabel>{group.category}</SelectLabel>
+                                {group.items.map((setting) => (
+                                  <SelectItem key={setting.endpoint} value={setting.endpoint}>
+                                    {setting.display_name}
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
                             ))}
                           </SelectContent>
                         </Select>
