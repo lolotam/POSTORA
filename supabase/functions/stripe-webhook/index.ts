@@ -5,6 +5,7 @@ import {
   mapStripeSubscriptionStatus,
   type PermittedSubscriptionStatus,
 } from "./subscriptionStatus.ts";
+import { shouldClearQuotaOverrides } from "./overrideClearing.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -290,43 +291,60 @@ Deno.serve(async (req) => {
         }
 
         // New subscription = clear any overrides so the plan resolves through
-        // the arbiter.
-        const quotas = CLEARED_QUOTA_OVERRIDES;
+        // the arbiter — but only if the subscription upsert above actually
+        // landed. On a failed write plan_id never moved, and the existing
+        // override is what still describes the customer's entitlements.
+        // Checkout is the create path: previousPlanId is null because the
+        // upsert itself establishes the plan.
+        const clearCheckoutOverrides = shouldClearQuotaOverrides({
+          previousPlanId: null,
+          resolvedPlanId: planId,
+          subscriptionWriteFailed: Boolean(subError),
+        });
 
-        // First try to update, if no rows affected, insert new record
-        const { data: existingQuota, error: quotaLookupError } = await supabase
-          .from("user_quotas")
-          .select("id")
-          .eq("user_id", userId)
-          .maybeSingle();
-
-        if (quotaLookupError) {
-          logStep("Quota lookup failed", { userId, error: quotaLookupError });
-        }
-
-        if (existingQuota) {
-          const { error: quotaUpdateError } = await supabase
-            .from("user_quotas")
-            .update(quotas)
-            .eq("user_id", userId);
-
-          if (quotaUpdateError) {
-            logStep("Quota override clear failed", { userId, error: quotaUpdateError });
-          }
+        if (!clearCheckoutOverrides) {
+          logStep(
+            "Skipping quota override clear: subscription write failed, stale override kept as the customer's safety net",
+            { userId, planId, subscriptionError: subError },
+          );
         } else {
-          const { error: quotaInsertError } = await supabase
+          const quotas = CLEARED_QUOTA_OVERRIDES;
+
+          // First try to update, if no rows affected, insert new record
+          const { data: existingQuota, error: quotaLookupError } = await supabase
             .from("user_quotas")
-            .insert({
-              user_id: userId,
-              ...quotas,
-            });
+            .select("id")
+            .eq("user_id", userId)
+            .maybeSingle();
 
-          if (quotaInsertError) {
-            logStep("Quota row insert failed", { userId, error: quotaInsertError });
+          if (quotaLookupError) {
+            logStep("Quota lookup failed", { userId, error: quotaLookupError });
           }
-        }
 
-        logStep(`Subscription created for user ${userId} on plan ${planSlug}`, { quotas });
+          if (existingQuota) {
+            const { error: quotaUpdateError } = await supabase
+              .from("user_quotas")
+              .update(quotas)
+              .eq("user_id", userId);
+
+            if (quotaUpdateError) {
+              logStep("Quota override clear failed", { userId, error: quotaUpdateError });
+            }
+          } else {
+            const { error: quotaInsertError } = await supabase
+              .from("user_quotas")
+              .insert({
+                user_id: userId,
+                ...quotas,
+              });
+
+            if (quotaInsertError) {
+              logStep("Quota row insert failed", { userId, error: quotaInsertError });
+            }
+          }
+
+          logStep(`Subscription created for user ${userId} on plan ${planSlug}`, { quotas });
+        }
 
         // Process referral if present
         if (referralCode) {
@@ -418,10 +436,9 @@ Deno.serve(async (req) => {
           }
 
           // plan_id moves only on a REAL plan change, decided by comparing
-          // against the stored row (Round-1 amendment A3). The same decision
-          // gates the override clear below: this event also fires for
-          // ordinary renewals and payment-method changes, and clearing there
-          // would erase deliberate admin overrides (spec R4a).
+          // against the stored row (Round-1 amendment A3). The override
+          // clear below reuses this via shouldClearQuotaOverrides(), which
+          // additionally refuses to clear when this update write fails.
           const changedPlanId =
             newPlanId !== null && newPlanId !== userSub.plan_id
               ? newPlanId
@@ -452,7 +469,19 @@ Deno.serve(async (req) => {
             logStep("Subscription update failed", { subscriptionId: subscription.id, error: subUpdateError });
           }
 
-          if (changedPlanId) {
+          // Clear overrides only when the plan really changed AND the
+          // subscription update above landed. On a failed write plan_id
+          // never moved, so the stale override stays as the customer's
+          // safety net. This event also fires for ordinary renewals and
+          // payment-method changes; clearing there would erase deliberate
+          // admin overrides (spec R4a).
+          const clearUpdateOverrides = shouldClearQuotaOverrides({
+            previousPlanId: userSub.plan_id,
+            resolvedPlanId: newPlanId,
+            subscriptionWriteFailed: Boolean(subUpdateError),
+          });
+
+          if (clearUpdateOverrides) {
             const quotas = CLEARED_QUOTA_OVERRIDES;
 
             const { data: existingQuota, error: quotaLookupError } = await supabase
@@ -487,6 +516,11 @@ Deno.serve(async (req) => {
               }
             }
             logStep(`Plan changed to ${newPlanSlug} for user ${userSub.user_id}, overrides cleared`);
+          } else if (changedPlanId && subUpdateError) {
+            logStep(
+              "Skipping quota override clear: subscription write failed, stale override kept as the customer's safety net",
+              { userId: userSub.user_id, plannedPlanId: changedPlanId, subscriptionError: subUpdateError },
+            );
           }
 
           // Send cancellation email if user cancelled
