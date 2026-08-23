@@ -200,8 +200,15 @@ interface FilterCall {
   value: unknown;
 }
 
+interface OrderCall {
+  column: string;
+  opts: unknown;
+}
+
 function stubSupabase(result: { data: unknown; error?: { message: string } | null }) {
   const filterCalls: FilterCall[] = [];
+  const orderCalls: OrderCall[] = [];
+  const limitCalls: number[] = [];
   let selectArg = "";
   let table = "";
   const chain: any = {
@@ -213,6 +220,21 @@ function stubSupabase(result: { data: unknown; error?: { message: string } | nul
       filterCalls.push({ table, column, value });
       return chain;
     },
+    // Mirrors the arbiter's IN(...) entitlement predicate (C1, 2026-08-23
+    // final review) — recorded as a filter call so callers can assert it the
+    // same way as .eq().
+    in: (column: string, values: unknown) => {
+      filterCalls.push({ table, column, value: values });
+      return chain;
+    },
+    order: (column: string, opts: unknown) => {
+      orderCalls.push({ column, opts });
+      return chain;
+    },
+    limit: (n: number) => {
+      limitCalls.push(n);
+      return chain;
+    },
     maybeSingle: () => Promise.resolve(result),
   };
   const client = {
@@ -221,7 +243,7 @@ function stubSupabase(result: { data: unknown; error?: { message: string } | nul
       return chain;
     },
   };
-  return { client, filterCalls, getSelect: () => selectArg };
+  return { client, filterCalls, orderCalls, limitCalls, getSelect: () => selectArg };
 }
 
 Deno.test("fetchUserOverride queries user_rate_limits with the user_id and endpoint filters", async () => {
@@ -360,9 +382,43 @@ Deno.test("fetchPlanSlug returns the active subscription's plan slug", async () 
   assertEquals(result, "pro");
   assertEquals(filterCalls, [
     { table: "user_subscriptions", column: "user_id", value: "user-123" },
-    { table: "user_subscriptions", column: "status", value: "active" },
+    { table: "user_subscriptions", column: "status", value: ["active", "past_due"] },
   ]);
   assertEquals(getSelect().includes("subscription_plans(slug)"), true);
+});
+
+// C1 (final review, 2026-08-23): dunning must not drop a paying customer's
+// rate-limit tier to free. past_due now entitles like active, matching
+// effective_user_quotas() exactly.
+Deno.test("fetchPlanSlug returns the plan slug for a past_due (dunning) subscription", async () => {
+  const { client, filterCalls } = stubSupabase({ data: { subscription_plans: { slug: "business" } } });
+
+  const result = await fetchPlanSlug(client, "user-123");
+
+  assertEquals(result, "business");
+  assertEquals(
+    filterCalls.some((c) => c.column === "status" && Array.isArray(c.value) && (c.value as string[]).includes("past_due")),
+    true,
+  );
+});
+
+// The maybeSingle trap: filtering on IN(...) instead of a single .eq() can
+// return more than one row for a user with both an active and a past_due
+// subscription. Without the ORDER BY + LIMIT 1 tie-break (mirroring the SQL
+// arbiter's own three-part tie-break), maybeSingle() would throw on two rows
+// and this function would silently fall through to 'free' — the exact
+// downgrade this fix exists to prevent.
+Deno.test("fetchPlanSlug orders by the arbiter's tie-break and limits to one row", async () => {
+  const { client, orderCalls, limitCalls } = stubSupabase({ data: { subscription_plans: { slug: "pro" } } });
+
+  await fetchPlanSlug(client, "user-123");
+
+  assertEquals(orderCalls, [
+    { column: "current_period_end", opts: { ascending: false, nullsFirst: false } },
+    { column: "created_at", opts: { ascending: false } },
+    { column: "id", opts: { ascending: false } },
+  ]);
+  assertEquals(limitCalls, [1]);
 });
 
 Deno.test("fetchPlanSlug resolves 'free' when there is no active subscription row", async () => {

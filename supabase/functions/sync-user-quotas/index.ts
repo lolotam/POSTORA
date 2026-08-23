@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import Stripe from "https://esm.sh/stripe@18.5.0";
+import { logStep, syncUserQuotas } from "./syncUserQuotas.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -10,31 +11,6 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const STRIPE_SECRET_KEY = Deno.env.get("STRIPE_SECRET_KEY");
-
-// Stripe Price ID to plan slug mapping
-const PRICE_TO_PLAN: Record<string, string> = {
-  "price_1SpPKL0hJJ11XlNONGaoHAI0": "pro",     // Pro Monthly
-  "price_1SpPL30hJJ11XlNO2wGUQHSn": "pro",     // Pro Yearly
-  "price_1SpPLX0hJJ11XlNOuaId2Dfy": "business", // Business Monthly
-  "price_1SpPLj0hJJ11XlNOqjV6RUAz": "business", // Business Yearly
-};
-
-// Limits live on subscription_plans and resolve through effective_user_quotas().
-// Writing concrete numbers here would convert every subscriber into a permanent
-// override at their plan's values as of that moment, and later edits on
-// /admin/plan-quotas would never reach a paying user.
-const CLEARED_QUOTA_OVERRIDES = {
-  max_profiles: null,
-  max_social_accounts: null,
-  max_posts_per_month: null,
-  max_posts_per_day: null,
-  max_media_uploads_per_day: null,
-} as const;
-
-const logStep = (step: string, details?: unknown) => {
-  const detailsStr = details ? ` - ${JSON.stringify(details)}` : "";
-  console.log(`[SYNC-QUOTAS] ${step}${detailsStr}`);
-};
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -179,72 +155,3 @@ Deno.serve(async (req) => {
     });
   }
 });
-
-// deno-lint-ignore no-explicit-any
-async function syncUserQuotas(
-  supabase: any,
-  stripe: Stripe,
-  userId: string,
-  email: string
-): Promise<string> {
-  logStep("Checking Stripe for user", { userId, email });
-
-  // Check Stripe for customer
-  const customers = await stripe.customers.list({ email, limit: 1 });
-  
-  let planSlug = "free";
-  
-  if (customers.data.length > 0) {
-    const customerId = customers.data[0].id;
-    
-    // Check for active subscription
-    const subscriptions = await stripe.subscriptions.list({
-      customer: customerId,
-      status: "active",
-      limit: 1,
-    });
-
-    if (subscriptions.data.length > 0) {
-      const subscription = subscriptions.data[0];
-      const priceId = subscription.items.data[0]?.price?.id;
-      
-      if (priceId && PRICE_TO_PLAN[priceId]) {
-        planSlug = PRICE_TO_PLAN[priceId];
-      }
-    }
-  }
-
-  logStep("Determined plan", { userId, planSlug });
-
-  // Stamp NULL (inherit) instead of plan numbers so the arbiter resolves the
-  // plan's current values on every read.
-  const { error: upsertError } = await supabase
-    .from("user_quotas")
-    .upsert({
-      user_id: userId,
-      ...CLEARED_QUOTA_OVERRIDES,
-      updated_at: new Date().toISOString(),
-    }, {
-      onConflict: "user_id",
-    });
-
-  if (upsertError) {
-    throw new Error(`Failed to update quotas: ${upsertError.message}`);
-  }
-
-  // Update user role if subscribed
-  if (planSlug !== "free") {
-    await supabase
-      .from("user_roles")
-      .upsert({
-        user_id: userId,
-        role: "subscriber",
-        updated_at: new Date().toISOString(),
-      }, {
-        onConflict: "user_id",
-      });
-  }
-
-  logStep("Quotas synced", { userId, planSlug });
-  return planSlug;
-}

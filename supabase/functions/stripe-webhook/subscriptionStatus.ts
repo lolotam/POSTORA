@@ -5,7 +5,10 @@
 // forwarding any of those verbatim violates the constraint and aborts the
 // whole UPDATE. Map explicitly and fail closed: an unrecognized status maps
 // to a non-entitling value, because effective_user_quotas() grants plan
-// entitlements only when user_subscriptions.status = 'active'.
+// entitlements only when user_subscriptions.status IS 'active' OR
+// 'past_due' — dunning stays entitled (see the mapping below and
+// supabase/migrations/20260823140100_effective_user_quotas.sql).
+// 'cancelled' and 'expired' are the only two statuses that stop entitling.
 export type PermittedSubscriptionStatus =
   | "active"
   | "cancelled"

@@ -243,18 +243,31 @@ export async function fetchGlobalSetting(
 }
 
 /**
- * Resolves the caller's plan slug from their active subscription. A caller
- * with no active subscription row is a Free user, not a plan-less one — most
- * free users have no user_subscriptions row at all — so a missing row resolves
- * 'free' (amendment A7) rather than null, keeping the free tier limits in
- * play for exactly the population they are meant to constrain.
+ * Resolves the caller's plan slug from their active/past_due subscription. A
+ * caller with no entitling subscription row is a Free user, not a plan-less
+ * one — most free users have no user_subscriptions row at all — so a missing
+ * row resolves 'free' (amendment A7) rather than null, keeping the free tier
+ * limits in play for exactly the population they are meant to constrain.
+ *
+ * Round-2 fix (final review C1): 'past_due' counts as entitling here too,
+ * matching effective_user_quotas() — dunning must not drop a paying
+ * customer's rate limit tier to free. Filtering on IN(...) instead of a
+ * single .eq() can return more than one row, so the ORDER BY + LIMIT 1
+ * mirrors the SQL arbiter's own three-part deterministic tie-break
+ * (20260823140100_effective_user_quotas.sql); without it, a user with both
+ * an active and a past_due row would make maybeSingle() throw and this
+ * function would fall through to 'free'.
  */
 export async function fetchPlanSlug(supabase: any, userId: string): Promise<string | null> {
   const { data, error } = await supabase
     .from('user_subscriptions')
     .select('subscription_plans(slug)')
     .eq('user_id', userId)
-    .eq('status', 'active')
+    .in('status', ['active', 'past_due'])
+    .order('current_period_end', { ascending: false, nullsFirst: false })
+    .order('created_at', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(1)
     .maybeSingle();
   if (error) throw new Error(`user_subscriptions lookup failed: ${error.message}`);
   return data?.subscription_plans?.slug ?? 'free';
