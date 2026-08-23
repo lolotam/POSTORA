@@ -70,6 +70,50 @@ export function mediaUploadLimitMessage(max: number): string {
   return `You've reached your daily limit of ${max} media uploads. Upgrade to Pro for unlimited uploads.`;
 }
 
+// F6 (CodeRabbit round 1, 2026-08-23): query-option factories, shared
+// between the reactive useQuery() calls below (for render-time display)
+// and queryClient.ensureQueryData() inside the enforcement helpers (for a
+// readiness-awaited decision). Extracted so both call sites use the
+// identical queryKey/queryFn — a mismatch would mean the imperative
+// ensureQueryData() call populates a different cache entry than the one
+// useQuery() is reading, defeating the point of awaiting it.
+function dbQuotaLimitsQueryOptions(userId: string | undefined) {
+  return {
+    queryKey: ["user-quota-limits", userId] as const,
+    queryFn: async () => {
+      if (!userId) return null;
+      const { data, error } = await supabase
+        .from("user_quotas")
+        .select("max_profiles, max_social_accounts, max_posts_per_month, max_posts_per_day, max_media_uploads_per_day")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (error || !data) return null;
+      return data;
+    },
+    enabled: !!userId,
+    staleTime: 60_000,
+  };
+}
+
+function planEntitlementsQueryOptions(planSlug: string) {
+  return {
+    queryKey: ["plan-entitlements", planSlug] as const,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("subscription_plans")
+        .select("profile_limit, max_social_accounts, max_posts_per_month, max_posts_per_day, max_media_uploads_per_day")
+        .eq("slug", planSlug)
+        .maybeSingle();
+      if (error) {
+        console.error("Error fetching plan entitlements:", error);
+        return null;
+      }
+      return data;
+    },
+    staleTime: 60_000,
+  };
+}
+
 export function useQuotas() {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -81,47 +125,45 @@ export function useQuotas() {
   const effectivePlanSlug = isSubscribed ? planSlug : "free";
 
   // Per-user override row (user_quotas). NULL columns mean inherit from the plan.
-  const { data: dbQuotaLimits } = useQuery({
-    queryKey: ["user-quota-limits", user?.id],
-    queryFn: async () => {
-      if (!user?.id) return null;
-      const { data, error } = await supabase
-        .from("user_quotas")
-        .select("max_profiles, max_social_accounts, max_posts_per_month, max_posts_per_day, max_media_uploads_per_day")
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (error || !data) return null;
-      return data;
-    },
-    enabled: !!user?.id,
-    staleTime: 60_000,
-  });
+  const { data: dbQuotaLimits, isLoading: isLoadingDbQuotaLimits } = useQuery(
+    dbQuotaLimitsQueryOptions(user?.id),
+  );
 
   // A dedicated plan query rather than useSubscription: that hook returns
   // dbSubscription: null for a user with no subscription row, so it never
   // carries a plan row for free users — who are the majority.
-  const { data: planRow } = useQuery({
-    queryKey: ["plan-entitlements", effectivePlanSlug],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("subscription_plans")
-        .select("profile_limit, max_social_accounts, max_posts_per_month, max_posts_per_day, max_media_uploads_per_day")
-        .eq("slug", effectivePlanSlug)
-        .maybeSingle();
-      if (error) {
-        console.error("Error fetching plan entitlements:", error);
-        return null;
-      }
-      return data;
-    },
-    staleTime: 60_000,
-  });
+  const { data: planRow, isLoading: isLoadingPlanRow } = useQuery(
+    planEntitlementsQueryOptions(effectivePlanSlug),
+  );
+
+  // F6: true while either query backing planLimits hasn't settled yet.
+  // Exposed so a display consumer can show a loading state instead of the
+  // FREE_TIER_FALLBACK placeholder if it chooses to.
+  const isEntitlementsLoading = isLoadingDbQuotaLimits || isLoadingPlanRow;
 
   // Resolution order mirrors the SQL arbiter effective_user_quotas():
   // per-user override -> plan -> FREE_TIER_FALLBACK. A NULL override column
   // means inherit from the plan; the old pickMax() "higher of the two" logic
   // is gone — an admin override may legitimately LOWER a limit.
   const planLimits = resolvePlanLimits(planRow ?? null, dbQuotaLimits ?? null);
+
+  // F6: the enforcement helpers below (canCreateProfile, canConnectSocialAccount,
+  // canCreatePost, canUploadMedia) must never make an allow/deny decision
+  // off `planLimits` while it is still the FREE_TIER_FALLBACK placeholder
+  // (nothing resolved yet). queryClient.ensureQueryData() returns the
+  // already-cached value if fresh, or awaits the in-flight/next fetch — so
+  // a helper called during the loading window now waits for the REAL data
+  // instead of deciding against a hardcoded Free-tier stand-in. Never
+  // flips to "allow everything": it always resolves to real data, it just
+  // may take a moment longer while data is in flight.
+  const getReadyPlanLimits = async (): Promise<QuotaLimits> => {
+    if (!user?.id) return planLimits;
+    const [db, plan] = await Promise.all([
+      queryClient.ensureQueryData(dbQuotaLimitsQueryOptions(user.id)),
+      queryClient.ensureQueryData(planEntitlementsQueryOptions(effectivePlanSlug)),
+    ]);
+    return resolvePlanLimits(plan ?? null, db ?? null);
+  };
 
   const { data: quota, isLoading } = useQuery({
     queryKey: ["user-quota", user?.id],
@@ -242,13 +284,14 @@ export function useQuotas() {
   // Check if user can create a new profile
   const canCreateProfile = async (): Promise<{ allowed: boolean; message?: string }> => {
     if (!user?.id) return { allowed: false, message: "Not authenticated" };
-    
+
     // Admins have no limits
     if (isAdmin) return { allowed: true };
 
-    // Use subscription-based limits (Pro/Business get higher limits)
-    const maxProfiles = planLimits.max_profiles;
-    
+    // F6: await real entitlement data rather than deciding off `planLimits`,
+    // which may still be the FREE_TIER_FALLBACK placeholder this early.
+    const maxProfiles = (await getReadyPlanLimits()).max_profiles;
+
     // Unlimited profiles
     if (isUnlimited(maxProfiles)) return { allowed: true };
 
@@ -274,9 +317,10 @@ export function useQuotas() {
     // Admins have no limits
     if (isAdmin) return { allowed: true };
 
-    // Use subscription-based limits
-    const maxSocialAccounts = planLimits.max_social_accounts;
-    
+    // F6: await real entitlement data rather than deciding off `planLimits`,
+    // which may still be the FREE_TIER_FALLBACK placeholder this early.
+    const maxSocialAccounts = (await getReadyPlanLimits()).max_social_accounts;
+
     // Unlimited accounts
     if (isUnlimited(maxSocialAccounts)) return { allowed: true };
 
@@ -305,8 +349,11 @@ export function useQuotas() {
     // Admins have no limits
     if (isAdmin) return { allowed: true, remaining: 999999 };
 
-    const maxPostsPerDay = planLimits.max_posts_per_day;
-    const maxPostsPerMonth = planLimits.max_posts_per_month;
+    // F6: await real entitlement data rather than deciding off `planLimits`,
+    // which may still be the FREE_TIER_FALLBACK placeholder this early.
+    const readyLimits = await getReadyPlanLimits();
+    const maxPostsPerDay = readyLimits.max_posts_per_day;
+    const maxPostsPerMonth = readyLimits.max_posts_per_month;
 
     if (isUnlimited(maxPostsPerDay) && isUnlimited(maxPostsPerMonth)) {
       return { allowed: true, remaining: 999999 };
@@ -382,9 +429,10 @@ export function useQuotas() {
     // Admins have no limits
     if (isAdmin) return { allowed: true, remaining: 999999 };
 
-    // Use subscription-based limits
-    const maxMediaUploads = planLimits.max_media_uploads_per_day;
-    
+    // F6: await real entitlement data rather than deciding off `planLimits`,
+    // which may still be the FREE_TIER_FALLBACK placeholder this early.
+    const maxMediaUploads = (await getReadyPlanLimits()).max_media_uploads_per_day;
+
     // Unlimited uploads for Pro/Business
     if (isUnlimited(maxMediaUploads)) {
       return { allowed: true, remaining: 999999 };
@@ -417,7 +465,13 @@ export function useQuotas() {
 
     if (error) {
       console.error("Error incrementing media upload:", error);
-      return true; // Don't block on error
+      // F1 (CodeRabbit round 1): increment_media_uploads() atomically checks
+      // AND increments in one call. An RPC error means that call did not run
+      // to completion (e.g. two concurrent first uploads racing the
+      // user_quotas.user_id unique key), so nothing was recorded for THIS
+      // upload. Treating that as "allowed" let two concurrent requests both
+      // upload past the same limit. Fail closed instead.
+      return false;
     }
 
     queryClient.invalidateQueries({ queryKey: ["user-quota", user.id] });
@@ -466,6 +520,12 @@ export function useQuotas() {
   return {
     quota,
     isLoading: isLoading || isLoadingRealUsage,
+    // F6: whether planLimits above is still resolving (still possibly the
+    // FREE_TIER_FALLBACK placeholder). The canX() enforcement helpers never
+    // need this - they already await getReadyPlanLimits() internally - but
+    // a display consumer can use it to show a loading state instead of a
+    // number that may not reflect the user's real plan yet.
+    isEntitlementsLoading,
     realUsage: realUsage || { postsToday: 0, postsThisMonth: 0, mediaUploadsToday: 0 },
     canCreateProfile,
     canConnectSocialAccount,
