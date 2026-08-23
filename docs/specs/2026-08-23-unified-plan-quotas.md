@@ -389,7 +389,14 @@ Merging to `main` auto-deploys **the frontend only**. R5 queries columns that do
 not exist until the migration runs, so a merge-first sequence breaks every
 dashboard.
 
-1. Apply the migration on prod via `ssh-contabo-mcp`.
+1. Apply **all** migrations `20260823140000` through `20260823140500` on prod via
+   `ssh-contabo-mcp`, as one set, in filename order, verifying only after the last.
+
+   **They must not be applied individually.** `140000` drops the `user_quotas` limit
+   defaults (A1), so from that moment new signups get NULL limits — and the *current*
+   `increment_media_uploads()` treats a NULL limit as unlimited. Applying `140000`
+   without `140200` therefore opens an unlimited-upload window. Surfaced by the Task 1
+   implementer during rehearsal.
 2. Verify: `SELECT slug, profile_limit, max_posts_per_day FROM subscription_plans;`
    returns the three seeded rows.
 3. Verify the backfill matches the R3 table.
