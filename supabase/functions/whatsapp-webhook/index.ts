@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
 import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
-import { buildMessagePayload, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
+import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -427,7 +427,13 @@ async function handleLiveMessages(
           socialAccountId: account.id,
           account: { id: account.id, platform: "whatsapp", platform_user_id: account.platform_user_id, platform_username: account.platform_username },
           conversationId,
-          sender: { id: from, name: contactName, phone: from },
+          // `from` is the digits-only wa_id, so it serves as both sender id and phone.
+          sender: buildMessagingSender({
+            platform: "whatsapp",
+            id: from,
+            name: contactName,
+            phone: from,
+          }),
           message: {
             id: messageId,
             text: messageText,

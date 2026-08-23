@@ -18,18 +18,87 @@ export interface MessagingAccountSource {
   platform: string;
   platform_user_id?: string | null;
   platform_username?: string | null;
+  // May carry ig_username (written by instagram-business-oauth); read via metadataString.
+  account_metadata?: unknown;
+}
+
+// One username rule for both account and sender derivation (spec R3): every candidate runs
+// through this before any branching, so trim and @-stripping cannot differ between paths.
+export function normalizeHandleUsername(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.replace(/^\s+|\s+$/gu, "");
+  const stripped = trimmed.replace(/^@+/, "");
+  if (!stripped) return null;
+  // Space-free input passes through unchanged, case preserved: subscribers may compare
+  // account.username case-sensitively, so lowercasing is confined to the slug branch.
+  if (!/\s/u.test(stripped)) return stripped;
+  // Fabricated-slug branch: a display name with spaces ("Danat Future Company") becomes a
+  // space-free handle. The result may not resolve to a real account on-platform — an
+  // accepted trade-off — and it only fires for values already changing shape.
+  return stripped.replace(/\s+/gu, "_").toLowerCase();
+}
+
+// Mirrors commentAuthor.ts's module-private metadataString (that file is out of scope here):
+// reads one key from account_metadata without trusting its shape.
+function metadataString(metadata: unknown, key: string): string | null {
+  if (!metadata || typeof metadata !== "object") return null;
+  const value = (metadata as Record<string, unknown>)[key];
+  return typeof value === "string" && value ? value : null;
+}
+
+function isHandlePlatform(platform: string): boolean {
+  return platform === "instagram" || platform === "facebook" || platform === "threads";
 }
 
 export function describeMessagingAccount(account: MessagingAccountSource): MessagingAccountSummary {
-  const username = account.platform_username?.trim() || null;
-  const handleable = account.platform === "instagram" || account.platform === "facebook" ||
-    account.platform === "threads";
+  // ig_username is instagram-only: a Facebook or WhatsApp row carrying stale ig_username
+  // metadata must not be labelled with an unrelated Instagram handle. A malformed value
+  // falls through to platform_username rather than yielding null.
+  const igUsername = account.platform === "instagram"
+    ? metadataString(account.account_metadata, "ig_username")
+    : null;
+  const username = normalizeHandleUsername(igUsername) ?? normalizeHandleUsername(account.platform_username);
+  // `name` keeps today's exact behaviour: the TRIMMED platform_username — a display name,
+  // internal spaces intact — falling back to platform_user_id, then id. Pinned by test.
+  const displayName = account.platform_username?.trim() || null;
   return {
     id: account.id,
     platform: account.platform,
-    name: username || account.platform_user_id || account.id,
+    name: displayName || account.platform_user_id || account.id,
     username,
-    handle: handleable && username ? `@${username.replace(/^@/, "")}` : null,
+    handle: isHandlePlatform(account.platform) && username ? `@${username}` : null,
+  };
+}
+
+// The five-field identity every message sender carries. Deliberately a different shape from
+// MessagingAccountSummary: account carries `platform` and no phone, sender carries phone and
+// no platform. username/handle are null until a real username source exists — never derived
+// from a display name, because slugging a member of the public's name can produce a handle
+// that belongs to a different real person.
+export interface MessagingPersonSummary {
+  id: string;
+  name: string | null;
+  username: string | null;
+  handle: string | null;
+  phone: string | null;
+}
+
+// Builds the sender through the same username rule as the account summary (normalizeHandleUsername),
+// so a future username source cannot leak spaces into sender.username/handle.
+export function buildMessagingSender(input: {
+  platform: MessagePlatform;
+  id: string;
+  name?: string | null;
+  username?: string | null;
+  phone?: string | null;
+}): MessagingPersonSummary {
+  const username = normalizeHandleUsername(input.username);
+  return {
+    id: input.id,
+    name: typeof input.name === "string" && input.name.trim() ? input.name : null,
+    username,
+    handle: isHandlePlatform(input.platform) && username ? `@${username}` : null,
+    phone: input.phone || null,
   };
 }
 
@@ -49,7 +118,7 @@ export interface MessagePayloadInput {
   socialAccountId: string;
   account?: MessagingAccountSource;
   conversationId: string;
-  sender: { id: string; name: string | null; phone: string | null };
+  sender: MessagingPersonSummary;
   message: { id: string; text: string; type: string; attachments: unknown[] };
   timestamp?: string;
 }

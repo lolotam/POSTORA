@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
 import { resolveAutomationHandler, resolveCommentAutomationHandler } from "../_shared/automationHandler.ts";
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
-import { buildCommentPayload, buildMessagePayload, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
+import { buildCommentPayload, buildMessagePayload, buildMessagingSender, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 import { isOwnComment } from "../_shared/commentAuthor.ts";
 import { matchAutoReplyRule } from "../_shared/autoReplyRules.ts";
 import { handleCommentInternally } from "../_shared/commentAutomation.ts";
@@ -194,11 +194,13 @@ Deno.serve(async (req) => {
                 socialAccountId: account.id,
                 account,
                 conversationId,
-                sender: {
+                // Meta messaging webhooks carry only the sender id; phone stays null rather
+                // than reading event.sender.phone, which Meta never populates.
+                sender: buildMessagingSender({
+                  platform,
                   id: senderId,
-                  name: event.sender?.name || null,
-                  phone: event.sender?.phone || null,
-                },
+                  name: event.sender?.name,
+                }),
                 message: {
                   id: event.message.mid || `${senderId}:${event.timestamp}`,
                   text: messageText,
