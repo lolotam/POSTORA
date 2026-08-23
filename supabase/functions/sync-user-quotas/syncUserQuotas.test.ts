@@ -37,7 +37,17 @@ function fakeSupabase(planRowId: string | null) {
   return { client, calls };
 }
 
-function fakeStripeWithActiveSubscription(priceId: string) {
+// Round-1 review fix (F3): Stripe API 2025-08-27.basil (the version this repo
+// pins - see supabase/functions/stripe-webhook/index.ts) removed
+// current_period_start/current_period_end from the top-level Subscription
+// object; they now live per-item at items.data[n].current_period_*. The fake
+// below carries BOTH shapes so a test can assert syncUserQuotas reads the
+// item-level fields, not the (now-absent-in-real-Stripe) top-level ones.
+function fakeStripeWithActiveSubscription(
+  priceId: string,
+  opts: { status?: string; itemPeriod?: { start: number; end: number } } = {},
+) {
+  const itemPeriod = opts.itemPeriod ?? { start: 1700000000, end: 1702592000 };
   return {
     customers: {
       // deno-lint-ignore require-await
@@ -45,17 +55,33 @@ function fakeStripeWithActiveSubscription(priceId: string) {
     },
     subscriptions: {
       // deno-lint-ignore require-await
-      list: async (_args: unknown) => ({
-        data: [
-          {
-            id: "sub_123",
-            items: { data: [{ price: { id: priceId } }] },
-            current_period_start: 1700000000,
-            current_period_end: 1702592000,
-            cancel_at_period_end: false,
-          },
-        ],
-      }),
+      list: async (args: { status?: string }) => {
+        const wantedStatus = args?.status;
+        const subStatus = opts.status ?? "active";
+        // Mimic Stripe's own server-side status filter: a query for
+        // status: "active" returns nothing for a past_due subscription.
+        if (wantedStatus && wantedStatus !== "all" && wantedStatus !== subStatus) {
+          return { data: [] };
+        }
+        return {
+          data: [
+            {
+              id: "sub_123",
+              status: subStatus,
+              items: {
+                data: [
+                  {
+                    price: { id: priceId },
+                    current_period_start: itemPeriod.start,
+                    current_period_end: itemPeriod.end,
+                  },
+                ],
+              },
+              cancel_at_period_end: false,
+            },
+          ],
+        };
+      },
     },
     // deno-lint-ignore no-explicit-any
   } as any;
@@ -125,4 +151,59 @@ Deno.test("syncUserQuotas writes nothing to user_subscriptions for a free (no St
   if (!quotaUpsert) {
     throw new Error("syncUserQuotas never cleared the per-user override for a free user");
   }
+});
+
+// F2 (CodeRabbit round 1, 2026-08-23): the branch's own dunning decision
+// (effective_user_quotas() entitles 'active' OR 'past_due' - see
+// supabase/migrations/20260823140100_effective_user_quotas.sql) must hold
+// here too. A Stripe subscriptions.list({ status: "active" }) query returns
+// NOTHING for a past_due customer, so this repair button used to fall
+// through to planSlug "free" and write no user_subscriptions row -
+// stranding exactly the dunning customer the arbiter is supposed to protect.
+Deno.test("syncUserQuotas treats a past_due Stripe subscription as entitled, same as active", async () => {
+  const { client, calls } = fakeSupabase("plan-row-pro");
+  const stripe = fakeStripeWithActiveSubscription("price_1SpPKL0hJJ11XlNONGaoHAI0", {
+    status: "past_due",
+  });
+
+  const planSlug = await syncUserQuotas(client, stripe, "user-3", "user3@example.com");
+
+  assertEquals(planSlug, "pro");
+
+  const subUpsert = calls.find((c) => c.table === "user_subscriptions" && c.op === "upsert");
+  if (!subUpsert) {
+    throw new Error(
+      "syncUserQuotas never wrote user_subscriptions for a past_due customer - dunning customer stranded on free",
+    );
+  }
+  assertEquals((subUpsert.payload as any).plan_id, "plan-row-pro");
+  // Round-2's PermittedSubscriptionStatus vocabulary only allows
+  // active|cancelled|expired|past_due; a repaired dunning row must be
+  // written as past_due, not silently upgraded to active.
+  assertEquals((subUpsert.payload as any).status, "past_due");
+});
+
+// F3 (CodeRabbit round 1, 2026-08-23): Stripe API 2025-08-27.basil (pinned in
+// stripe-webhook/index.ts) removed current_period_start/current_period_end
+// from the top-level Subscription object; they now live at
+// subscription.items.data[n].current_period_*. Reading the removed top-level
+// fields yields `undefined`, and `new Date(undefined * 1000).toISOString()`
+// throws a RangeError ("Invalid time value") - or, before Basil-awareness,
+// silently wrote an invalid/null period.
+Deno.test("syncUserQuotas reads the billing period from the subscription item (Stripe Basil), not the removed top-level field", async () => {
+  const { client, calls } = fakeSupabase("plan-row-pro");
+  const itemPeriod = { start: 1712000000, end: 1714592000 };
+  const stripe = fakeStripeWithActiveSubscription("price_1SpPKL0hJJ11XlNONGaoHAI0", {
+    itemPeriod,
+  });
+
+  await syncUserQuotas(client, stripe, "user-4", "user4@example.com");
+
+  const subUpsert = calls.find((c) => c.table === "user_subscriptions" && c.op === "upsert");
+  if (!subUpsert) {
+    throw new Error("syncUserQuotas never wrote user_subscriptions");
+  }
+  const payload = subUpsert.payload as any;
+  assertEquals(payload.current_period_start, new Date(itemPeriod.start * 1000).toISOString());
+  assertEquals(payload.current_period_end, new Date(itemPeriod.end * 1000).toISOString());
 });

@@ -51,8 +51,14 @@ Deno.test("mapStripeSubscriptionStatus: never-activated states map to expired", 
 });
 
 Deno.test("mapStripeSubscriptionStatus: unknown statuses fail closed to expired", () => {
-  // The arbiter grants plan entitlements only on status 'active', so the
-  // fallback for unrecognized statuses must be non-entitling.
+  // F9 (CodeRabbit round 1, 2026-08-23): this comment used to say the
+  // arbiter entitles only on 'active'. It entitles on 'active' OR
+  // 'past_due' (effective_user_quotas() - see
+  // supabase/migrations/20260823140100_effective_user_quotas.sql), and
+  // unpaid -> past_due above is deliberate so dunning customers stay
+  // entitled. 'expired' (this fallback) and 'cancelled' are the only two
+  // statuses that are NOT entitling, so the fallback for unrecognized
+  // statuses must map to one of those two, not to 'active' or 'past_due'.
   assertEquals(mapStripeSubscriptionStatus("paused"), "expired");
   assertEquals(mapStripeSubscriptionStatus("some_future_stripe_status"), "expired");
   assertEquals(mapStripeSubscriptionStatus(""), "expired");

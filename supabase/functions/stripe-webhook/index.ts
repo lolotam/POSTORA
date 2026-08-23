@@ -3,6 +3,7 @@ import Stripe from "https://esm.sh/stripe@18.5.0";
 
 import {
   mapStripeSubscriptionStatus,
+  resolveSubscriptionPeriod,
   type PermittedSubscriptionStatus,
 } from "./subscriptionStatus.ts";
 import { shouldClearQuotaOverrides } from "./overrideClearing.ts";
@@ -444,16 +445,22 @@ Deno.serve(async (req) => {
               ? newPlanId
               : null;
 
+          // F3: current_period_start/end no longer exist on the top-level
+          // Subscription object under apiVersion 2025-08-27.basil - they
+          // live on the subscription item. See subscriptionStatus.ts.
+          const { start: resolvedPeriodStart, end: resolvedPeriodEnd } =
+            resolveSubscriptionPeriod(subscription);
+
           const subscriptionUpdate: {
             status: PermittedSubscriptionStatus;
-            current_period_start: string;
-            current_period_end: string;
+            current_period_start: string | null;
+            current_period_end: string | null;
             cancel_at_period_end: boolean;
             plan_id?: string;
           } = {
             status: mapStripeSubscriptionStatus(subscription.status),
-            current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-            current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
+            current_period_start: resolvedPeriodStart,
+            current_period_end: resolvedPeriodEnd,
             cancel_at_period_end: subscription.cancel_at_period_end,
           };
           if (changedPlanId) {
@@ -524,8 +531,8 @@ Deno.serve(async (req) => {
           }
 
           // Send cancellation email if user cancelled
-          if (subscription.cancel_at_period_end) {
-            const endDate = new Date(subscription.current_period_end * 1000).toLocaleDateString("en-US", {
+          if (subscription.cancel_at_period_end && resolvedPeriodEnd) {
+            const endDate = new Date(resolvedPeriodEnd).toLocaleDateString("en-US", {
               year: "numeric",
               month: "long",
               day: "numeric",

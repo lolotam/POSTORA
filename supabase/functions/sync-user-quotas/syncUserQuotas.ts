@@ -25,6 +25,31 @@ export const CLEARED_QUOTA_OVERRIDES = {
   max_media_uploads_per_day: null,
 } as const;
 
+// F3 (CodeRabbit round 1, 2026-08-23): Stripe API 2025-03-31 ("Basil")
+// removed current_period_start/current_period_end from the top-level
+// Subscription object; they now live per-item at
+// subscription.items.data[n].current_period_start/end. This repo pins
+// apiVersion "2025-08-27.basil" (see stripe-webhook/index.ts), which
+// post-dates that change, so reading the top-level fields yields
+// `undefined` and `new Date(undefined * 1000).toISOString()` throws
+// RangeError: Invalid time value. Read from the first subscription item,
+// with a safe fallback to the top-level field (older SDK typings / a
+// mocked subscription in a test) and to null if neither is present -
+// never let a webhook crash over an unresolved billing period.
+// deno-lint-ignore no-explicit-any
+export function resolveSubscriptionPeriod(subscription: any): {
+  start: string | null;
+  end: string | null;
+} {
+  const item = subscription?.items?.data?.[0];
+  const rawStart = item?.current_period_start ?? subscription?.current_period_start ?? null;
+  const rawEnd = item?.current_period_end ?? subscription?.current_period_end ?? null;
+  return {
+    start: typeof rawStart === "number" ? new Date(rawStart * 1000).toISOString() : null,
+    end: typeof rawEnd === "number" ? new Date(rawEnd * 1000).toISOString() : null,
+  };
+}
+
 export const logStep = (step: string, details?: unknown) => {
   const detailsStr = details ? ` - ${JSON.stringify(details)}` : "";
   console.log(`[SYNC-QUOTAS] ${step}${detailsStr}`);
@@ -63,18 +88,30 @@ export async function syncUserQuotas(
   let activeSubscription: Stripe.Subscription | null = null;
   let customerId: string | null = null;
 
+  // Round-1 review fix (F2): a "status: 'active'" filter returns nothing for
+  // a past_due (dunning) customer, which used to fall through to planSlug
+  // "free" and write no user_subscriptions row - stranding exactly the
+  // paying-but-retrying customer this branch's own arbiter decision protects
+  // (effective_user_quotas() entitles 'active' OR 'past_due'; see
+  // supabase/migrations/20260823140100_effective_user_quotas.sql). Fetch
+  // "all" and filter to the entitled statuses ourselves instead.
+  let subscriptionStatus: "active" | "past_due" = "active";
+
   if (customers.data.length > 0) {
     customerId = customers.data[0].id;
 
-    // Check for active subscription
     const subscriptions = await stripe.subscriptions.list({
       customer: customerId,
-      status: "active",
-      limit: 1,
+      status: "all",
+      limit: 10,
     });
 
-    if (subscriptions.data.length > 0) {
-      activeSubscription = subscriptions.data[0];
+    activeSubscription = subscriptions.data.find(
+      (sub: Stripe.Subscription) => sub.status === "active" || sub.status === "past_due",
+    ) ?? null;
+
+    if (activeSubscription) {
+      subscriptionStatus = activeSubscription.status === "past_due" ? "past_due" : "active";
       const priceId = activeSubscription.items.data[0]?.price?.id;
 
       if (priceId && PRICE_TO_PLAN[priceId]) {
@@ -99,16 +136,23 @@ export async function syncUserQuotas(
       throw new Error(`No subscription_plans row for slug ${planSlug}`);
     }
 
+    const { start: periodStart, end: periodEnd } = resolveSubscriptionPeriod(activeSubscription);
+
     const { error: subUpsertError } = await supabase
       .from("user_subscriptions")
       .upsert({
         user_id: userId,
         plan_id: planRow.id,
-        status: "active",
+        // F2: a repaired dunning subscription must be written as past_due,
+        // not silently upgraded to active - PermittedSubscriptionStatus
+        // (stripe-webhook/subscriptionStatus.ts) only permits
+        // active|cancelled|expired|past_due, and effective_user_quotas()
+        // already entitles both.
+        status: subscriptionStatus,
         stripe_customer_id: customerId,
         stripe_subscription_id: activeSubscription.id,
-        current_period_start: new Date(activeSubscription.current_period_start * 1000).toISOString(),
-        current_period_end: new Date(activeSubscription.current_period_end * 1000).toISOString(),
+        current_period_start: periodStart,
+        current_period_end: periodEnd,
         cancel_at_period_end: activeSubscription.cancel_at_period_end,
       }, {
         onConflict: "user_id",

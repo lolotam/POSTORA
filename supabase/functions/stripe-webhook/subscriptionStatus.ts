@@ -38,3 +38,26 @@ export function mapStripeSubscriptionStatus(
 ): PermittedSubscriptionStatus {
   return STRIPE_STATUS_MAP[stripeStatus] ?? "expired";
 }
+
+// F3 (CodeRabbit round 1, 2026-08-23): Stripe API 2025-03-31 ("Basil")
+// removed current_period_start/current_period_end from the top-level
+// Subscription object; they now live per-item at
+// subscription.items.data[n].current_period_start/end. index.ts pins
+// apiVersion "2025-08-27.basil" (post-dates that change), so reading the
+// top-level fields yields `undefined`, and `new Date(undefined * 1000)`
+// produces an Invalid Date whose .toISOString() throws RangeError. Read
+// from the first subscription item, with a safe fallback to the top-level
+// field (older SDK typings) and to null if neither is present.
+// deno-lint-ignore no-explicit-any
+export function resolveSubscriptionPeriod(subscription: any): {
+  start: string | null;
+  end: string | null;
+} {
+  const item = subscription?.items?.data?.[0];
+  const rawStart = item?.current_period_start ?? subscription?.current_period_start ?? null;
+  const rawEnd = item?.current_period_end ?? subscription?.current_period_end ?? null;
+  return {
+    start: typeof rawStart === "number" ? new Date(rawStart * 1000).toISOString() : null,
+    end: typeof rawEnd === "number" ? new Date(rawEnd * 1000).toISOString() : null,
+  };
+}
