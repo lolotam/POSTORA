@@ -25,6 +25,11 @@ dist-ssr
 
 # OpenCode local state & secrets
 .opencode/
+
+# Claude Code: only settings.json and hooks/ are shared; the rest is local state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/skills/
 .env
 .env.*
 !.env.example

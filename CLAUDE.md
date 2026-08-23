@@ -4,6 +4,26 @@
 
 This document provides comprehensive context for AI coding assistants (Claude, GPT, Gemini) to understand and work with the Postora codebase.
 
+---
+
+## 📐 Required reading before you touch code
+
+**Before editing anything under `src/**` or `supabase/functions/**` you MUST read `ARCHITECTURE.md`.** It defines layering, dependency direction, Edge Function shape, and the security rules new code has to follow. It is not auto-loaded — open it deliberately.
+
+There are four agent documents. **`ARCHITECTURE.md` §0 owns the map of which document owns what** — read it there rather than looking for a copy here.
+
+**A fact belongs in exactly one of these files.** If you need to state something that already lives in another, link to it instead of copying it — these documents have already drifted from each other once.
+
+On conflict between `ARCHITECTURE.md` and the Task Execution Workflow below, **the workflow wins**.
+
+### Delegating to another agent (Codex / Grok / OpenCode / Antigravity)
+
+Nothing auto-loads `ARCHITECTURE.md` for a delegated implementer. **Every delegation brief must name `ARCHITECTURE.md` as required reading**, alongside the specific rule sections that apply to the task.
+
+No tooling checks this. The architecture hook only prints a reminder on `Edit`/`Write` inside this session and never blocks anything, so a brief that omits the rules produces work that nothing catches until human review.
+
+---
+
 ## Task Execution Workflow (MANDATORY)
 
 Follow these steps for every task, in order:
@@ -22,7 +42,7 @@ Follow these steps for every task, in order:
 - **Publishing source**: push and release only from `F:\N8N\Postora-n8n-community-node`, which maps to `https://github.com/lolotam/postora-n8n-community-node.git` and publishes the npm package `n8n-nodes-postora`.
 - **Postora repo commit**: after syncing the Postora-side vendored copy, commit and push those source/doc sync changes on the current feature branch of `https://github.com/lolotam/postora.git` (the main Postora repo) as scoped files only. Never publish npm from the Postora repo copy.
 - **Release process**: for a production n8n node change, bump the standalone package version in `F:\N8N\Postora-n8n-community-node` (`package.json`), run `npx tsc --noEmit` + `npm test` + `npm run build`, commit, push to `main`, create a GitHub release tag (`gh release create vX.Y.Z ...` — the repo's `publish.yml` workflow triggers on release `created`, not on tag push alone), and verify `npm view n8n-nodes-postora version` after the publish workflow completes.
-- **Deployment model**: GitHub releases in `https://github.com/lolotam/postora-n8n-community-node.git` trigger the npm publishing workflow (`.github/workflows/publish.yml`); users or hosted n8n instances receive the node by installing/updating the published npm package. Current version: `1.4.0` (as of 2026-08-22). Community nodes never auto-update in n8n — a user still on an older version will not see newly added nodes or events until they update the package in Settings → Community Nodes.
+- **Deployment model**: GitHub releases in `https://github.com/lolotam/postora-n8n-community-node.git` trigger the npm publishing workflow (`.github/workflows/publish.yml`); users or hosted n8n instances receive the node by installing/updating the published npm package. Current version: `1.5.0` (as of 2026-08-23). Community nodes never auto-update in n8n — a user still on an older version will not see newly added nodes or events until they update the package in Settings → Community Nodes.
 - **Current node capabilities** (as of v1.3.0): Post → Create supports Media Source = None/URL/Binary Data/Media File ID (the last posts an already-uploaded file by UUID via `media_file_ids`, no re-upload); Media → Upload supports the same three sources plus SSRF-hardened URL downloading (`safeFetchAndStage`/`fetchFollowingSafeRedirects` — every redirect hop is validated before being followed; see that repo's README "Known limit" note on DNS rebinding). Backend: `supabase/functions/n8n-api/index.ts` has `handleGetMediaById` (`GET /api/v1/media/:id`, ownership-scoped, non-enumerable 404) backing the Media File ID source. A jest suite (`__tests__/Postora.node.test.ts`) covers this — always run it before releasing.
 - **Comment automation** (added v1.3.0): a second trigger node **Postora Comment Trigger** (`nodes/PostoraCommentTrigger/`) fires on `comment.received` for Facebook, Instagram and Threads, with Platform + Account selectors whose values are stored on the webhook subscription and matched in `_shared/n8nMessagingDispatch.ts`. A **Comment** resource on the main node does Reply/Hide (all three platforms) and Delete (Facebook/Instagram only) against `POST /api/v1/comments/{reply,hide,delete}`. Delivery is gated per account by `account_metadata.comment_automation_handler` (`off` by default), set from the web app's Automation card on each messaging page; comments authored by the connected account itself are never dispatched, which is what stops an auto-reply loop. Threads replies require the `replies` webhook field to be subscribed manually in the Meta App Dashboard.
 - **Comment events on the main trigger** (added v1.3.1): `PostoraTrigger` also lists `comment.received`, `comment.facebook`, `comment.instagram`, `comment.threads`, `threads.mention.created` and `threads.mention.replied`, so a workflow that only ever adds "Postora Trigger" can subscribe to comments. `PostoraCommentTrigger` remains the one with Platform + Account filtering.
@@ -486,9 +506,8 @@ OPENAI_API_KEY
 ## Common Tasks
 
 ### Deploy Edge Function
-```bash
-npx supabase functions deploy [function-name] --project-ref efruibswazzuuupgyzmf
-```
+
+Self-hosted — do **not** use `npx supabase functions deploy` (that targets Supabase Cloud and fails here). Follow the procedure in **Task Execution Workflow → step 7** above, or see `docs/runbooks/deploy-edge-function.md` for exact paths and SHA256 verification.
 
 ### Run Locally
 ```bash
