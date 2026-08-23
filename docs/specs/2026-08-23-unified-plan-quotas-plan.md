@@ -19,7 +19,7 @@
 - **Backfill invariant:** no user's effective limit may decrease as a result of this work.
 - **Never** commit `b64.txt`, logs, backups, `.env*`, or secret files. Commit scoped: `git commit -m "..." -- <files>` (note `--` comes *after* `-m`).
 - **Never** run `npx supabase functions deploy` — it targets Supabase Cloud and fails on this self-hosted stack.
-- **Migrations are never applied by this plan.** Every migration is written and rehearsed only. Production application happens in the deployment sequence of spec §6, after review.
+- **Migrations are never applied to PRODUCTION by this plan.** Applying them to the `quota_rehearsal` throwaway database is required by Tasks 1-5. Every migration is written and rehearsed only. Production application happens in the deployment sequence of spec §6, after review.
 - **Free-tier literals**, used only as last-resort fallbacks: `max_profiles=2, max_social_accounts=3, max_posts_per_month=30, max_posts_per_day=2, max_media_uploads_per_day=20`.
 - Frontend tests: `npx vitest run <path>`. Full suite: `npm test`. Edge tests: `deno test --allow-all supabase/functions/n8n-api/`.
 
@@ -60,7 +60,7 @@ docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -c "DRO
 |---|---|
 | `supabase/migrations/20260823140000_plan_quota_columns.sql` | Add + seed the four entitlement columns on `subscription_plans` |
 | `supabase/migrations/20260823140100_effective_user_quotas.sql` | The single arbiter function |
-| `supabase/migrations/20260823140200_quota_readers_use_arbiter.sql` | `can_create_post`, `can_upload_media`, trigger reads |
+| `supabase/migrations/20260823140200_quota_readers_use_arbiter.sql` | `can_create_post` and `can_upload_media` only |
 | `supabase/migrations/20260823140300_quota_writers_clear_overrides.sql` | `handle_new_user_quota`, `set_user_quotas_for_plan`, trigger writes |
 | `supabase/migrations/20260823140400_backfill_user_quota_overrides.sql` | Capability-preserving NULLing of 66 live rows |
 | `src/hooks/usePlanQuotas.tsx` | **New.** Read/write adapter for plan entitlement columns |
@@ -344,14 +344,15 @@ git commit -m "feat(db): add effective_user_quotas arbiter" -- supabase/migratio
 
 ---
 
-### Task 3: Readers resolve through the arbiter
+### Task 3: Quota RPCs resolve through the arbiter
 
 **Files:**
 - Create: `supabase/migrations/20260823140200_quota_readers_use_arbiter.sql`
 
 **Interfaces:**
 - Consumes: `effective_user_quotas(uuid)` from Task 2.
-- Produces: `can_create_post(uuid)`, `can_upload_media(uuid)` and `enforce_post_quota_on_insert()` with unchanged signatures and unchanged error codes (`POST_QUOTA_DAILY_EXCEEDED`, `POST_QUOTA_MONTHLY_EXCEEDED`, both `ERRCODE = check_violation`).
+- Produces: `can_create_post(uuid)` and `can_upload_media(uuid)`, both with unchanged signatures.
+- **Not in this task:** `enforce_post_quota_on_insert()` is rewritten entirely in Task 4. Do not touch it here — two tasks issuing `CREATE OR REPLACE` for one function makes review order-dependent.
 
 - [ ] **Step 1: Write the failing assertions**
 
@@ -1057,7 +1058,11 @@ Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Wire the hook to the new plan query**
 
-Replace the `basePlanLimits` / `dbQuotaLimits` / `planLimits` block with:
+**Keep the existing `dbQuotaLimits` query (lines 66-80) exactly as it is** — it reads the
+per-user override row and is the second argument to `resolvePlanLimits`. Deleting it
+would make every user inherit the plan with no override path, breaking spec R2.
+
+Delete only `basePlanLimits` and the `planLimits` ternary, and replace them with:
 
 ```typescript
   const { data: planRow } = useQuery({
@@ -1412,7 +1417,7 @@ const CLEARED_QUOTA_OVERRIDES = {
 
 - [ ] **Step 2: Replace every write site**
 
-In `stripe-webhook/index.ts`, substitute `CLEARED_QUOTA_OVERRIDES` for `quotas` at line 299 (`const quotas = PLAN_QUOTAS[...]` becomes `const quotas = CLEARED_QUOTA_OVERRIDES`), for `PLAN_QUOTAS[newPlanSlug]` at lines 407 and 414, and for `PLAN_QUOTAS.free` at lines 466 and 473. Delete the now-dead `if (newPlanSlug && PLAN_QUOTAS[newPlanSlug])` guard at line 397, replacing its condition with `if (newPlanSlug)`.
+In `stripe-webhook/index.ts`, substitute `CLEARED_QUOTA_OVERRIDES` for `quotas` at line 299 (`const quotas = PLAN_QUOTAS[...]` becomes `const quotas = CLEARED_QUOTA_OVERRIDES`), for `PLAN_QUOTAS[newPlanSlug]` at lines 407 and 414, and for `PLAN_QUOTAS.free` at lines 466 and 473. At line 397, **keep** the `if` statement and narrow its condition from `if (newPlanSlug && PLAN_QUOTAS[newPlanSlug])` to `if (newPlanSlug)` — the block it guards must still run on a plan change; only the `PLAN_QUOTAS` half of the condition becomes meaningless.
 
 Apply the same substitution at `sync-user-quotas/index.ts:238-245` and `backfill-subscription/index.ts:217-225`.
 
