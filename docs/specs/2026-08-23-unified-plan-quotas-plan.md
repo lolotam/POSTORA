@@ -13,6 +13,8 @@
 ## Global Constraints
 
 - **Branch:** `feat/unified-plan-quotas`. Already checked out.
+- **Round-1 amendments are binding.** Ten tasks carry a "Round-1 amendments (BINDING)" block from the Codex adversarial review (spec section 9). Where a block conflicts with the steps above it, **the amendment wins**. Four of the five blockers it fixes were verified against the production database.
+- **TDD is not optional.** Every task follows RED then GREEN: write the test, RUN IT, and paste the actual failing output into the report before writing any implementation. A report that shows only passing output is rejected and the task is re-dispatched. "I could tell it would fail" is not a failing run.
 - **Required reading:** `ARCHITECTURE.md` before touching `src/**` or `supabase/functions/**`. §11 (no raw Supabase queries in pages), §23 (migration + types rules), §24 (service role), §16 (edge errors never 5xx).
 - **`-1` means unlimited** in every quota column. It is the most permissive value and wins every comparison.
 - **NULL in `user_quotas.max_*` means inherit from the plan.** A non-null value is a deliberate override that wins outright, and may raise *or* lower.
@@ -63,6 +65,7 @@ docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -c "DRO
 | `supabase/migrations/20260823140200_quota_readers_use_arbiter.sql` | `can_create_post` and `can_upload_media` only |
 | `supabase/migrations/20260823140300_quota_writers_clear_overrides.sql` | `handle_new_user_quota`, `set_user_quotas_for_plan`, trigger writes |
 | `supabase/migrations/20260823140400_backfill_user_quota_overrides.sql` | Capability-preserving NULLing of 66 live rows |
+| `supabase/migrations/20260823140500_seed_n8n_tier_rate_limits.sql` | **New (A8).** Tier rows for the ten `/api/v1/*` endpoints across three plans |
 | `src/hooks/usePlanQuotas.tsx` | **New.** Read/write adapter for plan entitlement columns |
 | `src/hooks/__tests__/usePlanQuotas.test.tsx` | **New.** Its tests |
 | `src/hooks/useQuotas.tsx` | Resolve from DB, delete `PLAN_QUOTAS` and `pickMax` |
@@ -190,6 +193,59 @@ Apply a third time and assert pro is still `999`. Expected: `999` — the guard 
 ```bash
 git commit -m "feat(db): add plan entitlement columns to subscription_plans" -- supabase/migrations/20260823140000_plan_quota_columns.sql
 ```
+
+---
+
+**Round-1 amendments (BINDING — override the steps above where they conflict).**
+
+*A1 — drop the `user_quotas` defaults.* Add to this migration, before the seed:
+
+```sql
+-- Omitted INSERT columns take these defaults (2/4/2/20/20), which would make every
+-- new row a pinned override instead of inheriting its plan. NULL must mean inherit.
+ALTER TABLE public.user_quotas
+  ALTER COLUMN max_profiles              DROP DEFAULT,
+  ALTER COLUMN max_social_accounts       DROP DEFAULT,
+  ALTER COLUMN max_posts_per_month       DROP DEFAULT,
+  ALTER COLUMN max_posts_per_day         DROP DEFAULT,
+  ALTER COLUMN max_media_uploads_per_day DROP DEFAULT;
+```
+
+Add an assertion: after this migration, `INSERT INTO user_quotas (user_id) VALUES (<uuid>)`
+leaves all five limit columns NULL.
+
+*A15 — seed each column independently.* Replace the three whole-row-guarded `UPDATE`
+statements with per-column `COALESCE`, so a partially-seeded row is repaired and an
+admin-edited column is preserved:
+
+```sql
+UPDATE public.subscription_plans SET
+  max_social_accounts       = COALESCE(max_social_accounts, 3),
+  max_posts_per_month       = COALESCE(max_posts_per_month, 30),
+  max_posts_per_day         = COALESCE(max_posts_per_day, 2),
+  max_media_uploads_per_day = COALESCE(max_media_uploads_per_day, 20)
+WHERE slug = 'free';
+```
+
+Same shape for `pro` (30/500/30/-1) and `business` (-1/-1/-1/-1). Step 6's replay check
+becomes two cases: (a) edit `max_social_accounts` to 99 while `max_posts_per_day` is NULL,
+replay, assert 99 survives **and** day is now seeded; (b) populate day, NULL accounts,
+replay, assert accounts is seeded.
+
+*A6 — owner-scoped read policy.* The public policy on `subscription_plans` is
+`(is_active = true)` — verified on prod. A subscriber on a deactivated plan cannot read
+their own entitlements, while the arbiter still can. Add:
+
+```sql
+CREATE POLICY "Users can view their own active plan"
+  ON public.subscription_plans FOR SELECT TO authenticated
+  USING (EXISTS (
+    SELECT 1 FROM public.user_subscriptions us
+    WHERE us.user_id = auth.uid() AND us.status = 'active' AND us.plan_id = subscription_plans.id
+  ));
+```
+
+The existing active-only public policy is unchanged.
 
 ---
 
@@ -341,6 +397,39 @@ Expected: `NOTICE: TASK2 PASS`.
 ```bash
 git commit -m "feat(db): add effective_user_quotas arbiter" -- supabase/migrations/20260823140100_effective_user_quotas.sql
 ```
+
+---
+
+**Round-1 amendments (BINDING).**
+
+*A14 — grant to `service_role` only.* Replace the GRANT line with:
+
+```sql
+REVOKE ALL ON FUNCTION public.effective_user_quotas(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.effective_user_quotas(uuid) TO service_role;
+```
+
+Rationale: no client path calls this RPC, and the SQL readers that do are
+`SECURITY DEFINER` executing as the definer, so they need no grant. Granting
+`authenticated` would let any user read any other user's limits by passing their uuid
+(ARCHITECTURE.md §23 requires caller/resource scope validation). Revoking is safer than
+an `auth.uid()` guard, which would break the post trigger — that runs with
+`auth.uid()` NULL.
+
+*A5 — deterministic subscription selection.* The active-subscription subquery must read:
+
+```sql
+      ORDER BY us.current_period_end DESC NULLS LAST, us.created_at DESC, us.id DESC
+```
+
+There is no uniqueness constraint on active subscriptions (verified: 0 duplicates today,
+but nothing prevents them). Without the full tie-breaker two active rows with equal or
+NULL `current_period_end` select nondeterministically, letting the arbiter and the
+backfill disagree.
+
+*A13 — added assertions.* Add to `/tmp/t2.sql`: a user whose plan row has NULL columns
+resolves to the free literals; and `SELECT count(*) FROM effective_user_quotas(u)` is
+exactly 1 for a user with no subscription, one subscription, and two active subscriptions.
 
 ---
 
@@ -508,6 +597,25 @@ Expected: `NOTICE: TASK3 PASS`.
 ```bash
 git commit -m "feat(db): resolve post and media quota checks through the arbiter" -- supabase/migrations/20260823140200_quota_readers_use_arbiter.sql
 ```
+
+---
+
+**Round-1 amendments (BINDING).**
+
+*A2 — `increment_media_uploads()` joins this task.* It is **not** counter-only: it selects
+`max_media_uploads_per_day` and enforces it. With a NULL override both `v_max_uploads = -1`
+and `v_current_uploads >= v_max_uploads` evaluate to NULL, so it increments forever — an
+unlimited upload bypass. Its missing-row branch also hardcodes `max_media_uploads_per_day = 20`,
+re-creating the override this work removes.
+
+Rewrite it in this migration: resolve the limit via `effective_user_quotas()`, insert
+missing rows with NULL limits, and keep the reset-window and increment behaviour identical.
+
+Add assertions to `/tmp/t3.sql`:
+- a user with a NULL override on the free plan is blocked by `increment_media_uploads`
+  once `media_uploads_today` reaches the plan's 20 (today it would increment past it);
+- the missing-row branch leaves `max_media_uploads_per_day` NULL;
+- a Business-plan user is never blocked.
 
 ---
 
@@ -700,6 +808,34 @@ git commit -m "feat(db): quota writers clear overrides instead of writing plan v
 
 ---
 
+**Round-1 amendments (BINDING).**
+
+*A1 — name all five columns explicitly.* Task 1 drops the `user_quotas` defaults, but
+every INSERT in this migration must still name all five limit columns with `NULL`. The
+dropped default is the fix; the explicit NULL documents intent and survives a future
+default being re-added. For example, in `handle_new_user_quota()`:
+
+```sql
+  INSERT INTO public.user_quotas (
+    user_id, posts_this_month, quota_reset_date,
+    max_profiles, max_social_accounts, max_posts_per_month,
+    max_posts_per_day, max_media_uploads_per_day
+  )
+  VALUES (
+    NEW.id, 0, (date_trunc('month', now()) + interval '1 month')::timestamptz,
+    NULL, NULL, NULL, NULL, NULL
+  )
+  ON CONFLICT (user_id) DO NOTHING;
+```
+
+Apply the same explicit-NULL form to the INSERT inside `enforce_post_quota_on_insert()`
+and to `set_user_quotas_for_plan()`.
+
+**Without this and A1's `DROP DEFAULT`, this task's own assertions fail** — Postgres
+would fill the omitted columns with 2/4/20/2/20.
+
+---
+
 ### Task 5: Capability-preserving backfill
 
 **Files:**
@@ -881,6 +1017,57 @@ docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -c "DRO
 ```bash
 git commit -m "feat(db): capability-preserving backfill of user_quotas overrides" -- supabase/migrations/20260823140400_backfill_user_quota_overrides.sql
 ```
+
+---
+
+**Round-1 amendments (BINDING).**
+
+*A4 - compare against plan-or-literal, never a raw nullable column.* This supersedes any
+"keep the override when the plan is NULL" rule. In the `resolved` CTE, wrap every plan
+column so it mirrors `effective_user_quotas()` exactly:
+
+```sql
+    COALESCE(sp.profile_limit, 2)              AS p_profiles,
+    COALESCE(sp.max_social_accounts, 3)        AS p_accounts,
+    COALESCE(sp.max_posts_per_month, 30)       AS p_month,
+    COALESCE(sp.max_posts_per_day, 2)          AS p_day,
+    COALESCE(sp.max_media_uploads_per_day, 20) AS p_uploads
+```
+
+Why this is a blocker without it: with a missing `free` row every `sp.*` is NULL, so for
+the admin's `-1` row branch 2 (`u = -1 AND p <> -1`), branch 3 (`p = -1`) and branch 4
+(`u > p`) are all NULL, the ladder falls to `ELSE NULL`, and the arbiter then resolves
+that user down to the finite free literals. Task 1 only UPDATEs a free row - it never
+creates one.
+
+*A5 - same deterministic ordering as the arbiter.* The `LEFT JOIN LATERAL` subquery must
+use `ORDER BY s.current_period_end DESC NULLS LAST, s.created_at DESC, s.id DESC`.
+Divergence here is exactly how the backfill and the arbiter come to disagree.
+
+*A5 - pre-migration assertion.* Add as the migration's first statement a DO block that
+ASSERTs `NOT EXISTS (SELECT 1 FROM public.user_subscriptions WHERE status = 'active'
+GROUP BY user_id HAVING count(*) > 1)` with the message
+'duplicate active subscriptions must be resolved before backfilling'.
+
+*A13 - the invariant test must compare before against after.* The Step 6 assertion
+(`= -1 OR >= 1`) cannot fail on a decrease from 999 to 2. Replace it with a snapshot
+taken BEFORE the backfill UPDATE:
+
+```sql
+CREATE TEMP TABLE quota_snapshot AS
+SELECT uq.user_id, e.* FROM public.user_quotas uq,
+       LATERAL public.effective_user_quotas(uq.user_id) e;
+```
+
+and, AFTER it, a DO block looping over `quota_snapshot` that re-resolves each user and
+ASSERTs, for every one of the five columns, that the new value is `-1` OR
+(the old value was not `-1` AND the new value is >= the old value). Message:
+'<column> limit decreased for ' || r.user_id. The invariant covers every column, not
+just the daily one.
+
+*A13 - add the missing Business fixture.* Step 2 seeds four users; add a fifth on the
+Business plan with an active subscription so the `business` bucket is exercised, and
+assert every column for every fixture rather than a selected few.
 
 ---
 
@@ -1102,6 +1289,18 @@ git commit -m "feat(quotas): resolve client limits from subscription_plans" -- s
 
 ---
 
+**Round-1 amendments (BINDING).**
+
+*A11 - the denial message must use the resolved limit.* `useQuotas.tsx:365-385` re-reads
+`user_quotas.max_media_uploads_per_day` to build its message. After the backfill that is
+normally NULL, so a Free plan edited to 10 uploads blocks at 10 but tells the user
+"daily limit of 20". Replace that query with the already-resolved `maxMediaUploads`, and
+delete the now-dead `user_quotas` read.
+
+Add a test asserting the message quotes the resolved plan value, not `20`.
+
+---
+
 ### Task 8: Plan-quota adapter and admin page
 
 **Files:**
@@ -1287,6 +1486,27 @@ git commit -m "feat(admin): plan quotas page edits subscription_plans" -- src/ho
 
 ---
 
+**Round-1 amendments (BINDING).**
+
+*A10 - preserve NULL; never persist a coerced zero.* The `?? 0` coalescing in the mapper
+turns a deliberately-NULL plan column into a hard `0` limit as soon as an admin opens and
+saves the plan - converting free-fallback behaviour into a zero-capability plan. Type the
+`PlanQuota` numeric fields as `number | null`, keep NULL through the form, and send NULL
+(not 0) on save. Render NULL as an empty input whose placeholder names the fallback value.
+
+*A12 - rewrite the "Important Notes" markup* (`AdminPlanQuotas.tsx:320-330`). It currently
+tells admins that changes require Sync Quotas and that edge-function values must match the
+database. Both become false: plan edits take effect immediately, and Task 10 changes
+`sync-user-quotas` to *clear* per-user overrides. Following the retained instruction would
+erase deliberate grants. Replace with the NULL-inheritance semantics and an explicit
+warning that the sync action clears per-user overrides.
+
+*A13 - test the mutation, not just the read.* The Step 1 test only exercises reading. Add
+a test that `updateQuota` issues an `update` against `subscription_plans` with the edited
+values, and that a NULL field is sent as `null`, not `0`.
+
+---
+
 ### Task 9: Admin cross-links and rate-limit tier visibility
 
 **Files:**
@@ -1386,6 +1606,26 @@ git commit -m "feat(admin): hide unenforced tier controls and label the shared p
 
 ---
 
+**Round-1 amendments (BINDING).**
+
+*A9 - disable the daily field for hourly-only endpoints.* Task 11 enforces only
+`max_requests_per_hour` for n8n endpoints, but the existing tier UI renders and saves both
+hourly and daily inputs. An admin could tune a daily cap that never fires. Add:
+
+```typescript
+/** Endpoints whose runtime enforces ONLY max_requests_per_hour. The daily column exists
+ *  on the row but has no consumer for these, so the field is disabled rather than shown
+ *  as an editable limit. */
+export function endpointEnforcesDailyTierLimit(endpoint: string): boolean {
+  return endpoint === "generate-caption" || endpoint === "generate-image";
+}
+```
+
+Disable the daily input where this returns false and render "Hourly only - the daily value
+is not enforced for this endpoint." Add a test for both branches.
+
+---
+
 ### Task 10: Edge functions stop writing plan values
 
 **Files:**
@@ -1436,6 +1676,37 @@ Expected: no errors.
 ```bash
 git commit -m "feat(quotas): edge functions clear overrides instead of writing plan values" -- supabase/functions/stripe-webhook/index.ts supabase/functions/sync-user-quotas/index.ts supabase/functions/backfill-subscription/index.ts
 ```
+
+---
+
+**Round-1 amendments (BINDING) - this task grows substantially.**
+
+*A3 - the webhook never writes `plan_id`.* Verified at `stripe-webhook/index.ts:386-394`:
+the update writes `status`, both period columns and `cancel_at_period_end`, and nothing
+else. Today that is masked because the webhook also writes the new plan's concrete numbers
+into `user_quotas`. Remove that write without fixing `plan_id` and **a user who upgrades
+inherits their old plan** - a regression against current behaviour. Required:
+
+1. Resolve the new plan's `id` from `newPlanSlug`
+   (`select id from subscription_plans where slug = newPlanSlug`).
+2. Include `plan_id` in the `user_subscriptions` update **only when the plan actually
+   changed** - compare against the stored `plan_id` first.
+3. Clear the override columns **only** on create, real plan change, or cancellation. The
+   retained `if (newPlanSlug)` from Ruling 3 fires on every ordinary
+   `customer.subscription.updated` event (renewals, payment-method changes) and would
+   erase deliberate admin grants, contradicting spec R4a.
+
+*A3 - invalid cancellation status.* The deletion path writes `"canceled"`.
+`user_subscriptions_status_check` permits `active | cancelled | expired | past_due` -
+verified on prod. Write `"cancelled"`. The same applies to `status: subscription.status`
+at line 389, which forwards Stripe values (`incomplete`, `trialing`, `unpaid`) the
+constraint rejects: map Stripe status to a permitted value explicitly.
+
+*A3 - stop discarding database errors.* Every `await supabase...` in these paths currently
+drops its `{ error }`. Destructure and log it; a silently failing update is how this class
+of bug survived. Do not throw - ARCHITECTURE.md section 16 forbids turning these into 5xx.
+
+Add a step verifying the Stripe-status-to-permitted-value mapping.
 
 ---
 
@@ -1621,6 +1892,34 @@ Expected: no errors.
 ```bash
 git commit -m "feat(n8n-api): resolve tier rate limits between user override and global" -- supabase/functions/n8n-api/rateLimitConfig.ts supabase/functions/n8n-api/rateLimitConfig.test.ts supabase/functions/n8n-api/index.ts
 ```
+
+---
+
+**Round-1 amendments (BINDING).**
+
+*A7 - a caller with no subscription is a Free user, not a plan-less one.* Most free users
+have no `user_subscriptions` row at all (66 users against 7 active subscriptions), so
+returning NULL skips the tier step for exactly the population tier limits are meant to
+constrain - contradicting spec acceptance criterion 7. `fetchPlanSlug` must resolve to
+`'free'`:
+
+```typescript
+  return data?.subscription_plans?.slug ?? 'free';
+```
+
+**Invert the Step 1 test** "skips the tier step when the user has no plan" - it encodes the
+wrong behaviour as a requirement. Replace with: a caller with no active subscription
+resolves `'free'`, and a Free `tier_rate_limits` row outranks the global setting. Keep a
+separate test that a *throwing* plan lookup degrades to the global setting.
+
+*A8 - seed the n8n tier rows.* All nine existing `tier_rate_limits` rows are AI endpoints;
+`AdminRateLimits` has no insert path, so acceptance criterion 7 cannot pass from the
+planned deployment state. Add a migration
+`supabase/migrations/20260823140500_seed_n8n_tier_rate_limits.sql` inserting rows for the
+ten `/api/v1/*` endpoints across `free`, `pro` and `business`, with
+`ON CONFLICT (plan_slug, endpoint) DO NOTHING` so a replay is inert. Free values sit below
+the corresponding `rate_limit_settings` global; pro and business above it. State the chosen
+numbers in the migration comment.
 
 ---
 
