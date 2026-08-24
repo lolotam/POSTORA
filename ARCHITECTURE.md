@@ -81,8 +81,13 @@ the media library shipped full-size originals into thumbnail cells. An
 optimization had been written, reviewed, and merged; only the wiring was
 missing, and nothing in the process looked for it.
 
-Checking this costs one grep for the new export's name, filtered to exclude
-test files. If that returns nothing, the change is not done.
+Checking this means naming the call site, not finding the string. A grep for the
+export's name also matches declarations, comments, re-exports, and — the trap
+`cdn.ts` actually fell into — type-only imports: `useCdnConfig.ts` imported
+`CdnConfig` and `CdnProvider` from it, so the module looked referenced while
+every function in it was unreachable. Point at a non-test file that *calls* the
+new code, or run an AST/call-graph check. If you cannot name that line, the
+change is not done.
 
 ---
 

@@ -19,7 +19,7 @@ export interface MediaFileUrlRow {
   current_object_version?: number | null | undefined;
 }
 export interface MediaProviderRow { object_version?: number | null; provider: string; status: string; delivery_url?: string | null }
-export interface MediaUrlConfig { read_preference?: string; primaryCdn?: string }
+export interface MediaUrlConfig { read_preference?: string; primaryCdn?: string; openinary?: { serverUrl?: string } }
 
 /** CDN providers Postora can write to and read from. */
 export type CdnProvider = "cloudinary" | "openinary" | "supabase";
@@ -74,15 +74,21 @@ const OPENINARY_DELIVERY_MARKER = "/t/";
  * renditions — is returned unchanged. Transcoding a video to serve a still is
  * far more expensive than sending the poster frame the browser already fetches,
  * and Supabase Storage object URLs have no transform grammar at all.
+ *
+ * `openinaryOrigin` must be the configured Openinary server URL. Without it the
+ * Openinary branch is skipped entirely: `/t/` is a plausible path on any host,
+ * so matching it unanchored would rewrite a foreign CDN's URL into a 404. Only
+ * the Cloudinary branch is safe to detect from the URL alone, because it is
+ * anchored to the `res.cloudinary.com` origin.
  */
-export function transformMediaUrl(url: string, transform?: MediaTransformOptions): string {
+export function transformMediaUrl(url: string, transform?: MediaTransformOptions, openinaryOrigin?: string): string {
   if (!url || !transform) return url;
   // Openinary deliberately mirrors Cloudinary's directive syntax, so one builder
   // produces the segment for both grammars.
   const segment = buildOpeninaryTransform(transform);
   if (!segment) return url;
 
-  if (isOpeninaryUrl(url)) {
+  if (openinaryOrigin && isOpeninaryUrl(url, openinaryOrigin)) {
     const marker = url.indexOf(OPENINARY_DELIVERY_MARKER);
     const origin = url.slice(0, marker);
     const rest = url.slice(marker + OPENINARY_DELIVERY_MARKER.length);
@@ -110,8 +116,8 @@ export function transformMediaUrl(url: string, transform?: MediaTransformOptions
  * `c_fill` over `c_thumb` because the grid crops with `object-cover` anyway and
  * `c_thumb` implies face detection the media library has no use for.
  */
-export function getMediaThumbnailUrl(url: string, size: number): string {
-  return transformMediaUrl(url, { width: size, crop: "fill", format: "auto", quality: "auto" });
+export function getMediaThumbnailUrl(url: string, size: number, openinaryOrigin?: string): string {
+  return transformMediaUrl(url, { width: size, crop: "fill", format: "auto", quality: "auto" }, openinaryOrigin);
 }
 
 /**
@@ -151,7 +157,7 @@ export function resolveMediaPublicUrl(
   config?: MediaUrlConfig,
   transform?: MediaTransformOptions,
 ): string {
-  return transformMediaUrl(resolveBaseUrl(row, storageResolver, providerRows, config), transform);
+  return transformMediaUrl(resolveBaseUrl(row, storageResolver, providerRows, config), transform, config?.openinary?.serverUrl);
 }
 
 /** Provider selection only — `resolveMediaPublicUrl` layers the transform on top. */

@@ -43,6 +43,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getMediaThumbnailUrl } from "@/lib/mediaUrl";
+import { useCdnConfig } from "@/hooks/useCdnConfig";
 import {
   Select,
   SelectContent,
@@ -141,13 +142,15 @@ import {
 function MediaThumbnail({
   file,
   size,
+  openinaryOrigin,
   onHeal,
 }: {
   file: MediaFile;
   size: number;
+  openinaryOrigin?: string;
   onHeal: (fileId: string, width: number, height: number) => void;
 }) {
-  const src = file.file_type === "image" ? getMediaThumbnailUrl(file.publicUrl, size) : file.publicUrl;
+  const src = file.file_type === "image" ? getMediaThumbnailUrl(file.publicUrl, size, openinaryOrigin) : file.publicUrl;
   const shouldHeal = !file.metadata?.width && src === file.publicUrl;
   const className = "w-full h-full object-cover";
 
@@ -231,6 +234,11 @@ export default function MediaLibrary() {
   const { isAdmin } = useUserRole();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
   const queryClient = useQueryClient();
+  const { data: cdnConfig } = useCdnConfig();
+  // Openinary delivery is only recognisable by its configured origin — see the
+  // note on transformMediaUrl. Without it, thumbnails fall back to the original.
+  const openinaryOrigin = cdnConfig?.openinary?.serverUrl;
+
   const healedIdsRef = useRef<Set<string>>(new Set());
 
   const healMetadata = useCallback((fileId: string, width: number, height: number) => {
@@ -1147,7 +1155,7 @@ export default function MediaLibrary() {
                   {displayedFiles.map((file) => (
                     <DraggableMediaCard key={file.id} file={file}>
                       <div className={cn("relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer aspect-square", selectedFiles.has(file.id) ? "border-primary bg-primary/5" : "border-border hover:border-primary/50")} onClick={() => toggleFileSelection(file.id)}>
-                        <MediaThumbnail file={file} size={300} onHeal={healMetadata} />
+                        <MediaThumbnail file={file} size={300} openinaryOrigin={openinaryOrigin} onHeal={healMetadata} />
                         <div className="absolute bottom-1 left-1 flex gap-0.5">
                           <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{file.file_type === "video" ? "Video" : "Image"}</Badge>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{label}</Badge> : null; })()}
@@ -1180,7 +1188,7 @@ export default function MediaLibrary() {
                 <div className="space-y-2">
                   {displayedFiles.map((file) => (
                     <div key={file.id} className={cn("flex items-center gap-4 p-3 rounded-xl border-2 transition-all cursor-pointer", selectedFiles.has(file.id) ? "border-primary bg-primary/5" : "border-border hover:border-primary/50")} onClick={() => toggleFileSelection(file.id)}>
-                      <div className="w-16 h-16 rounded-lg overflow-hidden bg-muted shrink-0"><MediaThumbnail file={file} size={128} onHeal={healMetadata} /></div>
+                      <div className="w-16 h-16 rounded-lg overflow-hidden bg-muted shrink-0"><MediaThumbnail file={file} size={128} openinaryOrigin={openinaryOrigin} onHeal={healMetadata} /></div>
                       <div className="flex-1 min-w-0">
                         <p className="font-medium truncate">{getFileDisplayName(file)}</p>
                         <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
@@ -1213,7 +1221,7 @@ export default function MediaLibrary() {
         <DragOverlay>
           {activeFile && (
             <div className="relative">
-              <div className="w-24 h-24 rounded-lg overflow-hidden border-2 border-primary shadow-lg bg-muted"><MediaThumbnail file={activeFile} size={192} onHeal={healMetadata} /></div>
+              <div className="w-24 h-24 rounded-lg overflow-hidden border-2 border-primary shadow-lg bg-muted"><MediaThumbnail file={activeFile} size={192} openinaryOrigin={openinaryOrigin} onHeal={healMetadata} /></div>
               {selectedFiles.has(activeFile.id) && selectedFiles.size > 1 && <div className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center shadow-lg">{selectedFiles.size}</div>}
             </div>
           )}

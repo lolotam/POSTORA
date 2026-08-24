@@ -1,8 +1,17 @@
 # Eight video performance/security claims, measured against Postora
 
-Date: 2026-08-24 · Branch: `fix/whatsapp-qr-repair-and-consent-logo`
+Date: 2026-08-24
 Method: static counts over the repo, plus live reads from the prod Postgres
 (`postorasupabase-supabase-j8axyh-supabase-db`) and the Contabo host.
+
+> **Every measurement below is the pre-change baseline**, taken before any of it
+> was acted on. Items 1, 2, and 3 of "Options, ranked" were then implemented in
+> PR #30, which ships alongside this document — so the code excerpts in §6 and
+> §2 and the "0 vulnerabilities" note in §8 describe the state this document was
+> written against, not the state of `main` after that PR merges. The numbers are
+> kept verbatim rather than updated: they are the evidence that justified the
+> change, and rewriting them would destroy the baseline. See "Status after
+> PR #30" at the end for what changed.
 
 ## Stack mismatch that reframes every claim
 
@@ -228,3 +237,31 @@ realtime WAL polling, `pg_net` cron dispatch, and Logflare ingest.
 5. Batch the `leads-api` per-row upserts.
 6. Investigate whether realtime is subscribed to more tables than the UI needs —
    it is the single largest DB consumer and the largest connection holder.
+
+---
+
+## Status after PR #30
+
+Options 1–3 were implemented; 4–6 remain open.
+
+| # | Option | Status |
+|---|---|---|
+| 1 | Media thumbnails, lazy loading, one canonical URL helper | **Done** — `cdn.ts` deleted, `mediaUrl.ts` gained `transformMediaUrl`/`getMediaThumbnailUrl`, `MediaThumbnail` serves sized renditions. DB pagination deliberately skipped (client-side filtering); `select("*")` became an explicit allowlist. |
+| 2 | Aggregate pushdown for the two count-in-JS queries | Open |
+| 3 | Dependency manifest and `react-router-dom` | **Done** — tooling moved to `devDependencies`, patched to 7.18.2 in **both** `package-lock.json` and `bun.lock`. `npm audit --omit=dev` reports 0. |
+| 4 | Review the 305 unused indexes | Open |
+| 5 | Batch the `leads-api` per-row upserts | Open |
+| 6 | Audit realtime table subscriptions | Open |
+
+Two corrections to the measurements above, found while implementing:
+
+- **§6 overstates the per-page cost.** 663 MB is the library total for the
+  largest account. The grid renders at most `itemsPerPage` items (default 50),
+  so the real cost was roughly 50 MB per view — an order of magnitude less,
+  still worth fixing.
+- **§8's audit numbers were npm-only.** CI installs with
+  `bun install --frozen-lockfile` and the Dokploy build resolves from
+  `bun.lock`, so `npm audit` never described the tree that ships. The initial
+  `npm audit fix` left `react-router-dom` at the vulnerable 7.18.0 in
+  `bun.lock`. **Run `npm audit` for the report, but patch the version in
+  `package.json` so both lockfiles move.**

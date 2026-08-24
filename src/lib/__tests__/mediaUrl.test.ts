@@ -140,6 +140,7 @@ describe("resolveMediaPublicUrl", () => {
  */
 describe("transformMediaUrl", () => {
   const thumb = { width: 300, format: "auto" } as const;
+  const OPENINARY = "https://cdn.example.com";
 
   it("returns the URL untouched when there is nothing to ask for", () => {
     const url = "https://res.cloudinary.com/dur1soa8n/image/upload/v1/a.png";
@@ -181,17 +182,25 @@ describe("transformMediaUrl", () => {
       "https://example.supabase.co/storage/v1/object/public/media/uploads/img.png",
     ],
   ])("%s", (_label, input, expected) => {
-    expect(transformMediaUrl(input, thumb)).toBe(expected);
+    expect(transformMediaUrl(input, thumb, OPENINARY)).toBe(expected);
+  });
+
+  // `/t/` is a plausible path on any host. Matching it unanchored rewrote a
+  // foreign CDN's URL into a 404 (CodeRabbit, PR #30).
+  it.each([
+    ["a foreign /t/ URL when no Openinary origin is configured", "https://cdn.example.com/t/postora.cloud/a.png", undefined],
+    ["a foreign /t/ URL from a host that is not the configured origin", "https://images.example.net/t/catalog/a.png", OPENINARY],
+  ])("leaves %s untouched", (_label, input, origin) => {
+    expect(transformMediaUrl(input, thumb, origin)).toBe(input);
   });
 
   it("stays idempotent when a transformed URL is transformed again", () => {
-    expect(transformMediaUrl(transformMediaUrl("https://cdn.example.com/t/w_20/a/b.png", thumb), thumb)).toBe(
-      "https://cdn.example.com/t/w_300,f_auto/a/b.png",
-    );
+    const once = transformMediaUrl("https://cdn.example.com/t/w_20/a/b.png", thumb, OPENINARY);
+    expect(transformMediaUrl(once, thumb, OPENINARY)).toBe("https://cdn.example.com/t/w_300,f_auto/a/b.png");
   });
 
   it("builds a square thumbnail rendition", () => {
-    expect(getMediaThumbnailUrl("https://cdn.example.com/t/postora.cloud/a.png", 80)).toBe(
+    expect(getMediaThumbnailUrl("https://cdn.example.com/t/postora.cloud/a.png", 80, OPENINARY)).toBe(
       "https://cdn.example.com/t/w_80,c_fill,q_auto,f_auto/postora.cloud/a.png",
     );
   });
@@ -202,7 +211,7 @@ describe("transformMediaUrl", () => {
         { file_path: "legacy.png" },
         undefined,
         [{ provider: "openinary", status: "ready", delivery_url: "https://cdn.example.com/t/a/b.png" }],
-        { read_preference: "openinary" },
+        { read_preference: "openinary", openinary: { serverUrl: OPENINARY } },
         thumb,
       ),
     ).toBe("https://cdn.example.com/t/w_300,f_auto/a/b.png");
