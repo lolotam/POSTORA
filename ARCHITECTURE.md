@@ -63,6 +63,27 @@ Never assume a file is the only implementation of a behavior.
 
 Never fix a cross-cutting bug only in the visible UI when the underlying business rule lives elsewhere.
 
+## Definition of Done — Zero Dead Modules
+
+**No new helper, utility, or infrastructure container is considered complete or
+merged without at least one active, production (non-test) consumer wired to it
+in the same change.**
+
+A passing test suite is not evidence that a module is reachable. Tests are
+consumers too, and a module whose only callers are its own tests looks healthy
+in CI, in review, and in coverage while doing nothing at runtime.
+
+This rule was added on 2026-08-24 after `src/lib/cdn.ts` was found in exactly
+that state: a complete, tested image-transform layer — `getCdnThumbnail`,
+`getCdnSrcSet`, `getCdnPlaceholder` — that no component ever imported, while
+the media library shipped full-size originals into thumbnail cells. An
+`imgproxy` container in the Supabase stack sat unused for the same reason. The
+optimization had been written, reviewed, and merged; only the wiring was
+missing, and nothing in the process looked for it.
+
+Checking this costs one grep for the new export's name, filtered to exclude
+test files. If that returns nothing, the change is not done.
+
 ---
 
 # 2. Architecture Strategy
