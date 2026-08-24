@@ -25,7 +25,7 @@ number. Re-pairing a number that already has a row for the same user collides:
 ERROR:  duplicate key value violates unique constraint
         "social_accounts_user_id_platform_platform_user_id_key"
 DETAIL: Key (user_id, platform, platform_user_id)=
-        (7fe4d34e-…, whatsapp, 96597950350) already exists.
+        (7fe4d34e-…, whatsapp, ***0350) already exists.
 ```
 (reproduced in a rolled-back transaction against row `a7fc6167`)
 
@@ -38,11 +38,11 @@ no UI error. `is_active` stays `false`, `platform_user_id` stays `pending_`.
 
 | Fact | Value |
 |---|---|
-| Evolution instance `postora_a7fc6167…` | `connectionStatus=open`, `ownerJid=96597950350@s.whatsapp.net`, 13:15:32Z |
+| Evolution instance `postora_a7fc6167…` | `connectionStatus=open`, `ownerJid=***0350@s.whatsapp.net`, 13:15:32Z |
 | `whatsapp_evolution_instances.a7fc6167` | `last_connection_state=open`, `last_sync_at=13:15:38Z` |
 | `social_accounts.a7fc6167` | `is_active=f`, `platform_user_id=pending_a7fc6167…`, `updated_at=11:39:49Z` |
 | `social_accounts` UPDATE trigger | `update_social_accounts_updated_at` exists → `updated_at == connected_at` proves **zero** UPDATEs ever applied |
-| Blocking row | `93de5a12…`, same user, `platform_user_id=96597950350`, `is_active=f`, connected 2026-08-20 |
+| Blocking row | `93de5a12…`, same user, `platform_user_id=***0350`, `is_active=f`, connected 2026-08-20 |
 | service_role | `rolbypassrls=t`, has UPDATE → not a permissions problem |
 
 Three stuck rows, all the same user re-pairing the same number:

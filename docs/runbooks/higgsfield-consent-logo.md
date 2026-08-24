@@ -79,19 +79,25 @@ replacement is confirmed: the stale edge copy is what keeps the consent screen
 rendering while the origin is empty.
 
 ```bash
+# Chained on && so a failed backup never reaches the delete and a failed delete never
+# reaches the upload: Openinary would then suffix the new file and leave the old one live.
 curl -sS --fail-with-body -m 60 -o /tmp/logo2.bak.png \
-  "https://openinary.walidmohamed.com/t/postora.cloud/logo2.png"
-AUTH | curl -sS --fail-with-body -m 60 -X DELETE -H @- \
-  "$U/api/storage/postora.cloud/logo2.png"
-AUTH | curl -sS --fail-with-body -m 60 -H @- -F "folder=postora.cloud" \
-  -F "files=@/tmp/ic.png;filename=logo2.png;type=image/png" "$U/api/upload" \
-  || AUTH | curl -sS --fail-with-body -m 60 -H @- -F "folder=postora.cloud" \
-       -F "files=@/tmp/logo2.bak.png;filename=logo2.png;type=image/png" "$U/api/upload"
+  "https://openinary.walidmohamed.com/t/postora.cloud/logo2.png" \
+  && AUTH | curl -sS --fail-with-body -m 60 -X DELETE -H @- \
+       "$U/api/storage/postora.cloud/logo2.png" \
+  && { AUTH | curl -sS --fail-with-body -m 60 -H @- -F "folder=postora.cloud" \
+         -F "files=@/tmp/ic.png;filename=logo2.png;type=image/png" "$U/api/upload" \
+       || AUTH | curl -sS --fail-with-body -m 60 -H @- -F "folder=postora.cloud" \
+            -F "files=@/tmp/logo2.bak.png;filename=logo2.png;type=image/png" "$U/api/upload"; }
 ```
 
-Confirm the origin is actually serving the new bytes at
-`/t/w_320/postora.cloud/logo2.png` — a different cache key, so the edge cannot
-mask the result — before purging anything.
+Read the upload's JSON response rather than trusting the exit status alone:
+Openinary reports the path it actually stored, and anything other than
+`postora.cloud/logo2.png` means it suffixed a duplicate instead of taking the
+name — delete that file and start again rather than purging. Then confirm the
+origin is serving the new bytes at `/t/w_320/postora.cloud/logo2.png` — a
+different cache key, so the edge cannot mask the result — before purging
+anything.
 
 ## The step that cannot be automated: purge Cloudflare
 

@@ -22,7 +22,9 @@ as $$
 declare
   v_user_id uuid;
   v_current text;
+  v_workspace_id uuid;
   v_duplicate_id uuid;
+  v_duplicate_workspace_id uuid;
 begin
   -- Every other connection mode stores digits, and the inbox parses that form back out of
   -- the conversation id. A malformed value would be unparseable rather than merely wrong.
@@ -31,8 +33,35 @@ begin
       using errcode = '22023';
   end if;
 
-  select user_id, platform_user_id
-    into v_user_id, v_current
+  -- The owner is read WITHOUT a row lock first, only to key the advisory lock below. Taking
+  -- any row lock before the advisory lock would give the two locks no fixed order across
+  -- concurrent claims, and an ordering that depends on which rows a claim happens to touch is
+  -- how 40P01 deadlocks appear later, when the duplicate lookup's filter changes and starts
+  -- matching rows another claimant already holds.
+  select user_id
+    into v_user_id
+    from social_accounts
+   where id = p_account_id
+     and platform = 'whatsapp';
+
+  if not found then
+    raise exception 'activate_evolution_qr_account: whatsapp account % not found', p_account_id
+      using errcode = 'P0002';
+  end if;
+
+  -- Two claims for the same number, from two provisional rows of the same user, would
+  -- otherwise each hold only its own row lock, each find no duplicate, and the second final
+  -- update would fail with 23505 -- the very collision this function exists to resolve. The
+  -- claim is therefore serialized per (user, number), and this is the FIRST lock every claim
+  -- takes. hashtextextended is used rather than hashtext because the single-argument advisory
+  -- lock takes a bigint. The loser of the race runs second, finds the winner as its duplicate
+  -- and retires it: newest pairing wins, which is the same rule the merge below applies.
+  perform pg_advisory_xact_lock(hashtextextended(v_user_id::text || ':' || p_owner_number, 0));
+
+  -- Re-read under the row lock: the winner of the advisory lock may have just changed this
+  -- row, and the unlocked read above is only trusted for the user it belongs to.
+  select platform_user_id, workspace_id
+    into v_current, v_workspace_id
     from social_accounts
    where id = p_account_id
      and platform = 'whatsapp'
@@ -58,17 +87,8 @@ begin
     return v_current;
   end if;
 
-  -- Two provisional rows for the same user can reach this point at the same moment, each
-  -- holding only its own row lock, each finding no duplicate, and the second final update
-  -- would then fail with 23505 -- the very collision this function exists to resolve. The
-  -- claim is therefore serialized per (user, number). hashtextextended is used rather than
-  -- hashtext because the single-argument advisory lock takes a bigint. The loser of the race
-  -- runs second, finds the winner as its duplicate and retires it: newest pairing wins, which
-  -- is the same rule the merge below applies.
-  perform pg_advisory_xact_lock(hashtextextended(v_user_id::text || ':' || p_owner_number, 0));
-
-  select id
-    into v_duplicate_id
+  select id, workspace_id
+    into v_duplicate_id, v_duplicate_workspace_id
     from social_accounts
    where user_id = v_user_id
      and platform = 'whatsapp'
@@ -77,6 +97,22 @@ begin
    for update;
 
   if v_duplicate_id is not null then
+    -- social_accounts is unique on (user_id, platform, platform_user_id) with no workspace
+    -- term, so one user genuinely cannot hold the same number in two workspaces and the merge
+    -- is forced. But messaging_cache rows carry their own workspace_id, the inbox filters on
+    -- it, and its dependants (whatsapp_conversation_assignments, whatsapp_deals) reference
+    -- (id, workspace_id) with no ON UPDATE rule -- so moving the rows across a workspace
+    -- boundary would either strand them behind the inbox filter or break those keys. Callers
+    -- can reach this state: whatsapp-evolution-bridge takes an explicit workspace_id. Failing
+    -- loudly here leaves the pairing inactive with a diagnosable error, which is recoverable;
+    -- a silently half-visible inbox is not.
+    if v_duplicate_workspace_id is distinct from v_workspace_id then
+      raise exception
+        'activate_evolution_qr_account: account % and its duplicate % are in different workspaces',
+        p_account_id, v_duplicate_id
+        using errcode = '22023';
+    end if;
+
     -- whatsapp_messages is unique on (user_id, message_id), not on the account, so moving a
     -- sibling row's messages within the same user cannot conflict. The freshly paired row is
     -- the one that survives: it holds the live Evolution instance and the name the user chose.

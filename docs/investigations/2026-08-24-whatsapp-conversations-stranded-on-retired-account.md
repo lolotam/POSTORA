@@ -1,7 +1,10 @@
 # WhatsApp inbox shows 2 threads after a re-pair — evidence log
 
 Date: 2026-08-24. All evidence gathered live against production
-(`postorasupabase-supabase-j8axyh`).
+(`postorasupabase-supabase-j8axyh`). Connected phone numbers are masked to their
+last four digits, matching `maskNumber` in `whatsappSyncEngine.ts`; account and
+user ids are internal database ids, kept truncated so the rows can still be
+correlated. The full mapping stays in the database, not here.
 
 **Symptom.** A user disconnected and re-scanned a WhatsApp QR connection. The
 history sweep reported success, but `/messaging/whatsapp/conversations` listed
@@ -10,16 +13,16 @@ only **2** chat threads.
 ## The rows
 
 ```text
-id        user      platform_user_id   active  msgs  convs
-aff985f0  12f4ba6a  96597950350        t        553     2   <- the re-paired row
-ccb565af  12f4ba6a  retired_ccb565af   f          0   305   <- merged away
+id        user      platform_user_id  active  msgs  convs
+aff985f0  12f4ba6a  ***0350           t        553      2   <- the re-paired row
+ccb565af  12f4ba6a  retired_ccb565af  f          0    305   <- merged away
 ```
 
 The same split appears on every account that has been through the merge:
 
 ```text
-5057c953  201285060308      t  1138    2   /  2f2d4c31 retired  0  283
-a7fc6167  96597950350       f   561    3   /  93de5a12 retired  0  307
+5057c953  ***0308  t  1138   2   /  2f2d4c31 retired  0  283
+a7fc6167  ***0350  f   561   3   /  93de5a12 retired  0  307
 ```
 
 Messages moved. Conversations did not.
@@ -59,8 +62,12 @@ would not retry.
    `(id, workspace_id)`, neither of which changes. No collision is possible:
    `messaging_cache` is unique on `(user_id, conversation_id)` and both rows
    belong to the same user, so a conversation exists on exactly one of them.
+   A duplicate in a *different* workspace is refused outright rather than merged:
+   its cached conversations would keep the old `workspace_id`, which the inbox
+   filters on, and their `(id, workspace_id)` dependants have no `ON UPDATE`
+   rule to follow them across.
 2. Rehearsed in a rolled-back transaction against `5d8adccd` claiming
-   `96597950350`: 3 conversations and 561 messages moved, duplicate retired.
+   `***0350`: 3 conversations and 561 messages moved, duplicate retired.
 
 ## One-off repair of the live data
 
