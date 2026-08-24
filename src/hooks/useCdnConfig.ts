@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import type { CdnConfig, CdnProvider } from "@/lib/cdn";
+import type { CdnConfig, CdnProvider } from "@/lib/mediaUrl";
 
 export type CdnStorageConfig = CdnConfig & {
   write_policy: { providers: CdnProvider[]; required: CdnProvider[] };

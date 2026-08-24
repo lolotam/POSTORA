@@ -92,7 +92,11 @@ function collectFunctionSources(dir: string): string[] {
   return found;
 }
 
-it("no edge function calls .catch() on a PostgREST builder", () => {
+// 30s, not the 5s default: this parses every file under supabase/functions with
+// the TypeScript AST. That is ~2s of work on an idle machine and over 10s when
+// the rest of the suite is running in parallel, so the default timeout made a
+// passing assertion fail intermittently. The assertion itself is unchanged.
+it("no edge function calls .catch() on a PostgREST builder", { timeout: 30_000 }, () => {
   const offenders = collectFunctionSources(FUNCTIONS_DIR).flatMap((file) =>
     findBuilderCatches(
       fs.readFileSync(path.resolve(process.cwd(), file), "utf8"),

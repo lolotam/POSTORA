@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolveMediaPublicUrl } from "../mediaUrl";
+import { getMediaThumbnailUrl, resolveMediaPublicUrl, transformMediaUrl } from "../mediaUrl";
 
 /**
  * Regression coverage for the broken-media-link incident (2026-06-20):
@@ -130,5 +130,95 @@ describe("resolveMediaPublicUrl", () => {
       const external = "https://cdn.example.com/some-other-cdn/asset.jpg";
       expect(resolveMediaPublicUrl({ file_path: external })).toBe(external);
     });
+  });
+});
+
+/**
+ * Delivery-time transforms. Absorbed from the former `src/lib/cdn.ts` facade,
+ * which built thumbnail URLs nothing ever rendered; `mediaUrl.ts` is now the
+ * sole resolver so there is one place a rendition can be requested.
+ */
+describe("transformMediaUrl", () => {
+  const thumb = { width: 300, format: "auto" } as const;
+  const OPENINARY = "https://cdn.example.com";
+
+  it("returns the URL untouched when there is nothing to ask for", () => {
+    const url = "https://res.cloudinary.com/dur1soa8n/image/upload/v1/a.png";
+    expect(transformMediaUrl(url)).toBe(url);
+    expect(transformMediaUrl(url, {})).toBe(url);
+    expect(transformMediaUrl("", thumb)).toBe("");
+  });
+
+  // One table per delivery grammar: same call shape, different provider, so the
+  // interesting content is the input/expected pair rather than five test bodies.
+  it.each([
+    [
+      "inserts the transform after Cloudinary's /upload/ segment",
+      "https://res.cloudinary.com/dur1soa8n/image/upload/v1781951136/media/logo.png",
+      "https://res.cloudinary.com/dur1soa8n/image/upload/w_300,f_auto/v1781951136/media/logo.png",
+    ],
+    [
+      // Transcoding a video to serve a still costs far more than the poster
+      // frame the browser already fetches, so video renditions are never rewritten.
+      "leaves a Cloudinary video rendition alone",
+      "https://res.cloudinary.com/dur1soa8n/video/upload/v1781356757/media/clip.mp4",
+      "https://res.cloudinary.com/dur1soa8n/video/upload/v1781356757/media/clip.mp4",
+    ],
+    [
+      "replaces an existing Openinary transform segment rather than stacking onto it",
+      "https://cdn.example.com/t/q_auto,f_auto/postora.cloud/logo2.png",
+      "https://cdn.example.com/t/w_300,f_auto/postora.cloud/logo2.png",
+    ],
+    [
+      "adds a transform segment to an Openinary URL that has none",
+      "https://cdn.example.com/t/postora.cloud/logo2.png",
+      "https://cdn.example.com/t/w_300,f_auto/postora.cloud/logo2.png",
+    ],
+    [
+      // Supabase Storage object URLs have no transform grammar; silently
+      // mangling one would 404 the image rather than shrink it.
+      "passes through a provider with no transform grammar",
+      "https://example.supabase.co/storage/v1/object/public/media/uploads/img.png",
+      "https://example.supabase.co/storage/v1/object/public/media/uploads/img.png",
+    ],
+  ])("%s", (_label, input, expected) => {
+    expect(transformMediaUrl(input, thumb, OPENINARY)).toBe(expected);
+  });
+
+  // `/t/` is a plausible path on any host. Matching it unanchored rewrote a
+  // foreign CDN's URL into a 404 (CodeRabbit, PR #30).
+  it.each([
+    ["a foreign /t/ URL when no Openinary origin is configured", "https://cdn.example.com/t/postora.cloud/a.png", undefined],
+    ["a foreign /t/ URL from a host that is not the configured origin", "https://images.example.net/t/catalog/a.png", OPENINARY],
+  ])("leaves %s untouched", (_label, input, origin) => {
+    expect(transformMediaUrl(input, thumb, origin)).toBe(input);
+  });
+
+  it("stays idempotent when a transformed URL is transformed again", () => {
+    const once = transformMediaUrl("https://cdn.example.com/t/w_20/a/b.png", thumb, OPENINARY);
+    expect(transformMediaUrl(once, thumb, OPENINARY)).toBe("https://cdn.example.com/t/w_300,f_auto/a/b.png");
+  });
+
+  it("builds a square thumbnail rendition", () => {
+    expect(getMediaThumbnailUrl("https://cdn.example.com/t/postora.cloud/a.png", 80, OPENINARY)).toBe(
+      "https://cdn.example.com/t/w_80,c_fill,q_auto,f_auto/postora.cloud/a.png",
+    );
+  });
+
+  it("applies the transform to the URL the resolver selected", () => {
+    expect(
+      resolveMediaPublicUrl(
+        { file_path: "legacy.png" },
+        undefined,
+        [{ provider: "openinary", status: "ready", delivery_url: "https://cdn.example.com/t/a/b.png" }],
+        { read_preference: "openinary", openinary: { serverUrl: OPENINARY } },
+        thumb,
+      ),
+    ).toBe("https://cdn.example.com/t/w_300,f_auto/a/b.png");
+  });
+
+  it("leaves every existing call site unchanged when no transform is passed", () => {
+    const row = { file_path: "https://res.cloudinary.com/dur1soa8n/image/upload/v1/a.png", storage_bucket: "cloudinary" };
+    expect(resolveMediaPublicUrl(row)).toBe(row.file_path);
   });
 });

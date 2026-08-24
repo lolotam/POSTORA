@@ -9,6 +9,8 @@
  * (Cloudinary's `secure_url`), so we return it verbatim.
  */
 
+import { buildOpeninaryTransform, isOpeninaryUrl } from "./openinary";
+
 /** Minimal view of a `media_files` row needed to resolve a URL. */
 export interface MediaFileUrlRow {
   file_path: string | null | undefined;
@@ -17,7 +19,106 @@ export interface MediaFileUrlRow {
   current_object_version?: number | null | undefined;
 }
 export interface MediaProviderRow { object_version?: number | null; provider: string; status: string; delivery_url?: string | null }
-export interface MediaUrlConfig { read_preference?: string; primaryCdn?: string }
+export interface MediaUrlConfig { read_preference?: string; primaryCdn?: string; openinary?: { serverUrl?: string } }
+
+/** CDN providers Postora can write to and read from. */
+export type CdnProvider = "cloudinary" | "openinary" | "supabase";
+
+/**
+ * Shape of the `cdn_storage` app setting. Lives here rather than in a separate
+ * module so the config that selects a provider and the resolver that consumes
+ * it cannot drift apart.
+ *
+ * Declared as a type alias, not an interface: this value is written straight
+ * into a `jsonb` column, and only an alias carries the implicit index signature
+ * that makes it assignable to the generated `Json` type.
+ */
+export type CdnConfig = {
+  read_preference?: CdnProvider;
+  primaryCdn?: CdnProvider;
+  cloudinary?: { cloudName?: string; enabled?: boolean };
+  openinary?: { serverUrl?: string; folderPrefix?: string; enabled?: boolean };
+};
+
+/**
+ * Delivery-time image transform. Deliberately narrower than the full
+ * Cloudinary/Openinary grammars — these are the directives both CDNs express
+ * identically, so one option object can drive either URL shape.
+ */
+export interface MediaTransformOptions {
+  width?: number;
+  height?: number;
+  crop?: "fill" | "fit" | "thumb" | "limit";
+  format?: "auto";
+  quality?: string | number;
+  gravity?: string;
+}
+
+/** An Openinary path segment is a transform if it is a `key_value` list. */
+const OPENINARY_TRANSFORM_SEGMENT = /^[a-z]+_[^/,]+(?:,[a-z]+_[^/,]+)*$/;
+/** Only `image/upload` is rewritten — see `transformMediaUrl`. */
+const CLOUDINARY_IMAGE_UPLOAD = /^(https?:\/\/res\.cloudinary\.com\/[^/]+\/image\/upload)\/(.+)$/i;
+const OPENINARY_DELIVERY_MARKER = "/t/";
+
+/**
+ * Rewrite an already-resolved delivery URL to request a smaller rendition.
+ *
+ * Handles the two URL grammars Postora delivers through:
+ *  - Openinary: `https://host/t/<transforms>/<key>` — the transform segment is
+ *    replaced, not appended, so repeated calls stay idempotent.
+ *  - Cloudinary: `https://res.cloudinary.com/<cloud>/image/upload/<rest>` — the
+ *    transform is inserted after `/upload/`, which chains ahead of any existing
+ *    one.
+ *
+ * Every other URL — Supabase Storage objects, foreign CDNs, `video/upload`
+ * renditions — is returned unchanged. Transcoding a video to serve a still is
+ * far more expensive than sending the poster frame the browser already fetches,
+ * and Supabase Storage object URLs have no transform grammar at all.
+ *
+ * `openinaryOrigin` must be the configured Openinary server URL. Without it the
+ * Openinary branch is skipped entirely: `/t/` is a plausible path on any host,
+ * so matching it unanchored would rewrite a foreign CDN's URL into a 404. Only
+ * the Cloudinary branch is safe to detect from the URL alone, because it is
+ * anchored to the `res.cloudinary.com` origin.
+ */
+export function transformMediaUrl(url: string, transform?: MediaTransformOptions, openinaryOrigin?: string): string {
+  if (!url || !transform) return url;
+  // Openinary deliberately mirrors Cloudinary's directive syntax, so one builder
+  // produces the segment for both grammars.
+  const segment = buildOpeninaryTransform(transform);
+  if (!segment) return url;
+
+  if (openinaryOrigin && isOpeninaryUrl(url, openinaryOrigin)) {
+    const marker = url.indexOf(OPENINARY_DELIVERY_MARKER);
+    const origin = url.slice(0, marker);
+    const rest = url.slice(marker + OPENINARY_DELIVERY_MARKER.length);
+    const slash = rest.indexOf("/");
+    const firstSegment = slash === -1 ? rest : rest.slice(0, slash);
+    // Drop an existing transform segment rather than stacking onto it, so
+    // transforming an already-transformed URL stays idempotent.
+    const hasTransform = slash !== -1 && OPENINARY_TRANSFORM_SEGMENT.test(firstSegment);
+    const objectKey = hasTransform ? rest.slice(slash + 1) : rest;
+    return `${origin}${OPENINARY_DELIVERY_MARKER}${segment}/${objectKey}`;
+  }
+
+  const cloudinary = url.match(CLOUDINARY_IMAGE_UPLOAD);
+  if (cloudinary) {
+    const [, base, rest] = cloudinary;
+    return `${base}/${segment}/${rest}`;
+  }
+
+  return url;
+}
+
+/**
+ * Square thumbnail rendition of an already-resolved URL.
+ *
+ * `c_fill` over `c_thumb` because the grid crops with `object-cover` anyway and
+ * `c_thumb` implies face detection the media library has no use for.
+ */
+export function getMediaThumbnailUrl(url: string, size: number, openinaryOrigin?: string): string {
+  return transformMediaUrl(url, { width: size, crop: "fill", format: "auto", quality: "auto" }, openinaryOrigin);
+}
 
 /**
  * Function that turns a Supabase-Storage object path into a public URL.
@@ -36,10 +137,31 @@ export type StorageUrlResolver = (bucket: string, path: string) => string;
  *  3. Supabase-Storage object paths: resolve via the injected resolver, using
  *     `storage_bucket` (or "media" as a fallback default).
  *
+ * `transform`, when given, requests a smaller rendition of whichever URL the
+ * rules above selected. Callers that already hold a resolved URL should use
+ * `transformMediaUrl` / `getMediaThumbnailUrl` directly instead.
+ *
  * @returns the resolved public URL, or the raw `file_path` (possibly null) when
  *          no better option is available — callers should null-check.
+ *
+ * Five parameters exceeds the four-argument ceiling this project's review guard
+ * applies. Kept positional deliberately: the first four are load-bearing at
+ * three existing call sites, and collapsing them into an options object would
+ * be a breaking signature change for a resolver whose contract is covered by
+ * regression tests from the 2026-06-20 broken-media-link incident.
  */
 export function resolveMediaPublicUrl(
+  row: MediaFileUrlRow,
+  storageResolver?: StorageUrlResolver,
+  providerRows?: MediaProviderRow[],
+  config?: MediaUrlConfig,
+  transform?: MediaTransformOptions,
+): string {
+  return transformMediaUrl(resolveBaseUrl(row, storageResolver, providerRows, config), transform, config?.openinary?.serverUrl);
+}
+
+/** Provider selection only — `resolveMediaPublicUrl` layers the transform on top. */
+function resolveBaseUrl(
   row: MediaFileUrlRow,
   storageResolver?: StorageUrlResolver,
   providerRows?: MediaProviderRow[],
