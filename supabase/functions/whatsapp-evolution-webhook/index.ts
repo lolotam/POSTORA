@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
+import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent } from "../_shared/n8nMessagingDispatch.ts";
 import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts";
 import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
@@ -123,33 +124,81 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
   // Only a message from the contact is an inbound event for automations; echoing the
   // operator's own reply back into n8n would retrigger their workflows on their own text.
   if (sentByOwner) return true;
-  await runInBackground("whatsapp evolution message dispatch", () => dispatchMessageEvent(
-    admin,
-    account.user_id,
-    buildMessagePayload({
-      platform: "whatsapp",
-      socialAccountId: account.id,
-      account: { id: account.id, platform: "whatsapp", platform_user_id: account.platform_user_id, platform_username: account.platform_username },
-      conversationId,
-      // The raw JID carries Evolution's "@s.whatsapp.net" suffix. Automations match on the
-      // same digits the Cloud path sends, so the suffix is stripped before it leaves Postora.
-      // remoteNumber is digits-only and serves as both sender id and phone.
-      sender: buildMessagingSender({
+
+  const automationHandler = resolveAutomationHandler(account.account_metadata);
+
+  if (automationHandler === "n8n") {
+    await runInBackground("whatsapp evolution message dispatch", () => dispatchMessageEvent(
+      admin,
+      account.user_id,
+      buildMessagePayload({
         platform: "whatsapp",
-        id: remoteNumber,
-        name: built.participantName,
-        phone: remoteNumber,
+        socialAccountId: account.id,
+        account: { id: account.id, platform: "whatsapp", platform_user_id: account.platform_user_id, platform_username: account.platform_username },
+        conversationId,
+        // The raw JID carries Evolution's "@s.whatsapp.net" suffix. Automations match on the
+        // same digits the Cloud path sends, so the suffix is stripped before it leaves Postora.
+        // remoteNumber is digits-only and serves as both sender id and phone.
+        sender: buildMessagingSender({
+          platform: "whatsapp",
+          id: remoteNumber,
+          name: built.participantName,
+          phone: remoteNumber,
+        }),
+        message: {
+          id: row.message_id as string,
+          text: row.message_text as string,
+          type: row.message_type as string,
+          attachments: [],
+        },
+        timestamp: built.timestamp,
       }),
-      message: {
-        id: row.message_id as string,
-        text: row.message_text as string,
-        type: row.message_type as string,
-        attachments: [],
-      },
-      timestamp: built.timestamp,
-    }),
-  ));
+    ));
+  }
+
+  const inboundText = (row.message_text as string) || "";
+  if (automationHandler === "internal" && inboundText.trim()) {
+    triggerAiAgentReply(
+      account,
+      conversationId,
+      account.platform_user_id,
+      remoteNumber,
+      inboundText,
+    ).catch((e) => console.error("[whatsapp-evolution-webhook] AI agent dispatch failed:", e?.message || e));
+  }
+
   return true;
+}
+
+async function triggerAiAgentReply(
+  account: { id: string; user_id: string },
+  conversationId: string,
+  phoneNumberId: string,
+  recipientPhone: string,
+  inboundText: string
+) {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const response = await fetch(`${supabaseUrl}/functions/v1/ai-agent-reply`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${serviceKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      user_id: account.user_id,
+      platform: "whatsapp",
+      social_account_id: account.id,
+      conversation_id: conversationId,
+      phone_number_id: phoneNumberId,
+      recipient_phone: recipientPhone,
+      inbound_text: inboundText,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    console.error(`[whatsapp-evolution-webhook] ai-agent-reply returned ${response.status}: ${text.slice(0, 200)}`);
+  }
 }
 
 async function handleConnectionUpdate(

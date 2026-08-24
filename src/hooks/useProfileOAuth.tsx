@@ -54,7 +54,7 @@ export function useProfileOAuth() {
   } = useInstagramOAuth(setConnectingPlatform, setConnectingProfile, handleFacebookConnect);
 
   // Handle OAuth redirects from URL params
-  useOAuthRedirectHandler({
+  const { instagramConfirmUsername, dismissInstagramConfirm } = useOAuthRedirectHandler({
     handleTikTokCallback,
     handleYouTubeCallback,
     handleLinkedInCallback,
@@ -156,5 +156,7 @@ export function useProfileOAuth() {
     connectedIgIds,
     handleSelectIgAccount,
     clearIgSelection,
+    instagramConfirmUsername,
+    dismissInstagramConfirm,
   };
 }

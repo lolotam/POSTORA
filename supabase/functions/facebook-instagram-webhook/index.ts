@@ -7,6 +7,11 @@ import { isOwnComment } from "../_shared/commentAuthor.ts";
 import { matchAutoReplyRule } from "../_shared/autoReplyRules.ts";
 import { handleCommentInternally } from "../_shared/commentAutomation.ts";
 import { normalizeMetaCommentChange } from "./commentEvents.ts";
+import {
+  buildObservation,
+  flushObservations,
+  type UnmatchedObservation,
+} from "../_shared/unmatchedWebhookObservation.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -48,6 +53,53 @@ async function findAccountForRecipient(
       .select(ACCOUNT_SELECT)
       .eq("platform", "instagram")
       .eq("is_active", true)
+      .eq(`account_metadata->>${metadataKey}`, recipientId)
+      .limit(1);
+    if (data && data.length > 0) return data[0];
+  }
+  return null;
+}
+
+type InactiveAccountRef = {
+  id: string;
+  user_id: string;
+  platform: string;
+  platform_user_id: string | null;
+  platform_username: string | null;
+  account_metadata: unknown;
+};
+
+// The identity columns are not optional here even though only id and user_id are stored:
+// isOwnComment resolves an account's own ids from platform_user_id and the two Instagram
+// metadata keys, so a narrower select would make ownIds() empty and every self-authored
+// comment read as somebody else's.
+const INACTIVE_ACCOUNT_SELECT = "id, user_id, platform, platform_user_id, platform_username, account_metadata";
+
+// Same resolution as findAccountForRecipient, minus the is_active filter. Diagnostic
+// only: it exists to tell "this is your account, but disconnected" apart from "this
+// account is not in Postora at all", and its result is never routed or replied to.
+// Called only after the active lookup has already failed, so it costs nothing on the
+// normal path.
+async function findAnyAccountForRecipient(
+  adminClient: any,
+  platform: "facebook" | "instagram",
+  recipientId: string,
+): Promise<InactiveAccountRef | null> {
+  const { data: byPlatformUserId } = await adminClient
+    .from("social_accounts")
+    .select(INACTIVE_ACCOUNT_SELECT)
+    .eq("platform", platform)
+    .eq("platform_user_id", recipientId)
+    .limit(1);
+  if (byPlatformUserId && byPlatformUserId.length > 0) return byPlatformUserId[0];
+
+  if (platform !== "instagram") return null;
+
+  for (const metadataKey of ["ig_igid", "ig_user_id"]) {
+    const { data } = await adminClient
+      .from("social_accounts")
+      .select(INACTIVE_ACCOUNT_SELECT)
+      .eq("platform", "instagram")
       .eq(`account_metadata->>${metadataKey}`, recipientId)
       .limit(1);
     if (data && data.length > 0) return data[0];
@@ -141,6 +193,10 @@ Deno.serve(async (req) => {
       const adminClient = createClient(supabaseUrl, supabaseKey);
 
       const entries = body?.entry || [];
+      // Collected across the whole request and written once at the end: runInBackground's
+      // degraded path awaits up to 2s per call, so a per-event write would charge that to
+      // Meta's acknowledgement repeatedly.
+      const unmatched: UnmatchedObservation[] = [];
       for (const entry of entries) {
         const recipientId = entry.id;
         const events = entry?.messaging || [];
@@ -154,6 +210,14 @@ Deno.serve(async (req) => {
           const account = await findAccountForRecipient(adminClient, platform, recipientId);
           if (!account) {
             console.warn(`[fb-ig-webhook] No matching ${platform} account found for recipient ${recipientId}`);
+            // Echoes and receipts were already filtered above, so everything reaching
+            // here is a genuine inbound message that could not be delivered.
+            unmatched.push(buildObservation({
+              recipientId,
+              eventKind: "message",
+              inactiveAccount: await findAnyAccountForRecipient(adminClient, platform, recipientId),
+              entry,
+            }));
             continue;
           }
 
@@ -237,7 +301,25 @@ Deno.serve(async (req) => {
           if (!normalized) continue;
 
           const account = await findAccountForRecipient(adminClient, platform, recipientId);
-          if (!account) continue;
+          if (!account) {
+            // Unlike the message branch there is no own-comment filter ahead of this
+            // point, and there cannot be: isOwnComment below compares the author against
+            // the account, so with no account the question is unanswerable. A
+            // self-authored comment on an unknown recipient is therefore recorded — which
+            // is right, since a comment arriving for an account Postora does not have is
+            // exactly the signal this table exists to surface.
+            const inactiveAccount = await findAnyAccountForRecipient(adminClient, platform, recipientId);
+            if (!inactiveAccount || !isOwnComment(inactiveAccount, normalized.author)) {
+              unmatched.push(buildObservation({
+                recipientId,
+                eventKind: "comment",
+                inactiveAccount,
+                entry,
+                change,
+              }));
+            }
+            continue;
+          }
 
           const inboxResult = await recordInboxEvent(adminClient, {
             account,
@@ -286,6 +368,14 @@ Deno.serve(async (req) => {
           }));
         }
       }
+
+      // Off the response path, and unable to affect it: flushObservations never throws,
+      // and the catch below turns anything that did into a 500, which would make Meta
+      // redeliver. A diagnostic must not become a delivery bug.
+      await runInBackground(
+        "fb-ig unmatched observations",
+        () => flushObservations(adminClient, platform, unmatched),
+      );
 
       return new Response(JSON.stringify({ success: true }), {
         status: 200,

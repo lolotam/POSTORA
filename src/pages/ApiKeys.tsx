@@ -37,6 +37,7 @@ import {
 import { McpConnectionPanel } from "@/components/mcp/McpConnectionPanel";
 import { McpConnectedClients } from "@/components/mcp/McpConnectedClients";
 import { Plug } from "lucide-react";
+import { WebhookSubscriptionsCard } from "@/features/webhook-observability";
 
 const BASE_URL = "https://api.postora.cloud/functions/v1/n8n-api";
 
@@ -485,6 +486,9 @@ export default function ApiKeys() {
                         </div>
                     </CardContent>
                 </Card>
+
+                {/* Webhook Subscriptions */}
+                <WebhookSubscriptionsCard />
 
                 {/* API Endpoints */}
                 <Card>

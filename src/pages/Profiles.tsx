@@ -43,6 +43,10 @@ import { ThreadsDebugPanel } from "@/components/admin/ThreadsDebugPanel";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useBetaPlatforms } from "@/hooks/useBetaPlatforms";
+import {
+  InstagramConnectConfirmDialog,
+  resolveWebhookIdentity,
+} from "@/features/webhook-observability";
 
 export default function Profiles() {
   const [pageSearchQuery, setPageSearchQuery] = useState("");
@@ -103,7 +107,32 @@ export default function Profiles() {
     connectedIgIds,
     handleSelectIgAccount,
     clearIgSelection,
+    instagramConfirmUsername,
+    dismissInstagramConfirm,
   } = useProfileOAuth();
+
+  // Resolved from the account list rather than the redirect params: the URL carries only
+  // a username, and the confirmation is worth nothing without the id Meta will actually
+  // address -- that mismatch is the whole failure being guarded against. Falls back to
+  // the most recently connected Instagram account when the username does not match, which
+  // covers a rename between connect and redirect.
+  const instagramConfirmation = useMemo(() => {
+    if (instagramConfirmUsername === null) return null;
+    const instagramAccounts = allAccounts.filter((account) => account.platform === "instagram");
+    if (instagramAccounts.length === 0) return null;
+    const normalized = instagramConfirmUsername.replace(/^@/, "").toLowerCase();
+    const matched = instagramAccounts.find(
+      (account) => (account.platform_username ?? "").toLowerCase() === normalized,
+    );
+    const account = matched ?? [...instagramAccounts].sort((a, b) =>
+      new Date(b.connected_at ?? 0).getTime() - new Date(a.connected_at ?? 0).getTime(),
+    )[0];
+    return {
+      socialAccountId: account.id,
+      username: account.platform_username,
+      webhookIdentity: resolveWebhookIdentity(account),
+    };
+  }, [instagramConfirmUsername, allAccounts]);
 
   const handleConnectPlatform = async (profileId: string, platform: Platform) => {
     if (!isAdmin) {
@@ -356,6 +385,11 @@ export default function Profiles() {
         connectedIds={connectedIgIds}
         onSelect={handleSelectIgAccount}
         onDone={clearIgSelection}
+      />
+
+      <InstagramConnectConfirmDialog
+        confirmation={instagramConfirmation}
+        onDismiss={dismissInstagramConfirm}
       />
 
       <UpgradeModal

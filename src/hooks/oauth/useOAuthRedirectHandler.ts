@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
+import { useCallback, useState } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { refetchSocialQueries } from "./oauthUtils";
 
@@ -22,6 +23,10 @@ interface CallbackHandlers {
 export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
   const [searchParams, setSearchParams] = useSearchParams();
   const { toast } = useToast();
+  // Surfaced to the caller rather than rendered here: a hook has no mount point, so the
+  // dialog itself lives in the page that consumes this (see Profiles.tsx).
+  const [instagramConfirmUsername, setInstagramConfirmUsername] = useState<string | null>(null);
+  const dismissInstagramConfirm = useCallback(() => setInstagramConfirmUsername(null), []);
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
@@ -134,6 +139,8 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
 
 
     const isReconnect = searchParams.get("reconnected") === "1";
+    // instagram-oauth appends ?username=, unlike the account_name= the other providers use.
+    const igUsername = searchParams.get("username") ?? accountName;
 
     const platformMessages: Record<string, { title: string; description: string }> = {
       youtube: { title: "YouTube connected!", description: channel ? `Connected channel: ${channel}` : "Your YouTube channel has been connected successfully." },
@@ -144,7 +151,16 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
       threads: { title: "Threads connected!", description: accountName ? `Connected account: @${accountName}` : "Your Threads account has been connected successfully." },
       reddit: { title: "Reddit connected!", description: accountName ? `Connected account: u/${accountName}` : "Your Reddit account has been connected successfully." },
       tiktok: { title: "TikTok connected!", description: accountName ? `Connected account: @${accountName}` : "Your TikTok account has been connected successfully." },
+      instagram: { title: "Instagram connected!", description: igUsername ? `Connected account: @${igUsername}` : "Your Instagram account has been connected successfully." },
+      instagram_business: { title: "Instagram connected!", description: igUsername ? `Connected account: @${igUsername}` : "Your Instagram account has been connected successfully." },
     };
+
+    // Raise the "is this the right account?" confirmation for whichever Instagram flow
+    // finished here. Both redirect-completed flows land in this block; the multi-account
+    // picker returns earlier (see the `select` handoffs above) and is not covered.
+    if (connected === "instagram" || connected === "instagram_business") {
+      setInstagramConfirmUsername(igUsername ?? "");
+    }
 
     const baseMsg = platformMessages[connected];
     const msg = isReconnect && baseMsg
@@ -167,6 +183,8 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
     }
 
   }, [searchParams, toast, setSearchParams, user, handlers, queryClient]);
+
+  return { instagramConfirmUsername, dismissInstagramConfirm };
 
   // Cleanup localStorage on mount
   useEffect(() => {
