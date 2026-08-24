@@ -46,6 +46,7 @@ import {
 } from "lucide-react";
 import { format, formatDistanceToNow, subHours } from "date-fns";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area, PieChart, Pie, Cell, BarChart, Bar, Legend } from "recharts";
+import { UnmatchedObservationsPanel } from "@/features/webhook-observability";
 
 interface AlertConfig {
   id: string;
@@ -778,6 +779,9 @@ export default function AdminObservability() {
 
           {/* Alert History Tab */}
           <TabsContent value="alerts" className="space-y-4">
+            {/* Inbound events Postora received but could not route to any account. */}
+            <UnmatchedObservationsPanel />
+
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Recent Alerts</CardTitle>

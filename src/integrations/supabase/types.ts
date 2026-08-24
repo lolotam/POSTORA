@@ -5281,6 +5281,59 @@ export type Database = {
         }
         Relationships: []
       }
+      webhook_unmatched_observations: {
+        Row: {
+          attempts: number
+          event_kind: string
+          first_seen_at: string
+          id: string
+          last_seen_at: string
+          last_summary: Json
+          observed_on: string
+          platform: string
+          reason: string
+          recipient_id: string
+          social_account_id: string | null
+          user_id: string | null
+        }
+        Insert: {
+          attempts?: number
+          event_kind: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          last_summary?: Json
+          observed_on?: string
+          platform: string
+          reason: string
+          recipient_id: string
+          social_account_id?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          attempts?: number
+          event_kind?: string
+          first_seen_at?: string
+          id?: string
+          last_seen_at?: string
+          last_summary?: Json
+          observed_on?: string
+          platform?: string
+          reason?: string
+          recipient_id?: string
+          social_account_id?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "webhook_unmatched_observations_social_account_id_fkey"
+            columns: ["social_account_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       whatsapp_agents: {
         Row: {
           avatar_url: string | null
@@ -7395,6 +7448,24 @@ export type Database = {
         Args: { p_key_id: string; p_reason: string }
         Returns: boolean
       }
+      list_my_webhook_subscriptions: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          registry: string
+          webhook_id: string
+          webhook_url: string
+          events: string[]
+          platform: string
+          social_account_id: string
+          is_active: boolean
+          failure_count: number
+          created_at: string
+        }[]
+      }
+      record_unmatched_webhook_observations: {
+        Args: { p_platform: string; p_observations: Json }
+        Returns: undefined
+      }
       set_user_quotas_for_plan: {
         Args: { p_user_id: string; p_plan_slug: string }
         Returns: undefined
@@ -7402,6 +7473,14 @@ export type Database = {
       sign: {
         Args: { secret: string; algorithm?: string; payload: Json }
         Returns: string
+      }
+      social_account_inbound_activity: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          social_account_id: string
+          last_event_at: string
+          events_7d: number
+        }[]
       }
       sparsevec_out: {
         Args: { "": unknown }

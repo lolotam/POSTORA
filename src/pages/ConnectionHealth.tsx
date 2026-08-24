@@ -39,6 +39,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { useCopyToClipboard } from "@/hooks/shared";
+import {
+    isMessagingPlatform,
+    resolveWebhookIdentity,
+    useInboundActivity,
+} from "@/features/webhook-observability";
 
 interface SocialAccountHealth {
     id: string;
@@ -53,11 +59,21 @@ interface SocialAccountHealth {
     failure_count: number;
     last_refresh_error: string | null;
     social_profile_id: string | null;
+    platform_user_id: string | null;
+    account_metadata: unknown;
 }
 
-type HealthStatus = "healthy" | "expired" | "unknown" | "needs_reauth";
+type HealthStatus = "healthy" | "expired" | "unknown" | "needs_reauth" | "disconnected";
 
-function getTokenHealth(expiresAt: string | null, platform: string, needsReauth?: boolean): { status: HealthStatus; daysLeft: number | null; hoursLeft: number | null; message: string } {
+function getTokenHealth(expiresAt: string | null, platform: string, needsReauth?: boolean, isActive = true): { status: HealthStatus; daysLeft: number | null; hoursLeft: number | null; message: string } {
+    // Ahead of every token check on purpose. A disconnected account can still hold a
+    // perfectly valid token, so judging it on expiry alone renders it "Active" and offers
+    // Refresh -- while webhooks for it are being dropped, because both account resolvers
+    // filter is_active = true. The row has to say what is actually wrong with it.
+    if (!isActive) {
+        return { status: "disconnected", daysLeft: null, hoursLeft: null, message: "Disconnected - reconnect to receive events" };
+    }
+
     // Check needs_reauth first
     if (needsReauth) {
         return { status: "needs_reauth", daysLeft: null, hoursLeft: null, message: "Reconnection required" };
@@ -92,6 +108,8 @@ function getStatusIcon(status: HealthStatus) {
             return <XCircle className="w-5 h-5 text-destructive" />;
         case "needs_reauth":
             return <RefreshCw className="w-5 h-5 text-red-600" />;
+        case "disconnected":
+            return <Link2 className="w-5 h-5 text-amber-500" />;
         default:
             return <Clock className="w-5 h-5 text-muted-foreground" />;
     }
@@ -103,6 +121,7 @@ function getStatusBadge(status: HealthStatus) {
         expired: { variant: "destructive", className: "" },
         needs_reauth: { variant: "destructive", className: "bg-red-600/10 text-red-600 border-red-600/30" },
         unknown: { variant: "secondary", className: "" },
+        disconnected: { variant: "outline", className: "bg-amber-500/10 text-amber-600 border-amber-500/30" },
     };
 
     const labels: Record<HealthStatus, string> = {
@@ -110,6 +129,7 @@ function getStatusBadge(status: HealthStatus) {
         expired: "Expired",
         needs_reauth: "Needs Reconnect",
         unknown: "Unknown",
+        disconnected: "Disconnected",
     };
 
     return (
@@ -127,6 +147,8 @@ export default function ConnectionHealth() {
     const [refreshingAccountId, setRefreshingAccountId] = useState<string | null>(null);
     const [isSendingTestNotification, setIsSendingTestNotification] = useState(false);
     const { handleConnectPlatform, connectingPlatform } = useProfileOAuth();
+    const { data: inboundActivity } = useInboundActivity();
+    const { copy, copiedId } = useCopyToClipboard({ showToast: true, successMessage: "Webhook identity copied" });
 
     const { data: accounts = [], isLoading, error } = useQuery({
         queryKey: ["connection_health", user?.id],
@@ -135,9 +157,12 @@ export default function ConnectionHealth() {
 
             const { data, error } = await supabase
                 .from("social_accounts")
-                .select("id, platform, platform_username, avatar_url, token_expires_at, updated_at, connected_at, is_active, needs_reauth, failure_count, last_refresh_error, social_profile_id")
+                .select("id, platform, platform_username, avatar_url, token_expires_at, updated_at, connected_at, is_active, needs_reauth, failure_count, last_refresh_error, social_profile_id, platform_user_id, account_metadata")
                 .eq("user_id", user.id)
-                .eq("is_active", true)
+                // Inactive accounts are listed rather than filtered out. This page is
+                // where a user comes to fix a broken connection, and an account that is
+                // disconnected is exactly the case where its events are being dropped --
+                // hiding it left the one actionable row invisible.
                 .order("platform", { ascending: true });
 
             if (error) throw error;
@@ -234,12 +259,12 @@ export default function ConnectionHealth() {
     // Calculate overall health stats
     const healthStats = accounts.reduce(
         (acc, account) => {
-            const { status } = getTokenHealth(account.token_expires_at, account.platform, account.needs_reauth);
+            const { status } = getTokenHealth(account.token_expires_at, account.platform, account.needs_reauth, account.is_active);
             acc[status] = (acc[status] || 0) + 1;
             acc.total += 1;
             return acc;
         },
-        { healthy: 0, expired: 0, unknown: 0, needs_reauth: 0, total: 0 } as Record<string, number>
+        { healthy: 0, expired: 0, unknown: 0, needs_reauth: 0, disconnected: 0, total: 0 } as Record<string, number>
     );
 
     const healthPercentage = healthStats.total > 0
@@ -374,14 +399,19 @@ export default function ConnectionHealth() {
                                         <TableHead>Account</TableHead>
                                         <TableHead>Status</TableHead>
                                         <TableHead>Token Expiry</TableHead>
+                                        <TableHead>Webhook Identity</TableHead>
+                                        <TableHead>Last Inbound Event</TableHead>
                                         <TableHead>Last Updated</TableHead>
                                         <TableHead className="text-right">Actions</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {accounts.map((account) => {
-                                        const health = getTokenHealth(account.token_expires_at, account.platform, account.needs_reauth);
+                                        const health = getTokenHealth(account.token_expires_at, account.platform, account.needs_reauth, account.is_active);
                                         const platformInfo = PLATFORM_TOKEN_INFO[account.platform.toLowerCase()];
+                                        const messaging = isMessagingPlatform(account.platform);
+                                        const webhookIdentity = messaging ? resolveWebhookIdentity(account) : null;
+                                        const activity = inboundActivity?.get(account.id);
 
                                         return (
                                             <TableRow key={account.id}>
@@ -429,6 +459,36 @@ export default function ConnectionHealth() {
                                                             </Tooltip>
                                                         )}
                                                     </div>
+                                                </TableCell>
+                                                <TableCell>
+                                                    {webhookIdentity ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => copy(webhookIdentity, account.id)}
+                                                            className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                                            title="Copy the id this platform uses to address your account"
+                                                        >
+                                                            {copiedId === account.id ? "Copied" : webhookIdentity}
+                                                        </button>
+                                                    ) : (
+                                                        <span className="text-xs text-muted-foreground">&mdash;</span>
+                                                    )}
+                                                </TableCell>
+                                                <TableCell>
+                                                    {!messaging ? (
+                                                        <span className="text-xs text-muted-foreground">&mdash;</span>
+                                                    ) : activity ? (
+                                                        <span className="text-sm text-muted-foreground">
+                                                            {new Date(activity.last_event_at).toLocaleString()}
+                                                        </span>
+                                                    ) : (
+                                                        // The headline diagnostic. An account that has never received
+                                                        // an inbound event is either not subscribed on the platform
+                                                        // side or is not the account being messaged at all.
+                                                        <span className="text-sm text-amber-600 dark:text-amber-500">
+                                                            Never received an inbound event
+                                                        </span>
+                                                    )}
                                                 </TableCell>
                                                 <TableCell>
                                                     <span className="text-sm text-muted-foreground">
