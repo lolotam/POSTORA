@@ -42,6 +42,7 @@ import {
   Square,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { getMediaThumbnailUrl } from "@/lib/mediaUrl";
 import {
   Select,
   SelectContent,
@@ -123,6 +124,61 @@ import {
   BulkDeleteDialog,
   DeleteFolderDialog,
 } from "./media-library";
+
+/**
+ * Thumbnail for one media row in the grid, the list, and the drag overlay.
+ *
+ * Requests a CDN rendition sized for the cell rather than the stored original:
+ * the library averages ~1 MB per image and the grid paints up to `itemsPerPage`
+ * of them at once. `transformMediaUrl` returns the URL untouched for providers
+ * with no transform grammar (Supabase Storage, foreign CDNs) and for video, so
+ * this is safe for every row shape.
+ *
+ * Dimension healing deliberately runs ONLY on an untransformed render. A CDN
+ * thumbnail reports the rendition's size, so healing from one would write
+ * 300×300 into `metadata` and corrupt the aspect-ratio filter that reads it.
+ */
+function MediaThumbnail({
+  file,
+  size,
+  onHeal,
+}: {
+  file: MediaFile;
+  size: number;
+  onHeal: (fileId: string, width: number, height: number) => void;
+}) {
+  const src = file.file_type === "image" ? getMediaThumbnailUrl(file.publicUrl, size) : file.publicUrl;
+  const shouldHeal = !file.metadata?.width && src === file.publicUrl;
+  const className = "w-full h-full object-cover";
+
+  if (file.file_type === "video") {
+    return (
+      <video
+        src={src}
+        className={className}
+        preload="metadata"
+        onLoadedMetadata={(e) => {
+          const vid = e.currentTarget;
+          if (shouldHeal && vid.videoWidth > 0) onHeal(file.id, vid.videoWidth, vid.videoHeight);
+        }}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={src}
+      alt=""
+      className={className}
+      loading="lazy"
+      decoding="async"
+      onLoad={(e) => {
+        const img = e.currentTarget;
+        if (shouldHeal && img.naturalWidth > 0) onHeal(file.id, img.naturalWidth, img.naturalHeight);
+      }}
+    />
+  );
+}
 
 export default function MediaLibrary() {
   const navigate = useNavigate();
@@ -301,9 +357,21 @@ export default function MediaLibrary() {
     queryKey: ["media-files", effectiveUserId, mediaToAccountsMap],
     queryFn: async () => {
       if (!effectiveUserId) return [];
+      // Explicit allowlist rather than `*`. Today it happens to name every column
+      // — this page really does consume all fifteen — so it is not a payload win.
+      // It is a guard: a column added later (an embedding, a large JSON blob)
+      // joins this query only when someone adds it here deliberately.
+      //
+      // Deliberately NOT paginated at the database level: folder navigation,
+      // search, type/date/platform/account/aspect-ratio filters, and select-all
+      // all run client-side over the full `mediaFiles` array (see `filteredFiles`
+      // below), so a `.range()` here would silently scope every one of them to
+      // the newest N rows. Rendering is already bounded by `itemsPerPage`.
       const { data, error } = await supabase
         .from("media_files")
-        .select("*")
+        .select(
+          "id, user_id, file_path, file_type, mime_type, file_size, storage_bucket, cloudinary_public_id, folder_path, platforms, social_account_ids, upload_date, created_at, metadata, current_object_version",
+        )
         .eq("user_id", effectiveUserId)
         .order("created_at", { ascending: false });
       if (error) throw error;
@@ -1079,7 +1147,7 @@ export default function MediaLibrary() {
                   {displayedFiles.map((file) => (
                     <DraggableMediaCard key={file.id} file={file}>
                       <div className={cn("relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer aspect-square", selectedFiles.has(file.id) ? "border-primary bg-primary/5" : "border-border hover:border-primary/50")} onClick={() => toggleFileSelection(file.id)}>
-                        {file.file_type === "image" ? <img src={file.publicUrl} alt="" className="w-full h-full object-cover" onLoad={(e) => { if (!file.metadata?.width) { const img = e.currentTarget; if (img.naturalWidth > 0) healMetadata(file.id, img.naturalWidth, img.naturalHeight); } }} /> : <video src={file.publicUrl} className="w-full h-full object-cover" onLoadedMetadata={(e) => { if (!file.metadata?.width) { const vid = e.currentTarget; if (vid.videoWidth > 0) healMetadata(file.id, vid.videoWidth, vid.videoHeight); } }} />}
+                        <MediaThumbnail file={file} size={300} onHeal={healMetadata} />
                         <div className="absolute bottom-1 left-1 flex gap-0.5">
                           <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{file.file_type === "video" ? "Video" : "Image"}</Badge>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{label}</Badge> : null; })()}
@@ -1112,7 +1180,7 @@ export default function MediaLibrary() {
                 <div className="space-y-2">
                   {displayedFiles.map((file) => (
                     <div key={file.id} className={cn("flex items-center gap-4 p-3 rounded-xl border-2 transition-all cursor-pointer", selectedFiles.has(file.id) ? "border-primary bg-primary/5" : "border-border hover:border-primary/50")} onClick={() => toggleFileSelection(file.id)}>
-                      <div className="w-16 h-16 rounded-lg overflow-hidden bg-muted shrink-0">{file.file_type === "image" ? <img src={file.publicUrl} alt="" className="w-full h-full object-cover" onLoad={(e) => { if (!file.metadata?.width) { const img = e.currentTarget; if (img.naturalWidth > 0) healMetadata(file.id, img.naturalWidth, img.naturalHeight); } }} /> : <video src={file.publicUrl} className="w-full h-full object-cover" onLoadedMetadata={(e) => { if (!file.metadata?.width) { const vid = e.currentTarget; if (vid.videoWidth > 0) healMetadata(file.id, vid.videoWidth, vid.videoHeight); } }} />}</div>
+                      <div className="w-16 h-16 rounded-lg overflow-hidden bg-muted shrink-0"><MediaThumbnail file={file} size={128} onHeal={healMetadata} /></div>
                       <div className="flex-1 min-w-0">
                         <p className="font-medium truncate">{getFileDisplayName(file)}</p>
                         <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
@@ -1145,7 +1213,7 @@ export default function MediaLibrary() {
         <DragOverlay>
           {activeFile && (
             <div className="relative">
-              <div className="w-24 h-24 rounded-lg overflow-hidden border-2 border-primary shadow-lg bg-muted">{activeFile.file_type === "image" ? <img src={activeFile.publicUrl} alt="" className="w-full h-full object-cover" /> : <video src={activeFile.publicUrl} className="w-full h-full object-cover" />}</div>
+              <div className="w-24 h-24 rounded-lg overflow-hidden border-2 border-primary shadow-lg bg-muted"><MediaThumbnail file={activeFile} size={192} onHeal={healMetadata} /></div>
               {selectedFiles.has(activeFile.id) && selectedFiles.size > 1 && <div className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs font-bold flex items-center justify-center shadow-lg">{selectedFiles.size}</div>}
             </div>
           )}
