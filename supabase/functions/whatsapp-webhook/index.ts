@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
+import { buildObservation, flushObservations, type UnmatchedObservation } from "../_shared/unmatchedWebhookObservation.ts";
 import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
@@ -116,6 +117,9 @@ Deno.serve(async (req) => {
       const adminClient = createClient(supabaseUrl, supabaseKey);
 
       const entries = body?.entry || [];
+      // Collected across the request and written once: runInBackground's degraded path
+      // awaits up to 2s per call, so a per-event write would charge that to the ack.
+      const unmatched: UnmatchedObservation[] = [];
       for (const entry of entries) {
         const changes = entry?.changes || [];
         for (const change of changes) {
@@ -132,9 +136,18 @@ Deno.serve(async (req) => {
           if (change.field === "messages") {
             // Status updates resolve by wamid, not account, so they are
             // processed even when no active account matches.
-            await handleLiveMessages(adminClient, account, value, accessToken);
+            await handleLiveMessages(adminClient, account, value, accessToken, unmatched, entry, change);
           } else if (!account) {
             console.warn(`[whatsapp-webhook] No matching account found for field: ${change.field}, phone_number_id: ${value?.metadata?.phone_number_id}`);
+            // history / smb_message_echoes / smb_app_state_sync -- not inbound messages,
+            // so the kind is 'unknown' and change.field carries what was actually dropped.
+            unmatched.push(buildObservation({
+              recipientId: phoneNumberId,
+              eventKind: "unknown",
+              inactiveAccount: await findAnyWhatsAppAccount(adminClient, phoneNumberId),
+              entry,
+              change,
+            }));
             continue;
           } else if (change.field === "history") {
             await handleHistorySync(adminClient, account, value);
@@ -145,6 +158,11 @@ Deno.serve(async (req) => {
           }
         }
       }
+
+      await runInBackground(
+        "whatsapp unmatched observations",
+        () => flushObservations(adminClient, "whatsapp", unmatched),
+      );
 
       return new Response(JSON.stringify({ success: true }), {
         status: 200,
@@ -161,6 +179,21 @@ Deno.serve(async (req) => {
 
   return new Response("Method not allowed", { status: 405 });
 });
+
+// Diagnostic-only twin of findWhatsAppAccount, without the is_active filter. Tells "your
+// number, but disconnected" apart from "this number is not in Postora"; never routed.
+async function findAnyWhatsAppAccount(
+  adminClient: any,
+  phoneNumberId: string,
+): Promise<{ id: string; user_id: string } | null> {
+  const { data } = await adminClient
+    .from("social_accounts")
+    .select("id, user_id")
+    .eq("platform", "whatsapp")
+    .eq("platform_user_id", phoneNumberId)
+    .limit(1);
+  return data?.[0] ?? null;
+}
 
 async function findWhatsAppAccount(adminClient: any, phoneNumberId: string): Promise<WhatsAppAccount | null> {
   const { data: accounts } = await adminClient
@@ -329,6 +362,9 @@ async function handleLiveMessages(
   account: WhatsAppAccount | null,
   value: any,
   accessToken: string | null,
+  unmatched?: UnmatchedObservation[],
+  entry?: any,
+  change?: any,
 ) {
   const phoneNumberId = value.metadata.phone_number_id;
   const displayPhone = value?.metadata?.display_phone_number;
@@ -338,6 +374,26 @@ async function handleLiveMessages(
   for (const msg of messages) {
     if (!account) {
       console.warn("[whatsapp-webhook] No matching account found");
+      // The break below sits ahead of the echo filter, so unlike the Facebook/Instagram
+      // message branch this point is reachable by our own outbound echoes. Gate the
+      // observation on the same predicate the router uses rather than reordering the
+      // router itself -- recording an echo as an undeliverable inbound message would be
+      // a false alarm pointing at the account's own traffic.
+      // Scan the whole array, not just this first message: the break below ends the loop
+      // immediately, so gating on msg alone would miss a real inbound message sitting
+      // behind one of our own echoes.
+      const hasInbound = messages.some((candidate: any) =>
+        shouldDispatchInboundMessage({ isEcho: candidate?.is_echo })
+      );
+      if (unmatched && hasInbound) {
+        unmatched.push(buildObservation({
+          recipientId: phoneNumberId,
+          eventKind: "message",
+          inactiveAccount: await findAnyWhatsAppAccount(adminClient, phoneNumberId),
+          entry,
+          change,
+        }));
+      }
       break;
     }
     const from = msg.from;
