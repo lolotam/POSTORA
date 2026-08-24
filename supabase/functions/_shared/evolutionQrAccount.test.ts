@@ -79,10 +79,10 @@ Deno.test("a linked session names the account from whichever identity source rep
       assertEquals(admin.updates[0].id, "acc-1");
       // The number is no longer part of this update: claiming it can collide with an
       // earlier connection for the same phone, so it goes through the RPC that merges them.
-      assertEquals(admin.updates[0].values, {
-        is_active: true,
-        platform_username: "Xsellpoint",
-      });
+      // is_active is absent too: on the claim path the RPC below is what activates the row,
+      // in the same transaction that takes the number, so a rejected claim cannot leave a
+      // live-looking account sitting on its pending_ placeholder.
+      assertEquals(admin.updates[0].values, { platform_username: "Xsellpoint" });
       assertEquals(admin.rpcs, [{
         name: "activate_evolution_qr_account",
         args: { p_account_id: "acc-1", p_owner_number: "96597950350" },
@@ -143,8 +143,11 @@ Deno.test("a rejected write is surfaced instead of being swallowed", async (t) =
   // connection of the same user already held raised 23505 against
   // social_accounts_user_id_platform_platform_user_id_key, and the connection stayed inactive
   // on its pending_ id with nothing logged anywhere -- the QR screen simply never finished.
+  // The activating case carries a profileName so the row write still has something to write:
+  // on the claim path the identity itself moved into the RPC, and a payload of nothing but
+  // the number would issue no PATCH at all.
   const states: Array<[string, string, unknown]> = [
-    ["activating", "open", { ownerJid: "96597950350@s.whatsapp.net" }],
+    ["activating", "open", { ownerJid: "96597950350@s.whatsapp.net", profileName: "Xsellpoint" }],
     ["deactivating", "close", null],
   ];
 
@@ -165,6 +168,17 @@ Deno.test("a rejected identity claim is surfaced instead of being swallowed", as
   await assertRejects(
     () => syncEvolutionAccountConnection(admin, PENDING, "open", { ownerJid: "96597950350@s.whatsapp.net" }),
   );
+});
+
+Deno.test("a rejected identity claim leaves the account unactivated", async () => {
+  // The half-applied state this guards against: is_active true on a row still holding
+  // pending_<uuid>. The inbox would list it as connected while every conversation id derived
+  // from it is unparseable, and no later poll would retry -- the account looks done.
+  const admin = recordingAdmin(null, { rpcError: { code: "23505", message: "duplicate key" } });
+  await assertRejects(
+    () => syncEvolutionAccountConnection(admin, PENDING, "open", { ownerJid: "96597950350@s.whatsapp.net" }),
+  );
+  assertEquals(admin.updates.filter((update) => update.values.is_active === true), []);
 });
 
 Deno.test("a linked session with no identity payload still activates the account", async () => {

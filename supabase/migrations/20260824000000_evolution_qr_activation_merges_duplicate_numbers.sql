@@ -58,6 +58,15 @@ begin
     return v_current;
   end if;
 
+  -- Two provisional rows for the same user can reach this point at the same moment, each
+  -- holding only its own row lock, each finding no duplicate, and the second final update
+  -- would then fail with 23505 -- the very collision this function exists to resolve. The
+  -- claim is therefore serialized per (user, number). hashtextextended is used rather than
+  -- hashtext because the single-argument advisory lock takes a bigint. The loser of the race
+  -- runs second, finds the winner as its duplicate and retires it: newest pairing wins, which
+  -- is the same rule the merge below applies.
+  perform pg_advisory_xact_lock(hashtextextended(v_user_id::text || ':' || p_owner_number, 0));
+
   select id
     into v_duplicate_id
     from social_accounts
@@ -72,6 +81,26 @@ begin
     -- sibling row's messages within the same user cannot conflict. The freshly paired row is
     -- the one that survives: it holds the live Evolution instance and the name the user chose.
     update whatsapp_messages
+       set social_account_id = p_account_id
+     where social_account_id = v_duplicate_id;
+
+    -- The inbox lists conversations by social_account_id, so leaving messaging_cache behind
+    -- strands every imported chat on the retired row: the account shows an empty inbox even
+    -- though its messages moved. A re-sweep cannot repair it either, because
+    -- import_whatsapp_conversations only advances a row when the incoming last_message_at is
+    -- strictly newer, and re-importing unchanged history never is. Moving the rows rather than
+    -- replacing them is what keeps their deals, assignments and labels attached: those foreign
+    -- keys reference (id, workspace_id), neither of which this touches. No collision is
+    -- possible -- messaging_cache is unique on (user_id, conversation_id) and both rows belong
+    -- to the same user, so a conversation exists on exactly one of them.
+    update messaging_cache
+       set social_account_id = p_account_id
+     where social_account_id = v_duplicate_id;
+
+    -- Same defect class, same fix: whatsapp-scheduled-sender joins social_accounts through
+    -- this column for the sending platform_user_id, and a retired row hands it
+    -- 'retired_<uuid>' -- not a number anything can send from.
+    update whatsapp_scheduled_messages
        set social_account_id = p_account_id
      where social_account_id = v_duplicate_id;
 

@@ -57,22 +57,41 @@ curl -s -o /tmp/ic.png \
 ```
 
 Verify the crop before replacing anything: upload it under a throwaway name and
-open the result, then delete the probe.
+open the result, then delete the probe. The key is fed to curl through **stdin**
+(`-H @-`) rather than interpolated into the command line — the Contabo host is
+shared, and an argv-visible bearer token is readable in `ps` by anyone with a
+shell on the box for as long as the request runs.
 
 ```bash
-curl -s -H "Authorization: Bearer $K" -F "folder=postora.cloud" \
+AUTH() { printf 'Authorization: Bearer %s\n' "$K"; }
+AUTH | curl -sS --fail-with-body -m 60 -H @- -F "folder=postora.cloud" \
   -F "files=@/tmp/ic.png;filename=_probe.png;type=image/png" "$U/api/upload"
 # open https://openinary.walidmohamed.com/t/w_320/postora.cloud/_probe.png
-curl -s -X DELETE -H "Authorization: Bearer $K" "$U/api/storage/postora.cloud/_probe.png"
+AUTH | curl -sS --fail-with-body -m 60 -X DELETE -H @- \
+  "$U/api/storage/postora.cloud/_probe.png"
 ```
 
-Then swap:
+Then swap. The live asset has to be **deleted before** the replacement is
+uploaded — Openinary offers no overwrite — so there is a window in which the
+registered `logo_uri` 404s at the origin. Keep a copy of the old bytes first and
+re-upload it if the new upload fails, and do not purge Cloudflare until the
+replacement is confirmed: the stale edge copy is what keeps the consent screen
+rendering while the origin is empty.
 
 ```bash
-curl -s -X DELETE -H "Authorization: Bearer $K" "$U/api/storage/postora.cloud/logo2.png"
-curl -s -H "Authorization: Bearer $K" -F "folder=postora.cloud" \
-  -F "files=@/tmp/ic.png;filename=logo2.png;type=image/png" "$U/api/upload"
+curl -sS --fail-with-body -m 60 -o /tmp/logo2.bak.png \
+  "https://openinary.walidmohamed.com/t/postora.cloud/logo2.png"
+AUTH | curl -sS --fail-with-body -m 60 -X DELETE -H @- \
+  "$U/api/storage/postora.cloud/logo2.png"
+AUTH | curl -sS --fail-with-body -m 60 -H @- -F "folder=postora.cloud" \
+  -F "files=@/tmp/ic.png;filename=logo2.png;type=image/png" "$U/api/upload" \
+  || AUTH | curl -sS --fail-with-body -m 60 -H @- -F "folder=postora.cloud" \
+       -F "files=@/tmp/logo2.bak.png;filename=logo2.png;type=image/png" "$U/api/upload"
 ```
+
+Confirm the origin is actually serving the new bytes at
+`/t/w_320/postora.cloud/logo2.png` — a different cache key, so the edge cannot
+mask the result — before purging anything.
 
 ## The step that cannot be automated: purge Cloudflare
 

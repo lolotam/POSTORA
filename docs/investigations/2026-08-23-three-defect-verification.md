@@ -21,7 +21,7 @@ On activation `syncEvolutionAccountConnection`
 (`supabase/functions/_shared/evolutionQrAccount.ts:147`) rewrites that to the real
 number. Re-pairing a number that already has a row for the same user collides:
 
-```
+```text
 ERROR:  duplicate key value violates unique constraint
         "social_accounts_user_id_platform_platform_user_id_key"
 DETAIL: Key (user_id, platform, platform_user_id)=

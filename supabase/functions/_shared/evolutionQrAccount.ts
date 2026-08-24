@@ -122,10 +122,15 @@ export async function syncEvolutionAccountConnection(
   }
   if (connection !== "open") return account.platform_user_id;
 
-  const updates: Record<string, unknown> = { is_active: true };
   const ownerJid = extractOwnerJid(identity);
   const ownerNumber = ownerJid ? ownerNumberFromJid(ownerJid) : null;
   const isProvisional = account.platform_user_id.startsWith("pending_");
+  // A provisional row that has a number to claim is activated by the RPC below, inside the
+  // same transaction that takes the number. Activating it here first would outlive a rejected
+  // claim, leaving a live-looking account still on its pending_ placeholder -- an inbox the
+  // reply path cannot address, which is the state this function exists to prevent.
+  const claimsIdentity = isProvisional && ownerNumber !== null;
+  const updates: Record<string, unknown> = claimsIdentity ? {} : { is_active: true };
   const metadata = await loadAccountMetadata(admin, account.id);
 
   // Re-pairing a different number leaves platform_user_id at the old value (the claim
@@ -150,22 +155,26 @@ export async function syncEvolutionAccountConnection(
   if (profileName && !metadata.display_name) {
     updates.platform_username = profileName;
   }
-  // This write used to be issued without looking at its result. Claiming the owner number
-  // through it could raise 23505 against
-  // social_accounts_user_id_platform_platform_user_id_key when the same phone was already
+  // This write used to be issued without looking at its result, and it used to carry the owner
+  // number too. That combination raised 23505 against
+  // social_accounts_user_id_platform_platform_user_id_key whenever the same phone was already
   // linked, and the discarded error left the connection inactive on its pending_ id with
-  // nothing logged anywhere -- the QR screen simply never finished.
-  const { error: updateError } = await admin
-    .from("social_accounts")
-    .update(updates)
-    .eq("id", account.id);
-  if (updateError) throw updateError;
+  // nothing logged anywhere -- the QR screen simply never finished. The object can now be
+  // empty on the claim path, where nothing but the identity changes, and PostgREST rejects an
+  // empty PATCH rather than treating it as a no-op.
+  if (Object.keys(updates).length > 0) {
+    const { error: updateError } = await admin
+      .from("social_accounts")
+      .update(updates)
+      .eq("id", account.id);
+    if (updateError) throw updateError;
+  }
 
   // Only a provisional row takes on an identity. A row that already resolved to a number
   // keeps it even when a different phone pairs into the session -- the mismatch flag above
   // is the record of that, because rewriting the number would orphan every conversation id
   // already derived from it.
-  if (!ownerNumber || !isProvisional) return account.platform_user_id;
+  if (!claimsIdentity) return account.platform_user_id;
 
   // Identity is claimed in SQL because resolving that collision is a multi-statement merge
   // (move the older session's messages, release its unique key, take the number) and a
