@@ -242,11 +242,14 @@ realtime WAL polling, `pg_net` cron dispatch, and Logflare ingest.
 
 ## Status after PR #30
 
-Options 1–3 were implemented; 4–6 remain open.
+Options 1a and 3 were implemented; 1b and 2, 4–6 remain open. Option 1 as
+originally written bundled pagination with the thumbnail work; implementing it
+showed those are separate decisions with opposite answers, so it is split here.
 
 | # | Option | Status |
 |---|---|---|
-| 1 | Media thumbnails, lazy loading, one canonical URL helper | **Done** — `cdn.ts` deleted, `mediaUrl.ts` gained `transformMediaUrl`/`getMediaThumbnailUrl`, `MediaThumbnail` serves sized renditions. DB pagination deliberately skipped (client-side filtering); `select("*")` became an explicit allowlist. |
+| 1a | Media thumbnails, lazy loading, one canonical URL helper | **Done** — `cdn.ts` deleted, `mediaUrl.ts` gained `transformMediaUrl`/`getMediaThumbnailUrl` (Openinary detection scoped to the configured origin), `MediaThumbnail` serves sized renditions with `loading="lazy"`. `select("*")` became an explicit allowlist. |
+| 1b | Paginate the `media_files` query at the database level | **Not done, and blocked** — folder navigation, search, every filter and select-all run client-side over the full array, so `.range()` would silently scope all of them to the newest N rows. Rendering is already bounded by `itemsPerPage` (default 50). Doing this properly means pushing filtering into the query first. |
 | 2 | Aggregate pushdown for the two count-in-JS queries | Open |
 | 3 | Dependency manifest and `react-router-dom` | **Done** — tooling moved to `devDependencies`, patched to 7.18.2 in **both** `package-lock.json` and `bun.lock`. `npm audit --omit=dev` reports 0. |
 | 4 | Review the 305 unused indexes | Open |
