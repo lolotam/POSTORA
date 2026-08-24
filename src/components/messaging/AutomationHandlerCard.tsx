@@ -9,7 +9,7 @@ import {
 } from "@/hooks/useAutomationHandlers";
 
 interface AutomationHandlerCardProps {
-  platform: "facebook" | "instagram" | "threads";
+  platform: "facebook" | "instagram" | "threads" | "whatsapp";
   // When the host page already owns an account selection, pass it in so a handler change
   // can never be saved against a different account than the one on screen.
   accountId?: string | null;
@@ -23,9 +23,9 @@ interface HandlerOption {
 }
 
 const MESSAGE_OPTIONS: HandlerOption[] = [
-  { value: "off", label: "Off" },
+  { value: "off", label: "Off (Disabled)" },
   { value: "internal", label: "Postora AI Agent" },
-  { value: "n8n", label: "n8n" },
+  { value: "n8n", label: "n8n Workflow" },
 ];
 
 const COMMENT_OPTIONS: HandlerOption[] = [
@@ -60,10 +60,11 @@ export function AutomationHandlerCard({ platform, accountId: controlledAccountId
   return (
     <Card className="mb-4">
       <CardHeader className="pb-3">
-        <CardTitle className="text-base">Automation</CardTitle>
+        <CardTitle className="text-base">Automation Handler</CardTitle>
         <CardDescription>
-          Chooses which agent replies. Choosing n8n requires a Postora Comment Trigger (or
-          Postora Trigger) workflow in n8n.
+          {platform === "whatsapp"
+            ? "Choose which engine automatically answers incoming messages for this account: the Postora AI Agent, an external n8n workflow, or nobody (Off)."
+            : "Chooses which agent replies. Choosing n8n requires a Postora Comment Trigger (or Postora Trigger) workflow in n8n."}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -84,7 +85,7 @@ export function AutomationHandlerCard({ platform, accountId: controlledAccountId
 
         {platform !== "threads" && (
           <HandlerRow
-            label="Messages"
+            label="Incoming Messages"
             testId="messages-handler"
             value={handlers?.automation_handler ?? "internal"}
             options={MESSAGE_OPTIONS}
@@ -93,25 +94,40 @@ export function AutomationHandlerCard({ platform, accountId: controlledAccountId
           />
         )}
 
-        <HandlerRow
-          label="Comments"
-          testId="comments-handler"
-          value={handlers?.comment_automation_handler ?? "off"}
-          options={COMMENT_OPTIONS}
-          disabled={busy}
-          onChange={(value) => save.mutate({ comment_automation_handler: value as CommentAutomationHandler })}
-        />
+        {platform !== "whatsapp" && (
+          <HandlerRow
+            label="Comments"
+            testId="comments-handler"
+            value={handlers?.comment_automation_handler ?? "off"}
+            options={COMMENT_OPTIONS}
+            disabled={busy}
+            onChange={(value) => save.mutate({ comment_automation_handler: value as CommentAutomationHandler })}
+          />
+        )}
 
-        <p className="text-xs text-muted-foreground">
-          Comments reach n8n only while Comments is set to n8n. Messages are always sent to any
-          subscribed n8n workflow so it can log or route them; this setting decides whether the
-          Postora AI agent also replies.
-        </p>
-        <p className="text-xs text-muted-foreground">
-          Postora AI Agent on Comments replies <strong>publicly</strong>, using your Auto Replies
-          rules first and the AI agent for anything they do not match. Away rules post at most
-          once per post per day.
-        </p>
+        {platform === "whatsapp" ? (
+          // WhatsApp routes each inbound message to exactly one handler: on "Postora AI Agent"
+          // no n8n webhook fires, and on "n8n Workflow" the internal agent never answers.
+          <p className="text-xs text-muted-foreground">
+            Incoming messages reach only the handler selected here. <strong>Postora AI Agent</strong>{" "}
+            answers from Postora and needs the AI agent enabled below.{" "}
+            <strong>n8n Workflow</strong> sends the message to your subscribed n8n workflows
+            instead, and Postora itself sends no reply.
+          </p>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">
+              Comments reach n8n only while Comments is set to n8n. Messages are always sent to any
+              subscribed n8n workflow so it can log or route them; this setting decides whether the
+              Postora AI agent also replies.
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Postora AI Agent on Comments replies <strong>publicly</strong>, using your Auto Replies
+              rules first and the AI agent for anything they do not match. Away rules post at most
+              once per post per day.
+            </p>
+          </>
+        )}
       </CardContent>
     </Card>
   );

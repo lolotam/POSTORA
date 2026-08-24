@@ -474,7 +474,7 @@ async function handleLiveMessages(
 
     const automationHandler = resolveAutomationHandler(account.account_metadata);
 
-    if (automationHandler !== "off") {
+    if (automationHandler === "n8n") {
       await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
         adminClient,
         account.user_id,

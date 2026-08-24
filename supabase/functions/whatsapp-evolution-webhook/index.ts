@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
+import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent } from "../_shared/n8nMessagingDispatch.ts";
 import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts";
 import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
@@ -126,7 +127,7 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
 
   const automationHandler = resolveAutomationHandler(account.account_metadata);
 
-  if (automationHandler !== "off") {
+  if (automationHandler === "n8n") {
     await runInBackground("whatsapp evolution message dispatch", () => dispatchMessageEvent(
       admin,
       account.user_id,
@@ -167,13 +168,6 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
   }
 
   return true;
-}
-
-function resolveAutomationHandler(metadata: unknown): "internal" | "n8n" | "off" {
-  if (!metadata || typeof metadata !== "object") return "internal";
-  const handler = (metadata as Record<string, unknown>).automation_handler;
-  if (handler === "off" || handler === "n8n" || handler === "internal") return handler;
-  return "internal";
 }
 
 async function triggerAiAgentReply(

@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
 import { useAllowedAiAgentModels, formatAllowedModelValue } from "@/hooks/useAllowedAiAgentModels";
 import { normalizeE164Phone } from "@/lib/phone";
+import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
 import { AiAgentTestChat } from "@/components/messaging/AiAgentTestChat";
@@ -130,6 +131,11 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }
 
       <TabsContent value="settings" className="mt-0">
         <div className="space-y-4">
+          {/* Only WhatsApp reaches its handler picker from here. The Facebook, Instagram and
+              Threads pages already render this card in their own tab, and a second copy would
+              put two independent account selectors for one setting on the same page. */}
+          {platform === "whatsapp" && <AutomationHandlerCard platform={platform} />}
+
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><Bot className="h-5 w-5" /> AI agent settings</CardTitle>

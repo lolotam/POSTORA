@@ -16,6 +16,7 @@ vi.mock("@/hooks/useAutomationHandlers", () => ({
 const accounts = [
   { id: "a1", platform: "instagram", platform_username: "mybrand", platform_user_id: "1789", is_active: true },
   { id: "t1", platform: "threads", platform_username: "mybrand", platform_user_id: "th-1", is_active: true },
+  { id: "w1", platform: "whatsapp", platform_username: "mybrand", platform_user_id: "96599", is_active: true },
 ];
 vi.mock("@/hooks/useSocialAccounts", () => ({
   useSocialAccounts: () => ({ data: accounts }),
@@ -29,7 +30,7 @@ describe("AutomationHandlerCard", () => {
   it("shows a Messages and a Comments row for Instagram", () => {
     render(<AutomationHandlerCard platform="instagram" />);
 
-    expect(screen.getByText("Messages")).toBeInTheDocument();
+    expect(screen.getByText("Incoming Messages")).toBeInTheDocument();
     expect(screen.getByText("Comments")).toBeInTheDocument();
     expect(screen.getByTestId("messages-handler")).toHaveTextContent("Postora AI Agent");
     expect(screen.getByTestId("comments-handler")).toHaveTextContent("Off");
@@ -57,6 +58,16 @@ describe("AutomationHandlerCard", () => {
     fireEvent.click(await screen.findByRole("option", { name: "Postora AI Agent" }));
 
     expect(save.mutate).toHaveBeenCalledWith({ comment_automation_handler: "internal" });
+  });
+
+  it("hides the Comments row on WhatsApp, which has no public comments", () => {
+    render(<AutomationHandlerCard platform="whatsapp" />);
+
+    expect(screen.getByText("Incoming Messages")).toBeInTheDocument();
+    expect(screen.queryByText("Comments")).not.toBeInTheDocument();
+    // The public-reply warning belongs to the Comments row; showing it here would describe
+    // automation this account cannot run.
+    expect(screen.queryByText("publicly")).not.toBeInTheDocument();
   });
 
   it("warns that the comment agent replies in public", () => {
