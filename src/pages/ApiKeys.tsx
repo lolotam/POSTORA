@@ -380,9 +380,9 @@ export default function ApiKeys() {
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div>
-                        <h1 className="text-2xl sm:text-3xl font-bold">API Keys</h1>
+                        <h1 className="text-2xl sm:text-3xl font-bold">MCP & API</h1>
                         <p className="text-muted-foreground mt-1">
-                            Manage your API keys for external integrations
+                            Manage your Model Context Protocol (MCP) servers, API keys, and external integrations
                         </p>
                     </div>
                     <Button variant="gradient" className="w-full sm:w-auto">

@@ -97,7 +97,7 @@ const getUserMenuItems = (isAdmin: boolean) => [
   { icon: BarChart3, label: "Post Analytics", path: "/analytics" },
   { icon: FileText, label: "Templates", path: "/templates" },
   { icon: FolderOpen, label: "Media Library", path: "/media" },
-  { icon: Key, label: "API Keys", path: "/api-keys" },
+  { icon: Key, label: "MCP & API", path: "/api-keys" },
   { icon: Activity, label: "Health", path: "/connection-health" },
   ...(isAdmin ? [{ icon: BookOpen, label: "System Logs", path: "/admin/logs" }] : []),
   { icon: Mail, label: "Contact Us", path: "/contact" },

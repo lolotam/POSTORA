@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
@@ -10,7 +10,6 @@ import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConne
 import {
   ProfileSection,
   SecuritySection,
-  ApiKeySection,
   AppearanceSection,
   TimezoneSection,
   NotificationsSection,
@@ -21,14 +20,12 @@ import { HiggsfieldConnectionCard } from "@/components/settings/HiggsfieldConnec
 
 import {
   User,
-  Key,
   Bell,
   Shield,
   Palette,
   Cookie,
   CreditCard,
   Plug,
-  Database,
 } from "lucide-react";
 
 /** Mirrors the TabsTrigger values below; an unknown ?tab= falls back to the first. */
@@ -37,7 +34,6 @@ const SETTINGS_TABS = [
   "connectors",
   "appearance",
   "subscription",
-  "api",
   "notifications",
   "security",
   "privacy",
@@ -46,12 +42,19 @@ const SETTINGS_TABS = [
 
 export default function Settings() {
   const [searchParams, setSearchParams] = useSearchParams();
-  // An unrecognised ?tab= used to reach the controlled <Tabs> verbatim, which rendered the tab
-  // bar with nothing selected and no TabsContent at all -- a blank settings page from a stale
-  // bookmark or a typo. Fall back instead of trusting the query string.
-  // Resolves tab, aliasing 'connectors' to 'integrations' for full backward compatibility
+  const navigate = useNavigate();
+
+  // Resolves tab, aliasing 'connectors' to 'integrations' for backward compatibility
   const rawTab = searchParams.get("tab");
-  const activeTab = rawTab && SETTINGS_TABS.includes(rawTab)
+
+  useEffect(() => {
+    // If user accesses legacy tab=api, smoothly redirect to the dedicated /api-keys page
+    if (rawTab === "api") {
+      navigate("/api-keys", { replace: true });
+    }
+  }, [rawTab, navigate]);
+
+  const activeTab = rawTab && SETTINGS_TABS.includes(rawTab as any)
     ? (rawTab === "connectors" ? "integrations" : rawTab)
     : "profile";
 
@@ -139,10 +142,6 @@ export default function Settings() {
               <CreditCard className="w-4 h-4" />
               <span className="hidden sm:inline">Subscription</span>
             </TabsTrigger>
-            <TabsTrigger value="api" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
-              <Key className="w-4 h-4" />
-              <span className="hidden sm:inline">API Access</span>
-            </TabsTrigger>
             <TabsTrigger value="notifications" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
               <Bell className="w-4 h-4" />
               <span className="hidden sm:inline">Notifications</span>
@@ -187,11 +186,6 @@ export default function Settings() {
           {/* Subscription Tab */}
           <TabsContent value="subscription" className="mt-6 space-y-6">
             <SubscriptionSection />
-          </TabsContent>
-
-          {/* API Access Tab */}
-          <TabsContent value="api" className="mt-6 space-y-6">
-            <ApiKeySection />
           </TabsContent>
 
           {/* Notifications Tab */}
