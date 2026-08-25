@@ -40,7 +40,7 @@ Deno.test("CloudGraphFetcher will not act without a token", () => {
 Deno.test("the media download carries the Bearer token — a bare fetch 401s", async () => {
   const seen: string[] = [];
   const bytes = await new CloudGraphFetcher().fetchMediaBytes(
-    { platform: "whatsapp", accessToken: "secret-token", mediaUrl: "https://lookaside.example/x" },
+    { platform: "whatsapp", accessToken: "secret-token", mediaUrl: "https://lookaside.fbsbx.com/x" },
     LIMITS,
     (_url, init) => {
       seen.push(String((init?.headers as Record<string, string>)?.Authorization));
@@ -61,7 +61,7 @@ Deno.test("a media id is resolved to a URL first, and both calls are authenticat
       assertEquals(String((init?.headers as Record<string, string>)?.Authorization), "Bearer t");
       if (String(url).includes("MEDIA-1")) {
         return Promise.resolve(
-          new Response(JSON.stringify({ url: "https://cdn.example/a", mime_type: "audio/ogg" }), { status: 200 }),
+          new Response(JSON.stringify({ url: "https://scontent.fbcdn.net/a", mime_type: "audio/ogg" }), { status: 200 }),
         );
       }
       return Promise.resolve(bodyResponse(new Uint8Array([7])));
@@ -77,7 +77,7 @@ Deno.test("a lying Content-Length does not get past the streaming ceiling", asyn
   await assertRejects(
     () =>
       new CloudGraphFetcher().fetchMediaBytes(
-        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://cdn.example/a" },
+        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://scontent.fbcdn.net/a" },
         LIMITS,
         () => Promise.resolve(bodyResponse(new Uint8Array(4096), { "content-length": "10" })),
       ),
@@ -90,7 +90,7 @@ Deno.test("an honest oversized Content-Length is refused before the body is read
   await assertRejects(
     () =>
       new CloudGraphFetcher().fetchMediaBytes(
-        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://cdn.example/a" },
+        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://scontent.fbcdn.net/a" },
         LIMITS,
         () => Promise.resolve(bodyResponse(new Uint8Array(4096), { "content-length": "4096" })),
       ),
@@ -103,7 +103,7 @@ Deno.test("a hung download aborts as a timeout", async () => {
   await assertRejects(
     () =>
       new CloudGraphFetcher().fetchMediaBytes(
-        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://cdn.example/a" },
+        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://scontent.fbcdn.net/a" },
         { maxBytes: 1024, timeoutMs: 20 },
         (_url, init) =>
           new Promise((_resolve, reject) => {
@@ -184,4 +184,81 @@ Deno.test("selectFetcher picks the first that claims the ref, and null when none
     "evolution",
   );
   assertEquals(selectFetcher({ platform: "whatsapp" }, candidates), null);
+});
+
+Deno.test("the bearer token is never sent to a non-Meta host", async () => {
+  // The whole point of the allowlist: even a URL that reached us looking legitimate must
+  // not receive the account's access token.
+  let called = false;
+  await assertRejects(
+    () =>
+      new CloudGraphFetcher().fetchMediaBytes(
+        { platform: "whatsapp", accessToken: "secret", mediaUrl: "https://evil.test/steal" },
+        LIMITS,
+        () => { called = true; return Promise.resolve(bodyResponse(new Uint8Array([1]))); },
+      ),
+    MediaFetchError,
+    "refusing to send credentials",
+  );
+  assert(!called, "must not issue the request at all");
+});
+
+Deno.test("a lookalike host does not pass the suffix check", async () => {
+  await assertRejects(
+    () =>
+      new CloudGraphFetcher().fetchMediaBytes(
+        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://graph.facebook.com.evil.test/x" },
+        LIMITS,
+      ),
+    MediaFetchError,
+    "refusing to send credentials",
+  );
+});
+
+Deno.test("private-network and non-https targets are refused even without credentials", async () => {
+  const direct = new DirectUrlFetcher();
+  await assertRejects(
+    () => direct.fetchMediaBytes({ platform: "whatsapp", mediaUrl: "http://scontent.fbcdn.net/a" }, LIMITS),
+    MediaFetchError,
+    "non-https",
+  );
+  await assertRejects(
+    () => direct.fetchMediaBytes({ platform: "whatsapp", mediaUrl: "https://127.0.0.1/admin" }, LIMITS),
+    MediaFetchError,
+    "private-network",
+  );
+  await assertRejects(
+    () => direct.fetchMediaBytes({ platform: "whatsapp", mediaUrl: "https://169.254.169.254/latest/meta-data" }, LIMITS),
+    MediaFetchError,
+    "private-network",
+  );
+});
+
+Deno.test("a redirect to an unlisted host is refused rather than followed with the token", async () => {
+  await assertRejects(
+    () =>
+      new CloudGraphFetcher().fetchMediaBytes(
+        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://scontent.fbcdn.net/a" },
+        LIMITS,
+        () =>
+          Promise.resolve(
+            new Response(null, { status: 302, headers: { location: "https://evil.test/x" } }),
+          ),
+      ),
+    MediaFetchError,
+    "refusing to send credentials",
+  );
+});
+
+Deno.test("oversized base64 is rejected on encoded length, before atob allocates", async () => {
+  const big = "A".repeat(4096); // ~3072 decoded bytes, over the 1024 ceiling
+  await assertRejects(
+    () =>
+      new EvolutionFetcher("https://evo.example", "k", "i").fetchMediaBytes(
+        { platform: "whatsapp", connectionMode: "evolution_qr", rawBase64: big },
+        LIMITS,
+      ),
+    MediaFetchError,
+    "exceeds",
+  );
 });

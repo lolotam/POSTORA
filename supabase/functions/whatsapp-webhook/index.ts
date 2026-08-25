@@ -25,6 +25,13 @@ interface WhatsAppAccount {
   connection_mode?: string | null;
 }
 
+// The exact strings extractMessageContent produces when there is no caption. Used to tell
+// "no caption" from a caption that merely looks like one.
+const MEDIA_PLACEHOLDERS: Record<string, string> = {
+  audio: "[Audio message]",
+  image: "[Image]",
+};
+
 interface MessageContent {
   messageText: string;
   mediaUrl: string | null;
@@ -535,8 +542,9 @@ async function handleLiveMessages(
             mediaId: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
             mediaUrl,
             mimeType: mediaMime,
-            // WhatsApp puts any typed caption in messageText; the placeholder is not one.
-            caption: messageText.startsWith("[") ? null : messageText,
+            // Compare against the exact placeholder for this type. `startsWith("[")`
+            // discarded genuine captions such as "[URGENT] leaking pipe".
+            caption: messageText === MEDIA_PLACEHOLDERS[mediaType] ? null : messageText,
             platform: "whatsapp",
           });
 

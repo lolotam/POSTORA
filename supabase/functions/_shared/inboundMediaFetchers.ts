@@ -9,6 +9,67 @@
 const GRAPH_VERSION = "v22.0";
 const GRAPH_BASE = `https://graph.facebook.com/${GRAPH_VERSION}`;
 
+/**
+ * Hosts a credentialed download may target. Meta returns media on lookaside/fbcdn
+ * domains, and the account's bearer token travels with the request -- so the token must
+ * never reach an origin outside this list, no matter where the URL came from.
+ *
+ * Suffix-matched against the parsed hostname, never against the raw string: substring
+ * matching would accept "graph.facebook.com.evil.test".
+ */
+const CREDENTIALED_HOST_SUFFIXES = [
+  "graph.facebook.com",
+  "lookaside.fbsbx.com",
+  "fbcdn.net",
+  "cdninstagram.com",
+];
+
+function hostIsAllowed(hostname: string, suffixes: string[]): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, "");
+  return suffixes.some((suffix) => host === suffix || host.endsWith(`.${suffix}`));
+}
+
+/** Blocks loopback, link-local, and RFC1918 targets reached by literal IP. */
+function isPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal")) return true;
+  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80")) return true;
+  const v4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (!v4) return false;
+  const [a, b] = [Number(v4[1]), Number(v4[2])];
+  return a === 10 || a === 127 || a === 0 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254);
+}
+
+/**
+ * Every URL this module fetches passes through here. `requireAllowlist` is true whenever
+ * credentials are attached: an unvalidated origin plus a bearer token is how an access
+ * token leaks, and Postora's own resolution step is not a substitute for checking.
+ */
+function assertFetchableUrl(rawUrl: string, requireAllowlist: boolean): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new MediaFetchError("media url is not parseable", "transport_failed");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new MediaFetchError(`refusing non-https media url (${parsed.protocol})`, "transport_failed");
+  }
+  if (isPrivateHost(parsed.hostname)) {
+    throw new MediaFetchError("refusing private-network media url", "transport_failed");
+  }
+  if (requireAllowlist && !hostIsAllowed(parsed.hostname, CREDENTIALED_HOST_SUFFIXES)) {
+    throw new MediaFetchError(
+      `refusing to send credentials to ${parsed.hostname}`,
+      "transport_failed",
+    );
+  }
+  return parsed;
+}
+
 export interface MediaRef {
   platform: "whatsapp" | "instagram" | "facebook";
   /** Absent for Cloud API, which resolves a URL from the id first. */
@@ -51,7 +112,8 @@ export interface InboundMediaFetcher {
  * oversized or lying response through and buffer it anyway. Streaming lets us abandon
  * the read the moment the ceiling is crossed, which is the point of having a limit.
  */
-async function readCapped(response: Response, maxBytes: number): Promise<Uint8Array> {
+async function readCapped(response: Response, maxBytes: number, timeoutMs = 0): Promise<Uint8Array> {
+  const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
   const declared = Number(response.headers.get("content-length") ?? "");
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new MediaFetchError(`declared ${declared} bytes exceeds ${maxBytes}`, "too_large");
@@ -70,6 +132,10 @@ async function readCapped(response: Response, maxBytes: number): Promise<Uint8Ar
   let total = 0;
   try {
     while (true) {
+      if (Date.now() > deadline) {
+        await reader.cancel().catch(() => {});
+        throw new MediaFetchError(`body read exceeded ${timeoutMs}ms`, "timeout");
+      }
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
@@ -98,11 +164,15 @@ async function timedFetch(
   url: string,
   init: RequestInit,
   timeoutMs: number,
+  requireAllowlist = false,
 ): Promise<Response> {
+  assertFetchableUrl(url, requireAllowlist);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetcher(url, { ...init, signal: controller.signal });
+    // manual: a 302 to an attacker-chosen host would otherwise carry the Authorization
+    // header along with it. The caller re-validates each hop.
+    return await fetcher(url, { ...init, signal: controller.signal, redirect: "manual" });
   } catch (error) {
     if ((error as Error)?.name === "AbortError") {
       throw new MediaFetchError(`timed out after ${timeoutMs}ms`, "timeout");
@@ -113,9 +183,34 @@ async function timedFetch(
   }
 }
 
-function decodeBase64(data: string): Uint8Array {
+/** A redirect is another origin: validate it exactly as strictly as the first hop. */
+function redirectTarget(response: Response, from: string): string | null {
+  if (response.status < 300 || response.status >= 400) return null;
+  const location = response.headers.get("location");
+  if (!location) return null;
+  return new URL(location, from).toString();
+}
+
+/**
+ * Decodes with the ceiling applied to the ENCODED string first.
+ *
+ * Checking only the decoded length is too late: atob() materialises a full binary string
+ * and the Uint8Array is a second copy, so an oversized payload can exhaust the isolate
+ * before any check runs -- and an OOM is not catchable by the pipeline's try/catch.
+ * Base64 is 4 chars per 3 bytes, so encoded length bounds decoded length.
+ */
+function decodeBase64Capped(data: string, maxBytes: number): Uint8Array {
   const clean = data.includes(",") ? data.slice(data.indexOf(",") + 1) : data;
-  const binary = atob(clean);
+  const approxDecoded = Math.floor((clean.length * 3) / 4);
+  if (approxDecoded > maxBytes) {
+    throw new MediaFetchError(`base64 payload ~${approxDecoded} bytes exceeds ${maxBytes}`, "too_large");
+  }
+  let binary: string;
+  try {
+    binary = atob(clean);
+  } catch {
+    throw new MediaFetchError("media payload is not valid base64", "transport_failed");
+  }
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes;
@@ -147,6 +242,7 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
   ): Promise<FetchedMedia> {
     const token = ref.accessToken;
     if (!token) throw new MediaFetchError("no access token", "transport_failed");
+    const auth = { Authorization: `Bearer ${token}` };
 
     let url = ref.mediaUrl ?? null;
     let mime = ref.mimeType ?? null;
@@ -157,8 +253,9 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
       const meta = await timedFetch(
         fetcher,
         `${GRAPH_BASE}/${encodeURIComponent(ref.mediaId)}`,
-        { headers: { Authorization: `Bearer ${token}` } },
+        { headers: auth },
         limits.timeoutMs,
+        true,
       );
       if (!meta.ok) {
         throw new MediaFetchError(`media lookup ${meta.status}`, meta.status === 404 ? "not_found" : "transport_failed");
@@ -169,17 +266,20 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
       if (!url) throw new MediaFetchError("media lookup returned no url", "not_found");
     }
 
-    const response = await timedFetch(
-      fetcher,
-      url,
-      { headers: { Authorization: `Bearer ${token}` } },
-      limits.timeoutMs,
-    );
+    // Follow at most two hops, validating each. `redirect: "manual"` means the token is
+    // never replayed to a location we have not checked.
+    let response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, true);
+    for (let hop = 0; hop < 2; hop += 1) {
+      const next = redirectTarget(response, url);
+      if (!next) break;
+      url = next;
+      response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, true);
+    }
     if (!response.ok) {
       throw new MediaFetchError(`media download ${response.status}`, "transport_failed");
     }
 
-    const bytes = await readCapped(response, limits.maxBytes);
+    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs);
     return { bytes, mimeType: mime ?? response.headers.get("content-type") ?? "application/octet-stream" };
   }
 }
@@ -210,10 +310,7 @@ export class EvolutionFetcher implements InboundMediaFetcher {
     fetcher: typeof fetch = fetch,
   ): Promise<FetchedMedia> {
     if (ref.rawBase64) {
-      const bytes = decodeBase64(ref.rawBase64);
-      if (bytes.byteLength > limits.maxBytes) {
-        throw new MediaFetchError(`${bytes.byteLength} bytes exceeds ${limits.maxBytes}`, "too_large");
-      }
+      const bytes = decodeBase64Capped(ref.rawBase64, limits.maxBytes);
       return { bytes, mimeType: ref.mimeType ?? "application/octet-stream" };
     }
 
@@ -237,10 +334,7 @@ export class EvolutionFetcher implements InboundMediaFetcher {
     const base64 = data?.base64 ?? data?.media ?? null;
     if (!base64) throw new MediaFetchError("evolution returned no base64", "not_found");
 
-    const bytes = decodeBase64(String(base64));
-    if (bytes.byteLength > limits.maxBytes) {
-      throw new MediaFetchError(`${bytes.byteLength} bytes exceeds ${limits.maxBytes}`, "too_large");
-    }
+    const bytes = decodeBase64Capped(String(base64), limits.maxBytes);
     return { bytes, mimeType: data?.mimetype ?? ref.mimeType ?? "application/octet-stream" };
   }
 }
@@ -259,11 +353,11 @@ export class DirectUrlFetcher implements InboundMediaFetcher {
     fetcher: typeof fetch = fetch,
   ): Promise<FetchedMedia> {
     if (!ref.mediaUrl) throw new MediaFetchError("no mediaUrl", "not_found");
-    // Only ever a URL Postora itself resolved from a provider -- never one taken from a
-    // webhook body, which would make this an SSRF surface.
-    const response = await timedFetch(fetcher, ref.mediaUrl, {}, limits.timeoutMs);
+    // No credentials are attached here, so the allowlist does not apply -- but https-only
+    // and the private-network block still do, since this runs service-role inside the VPC.
+    const response = await timedFetch(fetcher, ref.mediaUrl, {}, limits.timeoutMs, false);
     if (!response.ok) throw new MediaFetchError(`download ${response.status}`, "transport_failed");
-    const bytes = await readCapped(response, limits.maxBytes);
+    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs);
     return { bytes, mimeType: ref.mimeType ?? response.headers.get("content-type") ?? "application/octet-stream" };
   }
 }

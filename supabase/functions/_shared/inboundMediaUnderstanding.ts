@@ -142,16 +142,34 @@ const IMAGE_PROMPT =
   '{"description": string, "text": string, "fields": object}. ' +
   "Use an empty object for fields when nothing structured is present.";
 
+function abortError(): Error {
+  const error = new Error("aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+/**
+ * Races the work against a deadline. The signal is passed through for fetch, but body
+ * reads do not honour it, so the race is what actually bounds them -- a server that
+ * returns headers and then stalls the body would otherwise hang forever, and this runs
+ * inside the continuation that owes the customer a reply.
+ */
 async function withTimeout<T>(
   work: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(abortError());
+    }, timeoutMs);
+  });
   try {
-    return await work(controller.signal);
+    return await Promise.race([work(controller.signal), deadline]);
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -163,9 +181,11 @@ async function callGemini(call: ProviderCall, prompt: string): Promise<string> {
   const { bytes, mimeType, key, model, timeoutMs, fetcher } = call;
   const response = await withTimeout(
     (signal) =>
-      fetcher(`${GEMINI_BASE}/${model}:generateContent?key=${encodeURIComponent(key)}`, {
+      fetcher(`${GEMINI_BASE}/${model}:generateContent`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        // Header, never ?key= -- query strings are retained in proxy logs, exception
+        // tooling and provider access records, and this key bills real money.
+        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         signal,
         body: JSON.stringify({
           contents: [{
@@ -180,12 +200,14 @@ async function callGemini(call: ProviderCall, prompt: string): Promise<string> {
     timeoutMs,
   );
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`gemini ${response.status}: ${body.slice(0, 200)}`);
-  }
+  const data = await withTimeout(async () => {
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`gemini ${response.status}: ${body.slice(0, 200)}`);
+    }
+    return await response.json();
+  }, timeoutMs);
 
-  const data = await response.json();
   const text = data?.candidates?.[0]?.content?.parts
     ?.map((part: { text?: string }) => part?.text ?? "")
     .join("")
@@ -218,12 +240,14 @@ async function callWhisper(call: ProviderCall, languageHint?: string): Promise<s
     timeoutMs,
   );
 
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`whisper ${response.status}: ${body.slice(0, 200)}`);
-  }
+  const data = await withTimeout(async () => {
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`whisper ${response.status}: ${body.slice(0, 200)}`);
+    }
+    return await response.json();
+  }, timeoutMs);
 
-  const data = await response.json();
   const text = String(data?.text ?? "").trim();
   if (!text) throw new Error("whisper returned no text");
   return text;
@@ -284,8 +308,15 @@ function geminiResult(raw: string, kind: MediaKind, model: string): MediaUnderst
   };
 }
 
-/** `null` means "try the next provider"; a timeout is terminal and returns an outcome. */
-type ProviderAttempt = { outcome: UnderstandingOutcome } | { failure: string } | null;
+/**
+ * A provider attempt either succeeded or did not. A timeout is NOT terminal: it is just
+ * another failure, and the whole point of configuring a fallback is that it gets tried.
+ * Returning the timeout as a final outcome silently disabled Whisper for exactly the slow
+ * voice notes it exists to catch.
+ */
+type ProviderAttempt =
+  | { ok: true; result: MediaUnderstandingResult }
+  | { ok: false; failure: string; timedOut: boolean };
 
 async function attemptGemini(
   call: ProviderCall,
@@ -295,26 +326,22 @@ async function attemptGemini(
   try {
     const prompt = kind === "audio" ? AUDIO_PROMPT : imagePrompt(promptContext);
     const raw = await callGemini(call, prompt);
-    return { outcome: { ok: true, result: geminiResult(raw, kind, call.model) } };
+    return { ok: true, result: geminiResult(raw, kind, call.model) };
   } catch (error) {
-    if (isAbort(error)) {
-      return { outcome: { ok: false, reason: "timeout", detail: `gemini/${call.model}` } };
-    }
-    return { failure: `gemini: ${(error as Error)?.message ?? "unknown"}` };
+    const timedOut = isAbort(error);
+    const why = timedOut ? `timed out after ${call.timeoutMs}ms` : (error as Error)?.message ?? "unknown";
+    return { ok: false, failure: `gemini: ${why}`, timedOut };
   }
 }
 
 async function attemptWhisper(call: ProviderCall, languageHint?: string): Promise<ProviderAttempt> {
   try {
     const text = await callWhisper(call, languageHint);
-    return {
-      outcome: { ok: true, result: { text, kind: "audio", provider: "openai", model: call.model } },
-    };
+    return { ok: true, result: { text, kind: "audio", provider: "openai", model: call.model } };
   } catch (error) {
-    if (isAbort(error)) {
-      return { outcome: { ok: false, reason: "timeout", detail: `whisper/${call.model}` } };
-    }
-    return { failure: `whisper: ${(error as Error)?.message ?? "unknown"}` };
+    const timedOut = isAbort(error);
+    const why = timedOut ? `timed out after ${call.timeoutMs}ms` : (error as Error)?.message ?? "unknown";
+    return { ok: false, failure: `whisper: ${why}`, timedOut };
   }
 }
 
@@ -339,14 +366,17 @@ export async function understandInboundMedia(
   const failures: string[] = [];
   const base = { bytes, mimeType, timeoutMs: limits.timeoutMs, fetcher };
 
+  let everyFailureWasTimeout = true;
+
   if (config.geminiKey) {
     const attempt = await attemptGemini(
       { ...base, key: config.geminiKey, model: models.gemini },
       kind,
       config.promptContext,
     );
-    if (attempt && "outcome" in attempt) return attempt.outcome;
-    if (attempt) failures.push(attempt.failure);
+    if (attempt.ok) return { ok: true, result: attempt.result };
+    failures.push(attempt.failure);
+    everyFailureWasTimeout &&= attempt.timedOut;
   }
 
   // Whisper transcribes; it cannot describe an image, so there is no image fallback.
@@ -355,12 +385,19 @@ export async function understandInboundMedia(
       { ...base, key: config.openaiKey, model: models.whisper },
       config.languageHint,
     );
-    if (attempt && "outcome" in attempt) return attempt.outcome;
-    if (attempt) failures.push(attempt.failure);
+    if (attempt.ok) return { ok: true, result: attempt.result };
+    failures.push(attempt.failure);
+    everyFailureWasTimeout &&= attempt.timedOut;
   }
 
   if (failures.length === 0) {
     return { ok: false, reason: "no_provider", detail: "no usable API key for this media kind" };
   }
-  return { ok: false, reason: "provider_failed", detail: failures.join("; ") };
+  // "timeout" is reported only when nothing but timeouts happened, so the reason stays
+  // diagnostic without ever short-circuiting a fallback.
+  return {
+    ok: false,
+    reason: everyFailureWasTimeout ? "timeout" : "provider_failed",
+    detail: failures.join("; "),
+  };
 }
