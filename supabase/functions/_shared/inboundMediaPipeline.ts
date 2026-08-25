@@ -55,6 +55,16 @@ export const DEFAULT_DAILY_CAP = 100;
  * Env var holding each provider's key. provider_api_keys is consulted when the env has
  * none, because the admin UI writes keys there and operators expect that to be enough.
  */
+/**
+ * "google" and "gemini" name the same provider -- the ai_providers catalog uses "gemini",
+ * older stored settings use "google". They must collapse to one identity before dedupe,
+ * or the same model configured under each alias is called twice.
+ */
+function canonicalProvider(provider: string): string {
+  const p = provider.trim().toLowerCase();
+  return p === "google" ? "gemini" : p;
+}
+
 const PROVIDER_KEY_ENV: Record<string, string[]> = {
   elevenlabs: ["ELEVENLABS_API_KEY"],
   gemini: ["GOOGLE_AI_STUDIO_KEY", "GEMINI_API_KEY"],
@@ -115,16 +125,19 @@ export async function resolveSttTiers(
     if (!tier.provider || !tier.model) continue;
     // Normalise BEFORE deduping: the same model can be configured namespaced in one tier
     // and bare in another, and both would otherwise survive and be called twice.
-    const model = bareModelId(tier.provider, tier.model);
-    const dedupeKey = `${tier.provider}/${model}`;
+    // Canonicalise the provider AND normalise the model before deduping. Either alone
+    // lets the same model through twice under a different spelling.
+    const provider = canonicalProvider(tier.provider);
+    const model = bareModelId(provider, tier.model);
+    const dedupeKey = `${provider}/${model}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    const apiKey = await resolveProviderKey(admin, tier.provider, cache);
+    const apiKey = await resolveProviderKey(admin, provider, cache);
     if (!apiKey) {
-      console.warn(`[media-understanding] no API key for ${tier.provider}; skipping that tier`);
+      console.warn(`[media-understanding] no API key for ${provider}; skipping that tier`);
       continue;
     }
-    tiers.push({ provider: tier.provider, model, apiKey });
+    tiers.push({ provider, model, apiKey });
   }
   return tiers;
 }

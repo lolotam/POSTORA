@@ -265,3 +265,24 @@ Deno.test("the same model configured bare and namespaced runs once, not twice", 
   assertEquals(gemini.length, 1, "the duplicate must collapse");
   assertEquals(gemini[0].model, "gemini-2.5-flash", "and be stored bare");
 });
+
+Deno.test("google and gemini are one provider, so the same model collapses", async () => {
+  const { resolveSttTiers } = await import("./inboundMediaPipeline.ts");
+  const rows = [
+    { key: "default_ai_model_stt", value: { provider_code: "google", model_id: "gemini-2.5-flash" } },
+    { key: "default_ai_model_stt_fallback", value: { provider_code: "gemini", model_id: "gemini-2.5-flash" } },
+  ];
+  const admin = {
+    from: (t: string) =>
+      t === "system_settings"
+        ? { select: () => ({ in: () => Promise.resolve({ data: rows, error: null }) }) }
+        : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) }) }) },
+  } as any;
+  Deno.env.set("GOOGLE_AI_STUDIO_KEY", "k");
+  const tiers = await resolveSttTiers(admin);
+  // The hardcoded last resort (openai/whisper-1) also resolves when its key is present,
+  // so assert on the gemini entries rather than the total.
+  const gemini = tiers.filter((t) => t.provider === "gemini" || t.provider === "google");
+  assertEquals(gemini.length, 1, "the alias duplicate must collapse");
+  assertEquals(gemini[0].provider, "gemini", "and canonicalise to the catalog code");
+});
