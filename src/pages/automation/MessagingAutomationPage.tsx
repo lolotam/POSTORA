@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useSearchParams, Link } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
@@ -131,7 +130,7 @@ export default function MessagingAutomationPage() {
             innerClassName="p-4 md:p-6 space-y-6"
           >
             <AutomationHandlerCard platform={platform} />
-            <AutoReplyManager platform={platform} />
+            {platform !== "whatsapp" && <AutoReplyManager platform={platform} />}
           </GradientRingCard>
         </Reveal>
       </div>

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -76,6 +76,8 @@ function useThreadsAccountOptions() {
 export default function ThreadsMentions() {
   const { data: accounts = [], isLoading: accountsLoading } = useThreadsAccountOptions();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tab = searchParams.get("tab") === "replies" ? "replies" : "mentions";
 
   useEffect(() => {
     if (!selectedAccountId && accounts.length > 0) {
@@ -213,7 +215,7 @@ export default function ThreadsMentions() {
         {/* Tabs: Mentions | Replies */}
         {!noAccounts && (
           <ThreadsAuthorAvatarProvider accountId={selectedAccountId}>
-          <Tabs value={tab === "replies" ? "replies" : "mentions"} onValueChange={(nextTab) => setSearchParams({ tab: nextTab })} className="w-full">
+          <Tabs value={tab} onValueChange={(nextTab) => setSearchParams({ tab: nextTab })} className="w-full">
             <TabsList className="bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1 h-auto [&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-indigo-500 [&>[data-state=active]]:via-violet-500 [&>[data-state=active]]:to-purple-500 [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md">
               <TabsTrigger value="mentions" className="rounded-lg">
                 <AtSign className="h-4 w-4 mr-1.5" />

@@ -1,9 +1,9 @@
-import { useState } from "react";
-import { useSearchParams, Link } from "react-router-dom";
+import { Navigate, useSearchParams, Link } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
 import { ThreadsRepliesTab } from "@/components/messaging/threads/replies/ThreadsRepliesTab";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Icon3D, GradientHeading, GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
 import { MessageCircle, Sparkles, ArrowRight, MessageSquare } from "lucide-react";
 import { PlatformIcon } from "@/components/PlatformIcon";
@@ -27,6 +27,8 @@ const PLATFORMS: PlatformOption[] = [
 
 export default function CommentManagerPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { flags, isLoading: flagsLoading } = useFeatureFlags();
+
   const platformParam = searchParams.get("platform") as CommentPlatform;
   const platform: CommentPlatform = PLATFORMS.some((p) => p.id === platformParam) ? platformParam : "facebook";
 
@@ -54,6 +56,10 @@ export default function CommentManagerPage() {
       return next;
     }, { replace: true });
   };
+
+  if (!flagsLoading && !flags.commentManager) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   return (
     <DashboardLayout>

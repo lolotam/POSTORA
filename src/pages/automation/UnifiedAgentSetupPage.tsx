@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
-import { AiAgentManager, type AiAgentTab } from "@/components/messaging/AiAgentManager";
+import { AI_AGENT_TABS, AiAgentManager, type AiAgentTab } from "@/components/messaging/AiAgentManager";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
 import { Icon3D, GradientHeading, GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
 import { Bot, MessageSquare, MessageCircle, Sparkles, CheckCircle2 } from "lucide-react";
@@ -37,8 +36,7 @@ export default function UnifiedAgentSetupPage() {
   const surface: AgentSurface = surfaceParam === "comments" && selectedPlatformMeta.supportsComments ? "comments" : "dms";
 
   const tabParam = searchParams.get("tab") as AiAgentTab;
-  const validTabs: AiAgentTab[] = ["settings", "knowledge", "tools", "chat", "logs"];
-  const activeTab: AiAgentTab = validTabs.includes(tabParam) ? tabParam : "settings";
+  const activeTab: AiAgentTab = AI_AGENT_TABS.includes(tabParam) ? tabParam : "settings";
 
   const handlePlatformChange = (nextPlatform: AiAgentPlatform) => {
     const targetMeta = PLATFORMS.find((p) => p.id === nextPlatform);
