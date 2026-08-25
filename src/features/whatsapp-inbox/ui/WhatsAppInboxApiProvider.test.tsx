@@ -9,6 +9,9 @@ const fakeApi: WhatsAppInboxApi = {
   getMedia: vi.fn(),
   sendMedia: vi.fn(),
   sendInteractive: vi.fn(),
+  getConversationState: vi.fn(),
+  setMessageFlag: vi.fn(),
+  revokeMessage: vi.fn(),
 };
 
 function Probe(): JSX.Element {

@@ -1,8 +1,7 @@
 // Maps a whatsapp_messages row to the messaging-api response shape.
 //
 // Additive on purpose: the currently-deployed client ignores unknown fields and
-// still reads attachments[].file_url. Do not map revoked_at / revoked_by here —
-// those columns do not exist until Phase 4, and selecting them would fail at runtime.
+// still reads attachments[].file_url. revoked_at / revoked_by exist as of Phase 4.
 
 export type WhatsAppAttachmentKind = "image" | "video" | "audio" | "document";
 
@@ -20,6 +19,8 @@ export interface WhatsAppMessageRow {
   media_understanding?: string | null;
   direction?: string | null;
   status?: string | null;
+  revoked_at?: string | null;
+  revoked_by?: string | null;
 }
 
 export interface WhatsAppMessageView {
@@ -32,6 +33,8 @@ export interface WhatsAppMessageView {
   direction: string | null;
   status: string | null;
   media_understanding: string | null;
+  revoked_at: string | null;
+  revoked_by: string | null;
   attachments: WhatsAppAttachmentView[];
 }
 
@@ -83,6 +86,8 @@ export function toWhatsAppMessageView(row: WhatsAppMessageRow): WhatsAppMessageV
     direction: row.direction ?? null,
     status: row.status ?? null,
     media_understanding: row.media_understanding ?? null,
+    revoked_at: row.revoked_at ?? null,
+    revoked_by: row.revoked_by ?? null,
     attachments: attachmentsFor(row),
   };
 }

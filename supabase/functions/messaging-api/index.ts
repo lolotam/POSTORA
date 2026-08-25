@@ -22,6 +22,14 @@ import {
 import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 import {
+  getWhatsAppConversationState,
+  setWhatsAppMessageFlag,
+} from "../_shared/whatsappConversationState.ts";
+import {
+  revokeWhatsAppMessage,
+  WhatsAppRevokeError,
+} from "../_shared/whatsappRevoke.ts";
+import {
   COMMENT_AUTOMATION_HANDLERS,
   MESSAGE_AUTOMATION_HANDLERS,
   resolveAutomationHandler,
@@ -1338,6 +1346,73 @@ Deno.serve(async (req) => {
       return jsonResponse({ media });
     }
 
+    // ACTION: whatsapp_get_conversation_state
+    if (action === "whatsapp_get_conversation_state") {
+      const { social_account_id, conversation_id, message_row_ids } = body;
+      if (!social_account_id || !conversation_id || !Array.isArray(message_row_ids)) {
+        throw new Error("social_account_id, conversation_id, and message_row_ids required");
+      }
+
+      const state = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_get_conversation_state",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        getWhatsAppConversationState(adminClient, accountAccess, user.id, {
+          conversationId: conversation_id,
+          messageRowIds: message_row_ids,
+        }));
+
+      return jsonResponse(state);
+    }
+
+    // ACTION: whatsapp_set_message_flag
+    if (action === "whatsapp_set_message_flag") {
+      const { social_account_id, conversation_id, message_row_id, pinned, hidden } = body;
+      if (!social_account_id || !conversation_id || !message_row_id) {
+        throw new Error("social_account_id, conversation_id, and message_row_id required");
+      }
+      if (pinned === undefined && hidden === undefined) {
+        throw new Error("pinned or hidden required");
+      }
+
+      const result = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_set_message_flag",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        setWhatsAppMessageFlag(adminClient, accountAccess, user.id, {
+          conversationId: conversation_id,
+          messageRowId: message_row_id,
+          ...(typeof pinned === "boolean" ? { pinned } : {}),
+          ...(typeof hidden === "boolean" ? { hidden } : {}),
+        }));
+
+      return jsonResponse(result);
+    }
+
+    // ACTION: whatsapp_revoke_message
+    if (action === "whatsapp_revoke_message") {
+      const { social_account_id, message_row_id } = body;
+      if (!social_account_id || !message_row_id) {
+        throw new Error("social_account_id and message_row_id required");
+      }
+
+      const result = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_revoke_message",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        revokeWhatsAppMessage(adminClient, accountAccess, user.id, {
+          messageRowId: message_row_id,
+        }));
+
+      return jsonResponse(result);
+    }
+
     // ACTION: whatsapp_mark_read
     if (action === "whatsapp_mark_read") {
       const { social_account_id, conversation_id } = body;
@@ -1636,6 +1711,10 @@ Deno.serve(async (req) => {
 
     if (err instanceof WhatsAppAccessError) {
       return jsonResponse({ error: err.message }, err.status);
+    }
+
+    if (err instanceof WhatsAppRevokeError) {
+      return gracefulError(err.message, err.error_type);
     }
 
     if (err instanceof MalformedMessageCursorError) {

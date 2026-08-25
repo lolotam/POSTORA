@@ -35,10 +35,23 @@ vi.mock("@/components/whatsapp/WhatsAppWorkspaceProvider", () => ({
 vi.mock("../application/useWhatsAppMessages", () => ({
   useWhatsAppMessages: () => ({
     messages: testState.messages,
+    pinned: [],
     isLoading: false,
     hasOlder: testState.hasOlder,
     isFetchingOlder: false,
     fetchOlder: testState.fetchOlder,
+  }),
+}));
+
+vi.mock("../application/useWhatsAppMessageActions", () => ({
+  HIDDEN_UNDO_MS: 8_000,
+  useWhatsAppMessageActions: () => ({
+    pin: vi.fn(),
+    unpin: vi.fn(),
+    hide: vi.fn(),
+    unhide: vi.fn(),
+    revoke: vi.fn(),
+    isRevoking: false,
   }),
 }));
 
@@ -120,6 +133,11 @@ const fakeApi: WhatsAppInboxApi = {
   getMedia: vi.fn(async () => ({ media: [] })),
   sendMedia: vi.fn(async () => ({})),
   sendInteractive: vi.fn(async () => ({})),
+  getConversationState: vi.fn(async () => ({ flags: [], pinned: [], mutable: [] })),
+  setMessageFlag: vi.fn(async ({ message_row_id }) => ({
+    flag: { message_row_id, pinned_at: null, hidden_at: null },
+  })),
+  revokeMessage: vi.fn(async () => ({ success: true, revoked_at: "2026-08-25T12:00:00.000Z" })),
 };
 
 function testQueryClient(): QueryClient {

@@ -13,6 +13,8 @@ export interface CursorMessage {
   revoked_by?: string | null;
   status?: string | null;
   media_understanding?: string | null;
+  pinned_at?: string | null;
+  hidden_at?: string | null;
 }
 
 const STATUS_RANK: Record<string, number> = {
@@ -43,6 +45,8 @@ export function mergeMessageRecord<T extends CursorMessage>(existing: T, incomin
     revoked_by: incoming.revoked_by ?? existing.revoked_by ?? null,
     media_understanding: incoming.media_understanding ?? existing.media_understanding ?? null,
     status: incomingRank >= existingRank ? incomingStatus : existingStatus,
+    pinned_at: incoming.pinned_at ?? existing.pinned_at ?? null,
+    hidden_at: incoming.hidden_at ?? existing.hidden_at ?? null,
   };
 }
 
@@ -83,5 +87,7 @@ function sameMutableMessage(left: CursorMessage, right: CursorMessage): boolean 
     && left.revoked_at === right.revoked_at
     && left.revoked_by === right.revoked_by
     && left.status === right.status
-    && left.media_understanding === right.media_understanding;
+    && left.media_understanding === right.media_understanding
+    && left.pinned_at === right.pinned_at
+    && left.hidden_at === right.hidden_at;
 }

@@ -1,10 +1,16 @@
 import type {
+  GetConversationStateRequest,
+  GetConversationStateResponse,
   GetMessagesPageRequest,
   GetMessagesPageResponse,
   GetWhatsAppMediaRequest,
   GetWhatsAppMediaResponse,
+  RevokeMessageRequest,
+  RevokeMessageResponse,
   SendWhatsAppInteractiveRequest,
   SendWhatsAppMediaRequest,
+  SetMessageFlagRequest,
+  SetMessageFlagResponse,
   WhatsAppInboxApi,
   WhatsAppMessage,
 } from "../application/ports";
@@ -42,6 +48,22 @@ export function createWhatsAppInboxApi(): WhatsAppInboxApi {
     },
     sendInteractive(input: SendWhatsAppInteractiveRequest): Promise<unknown> {
       return callMessagingApi("whatsapp_send_interactive", { ...input });
+    },
+    getConversationState(input: GetConversationStateRequest): Promise<GetConversationStateResponse> {
+      return callMessagingApi<GetConversationStateResponse>("whatsapp_get_conversation_state", { ...input });
+    },
+    setMessageFlag(input: SetMessageFlagRequest): Promise<SetMessageFlagResponse> {
+      const body: Record<string, unknown> = {
+        social_account_id: input.social_account_id,
+        conversation_id: input.conversation_id,
+        message_row_id: input.message_row_id,
+      };
+      if (input.pinned !== undefined) body.pinned = input.pinned;
+      if (input.hidden !== undefined) body.hidden = input.hidden;
+      return callMessagingApi<SetMessageFlagResponse>("whatsapp_set_message_flag", body);
+    },
+    revokeMessage(input: RevokeMessageRequest): Promise<RevokeMessageResponse> {
+      return callMessagingApi<RevokeMessageResponse>("whatsapp_revoke_message", { ...input });
     },
   };
 }

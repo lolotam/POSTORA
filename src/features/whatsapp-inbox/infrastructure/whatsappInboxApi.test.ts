@@ -85,4 +85,40 @@ describe("createWhatsAppInboxApi", () => {
       interactive: { type: "button" },
     });
   });
+
+  it("sends conversation state, flag, and revoke through the shared caller", async () => {
+    const api = createWhatsAppInboxApi();
+    callMessagingApi.mockResolvedValue({ flags: [], pinned: [], mutable: [] });
+    await api.getConversationState({
+      social_account_id: "acct",
+      conversation_id: "conv",
+      message_row_ids: ["row-1"],
+    });
+    expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_get_conversation_state", {
+      social_account_id: "acct",
+      conversation_id: "conv",
+      message_row_ids: ["row-1"],
+    });
+
+    callMessagingApi.mockResolvedValue({ flag: { message_row_id: "row-1", pinned_at: "t", hidden_at: null } });
+    await api.setMessageFlag({
+      social_account_id: "acct",
+      conversation_id: "conv",
+      message_row_id: "row-1",
+      pinned: true,
+    });
+    expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_set_message_flag", {
+      social_account_id: "acct",
+      conversation_id: "conv",
+      message_row_id: "row-1",
+      pinned: true,
+    });
+
+    callMessagingApi.mockResolvedValue({ success: true, revoked_at: "t" });
+    await api.revokeMessage({ social_account_id: "acct", message_row_id: "row-1" });
+    expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_revoke_message", {
+      social_account_id: "acct",
+      message_row_id: "row-1",
+    });
+  });
 });

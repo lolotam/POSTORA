@@ -100,6 +100,11 @@ class FakeMessageServer {
       getMedia: async () => ({ media: [] }),
       sendMedia: async () => ({}),
       sendInteractive: async () => ({}),
+      getConversationState: async () => ({ flags: [], pinned: [], mutable: [] }),
+      setMessageFlag: async ({ message_row_id }) => ({
+        flag: { message_row_id, pinned_at: null, hidden_at: null },
+      }),
+      revokeMessage: async () => ({ success: true, revoked_at: "2026-08-25T12:00:00.000Z" }),
     };
   }
 
@@ -206,6 +211,21 @@ describe("useWhatsAppMessages", () => {
       getMedia: async () => ({ media: [] }),
       sendMedia: async () => ({}),
       sendInteractive: async () => ({}),
+      getConversationState: async () => ({
+        flags: [],
+        pinned: [],
+        mutable: [waMessage("x", stamp(100), { revoked_at: "2026-08-25T10:00:00Z" })].map((row) => ({
+          message_row_id: row.id,
+          revoked_at: row.revoked_at ?? null,
+          revoked_by: row.revoked_by ?? null,
+          status: row.status ?? null,
+          media_understanding: row.media_understanding ?? null,
+        })),
+      }),
+      setMessageFlag: async ({ message_row_id }) => ({
+        flag: { message_row_id, pinned_at: null, hidden_at: null },
+      }),
+      revokeMessage: async () => ({ success: true }),
     };
     const { result } = renderMessages(api, "acct", "conv");
     await waitFor(() => expect(result.current.messages.find((row) => row.id === "x")?.revoked_at).toBeTruthy());
@@ -256,5 +276,38 @@ describe("useWhatsAppMessages", () => {
     await waitFor(() => expect(result.current.messages.length).toBeGreaterThan(100));
     const ids = result.current.messages.map((row) => row.id);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("lets the conversation-state overlay win for the fields it carries", async () => {
+    const api: WhatsAppInboxApi = {
+      getMessagesPage: async () => ({
+        messages: [waMessage("x", stamp(1), { status: "sent", revoked_at: null, message: "hello" })],
+      }),
+      getMedia: async () => ({ media: [] }),
+      sendMedia: async () => ({}),
+      sendInteractive: async () => ({}),
+      getConversationState: async () => ({
+        flags: [{ message_row_id: "x", pinned_at: "2026-08-25T12:01:00.000Z", hidden_at: null }],
+        pinned: [{ message_row_id: "x", preview: "hello", timestamp: stamp(1) }],
+        mutable: [{
+          message_row_id: "x",
+          revoked_at: "2026-08-25T13:00:00.000Z",
+          revoked_by: "teammate",
+          status: "delivered",
+          media_understanding: "a cat",
+        }],
+      }),
+      setMessageFlag: async ({ message_row_id }) => ({
+        flag: { message_row_id, pinned_at: null, hidden_at: null },
+      }),
+      revokeMessage: async () => ({ success: true }),
+    };
+    const { result } = renderMessages(api, "acct", "conv");
+    await waitFor(() => expect(result.current.messages[0]?.revoked_at).toBe("2026-08-25T13:00:00.000Z"));
+    expect(result.current.messages[0]?.message).toBe("hello");
+    expect(result.current.messages[0]?.status).toBe("delivered");
+    expect(result.current.messages[0]?.media_understanding).toBe("a cat");
+    expect(result.current.messages[0]?.pinned_at).toBe("2026-08-25T12:01:00.000Z");
+    expect(result.current.pinned).toHaveLength(1);
   });
 });

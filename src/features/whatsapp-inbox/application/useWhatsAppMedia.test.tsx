@@ -67,6 +67,9 @@ describe("useWhatsAppMedia", () => {
       getMedia,
       sendMedia: vi.fn(),
       sendInteractive: vi.fn(),
+      getConversationState: vi.fn(),
+      setMessageFlag: vi.fn(),
+      revokeMessage: vi.fn(),
     };
   });
 

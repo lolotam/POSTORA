@@ -1,12 +1,15 @@
-import { useEffect, useLayoutEffect, useRef, useState, type UIEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import { ArrowLeft, Loader2, MessageCircle } from "lucide-react";
 import { AiConversationModeSelect } from "@/components/messaging/AiConversationModeSelect";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
 import { useMarkConversationRead, type Conversation } from "@/hooks/useMessaging";
+import { HIDDEN_UNDO_MS, useWhatsAppMessageActions } from "../application/useWhatsAppMessageActions";
 import { useWhatsAppMessages } from "../application/useWhatsAppMessages";
+import type { WhatsAppConnectionMode } from "../domain/whatsappCapabilities";
 import { anchorOffsetAfterPrepend, shouldStickToBottom } from "../domain/scrollAnchor";
+import { PinnedMessagesBar } from "./PinnedMessagesBar";
 import { WhatsAppComposer } from "./WhatsAppComposer";
 import { WhatsAppMessageBubble } from "./WhatsAppMessageBubble";
 
@@ -14,6 +17,7 @@ interface WhatsAppConversationPaneProps {
   conversation: Conversation | null;
   socialAccountId: string;
   pageId: string;
+  connectionMode?: WhatsAppConnectionMode;
   onScrollStateChange(scrolledAway: boolean): void;
   onBack?: () => void;
 }
@@ -22,6 +26,7 @@ export function WhatsAppConversationPane({
   conversation,
   socialAccountId,
   pageId,
+  connectionMode = null,
   onScrollStateChange,
   onBack,
 }: WhatsAppConversationPaneProps): JSX.Element {
@@ -36,10 +41,17 @@ export function WhatsAppConversationPane({
   const initialScrolledRef = useRef(false);
   const [newMessageCount, setNewMessageCount] = useState(0);
 
-  const { messages, isLoading, hasOlder, isFetchingOlder, fetchOlder } = useWhatsAppMessages(
+  const { messages, pinned, isLoading, hasOlder, isFetchingOlder, fetchOlder } = useWhatsAppMessages(
     socialAccountId,
     conversation?.id ?? null,
   );
+  const actions = useWhatsAppMessageActions(socialAccountId, conversation?.id ?? null);
+  const visibleMessages = useMemo(
+    () => messages.filter((message) => !message.hidden_at),
+    [messages],
+  );
+  const [hiddenUndo, setHiddenUndo] = useState<{ id: string; wasPinned: boolean } | null>(null);
+  const undoTimerRef = useRef<number | null>(null);
   const markRead = useMarkConversationRead();
   const { activeRole } = useWhatsAppWorkspaceContext();
   const conversationId = conversation?.id;
@@ -60,6 +72,7 @@ export function WhatsAppConversationPane({
 
   useEffect(() => () => {
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+    if (undoTimerRef.current !== null) window.clearTimeout(undoTimerRef.current);
   }, []);
 
   useLayoutEffect(() => {
@@ -72,11 +85,12 @@ export function WhatsAppConversationPane({
       stickToBottomRef.current = true;
       prependSnapshotRef.current = null;
       setNewMessageCount(0);
+      setHiddenUndo(null);
     }
-    if (!el || !conversation || messages.length === 0) return;
+    if (!el || !conversation || visibleMessages.length === 0) return;
 
     const prevIds = prevIdsRef.current;
-    const nextIds = messages.map((message) => message.id);
+    const nextIds = visibleMessages.map((message) => message.id);
 
     if (!initialScrolledRef.current) {
       el.scrollTop = el.scrollHeight;
@@ -107,7 +121,7 @@ export function WhatsAppConversationPane({
     }
 
     prevIdsRef.current = nextIds;
-  }, [conversation, messages, socialAccountId]);
+  }, [conversation, socialAccountId, visibleMessages]);
 
   useEffect(() => {
     const root = scrollRef.current;
@@ -143,6 +157,35 @@ export function WhatsAppConversationPane({
     el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     setNewMessageCount(0);
     stickToBottomRef.current = true;
+  };
+
+  const scheduleUndo = (id: string, wasPinned: boolean) => {
+    setHiddenUndo({ id, wasPinned });
+    if (undoTimerRef.current !== null) window.clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = window.setTimeout(() => {
+      undoTimerRef.current = null;
+      setHiddenUndo(null);
+    }, HIDDEN_UNDO_MS);
+  };
+
+  const hideMessage = (message: (typeof messages)[number]) => {
+    actions.hide(message);
+    scheduleUndo(message.id, Boolean(message.pinned_at));
+  };
+
+  const undoHide = () => {
+    if (!hiddenUndo) return;
+    actions.unhide(hiddenUndo.id, hiddenUndo.wasPinned);
+    setHiddenUndo(null);
+    if (undoTimerRef.current !== null) {
+      window.clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = null;
+    }
+  };
+
+  const scrollToMessage = (messageRowId: string) => {
+    const node = scrollRef.current?.querySelector(`[data-message-id="${messageRowId}"]`);
+    node?.scrollIntoView({ block: "center" });
   };
 
   if (!conversation) {
@@ -195,6 +238,12 @@ export function WhatsAppConversationPane({
         </div>
       </div>
 
+      <PinnedMessagesBar
+        pinned={pinned}
+        loadedIds={new Set(visibleMessages.map((message) => message.id))}
+        onScrollTo={scrollToMessage}
+      />
+
       <div
         ref={scrollRef}
         data-testid="wa-message-pane"
@@ -206,17 +255,33 @@ export function WhatsAppConversationPane({
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        ) : messages.length === 0 ? (
+        ) : visibleMessages.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No messages in this conversation</p>
         ) : (
-          messages.map((message) => (
+          visibleMessages.map((message) => (
             <WhatsAppMessageBubble
               key={message.id}
               message={message}
               isSent={message.from?.id === pageId}
+              connectionMode={connectionMode}
+              onPin={() => actions.pin(message)}
+              onUnpin={() => actions.unpin(message)}
+              onHide={() => hideMessage(message)}
+              onRevoke={() => actions.revoke(message)}
             />
           ))
         )}
+        {hiddenUndo ? (
+          <div
+            data-testid="wa-hidden-undo"
+            className="sticky bottom-4 z-10 flex items-center justify-center gap-2 rounded-full bg-foreground px-3 py-1.5 text-xs text-background shadow-md"
+          >
+            1 message hidden —
+            <button type="button" className="font-semibold underline" onClick={undoHide}>
+              Undo
+            </button>
+          </div>
+        ) : null}
         {newMessageCount > 0 && (
           <Button
             type="button"

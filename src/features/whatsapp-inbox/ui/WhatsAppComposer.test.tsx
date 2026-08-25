@@ -61,7 +61,15 @@ describe("WhatsAppComposer outbound upload", () => {
 
   beforeEach(() => {
     sendMedia = vi.fn(async () => ({}));
-    api = { getMessagesPage: vi.fn(), getMedia: vi.fn(), sendMedia, sendInteractive: vi.fn() };
+    api = {
+      getMessagesPage: vi.fn(),
+      getMedia: vi.fn(),
+      sendMedia,
+      sendInteractive: vi.fn(),
+      getConversationState: vi.fn(),
+      setMessageFlag: vi.fn(),
+      revokeMessage: vi.fn(),
+    };
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     vi.spyOn(queryClient, "invalidateQueries");
     getUser.mockResolvedValue({ data: { user: { id: "user-uuid" } } });

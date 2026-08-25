@@ -165,6 +165,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
                         conversation={selectedConversation}
                         socialAccountId={selectedAccountId}
                         pageId={pageId}
+                        connectionMode={selectedAccount?.connection_mode ?? null}
                         onScrollStateChange={setCompact}
                         onBack={() => selectConversation(null)}
                       />

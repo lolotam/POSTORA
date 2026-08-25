@@ -29,6 +29,16 @@ export interface WhatsAppTransport {
   markRead(messageId: string): Promise<void>;
 }
 
+export interface SupportsMessageRevoke {
+  revokeMessage(key: { id: string; remoteJid: string; fromMe: boolean }): Promise<void>;
+}
+
+export function supportsMessageRevoke(
+  transport: WhatsAppTransport,
+): transport is WhatsAppTransport & SupportsMessageRevoke {
+  return typeof (transport as WhatsAppTransport & Partial<SupportsMessageRevoke>).revokeMessage === "function";
+}
+
 function accountToken(account: WhatsAppTransportAccount): string {
   const token = account.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN");
   if (!token) throw new Error("No WhatsApp access token available for this account");
@@ -77,7 +87,7 @@ export class CloudApiTransport implements WhatsAppTransport {
 
 }
 
-export class EvolutionTransport implements WhatsAppTransport {
+export class EvolutionTransport implements WhatsAppTransport, SupportsMessageRevoke {
   constructor(private readonly api: EvolutionApi, private readonly instanceName: string) {}
 
   sendText(input: WhatsAppSendTextInput): Promise<EvolutionSendResult> {
@@ -92,6 +102,10 @@ export class EvolutionTransport implements WhatsAppTransport {
       caption: input.caption,
       fileName: input.fileName,
     });
+  }
+
+  async revokeMessage(key: { id: string; remoteJid: string; fromMe: boolean }): Promise<void> {
+    await this.api.deleteMessageForEveryone(this.instanceName, key);
   }
 
   async markRead(_messageId: string): Promise<void> {}

@@ -111,12 +111,12 @@ Deno.test("the legacy envelope fields stay in place", () => {
   assertEquals(view.created_time, "2026-08-25T12:00:00.000Z");
 });
 
-Deno.test("revoked_at and revoked_by are not mapped yet — Phase 4 wires them to the UI", () => {
+Deno.test("revoked_at and revoked_by are mapped once the columns exist", () => {
   const view = toWhatsAppMessageView({
     ...row(),
     revoked_at: "2026-08-25T12:00:00.000Z",
     revoked_by: "user-1",
-  } as any);
-  assertEquals("revoked_at" in view, false);
-  assertEquals("revoked_by" in view, false);
+  });
+  assertEquals(view.revoked_at, "2026-08-25T12:00:00.000Z");
+  assertEquals(view.revoked_by, "user-1");
 });

@@ -65,6 +65,8 @@ export interface WhatsAppMessage {
   status?: string | null;
   revoked_at?: string | null;
   revoked_by?: string | null;
+  pinned_at?: string | null;
+  hidden_at?: string | null;
   conversation_id?: string;
 }
 
@@ -83,11 +85,70 @@ export interface GetMessagesPageResponse {
   };
 }
 
+export interface WhatsAppMessageFlag {
+  message_row_id: string;
+  pinned_at: string | null;
+  hidden_at: string | null;
+}
+
+export interface WhatsAppPinnedMessage {
+  message_row_id: string;
+  preview: string;
+  timestamp: string | null;
+}
+
+export interface WhatsAppMutableOverlay {
+  message_row_id: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  status: string | null;
+  media_understanding: string | null;
+}
+
+export interface GetConversationStateRequest {
+  social_account_id: string;
+  conversation_id: string;
+  message_row_ids: string[];
+}
+
+export interface GetConversationStateResponse {
+  flags: WhatsAppMessageFlag[];
+  pinned: WhatsAppPinnedMessage[];
+  mutable: WhatsAppMutableOverlay[];
+}
+
+export interface SetMessageFlagRequest {
+  social_account_id: string;
+  conversation_id: string;
+  message_row_id: string;
+  pinned?: boolean;
+  hidden?: boolean;
+}
+
+export interface SetMessageFlagResponse {
+  flag: WhatsAppMessageFlag;
+}
+
+export interface RevokeMessageRequest {
+  social_account_id: string;
+  message_row_id: string;
+}
+
+export interface RevokeMessageResponse {
+  success: boolean;
+  revoked_at?: string;
+  error_type?: string;
+  error?: string;
+}
+
 export interface WhatsAppInboxApi {
   getMessagesPage(input: GetMessagesPageRequest): Promise<GetMessagesPageResponse>;
   getMedia(input: GetWhatsAppMediaRequest): Promise<GetWhatsAppMediaResponse>;
   sendMedia(input: SendWhatsAppMediaRequest): Promise<unknown>;
   sendInteractive(input: SendWhatsAppInteractiveRequest): Promise<unknown>;
+  getConversationState(input: GetConversationStateRequest): Promise<GetConversationStateResponse>;
+  setMessageFlag(input: SetMessageFlagRequest): Promise<SetMessageFlagResponse>;
+  revokeMessage(input: RevokeMessageRequest): Promise<RevokeMessageResponse>;
 }
 
 export const WhatsAppInboxApiContext = createContext<WhatsAppInboxApi | null>(null);

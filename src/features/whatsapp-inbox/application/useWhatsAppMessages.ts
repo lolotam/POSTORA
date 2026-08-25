@@ -6,10 +6,27 @@ import {
   oldestMessageCursor,
   type MessageCursor,
 } from "../domain/messageCursor";
-import { useWhatsAppInboxApi, type WhatsAppMessage } from "./ports";
+import {
+  useWhatsAppInboxApi,
+  type GetConversationStateResponse,
+  type WhatsAppMessage,
+  type WhatsAppPinnedMessage,
+} from "./ports";
 
 export const WA_LATEST_REFETCH_MS = 15_000;
 export const WA_HISTORY_PAGE_SIZE = 40;
+
+export function waLatestQueryKey(socialAccountId: string, conversationId: string | null) {
+  return ["wa-latest", socialAccountId, conversationId] as const;
+}
+
+export function waHistoryQueryKey(socialAccountId: string, conversationId: string | null) {
+  return ["wa-history", socialAccountId, conversationId] as const;
+}
+
+export function waConversationStateQueryKey(socialAccountId: string, conversationId: string | null) {
+  return ["wa-conversation-state", socialAccountId, conversationId] as const;
+}
 
 function tagConversation(messages: WhatsAppMessage[], conversationId: string): WhatsAppMessage[] {
   return messages.map((message) => (
@@ -17,8 +34,47 @@ function tagConversation(messages: WhatsAppMessage[], conversationId: string): W
   ));
 }
 
+function applyConversationState(
+  store: Map<string, WhatsAppMessage>,
+  state: GetConversationStateResponse,
+): boolean {
+  let changed = false;
+  const flagsById = new Map(state.flags.map((flag) => [flag.message_row_id, flag]));
+  const mutableById = new Map(state.mutable.map((row) => [row.message_row_id, row]));
+  for (const [id, message] of store) {
+    const mutable = mutableById.get(id);
+    const flag = flagsById.get(id);
+    const next: WhatsAppMessage = {
+      ...message,
+      ...(mutable
+        ? {
+          revoked_at: mutable.revoked_at,
+          revoked_by: mutable.revoked_by,
+          status: mutable.status,
+          media_understanding: mutable.media_understanding,
+        }
+        : {}),
+      pinned_at: flag?.pinned_at ?? null,
+      hidden_at: flag?.hidden_at ?? null,
+    };
+    if (
+      next.revoked_at !== message.revoked_at
+      || next.revoked_by !== message.revoked_by
+      || next.status !== message.status
+      || next.media_understanding !== message.media_understanding
+      || next.pinned_at !== message.pinned_at
+      || next.hidden_at !== message.hidden_at
+    ) {
+      store.set(id, next);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 export function useWhatsAppMessages(socialAccountId: string, conversationId: string | null): {
   messages: WhatsAppMessage[];
+  pinned: WhatsAppPinnedMessage[];
   isLoading: boolean;
   hasOlder: boolean;
   isFetchingOlder: boolean;
@@ -39,7 +95,7 @@ export function useWhatsAppMessages(socialAccountId: string, conversationId: str
   }
 
   const latestQuery = useQuery({
-    queryKey: ["wa-latest", socialAccountId, conversationId],
+    queryKey: waLatestQueryKey(socialAccountId, conversationId),
     queryFn: () => api.getMessagesPage({
       social_account_id: socialAccountId,
       conversation_id: conversationId as string,
@@ -48,8 +104,19 @@ export function useWhatsAppMessages(socialAccountId: string, conversationId: str
     refetchInterval: WA_LATEST_REFETCH_MS,
   });
 
+  const stateQuery = useQuery({
+    queryKey: waConversationStateQueryKey(socialAccountId, conversationId),
+    queryFn: () => api.getConversationState({
+      social_account_id: socialAccountId,
+      conversation_id: conversationId as string,
+      message_row_ids: [...storeRef.current.keys()],
+    }),
+    enabled: Boolean(socialAccountId && conversationId),
+    refetchInterval: WA_LATEST_REFETCH_MS,
+  });
+
   const historyQuery = useInfiniteQuery({
-    queryKey: ["wa-history", socialAccountId, conversationId],
+    queryKey: waHistoryQueryKey(socialAccountId, conversationId),
     queryFn: async ({ pageParam }: { pageParam: MessageCursor | undefined }) => {
       const before = pageParam ?? oldestMessageCursor([...storeRef.current.values()]);
       if (!before || !conversationId) {
@@ -88,9 +155,12 @@ export function useWhatsAppMessages(socialAccountId: string, conversationId: str
         tagConversation(page.messages ?? [], conversationId),
       ) || changed;
     }
+    if (stateQuery.data) {
+      changed = applyConversationState(storeRef.current, stateQuery.data) || changed;
+    }
     if (!changed && messages.length === storeRef.current.size) return;
     setMessages(sortMessagesForDisplay([...storeRef.current.values()], "whatsapp"));
-  }, [conversationId, historyQuery.data, latestQuery.data, messages.length, selectionKey]);
+  }, [conversationId, historyQuery.data, latestQuery.data, messages.length, selectionKey, stateQuery.data]);
 
   const historyFetched = (historyQuery.data?.pages.length ?? 0) > 0;
   const hasOlder = Boolean(conversationId) && (
@@ -113,5 +183,12 @@ export function useWhatsAppMessages(socialAccountId: string, conversationId: str
     void fetchNextPage();
   }, [fetchNextPage, hasOlder, isFetchingOlder, loadOlder]);
 
-  return { messages, isLoading, hasOlder, isFetchingOlder, fetchOlder };
+  return {
+    messages,
+    pinned: stateQuery.data?.pinned ?? [],
+    isLoading,
+    hasOlder,
+    isFetchingOlder,
+    fetchOlder,
+  };
 }

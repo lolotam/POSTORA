@@ -2,36 +2,30 @@ import { format } from "date-fns";
 import { Contact, MapPin } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
-import type { Message } from "@/hooks/useMessaging";
-import type { WhatsAppAttachment } from "../application/ports";
+import type { WhatsAppAttachment, WhatsAppMessage } from "../application/ports";
+import type { WhatsAppConnectionMode } from "../domain/whatsappCapabilities";
 import { WhatsAppMediaAttachment } from "./WhatsAppMediaAttachment";
+import { WhatsAppMessageContextMenu } from "./WhatsAppMessageContextMenu";
 
-export type WhatsAppMessage = Message & {
-  media_understanding?: string | null;
-};
+export type { WhatsAppMessage };
 
 interface WhatsAppMessageBubbleProps {
   message: WhatsAppMessage;
   isSent: boolean;
+  connectionMode?: WhatsAppConnectionMode;
+  onPin?(): void;
+  onUnpin?(): void;
+  onHide?(): void;
+  onRevoke?(): void;
 }
 
-function isInboxAttachment(value: Message["attachments"][number]): value is Message["attachments"][number] & WhatsAppAttachment {
+function isInboxAttachment(value: WhatsAppMessage["attachments"][number]): value is WhatsAppAttachment {
   const candidate = value as WhatsAppAttachment;
   return typeof candidate.kind === "string" && typeof candidate.message_row_id === "string";
 }
 
 function inboxAttachments(message: WhatsAppMessage): WhatsAppAttachment[] {
-  return (message.attachments ?? []).filter(isInboxAttachment).map((attachment) => ({
-    kind: attachment.kind,
-    message_row_id: attachment.message_row_id,
-    mime_type: attachment.mime_type ?? null,
-    name: attachment.name ?? null,
-    needs_fetch: attachment.needs_fetch ?? true,
-    file_url: attachment.file_url ?? null,
-    duration_seconds: "duration_seconds" in attachment
-      ? (attachment as WhatsAppAttachment).duration_seconds
-      : undefined,
-  }));
+  return (message.attachments ?? []).filter(isInboxAttachment);
 }
 
 function InlineMediaFromText({ text }: { text: string }) {
@@ -57,7 +51,15 @@ function InlineMediaFromText({ text }: { text: string }) {
   return null;
 }
 
-export function WhatsAppMessageBubble({ message, isSent }: WhatsAppMessageBubbleProps): JSX.Element {
+export function WhatsAppMessageBubble({
+  message,
+  isSent,
+  connectionMode = null,
+  onPin,
+  onUnpin,
+  onHide,
+  onRevoke,
+}: WhatsAppMessageBubbleProps): JSX.Element {
   const hasSpecialInline = message.message && (
     message.message.startsWith("[Location]")
     || message.message.startsWith("[Contact]")
@@ -65,9 +67,10 @@ export function WhatsAppMessageBubble({ message, isSent }: WhatsAppMessageBubble
   );
   const attachments = inboxAttachments(message);
   const understanding = message.media_understanding?.trim();
+  const revoked = Boolean(message.revoked_at);
 
-  return (
-    <div className={cn("group flex max-w-[75%] flex-col", isSent ? "ml-auto items-end" : "items-start")}>
+  const body = (
+    <div className={cn("flex max-w-[75%] flex-col", isSent ? "ml-auto items-end" : "items-start")}>
       <span className="mb-1 text-xs text-muted-foreground">{message.from?.name}</span>
       <div
         className={cn(
@@ -77,12 +80,14 @@ export function WhatsAppMessageBubble({ message, isSent }: WhatsAppMessageBubble
             : "rounded-bl-sm bg-muted text-foreground",
         )}
       >
-        {hasSpecialInline ? (
+        {revoked ? (
+          <p className="italic opacity-80">This message was deleted</p>
+        ) : hasSpecialInline ? (
           <InlineMediaFromText text={message.message} />
         ) : message.message ? (
           <p className="whitespace-pre-wrap">{message.message}</p>
         ) : null}
-        {attachments.map((attachment) => (
+        {revoked ? null : attachments.map((attachment) => (
           <WhatsAppMediaAttachment
             key={attachment.message_row_id}
             attachment={attachment}
@@ -90,7 +95,7 @@ export function WhatsAppMessageBubble({ message, isSent }: WhatsAppMessageBubble
           />
         ))}
       </div>
-      {understanding ? (
+      {!revoked && understanding ? (
         <Collapsible className="mt-1 max-w-full">
           <CollapsibleTrigger
             className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
@@ -106,5 +111,29 @@ export function WhatsAppMessageBubble({ message, isSent }: WhatsAppMessageBubble
         {format(new Date(message.created_time), "MMM d, h:mm a")}
       </span>
     </div>
+  );
+
+  if (revoked) {
+    return (
+      <div data-testid="wa-bubble" data-message-id={message.id}>
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <WhatsAppMessageContextMenu
+      message={message}
+      connectionMode={connectionMode}
+      onCopy={() => {
+        void navigator.clipboard.writeText(message.message ?? "");
+      }}
+      onPin={() => onPin?.()}
+      onUnpin={() => onUnpin?.()}
+      onHide={() => onHide?.()}
+      onRevoke={() => onRevoke?.()}
+    >
+      {body}
+    </WhatsAppMessageContextMenu>
   );
 }

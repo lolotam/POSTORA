@@ -89,7 +89,15 @@ describe("WhatsAppMediaAttachment", () => {
   beforeEach(() => {
     stubIntersectionObserver();
     getMedia = vi.fn();
-    api = { getMessagesPage: vi.fn(), getMedia, sendMedia: vi.fn(), sendInteractive: vi.fn() };
+    api = {
+      getMessagesPage: vi.fn(),
+      getMedia,
+      sendMedia: vi.fn(),
+      sendInteractive: vi.fn(),
+      getConversationState: vi.fn(),
+      setMessageFlag: vi.fn(),
+      revokeMessage: vi.fn(),
+    };
   });
 
   it("does not fetch until the bubble enters the viewport", () => {
