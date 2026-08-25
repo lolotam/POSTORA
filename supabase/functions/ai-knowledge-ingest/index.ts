@@ -283,6 +283,7 @@ async function cloudinarySignature(value: string): Promise<string> {
 }
 
 async function uploadGraphExport(
+  admin: AdminClient,
   contents: Uint8Array | string,
   fileName: string,
   contentType: string,
@@ -318,40 +319,59 @@ async function uploadGraphExport(
         return openinaryDeliveryUrl(openinaryConfig, stored);
       }
       // Openinary enforces a media MIME allow-list, so text/html and application/zip may be
-      // rejected outright. Log it — a silent fallback makes a permanently dead branch look healthy.
+      // rejected outright. Log it.
       console.warn(
-        `[uploadGraphExport] Openinary did not store ${fileName} (HTTP ${res.status}): ${payload?.error ?? stored ?? "no stored path"} — falling back to Cloudinary`,
+        `[uploadGraphExport] Openinary did not store ${fileName} (HTTP ${res.status}): ${payload?.error ?? stored ?? "no stored path"} — trying self-hosted Supabase storage`,
       );
     } catch (err) {
-      console.warn("[uploadGraphExport] Openinary upload failed, trying Cloudinary fallback:", err);
+      console.warn("[uploadGraphExport] Openinary upload failed, trying self-hosted Supabase storage:", err);
     }
+  }
+
+  // Self-hosted Supabase Storage (primary fallback for raw/zip/html files)
+  try {
+    const storagePath = `${folder}/${fileName}`;
+    const { error: storageError } = await (admin as any).storage
+      .from(BUCKET)
+      .upload(storagePath, body, {
+        contentType,
+        upsert: true,
+      });
+    if (!storageError) {
+      const { data: urlData } = (admin as any).storage.from(BUCKET).getPublicUrl(storagePath);
+      if (urlData?.publicUrl) return urlData.publicUrl;
+    } else {
+      console.warn(`[uploadGraphExport] Supabase storage upload error for ${storagePath}:`, storageError);
+    }
+  } catch (err) {
+    console.warn("[uploadGraphExport] Supabase storage upload failed, trying Cloudinary fallback:", err);
   }
 
   const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
   const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
   const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
-  if (!cloudName || !apiKey || !apiSecret) {
-    throw new Error("Storage provider not configured (Openinary or Cloudinary required)");
+  if (cloudName && apiKey && apiSecret) {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = await cloudinarySignature(
+      `folder=${folder}&overwrite=true&public_id=${fileName}&timestamp=${timestamp}${apiSecret}`,
+    );
+    const form = new FormData();
+    form.append("file", new Blob([body], { type: contentType }), fileName);
+    form.append("api_key", apiKey);
+    form.append("timestamp", String(timestamp));
+    form.append("signature", signature);
+    form.append("folder", folder);
+    form.append("public_id", fileName);
+    form.append("overwrite", "true");
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`, {
+      method: "POST",
+      body: form,
+    });
+    const payload = await response.json();
+    if (response.ok && payload.secure_url) return payload.secure_url;
   }
-  const timestamp = Math.floor(Date.now() / 1000);
-  const signature = await cloudinarySignature(
-    `folder=${folder}&overwrite=true&public_id=${fileName}&timestamp=${timestamp}${apiSecret}`,
-  );
-  const form = new FormData();
-  form.append("file", new Blob([body], { type: contentType }), fileName);
-  form.append("api_key", apiKey);
-  form.append("timestamp", String(timestamp));
-  form.append("signature", signature);
-  form.append("folder", folder);
-  form.append("public_id", fileName);
-  form.append("overwrite", "true");
-  const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/raw/upload`, {
-    method: "POST",
-    body: form,
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload?.error?.message || "Graph export upload failed");
-  return payload.secure_url;
+
+  throw new Error("Storage provider not configured (Openinary, Supabase Storage, or Cloudinary required)");
 }
 
 async function createGraphExports(admin: AdminClient, userId: string, userEmail: string) {
@@ -368,8 +388,9 @@ async function createGraphExports(admin: AdminClient, userId: string, userEmail:
   const zip = new JSZip();
   for (const [name, note] of buildObsidianNotes(graphEntities, graphRelations)) zip.file(name, note);
   const [htmlUrl, vaultUrl] = await Promise.all([
-    uploadGraphExport(buildGraphHtml(graphEntities, graphRelations), "graph.html", "text/html", userEmail),
+    uploadGraphExport(admin, buildGraphHtml(graphEntities, graphRelations), "graph.html", "text/html", userEmail),
     uploadGraphExport(
+      admin,
       await zip.generateAsync({ type: "uint8array" }),
       "obsidian-vault.zip",
       "application/zip",
