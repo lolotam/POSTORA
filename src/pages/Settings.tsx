@@ -14,7 +14,6 @@ import {
   TimezoneSection,
   NotificationsSection,
   SubscriptionSection,
-  IntegrationsSection,
 } from "@/components/settings";
 
 import {
@@ -173,7 +172,6 @@ export default function Settings() {
           {/* Unified Integrations & Connectors Tab */}
           <TabsContent value="integrations" className="mt-6 space-y-8">
             <DatabaseConnectorsManager />
-            <IntegrationsSection />
           </TabsContent>
 
           {/* Appearance Tab */}

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Database,
   Globe,
@@ -551,6 +552,68 @@ export function DatabaseConnectorsManager() {
     }
   };
 
+  const queryClient = useQueryClient();
+
+  // Inbound OAuth Authorized Applications query (e.g. n8n, Zapier, Make)
+  const { data: oauthClients = [] } = useQuery({
+    queryKey: ["oauth-authorized-clients"],
+    queryFn: async () => {
+      try {
+        const { data: sessionData } = await supabase.auth.getSession();
+        const accessToken = sessionData?.session?.access_token;
+        if (!accessToken) return [];
+
+        const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+        const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+        const res = await fetch(`${SUPABASE_URL}/auth/v1/oauth/authorized-clients`, {
+          headers: {
+            apikey: SUPABASE_ANON_KEY,
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+
+        if (!res.ok) return [];
+        return (await res.json()) as Array<{
+          id: string;
+          name: string;
+          icon?: string;
+          scopes?: string[];
+          created_at?: string;
+          authorized_at?: string;
+        }>;
+      } catch {
+        return [];
+      }
+    },
+  });
+
+  const handleRevokeOAuth = async (clientId: string, clientName: string) => {
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const accessToken = sessionData?.session?.access_token;
+      if (!accessToken) return;
+
+      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+      const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/oauth/authorized-clients/${clientId}`, {
+        method: "DELETE",
+        headers: {
+          apikey: SUPABASE_ANON_KEY,
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (res.ok) {
+        toast.success(`Revoked access for ${clientName}`);
+        queryClient.invalidateQueries({ queryKey: ["oauth-authorized-clients"] });
+      }
+    } catch {
+      toast.error("Failed to revoke OAuth access");
+    }
+  };
+
   const apiKey = profile?.api_key || "YOUR_POSTORA_API_KEY";
 
   // Map configured tools by connector_type
@@ -716,7 +779,7 @@ export function DatabaseConnectorsManager() {
   };
 
   // Connected count
-  const connectedCount = tools.length + (higgsfieldConnected ? 1 : 0);
+  const connectedCount = tools.length + (higgsfieldConnected ? 1 : 0) + (oauthClients?.length || 0);
 
   if (isLoading) {
     return (
@@ -1097,6 +1160,69 @@ export function DatabaseConnectorsManager() {
                 </Card>
               );
             })}
+
+            {/* Inbound Authorized OAuth Applications (e.g. n8n, Zapier) */}
+            {oauthClients.map((client) => (
+              <Card key={client.id} className="border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 via-card/85 to-card/60 backdrop-blur-xl shadow-sm">
+                <CardHeader className="p-4 pb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-xl bg-secondary/80 flex items-center justify-center border border-border/50 shadow-sm shrink-0">
+                        {client.icon ? (
+                          <img src={client.icon} alt={client.name} className="h-7 w-7 rounded-lg" />
+                        ) : (
+                          <Globe className="h-6 w-6 text-primary" />
+                        )}
+                      </div>
+                      <div>
+                        <CardTitle className="text-sm font-bold text-foreground truncate max-w-[150px]">
+                          {client.name}
+                        </CardTitle>
+                        <CardDescription className="text-xs truncate max-w-[180px]">
+                          Authorized OAuth App
+                        </CardDescription>
+                      </div>
+                    </div>
+
+                    <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px] gap-1 py-0 h-5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Authorized
+                    </Badge>
+                  </div>
+                </CardHeader>
+
+                <CardContent className="p-4 pt-0 space-y-3">
+                  <div className="p-2.5 rounded-xl bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between">
+                    <span>Scopes: {client.scopes?.join(", ") || "Full Access"}</span>
+                    <span className="font-medium text-emerald-400">Active Token</span>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Connected</span>
+                    </Button>
+
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        if (confirm(`Are you sure you want to revoke access for ${client.name}?`)) {
+                          handleRevokeOAuth(client.id, client.name);
+                        }
+                      }}
+                      className="h-8 text-xs text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
+                    >
+                      <Unlink className="w-3.5 h-3.5 mr-1" /> Revoke
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
           </div>
         )}
       </div>
