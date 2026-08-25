@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
+import { useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/integrations/supabase/client";
 import { CookiePreferencesSection } from "@/components/CookiePreferencesSection";
+import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConnectorsManager";
 import {
   ProfileSection,
   SecuritySection,
@@ -26,9 +28,12 @@ import {
   Cookie,
   CreditCard,
   Plug,
+  Database,
 } from "lucide-react";
 
 export default function Settings() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get("tab") || "profile";
   const [isSaving, setIsSaving] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -72,6 +77,13 @@ export default function Settings() {
     setIsSaving(false);
   };
 
+  const handleTabChange = (nextTab: string) => {
+    setSearchParams((prev) => {
+      prev.set("tab", nextTab);
+      return prev;
+    });
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -79,16 +91,20 @@ export default function Settings() {
         <div>
           <h1 className="text-3xl font-bold">Settings</h1>
           <p className="text-muted-foreground mt-1">
-            Manage your account, profile, and preferences.
+            Manage your account, profile, connectors, and preferences.
           </p>
         </div>
 
         {/* Tabs Navigation */}
-        <Tabs defaultValue="profile" className="w-full">
+        <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <TabsList className="w-full flex flex-wrap justify-start gap-1 h-auto p-1 bg-muted/50 rounded-lg">
             <TabsTrigger value="profile" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
               <User className="w-4 h-4" />
               <span className="hidden sm:inline">Profile</span>
+            </TabsTrigger>
+            <TabsTrigger value="connectors" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+              <Database className="w-4 h-4" />
+              <span className="hidden sm:inline">Connectors</span>
             </TabsTrigger>
             <TabsTrigger value="appearance" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
               <Palette className="w-4 h-4" />
@@ -135,6 +151,11 @@ export default function Settings() {
             />
           </TabsContent>
 
+          {/* Connectors Tab */}
+          <TabsContent value="connectors" className="mt-6 space-y-6">
+            <DatabaseConnectorsManager />
+          </TabsContent>
+
           {/* Appearance Tab */}
           <TabsContent value="appearance" className="mt-6 space-y-6">
             <AppearanceSection />
@@ -175,3 +196,4 @@ export default function Settings() {
     </DashboardLayout>
   );
 }
+

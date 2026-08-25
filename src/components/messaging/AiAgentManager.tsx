@@ -16,7 +16,7 @@ import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerC
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
 import { AiAgentTestChat } from "@/components/messaging/AiAgentTestChat";
-import { AiToolsManager } from "@/components/messaging/AiToolsManager";
+import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConnectorsManager";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
   "is_enabled" | "default_mode" | "language_mode" | "model" | "daily_message_cap" | "reply_cooldown_seconds"

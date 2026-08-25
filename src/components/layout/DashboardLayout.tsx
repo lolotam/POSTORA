@@ -43,6 +43,9 @@ import {
   AtSign,
   Video,
   MessageSquare,
+  MessageCircle,
+  Bot,
+  Database,
   Sparkles,
   Headphones,
   ShoppingBag,
@@ -161,23 +164,40 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     }
 
     const messagingChildren = [
-      ...(flags.msgFacebook ? [{ icon: Facebook, label: "Facebook", path: "/messaging/facebook" }] : []),
-      ...(flags.msgInstagram ? [{ icon: Camera, label: "Instagram", path: "/messaging/instagram" }] : []),
-      ...(flags.msgThreads ? [{ icon: AtSign, label: "Threads", path: "/messaging/thread" }] : []),
       ...(flags.msgWhatsapp ? [
         { icon: MessageSquare, label: "WhatsApp", path: "/messaging/whatsapp" },
       ] : []),
+      ...(flags.msgFacebook ? [{ icon: Facebook, label: "Facebook", path: "/messaging/facebook" }] : []),
+      ...(flags.msgInstagram ? [{ icon: Camera, label: "Instagram", path: "/messaging/instagram" }] : []),
+      ...(flags.msgThreads ? [{ icon: AtSign, label: "Threads", path: "/messaging/thread" }] : []),
+      ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
     ];
 
     if (messagingChildren.length > 0) {
       entries.push({
         type: "dropdown",
         icon: MessageSquare,
-        label: "Messaging",
+        label: "Inboxes",
         basePath: "/messaging/",
         children: messagingChildren,
       });
     }
+
+    const automationChildren = [
+      { icon: Sparkles, label: "Overview", path: "/automation" },
+      { icon: Bot, label: "Agent Setup", path: "/automation/agents" },
+      { icon: MessageSquare, label: "Messaging Automation", path: "/automation/messaging" },
+      { icon: MessageCircle, label: "Comments Automation", path: "/automation/comments" },
+      { icon: Database, label: "Database Connectors", path: "/settings?tab=connectors" },
+    ];
+
+    entries.push({
+      type: "dropdown",
+      icon: Sparkles,
+      label: "Automation",
+      basePath: "/automation",
+      children: automationChildren,
+    });
 
     const adManagerChildren = [
       ...(flags.adManager ? [{ icon: Megaphone, label: "Ad Manager", path: "/ad-manager" }] : []),
@@ -221,7 +241,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     : profile?.email?.slice(0, 2).toUpperCase() || "U";
 
   const isDropdownActive = (entry: NavItemDropdown) =>
-    entry.children.some((c) => location.pathname === c.path) || location.pathname.startsWith(entry.basePath);
+    entry.children.some((c) => location.pathname === c.path || (c.path.includes("?") && (location.pathname + location.search) === c.path)) ||
+    location.pathname.startsWith(entry.basePath) ||
+    (entry.label === "Inboxes" && location.pathname === "/comments");
 
   const isCanvasHiddenFromUsers = (path: string) => path === "/canvas" && isAdmin && !flags.canvas;
 
@@ -359,7 +381,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="start" className="w-48">
                     {dropdown.children.map((child) => {
-                      const childActive = location.pathname === child.path;
+                      const childActive = location.pathname === child.path || (child.path.includes("?") && (location.pathname + location.search) === child.path);
                       return (
                         <DropdownMenuItem key={child.path} asChild>
                           <Link
@@ -590,7 +612,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                           >
                             <div className="pl-8 space-y-0.5 py-1">
                               {dropdown.children.map((child) => {
-                                const childActive = location.pathname === child.path;
+                                const childActive = location.pathname === child.path || (child.path.includes("?") && (location.pathname + location.search) === child.path);
                                 return (
                                   <Link
                                     key={child.path}

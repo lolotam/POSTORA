@@ -105,6 +105,11 @@ const OAuthCallback = lazyWithRetry(() => import("@/pages/OAuthCallback"), "OAut
 const AdminHiggsfieldCallback = lazyWithRetry(() => import("@/pages/AdminHiggsfieldCallback"), "AdminHiggsfieldCallback");
 const ApiDocumentation = lazyWithRetry(() => import("@/pages/ApiDocumentation"), "ApiDocumentation");
 const EcommerceWhatsAppApi = lazyWithRetry(() => import("@/pages/docs/EcommerceWhatsAppApi"), "EcommerceWhatsAppApi");
+const AutomationHub = lazyWithRetry(() => import("@/pages/automation/AutomationHub"), "AutomationHub");
+const MessagingAutomationPage = lazyWithRetry(() => import("@/pages/automation/MessagingAutomationPage"), "MessagingAutomationPage");
+const CommentsAutomationPage = lazyWithRetry(() => import("@/pages/automation/CommentsAutomationPage"), "CommentsAutomationPage");
+const UnifiedAgentSetupPage = lazyWithRetry(() => import("@/pages/automation/UnifiedAgentSetupPage"), "UnifiedAgentSetupPage");
+const CommentManagerPage = lazyWithRetry(() => import("@/pages/comments/CommentManagerPage"), "CommentManagerPage");
 
 // Admin pages
 const AdminDashboard = lazyWithRetry(() => import("@/pages/admin/AdminDashboard"), "AdminDashboard");
@@ -283,6 +288,16 @@ export function AnimatedRoutes() {
           <Route path="docs" element={<AnimatedPage><WhatsAppDocs /></AnimatedPage>} />
         </Route>
         <Route path="/messaging/thread" element={<ProtectedRoute><AnimatedPage><ThreadsMentions /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/messaging/threads" element={<Navigate to="/messaging/thread" replace />} />
+        <Route path="/comments" element={<ProtectedRoute><AnimatedPage><CommentManagerPage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/messaging/comments" element={<Navigate to="/comments" replace />} />
+        
+        {/* Automation Hub */}
+        <Route path="/automation" element={<ProtectedRoute><AnimatedPage><AutomationHub /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/automation/messaging" element={<ProtectedRoute><AnimatedPage><MessagingAutomationPage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/automation/comments" element={<ProtectedRoute><AnimatedPage><CommentsAutomationPage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/automation/agents" element={<ProtectedRoute><AnimatedPage><UnifiedAgentSetupPage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/automation-hub" element={<Navigate to="/automation" replace />} />
         <Route path="/leads-crm" element={<ProtectedRoute><AnimatedPage><LeadsCRM /></AnimatedPage></ProtectedRoute>} />
         <Route path="/leads" element={<Navigate to="/leads-crm" replace />} />
         <Route path="/ad-analytics" element={<ProtectedRoute><AnimatedPage><AdAnalytics /></AnimatedPage></ProtectedRoute>} />
