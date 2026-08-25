@@ -19,14 +19,10 @@ import {
   Copy,
   CheckCircle2,
   Zap,
-  Radio,
-  Layers,
-  Plug,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -46,6 +42,173 @@ import { useAiAgentTools, type AiAgentTool, type AiAgentToolInput, type Connecto
 import { validateAiToolName, validateAiToolUrl } from "@/lib/aiTools";
 import { cn } from "@/lib/utils";
 
+/**
+ * Authentic high-definition vector brand logos for connectors
+ */
+export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: ConnectorType; className?: string }) {
+  switch (id) {
+    case "shopify":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <path
+            d="M83.5 24.8c-.3-.8-1-1.3-1.8-1.4l-14.8-1.5c-.2-.6-.4-1.2-.7-1.8-3.4-6.8-9.4-11.2-16.7-11.2-7.3 0-13.3 4.4-16.7 11.2-.3.6-.5 1.2-.7 1.8l-14.8 1.5c-.8.1-1.5.6-1.8 1.4L.6 94.4c-.2.6 0 1.3.4 1.8.4.5 1 .8 1.6.8h94.8c.6 0 1.2-.3 1.6-.8.4-.5.6-1.2.4-1.8L83.5 24.8z"
+            fill="#95BF47"
+          />
+          <path
+            d="M49.5 14.9c5.2 0 9.7 3.5 12.3 8.8l-24.6 2.5c2.6-5.3 7.1-11.3 12.3-11.3z"
+            fill="#5E8E3E"
+          />
+          <path
+            d="M48.2 38.5c-9.1 0-13.5 5.5-13.5 11.4 0 11.5 17.6 13.2 17.6 21.2 0 4.1-3.6 6.5-8.4 6.5-6.2 0-10.4-3.3-10.4-3.3l-2.4 8.7s4.9 3.5 12.9 3.5c10.5 0 16.9-5.9 16.9-13.2 0-12.8-17.7-13.9-17.7-21.2 0-3.3 2.7-5.3 7.1-5.3 5.1 0 8.5 2.5 8.5 2.5l2.4-8.2s-4.6-2.6-13-2.6z"
+            fill="#FFFFFF"
+          />
+        </svg>
+      );
+
+    case "woocommerce":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#7F54B3" />
+          <path
+            d="M84.2 34.8c-2.4-8.8-11.6-14-20.4-11.6l-37 10c-8.8 2.4-14 11.6-11.6 20.4l4.5 16.6c2.4 8.8 11.6 14 20.4 11.6l37-10c8.8-2.4 14-11.6 11.6-20.4l-4.5-16.6z"
+            fill="#96588A"
+          />
+          <path
+            d="M32.5 44.5c.8-1.5 2.8-2.1 4.3-1.3 1.5.8 2.1 2.8 1.3 4.3l-4.8 9.5 6.2-11.8c.8-1.5 2.8-2.1 4.3-1.3 1.5.8 2.1 2.8 1.3 4.3l-6.4 12.2 7.2-13.7c.8-1.5 2.8-2.1 4.3-1.3 1.5.8 2.1 2.8 1.3 4.3l-8.5 16.2c-.8 1.5-2.8 2.1-4.3 1.3-1.1-.6-1.7-1.8-1.5-3l5.1-9.7-6.2 11.8c-.8 1.5-2.8 2.1-4.3 1.3-1.1-.6-1.7-1.8-1.5-3l5.1-9.7-8.8 16.8c-.8 1.5-2.8 2.1-4.3 1.3-1.5-.8-2.1-2.8-1.3-4.3l10.8-20.5z"
+            fill="#FFFFFF"
+          />
+        </svg>
+      );
+
+    case "salla":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#004D5A" />
+          <path
+            d="M50 20L76 35V65L50 80L24 65V35L50 20Z"
+            stroke="#22C55E"
+            strokeWidth="8"
+            strokeLinejoin="round"
+          />
+          <circle cx="50" cy="50" r="12" fill="#22C55E" />
+        </svg>
+      );
+
+    case "zid":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#7635DC" />
+          <path
+            d="M28 32H72L42 68H72"
+            stroke="#FFFFFF"
+            strokeWidth="10"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <circle cx="48" cy="22" r="5" fill="#FFC72C" />
+        </svg>
+      );
+
+    case "myfatoorah":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#1BA3B6" />
+          <rect x="22" y="32" width="56" height="36" rx="8" stroke="#FFFFFF" strokeWidth="6" />
+          <path d="M22 44H78" stroke="#FFFFFF" strokeWidth="5" />
+          <circle cx="34" cy="56" r="4" fill="#FFD700" />
+          <circle cx="44" cy="56" r="4" fill="#FF6B6B" />
+        </svg>
+      );
+
+    case "stripe":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#635BFF" />
+          <path
+            d="M48.5 35.2c-5.8 0-9.6 3.1-9.6 7.8 0 8.8 12.8 7.4 12.8 11.2 0 1.8-1.6 2.4-3.8 2.4-3.8 0-8.6-1.6-8.6-1.6l-1.8 8.9s4.2 1.9 10 1.9c6.4 0 10.4-3.1 10.4-8 0-9.2-12.8-7.7-12.8-11.4 0-1.5 1.3-2.2 3.4-2.2 3.2 0 7.4 1.3 7.4 1.3l1.8-8.6s-3.7-1.7-9.2-1.7z"
+            fill="#FFFFFF"
+          />
+        </svg>
+      );
+
+    case "supabase":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#1C1C1C" />
+          <path
+            d="M54.5 18L26 53.5H48L44.5 82L73 46.5H51L54.5 18Z"
+            fill="url(#supabase-grad)"
+          />
+          <defs>
+            <linearGradient id="supabase-grad" x1="26" y1="18" x2="73" y2="82" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#3ECF8E" />
+              <stop offset="1" stopColor="#249361" />
+            </linearGradient>
+          </defs>
+        </svg>
+      );
+
+    case "mysql_postgres":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#336791" />
+          <ellipse cx="50" cy="30" rx="26" ry="10" fill="#FFFFFF" fillOpacity="0.9" />
+          <path
+            d="M24 30v18c0 5.5 11.6 10 26 10s26-4.5 26-10V30"
+            stroke="#FFFFFF"
+            strokeWidth="6"
+            fill="none"
+          />
+          <path
+            d="M24 48v18c0 5.5 11.6 10 26 10s26-4.5 26-10V48"
+            stroke="#FFFFFF"
+            strokeWidth="6"
+            fill="none"
+          />
+        </svg>
+      );
+
+    case "formula":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#F59E0B" />
+          <path
+            d="M32 30h36M32 50h36M32 70h36M50 22v56"
+            stroke="#FFFFFF"
+            strokeWidth="8"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+
+    case "custom_rest":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#EA4B71" />
+          <circle cx="35" cy="50" r="10" stroke="#FFFFFF" strokeWidth="6" />
+          <circle cx="65" cy="35" r="10" stroke="#FFFFFF" strokeWidth="6" />
+          <circle cx="65" cy="65" r="10" stroke="#FFFFFF" strokeWidth="6" />
+          <path d="M45 46L55 39M45 54L55 61" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" />
+        </svg>
+      );
+
+    case "mcp_custom":
+    default:
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#8B5CF6" />
+          <path
+            d="M28 50L50 28L72 50L50 72L28 50Z"
+            stroke="#FFFFFF"
+            strokeWidth="8"
+            strokeLinejoin="round"
+          />
+          <circle cx="50" cy="50" r="8" fill="#FFFFFF" />
+        </svg>
+      );
+  }
+}
+
 export interface ConnectorDirectoryItem {
   id: ConnectorType;
   name: string;
@@ -56,7 +219,6 @@ export interface ConnectorDirectoryItem {
   description: string;
   defaultUrl: string;
   suggestedPrompt: string;
-  icon: typeof Database;
   brandColor: string;
   iconBg: string;
   supportsMcp: boolean;
@@ -79,7 +241,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Official Shopify integration for automated product catalog lookups, collection browsing, stock verification, and order fulfillment status.",
     defaultUrl: "https://your-shop.myshopify.com/api/2024-01/graphql.json",
     suggestedPrompt: "Search Shopify product catalog, check live inventory, and look up customer order fulfillment status.",
-    icon: ShoppingBag,
     brandColor: "text-emerald-500",
     iconBg: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
     supportsMcp: true,
@@ -96,7 +257,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Official WooCommerce REST API connector to query products, variations, live prices, stock levels, and order history directly in customer chats.",
     defaultUrl: "https://your-store.com/wp-json/wc/v3/products",
     suggestedPrompt: "Search WooCommerce catalog for products, check prices, verify stock availability, and check order statuses.",
-    icon: ShoppingBag,
     brandColor: "text-purple-500",
     iconBg: "bg-purple-500/10 border-purple-500/20 text-purple-400",
     supportsMcp: true,
@@ -113,7 +273,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Seamless integration with Salla Merchant API for Saudi & Middle East e-commerce stores to query products, prices, and shipping status.",
     defaultUrl: "https://api.salla.dev/admin/v2/products",
     suggestedPrompt: "Search Salla store products, check quantities, and check order shipping status.",
-    icon: ShoppingBag,
     brandColor: "text-amber-500",
     iconBg: "bg-amber-500/10 border-amber-500/20 text-amber-400",
     supportsMcp: false,
@@ -129,7 +288,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Direct integration with Zid Store Manager API for product catalog inquiries, inventory levels, and customer order management.",
     defaultUrl: "https://api.zid.sa/v1/managers/store/products",
     suggestedPrompt: "Search Zid store products, stock levels, and customer order updates.",
-    icon: ShoppingBag,
     brandColor: "text-violet-500",
     iconBg: "bg-violet-500/10 border-violet-500/20 text-violet-400",
     supportsMcp: false,
@@ -145,7 +303,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "MyFatoorah payment gateway integration to check payment status, lookup customer invoices, and generate instant checkout payment links.",
     defaultUrl: "https://api.myfatoorah.com/v2/GetPaymentStatus",
     suggestedPrompt: "Check payment invoice status, query transaction reference numbers, and generate payment links.",
-    icon: CreditCard,
     brandColor: "text-sky-500",
     iconBg: "bg-sky-500/10 border-sky-500/20 text-sky-400",
     supportsMcp: true,
@@ -162,7 +319,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Connect to Stripe API to look up customer payment status, invoice details, and active subscriptions in customer support chats.",
     defaultUrl: "https://api.stripe.com/v1/payment_intents",
     suggestedPrompt: "Check Stripe payment intent status and customer subscription records.",
-    icon: CreditCard,
     brandColor: "text-indigo-500",
     iconBg: "bg-indigo-500/10 border-indigo-500/20 text-indigo-400",
     supportsMcp: false,
@@ -178,7 +334,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Direct REST / PostgREST connection to query your Supabase database tables for products, inventory, customer records, and custom RPC functions.",
     defaultUrl: "https://api.postora.cloud/rest/v1/products",
     suggestedPrompt: "Query store database for products matching customer query, including name, price, stock status, and product URLs.",
-    icon: Database,
     brandColor: "text-emerald-400",
     iconBg: "bg-emerald-500/10 border-emerald-500/20 text-emerald-400",
     supportsMcp: true,
@@ -195,7 +350,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Connect to custom SQL databases through Prisma, Hasura, Directus, or PostgREST for structured schema queries.",
     defaultUrl: "https://api.yourdomain.com/sql/products",
     suggestedPrompt: "Query relational database tables for product attributes, stock status, and pricing.",
-    icon: Server,
     brandColor: "text-blue-500",
     iconBg: "bg-blue-500/10 border-blue-500/20 text-blue-400",
     supportsMcp: false,
@@ -211,7 +365,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Computes custom quotes, delivery fees, bulk tier discounts, or VAT calculations based on customer conversation parameters.",
     defaultUrl: "https://n8n.yourdomain.com/webhook/quote-calculator",
     suggestedPrompt: "Compute pricing quotes, delivery estimates, or discounts based on product quantity and dimensions.",
-    icon: Calculator,
     brandColor: "text-amber-400",
     iconBg: "bg-amber-500/10 border-amber-500/20 text-amber-400",
     supportsMcp: false,
@@ -227,7 +380,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Connects to any external REST endpoint or n8n workflow to trigger background business logic and return live data.",
     defaultUrl: "https://n8n.yourdomain.com/webhook/ai-agent-tool",
     suggestedPrompt: "Call custom internal workflow to perform actions or lookup specific records.",
-    icon: Globe,
     brandColor: "text-cyan-400",
     iconBg: "bg-cyan-500/10 border-cyan-500/20 text-cyan-400",
     supportsMcp: false,
@@ -243,7 +395,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Connect any external Model Context Protocol (MCP) server directly into the Postora AI runtime with zero admin approval.",
     defaultUrl: "https://mcp.yourdomain.com/sse",
     suggestedPrompt: "Call Model Context Protocol tools to query real-time enterprise tools and context.",
-    icon: Zap,
     brandColor: "text-violet-400",
     iconBg: "bg-violet-500/10 border-violet-500/20 text-violet-400",
     supportsMcp: true,
@@ -363,7 +514,7 @@ export function DatabaseConnectorsManager() {
     }
 
     setClearSecret(false);
-    setModalTab(preset.supportsMcp ? "credentials" : "credentials");
+    setModalTab("credentials");
     setDialogOpen(true);
   };
 
@@ -512,7 +663,7 @@ export function DatabaseConnectorsManager() {
                 type="button"
                 onClick={() => setActiveCategory(cat.id)}
                 className={cn(
-                  "px-3 py-1.5 rounded-xl text-xs font-medium transition-all shrink-0 cursor-pointer border",
+                  "px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all shrink-0 cursor-pointer border",
                   isActive
                     ? "bg-primary text-primary-foreground border-primary shadow-sm"
                     : "bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50"
@@ -536,10 +687,9 @@ export function DatabaseConnectorsManager() {
         </div>
       </div>
 
-      {/* Connectors Grid (ChatGPT / Claude / Perplexity Style) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+      {/* Connectors Grid (3D Brand Cards with Logo on Left and Text on Right) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
         {filteredDirectory.map((preset) => {
-          const Icon = preset.icon;
           const isConnected = configuredToolsMap.has(preset.id);
           const tool = configuredToolsMap.get(preset.id);
 
@@ -556,71 +706,98 @@ export function DatabaseConnectorsManager() {
                 }
               }}
               className={cn(
-                "relative group flex flex-col justify-between p-4 rounded-2xl border transition-all duration-200 text-left cursor-pointer",
+                "relative group flex flex-col justify-between p-5 rounded-2xl border transition-all duration-300 ease-out text-left cursor-pointer backdrop-blur-xl overflow-hidden",
+                // 3D Glassmorphism, specular top highlight and multi-layered depth
+                "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/30 before:via-white/5 before:to-transparent before:pointer-events-none",
                 isConnected
-                  ? "bg-card/90 border-primary/40 shadow-md shadow-primary/5 hover:border-primary hover:shadow-lg"
-                  : "bg-card/40 border-border/60 hover:bg-card/80 hover:border-border hover:shadow-sm"
+                  ? "bg-gradient-to-b from-primary/15 via-card/90 to-card/60 border-primary/50 shadow-[0_16px_36px_-8px_rgba(var(--primary-rgb,59,130,246),0.3),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:shadow-[0_22px_48px_-8px_rgba(var(--primary-rgb,59,130,246),0.45)] hover:border-primary"
+                  : "bg-gradient-to-b from-card/95 via-card/80 to-card/60 border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.3),0_4px_10px_-2px_rgba(0,0,0,0.15),inset_0_1.5px_2px_rgba(255,255,255,0.6),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:scale-[1.015] hover:border-primary/50 hover:shadow-[0_20px_42px_-8px_rgba(0,0,0,0.45),inset_0_2px_3px_rgba(255,255,255,0.85)]"
               )}
             >
-              <div>
-                {/* Card Header: Icon & Status Badge */}
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <div
-                    className={cn(
-                      "w-11 h-11 rounded-xl flex items-center justify-center border transition-transform duration-200 group-hover:scale-105 shadow-sm",
-                      preset.iconBg
-                    )}
-                  >
-                    <Icon className="w-5 h-5" />
+              {/* Top Row: Logo on Left + Text & Badges on Right */}
+              <div className="flex items-start gap-4">
+                {/* 3D Brand Logo Container on Left */}
+                <div
+                  className={cn(
+                    "relative shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border border-border/50 shadow-md transition-all duration-300 group-hover:scale-110 group-hover:-translate-y-0.5 group-hover:shadow-lg group-hover:border-primary/40",
+                    "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/35 before:via-white/10 before:to-transparent before:pointer-events-none",
+                    isConnected && "border-primary/40 shadow-primary/20"
+                  )}
+                >
+                  <div className="transition-transform duration-300 group-hover:scale-105 group-hover:rotate-1">
+                    <ConnectorBrandLogo id={preset.id} className="w-8 h-8 sm:w-9 sm:h-9 drop-shadow-sm" />
                   </div>
+                  {isConnected && (
+                    <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/40 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                      <Check className="w-3 h-3 stroke-[3]" />
+                    </div>
+                  )}
+                </div>
 
-                  <div className="flex flex-col items-end gap-1">
-                    {isConnected ? (
-                      <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px] gap-1 py-0 h-5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        Connected
-                      </Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-[10px] text-muted-foreground border-border/50 py-0 h-5">
-                        {preset.categoryLabel}
-                      </Badge>
-                    )}
+                {/* Content on Right of Logo */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-1.5">
+                    <h4 className="font-bold text-sm sm:text-base text-foreground tracking-tight group-hover:text-primary transition-colors truncate">
+                      {preset.title}
+                    </h4>
 
                     {preset.supportsMcp && (
-                      <Badge variant="outline" className="bg-violet-500/10 text-violet-400 border-violet-500/30 text-[9px] py-0 h-4">
+                      <Badge variant="outline" className="bg-violet-500/10 text-violet-400 border-violet-500/30 text-[9px] py-0 h-4.5 shrink-0">
                         ⚡ MCP
                       </Badge>
                     )}
                   </div>
-                </div>
 
-                {/* Card Title & Description */}
-                <h4 className="font-semibold text-sm text-foreground tracking-tight group-hover:text-primary transition-colors">
-                  {preset.title}
-                </h4>
-                <p className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-relaxed">
-                  {preset.shortDesc}
-                </p>
+                  <div className="flex items-center gap-1.5 mt-0.5 mb-1.5">
+                    <span className="text-[11px] font-medium text-muted-foreground">
+                      {preset.categoryLabel}
+                    </span>
+                    {isConnected && (
+                      <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[9px] gap-1 py-0 h-4 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                        Connected
+                      </Badge>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                    {preset.shortDesc}
+                  </p>
+                </div>
               </div>
 
-              {/* Card Footer: Action */}
-              <div className="mt-4 pt-3 border-t border-border/40 flex items-center justify-between text-xs">
-                <span className="text-[11px] text-muted-foreground">
-                  {isConnected && tool?.is_enabled ? "Active AI Tool" : isConnected ? "Disabled" : "Available"}
-                </span>
+              {/* Bottom Row: Status Indicator & Clean Prominent Connect Button */}
+              <div className="mt-4 pt-3.5 border-t border-border/40 flex items-center justify-between text-xs">
+                <div className="flex items-center gap-1.5 text-muted-foreground text-[11px]">
+                  <span
+                    className={cn(
+                      "w-2 h-2 rounded-full",
+                      isConnected && tool?.is_enabled
+                        ? "bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400/50"
+                        : isConnected
+                        ? "bg-amber-400"
+                        : "bg-muted-foreground/30"
+                    )}
+                  />
+                  <span>{isConnected && tool?.is_enabled ? "Active in AI Agent" : isConnected ? "Configured (Disabled)" : "Ready to Connect"}</span>
+                </div>
 
+                {/* Big Clean Connect Button */}
                 <Button
                   size="sm"
                   variant={isConnected ? "outline" : "default"}
-                  className="h-7 text-xs px-2.5 rounded-lg gap-1 pointer-events-none"
+                  className={cn(
+                    "h-8.5 px-4 text-xs font-semibold rounded-xl shadow-sm transition-all duration-200 pointer-events-none group-hover:shadow-md",
+                    !isConnected && "bg-primary text-primary-foreground hover:bg-primary/90 shadow-primary/25"
+                  )}
                 >
                   {isConnected ? (
                     <>
-                      <Pencil className="w-3 h-3" /> Configure
+                      <Pencil className="w-3.5 h-3.5 mr-1" /> Configure
                     </>
                   ) : (
                     <>
-                      <Plus className="w-3 h-3" /> Connect
+                      <Plus className="w-3.5 h-3.5 mr-1" /> Connect
                     </>
                   )}
                 </Button>
@@ -634,10 +811,10 @@ export function DatabaseConnectorsManager() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3.5">
               {selectedPreset && (
-                <div className={cn("w-12 h-12 rounded-2xl flex items-center justify-center border shadow-sm", selectedPreset.iconBg)}>
-                  <selectedPreset.icon className="w-6 h-6" />
+                <div className="relative shrink-0 w-14 h-14 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border border-border/50 shadow-md">
+                  <ConnectorBrandLogo id={selectedPreset.id} className="w-8 h-8 drop-shadow-sm" />
                 </div>
               )}
               <div>
