@@ -14,6 +14,37 @@ describe("createWhatsAppInboxApi", () => {
     callMessagingApi.mockResolvedValue({ media: [] });
   });
 
+  it("omits pagination fields on a legacy latest-window call", async () => {
+    callMessagingApi.mockResolvedValue({ messages: [] });
+    const api = createWhatsAppInboxApi();
+    await api.getMessagesPage({ social_account_id: "acct", conversation_id: "conv" });
+    expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_get_messages", {
+      social_account_id: "acct",
+      conversation_id: "conv",
+    });
+  });
+
+  it("sends limit and before for a history page", async () => {
+    callMessagingApi.mockResolvedValue({
+      messages: [],
+      page_info: { next_before: null, has_more: false },
+    });
+    const api = createWhatsAppInboxApi();
+    const before = { timestamp: "2026-08-25T12:00:00.000Z", id: "row-1" };
+    await api.getMessagesPage({
+      social_account_id: "acct",
+      conversation_id: "conv",
+      limit: 40,
+      before,
+    });
+    expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_get_messages", {
+      social_account_id: "acct",
+      conversation_id: "conv",
+      limit: 40,
+      before,
+    });
+  });
+
   it("sends whatsapp_get_media through the shared retrying caller", async () => {
     const api = createWhatsAppInboxApi();
     await api.getMedia({ social_account_id: "acct", message_row_ids: ["row-1", "row-2"] });

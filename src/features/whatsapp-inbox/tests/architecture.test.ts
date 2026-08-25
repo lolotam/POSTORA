@@ -26,13 +26,13 @@ function filesImportingInfrastructure(files: string[]): string[] {
 describe("whatsapp-inbox layering", () => {
   it("application and domain do not import infrastructure", () => {
     const applicationFiles = collectSourceFiles(join(FEATURE_ROOT, "application"));
+    const domainFiles = collectSourceFiles(join(FEATURE_ROOT, "domain"));
     // collectSourceFiles answers [] for a directory that does not exist, so without this the
-    // whole rule would pass vacuously the day someone renames application/ -- a green test
-    // proving nothing. domain/ is deliberately not asserted: it arrives in Phase 3, and an
-    // empty result for it is correct today.
+    // whole rule would pass vacuously the day someone renames application/ or domain/.
     expect(applicationFiles.length).toBeGreaterThan(0);
+    expect(domainFiles.length).toBeGreaterThan(0);
 
-    const files = [...applicationFiles, ...collectSourceFiles(join(FEATURE_ROOT, "domain"))];
+    const files = [...applicationFiles, ...domainFiles];
     expect(filesImportingInfrastructure(files)).toEqual([]);
   });
 

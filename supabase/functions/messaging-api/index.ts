@@ -5,6 +5,14 @@ import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspace
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
 import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import {
+  conversationIdsForFilter,
+  keysetOrFilter,
+  MalformedMessageCursorError,
+  pageFetchLimit,
+  parseWhatsAppMessagePageRequest,
+  sliceWhatsAppMessagePage,
+} from "../_shared/whatsappMessagePage.ts";
+import {
   MAX_MEDIA_ROWS,
   OUTBOUND_SIGN_TTL_SECONDS,
   ownedStoragePath,
@@ -1267,36 +1275,45 @@ Deno.serve(async (req) => {
       const { social_account_id, conversation_id } = body;
       if (!social_account_id || !conversation_id) throw new Error("social_account_id and conversation_id required");
 
-      const account = await withWhatsAppActionAccess({
+      await withWhatsAppActionAccess({
         client: whatsappAccessClient,
         userId: user.id,
         action: "whatsapp_get_messages",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
 
+      const pageRequest = parseWhatsAppMessagePageRequest(body);
       // Normalize conversation_id to handle both with and without '+' prefix
       const normalizedConvId = conversation_id.replace(/_\+/g, "_");
 
-      // whatsapp_messages has no workspace_id column. The workspace-authorized
-      // social_account_id above is therefore the tenant boundary for this query.
-      const { data: msgs, error: msgsError } = await adminClient
+      // `.in` rather than `.or` for the conversation ids: the PostgREST client appends
+      // duplicate `or` parameters, so the keyset predicate below would silently corrupt
+      // the SQL if this occupied the single `.or()` slot.
+      let messagesQuery = adminClient
         .from("whatsapp_messages")
         .select("*")
         .eq("social_account_id", social_account_id)
-        .or(`conversation_id.eq.${normalizedConvId},conversation_id.eq.${conversation_id}`)
-        // Newest-first, like Graph `get_messages`, so the shared inbox pane can treat both
-        // platforms alike. Ascending would also make the limit keep the OLDEST hundred, which
-        // hid every recent message on threads longer than that.
+        .in("conversation_id", conversationIdsForFilter(normalizedConvId, conversation_id));
+
+      if (pageRequest.mode === "paginated" && pageRequest.before) {
+        messagesQuery = messagesQuery.or(keysetOrFilter(pageRequest.before));
+      }
+
+      // Newest-first, like Graph `get_messages`, so the shared inbox pane can treat both
+      // platforms alike. Ascending would also make the limit keep the OLDEST hundred, which
+      // hid every recent message on threads longer than that.
+      const { data: msgs, error: msgsError } = await messagesQuery
         .order("timestamp", { ascending: false })
         // WhatsApp timestamps are second-granular and both ingest paths can land the same
         // second, so the id keeps the page stable across refetches instead of shuffling ties.
         .order("id", { ascending: false })
-        .limit(100);
+        .limit(pageFetchLimit(pageRequest));
 
       if (msgsError) throw msgsError;
 
-      const messages = (msgs || []).map((m: any) => toWhatsAppMessageView(m));
-
+      const paged = sliceWhatsAppMessagePage(msgs || [], pageRequest);
+      const messages = paged.rows.map((m: any) => toWhatsAppMessageView(m));
+      if (paged.page_info) return jsonResponse({ messages, page_info: paged.page_info });
       return jsonResponse({ messages });
     }
 
@@ -1619,6 +1636,10 @@ Deno.serve(async (req) => {
 
     if (err instanceof WhatsAppAccessError) {
       return jsonResponse({ error: err.message }, err.status);
+    }
+
+    if (err instanceof MalformedMessageCursorError) {
+      return jsonResponse({ error: err.message }, 400);
     }
 
     // Surface friendly WhatsApp 2FA error as 200 with structured field

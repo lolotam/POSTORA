@@ -20,6 +20,7 @@ function message(overrides: Partial<WhatsAppMessage> = {}): WhatsAppMessage {
 }
 
 const api: WhatsAppInboxApi = {
+  getMessagesPage: vi.fn(async () => ({ messages: [] })),
   getMedia: vi.fn(async () => ({ media: [] })),
   sendMedia: vi.fn(),
   sendInteractive: vi.fn(),

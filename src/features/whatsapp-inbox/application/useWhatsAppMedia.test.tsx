@@ -63,6 +63,7 @@ describe("useWhatsAppMedia", () => {
       media: message_row_ids.map((id) => resolved(id)),
     }));
     api = {
+      getMessagesPage: vi.fn(),
       getMedia,
       sendMedia: vi.fn(),
       sendInteractive: vi.fn(),

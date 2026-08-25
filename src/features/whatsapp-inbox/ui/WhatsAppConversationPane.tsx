@@ -1,10 +1,12 @@
-import { useEffect, useRef, type UIEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type UIEvent } from "react";
 import { ArrowLeft, Loader2, MessageCircle } from "lucide-react";
 import { AiConversationModeSelect } from "@/components/messaging/AiConversationModeSelect";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { useMessages, type Conversation } from "@/hooks/useMessaging";
-import { sortMessagesForDisplay } from "@/lib/messageOrder";
+import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
+import { useMarkConversationRead, type Conversation } from "@/hooks/useMessaging";
+import { useWhatsAppMessages } from "../application/useWhatsAppMessages";
+import { anchorOffsetAfterPrepend, shouldStickToBottom } from "../domain/scrollAnchor";
 import { WhatsAppComposer } from "./WhatsAppComposer";
 import { WhatsAppMessageBubble } from "./WhatsAppMessageBubble";
 
@@ -23,20 +25,34 @@ export function WhatsAppConversationPane({
   onScrollStateChange,
   onBack,
 }: WhatsAppConversationPaneProps): JSX.Element {
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const topSentinelRef = useRef<HTMLDivElement>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const latestScrollTopRef = useRef(0);
-  const { data: messages = [], isLoading } = useMessages(conversation?.id || null, socialAccountId, "whatsapp");
+  const selectionRef = useRef("");
+  const prevIdsRef = useRef<string[]>([]);
+  const stickToBottomRef = useRef(true);
+  const prependSnapshotRef = useRef<{ height: number; top: number } | null>(null);
+  const initialScrolledRef = useRef(false);
+  const [newMessageCount, setNewMessageCount] = useState(0);
 
-  // Ported verbatim from ConversationDetail, defect included: `messages` is the raw query
-  // array, so the 15s refetchInterval hands this effect a new identity every poll and the
-  // pane smooth-scrolls to the bottom while the reader is somewhere else. Phase 1 is layout
-  // only and deliberately changes no behaviour; Phase 3 replaces this with the near-bottom
-  // check in domain/scrollAnchor.ts. Do not patch it here in isolation -- the fix needs the
-  // paginated store to know what "already at the bottom" means.
+  const { messages, isLoading, hasOlder, isFetchingOlder, fetchOlder } = useWhatsAppMessages(
+    socialAccountId,
+    conversation?.id ?? null,
+  );
+  const markRead = useMarkConversationRead();
+  const { activeRole } = useWhatsAppWorkspaceContext();
+  const conversationId = conversation?.id;
+
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
+    if (!conversationId || !socialAccountId) return;
+    // whatsapp_mark_read is agent-min; a viewer 403s on every open. Do not relax the policy.
+    if (activeRole === "viewer") return;
+    markRead.mutate(
+      { socialAccountId, conversationId },
+      { onError: () => undefined },
+    );
+  }, [activeRole, conversationId, markRead, socialAccountId]);
 
   useEffect(() => {
     onScrollStateChange(false);
@@ -46,8 +62,71 @@ export function WhatsAppConversationPane({
     if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
   }, []);
 
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const selection = `${socialAccountId}:${conversation?.id ?? ""}`;
+    if (selectionRef.current !== selection) {
+      selectionRef.current = selection;
+      prevIdsRef.current = [];
+      initialScrolledRef.current = false;
+      stickToBottomRef.current = true;
+      prependSnapshotRef.current = null;
+      setNewMessageCount(0);
+    }
+    if (!el || !conversation || messages.length === 0) return;
+
+    const prevIds = prevIdsRef.current;
+    const nextIds = messages.map((message) => message.id);
+
+    if (!initialScrolledRef.current) {
+      el.scrollTop = el.scrollHeight;
+      initialScrolledRef.current = true;
+      prevIdsRef.current = nextIds;
+      stickToBottomRef.current = true;
+      return;
+    }
+
+    const snapshot = prependSnapshotRef.current;
+    if (snapshot) {
+      el.scrollTop = anchorOffsetAfterPrepend(snapshot.height, el.scrollHeight, snapshot.top);
+      prependSnapshotRef.current = null;
+    }
+
+    const prevNewest = prevIds[prevIds.length - 1];
+    const nextNewest = nextIds[nextIds.length - 1];
+    const appended = Boolean(prevNewest && nextNewest && prevNewest !== nextNewest && nextIds.includes(prevNewest));
+    if (appended) {
+      const prevSet = new Set(prevIds);
+      const added = nextIds.filter((id) => !prevSet.has(id)).length;
+      if (stickToBottomRef.current) {
+        el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+        setNewMessageCount(0);
+      } else if (added > 0) {
+        setNewMessageCount((count) => count + added);
+      }
+    }
+
+    prevIdsRef.current = nextIds;
+  }, [conversation, messages, socialAccountId]);
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    const sentinel = topSentinelRef.current;
+    if (!root || !sentinel) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      if (!hasOlder || isFetchingOlder) return;
+      prependSnapshotRef.current = { height: root.scrollHeight, top: root.scrollTop };
+      fetchOlder();
+    }, { root });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [fetchOlder, hasOlder, isFetchingOlder, conversation?.id]);
+
   const handleScroll = (event: UIEvent<HTMLDivElement>) => {
-    latestScrollTopRef.current = event.currentTarget.scrollTop;
+    const el = event.currentTarget;
+    latestScrollTopRef.current = el.scrollTop;
+    stickToBottomRef.current = shouldStickToBottom(el);
     if (scrollFrameRef.current !== null) return;
 
     scrollFrameRef.current = requestAnimationFrame(() => {
@@ -56,6 +135,14 @@ export function WhatsAppConversationPane({
       if (scrollTop > 72) onScrollStateChange(true);
       else if (scrollTop < 24) onScrollStateChange(false);
     });
+  };
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    setNewMessageCount(0);
+    stickToBottomRef.current = true;
   };
 
   if (!conversation) {
@@ -73,8 +160,6 @@ export function WhatsAppConversationPane({
       </div>
     );
   }
-
-  const sortedMessages = sortMessagesForDisplay(messages, "whatsapp");
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -111,18 +196,20 @@ export function WhatsAppConversationPane({
       </div>
 
       <div
+        ref={scrollRef}
         data-testid="wa-message-pane"
         onScroll={handleScroll}
-        className="min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
       >
+        <div ref={topSentinelRef} data-testid="wa-history-sentinel" className="h-px w-full" />
         {isLoading ? (
           <div className="flex h-full items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
-        ) : sortedMessages.length === 0 ? (
+        ) : messages.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No messages in this conversation</p>
         ) : (
-          sortedMessages.map((message) => (
+          messages.map((message) => (
             <WhatsAppMessageBubble
               key={message.id}
               message={message}
@@ -130,7 +217,17 @@ export function WhatsAppConversationPane({
             />
           ))
         )}
-        <div ref={messagesEndRef} />
+        {newMessageCount > 0 && (
+          <Button
+            type="button"
+            data-testid="wa-new-messages"
+            size="sm"
+            className="sticky bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full shadow-md"
+            onClick={jumpToLatest}
+          >
+            ↓ {newMessageCount} new messages
+          </Button>
+        )}
       </div>
 
       <WhatsAppComposer conversation={conversation} socialAccountId={socialAccountId} />

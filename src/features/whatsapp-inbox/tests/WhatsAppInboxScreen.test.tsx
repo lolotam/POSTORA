@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
@@ -16,6 +16,8 @@ const testState = vi.hoisted(() => ({
   conversations: [] as Conversation[],
   messages: [] as Message[],
   sendMessage: vi.fn(),
+  fetchOlder: vi.fn(),
+  hasOlder: false,
 }));
 
 vi.mock("@/hooks/useMessaging", () => ({
@@ -23,6 +25,21 @@ vi.mock("@/hooks/useMessaging", () => ({
   useConversations: () => ({ data: testState.conversations, isLoading: false }),
   useMessages: () => ({ data: testState.messages, isLoading: false }),
   useSendMessage: () => ({ mutate: testState.sendMessage, isPending: false }),
+  useMarkConversationRead: () => ({ mutate: vi.fn(), mutateAsync: vi.fn() }),
+}));
+
+vi.mock("@/components/whatsapp/WhatsAppWorkspaceProvider", () => ({
+  useWhatsAppWorkspaceContext: () => ({ activeRole: "owner" }),
+}));
+
+vi.mock("../application/useWhatsAppMessages", () => ({
+  useWhatsAppMessages: () => ({
+    messages: testState.messages,
+    isLoading: false,
+    hasOlder: testState.hasOlder,
+    isFetchingOlder: false,
+    fetchOlder: testState.fetchOlder,
+  }),
 }));
 
 vi.mock("@/components/messaging/QuickReplyPicker", () => ({
@@ -99,6 +116,7 @@ const conversation: Conversation = {
 };
 
 const fakeApi: WhatsAppInboxApi = {
+  getMessagesPage: vi.fn(async () => ({ messages: [] })),
   getMedia: vi.fn(async () => ({ media: [] })),
   sendMedia: vi.fn(async () => ({})),
   sendInteractive: vi.fn(async () => ({})),
@@ -134,6 +152,8 @@ describe("WhatsAppInboxScreen", () => {
     testState.accounts = [account];
     testState.conversations = [conversation];
     testState.messages = [];
+    testState.hasOlder = false;
+    testState.fetchOlder.mockReset();
     window.localStorage.clear();
   });
 
@@ -275,5 +295,150 @@ describe("WhatsAppConversationPane composer", () => {
 
     expect(screen.getByRole("button", { name: /attach a file/i })).toBeInTheDocument();
     expect(screen.getByText("Quick replies")).toBeInTheDocument();
+  });
+});
+
+function bubble(id: string, createdTime: string): Message {
+  return {
+    id,
+    message: id,
+    from: { name: "Ada", id: "1" },
+    to: [{ name: "", id: "2" }],
+    created_time: createdTime,
+    attachments: [],
+  };
+}
+
+describe("WhatsAppConversationPane message scroll", () => {
+  let scrollTopAssignments: number[];
+  let currentScrollTop: number;
+  let currentScrollHeight: number;
+  let observerCallback: IntersectionObserverCallback | null;
+
+  function renderPane() {
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={testQueryClient()}>
+        <MemoryRouter>
+          <WhatsAppChromeProvider>
+            <WhatsAppInboxApiProvider api={fakeApi}>
+              <WhatsAppMediaScope socialAccountId={account.id}>{children}</WhatsAppMediaScope>
+            </WhatsAppInboxApiProvider>
+          </WhatsAppChromeProvider>
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+    return render(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId={account.id}
+        pageId={account.platform_user_id}
+        onScrollStateChange={() => undefined}
+      />,
+      { wrapper },
+    );
+  }
+
+  beforeEach(() => {
+    scrollTopAssignments = [];
+    currentScrollTop = 0;
+    currentScrollHeight = 1000;
+    observerCallback = null;
+    testState.hasOlder = true;
+    testState.messages = [
+      bubble("a", "2026-08-25T12:00:00.000Z"),
+      bubble("b", "2026-08-25T12:00:01.000Z"),
+    ];
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get() { return currentScrollHeight; },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get() { return 100; },
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTop", {
+      configurable: true,
+      get() { return currentScrollTop; },
+      set(value: number) {
+        scrollTopAssignments.push(value);
+        currentScrollTop = value;
+      },
+    });
+    HTMLElement.prototype.scrollTo = vi.fn(function scrollTo(this: HTMLElement, arg?: ScrollToOptions | number) {
+      if (typeof arg === "object" && arg && typeof arg.top === "number") {
+        this.scrollTop = arg.top;
+      }
+    }) as typeof HTMLElement.prototype.scrollTo;
+    window.IntersectionObserver = class {
+      observe = vi.fn();
+      disconnect = vi.fn();
+      unobserve = vi.fn();
+      constructor(callback: IntersectionObserverCallback) {
+        observerCallback = callback;
+      }
+    } as typeof IntersectionObserver;
+    (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
+  });
+
+  // 2026-08-25: the pane force-scrolled to the bottom on every 15s poll because the effect
+  // keyed on the raw query array, whose identity changes on each refetch.
+  it("selecting a conversation sets scrollTop once and never calls scrollIntoView", () => {
+    const view = renderPane();
+    expect(scrollTopAssignments).toEqual([1000]);
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+
+    testState.messages = testState.messages.map((message) => ({ ...message }));
+    view.rerender(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId={account.id}
+        pageId={account.platform_user_id}
+        onScrollStateChange={() => undefined}
+      />,
+    );
+    expect(scrollTopAssignments).toEqual([1000]);
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("a refetch returning the same page does not re-scroll", () => {
+    const view = renderPane();
+    scrollTopAssignments = [];
+    (HTMLElement.prototype.scrollTo as ReturnType<typeof vi.fn>).mockClear();
+
+    testState.messages = testState.messages.map((message) => ({ ...message }));
+    view.rerender(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId={account.id}
+        pageId={account.platform_user_id}
+        onScrollStateChange={() => undefined}
+      />,
+    );
+    expect(scrollTopAssignments).toEqual([]);
+    expect(HTMLElement.prototype.scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("a prepended page preserves the anchor", () => {
+    const view = renderPane();
+    currentScrollTop = 0;
+    act(() => {
+      observerCallback?.(
+        [{ isIntersecting: true } as IntersectionObserverEntry],
+        {} as IntersectionObserver,
+      );
+    });
+    expect(testState.fetchOlder).toHaveBeenCalled();
+
+    currentScrollHeight = 1400;
+    testState.messages = [bubble("older", "2026-08-25T11:59:00.000Z"), ...testState.messages];
+    view.rerender(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId={account.id}
+        pageId={account.platform_user_id}
+        onScrollStateChange={() => undefined}
+      />,
+    );
+    expect(currentScrollTop).toBe(400);
   });
 });

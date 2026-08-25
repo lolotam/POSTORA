@@ -5,6 +5,7 @@ import { useWhatsAppInboxApi } from "../application/ports";
 import { WhatsAppInboxApiProvider } from "./WhatsAppInboxApiProvider";
 
 const fakeApi: WhatsAppInboxApi = {
+  getMessagesPage: vi.fn(),
   getMedia: vi.fn(),
   sendMedia: vi.fn(),
   sendInteractive: vi.fn(),

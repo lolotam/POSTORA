@@ -1,4 +1,7 @@
 import { createContext, useContext } from "react";
+import type { MessageCursor } from "../domain/messageCursor";
+
+export type { MessageCursor };
 
 export type WhatsAppAttachmentKind = "image" | "video" | "audio" | "document";
 
@@ -49,7 +52,39 @@ export interface SendWhatsAppInteractiveRequest {
   interactive: unknown;
 }
 
+export interface WhatsAppMessage {
+  id: string;
+  message: string;
+  from: { name: string; id: string };
+  to: Array<{ name: string; id: string }>;
+  created_time: string;
+  attachments: WhatsAppAttachment[];
+  media_understanding?: string | null;
+  provider_message_id?: string | null;
+  direction?: string | null;
+  status?: string | null;
+  revoked_at?: string | null;
+  revoked_by?: string | null;
+  conversation_id?: string;
+}
+
+export interface GetMessagesPageRequest {
+  social_account_id: string;
+  conversation_id: string;
+  limit?: number;
+  before?: MessageCursor;
+}
+
+export interface GetMessagesPageResponse {
+  messages: WhatsAppMessage[];
+  page_info?: {
+    next_before: MessageCursor | null;
+    has_more: boolean;
+  };
+}
+
 export interface WhatsAppInboxApi {
+  getMessagesPage(input: GetMessagesPageRequest): Promise<GetMessagesPageResponse>;
   getMedia(input: GetWhatsAppMediaRequest): Promise<GetWhatsAppMediaResponse>;
   sendMedia(input: SendWhatsAppMediaRequest): Promise<unknown>;
   sendInteractive(input: SendWhatsAppInteractiveRequest): Promise<unknown>;
