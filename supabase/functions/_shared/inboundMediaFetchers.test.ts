@@ -262,3 +262,24 @@ Deno.test("oversized base64 is rejected on encoded length, before atob allocates
     "exceeds",
   );
 });
+
+Deno.test("a body that emits one chunk and never closes times out instead of hanging", async () => {
+  // The regression CodeRabbit asked for. A between-reads clock check does not catch this:
+  // the second reader.read() simply never settles, so only racing each read does.
+  const stalling = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new Uint8Array([1, 2, 3]));
+      // never close(), never enqueue again
+    },
+  });
+  await assertRejects(
+    () =>
+      new CloudGraphFetcher().fetchMediaBytes(
+        { platform: "whatsapp", accessToken: "t", mediaUrl: "https://scontent.fbcdn.net/a" },
+        { maxBytes: 1024, timeoutMs: 40 },
+        () => Promise.resolve(new Response(stalling, { status: 200 })),
+      ),
+    MediaFetchError,
+    "exceeded",
+  );
+});

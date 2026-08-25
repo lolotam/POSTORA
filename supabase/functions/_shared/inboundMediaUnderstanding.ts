@@ -154,22 +154,45 @@ function abortError(): Error {
  * returns headers and then stalls the body would otherwise hang forever, and this runs
  * inside the continuation that owes the customer a reply.
  */
-async function withTimeout<T>(
-  work: (signal: AbortSignal) => Promise<T>,
-  timeoutMs: number,
-): Promise<T> {
-  const controller = new AbortController();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => {
-      controller.abort();
-      reject(abortError());
-    }, timeoutMs);
-  });
+/**
+ * One deadline for an entire provider attempt: the request AND the body parse.
+ *
+ * Two separate timers (one around fetch, one around .json()) let a slow provider consume
+ * twice the configured budget, and left the response body undrained when the deadline
+ * won -- which holds the connection open inside a continuation that is already late.
+ */
+class ProviderDeadline {
+  readonly controller = new AbortController();
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private readonly expiry: Promise<never>;
+
+  constructor(timeoutMs: number) {
+    this.expiry = new Promise<never>((_resolve, reject) => {
+      this.timer = setTimeout(() => {
+        this.controller.abort();
+        reject(abortError());
+      }, timeoutMs);
+    });
+    // Nothing else observes this promise until race() does, and an unobserved rejection
+    // is a crash in some runtimes.
+    this.expiry.catch(() => {});
+  }
+
+  race<T>(work: Promise<T>): Promise<T> {
+    return Promise.race([work, this.expiry]);
+  }
+
+  release(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+  }
+}
+
+/** Drains an unread body so the deadline does not leave the connection hanging. */
+async function discardBody(response: Response | null): Promise<void> {
   try {
-    return await Promise.race([work(controller.signal), deadline]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    await response?.body?.cancel();
+  } catch {
+    // Already consumed or already errored; nothing to release.
   }
 }
 
@@ -179,14 +202,16 @@ function isAbort(error: unknown): boolean {
 
 async function callGemini(call: ProviderCall, prompt: string): Promise<string> {
   const { bytes, mimeType, key, model, timeoutMs, fetcher } = call;
-  const response = await withTimeout(
-    (signal) =>
+  const deadline = new ProviderDeadline(timeoutMs);
+  let response: Response | null = null;
+  try {
+    response = await deadline.race(
       fetcher(`${GEMINI_BASE}/${model}:generateContent`, {
         method: "POST",
         // Header, never ?key= -- query strings are retained in proxy logs, exception
         // tooling and provider access records, and this key bills real money.
         headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        signal,
+        signal: deadline.controller.signal,
         body: JSON.stringify({
           contents: [{
             parts: [
@@ -197,24 +222,30 @@ async function callGemini(call: ProviderCall, prompt: string): Promise<string> {
           generationConfig: { temperature: 0, maxOutputTokens: 2048 },
         }),
       }),
-    timeoutMs,
-  );
+    );
 
-  const data = await withTimeout(async () => {
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new Error(`gemini ${response.status}: ${body.slice(0, 200)}`);
-    }
-    return await response.json();
-  }, timeoutMs);
+    const settled = response;
+    const data = await deadline.race((async () => {
+      if (!settled.ok) {
+        const body = await settled.text().catch(() => "");
+        throw new Error(`gemini ${settled.status}: ${body.slice(0, 200)}`);
+      }
+      return await settled.json();
+    })());
 
-  const text = data?.candidates?.[0]?.content?.parts
-    ?.map((part: { text?: string }) => part?.text ?? "")
-    .join("")
-    .trim();
+    const text = data?.candidates?.[0]?.content?.parts
+      ?.map((part: { text?: string }) => part?.text ?? "")
+      .join("")
+      .trim();
 
-  if (!text) throw new Error("gemini returned no text");
-  return text;
+    if (!text) throw new Error("gemini returned no text");
+    return text;
+  } catch (error) {
+    await discardBody(response);
+    throw error;
+  } finally {
+    deadline.release();
+  }
 }
 
 async function callWhisper(call: ProviderCall, languageHint?: string): Promise<string> {
@@ -229,28 +260,36 @@ async function callWhisper(call: ProviderCall, languageHint?: string): Promise<s
   form.append("model", model);
   if (languageHint) form.append("language", languageHint);
 
-  const response = await withTimeout(
-    (signal) =>
+  const deadline = new ProviderDeadline(timeoutMs);
+  let response: Response | null = null;
+  try {
+    response = await deadline.race(
       fetcher(WHISPER_ENDPOINT, {
         method: "POST",
         headers: { Authorization: `Bearer ${key}` },
-        signal,
+        signal: deadline.controller.signal,
         body: form,
       }),
-    timeoutMs,
-  );
+    );
 
-  const data = await withTimeout(async () => {
-    if (!response.ok) {
-      const body = await response.text().catch(() => "");
-      throw new Error(`whisper ${response.status}: ${body.slice(0, 200)}`);
-    }
-    return await response.json();
-  }, timeoutMs);
+    const settled = response;
+    const data = await deadline.race((async () => {
+      if (!settled.ok) {
+        const body = await settled.text().catch(() => "");
+        throw new Error(`whisper ${settled.status}: ${body.slice(0, 200)}`);
+      }
+      return await settled.json();
+    })());
 
-  const text = String(data?.text ?? "").trim();
-  if (!text) throw new Error("whisper returned no text");
-  return text;
+    const text = String(data?.text ?? "").trim();
+    if (!text) throw new Error("whisper returned no text");
+    return text;
+  } catch (error) {
+    await discardBody(response);
+    throw error;
+  } finally {
+    deadline.release();
+  }
 }
 
 /**

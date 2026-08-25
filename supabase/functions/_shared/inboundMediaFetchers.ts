@@ -112,8 +112,16 @@ export interface InboundMediaFetcher {
  * oversized or lying response through and buffer it anyway. Streaming lets us abandon
  * the read the moment the ceiling is crossed, which is the point of having a limit.
  */
+/** Rejects with a timeout MediaFetchError once `ms` elapses. Never resolves. */
+function timeoutAfter(ms: number): { promise: Promise<never>; cancel: () => void } {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const promise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new MediaFetchError(`body read exceeded ${ms}ms`, "timeout")), ms);
+  });
+  return { promise, cancel: () => { if (timer !== undefined) clearTimeout(timer); } };
+}
+
 async function readCapped(response: Response, maxBytes: number, timeoutMs = 0): Promise<Uint8Array> {
-  const deadline = timeoutMs > 0 ? Date.now() + timeoutMs : Infinity;
   const declared = Number(response.headers.get("content-length") ?? "");
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new MediaFetchError(`declared ${declared} bytes exceeds ${maxBytes}`, "too_large");
@@ -130,23 +138,30 @@ async function readCapped(response: Response, maxBytes: number, timeoutMs = 0): 
   const reader = response.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  // One deadline for the WHOLE body, raced against every read. Checking the clock between
+  // reads is not enough: a server can send headers, emit one chunk, and then leave the
+  // next read pending forever, which would hang the continuation that owes the customer
+  // a reply.
+  const budget = timeoutMs > 0 ? timeoutAfter(timeoutMs) : null;
   try {
     while (true) {
-      if (Date.now() > deadline) {
-        await reader.cancel().catch(() => {});
-        throw new MediaFetchError(`body read exceeded ${timeoutMs}ms`, "timeout");
-      }
-      const { done, value } = await reader.read();
+      const { done, value } = budget
+        ? await Promise.race([reader.read(), budget.promise])
+        : await reader.read();
       if (done) break;
       if (!value) continue;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel().catch(() => {});
         throw new MediaFetchError(`stream exceeded ${maxBytes} bytes`, "too_large");
       }
       chunks.push(value);
     }
+  } catch (error) {
+    // Release the socket on the way out, whether we hit the cap or the deadline.
+    await reader.cancel().catch(() => {});
+    throw error;
   } finally {
+    budget?.cancel();
     reader.releaseLock?.();
   }
 

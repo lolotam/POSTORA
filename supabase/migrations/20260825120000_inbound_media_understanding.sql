@@ -16,9 +16,11 @@ COMMENT ON COLUMN public.whatsapp_messages.media_understanding IS
 COMMENT ON COLUMN public.whatsapp_messages.media_understanding_meta IS
   'provider, model, kind, duration_seconds, confidence, extracted_data, attempted_at. Used for cost attribution and for judging transcription quality after the fact.';
 
--- Partial: the overwhelming majority of rows are text and will never carry a
--- value here, so indexing only the populated rows keeps this small. Supports
--- the daily per-account cap count and the admin usage view.
-CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_media_understanding
-  ON public.whatsapp_messages (social_account_id, timestamp DESC)
-  WHERE media_understanding IS NOT NULL;
+-- No index here on purpose.
+--
+-- An earlier revision added a partial index to support a daily-cap COUNT over this table.
+-- That cap now lives in media_understanding_usage (20260825130000), so the index had no
+-- reader -- and CREATE INDEX takes ACCESS EXCLUSIVE on whatsapp_messages, which receives
+-- every inbound webhook write. Building an unused index would stall live inserts for
+-- nothing. Add one when a query actually needs it, with CONCURRENTLY in its own
+-- non-transactional migration.

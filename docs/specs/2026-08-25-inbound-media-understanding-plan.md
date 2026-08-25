@@ -1,6 +1,6 @@
 # Inbound Media Understanding — Implementation Plan
 
-**Date:** 2026-08-25 · **Status:** Draft for approval · **Version:** 1.0
+**Date:** 2026-08-25 · **Status:** Phase 1 implemented · **Version:** 1.1
 **Spec:** `docs/specs/2026-08-25-inbound-media-understanding.md`
 
 > Contracts and rationale live in the spec; this plan references decision IDs (D1–D8) rather than
@@ -48,10 +48,10 @@ Proves the design against 4 accounts.
 | 1.2 | `_shared/inboundMediaUnderstanding.ts` — the **pure** understanding (bytes → text). No Supabase client, no account, no `connection_mode`. Deno tests hit it directly | D9, §6 |
 | 1.2b | `InboundMediaFetcher` port + orchestrator (setting, cap, model resolution, row write, degradation) | D9, D7 |
 | 1.3 | `CloudGraphFetcher` — sends `Authorization: Bearer`, enforces the streaming byte ceiling. Serves **both** `cloud_api` and `coexistence`, mirroring `whatsappTransport.ts:106` | §2.5, §8.2, D9 |
-| 1.4 | Audio via Deepgram `nova-3` `language=multi`, falling back to Whisper | D3 |
-| 1.5 | Image via Gemini vision using `GOOGLE_AI_STUDIO_KEY` | D3 |
+| 1.4 | Audio via Gemini `gemini-2.5-flash`, falling back to Whisper `whisper-1`. **Not Deepgram** — its key is absent from the edge runtime (spec D3 R1) | D3 |
+| 1.5 | Image via the same Gemini call path, `GOOGLE_AI_STUDIO_KEY` | D3 |
 | 1.6 | `account_metadata.media_understanding` resolver, default `off`, in the style of `_shared/automationHandler.ts` | D4 |
-| 1.7 | Daily per-account cap + size/duration caps + bounded timeout | §8 |
+| 1.7 | Atomic daily per-account cap (`reserve_media_understanding`), 15 MB ceiling enforced while streaming, 10s per-provider deadline covering request **and** body | §8 |
 | 1.8 | `whatsapp-webhook` wiring: understanding runs in `runInBackground`, and the agent trigger moves inside that continuation | D6 |
 | 1.9 | `transcribe-media` refactored onto the shared module, external behaviour unchanged | D2 |
 
@@ -127,10 +127,10 @@ came from a mis-transcription or from the model. Without it, every complaint is 
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Per-message provider cost on a webhook path | Unbounded spend | Default `off`, per-account opt-in, daily cap, size/duration caps (D4, §8) |
+| Per-message provider cost on a webhook path | Unbounded spend | Default `off`, per-account opt-in, atomic attempt-counting daily cap that fails closed, 15 MB streaming ceiling (D4, §8) |
 | Slow provider stalls the webhook | Meta retries; duplicate processing | `runInBackground` + bounded timeout (D6) |
 | Cloud media URL expires mid-flight | No transcript | Download immediately (D8); degrade to placeholder (D7) |
-| Arabic quality below usable | Feature does not deliver for the actual market | `nova-3 language=multi` is already the configured choice; Phase 1 exit is judged on a real Arabic note, and a failure here should stop the phase |
+| Arabic quality below usable | Feature does not deliver for the actual market | Gemini is prompted to preserve the spoken language and not translate; Phase 1 exit is judged on a real Arabic note, and a failure here should stop the phase |
 | Agent acts on a mis-transcription | Wrong answer to a customer | Transcript stored and shown (3.1); open question 2 proposes the agent signal it is working from a transcript |
 | `transcribe-media` refactor regresses the media library | A shipped feature breaks | Do it last; drop it rather than risk it (1.9) |
 | Tests do not run in CI | Regressions land silently | Known and stated (spec §9). Run `deno test` locally; consider the CI Deno job from the Partner API plan P0.4 as a shared prerequisite |

@@ -1,6 +1,6 @@
 # Inbound Media Understanding for the WhatsApp AI Agent — Spec
 
-**Date:** 2026-08-25 · **Status:** Draft for approval · **Version:** 1.0
+**Date:** 2026-08-25 · **Status:** Phase 1 implemented · **Version:** 1.1
 **Plan:** `docs/specs/2026-08-25-inbound-media-understanding-plan.md`
 **Required reading for any implementer:** `ARCHITECTURE.md` — §12 (Edge Function shape),
 §13 (prohibitions), §24 (service role), §26 (external HTTP), §27 (background work).
@@ -207,11 +207,19 @@ user-facing media library and the webhook path. Its external behaviour does not 
 
 ### D3 — Providers already configured; no new secrets
 
+**(R1) Corrected during implementation.** v1.0 chose Deepgram `nova-3` as the audio primary
+because `transcribe-media/index.ts:73` configures it. **`DEEPGRAM_API_KEY` is not set in the
+edge runtime** — only `GOOGLE_AI_STUDIO_KEY` and `OPENAI_API_KEY` are — so that choice would
+have failed in production on the first voice note. Verified against the running container.
+
 | Kind | Provider | Why |
 |---|---|---|
-| audio | Deepgram `nova-3`, `language=multi` (`transcribe-media/index.ts:73`) | Already the configured choice, already multilingual — decisive for Arabic/English |
-| audio fallback | OpenAI Whisper (`:72`) | Existing three-tier ladder |
-| image | Gemini vision via `GOOGLE_AI_STUDIO_KEY` | Already used for embeddings; no new provider, no new secret |
+| audio | **Gemini `gemini-2.5-flash`** via `GOOGLE_AI_STUDIO_KEY` | Multimodal, handles audio and image on one code path, and its key is actually present |
+| audio fallback | OpenAI Whisper (`whisper-1`) | `OPENAI_API_KEY` is present. Tried on **any** Gemini failure, timeouts included |
+| image | Gemini `gemini-2.5-flash` | Same call shape as audio; no second provider |
+
+Deepgram remains a reasonable future primary — it would need `DEEPGRAM_API_KEY` provisioned
+first, and that is a deployment change, not a code one.
 
 Model selection continues to read `app_settings` / `system_settings` as `transcribe-media` does, so
 admins keep one place to change it.
@@ -320,7 +328,11 @@ No RLS change: `whatsapp_messages` policies already scope by `user_id`.
 1. **Opt-in per account**, default `off` (D4).
 2. **Size cap** checked from `Content-Length` before reading the body, and a hard byte ceiling while
    reading — a `Content-Length` header is attacker-influenced and cannot be the only check.
-3. **Duration cap** for audio.
+3. ~~**Duration cap** for audio.~~ **(R1) Not implemented, and the guarantee is withdrawn.**
+   Duration is not knowable without decoding the container, which costs as much as the
+   transcription it would be protecting. The **byte ceiling bounds it in practice** — 15 MB of
+   opus is far longer than any voice note a customer sends. Claiming a duration cap that does
+   not exist would be exactly the kind of untrue guarantee this spec argues against elsewhere.
 4. **Daily per-account cap**, mirroring the agent's existing daily cap
    (`ai-agent-reply/index.ts` `isDailyCapReached`).
 5. **Bounded timeout** on every outbound call — `ARCHITECTURE.md` §26.
