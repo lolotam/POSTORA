@@ -45,8 +45,9 @@ Proves the design against 4 accounts.
 | # | Deliverable | Spec ref |
 |---|---|---|
 | 1.1 | Additive migration: `media_understanding`, `media_understanding_meta` on `whatsapp_messages` | §7 |
-| 1.2 | `_shared/inboundMediaUnderstanding.ts` implementing the §6 contract, with Deno tests over a stubbed fetcher | D2, §6 |
-| 1.3 | Cloud downloader that sends `Authorization: Bearer` and enforces the streaming byte ceiling | §2.5, §8.2 |
+| 1.2 | `_shared/inboundMediaUnderstanding.ts` — the **pure** understanding (bytes → text). No Supabase client, no account, no `connection_mode`. Deno tests hit it directly | D9, §6 |
+| 1.2b | `InboundMediaFetcher` port + orchestrator (setting, cap, model resolution, row write, degradation) | D9, D7 |
+| 1.3 | `CloudGraphFetcher` — sends `Authorization: Bearer`, enforces the streaming byte ceiling. Serves **both** `cloud_api` and `coexistence`, mirroring `whatsappTransport.ts:106` | §2.5, §8.2, D9 |
 | 1.4 | Audio via Deepgram `nova-3` `language=multi`, falling back to Whisper | D3 |
 | 1.5 | Image via Gemini vision using `GOOGLE_AI_STUDIO_KEY` | D3 |
 | 1.6 | `account_metadata.media_understanding` resolver, default `off`, in the style of `_shared/automationHandler.ts` | D4 |
@@ -84,13 +85,19 @@ Where the value is: 13 of 17 accounts.
 | # | Deliverable | Spec ref |
 |---|---|---|
 | 2.1 | Media download added to `_shared/evolutionApi.ts` — new capability, with tests | §2.6 |
-| 2.2 | `whatsapp-evolution-webhook` wired to the same shared module | D2 |
-| 2.3 | Evolution transport branch in the module's `source` union | §6 |
+| 2.2 | `EvolutionFetcher` implementing the D9 port | D9 |
+| 2.3 | `whatsapp-evolution-webhook` wired to the same orchestrator | D2, D9 |
+
+**Note on scope.** Because of D9, this phase adds **a fetcher and nothing else** — the
+understanding, the caps, the storage and the degradation path are all already proven in Phase 1.
+That is the whole point of the boundary: if Phase 2 finds itself changing
+`inboundMediaUnderstanding.ts`, the boundary was drawn wrong and that is a signal to stop.
 
 **Exit criteria**
 
 - Same live test as Phase 1, against an `evolution_qr` account.
-- Both transports produce the same module input shape — proven by a test, not by inspection.
+- `inboundMediaUnderstanding.ts` is **unchanged** by this phase — verified by diff.
+- Both fetchers satisfy the same port, proven by one shared test suite run against both.
 - Evolution accounts that have not opted in are unchanged.
 
 **Risk.** Evolution's media retrieval is Baileys-backed and less predictable than Graph. If bytes

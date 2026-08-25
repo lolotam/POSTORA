@@ -130,6 +130,7 @@ a different table and a different flow.
 | Video | 25 inbound; poor cost-to-value | Demand |
 | Backfilling the 385 historical messages | Cloud media URLs have expired; Evolution history may not be retrievable | Never for Cloud; maybe for Evolution |
 | Replacing `message_text` | Everything reading it today would change behaviour | Never |
+| **Instagram DM / Messenger** | Same defect and *worse* placeholder (`facebook-instagram-webhook:225` — every attachment type becomes `[Attachment]`, a caption-less media message becomes an empty string), but 114 of 1,059 conversations vs WhatsApp's 945 | Add `MetaMessagingFetcher` (D9). A fetcher, not a redesign — this is the deferral the D9 boundary is drawn to make cheap |
 
 ---
 
@@ -140,6 +141,57 @@ a different table and a different flow.
 Audio and image share one pipeline: resolve → download with auth → model → substitute text.
 Adding image to an audio implementation is roughly 20% more work for two thirds more coverage
 (§2.2). Shipping audio alone would be the worse trade.
+
+### D9 — Understanding is an agent capability, not a transport or platform feature **(R1)**
+
+**The gap this closes.** v1.0 of this spec described the work per transport, which implied the
+understanding itself differs by connection mode. It does not. Audio bytes become text the same way
+whether they arrived over Cloud API, Evolution, or Instagram. **Only the byte-fetching differs.**
+
+Two consequences v1.0 got wrong:
+
+**(a) There are two WhatsApp transports, not three.** `_shared/whatsappTransport.ts:106` already
+makes this split for *sending*:
+
+```ts
+if (account.connection_mode !== "evolution_qr") return new CloudApiTransport(account);
+```
+
+`cloud_api` and `coexistence` share one transport. Inbound media must mirror that existing port
+rather than invent a parallel three-way split — otherwise the two abstractions drift.
+
+**(b) The defect is not WhatsApp-only.** `facebook-instagram-webhook/index.ts:225`:
+
+```ts
+const messageText: string = event.message.text || (event.message.attachments ? "[Attachment]" : "");
+```
+
+fed to the agent at `:288`. Instagram DM and Messenger are **worse** than WhatsApp here: every
+attachment type — image, audio, video, file — collapses to one `[Attachment]` string, and a
+media-only message with no caption reaches the agent as an **empty string**. Production carries
+**111 Instagram conversations** and 3 Facebook (`messaging_cache`, 2026-08-25), against 945
+WhatsApp.
+
+**Decision.** One transport- and platform-agnostic understanding module, plus a thin fetcher port:
+
+```
+understandInboundMedia(bytes: Blob, kind, mimeType, limits) -> UnderstandingResult
+   ▲  pure: no transport, no platform, no Supabase client
+   │
+InboundMediaFetcher (port)  — fetch(ref) -> Blob
+   ├── CloudGraphFetcher      cloud_api + coexistence   (Bearer token, graph.facebook.com)
+   ├── EvolutionFetcher       evolution_qr              (Evolution API, §2.6)
+   └── MetaMessagingFetcher   instagram + facebook      (attachment payload URLs)
+```
+
+Adding a platform means adding a fetcher — roughly fifty lines — and never touching the
+understanding. That is the Open/Closed shape `ARCHITECTURE.md` §19 requires for platform work, and
+it is why the module signature takes **bytes**, not a transport descriptor.
+
+**Scope consequence.** Instagram and Messenger are **not** in this spec's phases — WhatsApp is 945
+of 1,059 conversations and is where the work is justified. But the module boundary is drawn so that
+adding them later is a fetcher, not a redesign. Recorded in §4 as a deferral with re-entry criteria
+rather than left implicit.
 
 ### D2 — Extract into `_shared/`; do not call `transcribe-media` over HTTP
 
@@ -201,23 +253,43 @@ for later. If the URL has already expired, D7 applies.
 
 ## 6. Contract
 
+Two pieces, split on the D9 boundary.
+
+**The understanding — pure, and knows nothing about transports or platforms:**
+
 ```
 understandInboundMedia({
-  kind:      "audio" | "image",
-  source:    { transport: "cloud",     url: string, accessToken: string }
-           | { transport: "evolution", instance: string, messageId: string },
-  mimeType:  string | null,
-  admin:     SupabaseClient,
-  limits:    { maxBytes: number, maxSeconds: number, timeoutMs: number },
+  bytes:    Blob,
+  kind:     "audio" | "image",
+  mimeType: string | null,
+  models:   { audio: string, audioFallback: string, image: string },
+  limits:   { maxBytes: number, maxSeconds: number, timeoutMs: number },
 })
   -> { ok: true,  text: string, provider: string, model: string,
        language?: string, durationSec?: number, costUsd?: number }
-   | { ok: false, reason: "disabled" | "unsupported_type" | "too_large"
-                        | "download_failed" | "provider_failed"
-                        | "timeout" | "daily_cap_reached" }
+   | { ok: false, reason: "unsupported_type" | "too_large"
+                        | "provider_failed" | "timeout" }
 ```
 
-Never throws. `ok: false` is a normal outcome the caller handles by keeping the placeholder.
+No Supabase client, no account, no `connection_mode`. This makes it directly unit-testable and is
+what keeps a new platform from touching it.
+
+**The fetcher port — the only thing that differs per source:**
+
+```
+interface InboundMediaFetcher {
+  fetch(ref: MediaRef, limits: { maxBytes: number; timeoutMs: number }): Promise<Blob>;
+}
+
+CloudGraphFetcher      // cloud_api + coexistence — Bearer token (§2.5)
+EvolutionFetcher       // evolution_qr — Evolution API (§2.6)
+MetaMessagingFetcher   // instagram + facebook — deferred (§4), but the seam exists
+```
+
+**The orchestrator** — resolves the per-account setting, the daily cap and the models, picks the
+fetcher, calls the understanding, writes the row. This is the only piece that touches the database,
+and it is where `ok: false` plus the fetcher's own failures are collapsed into "keep the
+placeholder" (D7). It never throws to the webhook.
 
 ---
 
