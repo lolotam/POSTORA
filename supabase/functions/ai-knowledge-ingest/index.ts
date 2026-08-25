@@ -338,8 +338,8 @@ async function uploadGraphExport(
         upsert: true,
       });
     if (!storageError) {
-      const { data: urlData } = (admin as any).storage.from(BUCKET).getPublicUrl(storagePath);
-      if (urlData?.publicUrl) return urlData.publicUrl;
+      const publicBase = Deno.env.get("API_EXTERNAL_URL") || Deno.env.get("SUPABASE_PUBLIC_URL") || "https://api.postora.cloud";
+      return `${publicBase.replace(/\/+$/, "")}/storage/v1/object/public/${BUCKET}/${storagePath.replace(/^\/+/, "")}`;
     } else {
       console.warn(`[uploadGraphExport] Supabase storage upload error for ${storagePath}:`, storageError);
     }
