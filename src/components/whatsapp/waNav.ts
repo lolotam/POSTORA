@@ -81,8 +81,8 @@ export const whatsappAutomationTabs: AutomationTabItem[] = [
   { path: "ai-agent", label: "AI Agent", icon: Sparkles },
   { path: "quick-replies", label: "Quick Replies", icon: Zap },
   { path: "auto-replies", label: "Auto Replies", icon: Bot },
-  { path: "agents", label: "Agents", icon: UserCog },
   { path: "broadcasts", label: "Broadcasting", icon: Radio },
+  { path: "agents", label: "Agents", icon: UserCog },
   { path: "/human-agent", label: "Human Agent", icon: Headphones, absolute: true },
 ];
 
@@ -91,7 +91,7 @@ export const whatsappSectionDescriptions: Record<string, string> = {
   contacts: "Manage saved contacts, uploads, tags, and customer records.",
   templates: "Review approved message templates and send compliant outreach.",
   analytics: "Track conversation activity, unread messages, and response trends.",
-  automation: "AI agent, quick replies, auto replies, broadcasts, agents, and human handoff.",
+  automation: "AI agent, quick replies, auto replies, broadcasting, and team agents.",
   "quick-replies": "Keep reusable replies ready for agents and common questions.",
   "auto-replies": "Automate inbound responses based on keywords and availability.",
   broadcasts: "Plan and send WhatsApp broadcast campaigns to opted-in contacts.",

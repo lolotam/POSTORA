@@ -88,8 +88,8 @@ describe("whatsappAutomationTabs", () => {
       "ai-agent",
       "quick-replies",
       "auto-replies",
-      "agents",
       "broadcasts",
+      "agents",
     ]);
   });
 

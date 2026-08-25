@@ -2,6 +2,7 @@ import { Sparkles } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { AI_AGENT_TABS, AiAgentManager, type AiAgentTab } from "@/components/messaging/AiAgentManager";
 import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
+import { WhatsAppAutomationNav } from "@/components/whatsapp/WhatsAppAutomationNav";
 import { WHATSAPP_BASE_PATH } from "@/components/whatsapp/waNav";
 
 export default function AiAgent() {
@@ -16,6 +17,7 @@ export default function AiAgent() {
         title="AI Agent"
         description="Configure the AI assistant that answers customers automatically."
       />
+      <WhatsAppAutomationNav />
       <AiAgentManager
         activeTab={activeTab}
         onTabChange={(nextTab) =>

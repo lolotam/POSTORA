@@ -1,5 +1,6 @@
 import { UserCog } from "lucide-react";
 import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
+import { WhatsAppAutomationNav } from "@/components/whatsapp/WhatsAppAutomationNav";
 import { WorkspaceTeamManager } from "@/components/whatsapp/WorkspaceTeamManager";
 
 export default function Agents() {
@@ -10,6 +11,7 @@ export default function Agents() {
         title="Workspace team"
         description="Manage workspace access, roles, invitations, and operational agent presence."
       />
+      <WhatsAppAutomationNav />
       <WorkspaceTeamManager />
     </div>
   );

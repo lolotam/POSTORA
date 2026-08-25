@@ -11,7 +11,6 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
-import { useAllowedAiAgentModels, formatAllowedModelValue } from "@/hooks/useAllowedAiAgentModels";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
@@ -27,7 +26,7 @@ const defaultConfig: Required<Pick<AiAgentConfigInput,
   language_mode: "auto",
   model: "gpt-4o-mini",
   daily_message_cap: 50,
-  reply_cooldown_seconds: 60,
+  reply_cooldown_seconds: 0,
   persona_instructions: "",
   business_profile_text: "",
   admin_phone_numbers: [],
@@ -51,7 +50,6 @@ interface AiAgentManagerProps {
 
 export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }: AiAgentManagerProps = {}) {
   const { config, isLoading, upsertConfig } = useAiAgentConfig(platform);
-  const { data: allowedModels = [] } = useAllowedAiAgentModels();
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -208,45 +206,32 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Advanced</CardTitle>
-              <CardDescription>Models are curated by your admin. Choose a primary and up to two fallbacks.</CardDescription>
+              <CardDescription>Daily conversation limits and response cooldown settings.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-5">
-              <div className="grid gap-5 md:grid-cols-3">
-                {([
-                  { key: "model", label: "Primary model", required: true },
-                  { key: "fallback_model_1", label: "Fallback #1", required: false },
-                  { key: "fallback_model_2", label: "Fallback #2", required: false },
-                ] as const).map((slot) => {
-                  const stored = (form[slot.key as keyof AiAgentConfigInput] as string) || "";
-                  // Configs saved before the allow-list hold bare model ids
-                  // (e.g. "gpt-4o-mini"); map them onto the "provider/model_id"
-                  // option values so the current selection still displays.
-                  const matched = allowedModels.find(
-                    (m) => formatAllowedModelValue(m) === stored || m.model_id === stored,
-                  );
-                  const value = matched ? formatAllowedModelValue(matched) : stored;
-                  return (
-                    <div key={slot.key} className="space-y-2">
-                      <Label>{slot.label}</Label>
-                      <Select
-                        value={value || (slot.required ? undefined : "__none__")}
-                        onValueChange={(v) => update(slot.key as keyof AiAgentConfigInput, (v === "__none__" ? null : v) as any)}
-                      >
-                        <SelectTrigger><SelectValue placeholder={allowedModels.length ? "Choose a model" : "No models configured"} /></SelectTrigger>
-                        <SelectContent>
-                          {!slot.required && <SelectItem value="__none__">— None —</SelectItem>}
-                          {allowedModels.map((m) => (
-                            <SelectItem key={m.id} value={formatAllowedModelValue(m)}>{m.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  );
-                })}
-              </div>
               <div className="grid gap-5 md:grid-cols-2">
-                <div className="space-y-2"><Label htmlFor="daily-cap">Daily message cap</Label><Input id="daily-cap" type="number" min={1} value={form.daily_message_cap ?? 50} onChange={(event) => update("daily_message_cap", Number(event.target.value))} /></div>
-                <div className="space-y-2"><Label htmlFor="cooldown">Reply cooldown (seconds)</Label><Input id="cooldown" type="number" min={0} value={form.reply_cooldown_seconds ?? 60} onChange={(event) => update("reply_cooldown_seconds", Number(event.target.value))} /></div>
+                <div className="space-y-2">
+                  <Label htmlFor="daily-cap">Daily message cap</Label>
+                  <Input
+                    id="daily-cap"
+                    type="number"
+                    min={1}
+                    value={form.daily_message_cap ?? 50}
+                    onChange={(event) => update("daily_message_cap", Number(event.target.value))}
+                  />
+                  <p className="text-xs text-muted-foreground">Maximum automated replies sent per day.</p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="cooldown">Reply cooldown (seconds)</Label>
+                  <Input
+                    id="cooldown"
+                    type="number"
+                    min={0}
+                    value={form.reply_cooldown_seconds ?? 0}
+                    onChange={(event) => update("reply_cooldown_seconds", Number(event.target.value))}
+                  />
+                  <p className="text-xs text-muted-foreground">Wait time between consecutive AI replies (0 for instant).</p>
+                </div>
               </div>
             </CardContent>
           </Card>
