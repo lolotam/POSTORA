@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -13,14 +13,36 @@ interface ConversationListProps {
   onSelect: (conv: Conversation) => void;
   isLoading: boolean;
   showLabels?: boolean;
+  // Selection is opt-in and every prop below is optional, so the Facebook, Instagram and
+  // Brand Intelligence call sites pass nothing and render exactly as before.
+  selectionMode?: boolean;
+  selectedIds?: ReadonlySet<string>;
+  onToggleSelect?: (conv: Conversation) => void;
+  onFilteredChange?: (conversations: Conversation[]) => void;
 }
 
-export function ConversationList({ conversations, selectedId, onSelect, isLoading, showLabels }: ConversationListProps) {
+export function ConversationList({
+  conversations,
+  selectedId,
+  onSelect,
+  isLoading,
+  showLabels,
+  selectionMode,
+  selectedIds,
+  onToggleSelect,
+  onFilteredChange,
+}: ConversationListProps) {
   const [search, setSearch] = useState("");
 
   const filtered = search
     ? conversations.filter((c) => c.participant_name.toLowerCase().includes(search.toLowerCase()))
     : conversations;
+
+  // Select-all must apply to what the user can actually see, so the owner of the selection
+  // needs the filtered list rather than the full one.
+  useEffect(() => {
+    onFilteredChange?.(filtered);
+  }, [filtered, onFilteredChange]);
 
   if (isLoading) {
     return (
@@ -55,13 +77,25 @@ export function ConversationList({ conversations, selectedId, onSelect, isLoadin
           filtered.map((conv) => (
             <button
               key={conv.id}
-              onClick={() => onSelect(conv)}
+              onClick={() => (selectionMode ? onToggleSelect?.(conv) : onSelect(conv))}
+              aria-pressed={selectionMode ? selectedIds?.has(conv.id) === true : undefined}
               className={cn(
                 "w-full flex items-start gap-3 p-3 text-left hover:bg-accent/50 transition-colors border-b",
                 selectedId === conv.id && "bg-accent",
                 conv.unread_count > 0 && "font-medium"
               )}
             >
+              {selectionMode && (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "mt-3 h-4 w-4 shrink-0 rounded-sm border",
+                    selectedIds?.has(conv.id)
+                      ? "border-primary bg-primary"
+                      : "border-muted-foreground/40",
+                  )}
+                />
+              )}
               <Avatar className="h-10 w-10 shrink-0">
                 <AvatarImage src={conv.participant_avatar || undefined} alt={conv.participant_name} />
                 <AvatarFallback className="bg-primary/10 text-primary text-sm">

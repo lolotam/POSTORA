@@ -22,9 +22,33 @@ export interface EvolutionMediaInput {
   fileName?: string;
 }
 
+export interface EvolutionAudioInput {
+  number: string;
+  audio: string;
+  delay?: number;
+  encoding?: boolean;
+}
+
 export interface EvolutionSendResult {
   messageId: string | null;
   raw: unknown;
+}
+
+export interface EvolutionRevokeKey {
+  id: string;
+  remoteJid: string;
+  fromMe: boolean;
+}
+
+export class EvolutionApiError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly body: unknown,
+  ) {
+    super(message);
+    this.name = "EvolutionApiError";
+  }
 }
 
 export interface FindMessagesOptions {
@@ -73,6 +97,8 @@ export interface EvolutionApi {
   deleteInstance(instanceName: string): Promise<unknown>;
   sendText(instanceName: string, input: { number: string; text: string }): Promise<EvolutionSendResult>;
   sendMedia(instanceName: string, input: EvolutionMediaInput): Promise<EvolutionSendResult>;
+  sendWhatsAppAudio(instanceName: string, input: EvolutionAudioInput): Promise<EvolutionSendResult>;
+  deleteMessageForEveryone(instanceName: string, key: EvolutionRevokeKey): Promise<unknown>;
   setWebhook(instanceName: string, webhook: EvolutionWebhookConfig): Promise<unknown>;
 }
 
@@ -132,7 +158,11 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
         ),
       ]);
       if (!response.ok) {
-        throw new Error(`Evolution API request failed with status ${response.status}`);
+        throw new EvolutionApiError(
+          `Evolution API request failed with status ${response.status}`,
+          response.status,
+          body,
+        );
       }
       return body;
     } catch (error) {
@@ -249,6 +279,25 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
         ...(input.fileName ? { fileName: input.fileName } : {}),
       }),
     })),
+    sendWhatsAppAudio: async (instanceName, input) => sendResult(await request(
+      `/message/sendWhatsAppAudio/${encodeURIComponent(instanceName)}`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          number: input.number,
+          audio: input.audio,
+          ...(input.delay != null ? { delay: input.delay } : {}),
+          ...(input.encoding != null ? { encoding: input.encoding } : {}),
+        }),
+      },
+    )),
+    deleteMessageForEveryone: (instanceName, key) => request(
+      `/chat/deleteMessageForEveryone/${encodeURIComponent(instanceName)}`,
+      {
+        method: "DELETE",
+        body: JSON.stringify(key),
+      },
+    ),
     setWebhook: (instanceName, webhook) => request(`/webhook/set/${encodeURIComponent(instanceName)}`, {
       method: "POST",
       body: JSON.stringify({

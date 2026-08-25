@@ -29,6 +29,17 @@ describe("WhatsAppNavList", () => {
     expect(screen.getByRole("link", { name: "Conversations" })).toBeInTheDocument();
   });
 
+  // 2026-08-25: the 68px rail kept h-4 w-4 icons, so a 16px glyph floated in 68px of space.
+  it("renders larger icons when collapsed", () => {
+    const { container } = renderNav({ collapsed: true });
+    expect(container.querySelector("svg")?.getAttribute("class")).toContain("h-5 w-5");
+  });
+
+  it("keeps the accessible name when collapsed", () => {
+    renderNav({ collapsed: true });
+    expect(screen.getByRole("link", { name: /conversations/i })).toBeInTheDocument();
+  });
+
   it("marks the active section for the current route", () => {
     renderNav({}, "/messaging/whatsapp/setup");
     expect(screen.getByRole("link", { name: "Setup" })).toHaveAttribute("aria-current", "page");

@@ -3,8 +3,36 @@ import { isDirectInstagramAccount, getPageTokenForMessaging, getSendCredentials 
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
+import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
+import {
+  conversationIdsForFilter,
+  keysetOrFilter,
+  MalformedMessageCursorError,
+  pageFetchLimit,
+  parseWhatsAppMessagePageRequest,
+  sliceWhatsAppMessagePage,
+} from "../_shared/whatsappMessagePage.ts";
+import {
+  MAX_MEDIA_ROWS,
+  OUTBOUND_SIGN_TTL_SECONDS,
+  ownedStoragePath,
+  resolveWhatsAppMedia,
+  signMediaPath,
+} from "../_shared/whatsappMediaResolver.ts";
 import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
+import {
+  getWhatsAppConversationState,
+  setWhatsAppMessageFlag,
+} from "../_shared/whatsappConversationState.ts";
+import {
+  revokeWhatsAppMessage,
+  WhatsAppRevokeError,
+} from "../_shared/whatsappRevoke.ts";
+import {
+  sendWhatsAppVoice,
+  WhatsAppVoiceSendError,
+} from "../_shared/whatsappVoiceSend.ts";
 import {
   COMMENT_AUTOMATION_HANDLERS,
   MESSAGE_AUTOMATION_HANDLERS,
@@ -1259,45 +1287,157 @@ Deno.serve(async (req) => {
       const { social_account_id, conversation_id } = body;
       if (!social_account_id || !conversation_id) throw new Error("social_account_id and conversation_id required");
 
-      const account = await withWhatsAppActionAccess({
+      await withWhatsAppActionAccess({
         client: whatsappAccessClient,
         userId: user.id,
         action: "whatsapp_get_messages",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
 
+      const pageRequest = parseWhatsAppMessagePageRequest(body);
       // Normalize conversation_id to handle both with and without '+' prefix
       const normalizedConvId = conversation_id.replace(/_\+/g, "_");
 
-      // whatsapp_messages has no workspace_id column. The workspace-authorized
-      // social_account_id above is therefore the tenant boundary for this query.
-      const { data: msgs, error: msgsError } = await adminClient
+      // `.in` rather than `.or` for the conversation ids: the PostgREST client appends
+      // duplicate `or` parameters, so the keyset predicate below would silently corrupt
+      // the SQL if this occupied the single `.or()` slot.
+      let messagesQuery = adminClient
         .from("whatsapp_messages")
         .select("*")
         .eq("social_account_id", social_account_id)
-        .or(`conversation_id.eq.${normalizedConvId},conversation_id.eq.${conversation_id}`)
-        // Newest-first, like Graph `get_messages`, so the shared inbox pane can treat both
-        // platforms alike. Ascending would also make the limit keep the OLDEST hundred, which
-        // hid every recent message on threads longer than that.
+        .in("conversation_id", conversationIdsForFilter(normalizedConvId, conversation_id));
+
+      if (pageRequest.mode === "paginated" && pageRequest.before) {
+        messagesQuery = messagesQuery.or(keysetOrFilter(pageRequest.before));
+      }
+
+      // Newest-first, like Graph `get_messages`, so the shared inbox pane can treat both
+      // platforms alike. Ascending would also make the limit keep the OLDEST hundred, which
+      // hid every recent message on threads longer than that.
+      const { data: msgs, error: msgsError } = await messagesQuery
         .order("timestamp", { ascending: false })
         // WhatsApp timestamps are second-granular and both ingest paths can land the same
         // second, so the id keeps the page stable across refetches instead of shuffling ties.
         .order("id", { ascending: false })
-        .limit(100);
+        .limit(pageFetchLimit(pageRequest));
 
       if (msgsError) throw msgsError;
 
-      // Format to match the Message interface expected by ConversationDetail
-      const messages = (msgs || []).map((m: any) => ({
-        id: m.id,
-        message: m.message_text || "",
-        from: { name: m.from_name || m.from_phone || "Unknown", id: m.from_phone || "" },
-        to: [{ name: "", id: m.to_phone || "" }],
-        created_time: m.timestamp,
-        attachments: m.media_url ? [{ file_url: m.media_url }] : [],
-      }));
-
+      const paged = sliceWhatsAppMessagePage(msgs || [], pageRequest);
+      const messages = paged.rows.map((m: any) => toWhatsAppMessageView(m));
+      if (paged.page_info) return jsonResponse({ messages, page_info: paged.page_info });
       return jsonResponse({ messages });
+    }
+
+    // ACTION: whatsapp_get_media
+    if (action === "whatsapp_get_media") {
+      const { social_account_id, message_row_ids } = body;
+      if (!social_account_id || !Array.isArray(message_row_ids)) {
+        throw new Error("social_account_id and message_row_ids required");
+      }
+      if (message_row_ids.length > MAX_MEDIA_ROWS) {
+        throw new Error(`message_row_ids exceeds ${MAX_MEDIA_ROWS}`);
+      }
+
+      const media = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_get_media",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        resolveWhatsAppMedia(adminClient, accountAccess, { messageRowIds: message_row_ids }));
+
+      return jsonResponse({ media });
+    }
+
+    // ACTION: whatsapp_get_conversation_state
+    if (action === "whatsapp_get_conversation_state") {
+      const { social_account_id, conversation_id, message_row_ids } = body;
+      if (!social_account_id || !conversation_id || !Array.isArray(message_row_ids)) {
+        throw new Error("social_account_id, conversation_id, and message_row_ids required");
+      }
+
+      const state = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_get_conversation_state",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        getWhatsAppConversationState(adminClient, accountAccess, user.id, {
+          conversationId: conversation_id,
+          messageRowIds: message_row_ids,
+        }));
+
+      return jsonResponse(state);
+    }
+
+    // ACTION: whatsapp_set_message_flag
+    if (action === "whatsapp_set_message_flag") {
+      const { social_account_id, conversation_id, message_row_id, pinned, hidden } = body;
+      if (!social_account_id || !conversation_id || !message_row_id) {
+        throw new Error("social_account_id, conversation_id, and message_row_id required");
+      }
+      if (pinned === undefined && hidden === undefined) {
+        throw new Error("pinned or hidden required");
+      }
+
+      const result = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_set_message_flag",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        setWhatsAppMessageFlag(adminClient, accountAccess, user.id, {
+          conversationId: conversation_id,
+          messageRowId: message_row_id,
+          ...(typeof pinned === "boolean" ? { pinned } : {}),
+          ...(typeof hidden === "boolean" ? { hidden } : {}),
+        }));
+
+      return jsonResponse(result);
+    }
+
+    // ACTION: whatsapp_revoke_message
+    if (action === "whatsapp_revoke_message") {
+      const { social_account_id, message_row_id } = body;
+      if (!social_account_id || !message_row_id) {
+        throw new Error("social_account_id and message_row_id required");
+      }
+
+      const result = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_revoke_message",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        revokeWhatsAppMessage(adminClient, accountAccess, user.id, {
+          messageRowId: message_row_id,
+        }));
+
+      return jsonResponse(result);
+    }
+
+    // ACTION: whatsapp_send_voice
+    if (action === "whatsapp_send_voice") {
+      const { social_account_id, recipient_phone, media_path, duration_seconds, mime_type } = body;
+      if (!social_account_id) {
+        throw new Error("social_account_id required");
+      }
+
+      const result = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_voice",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        sendWhatsAppVoice(adminClient, accountAccess, user.id, {
+          recipient_phone,
+          media_path,
+          duration_seconds,
+          mime_type,
+        }, { upsertOutboundConversation }));
+
+      return jsonResponse(result);
     }
 
     // ACTION: whatsapp_mark_read
@@ -1325,8 +1465,10 @@ Deno.serve(async (req) => {
 
     // ACTION: whatsapp_send_media
     if (action === "whatsapp_send_media") {
-      const { social_account_id, recipient_phone, media_url, media_type, caption } = body;
-      if (!social_account_id || !recipient_phone || !media_url) throw new Error("social_account_id, recipient_phone, and media_url required");
+      const { social_account_id, recipient_phone, media_url, media_path, media_type, caption } = body;
+      if (!social_account_id || !recipient_phone || (!media_url && !media_path)) {
+        throw new Error("social_account_id, recipient_phone, and media_url or media_path required");
+      }
 
       const account = await withWhatsAppActionAccess({
         client: whatsappAccessClient,
@@ -1336,6 +1478,17 @@ Deno.serve(async (req) => {
       }, (access) => Promise.resolve(access));
       const phoneNumberId = account.platformUserId;
 
+      let transportUrl = media_url as string | undefined;
+      let persistedMediaUrl = media_url as string | undefined;
+      if (media_path) {
+        const path = ownedStoragePath(media_path, user.id);
+        const signed = await signMediaPath(adminClient, path, OUTBOUND_SIGN_TTL_SECONDS);
+        if (!signed) throw new Error("could not sign media_path");
+        transportUrl = signed;
+        persistedMediaUrl = path;
+      }
+      if (!transportUrl) throw new Error("media_url or media_path required");
+
       const mType = media_type || "document";
       const transport = await resolveWhatsAppTransport(adminClient, {
           id: account.accountId,
@@ -1344,12 +1497,13 @@ Deno.serve(async (req) => {
           connection_mode: account.connectionMode,
           account_metadata: account.accountMetadata as Record<string, unknown> | null,
       });
+      const sourceName = String(media_path || media_url || "file");
       const data: any = (await transport.sendMedia({
         recipientPhone: recipient_phone,
-        mediaUrl: media_url,
+        mediaUrl: transportUrl,
         mediaType: (mType === "image" || mType === "video" || mType === "document" || mType === "audio") ? mType : "document",
         caption,
-        fileName: mType === "document" ? media_url.split("/").pop() || "file" : undefined,
+        fileName: mType === "document" ? sourceName.split("/").pop() || "file" : undefined,
       })).raw;
       const sentMessageId = data?.messages?.[0]?.id || data?.key?.id;
 
@@ -1366,7 +1520,9 @@ Deno.serve(async (req) => {
         to_phone: recipient_phone,
         message_text: caption || `[${mType}]`,
         message_type: mType,
-        media_url: media_url,
+        // media_url holds either an http(s):// provider URL (legacy/coexistence)
+        // or a bucket-relative storage path. whatsapp_get_media branches on the http prefix.
+        media_url: persistedMediaUrl,
         media_type: mType,
         direction: "outbound",
         status: "sent",
@@ -1582,6 +1738,18 @@ Deno.serve(async (req) => {
 
     if (err instanceof WhatsAppAccessError) {
       return jsonResponse({ error: err.message }, err.status);
+    }
+
+    if (err instanceof WhatsAppRevokeError) {
+      return gracefulError(err.message, err.error_type);
+    }
+
+    if (err instanceof WhatsAppVoiceSendError) {
+      return gracefulError(err.message, err.error_type);
+    }
+
+    if (err instanceof MalformedMessageCursorError) {
+      return jsonResponse({ error: err.message }, 400);
     }
 
     // Surface friendly WhatsApp 2FA error as 200 with structured field

@@ -102,7 +102,12 @@ export class MediaFetchError extends Error {
 export interface InboundMediaFetcher {
   readonly name: string;
   canHandle(ref: MediaRef): boolean;
-  fetchMediaBytes(ref: MediaRef, limits: FetchLimits, fetcher?: typeof fetch): Promise<FetchedMedia>;
+  fetchMediaBytes(
+    ref: MediaRef,
+    limits: FetchLimits,
+    fetcher?: typeof fetch,
+    signal?: AbortSignal,
+  ): Promise<FetchedMedia>;
 }
 
 /**
@@ -121,7 +126,25 @@ function timeoutAfter(ms: number): { promise: Promise<never>; cancel: () => void
   return { promise, cancel: () => { if (timer !== undefined) clearTimeout(timer); } };
 }
 
-async function readCapped(response: Response, maxBytes: number, timeoutMs = 0): Promise<Uint8Array> {
+/** Rejects with AbortError when `signal` fires. Never resolves. */
+function whenAborted(signal: AbortSignal): Promise<never> {
+  return new Promise((_resolve, reject) => {
+    const fail = () => {
+      const error = new Error("The operation was aborted");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (signal.aborted) fail();
+    else signal.addEventListener("abort", fail, { once: true });
+  });
+}
+
+async function readCapped(
+  response: Response,
+  maxBytes: number,
+  timeoutMs = 0,
+  signal?: AbortSignal,
+): Promise<Uint8Array> {
   const declared = Number(response.headers.get("content-length") ?? "");
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new MediaFetchError(`declared ${declared} bytes exceeds ${maxBytes}`, "too_large");
@@ -143,10 +166,14 @@ async function readCapped(response: Response, maxBytes: number, timeoutMs = 0): 
   // next read pending forever, which would hang the continuation that owes the customer
   // a reply.
   const budget = timeoutMs > 0 ? timeoutAfter(timeoutMs) : null;
+  const aborted = signal ? whenAborted(signal) : null;
   try {
     while (true) {
-      const { done, value } = budget
-        ? await Promise.race([reader.read(), budget.promise])
+      const racers: Promise<unknown>[] = [reader.read()];
+      if (budget) racers.push(budget.promise);
+      if (aborted) racers.push(aborted);
+      const { done, value } = racers.length > 1
+        ? await Promise.race(racers) as ReadableStreamReadResult<Uint8Array>
         : await reader.read();
       if (done) break;
       if (!value) continue;
@@ -180,21 +207,33 @@ async function timedFetch(
   init: RequestInit,
   timeoutMs: number,
   requireAllowlist = false,
+  external?: AbortSignal,
 ): Promise<Response> {
   assertFetchableUrl(url, requireAllowlist);
+  if (external?.aborted) {
+    const error = new Error("The operation was aborted");
+    error.name = "AbortError";
+    throw error;
+  }
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onExternalAbort = () => controller.abort();
+  if (external) external.addEventListener("abort", onExternalAbort, { once: true });
   try {
     // manual: a 302 to an attacker-chosen host would otherwise carry the Authorization
     // header along with it. The caller re-validates each hop.
     return await fetcher(url, { ...init, signal: controller.signal, redirect: "manual" });
   } catch (error) {
     if ((error as Error)?.name === "AbortError") {
+      // An external deadline must surface as AbortError so the caller can tell it
+      // apart from this function's own timeout.
+      if (external?.aborted) throw error;
       throw new MediaFetchError(`timed out after ${timeoutMs}ms`, "timeout");
     }
     throw new MediaFetchError((error as Error)?.message ?? "network error", "transport_failed");
   } finally {
     clearTimeout(timer);
+    external?.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -254,6 +293,7 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
     ref: MediaRef,
     limits: FetchLimits,
     fetcher: typeof fetch = fetch,
+    signal?: AbortSignal,
   ): Promise<FetchedMedia> {
     const token = ref.accessToken;
     if (!token) throw new MediaFetchError("no access token", "transport_failed");
@@ -271,6 +311,7 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
         { headers: auth },
         limits.timeoutMs,
         true,
+        signal,
       );
       if (!meta.ok) {
         throw new MediaFetchError(`media lookup ${meta.status}`, meta.status === 404 ? "not_found" : "transport_failed");
@@ -283,18 +324,18 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
 
     // Follow at most two hops, validating each. `redirect: "manual"` means the token is
     // never replayed to a location we have not checked.
-    let response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, true);
+    let response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, true, signal);
     for (let hop = 0; hop < 2; hop += 1) {
       const next = redirectTarget(response, url);
       if (!next) break;
       url = next;
-      response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, true);
+      response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, true, signal);
     }
     if (!response.ok) {
       throw new MediaFetchError(`media download ${response.status}`, "transport_failed");
     }
 
-    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs);
+    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs, signal);
     return { bytes, mimeType: mime ?? response.headers.get("content-type") ?? "application/octet-stream" };
   }
 }
@@ -323,6 +364,7 @@ export class EvolutionFetcher implements InboundMediaFetcher {
     ref: MediaRef,
     limits: FetchLimits,
     fetcher: typeof fetch = fetch,
+    signal?: AbortSignal,
   ): Promise<FetchedMedia> {
     if (ref.rawBase64) {
       const bytes = decodeBase64Capped(ref.rawBase64, limits.maxBytes);
@@ -340,6 +382,8 @@ export class EvolutionFetcher implements InboundMediaFetcher {
         body: JSON.stringify({ message: { key: { id: ref.mediaId } }, convertToMp4: false }),
       },
       limits.timeoutMs,
+      false,
+      signal,
     );
     if (!response.ok) {
       throw new MediaFetchError(`evolution media ${response.status}`, "transport_failed");
@@ -366,13 +410,14 @@ export class DirectUrlFetcher implements InboundMediaFetcher {
     ref: MediaRef,
     limits: FetchLimits,
     fetcher: typeof fetch = fetch,
+    signal?: AbortSignal,
   ): Promise<FetchedMedia> {
     if (!ref.mediaUrl) throw new MediaFetchError("no mediaUrl", "not_found");
     // No credentials are attached here, so the allowlist does not apply -- but https-only
     // and the private-network block still do, since this runs service-role inside the VPC.
-    const response = await timedFetch(fetcher, ref.mediaUrl, {}, limits.timeoutMs, false);
+    const response = await timedFetch(fetcher, ref.mediaUrl, {}, limits.timeoutMs, false, signal);
     if (!response.ok) throw new MediaFetchError(`download ${response.status}`, "transport_failed");
-    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs);
+    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs, signal);
     return { bytes, mimeType: ref.mimeType ?? response.headers.get("content-type") ?? "application/octet-stream" };
   }
 }

@@ -8,6 +8,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { WhatsAppNavList } from "./WhatsAppNavList";
+import { WhatsAppChromeProvider, useWhatsAppChrome } from "./WhatsAppChromeContext";
 import { WhatsAppWorkspaceProvider } from "./WhatsAppWorkspaceProvider";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
@@ -22,9 +23,10 @@ function readCollapsedPreference(): boolean {
   }
 }
 
-export default function WhatsAppLayout() {
+function WhatsAppLayoutContent() {
   const { flags, isLoading } = useFeatureFlags();
   const { pathname } = useLocation();
+  const { compact, immersive } = useWhatsAppChrome();
   const [collapsed, setCollapsed] = useState(readCollapsedPreference);
   const [drawerOpen, setDrawerOpen] = useState(false);
 
@@ -50,9 +52,19 @@ export default function WhatsAppLayout() {
   return (
     <WhatsAppWorkspaceProvider>
       <TooltipProvider>
-        <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
+        {/* h-screen is 100vh, which on iOS Safari includes the collapsing URL bar and clips
+            the composer off the bottom of the chat. dvh fixes that, but the two cannot simply
+            sit side by side: they generate rules of equal specificity, so the winner would be
+            whichever Tailwind happens to emit last. The @supports variant is deterministic --
+            it wins wherever dvh is understood and is absent everywhere else. */}
+        <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground supports-[height:100dvh]:h-[100dvh]">
           <header className="z-40 shrink-0 border-b border-[#25D366]/20 bg-[#075E54] text-white shadow-sm">
-            <div className="flex flex-col gap-4 px-4 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+            <div
+              className={cn(
+                "flex flex-col px-4 transition-all duration-200 motion-reduce:transition-none sm:px-6 lg:flex-row lg:items-center lg:justify-between",
+                compact ? "gap-2 py-2" : "gap-4 py-4",
+              )}
+            >
               <div className="flex items-center gap-3">
                 <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
                   <SheetTrigger asChild>
@@ -71,12 +83,24 @@ export default function WhatsAppLayout() {
                   </SheetContent>
                 </Sheet>
 
-                <div className="flex h-11 w-11 items-center justify-center rounded-full bg-white/10 ring-1 ring-white/20">
-                  <MessageCircle className="h-6 w-6" />
+                <div
+                  className={cn(
+                    "flex items-center justify-center rounded-full bg-white/10 ring-1 ring-white/20 transition-all duration-200 motion-reduce:transition-none",
+                    compact ? "h-8 w-8" : "h-11 w-11",
+                  )}
+                >
+                  <MessageCircle className={cn("transition-all duration-200 motion-reduce:transition-none", compact ? "h-5 w-5" : "h-6 w-6")} />
                 </div>
                 <div>
-                  <h1 className="text-xl font-semibold leading-tight">WhatsApp Business</h1>
-                  <p className="hidden text-sm text-white/75 sm:block">
+                  <h1 className={cn("font-semibold leading-tight transition-all duration-200 motion-reduce:transition-none", compact ? "text-lg" : "text-xl")}>
+                    WhatsApp Business
+                  </h1>
+                  <p
+                    className={cn(
+                      "hidden overflow-hidden text-sm text-white/75 transition-all duration-200 motion-reduce:transition-none sm:block",
+                      compact ? "max-h-0 opacity-0" : "max-h-6 opacity-100",
+                    )}
+                  >
                     Conversations, automation, commerce, and diagnostics
                   </p>
                 </div>
@@ -99,7 +123,7 @@ export default function WhatsAppLayout() {
                 content pane must not be pushed down by the nav. */}
             <aside
               className={cn(
-                "wa-app hidden shrink-0 flex-col border-r bg-background/95 transition-[width] duration-200 ease-in-out lg:flex",
+                "wa-app hidden min-h-0 shrink-0 flex-col border-r bg-background/95 transition-[width] duration-200 ease-in-out lg:flex",
                 collapsed ? "w-[68px]" : "w-60",
               )}
             >
@@ -121,9 +145,16 @@ export default function WhatsAppLayout() {
               </div>
             </aside>
 
-            <main className="wa-app min-w-0 flex-1 overflow-y-auto bg-gradient-to-b from-[#DCF8C6]/25 via-background to-background dark:from-[#075E54]/25">
-              <div className="space-y-6 px-4 py-6 sm:px-6 lg:px-8">
-                <WhatsAppCoexistenceSetupBanner />
+            <main
+              className={cn(
+                "wa-app min-h-0 min-w-0 flex-1",
+                immersive
+                  ? "overflow-hidden"
+                  : "overflow-y-auto bg-gradient-to-b from-[#DCF8C6]/25 via-background to-background dark:from-[#075E54]/25",
+              )}
+            >
+              <div className={cn(immersive ? "flex h-full min-h-0 flex-col" : "space-y-6 px-4 py-6 sm:px-6 lg:px-8")}>
+                {!immersive && <WhatsAppCoexistenceSetupBanner />}
                 <Outlet />
               </div>
             </main>
@@ -131,5 +162,13 @@ export default function WhatsAppLayout() {
         </div>
       </TooltipProvider>
     </WhatsAppWorkspaceProvider>
+  );
+}
+
+export default function WhatsAppLayout() {
+  return (
+    <WhatsAppChromeProvider>
+      <WhatsAppLayoutContent />
+    </WhatsAppChromeProvider>
   );
 }

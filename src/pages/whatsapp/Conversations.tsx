@@ -1,18 +1,17 @@
-import { MessageSquare } from "lucide-react";
-import { MessagingInbox } from "@/components/messaging/MessagingInbox";
-import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
+import { useEffect } from "react";
+import { useWhatsAppChrome } from "@/components/whatsapp/WhatsAppChromeContext";
+import { WhatsAppInboxScreen } from "@/features/whatsapp-inbox";
 
 export default function Conversations() {
-  return (
-    <div className="space-y-6">
-      <WhatsAppPageHeader
-        icon={MessageSquare}
-        title="Conversations"
-        description="Reply to WhatsApp customers and manage live inbox activity."
-      />
-      <div className="min-h-[640px]">
-        <MessagingInbox platform="whatsapp" />
-      </div>
-    </div>
-  );
+  const { setCompact, setImmersive } = useWhatsAppChrome();
+
+  useEffect(() => {
+    setImmersive(true);
+    return () => {
+      setCompact(false);
+      setImmersive(false);
+    };
+  }, [setCompact, setImmersive]);
+
+  return <WhatsAppInboxScreen />;
 }

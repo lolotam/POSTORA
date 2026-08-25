@@ -95,7 +95,9 @@ change is not done.
 
 POSTORA is migrating incrementally from technical-folder organization toward feature-oriented architecture.
 
-> **Status check (verified 2026-08-22): `src/features/` does not exist yet.** Everything in this section and §3 describes a *target*, not the current tree. The first substantial new feature creates the directory. Do not assume a `src/features/<x>/` module already exists because this file names it.
+> **Status check (verified 2026-08-25): `src/features/` now exists.** It was created by the WhatsApp inbox overhaul, which is the "first substantial new feature" this note anticipated. Two modules live there today — `src/features/whatsapp-inbox/` and `src/features/webhook-observability/`. Everything else in this section and §3 still describes a *target*: most of the tree remains organised by technical folder, so do not assume a `src/features/<x>/` module exists merely because this file names it — check.
+>
+> `src/features/whatsapp-inbox/` is the worked example of the layering in §4: `ui → application → domain`, with `application/ports.ts` declaring the interfaces and `infrastructure/` implementing them. Its composition root is `ui/WhatsAppInboxScreen.tsx`, the only file in that feature permitted to import `infrastructure/`, and that rule is enforced by an eslint `no-restricted-imports` rule plus `tests/architecture.test.ts` rather than left to review.
 
 Existing legacy folders remain valid:
 

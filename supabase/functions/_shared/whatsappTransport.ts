@@ -23,10 +23,35 @@ export interface WhatsAppSendMediaInput {
   fileName?: string;
 }
 
+export interface WhatsAppSendVoiceInput {
+  recipientPhone: string;
+  audioUrl: string;
+}
+
 export interface WhatsAppTransport {
   sendText(input: WhatsAppSendTextInput): Promise<EvolutionSendResult>;
   sendMedia(input: WhatsAppSendMediaInput): Promise<EvolutionSendResult>;
   markRead(messageId: string): Promise<void>;
+}
+
+export interface SupportsMessageRevoke {
+  revokeMessage(key: { id: string; remoteJid: string; fromMe: boolean }): Promise<void>;
+}
+
+export function supportsMessageRevoke(
+  transport: WhatsAppTransport,
+): transport is WhatsAppTransport & SupportsMessageRevoke {
+  return typeof (transport as WhatsAppTransport & Partial<SupportsMessageRevoke>).revokeMessage === "function";
+}
+
+export interface SupportsVoiceNote {
+  sendVoiceNote(input: WhatsAppSendVoiceInput): Promise<EvolutionSendResult>;
+}
+
+export function supportsVoiceNote(
+  transport: WhatsAppTransport,
+): transport is WhatsAppTransport & SupportsVoiceNote {
+  return typeof (transport as WhatsAppTransport & Partial<SupportsVoiceNote>).sendVoiceNote === "function";
 }
 
 function accountToken(account: WhatsAppTransportAccount): string {
@@ -77,7 +102,7 @@ export class CloudApiTransport implements WhatsAppTransport {
 
 }
 
-export class EvolutionTransport implements WhatsAppTransport {
+export class EvolutionTransport implements WhatsAppTransport, SupportsMessageRevoke, SupportsVoiceNote {
   constructor(private readonly api: EvolutionApi, private readonly instanceName: string) {}
 
   sendText(input: WhatsAppSendTextInput): Promise<EvolutionSendResult> {
@@ -92,6 +117,18 @@ export class EvolutionTransport implements WhatsAppTransport {
       caption: input.caption,
       fileName: input.fileName,
     });
+  }
+
+  sendVoiceNote(input: WhatsAppSendVoiceInput): Promise<EvolutionSendResult> {
+    return this.api.sendWhatsAppAudio(this.instanceName, {
+      number: input.recipientPhone,
+      audio: input.audioUrl,
+      encoding: true,
+    });
+  }
+
+  async revokeMessage(key: { id: string; remoteJid: string; fromMe: boolean }): Promise<void> {
+    await this.api.deleteMessageForEveryone(this.instanceName, key);
   }
 
   async markRead(_messageId: string): Promise<void> {}

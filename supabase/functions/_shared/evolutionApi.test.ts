@@ -44,7 +44,7 @@ Deno.test("Evolution API client sends instance creation to the configured public
   });
 });
 
-Deno.test("Evolution API client sends text and media through the instance routes", async () => {
+Deno.test("Evolution API client sends text, media, audio, and delete-for-everyone through the instance routes", async () => {
   const calls: Array<{ url: string; body: unknown }> = [];
   const apiKey = crypto.randomUUID();
   const api = createEvolutionApi(async (url, init) => {
@@ -58,6 +58,16 @@ Deno.test("Evolution API client sends text and media through the instance routes
     mediaType: "image",
     media: "https://cdn.example/image.jpg",
     caption: "caption",
+  });
+  await api.sendWhatsAppAudio("postora-account-1", {
+    number: "+96550000000",
+    audio: "https://cdn.example/voice.webm",
+    encoding: true,
+  });
+  await api.deleteMessageForEveryone("postora-account-1", {
+    id: "3EB0ABC",
+    remoteJid: "96550000000@s.whatsapp.net",
+    fromMe: true,
   });
 
   assertEquals(calls, [
@@ -74,7 +84,42 @@ Deno.test("Evolution API client sends text and media through the instance routes
         caption: "caption",
       },
     },
+    {
+      url: "https://wa.postora.cloud/message/sendWhatsAppAudio/postora-account-1",
+      body: {
+        number: "+96550000000",
+        audio: "https://cdn.example/voice.webm",
+        encoding: true,
+      },
+    },
+    {
+      url: "https://wa.postora.cloud/chat/deleteMessageForEveryone/postora-account-1",
+      body: {
+        id: "3EB0ABC",
+        remoteJid: "96550000000@s.whatsapp.net",
+        fromMe: true,
+      },
+    },
   ]);
+});
+
+Deno.test("deleteMessageForEveryone uses DELETE on the Evolution chat route", async () => {
+  const calls: Array<{ url: string; method: string | undefined }> = [];
+  const api = createEvolutionApi(async (url, init) => {
+    calls.push({ url: String(url), method: init?.method });
+    return response({ message: { protocolMessage: { type: "REVOKE" } } });
+  }, { baseUrl: "https://wa.postora.cloud", apiKey: "k" });
+
+  await api.deleteMessageForEveryone("postora-account-1", {
+    id: "3EB0ABC",
+    remoteJid: "96550000000@s.whatsapp.net",
+    fromMe: true,
+  });
+
+  assertEquals(calls, [{
+    url: "https://wa.postora.cloud/chat/deleteMessageForEveryone/postora-account-1",
+    method: "DELETE",
+  }]);
 });
 
 Deno.test("Evolution API client rejects a request that exceeds its deadline", async () => {
