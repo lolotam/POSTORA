@@ -240,7 +240,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }
         </div>
       </TabsContent>
       <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} /></TabsContent>
-      <TabsContent value="tools" className="mt-0"><AiToolsManager /></TabsContent>
+      <TabsContent value="tools" className="mt-0"><DatabaseConnectorsManager /></TabsContent>
       <TabsContent value="test" className="mt-0"><AiAgentTestChat platform={platform} /></TabsContent>
       <TabsContent value="logs" className="mt-0"><AiAgentLogsView platform={platform} /></TabsContent>
     </Tabs>

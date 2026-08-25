@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -75,15 +75,6 @@ function useThreadsAccountOptions() {
 
 export default function ThreadsMentions() {
   const { data: accounts = [], isLoading: accountsLoading } = useThreadsAccountOptions();
-  const { flags } = useFeatureFlags();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const tab = messagingTabFromSearch(searchParams.toString(), "mentions", [
-    "mentions",
-    "replies",
-    "auto-replies",
-    "agents",
-    "ai-agent",
-  ]);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
 
   useEffect(() => {
