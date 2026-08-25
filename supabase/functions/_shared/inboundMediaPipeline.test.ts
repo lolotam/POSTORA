@@ -14,7 +14,15 @@ function stubAdmin(
 ) {
   return {
     rpc: (_name: string) => Promise.resolve({ data: opts.withinCap ?? true, error: null }),
-    from() {
+    from(table: string) {
+      // resolveSttTiers reads system_settings; empty means "no admin ladder configured",
+      // which is the path these tests exercise.
+      if (table === "system_settings") {
+        return { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) };
+      }
+      if (table === "provider_api_keys") {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) };
+      }
       return {
         update: (row: any) => ({
           eq: () => ({
@@ -172,7 +180,13 @@ Deno.test("no fetcher claims the ref — reported, not thrown", async () => {
 Deno.test("a persistence failure still returns the transcript we already paid for", async () => {
   const admin = {
     rpc: () => Promise.resolve({ data: true, error: null }),
-    from() {
+    from(table: string) {
+      if (table === "system_settings") {
+        return { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) };
+      }
+      if (table === "provider_api_keys") {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) };
+      }
       return {
         update: () => ({
           eq: () => ({ eq: () => ({ select: () => Promise.resolve({ data: null, error: { message: "db down" } }) }) }),
@@ -196,7 +210,10 @@ Deno.test("a persistence failure still returns the transcript we already paid fo
 Deno.test("the daily cap fails CLOSED when the reservation errors — this guards spend", async () => {
   const admin = {
     rpc: () => Promise.resolve({ data: null, error: { message: "rpc down" } }),
-    from: () => ({ update: () => ({ eq: () => ({ eq: () => ({ select: () => Promise.resolve({ data: [], error: null }) }) }) }) }),
+    from: (t: string) =>
+      t === "system_settings"
+        ? { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) }
+        : { update: () => ({ eq: () => ({ eq: () => ({ select: () => Promise.resolve({ data: [], error: null }) }) }) }) },
   };
   const outcome = await runInboundMediaUnderstanding(
     admin,
@@ -226,4 +243,46 @@ Deno.test("transcribed content cannot close its own delimiter block", () => {
   const composed = composeAgentText("audio", hostile);
   // Exactly the opening and closing fence, and nothing the content injected.
   assertEquals(composed.split(fence).length - 1, 2);
+});
+
+Deno.test("the same model configured bare and namespaced runs once, not twice", async () => {
+  // Dedupe must happen after normalisation. "google/gemini-2.5-flash" and
+  // "gemini-2.5-flash" are one model; treating them as two burns a rung and bills twice.
+  const { resolveSttTiers } = await import("./inboundMediaPipeline.ts");
+  const rows = [
+    { key: "default_ai_model_stt", value: { provider_code: "gemini", model_id: "gemini/gemini-2.5-flash" } },
+    { key: "default_ai_model_stt_fallback", value: { provider_code: "gemini", model_id: "gemini-2.5-flash" } },
+  ];
+  const admin = {
+    from: (t: string) =>
+      t === "system_settings"
+        ? { select: () => ({ in: () => Promise.resolve({ data: rows, error: null }) }) }
+        : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) }) }) },
+  } as any;
+  Deno.env.set("GOOGLE_AI_STUDIO_KEY", "k");
+  const tiers = await resolveSttTiers(admin);
+  const gemini = tiers.filter((t) => t.provider === "gemini");
+  assertEquals(gemini.length, 1, "the duplicate must collapse");
+  assertEquals(gemini[0].model, "gemini-2.5-flash", "and be stored bare");
+});
+
+Deno.test("google and gemini are one provider, so the same model collapses", async () => {
+  const { resolveSttTiers } = await import("./inboundMediaPipeline.ts");
+  const rows = [
+    { key: "default_ai_model_stt", value: { provider_code: "google", model_id: "gemini-2.5-flash" } },
+    { key: "default_ai_model_stt_fallback", value: { provider_code: "gemini", model_id: "gemini-2.5-flash" } },
+  ];
+  const admin = {
+    from: (t: string) =>
+      t === "system_settings"
+        ? { select: () => ({ in: () => Promise.resolve({ data: rows, error: null }) }) }
+        : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) }) }) },
+  } as any;
+  Deno.env.set("GOOGLE_AI_STUDIO_KEY", "k");
+  const tiers = await resolveSttTiers(admin);
+  // The hardcoded last resort (openai/whisper-1) also resolves when its key is present,
+  // so assert on the gemini entries rather than the total.
+  const gemini = tiers.filter((t) => t.provider === "gemini" || t.provider === "google");
+  assertEquals(gemini.length, 1, "the alias duplicate must collapse");
+  assertEquals(gemini[0].provider, "gemini", "and canonicalise to the catalog code");
 });

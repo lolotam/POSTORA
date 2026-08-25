@@ -8,6 +8,8 @@ import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts
 import { buildEvolutionMessageRow, remoteNumberFor } from "../_shared/evolutionMessage.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
+import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
+import { EvolutionFetcher } from "../_shared/inboundMediaFetchers.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -96,7 +98,12 @@ async function touchConversation(admin: any, account: EvolutionAccount, touch: C
   }, { onConflict: "user_id,conversation_id" });
 }
 
-async function persistEvolutionMessage(admin: any, account: EvolutionAccount, message: any): Promise<boolean> {
+async function persistEvolutionMessage(
+  admin: any,
+  account: EvolutionAccount,
+  message: any,
+  instanceName: string,
+): Promise<boolean> {
   const built = buildEvolutionMessageRow(account, message);
   if (!built) return false;
   const { conversationId, sentByOwner, row } = built;
@@ -157,15 +164,61 @@ async function persistEvolutionMessage(admin: any, account: EvolutionAccount, me
   }
 
   const inboundText = (row.message_text as string) || "";
-  if (automationHandler === "internal" && inboundText.trim()) {
-    triggerAiAgentReply(
-      account,
-      conversationId,
-      account.platform_user_id,
-      remoteNumber,
-      inboundText,
-    ).catch((e) => console.error("[whatsapp-evolution-webhook] AI agent dispatch failed:", e?.message || e));
+  if (automationHandler !== "internal" || !inboundText.trim()) return true;
+
+  // Same shape as the Cloud path: understand the media FIRST, then give the agent the
+  // transcript instead of "[Audio message]". Evolution hands over bytes through its own
+  // instance API rather than a URL, which is the only difference -- and it lives entirely
+  // inside EvolutionFetcher (spec D9).
+  const mediaKind = row.media_type as string | null;
+  const mediaMime = (row.media_metadata as { mime_type?: string } | null)?.mime_type ?? null;
+
+  if ((mediaKind === "audio" || mediaKind === "image") && mediaMime) {
+    const mediaRowId = insertedRows[0]?.id ?? null;
+    await runInBackground("evolution inbound media understanding", async () => {
+      const evolutionBase = Deno.env.get("EVOLUTION_API_URL");
+      const evolutionKey = Deno.env.get("EVOLUTION_API_KEY");
+      const outcome = evolutionBase && evolutionKey
+        ? await runInboundMediaUnderstanding(admin, {
+          account: {
+            id: account.id,
+            user_id: account.user_id,
+            platform_user_id: account.platform_user_id,
+            connection_mode: "evolution_qr",
+            account_metadata: account.account_metadata,
+          },
+          messageRowId: mediaRowId,
+          mediaId: row.message_id as string,
+          mimeType: mediaMime,
+          caption: inboundText.startsWith("[") ? null : inboundText,
+          platform: "whatsapp",
+        }, {
+          fetchers: [new EvolutionFetcher(evolutionBase, evolutionKey, instanceName)],
+        })
+        : { understood: false as const, reason: "evolution credentials missing" };
+
+      if (!outcome.understood) {
+        console.error(`[whatsapp-evolution-webhook] media understanding skipped: ${outcome.reason}`);
+      }
+      const agentInput = outcome.understood ? outcome.agentText : inboundText;
+      // Without this the reply endpoint falls back to counting characters, and the English
+      // data-marker around an Arabic transcript wins -- the exact bug this feature hit on
+      // the Cloud path. Evolution needs the same hint.
+      await triggerAiAgentReply(
+        account, conversationId, account.platform_user_id, remoteNumber, agentInput,
+        outcome.understood ? outcome.languageCode : undefined,
+      );
+    });
+    return true;
   }
+
+  triggerAiAgentReply(
+    account,
+    conversationId,
+    account.platform_user_id,
+    remoteNumber,
+    inboundText,
+  ).catch((e) => console.error("[whatsapp-evolution-webhook] AI agent dispatch failed:", e?.message || e));
 
   return true;
 }
@@ -175,7 +228,8 @@ async function triggerAiAgentReply(
   conversationId: string,
   phoneNumberId: string,
   recipientPhone: string,
-  inboundText: string
+  inboundText: string,
+  languageHint?: string,
 ) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -193,6 +247,7 @@ async function triggerAiAgentReply(
       phone_number_id: phoneNumberId,
       recipient_phone: recipientPhone,
       inbound_text: inboundText,
+      ...(languageHint ? { language_hint: languageHint } : {}),
     }),
   });
   if (!response.ok) {
@@ -273,7 +328,9 @@ Deno.serve(async (req) => {
 
     const event = normalizeEvolutionEvent(body.event);
     if (event === "MESSAGES_UPSERT") {
-      for (const message of messageItems(body)) await persistEvolutionMessage(admin, account, message);
+      for (const message of messageItems(body)) {
+        await persistEvolutionMessage(admin, account, message, instance.instance_name);
+      }
     } else if (event === "CONNECTION_UPDATE") {
       await handleConnectionUpdate(admin, account, instance, body.data);
     } else if (event === "QRCODE_UPDATED") {

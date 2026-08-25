@@ -111,16 +111,22 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
 }> {
   const primaryKey = `default_ai_model_${category}`;
   const fallbackKey = `default_ai_model_${category}_fallback`;
+  // The admin UI writes a THIRD tier (useAIConfiguration.ts:126). Reading only the first
+  // two silently discarded whatever an operator picked as last resort and substituted the
+  // hardcoded CATEGORY_LAST_RESORT instead -- for every category, not just stt.
+  const fallback2Key = `default_ai_model_${category}_fallback_2`;
 
   const { data: settings } = await supabaseAdmin
     .from('system_settings')
     .select('key, value')
-    .in('key', [primaryKey, fallbackKey]);
+    .in('key', [primaryKey, fallbackKey, fallback2Key]);
 
   let primaryProvider = 'google';
   let primaryModel = 'google/gemini-2.5-flash';
   let fallbackProvider = '';
   let fallbackModel = '';
+  let configuredLastResortProvider = '';
+  let configuredLastResortModel = '';
 
   for (const s of settings || []) {
     try {
@@ -133,12 +139,46 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
         fallbackProvider = val.provider_code;
         fallbackModel = val.model_id;
       }
+      if (s.key === fallback2Key && val?.provider_code && val?.model_id) {
+        configuredLastResortProvider = val.provider_code;
+        configuredLastResortModel = val.model_id;
+      }
     } catch { /* use defaults */ }
   }
 
+  // An operator's explicit third choice outranks the hardcoded floor -- but only when it
+  // names a model that actually exists and is active.
+  //
+  // This guard is not theoretical: default_ai_model_chat_fallback_2 held
+  // openrouter/nvidia/nemotron-3-ultra-550b-a55b:free, which is absent from ai_models.
+  // The row had been inert while nothing read _fallback_2, so switching it on would have
+  // silently replaced chat's known-good floor with an unvalidated model. A stale setting
+  // must not be able to take out the last line of defence for every AI category.
+  let useConfiguredLastResort = false;
+  if (configuredLastResortProvider && configuredLastResortModel) {
+    const { data: known } = await supabaseAdmin
+      .from('ai_models')
+      .select('id, ai_providers!inner(provider_code)')
+      .eq('model_id', configuredLastResortModel)
+      .eq('is_active', true)
+      .eq('ai_providers.provider_code', configuredLastResortProvider)
+      .maybeSingle();
+    useConfiguredLastResort = Boolean(known);
+    if (!useConfiguredLastResort) {
+      console.warn(
+        `[ai-fallback] ignoring ${category} third tier ` +
+        `${configuredLastResortProvider}/${configuredLastResortModel}: not an active model`,
+      );
+    }
+  }
+
   const lastResort = CATEGORY_LAST_RESORT[category] || CATEGORY_LAST_RESORT['chat']!;
-  const lastResortProvider = lastResort?.provider || 'google';
-  const lastResortModel = lastResort?.model || 'gemini-3-flash-preview';
+  const lastResortProvider = useConfiguredLastResort
+    ? configuredLastResortProvider
+    : (lastResort?.provider || 'google');
+  const lastResortModel = useConfiguredLastResort
+    ? configuredLastResortModel
+    : (lastResort?.model || 'gemini-3-flash-preview');
 
   return { primaryProvider, primaryModel, fallbackProvider, fallbackModel, lastResortProvider, lastResortModel };
 }

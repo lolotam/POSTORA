@@ -9,12 +9,15 @@
 // Spec: docs/specs/2026-08-25-inbound-media-understanding.md (D4, D6, D7, D9).
 
 import {
+  bareModelId,
   classifyMime,
   DEFAULT_LIMITS,
   understandInboundMedia,
   type MediaKind,
+  type ProviderTier,
   type UnderstandingLimits,
 } from "./inboundMediaUnderstanding.ts";
+import { fetchCategoryAiSettings } from "./ai-fallback.ts";
 import {
   CloudGraphFetcher,
   DirectUrlFetcher,
@@ -48,6 +51,97 @@ export function modeAllows(mode: MediaUnderstandingMode, kind: MediaKind): boole
 
 export const DEFAULT_DAILY_CAP = 100;
 
+/**
+ * Env var holding each provider's key. provider_api_keys is consulted when the env has
+ * none, because the admin UI writes keys there and operators expect that to be enough.
+ */
+/**
+ * "google" and "gemini" name the same provider -- the ai_providers catalog uses "gemini",
+ * older stored settings use "google". They must collapse to one identity before dedupe,
+ * or the same model configured under each alias is called twice.
+ */
+function canonicalProvider(provider: string): string {
+  const p = provider.trim().toLowerCase();
+  return p === "google" ? "gemini" : p;
+}
+
+const PROVIDER_KEY_ENV: Record<string, string[]> = {
+  elevenlabs: ["ELEVENLABS_API_KEY"],
+  gemini: ["GOOGLE_AI_STUDIO_KEY", "GEMINI_API_KEY"],
+  google: ["GOOGLE_AI_STUDIO_KEY", "GEMINI_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+};
+
+async function resolveProviderKey(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  provider: string,
+  cache: Map<string, string | null>,
+): Promise<string | null> {
+  if (cache.has(provider)) return cache.get(provider) ?? null;
+
+  for (const name of PROVIDER_KEY_ENV[provider] ?? []) {
+    const value = Deno.env.get(name);
+    if (value) {
+      cache.set(provider, value);
+      return value;
+    }
+  }
+
+  const { data } = await admin
+    .from("provider_api_keys")
+    .select("api_key")
+    .eq("provider_code", provider)
+    .maybeSingle();
+  const key = data?.api_key ?? null;
+  cache.set(provider, key);
+  return key;
+}
+
+/**
+ * The Speech-to-Text ladder an operator configured at /admin/settings, in order:
+ * primary -> fallback -> last resort. Reads the same `default_ai_model_stt` keys the
+ * media-library transcriber uses, so both paths obey one setting instead of drifting.
+ *
+ * A tier whose key is missing is dropped here rather than failed later, so a provider
+ * that was never configured does not consume a rung of the ladder.
+ */
+export async function resolveSttTiers(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+): Promise<ProviderTier[]> {
+  const settings = await fetchCategoryAiSettings(admin, "stt");
+  const ordered = [
+    { provider: settings.primaryProvider, model: settings.primaryModel },
+    { provider: settings.fallbackProvider, model: settings.fallbackModel },
+    { provider: settings.lastResortProvider, model: settings.lastResortModel },
+  ];
+
+  const cache = new Map<string, string | null>();
+  const tiers: ProviderTier[] = [];
+  const seen = new Set<string>();
+
+  for (const tier of ordered) {
+    if (!tier.provider || !tier.model) continue;
+    // Normalise BEFORE deduping: the same model can be configured namespaced in one tier
+    // and bare in another, and both would otherwise survive and be called twice.
+    // Canonicalise the provider AND normalise the model before deduping. Either alone
+    // lets the same model through twice under a different spelling.
+    const provider = canonicalProvider(tier.provider);
+    const model = bareModelId(provider, tier.model);
+    const dedupeKey = `${provider}/${model}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    const apiKey = await resolveProviderKey(admin, provider, cache);
+    if (!apiKey) {
+      console.warn(`[media-understanding] no API key for ${provider}; skipping that tier`);
+      continue;
+    }
+    tiers.push({ provider, model, apiKey });
+  }
+  return tiers;
+}
+
 export interface PipelineAccount {
   id: string;
   user_id: string;
@@ -71,10 +165,12 @@ export interface PipelineInput {
 }
 
 export type PipelineOutcome =
-  | { understood: true; text: string; agentText: string }
+  | { understood: true; text: string; agentText: string; languageCode?: string }
   | { understood: false; reason: string };
 
 export interface PipelineDeps {
+  /** Supplied by tests; production resolves the ladder from /admin/settings. */
+  tiers?: ProviderTier[];
   fetchers?: InboundMediaFetcher[];
   fetcher?: typeof fetch;
   limits?: UnderstandingLimits;
@@ -226,6 +322,9 @@ export async function runInboundMediaUnderstanding(
         promptContext: deps.promptContext ?? undefined,
         limits,
         fetcher: deps.fetcher,
+        tiers: deps.tiers ?? await resolveSttTiers(admin),
+        // Kept as a floor: if /admin/settings yields no usable tier at all, the feature
+        // still works rather than silently going dark.
         geminiKey: deps.geminiKey ?? Deno.env.get("GOOGLE_AI_STUDIO_KEY") ?? null,
         openaiKey: deps.openaiKey ?? Deno.env.get("OPENAI_API_KEY") ?? null,
       },
@@ -252,6 +351,7 @@ export async function runInboundMediaUnderstanding(
             kind: result.kind,
             duration_seconds: result.duration_seconds ?? null,
             confidence: result.confidence ?? null,
+            language_code: result.language_code ?? null,
             extracted_data: result.extracted_data ?? null,
             bytes: bytes.byteLength,
             attempted_at: new Date().toISOString(),
@@ -269,7 +369,7 @@ export async function runInboundMediaUnderstanding(
       }
     }
 
-    return { understood: true, text: result.text, agentText };
+    return { understood: true, text: result.text, agentText, languageCode: result.language_code };
   } catch (error) {
     console.error("[media-understanding] unexpected:", (error as Error)?.message ?? error);
     return { understood: false, reason: "unexpected" };

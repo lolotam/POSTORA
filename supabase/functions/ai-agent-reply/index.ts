@@ -56,6 +56,8 @@ interface ReplyRequest {
   recipient_phone: string;
   inbound_text: string;
   comment_id?: string;
+  /** Language the caller already detected (e.g. a transcript's "ara"). Beats counting. */
+  language_hint?: string;
 }
 
 // Comment text is attacker-controlled free text on a public surface. The prompt sees the
@@ -503,10 +505,12 @@ Deno.serve(async (req) => {
       ? actAsAdmin
       : request.platform === "whatsapp" && adminNumbers.includes(waRecipient(request.recipient_phone));
 
-    const language = detectReplyLanguage(request.inbound_text, config.language_mode);
+    const language = detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint);
     const systemPrompt = buildSystemPrompt({
       persona: config.persona_instructions,
       language,
+      // "ar"/"en" is a deliberate operator choice; "auto" mirrors the customer.
+      languageForced: config.language_mode === "ar" || config.language_mode === "en",
       knowledgeBlocks: [
         ...relevantChunks.map((chunk: { content: string }) => chunk.content),
         relatedFacts,

@@ -19,7 +19,10 @@ export interface MediaUnderstandingResult {
   provider: string;
   model: string;
   duration_seconds?: number;
+  /** Language-detection probability, where the provider reports one. */
   confidence?: number;
+  /** ISO-639-3 code the provider detected, e.g. "ara". */
+  language_code?: string;
   /** OCR-style fields pulled out of a receipt/invoice image, when the model returns them. */
   extracted_data?: Record<string, unknown>;
 }
@@ -39,6 +42,13 @@ export type UnderstandingFailure =
 export type UnderstandingOutcome =
   | { ok: true; result: MediaUnderstandingResult }
   | { ok: false; reason: UnderstandingFailure; detail?: string };
+
+/** One rung of the admin-configured ladder. Resolved by the caller, never looked up here. */
+export interface ProviderTier {
+  provider: string;
+  model: string;
+  apiKey: string;
+}
 
 export interface UnderstandingModels {
   /** Multimodal model used for both audio and image. */
@@ -66,6 +76,30 @@ export interface UnderstandingConfig {
   fetcher?: typeof fetch;
   geminiKey?: string | null;
   openaiKey?: string | null;
+  /**
+   * Ordered provider ladder from the admin's Speech-to-Text settings. When present it
+   * replaces the built-in gemini -> whisper pair entirely, so what an operator picks in
+   * /admin/settings is what actually runs.
+   */
+  tiers?: ProviderTier[];
+}
+
+/**
+ * Settings store a bare model_id today, but ai_agent_configs.model holds namespaced values
+ * like "google/gemini-2.5-flash", so an operator can plausibly paste one into a tier. Every
+ * provider here wants the bare name, and a namespaced id fails the whole ladder silently.
+ */
+export function bareModelId(provider: string, modelId: string): string {
+  const prefix = `${provider.toLowerCase()}/`;
+  const lower = modelId.toLowerCase();
+  if (lower.startsWith(prefix)) return modelId.slice(prefix.length);
+  // "google/" and "gemini/" are used interchangeably for the same provider.
+  for (const alias of ["google/", "gemini/"]) {
+    if ((provider === "gemini" || provider === "google") && lower.startsWith(alias)) {
+      return modelId.slice(alias.length);
+    }
+  }
+  return modelId;
 }
 
 interface ProviderCall {
@@ -91,6 +125,45 @@ export const DEFAULT_LIMITS: UnderstandingLimits = {
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const WHISPER_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions";
+/**
+ * ElevenLabs publishes regional bases for data residency: api.eu.residency,
+ * api.in.residency, api.sg.residency, api.us. Configurable because where a customer's
+ * voice note is processed can be a contractual question, not a performance one.
+ *
+ * Note the default is the global endpoint AND enable_logging defaults to true on
+ * ElevenLabs' side, so audio and transcripts are retained by them unless the account is
+ * enterprise. Documented in the spec rather than silently assumed.
+ */
+const ELEVENLABS_DEFAULT_BASE = "https://api.elevenlabs.io";
+
+/** The only hosts ElevenLabs publishes. An env var must not be able to name another. */
+const ELEVENLABS_HOSTS = new Set([
+  "api.elevenlabs.io",
+  "api.us.elevenlabs.io",
+  "api.eu.residency.elevenlabs.io",
+  "api.in.residency.elevenlabs.io",
+  "api.sg.residency.elevenlabs.io",
+]);
+
+/**
+ * A typo or a tampered deployment variable would otherwise send the API key AND the
+ * customer's audio to whatever host the value named. The override exists for data
+ * residency, so it only ever needs to reach an ElevenLabs origin.
+ */
+function elevenLabsEndpoint(): string {
+  const configured = Deno.env.get("ELEVENLABS_API_BASE");
+  if (!configured) return `${ELEVENLABS_DEFAULT_BASE}/v1/speech-to-text`;
+  try {
+    const url = new URL(configured);
+    if (url.protocol !== "https:" || !ELEVENLABS_HOSTS.has(url.hostname) || url.username || url.password) {
+      throw new Error("not an ElevenLabs origin");
+    }
+    return `https://${url.hostname}/v1/speech-to-text`;
+  } catch {
+    console.error("[media-understanding] ELEVENLABS_API_BASE is not a valid ElevenLabs origin; using the default");
+    return `${ELEVENLABS_DEFAULT_BASE}/v1/speech-to-text`;
+  }
+}
 
 // Meta and Evolution both deliver voice notes as ogg/opus; the rest are here because
 // customers forward files recorded elsewhere.
@@ -227,8 +300,10 @@ async function callGemini(call: ProviderCall, prompt: string): Promise<string> {
     const settled = response;
     const data = await deadline.race((async () => {
       if (!settled.ok) {
-        const body = await settled.text().catch(() => "");
-        throw new Error(`gemini ${settled.status}: ${body.slice(0, 200)}`);
+        // Status only. A provider body can echo request content or diagnostics, and this
+        // string ends up in durable application logs.
+        await settled.body?.cancel().catch(() => {});
+        throw new Error(`gemini ${settled.status}`);
       }
       return await settled.json();
     })());
@@ -275,8 +350,10 @@ async function callWhisper(call: ProviderCall, languageHint?: string): Promise<s
     const settled = response;
     const data = await deadline.race((async () => {
       if (!settled.ok) {
-        const body = await settled.text().catch(() => "");
-        throw new Error(`whisper ${settled.status}: ${body.slice(0, 200)}`);
+        // Status only. A provider body can echo request content or diagnostics, and this
+        // string ends up in durable application logs.
+        await settled.body?.cancel().catch(() => {});
+        throw new Error(`whisper ${settled.status}`);
       }
       return await settled.json();
     })());
@@ -284,6 +361,88 @@ async function callWhisper(call: ProviderCall, languageHint?: string): Promise<s
     const text = String(data?.text ?? "").trim();
     if (!text) throw new Error("whisper returned no text");
     return text;
+  } catch (error) {
+    await discardBody(response);
+    throw error;
+  } finally {
+    deadline.release();
+  }
+}
+
+interface ElevenLabsTranscript {
+  text: string;
+  languageCode?: string;
+  languageProbability?: number;
+  durationSeconds?: number;
+}
+
+/**
+ * ElevenLabs Scribe. Audio only -- it is a speech model and cannot look at an image.
+ *
+ * Parameters chosen against the published contract rather than defaults:
+ *  - tag_audio_events=false: Scribe otherwise injects "(laughter)", "(footsteps)" into the
+ *    text. That is noise to an agent that is about to answer a customer, and worse, it is
+ *    indistinguishable from something the customer actually said.
+ *  - timestamps_granularity=none: we use only the text, so per-word timings are payload we
+ *    parse and discard.
+ *  - diarize left off: a WhatsApp voice note is one speaker, and diarisation is billed.
+ *  - entity_detection / redaction left off: both carry a 30% surcharge.
+ *  - language_code only when the caller knows it; Scribe's auto-detection is strong
+ *    (0.996 on a real Arabic note) and a wrong hint is worse than none.
+ */
+async function callElevenLabs(
+  call: ProviderCall,
+  languageHint?: string,
+): Promise<ElevenLabsTranscript> {
+  const { bytes, mimeType, key, model, timeoutMs, fetcher } = call;
+  const form = new FormData();
+  const ext = bareMime(mimeType).split("/")[1]?.replace("x-", "") || "ogg";
+  form.append("file", new Blob([bytes.slice().buffer], { type: bareMime(mimeType) }), `audio.${ext}`);
+  form.append("model_id", model);
+  form.append("tag_audio_events", "false");
+  form.append("timestamps_granularity", "none");
+  if (languageHint) form.append("language_code", languageHint);
+
+  const deadline = new ProviderDeadline(timeoutMs);
+  let response: Response | null = null;
+  try {
+    response = await deadline.race(
+      fetcher(elevenLabsEndpoint(), {
+        method: "POST",
+        headers: { "xi-api-key": key },
+        signal: deadline.controller.signal,
+        body: form,
+      }),
+    );
+
+    const settled = response;
+    const data = await deadline.race((async () => {
+      if (!settled.ok) {
+        // Status only. A provider body can echo request content or diagnostics, and this
+        // string ends up in durable application logs.
+        await settled.body?.cancel().catch(() => {});
+        throw new Error(`elevenlabs ${settled.status}`);
+      }
+      return await settled.json();
+    })());
+
+    // Multi-channel returns `transcripts[]` instead of a bare `text`. We never enable it,
+    // but reading the first channel costs nothing and avoids an empty-text failure if a
+    // future caller does.
+    const payload = Array.isArray(data?.transcripts) ? data.transcripts[0] : data;
+    const text = String(payload?.text ?? "").trim();
+    if (!text) throw new Error("elevenlabs returned no text");
+
+    return {
+      text,
+      languageCode: payload?.language_code ?? undefined,
+      languageProbability: typeof payload?.language_probability === "number"
+        ? payload.language_probability
+        : undefined,
+      durationSeconds: typeof data?.audio_duration_secs === "number"
+        ? data.audio_duration_secs
+        : undefined,
+    };
   } catch (error) {
     await discardBody(response);
     throw error;
@@ -384,6 +543,55 @@ async function attemptWhisper(call: ProviderCall, languageHint?: string): Promis
   }
 }
 
+/** Which providers can do which kind. A speech model cannot look at a receipt. */
+function tierSupports(provider: string, kind: MediaKind): boolean {
+  if (kind === "image") return provider === "gemini" || provider === "google";
+  return provider === "elevenlabs" || provider === "gemini" || provider === "google" ||
+    provider === "openai";
+}
+
+async function attemptTier(
+  tier: ProviderTier,
+  call: Omit<ProviderCall, "key" | "model">,
+  kind: MediaKind,
+  config: UnderstandingConfig,
+): Promise<ProviderAttempt> {
+  const providerCall: ProviderCall = {
+    ...call,
+    key: tier.apiKey,
+    model: bareModelId(tier.provider, tier.model),
+  };
+  try {
+    if (tier.provider === "elevenlabs") {
+      const t = await callElevenLabs(providerCall, config.languageHint);
+      return {
+        ok: true,
+        result: {
+          text: t.text,
+          kind,
+          provider: "elevenlabs",
+          model: tier.model,
+          ...(t.durationSeconds !== undefined ? { duration_seconds: t.durationSeconds } : {}),
+          ...(t.languageProbability !== undefined ? { confidence: t.languageProbability } : {}),
+          ...(t.languageCode ? { language_code: t.languageCode } : {}),
+        },
+      };
+    }
+    if (tier.provider === "openai") {
+      const text = await callWhisper(providerCall, config.languageHint);
+      return { ok: true, result: { text, kind, provider: "openai", model: tier.model } };
+    }
+    // gemini / google
+    const prompt = kind === "audio" ? AUDIO_PROMPT : imagePrompt(config.promptContext);
+    const raw = await callGemini(providerCall, prompt);
+    return { ok: true, result: geminiResult(raw, kind, tier.model) };
+  } catch (error) {
+    const timedOut = isAbort(error);
+    const why = timedOut ? `timed out after ${call.timeoutMs}ms` : (error as Error)?.message ?? "unknown";
+    return { ok: false, failure: `${tier.provider}/${tier.model}: ${why}`, timedOut };
+  }
+}
+
 /**
  * Bytes in, text out. Audio uses Gemini with a Whisper fallback; images use Gemini only,
  * since Whisper cannot see. Documents are declined rather than mishandled.
@@ -406,6 +614,43 @@ export async function understandInboundMedia(
   const base = { bytes, mimeType, timeoutMs: limits.timeoutMs, fetcher };
 
   let everyFailureWasTimeout = true;
+
+  // Admin-configured ladder wins. Tiers that cannot handle this kind, or have no key, are
+  // skipped rather than counted as failures -- an operator picking a speech model as the
+  // primary should not stop images from reaching Gemini further down the ladder.
+  const tiers = (config.tiers ?? []).filter((t) => t.apiKey && tierSupports(t.provider, kind));
+  if (tiers.length > 0) {
+    // ONE budget across the whole ladder, not timeoutMs per rung. Three tiers each given a
+    // fresh 10s meant a message could sit ~30s in providers on top of the download before
+    // degrading -- and the customer is waiting for a reply the entire time.
+    const ladderDeadline = Date.now() + limits.timeoutMs * 2;
+    for (const tier of tiers) {
+      const remaining = ladderDeadline - Date.now();
+      // Only skip when there is genuinely nothing left. An absolute floor here would be a
+      // magic number that silently swallows the first tier whenever the configured
+      // timeout is small.
+      if (remaining <= 0) {
+        failures.push(`${tier.provider}/${tier.model}: skipped, ladder budget exhausted`);
+        break;
+      }
+      const base = {
+        bytes,
+        mimeType,
+        // Never more than one tier's worth, never more than what is left.
+        timeoutMs: Math.min(limits.timeoutMs, remaining),
+        fetcher,
+      };
+      const attempt = await attemptTier(tier, base, kind, config);
+      if (attempt.ok) return { ok: true, result: attempt.result };
+      failures.push(attempt.failure);
+      everyFailureWasTimeout &&= attempt.timedOut;
+    }
+    return {
+      ok: false,
+      reason: everyFailureWasTimeout ? "timeout" : "provider_failed",
+      detail: failures.join("; "),
+    };
+  }
 
   if (config.geminiKey) {
     const attempt = await attemptGemini(

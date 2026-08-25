@@ -551,7 +551,12 @@ async function handleLiveMessages(
           // Understood or not, the agent still replies -- it just falls back to the
           // placeholder, which is exactly today's behaviour.
           const agentInput = outcome.understood ? outcome.agentText : messageText;
-          await triggerAiAgentReply(account, conversationId, phoneNumberId, from, agentInput);
+          // The transcript's detected language beats counting characters in text that now
+          // carries an English data-marker (see detectReplyLanguage).
+          await triggerAiAgentReply(
+            account, conversationId, phoneNumberId, from, agentInput,
+            outcome.understood ? outcome.languageCode : undefined,
+          );
         });
       } else {
         triggerAiAgentReply(account, conversationId, phoneNumberId, from, messageText)
@@ -968,7 +973,8 @@ async function triggerAiAgentReply(
   conversationId: string,
   phoneNumberId: string,
   recipientPhone: string,
-  inboundText: string
+  inboundText: string,
+  languageHint?: string,
 ) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -986,6 +992,7 @@ async function triggerAiAgentReply(
       phone_number_id: phoneNumberId,
       recipient_phone: recipientPhone,
       inbound_text: inboundText,
+      ...(languageHint ? { language_hint: languageHint } : {}),
     }),
   });
   if (!response.ok) {
