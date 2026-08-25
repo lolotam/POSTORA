@@ -1,0 +1,34 @@
+TASK: Add regression tests for the OAuth reconnect health-state clearing feature. TESTS ONLY — do not modify any production code. Do not commit (the orchestrator commits).
+
+REPO: F:\Postora_new — React 18 + TypeScript + Vite. Frontend tests run with Vitest (jsdom). Gate commands: `npx vitest run` and `npm run lint`.
+
+BACKGROUND (verified facts — trust these): The reconnect feature works as follows.
+- Edge functions supabase/functions/{pinterest,twitter,tiktok}-oauth/index.ts each have a reconnect path that updates the EXISTING social_accounts row via .update({...}).eq("id", row.id).eq("user_id", ...) with payload including is_active: true, needs_reauth: false, failure_count: 0, last_refresh_error: null, and guards: RECONNECT_ACCOUNT_NOT_FOUND / RECONNECT_FORBIDDEN / RECONNECT_PLATFORM_MISMATCH / RECONNECT_ACCOUNT_MISMATCH. Their connect path uses .upsert(..., { onConflict: "user_id,platform,platform_user_id" }). On reconnect success they append reconnected=1 to the redirect ("ret.searchParams.set(\"reconnected\", \"1\")" or returnUrl equivalent).
+- Twitter's reconnect update now uses `...(refresh_token ? { refresh_token } : {})` to preserve the stored refresh token; it must never regress to `refresh_token: refresh_token ?? null` inside the reconnect update.
+- src/hooks/oauth/oauthUtils.ts exports refetchSocialQueries(queryClient) which calls queryClient.refetchQueries for these queryKeys: ["all_social_accounts"], ["social_accounts"], ["social_accounts_by_profile"], ["social_profiles"], ["accounts-needing-reauth"], ["connection_health"], ["admin-token-health"], ["admin-refresh-history"].
+- src/hooks/oauth/useOAuthRedirectHandler.ts reads searchParams; when connected=<platform> it reads isReconnect = searchParams.get("reconnected") === "1", shows toast title "Connection refreshed" when reconnecting, and calls refetchSocialQueries(queryClient).
+- src/components/dashboard/TokenReauthBanner.tsx queries social_accounts with .eq("needs_reauth", true) under queryKey ["accounts-needing-reauth", user?.id].
+
+EXISTING PATTERNS TO FOLLOW:
+1. Source-guard tests: src/lib/__tests__/edgeFailClosedGuards.test.ts reads supabase function sources with fs.readFileSync and asserts patterns with expect(...).toContain / toMatch. Follow this exact pattern.
+2. Hook tests: src/hooks/oauth/__tests__/reconnectMode.test.ts and src/hooks/__tests__/useProfileOAuth.test.tsx show the project's mocking approach for supabase client, toast, and react-query. Read them before writing.
+
+DELIVERABLES:
+A) NEW FILE src/lib/__tests__/reconnectHealthClearing.test.ts (source-guard style). For EACH of supabase/functions/pinterest-oauth/index.ts, twitter-oauth/index.ts, tiktok-oauth/index.ts assert:
+   - the reconnect update payload includes needs_reauth: false, failure_count: 0, last_refresh_error: null, is_active: true (regex over the .update({...}) block is fine; keep regexes simple and robust);
+   - reconnect targets the exact row: .eq("id", row.id) and an .eq("user_id", ...) ownership filter;
+   - guards RECONNECT_FORBIDDEN and RECONNECT_ACCOUNT_MISMATCH are present;
+   - connect upsert uses onConflict: "user_id,platform,platform_user_id" (prevents duplicates);
+   - the reconnected=1 redirect signal is present ('"reconnected", "1"');
+   - twitter-oauth reconnect block does NOT contain "refresh_token: refresh_token ?? null".
+B) NEW FILE src/hooks/oauth/__tests__/oauthUtils.test.ts: unit test that refetchSocialQueries calls queryClient.refetchQueries once per key with exactly the 8 queryKeys listed above (pass a mock queryClient object { refetchQueries: vi.fn() }).
+C) Extend redirect-handler coverage: add a test (new file src/hooks/oauth/__tests__/useOAuthRedirectHandler.reconnect.test.tsx OR extend an existing suite if simpler) that renders the hook with URL search params connected=pinterest&reconnected=1 and asserts: (1) toast called with title "Connection refreshed", (2) queryClient refetch for ["accounts-needing-reauth"] and ["all_social_accounts"] happened (via refetchSocialQueries or spying on queryClient.refetchQueries). Mock react-router's useSearchParams or wrap in MemoryRouter with initial entries — follow whatever the repo's existing hook tests do for router + query client wrappers. If mocking the full hook environment proves too brittle, a focused test that the handler module calls refetchSocialQueries when reconnected=1 (module-level mock of ./oauthUtils) is acceptable — state which approach you took.
+D) Component test for the profile card state (user requirement "card changes from expired to active"): if src/components/profiles/PlatformAccountsTab.tsx can be rendered with minimal props, add src/components/profiles/__tests__/PlatformAccountsTab.reauth.test.tsx asserting: account with needs_reauth=true renders "Action Required" and a Reconnect button; same account with needs_reauth=false and future token_expires_at renders "Active" and no Reconnect button. If the component's required props make this impractical within reasonable effort, SKIP it and say so explicitly in your report with the blocking reason.
+
+CONSTRAINTS:
+- Tests only. Zero production-code changes. Zero snapshot tests.
+- Never print or hardcode real tokens/secrets; use obviously fake fixtures.
+- All tests must pass: run `npx vitest run` yourself before finishing and include the summary in your report. Also run `npm run lint` on the new files.
+- Match repo lint style (TypeScript strict, existing import patterns).
+
+REPORT CONTRACT: End with "Phase 6 Test Report": list of files added/changed, approach taken for (C), whether (D) was done or skipped and why, and the final vitest + lint output summary (counts only).

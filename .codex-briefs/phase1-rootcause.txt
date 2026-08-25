@@ -1,0 +1,24 @@
+TASK: Read-only root-cause investigation (NO code changes) — "reconnect succeeds but expired warning stays"
+
+REPO: F:\Postora_new — Postora, a social media manager. React 18 + TypeScript + Vite + Tailwind + shadcn/ui frontend in src/, Supabase Edge Functions (Deno) in supabase/functions/. Backend is SELF-HOSTED Supabase at https://api.postora.cloud. React Query (@tanstack/react-query) is used for data fetching.
+
+PROBLEM: When a platform's refresh token expires, the app correctly shows a red "expired / reconnect" warning on the dashboard and on the profile platform cards for Pinterest, X/Twitter, and TikTok. When the user clicks Reconnect, OAuth completes successfully and tokens appear refreshed — but the red dashboard warning and the profile card's expired/reconnect state REMAIN. Users currently must delete the account and reconnect from scratch.
+
+Relevant DB columns on public.social_accounts: id, user_id, platform, platform_user_id, platform_username, access_token, refresh_token, token_expires_at, is_active, needs_reauth, failure_count, last_refresh_error, updated_at, social_profile_id.
+
+YOUR JOB — answer these questions with exact file paths, line numbers, and verbatim code quotes:
+
+1. WARNING SOURCE: Where does the dashboard red expired-token banner get its data? Which hook/component, which table(s) or edge function does it query (social_accounts.needs_reauth? token_refresh_history? connection_health? something else), and what is the exact React Query queryKey? Look for hooks like accounts-needing-reauth, connection health hooks, and dashboard banner components.
+2. PROFILE CARD SOURCE: Same analysis for the profile page platform cards that show expired/reconnect state (likely src/components/profiles/* and hooks like useSocialAccounts / social_accounts_by_profile). Exact queryKeys.
+3. OAUTH CALLBACK UPDATE PATHS: For each of supabase/functions/pinterest-oauth/index.ts, supabase/functions/twitter-oauth/index.ts, supabase/functions/tiktok-oauth/index.ts — find the OAuth callback success path where tokens are stored. Quote the exact .upsert() or .update() payload. Answer per platform: does the success path set needs_reauth=false? failure_count=0? last_refresh_error=null? is_active=true? Does it use upsert (which conflict target?) or update? Could it create a duplicate row on reconnect (e.g. conflict target mismatch)? Does it preserve social_profile_id or could it null/overwrite it?
+4. REDIRECT PARAMS: What query params does each callback redirect back to the frontend with (e.g. ?connected=pinterest)? Is there any reconnect-specific signal today?
+5. REDIRECT HANDLER: In src/hooks/oauth/useOAuthRedirectHandler.ts (and any related oauth hooks), what happens when connected=<platform> is detected? Which React Query keys are invalidated/refetched today, and which of the warning/card queryKeys from questions 1-2 are NOT invalidated?
+6. REFRESH-TOKENS FUNCTION: Check supabase/functions/refresh-tokens (or similar) — what sets needs_reauth=true / failure_count / last_refresh_error? Is there any table like token_refresh_history or connection_health being written? Do admin hooks (admin-token-health, admin-refresh-history) read them?
+7. ROOT CAUSE VERDICT: State which combination explains the bug: (a) backend callback not clearing health fields, (b) frontend not invalidating the right query caches, (c) warning derived from stale failure logs, or a combination. Be specific per platform — they may differ.
+
+CONSTRAINTS:
+- READ-ONLY. Do not modify any file.
+- Never print values of tokens, secrets, or env vars — quote code structure only.
+- Ignore n8n-related code.
+
+REPORT CONTRACT: End with a markdown report titled "Phase 1 Root Cause Report" with sections matching questions 1-7, each with file:line references and verbatim quotes of the decisive code. Keep quotes tight (only the decisive lines).

@@ -1,6 +1,7 @@
 # Postora Partner API — Specification v1
 
-**Status:** Draft for review · **Date:** 2026-08-25 · **Supersedes scope of:** `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md` (v2, WhatsApp-only)
+**Status:** Draft, revised after review round 1 · **Version:** 1.1 · **Date:** 2026-08-25
+**Supersedes scope of:** `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md` (v2, WhatsApp-only)
 **Source PRD:** `docs/postora future feathers/POSTORA_PARTNER_API_PRD_v1.0.md`
 **Implementation plan:** `docs/postora future feathers/POSTORA-PARTNER-API-IMPLEMENTATION-PLAN.md`
 
@@ -12,23 +13,16 @@
 
 ## 1. Problem
 
-The PRD (`POSTORA_PARTNER_API_PRD_v1.0.md`) describes a full developer platform: REST `/v1`
-resources across messaging, publishing, media, contacts, analytics and AI; OAuth app
-installations; a webhook product; SDKs; billing.
+The PRD describes a full developer platform: REST `/v1` resources across messaging, publishing,
+media, contacts, analytics and AI; OAuth app installations; a webhook product; SDKs; billing.
 
-What exists in the repository today is a **single-endpoint, action-RPC door that does three
-things for WhatsApp.** The gap is not a matter of adding endpoints — the PRD and the
-implementation disagree about the *shape* of the API, the *error envelope*, the *scope
-vocabulary*, and the *unit of tenancy*.
+What exists today is a **single-endpoint, action-RPC door that does three things for WhatsApp.**
+The gap is not a matter of adding endpoints — the PRD and the implementation disagree about the
+*shape* of the API, the *error envelope*, the *scope vocabulary*, and the *unit of tenancy*.
 
-This specification's job is to close that gap explicitly. It does not restate the PRD. It
-records, for each conflict between the PRD's target and the code's reality, **which one wins in
-v1 and why** — so that implementation is a matter of execution rather than re-litigation.
-
-The central finding that makes this tractable is in §3.4: **the Partner API has exactly one
-credential, which has never sent a message.** The backward-compatibility burden that would
-normally force an awkward compromise does not exist yet. It will exist the moment Danat goes
-live, which is why the shape decision must be made now rather than after.
+This specification closes that gap explicitly. It does not restate the PRD. For each conflict
+between the PRD's target and the code's reality it records **which one wins in v1 and why**, so
+implementation is execution rather than re-litigation.
 
 ---
 
@@ -38,53 +32,57 @@ live, which is why the shape decision must be made now rather than after.
 |---|---|
 | `POSTORA_PARTNER_API_PRD_v1.0.md` | Product intent, target users, commercial framing, long-range roadmap |
 | `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md` | The WhatsApp partner door as built: key hashing, tenancy FK, idempotency semantics, Danat topology |
-| `ARCHITECTURE.md` | Layering, dependency direction, Edge Function shape, security rules that all new code must follow |
-| **This document** | The v1 public contract, the decision ledger, the data-model delta, and the acceptance bar |
-| `POSTORA-PARTNER-API-IMPLEMENTATION-PLAN.md` | Ordered phases, sequencing, risk, and per-phase exit criteria |
+| `ARCHITECTURE.md` | Layering, dependency direction, Edge Function shape, security rules all new code must follow |
+| **This document** | The v1 public contract, the decision ledger, the data-model delta, the acceptance bar |
+| `POSTORA-PARTNER-API-IMPLEMENTATION-PLAN.md` | Ordered phases, sequencing, risk, per-phase exit criteria |
 
-The 2026-08-13 spec is **not superseded as a record of why the foundation is built the way it
-is.** Its §5.1a (composite-FK tenancy), §5.1b (metering), §5.3 (idempotency states) and §5.5
-(delivery outbox) remain the authoritative rationale. This document generalises the *surface*
-above that foundation and carries forward the one part of it that was specified but never built
-(§3.3 below).
+The 2026-08-13 spec is **not superseded as a record of why the foundation is built as it is.** Its
+§5.1a (composite-FK tenancy), §5.1b (metering), §5.3 (idempotency states) and §5.5 (delivery
+outbox) remain the authoritative rationale. This document generalises the *surface* above that
+foundation and carries forward the part of it that was specified but never built (§3.3.1).
 
-Per `CLAUDE.md`, a fact lives in exactly one file. Where this spec needs a fact from another
+Per `CLAUDE.md`, a fact lives in exactly one file; where this spec needs a fact from another
 document it links rather than copies.
 
 ---
 
 ## 3. Verified current state
 
-Everything in this section was checked on 2026-08-25 against the working tree and the
-production database. This is the baseline the plan builds from.
+Checked on 2026-08-25 against the working tree and the production database.
 
-### 3.1 What is built and working
+### 3.1 What is built
 
-The foundation is substantially more complete than the PRD assumes. PRD §50's "Phase 1 —
-Partner API Foundation" is, with the exceptions in §3.3, **already delivered**.
+The foundation is substantially more complete than the PRD assumes. PRD §50's "Phase 1 — Partner
+API Foundation" is, with the exceptions in §3.3, largely delivered.
 
-| PRD requirement | Status | Evidence |
+| PRD requirement | Status | Evidence and precise scope of the claim |
 |---|---|---|
-| API-key auth, hashed at rest | ✅ Built | `_shared/partnerApiKeys.ts` — SHA-256 hex digest, `pk_live_` prefix, plaintext never stored |
-| Non-enumerable key errors | ✅ Built | `partnerApiKeys.ts:81` — unknown key and malformed key return the identical 401 |
-| Scopes | ✅ Built | `partnerApiKeys.ts` `PartnerScope`; enforced via `assertScope` + `partner-api/router.ts` |
-| Workspace/account binding | ✅ Built, DB-enforced | `20260813120000_partner_api_foundation.sql` — composite FK `(social_account_id, workspace_id)` makes cross-workspace key misuse impossible in the database, not merely in code |
-| Request IDs | ✅ Built | `partner-api/index.ts` — `X-Postora-Request-Id` header **and** body field, on every exit path including pre-auth |
-| Idempotency | ✅ Built, unusually rigorous | `claim_partner_idempotency()` SQL function: atomic claim, lease takeover, and an `attempt_token` fencing UUID so a revived stale writer cannot settle a new owner's row |
-| Indeterminate-outcome handling | ✅ Built | `partner-api/index.ts` — an indeterminate send is never auto-retried and never refunded, because the customer may already have the message |
-| Rate limiting, concurrency-safe | ✅ Built | `consume_partner_rate()` — single atomic `INSERT … ON CONFLICT DO UPDATE … RETURNING`, explicitly rejecting the count-then-insert race |
-| Quota reserve/settle | ✅ Built | `reserve_partner_quota()` / `release_partner_quota()` — quota is consumed only by a Meta-accepted send, released on definite rejection, retained on indeterminate |
-| Usage ledger | ✅ Built | `partner_api_usage`, composite FK prevents a usage row whose workspace disagrees with its key |
-| Revocation as a one-way door | ✅ Built | `revoke_partner_key()` — no `UPDATE` grant exists, so a leaked key cannot be silently un-revoked |
-| Sanitized errors | ✅ Built | Typed error codes throughout; raw Meta/Postgres errors are not returned |
+| API-key auth, hashed at rest | Built | `_shared/partnerApiKeys.ts` — SHA-256 hex digest, `pk_live_` prefix, plaintext never stored |
+| Non-enumerable key errors | Built | `partnerApiKeys.ts:81` — unknown and malformed keys return an identical 401 |
+| Workspace/account binding | Built, DB-enforced | `20260813120000_partner_api_foundation.sql` — composite FK `(social_account_id, workspace_id)` makes cross-workspace key misuse impossible in the database, not merely in code |
+| Scopes | Built | `PartnerScope` in `partnerApiKeys.ts`; enforced by `assertScope` + `partner-api/router.ts` |
+| Request IDs | Built **for application responses** | `partner-api/index.ts:75` — every post-`OPTIONS` exit path stamps header and body. **The CORS preflight at `:70` returns before the id is generated and carries neither** |
+| Idempotency claim/replay/conflict | Built, rigorous | `claim_partner_idempotency()` — atomic claim, lease takeover, and an `attempt_token` fence so a revived stale writer cannot settle a new owner's row |
+| Observed-indeterminate handling | Built | An indeterminate outcome the process *observes* is never auto-retried and never refunded. **This does not cover process death mid-send — see §3.3.9** |
+| Rate limiting, concurrency-safe | Built | `consume_partner_rate()` — one atomic `INSERT … ON CONFLICT DO UPDATE … RETURNING`, explicitly rejecting the count-then-insert race |
+| Quota reserve/settle | Built | `reserve_partner_quota()` / `release_partner_quota()`. **Quota is consumed by accepted *or indeterminate* sends** — released only on a *definite* provider rejection |
+| Usage ledger | Built | `partner_api_usage`; composite FK prevents a usage row whose workspace disagrees with its key |
+| Revocation as a one-way door | Built | `revoke_partner_key()` — no `UPDATE` grant exists, so a leaked key cannot be silently un-revoked |
+| Sanitized errors | Built | Typed error codes throughout; raw Meta/Postgres errors are not returned |
+
+**On test status.** 30 Deno tests covering these modules pass locally in 728ms. They are *not* a
+release assurance, because they do not run in CI (§3.3.8), and unit tests over stubbed clients
+cannot demonstrate the SQL concurrency properties that the idempotency and rate-limit designs
+depend on. Treat the foundation's *reasoning* as sound and its *operational behaviour* as
+unvalidated — nothing here has run under production load (§3.4).
 
 This foundation should be **extended, not redesigned.** Several of its properties (the fencing
-token, the reserve/settle split, the composite FKs) are subtle correctness work that a rewrite
-would likely lose.
+token, the reserve/settle split, the composite FKs) are subtle correctness work a rewrite would
+likely lose.
 
-### 3.2 What the API actually exposes
+### 3.2 What the API exposes
 
-Three actions, WhatsApp only, over a single `POST` endpoint (`partner-api/router.ts`):
+Three actions, WhatsApp only, over a single `POST` (`partner-api/router.ts`):
 
 | Action | Scope required | Side effect |
 |---|---|---|
@@ -92,61 +90,61 @@ Three actions, WhatsApp only, over a single `POST` endpoint (`partner-api/router
 | `list_templates` | `whatsapp:templates.read` | none |
 | `send_template` | `whatsapp:template.send` | billable; requires `Idempotency-Key` |
 
-A fourth scope, `whatsapp:webhooks.manage`, is **defined and granted but has no action behind
-it** (`partnerApiKeys.ts` `PartnerScope`; absent from `ACTION_SCOPES`).
+A fourth scope, `whatsapp:webhooks.manage`, is **defined and granted but has no action behind it.**
 
-### 3.3 What is specified but missing
-
-These are the real gaps. Each is a prerequisite for something the PRD promises.
+### 3.3 What is specified or required but missing
 
 1. **The webhook delivery outbox does not exist.** The 2026-08-13 spec §5.5 specified
-   `whatsapp_webhook_deliveries` as a transactional outbox, with the explicit reasoning that
-   fire-and-forget dispatch loses events permanently: the inbound message is inserted first,
-   dispatched second, so a lost dispatch is never recovered because Meta's redelivery hits the
-   duplicate check and skips. **No `*_deliveries` table was ever created** — a scan of all 225
-   migrations finds only `whatsapp_webhooks` and `workflow_webhooks`. The PRD's entire webhook
-   product (§22–23: retries, delivery ledger, event IDs, replay, endpoint health) rests on this
-   missing table.
+   `whatsapp_webhook_deliveries` as a transactional outbox, reasoning that fire-and-forget
+   dispatch loses events permanently: the inbound message is inserted first and dispatched
+   second, so a lost dispatch is never recovered because Meta's redelivery hits the duplicate
+   check and skips. **No `*_deliveries` table exists in any of the 225 migrations.** The PRD's
+   whole webhook product (§22–23) rests on it.
 
-2. **No `X-RateLimit-*` headers are emitted.** PRD §25 requires `X-RateLimit-Limit`,
-   `-Remaining`, `-Reset` and `Retry-After`. `checkRateLimit` (`_shared/partnerApiMetering.ts:75`)
-   returns `void` or throws; it never surfaces the counts, so the caller cannot back off
-   intelligently. `Retry-After` is emitted only for `idempotency_in_progress`.
+2. **No `X-RateLimit-*` headers.** PRD §25 requires `-Limit`, `-Remaining`, `-Reset` and
+   `Retry-After`. `checkRateLimit` (`_shared/partnerApiMetering.ts:75`) returns `void` or throws;
+   it never surfaces counts, so a caller cannot back off intelligently.
 
 3. **The rate limiter fails open, unconditionally.** `partnerApiMetering.ts:84` —
-   `if (error) return;` with the comment "Never fail a send because the limiter is unavailable."
-   PRD §25 requires a *deliberate* fail-open/fail-closed policy **chosen per operation risk**.
-   Today a limiter outage removes all rate limiting from billable sends. See Decision D7.
+   `if (error) return;`. PRD §25 requires a *deliberate* policy chosen per operation risk. Today
+   a limiter outage removes all rate limiting from billable sends. See D7.
 
-4. **No OpenAPI document exists.** PRD §31 makes it the source of truth; `openapi/` is absent
-   from the repository.
+4. **No OpenAPI document.** PRD §31 makes it the source of truth; `openapi/` does not exist.
 
-5. **No key-minting UI.** `partner_api_keys` appears nowhere in `src/` except the generated
-   `src/integrations/supabase/types.ts`. Keys are minted by hand-written SQL. Note that
-   `src/pages/ApiKeys.tsx` is a *different* system — it manages `profiles.api_key`, the plaintext
-   per-user UUID used by `n8n-api`. See Decision D8.
+5. **No key-minting UI and no rotation.** `partner_api_keys` appears in `src/` only in the
+   generated `types.ts`. Keys are minted by hand-written SQL. (`src/pages/ApiKeys.tsx` is a
+   *different* system — it manages `profiles.api_key`, used by `n8n-api`. See D8.)
 
 6. **No audit log.** PRD §30 requires an auditable record of key creation, rotation, revocation
-   and scope changes. `revoke_partner_key()` stamps `revoked_by`/`revoked_reason` on the row
-   itself, which records the latest state but is not an append-only audit trail.
+   and scope changes. `revoke_partner_key()` stamps `revoked_by`/`revoked_reason` on the row,
+   which records latest state but is not an append-only trail.
 
-7. **No OAuth, no applications, no installations.** PRD §12.2, §40 and §50 Phase 6 are entirely
-   unbuilt. There is no `partner_applications`, `partner_oauth_*`, or `partner_installations`.
+7. **No OAuth, applications, or installations.** PRD §12.2, §40, §50 Phase 6 are unbuilt.
 
-8. **The Partner API's tests never run in CI.** `vite.config.ts:45` sets the vitest
-   `include` to `["src/**/*.{test,spec}.*"]`, so every Deno test under `supabase/functions/**`
-   is outside the pattern. `.github/workflows/test.yml` runs only `bun run test` (vitest) and
-   `npx tsc --noEmit`. Consequently `partner-api/isolation.test.ts`,
-   `partner-api/router.test.ts`, `_shared/partnerApiIdempotency.test.ts`,
-   `partnerApiKeys.test.ts` and `partnerApiMetering.test.ts` **exist but gate nothing.**
+8. **The Partner API's tests never run in CI.** `vite.config.ts:45` sets the vitest `include` to
+   `["src/**/*.{test,spec}.*"]`, so every Deno test under `supabase/functions/**` is outside the
+   pattern; `.github/workflows/test.yml` runs only `bun run test` (vitest) and `npx tsc --noEmit`.
+   `partner-api/isolation.test.ts`, `router.test.ts`, `partnerApiIdempotency.test.ts`,
+   `partnerApiKeys.test.ts` and `partnerApiMetering.test.ts` **exist but gate nothing.** §10
+   declares tenant-isolation tests release-blocking; under today's CI they block nothing. A Deno
+   test job is a Phase 0 prerequisite, not a testing nicety.
 
-   This is load-bearing for §10: the spec declares tenant-isolation tests release-blocking, and
-   under today's CI they would block nothing. A Deno test job is therefore a Phase 0
-   prerequisite, not a testing nicety — see the implementation plan.
+9. **A crash mid-send can duplicate a customer message.** `partner-api/index.ts` calls
+   `sendTemplate()` **before** any durable record exists that the provider call was attempted.
+   `completeIdempotency()` and `markIndeterminate()` both run *after* the call returns. If the
+   isolate dies after Meta accepts the message but before either settles, the row stays
+   `processing`; once the 300-second lease expires, `claim_partner_idempotency()` grants takeover
+   to a retry, which sends a **second real message to a real customer**.
 
-### 3.4 Live production state — the decisive fact
+   The `attempt_token` fence does not prevent this — it stops a stale writer from *settling*
+   another attempt's row, not from *dispatching* a second provider call. The in-code comments
+   correctly identify this hazard for the settle-failure case and handle it via
+   `markIndeterminate()`; the process-death case cannot be handled from inside the dying process.
+   See D13.
 
-Queried against the production database on 2026-08-25:
+### 3.4 Live production state
+
+Queried against production on 2026-08-25:
 
 ```
 partner_api_keys:  1 row
@@ -154,263 +152,299 @@ partner_api_usage: 4 rows
 whatsapp_webhooks: 0 rows
 ```
 
-The single key is `Danat Backend` (`pk_live_urCb…`), holding all three scopes, **not revoked**,
+The key is `Danat Backend` (`pk_live_urCb…`), all three scopes, **not revoked**,
 `last_used_at = 2026-08-14 01:28 UTC`, `current_usage_count = 0`.
 
-All four usage rows are from a single 11-minute smoke-test window on 2026-08-14:
-one `unknown_action` 400, two `get_status` 200s, one `list_templates` 200.
+All four usage rows come from one 11-minute window on 2026-08-14: one `unknown_action` 400, two
+`get_status` 200s, one `list_templates` 200. **No `send_template` call has ever been made. No
+webhooks are configured.**
 
-**There has never been a `send_template` call. There are no configured webhooks. The one
-credential has been idle for eleven days.**
+**What this proves, and what it does not.** It proves the side-effectful path has never run in
+production, and that no *recorded traffic* depends on the current contract. It does **not** prove
+there is only one consumer: one credential can be deployed across many hosts, environments,
+release versions and dormant retry jobs, and Postora has no inventory of where Danat installed it.
 
-Consequences, which drive §5:
+Therefore the following are **working hypotheses, not established facts**, and each must be
+confirmed by an inventory of Danat's deployment before any decision is executed on its strength:
 
-- The Partner API has **one consumer, and it has never exercised the side-effectful path.**
-- Backward compatibility is a **single coordinated change with one named partner**, not a
-  public deprecation window.
-- Any breaking change to shape, envelope, or scope vocabulary is close to free **right now**
-  and becomes progressively expensive from Danat's go-live onward.
-- Conversely: nothing about the current surface has been proven in production under real load.
-  Treat the foundation's *correctness* as well-reasoned and well-tested, but its *operational
-  behaviour* as unvalidated.
+- H1 — the credential is held by a single deployed consumer;
+- H2 — changing shape, envelope, or scope vocabulary is close to free **today**, and grows
+  expensive from Danat's go-live onward.
+
+D1, D3 and D7 are affordable *if* H1 and H2 hold. Confirming them is the first item in §11.
 
 ---
 
 ## 4. Goals
 
-1. Freeze the v1 public contract shape, error envelope, and scope vocabulary **before** the
-   second consumer arrives.
+1. Freeze the v1 public contract shape, error envelope, and scope vocabulary **before** the second
+   consumer arrives.
 2. Carry the existing foundation forward without redesigning its correctness-critical parts.
-3. Deliver the missing prerequisites (§3.3) that the PRD's promises depend on.
-4. Make the OpenAPI document the enforced source of truth, with CI gates.
-5. Keep every phase independently shippable, so the programme can stop at any phase boundary
-   and still leave a coherent product.
+3. Deliver the missing prerequisites (§3.3) the PRD's promises depend on.
+4. Make the OpenAPI document the enforced source of truth, with CI gates that actually run.
+5. Keep every phase independently shippable.
 
 ## 5. Non-goals for v1
 
-Beyond the PRD's own §6 non-goals, this specification additionally defers:
+Beyond the PRD's own §6, this specification defers the following. Each carries re-entry criteria,
+so scope cannot quietly disappear into conditional prose.
 
-- **OAuth and app installations** (PRD §12.2, Phase 6). No consumer needs them: Danat is
-  server-to-server, and the WooCommerce plugin is site-owner-installed, both of which are
-  correctly served by API keys. OAuth is required only for *public marketplace* apps
-  (Shopify/Salla/Zid public listings), which are not v1 commitments.
-- **SDK generation** (PRD §34). Deferred until the OpenAPI document is stable — generating SDKs
-  from a moving contract produces churn, not value.
-- **Billing integration** (PRD §27, Phase 9). The metering ledger must be *billing-ready*; wiring
-  Stripe is not v1.
-- **The AI API** (PRD §21). AI generation has its own quota model and cost profile; exposing it
-  publicly is a separate commercial decision.
-- **Analytics API** (PRD §20). It would be built on a warehouse that does not exist — see the
-  roadmap's Core 2 finding in `Ai agent improvemnets.md`. Specifying a public analytics contract
-  before the data layer exists would freeze a contract we cannot serve.
+| Deferred | PRD ref | Why | Re-entry when |
+|---|---|---|---|
+| OAuth and app installations | §12.2, Phase 6 | No v1 consumer needs it: Danat is server-to-server, WooCommerce is site-owner-installed. OAuth is for *public marketplace* apps only | A public Shopify/Salla/Zid listing is committed |
+| SDK generation | §34 | Generating from a moving contract produces churn | OpenAPI is stable and version-tagged |
+| Billing integration | §27, Phase 9 | Metering must be billing-*ready*; wiring Stripe is not v1 | First paid partner contract |
+| AI API | §21 | Separate quota model and commercial decision | Explicit product decision |
+| Analytics API | §20 | Would be built on a warehouse that does not exist (see `Ai agent improvemnets.md`, Core 2). Specifying a contract we cannot serve would freeze a lie | The analytics warehouse ships |
+| **Contacts API** | §19 | No identified v1 consumer requires it | A named consumer requires it |
+| **n8n migration onto `/v1`** | §38 | The node works today on `n8n-api`; migrating it is its own plan with its own blast radius | After `/v1` messaging is GA and stable |
+| **`profiles.api_key` convergence** | — | Reissuing credentials to every n8n user is a real migration for an internal-consistency benefit | See D8 |
 
 ---
 
 ## 6. Decision ledger
 
-Each decision resolves a conflict between the PRD and the implementation. These are the
-contested claims; they are the intended target of review.
+Each decision resolves a conflict between the PRD and the implementation, or closes a gap a
+reviewer identified. Decisions marked **(R1)** were added or materially changed after review
+round 1.
 
 ---
 
 ### D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias
 
-**Conflict.** PRD §11 specifies REST resources (`GET /v1/conversations`, `POST /v1/messages`).
-The implementation is a single `POST` taking `{action: "..."}` (`partner-api/index.ts`,
-`router.ts`).
+**Conflict.** PRD §11 specifies REST resources. The implementation is a single `POST` taking
+`{action: "..."}`.
 
-**Decision.** Adopt REST `/v1` as the v1 public contract. Keep the existing action endpoint
-alive, frozen at its current three actions, as a compatibility alias for Danat.
+**Decision.** Adopt REST `/v1` as the v1 public contract. Keep the existing action endpoint alive,
+frozen at its current three actions, as a compatibility alias.
 
-**Rationale.** The action-RPC shape is a poor fit for what the PRD asks for — it cannot express
-resource-scoped pagination, conditional requests, or per-resource rate limits without inventing
-a parallel convention for each, and it makes the OpenAPI document (PRD §31) describe one
-endpoint with a discriminated-union body rather than a resource model. That is a contract
-readers and generators handle badly.
+**Rationale.** Action-RPC cannot express resource-scoped pagination, conditional requests, or
+per-resource limits without inventing a parallel convention for each, and it forces the OpenAPI
+document to describe one endpoint with a discriminated-union body — a contract that readers and
+generators handle badly. The usual "you cannot break existing consumers" objection is weak here
+under H2 (§3.4).
 
-The usual counterargument — "you cannot break existing consumers" — **does not apply**. §3.4
-shows one consumer, four smoke-test calls, no sends, idle eleven days. The migration is an email
-to one partner.
+**Cost accepted.** Two paths during the alias window. Bounded by freezing the alias — no new
+actions, ever — and implementing every alias action as a thin translation onto the same use-case
+layer the REST route calls, so behaviour cannot diverge.
 
-**Cost accepted.** Two code paths during the alias window. Bounded by keeping the alias frozen:
-no new actions are ever added to it, and every alias action is implemented as a thin translation
-onto the same use-case layer the REST route calls, so behaviour cannot diverge.
+**(R1) Alias sunset — corrected.** The previous wording ("Danat confirms, or 6 months after GA,
+whichever is sooner") permitted removal at six months *even if Danat had not migrated*, which
+would knowingly break the only partner. Replaced with all of the following, conjunctively:
 
-**Alias sunset.** The alias is removed when Danat has migrated and confirmed, or 6 months after
-`/v1` GA, whichever is sooner. This resolves open question 1 of the 2026-08-13 spec for the
-`partner-api` surface (`ecommerce-whatsapp-api` remains separately open — see Q3).
+1. alias telemetry shows **zero** Danat traffic for 30 consecutive days; **and**
+2. Danat confirms in writing that no deployed environment still calls the alias; **and**
+3. a 30-day notice period has elapsed after that confirmation.
 
-**Rejected alternative.** Keeping action-RPC and layering REST later. This produces the worst
-outcome: the contract freezes twice, and the second freeze happens *after* consumers exist.
+An email is not a completed migration. Absent all three, the alias stays.
+
+**Rejected alternative.** Keeping action-RPC and layering REST later — the contract then freezes
+twice, the second time *after* consumers exist.
 
 ---
 
-### D2 — Error envelope: extend the existing shape; do not adopt the PRD's
+### D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**
 
-**Conflict.** The PRD §28 envelope is `{"error": {code, message, request_id, details}}`. The
+**Conflict.** PRD §28 specifies `{"error": {code, message, request_id, details}}`. The
 implementation emits `{success: false, error: {code, message, retryable, details}}` with
-`request_id` at the top level (`partner-api/index.ts` `errorBody` / `withRequestId`).
+`request_id` at the top level.
 
-**Decision.** Freeze the **implemented** envelope as the v1 contract, with `request_id` staying
-top-level. Add `details` uniformly. The PRD's shape is not adopted.
+**(R1) Revision.** v1.0 of this spec froze the *implemented* envelope for `/v1`. Review round 1
+correctly showed the rationale was weak: D1 already keeps the alias, so the alias can retain its
+own envelope, and `/v1` is free to choose on merits. The claim that "HTTP status alone is
+ambiguous" is not supported by the adapter, which uses meaningful 4xx/5xx statuses throughout.
 
-**Rationale.** The implemented envelope carries two fields the PRD's lacks, and both are load-
-bearing:
+**Decision.** `/v1` errors use:
 
-- `retryable` tells a client whether to back off or fail permanently, without maintaining a
-  client-side table of which codes are transient. This is exactly the information an integrator
-  most often gets wrong.
-- `success` lets a client branch before inspecting the body, which matters for the alias
-  endpoint where HTTP status alone is ambiguous.
+```json
+{ "error": { "code": "...", "message": "...", "retryable": false,
+             "request_id": "req_...", "details": {} } }
+```
 
-`request_id` stays top-level because it is present on **successful** responses too
-(`withRequestId` is applied to every response, not only errors). Nesting it under `error` would
-make the correlation handle available only on failure — the opposite of what an integrator
-debugging a *successful-but-wrong* call needs.
-
-**Cost accepted.** Divergence from the PRD, and from the Stripe-style convention the PRD echoes.
-Documented explicitly in the developer docs so it is a deliberate difference, not an accident.
-
----
-
-### D3 — Scope vocabulary: generic resource scopes, with the WhatsApp scopes retained as aliases
-
-**Conflict.** PRD §13 specifies generic scopes (`messages:send`, `posts:publish`). The
-implementation uses provider-prefixed ones (`whatsapp:template.send`).
-
-**Decision.** v1 issues generic scopes. The three existing WhatsApp scopes remain valid on
-already-issued keys and map onto the generic set. New keys receive generic scopes only.
-
-Mapping:
-
-| Existing | v1 generic |
-|---|---|
-| `whatsapp:template.send` | `messages:send` |
-| `whatsapp:templates.read` | `templates:read` |
-| `whatsapp:webhooks.manage` | `webhooks:manage` |
-
-**Rationale.** Provider-prefixed scopes force a new scope for every platform (`instagram:messages.send`,
-`facebook:messages.send`), which multiplies the authorisation surface and pushes provider
-knowledge into the credential model — the opposite of the provider-neutral boundary the PRD
-(§42) and `ARCHITECTURE.md` both require. Which *platforms* a key may act on is already answered
-by its bound accounts (D4), so encoding it in the scope too is redundant and can contradict it.
-
-**Capability, not scope, gates what a platform supports.** A key holding `messages:send` bound
-to an Instagram account can send what Instagram supports; anything else returns
-`unsupported_capability` (PRD §15.4). Scope answers *may you*; capability answers *can this
-platform*. Conflating them is what produces a scope explosion.
-
-**Cost accepted.** One mapping table, and one key to migrate. Trivial at today's scale (§3.4);
-this decision is materially harder in six months.
+- PRD nesting is adopted, including `request_id` inside `error`.
+- **`retryable` is retained**, against the PRD, and this is deliberate: it tells a client whether
+  to back off or fail permanently without maintaining a client-side table of which codes are
+  transient — the thing integrators most often get wrong. The PRD's shape is silent on it and is
+  worse for it.
+- `success` is dropped from `/v1`.
+- `X-Postora-Request-Id` is returned on **every** application response, success or failure, and
+  successful bodies carry `request_id` too — so correlation does not depend on failing.
+- The frozen alias keeps its current envelope unchanged.
 
 ---
 
-### D4 — Account binding: many accounts per key, additively
+### D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)**
+
+**Conflict.** PRD §13 specifies generic scopes (`messages:send`). The implementation uses
+provider-prefixed ones (`whatsapp:template.send`).
+
+**Decision.** v1 issues generic scopes only.
+
+**(R1) Revision — the aliasing plan is withdrawn.** v1.0 proposed mapping
+`whatsapp:template.send → messages:send` while leaving old scopes valid. Review round 1 correctly
+identified this as **privilege escalation disguised as vocabulary migration**: the legacy scope
+authorises *WhatsApp template* sending specifically, while `messages:send` covers a broader
+resource family — free-form messages, and under D4 any newly bound account on any platform. A
+credential would silently gain authority its holder never requested.
+
+**Replacement.** No aliasing. There is exactly one key (§3.4), so:
+
+1. Legacy scope strings remain accepted **at exactly their current capability** — WhatsApp
+   template send only — and are never widened.
+2. The Danat key is **reissued** with explicit generic scopes as part of its migration, which is a
+   deliberate grant with a human decision behind it.
+3. Legacy scope strings are then rejected for new keys.
+
+**Authorization is an intersection, not a lookup.** A request is permitted only if the scope
+allows the *operation*, the bound accounts allow the *resource*, and the platform capability
+allows the *operation subtype*. Scope answers *may you*; capability answers *can this platform*;
+account binding answers *on what*. Conflating any two of them is what produces either a scope
+explosion or a privilege leak.
+
+**Rationale for generic scopes.** Provider-prefixed scopes force a new scope per platform, which
+multiplies the authorisation surface and pushes provider knowledge into the credential model —
+the opposite of the provider-neutral boundary the PRD (§42) and `ARCHITECTURE.md` require.
+
+---
+
+### D4 — Account binding: many accounts per key, with **two** composite FKs **(R1, revised)**
 
 **Conflict.** PRD §14 shows `allowed_social_accounts: [...]`. The implementation pins exactly one
-(`partner_api_keys.social_account_id UUID NOT NULL`).
+(`partner_api_keys.social_account_id NOT NULL`).
 
-**Decision.** Move to a many-to-many `partner_api_key_accounts` join table. Retain
-`social_account_id` as a generated/maintained "primary account" for the frozen alias endpoint,
-which has no way to express account selection.
+**Decision.** Add a `partner_api_key_accounts` join table. Retain `social_account_id` as the
+"primary account" for the frozen alias, which has no way to express account selection.
 
-**Rationale.** One-account-per-key is correct for Danat and wrong for everything else. A
-WooCommerce site publishing to five platforms would need five keys, five secrets in
-`wp_options`, and five rotations — and the merchant would reasonably store them insecurely. More
-importantly, the publishing API (PRD §18) is inherently multi-account: one post fans out across
-platforms.
+**(R1) Non-negotiable constraint — corrected.** v1.0 required only
+`FK (social_account_id, workspace_id) → social_accounts (id, workspace_id)`. That is insufficient:
+it proves the *account* belongs to the row's workspace but not that the *key* does, so a malformed
+or compromised administrative write could bind a key from workspace A to an account from
+workspace B while satisfying the constraint.
 
-**Non-negotiable constraint.** The join table **must** carry the same composite-FK tenancy proof
-as the current column: `FOREIGN KEY (social_account_id, workspace_id) REFERENCES social_accounts
-(id, workspace_id)`. This is the control that makes cross-workspace misuse impossible in the
-database rather than in application code (2026-08-13 spec §5.1a). A naive join table with two
-independent FKs **loses that guarantee silently** and would be the single most dangerous
-regression available in this programme.
+The table must carry **both**:
 
-**Migration.** Additive. Backfill one row per existing key; the `NOT NULL` column stays until the
-alias is sunset.
+```
+FOREIGN KEY (social_account_id, workspace_id) REFERENCES social_accounts   (id, workspace_id)
+FOREIGN KEY (key_id,            workspace_id) REFERENCES partner_api_keys  (id, workspace_id)
+```
+
+plus `UNIQUE (key_id, social_account_id)`.
+
+This is not a novel pattern: `partner_api_keys` already carries
+`UNIQUE (id, workspace_id)` (`20260813120000_partner_api_foundation.sql:52`) precisely so it can
+be referenced this way, and `partner_api_usage` already uses the identical double-composite
+technique. Following the existing precedent is the correct move; a join table with two independent
+FKs would **silently lose the guarantee** and is the single most dangerous regression available in
+this programme.
+
+**Rationale for many-per-key.** One-account-per-key is right for Danat and wrong for everything
+else: a WooCommerce site publishing to five platforms would need five keys, five secrets in
+`wp_options`, and five rotations. Publishing (PRD §18) is inherently multi-account.
+
+**Migration.** Additive; backfill one row per existing key; the `NOT NULL` column stays until the
+alias sunsets.
 
 ---
 
-### D5 — The webhook delivery outbox is a v1 prerequisite, not a later phase
+### D5 — The webhook delivery outbox is a v1 prerequisite
 
-**Conflict.** The PRD treats webhooks as one product area among several (§22–23). The 2026-08-13
-spec §5.5 specified the outbox and it was never built (§3.3.1).
-
-**Decision.** Build `partner_webhook_deliveries` as a transactional outbox **before** any
-webhook endpoint is exposed publicly. No webhook API ships on fire-and-forget dispatch.
+**Decision.** Build `partner_webhook_deliveries` as a transactional outbox **before** any webhook
+endpoint is exposed. No webhook API ships on fire-and-forget dispatch.
 
 **Rationale.** The failure mode is not "an event is late" but "an event is lost permanently and
-neither side can tell." Because the message row is inserted before dispatch, a dropped dispatch
-is unrecoverable: Meta's own redelivery hits the duplicate check and skips. Publishing a webhook
-product with that property, and a documented at-least-once guarantee, would be an untrue claim.
+neither side can tell." Because the message row is inserted before dispatch, a dropped dispatch is
+unrecoverable — Meta's redelivery hits the duplicate check and skips. Publishing a webhook product
+with a documented at-least-once guarantee on that basis would be an untrue claim.
+`ARCHITECTURE.md` §27 independently forbids treating Edge Functions as durable queues and requires
+retry-critical workflows to persist state so they can resume after process termination.
 
-Carry forward, unchanged, from the 2026-08-13 spec §5.5:
+Carried forward unchanged from the 2026-08-13 spec §5.5:
 
 - atomic claim via `FOR UPDATE SKIP LOCKED` **plus a lease** — explicitly *not* the
-  select-then-loop pattern in `whatsapp-scheduled-sender/index.ts:26-32`, which has no atomic
-  claim and double-delivers under concurrency;
-- backoff ladder 1m / 5m / 30m / 2h / 6h;
+  select-then-loop in `whatsapp-scheduled-sender/index.ts:26-32`, which has no atomic claim and
+  double-delivers under concurrency;
+- backoff 1m / 5m / 30m / 2h / 6h;
 - auto-disable only after the ladder is exhausted, surfaced in the UI;
 - `UNIQUE (webhook_id, source_event_id)` as the dedup anchor.
 
-**Guarantees published to partners — and no more:** at-least-once delivery; best-effort ordering
-(backoff inherently lets event 2 land before event 1's retry; strict per-conversation ordering
-would mean head-of-line blocking); immutable event IDs, so **partners deduplicate**.
+**Guarantees published — and no more:** at-least-once delivery; best-effort ordering (backoff
+inherently lets event 2 land before event 1's retry; strict per-conversation ordering would mean
+head-of-line blocking); immutable event IDs, so **partners deduplicate**.
 
-**Generalisation.** The 2026-08-13 table was WhatsApp-named. v1 names it `partner_webhook_*` and
-carries a `platform` column, so the publishing and account event families (PRD §22.4) use the
-same machinery.
+**(R1) The outbox alone is not sufficient.** A table and a worker still lose events unless every
+producer **enqueues in the same transaction as the state change it reports.** A callback that
+fires "after the post completes" recreates precisely the crash gap the outbox exists to close.
+Every event in D6 must therefore name a producer that enqueues transactionally — see D9 for how
+this applies to publishing, which is the hard case.
+
+**Generalisation.** The 2026-08-13 table was WhatsApp-named; v1 names it `partner_webhook_*` with
+a `platform` column, so publishing and account events use the same machinery.
 
 ---
 
-### D6 — Event families: publish only what the platform can actually produce
+### D6 — Event families: publish only what has a defined, transactional producer **(R1, revised)**
 
-**Decision.** v1 publishes an event only where a real producer exists. Documented per event with
-its delivery mechanism and its latency characteristic, because they differ sharply.
+**Decision.** An event ships in v1 only when its **exact state transition, stable source
+identifier, and transactional producer** are all defined. "A producer exists somewhere" is not
+sufficient — see D5(R1).
 
-| Event | Producer | Ships in v1? |
+**(R1) Naming correction.** `message.sent` was listed as produced by the Partner API send path.
+The implementation only ever knows `state: "accepted_by_meta"` — provider acceptance, not
+delivery, and not observably "sent". Publishing `message.sent` would have partners building
+irreversible workflows on a name that overstates what Postora knows. Renamed to
+**`message.accepted`**, with `message.delivered` reserved for the provider's own delivery status.
+
+| Event | Transition it reports | Producer | v1? |
+|---|---|---|---|
+| `message.received` | Inbound message persisted | Meta / Evolution webhook, enqueued with the insert | Yes |
+| `message.accepted` | Provider accepted for delivery | Partner API send path, enqueued with the settle | Yes |
+| `message.delivered` / `.read` / `.failed` | Provider status callback | Meta status webhook | Yes — **WhatsApp Cloud only; unavailable in Evolution QR mode** |
+| `post.published` / `.failed` | Terminal `platform_posts` status | Publishing status transition — requires the D9 seam | Yes, gated on D9 |
+| `post.scheduled` | Schedule row created | Scheduling path | Yes |
+| `account.reauthorization_required` | `needs_reauth` set true | `check-connection-health` | Yes |
+| `account.connected` / `.disconnected` | Account activation transition | OAuth callbacks | Yes |
+| `conversation.updated` | — | **None** — would be inferred | **No** |
+| Comment events | — | Poller or webhook, per platform | **No** — deferred, see roadmap Core 4 |
+| `webhook.test` | Manual trigger | Webhook API | Yes |
+
+**Latency is documented per event, not globally.** Webhook-sourced events are near-real-time;
+poller-sourced events are bounded by cron cadence. Publishing both under one "real-time events"
+heading would be untrue for the polled ones.
+
+---
+
+### D7 — Limiter-failure policy: classify by risk, not by billability **(R1, revised)**
+
+**Conflict.** PRD §25 requires a deliberate per-risk policy. `partnerApiMetering.ts:84` fails open
+for everything.
+
+**(R1) Revision.** v1.0 split on "billable side effect vs read". Review round 1 correctly showed
+that boundary leaves major abuse classes uncovered: a webhook *test* is a read-shaped operation
+that makes Postora issue an outbound request to a partner-supplied URL (SSRF amplification); media
+*upload* consumes storage; provider-backed reads consume Meta quota; secret rotation is a
+security-relevant mutation. None are "billable sends".
+
+**Decision.** Every operation is assigned one of three risk classes in the OpenAPI document. On
+limiter unavailability:
+
+| Class | Definition | On limiter failure |
 |---|---|---|
-| `message.received` | Meta webhook / Evolution webhook | Yes |
-| `message.sent` | Partner API send path | Yes |
-| `message.delivered` / `.read` / `.failed` | Meta status webhook | Yes, WhatsApp Cloud only — **not** available in Evolution QR mode |
-| `post.published` / `.failed` | `process-post` result | Yes |
-| `post.scheduled` | Scheduling path | Yes |
-| `account.reauthorization_required` | `check-connection-health` | Yes |
-| `account.connected` / `.disconnected` | OAuth callbacks | Yes |
-| `conversation.updated` | — | **No** — no single producer exists today; it would be inferred, and an inferred event with a documented contract is a liability |
-| `webhook.test` | Manual trigger | Yes |
-| Comment events | Poller (Threads/YouTube) or webhook (Meta) | **No** — deferred; see roadmap Core 4 |
+| **A — bounded local read** | Serves from Postora's own database, bounded page size, no outbound call | **Fail open.** Cheap, idempotent, no amplification |
+| **B — external or unbounded** | Any outbound provider call, media download, or unbounded result set | **Fail closed** — `503 limiter_unavailable`, `retryable: true`, `Retry-After` |
+| **C — mutation or amplifier** | Any state change, any customer-reaching effect, any operation that makes Postora call a third-party URL (webhook test, webhook create/rotate), any upload | **Fail closed** |
 
-**Latency must be documented per event, not globally.** Events sourced from a Meta webhook are
-near-real-time. Events sourced from a poller are bounded by the cron cadence. Publishing both
-under one "real-time events" heading would be untrue for the polled ones.
+**Rationale.** The existing comment — "Never fail a send because the limiter is unavailable" —
+optimises for availability of a money-spending, customer-reaching operation. A limiter outage plus
+a partner retry loop is precisely what rate limiting exists to prevent; the blast radius is real
+messages, real spend, and outbound requests Postora is attributed with, none recoverable by
+apology. A refused class-B/C request is retryable and harmless.
+
+**This is a deliberate behaviour change to shipped code**, safe to make now only because
+`send_template` has never run in production (§3.4). It is in the plan's risk register.
 
 ---
 
-### D7 — Rate limiter failure: fail closed for billable operations, open for reads
-
-**Conflict.** PRD §25 requires a deliberate per-risk policy. The implementation
-(`partnerApiMetering.ts:84`) fails open for everything.
-
-**Decision.** On limiter unavailability: **reads proceed** (fail open); **billable side effects
-are refused** with `503 limiter_unavailable`, `retryable: true`, and `Retry-After`.
-
-**Rationale.** The current comment — "Never fail a send because the limiter is unavailable" —
-optimises for availability of a *money-spending, customer-reaching* operation. A limiter outage
-combined with a partner retry loop is precisely the scenario rate limiting exists to prevent:
-the blast radius is real messages to real customers and real spend, and it is not recoverable by
-apology. A refused send is retryable and harmless; an unbounded send storm is neither.
-
-Reads are cheap and idempotent, so failing open there is the right trade.
-
-**This is a deliberate behaviour change to shipped code.** It is safe to make now precisely
-because `send_template` has never been called in production (§3.4). Flag it explicitly in the
-plan's risk register.
-
----
-
-### D8 — Two API-key systems: keep both, document the boundary, converge later
+### D8 — Two API-key systems: explicit non-goal, with a containment rule **(R1, revised)**
 
 **Finding.** Postora has two unrelated API-key systems:
 
@@ -419,140 +453,244 @@ plan's risk register.
 | Consumer | `n8n-api` | `partner-api` |
 | Storage | **Plaintext UUID** on `profiles` | SHA-256 hash |
 | Scopes | None — full user authority | Yes |
-| Rotation | Regenerate in `src/pages/ApiKeys.tsx` | Not implemented |
+| Rotation | Regenerate in `src/pages/ApiKeys.tsx` | **Not implemented** (D12) |
 | Tenancy | User-scoped | Workspace + account, DB-enforced |
 
-**Decision.** v1 does not merge them. The Partner API model is the strategic one; `n8n-api`
-keys continue to serve the n8n node. Document the boundary and mark convergence as post-v1.
+**Decision.** Convergence is an explicit **v1 non-goal** (§5), not an open question.
 
-**Rationale.** Merging them means reissuing credentials to every n8n user — a migration with a
-real blast radius, for an internal consistency benefit, at a time when the Partner API itself is
-not yet stable. Sequencing that before v1 GA risks both.
+**(R1) Containment rule — added.** Deferral without containment would let the weaker credential
+keep spreading. Therefore, binding for v1:
 
-**Recorded as a security observation, not a v1 commitment:** `profiles.api_key` is stored in
-plaintext and grants unscoped user-level authority. That is a weaker posture than
-`partner_api_keys`, and it should not be extended to new surfaces. New integrations use Partner
-API keys.
+1. **No new surface may authenticate with `profiles.api_key`.** Every new integration point uses
+   Partner API keys. This is a review gate, not a guideline.
+2. The security posture is recorded here as a known weakness: plaintext at rest, unscoped user
+   authority, so a database disclosure yields directly usable credentials.
+3. Re-entry criteria: once `/v1` messaging is GA and the n8n node has a migration path (§5),
+   `profiles.api_key` issuance is deprecated on a dated schedule with rotation and an overlap
+   window.
+
+**Rationale for deferring.** Merging means reissuing credentials to every n8n user — a real blast
+radius, for an internal-consistency benefit, at a time when the Partner API itself is not stable.
+Sequencing it before v1 GA risks both.
 
 ---
 
-### D9 — Publishing goes through a port, and does not wait for the `process-post` refactor
+### D9 — Publishing: an in-process port with a transactional status seam **(R1, revised)**
 
 **Conflict.** PRD §18 requires provider-neutral publishing ports. `process-post/index.ts` is a
 7,202-line monolith with a ten-branch platform switch.
 
-**Decision.** The Partner API publishing endpoints call a new `PublishPort` interface. Its v1
-implementation **delegates to the existing `process-post` path**. The monolith is not refactored
-as part of this programme.
+**(R1) Revision.** v1.0 said the port "delegates to the existing `process-post` path" and that the
+monolith is untouched. Review round 1 correctly identified two problems:
 
-**Rationale.** Coupling a public API programme to a 7,000-line refactor makes both slower and
-puts the refactor on the critical path of a contract commitment. The port gives the PRD what it
-actually needs — a stable seam, so the public contract does not encode `process-post`'s internal
-shape — while letting the refactor proceed independently behind it.
+- **It is not yet a boundary.** Left undefined, an implementer might bridge Edge Function to Edge
+  Function over HTTP — which duplicates authentication, timeout, retry and idempotency semantics,
+  and is adapter-calling-adapter, contrary to `ARCHITECTURE.md` §12. Importing the entrypoint is
+  equally wrong.
+- **It cannot emit `post.published` safely.** D5(R1) requires transactional enqueue. A monolith
+  that writes its result and *then* notifies has the exact crash gap the outbox exists to close.
 
-**Consequence to state honestly:** v1 publishing inherits `process-post`'s current per-platform
-behaviour, including its failure modes. The port is an *architectural* boundary, not a
-behavioural improvement.
+**Decision, in three parts.**
+
+1. **The seam is an extracted in-process use case**, not an HTTP call and not an import of
+   `index.ts`. The narrow publish-invocation path is extracted into `_shared/` behind
+   `PublishPort`; both `process-post`'s entrypoint and the Partner API route call it. Provider
+   branches stay where they are.
+2. **The status transition and the outbox enqueue happen in one database transaction.** Whatever
+   writes the terminal `platform_posts` status also writes the delivery row. This is the minimum
+   modification to the legacy path, and it is required — not optional.
+3. **No wholesale refactor.** The ten provider branches are untouched by this programme; the
+   `process-post` split remains a separate initiative (see the roadmap's Core 1).
+
+**Consequence stated honestly.** v1 publishing inherits `process-post`'s current per-platform
+behaviour and failure modes. The port is an *architectural* boundary, not a behavioural
+improvement. "No wholesale refactor" is viable; "no required modification" is not.
 
 ---
 
-### D10 — Media: reuse the existing pipeline; no new storage path
+### D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**
 
-**Decision.** `POST /v1/media` accepts an upload and routes it through the existing
-Cloudinary/Openinary pipeline, returning a Postora `media_file_id`. Partners never receive
-provider credentials or raw provider URLs; downloads are served through a Postora-controlled,
-time-bounded URL.
+**Decision.** `POST /v1/media` routes through the existing Cloudinary/Openinary pipeline and
+returns a Postora `media_file_id`. Partners never receive provider credentials or raw provider
+URLs; downloads are served through a Postora-controlled, time-bounded URL.
 
-**Rationale.** A second upload path would double the surface for the file-type, size and
-malware controls the PRD (§16) requires.
+**(R1) Revision.** v1.0 said "reuse the existing pipeline", which is a routing decision, not a
+security contract, and left implementers to invent security-sensitive behaviour. Reuse is
+therefore **conditional** on documenting and verifying, before the endpoint ships:
 
-**Documented limit.** Temporary-URL expiry must be stated numerically in the developer docs.
-"Temporary" without a number is not a contract.
+| Control | Must be specified as |
+|---|---|
+| Max size | A number, per media type |
+| Accepted types | An allowlist, validated by **content sniffing**, not by extension or client `Content-Type` |
+| Malware handling | Scan-before-availability, with the state machine made explicit |
+| Availability semantics | Whether a `media_file_id` is returned before scanning completes, and what a consumer of a not-yet-clean id receives |
+| Tenant ownership | Checked on every read and download against bound accounts (D4) |
+| Download URL TTL | **A number.** "Temporary" without a number is not a contract |
+| Retention and deletion | Stated, including partner-initiated deletion |
+| Quota dimension | Storage and transfer metered per PRD §26 |
+
+If any row cannot be answered from the existing pipeline, that gap is implementation work in the
+media phase — not an assumption.
+
+---
+
+### D11 — Account selection in REST requests **(R1, new)**
+
+**Gap.** D4 gives a key many accounts, but v1.0 never said how a request selects among them. Left
+undefined, every endpoint would invent its own convention and accidental wrong-account or fan-out
+sends would become public-contract behaviour.
+
+**Decision.**
+
+| Request kind | Selection rule |
+|---|---|
+| **Collection reads** (`GET /v1/conversations`) | Default: **all** bound accounts, results carry `account_id`. Optional `?account_id=` narrows. Never an implicit single-account default |
+| **Resource reads** (`GET /v1/conversations/{id}`) | Account is derived from the resource; the resource is then checked against the binding. A resource outside the binding returns `resource_not_found`, never `resource_forbidden` — non-enumerable, matching the key-auth precedent |
+| **Single-account mutations** (`POST /v1/messages`) | `account_id` is **required and explicit**. There is no default, even when exactly one account is bound. Omitting it is `validation_error`, never a guess |
+| **Multi-account publishing** (`POST /v1/posts`) | `targets[]`, each naming an `account_id`. An empty array is `validation_error`; there is no "publish to everything" shorthand |
+| **Alias endpoint** | Uses `partner_api_keys.social_account_id` (the primary), which is why that column survives until sunset (D4) |
+
+**Rationale.** Requiring an explicit `account_id` on mutations even when only one account is bound
+is deliberate: the alternative silently changes meaning the day a second account is added, and the
+failure mode is a message sent from the wrong identity.
+
+---
+
+### D12 — Partner credential lifecycle is in v1 scope **(R1, new)**
+
+**Gap.** §3.3.5 records no minting UI and no rotation, but v1.0 neither specified a lifecycle nor
+declared it a non-goal. An implementer would have had to invent who may create keys, how plaintext
+is delivered, and how a compromised key is replaced.
+
+**Decision.** Credential lifecycle is **in scope for v1** and blocks GA. A public API cannot be
+operated with hand-written production SQL.
+
+Required:
+
+1. **Creation** — workspace owner/admin only, in the Developer area. Plaintext shown exactly once
+   and never retrievable, matching the existing `mcp_oauth_tokens` precedent.
+2. **Scope and account grant** — explicit at creation; broadening either is a new grant, audited.
+3. **Rotation** — issues a new secret with a **bounded overlap window** during which both are
+   valid, so a partner can deploy without downtime. Overlap length is configurable and audited.
+4. **Revocation** — already implemented as a one-way door (`revoke_partner_key()`); surfaced in
+   the UI.
+5. **Audit** — every one of the above appends to `partner_audit_logs` with actor, workspace,
+   action, target, timestamp and request ID.
+6. **Never** does the UI reveal a previously created secret (PRD §48).
+
+---
+
+### D13 — Provider dispatch must be durable before the call **(R1, new)**
+
+**Gap.** §3.3.9 — a crash between Meta accepting a message and the idempotency row being settled
+lets a retry take over the expired lease and send the customer a **second real message**.
+
+**Decision.** The no-duplicate guarantee is **withdrawn until this is closed**, and closing it is a
+prerequisite for `POST /v1/messages` GA.
+
+Required design (mechanism to be settled in the plan's messaging phase):
+
+1. **Persist a dispatch intent before the provider call**, recording that a provider request is
+   about to be issued, with the provider-request identifier where one exists.
+2. **A takeover must be able to distinguish** "claimed but never dispatched" (safe to retry) from
+   "dispatched, outcome unknown" (must **not** re-dispatch; resolve to `indeterminate`).
+3. **Reconciliation** — where the provider offers a lookup by client reference, an indeterminate
+   record is reconciled rather than left permanently stuck. WhatsApp Cloud offers no client-side
+   idempotency key, so reconciliation is best-effort and the conservative branch is refusal.
+
+**Interim position until built.** `send_template` and `POST /v1/messages` are documented as
+**at-least-once under process failure**, not exactly-once. Partners are told plainly that a crash
+window exists, rather than being given a guarantee Postora cannot keep.
+
+**Why this matters more than it looks.** The rest of the idempotency design is genuinely
+rigorous, which makes an unqualified "no duplicates" claim in the developer docs highly credible —
+and wrong in exactly the case (customer receives two messages) that damages a partner most.
 
 ---
 
 ## 7. Target v1 surface
 
-Scoped to what §5's non-goals leave in. Every endpoint requires a scope and is tenant-checked
-against the credential's bound accounts (D4).
+Scoped by §5. Every endpoint requires a scope, is tenant-checked against bound accounts (D4),
+resolves its account per D11, and carries a D7 risk class.
 
 ```text
 Accounts
-  GET    /v1/accounts                          accounts:read
-  GET    /v1/accounts/{id}                     accounts:read
+  GET    /v1/accounts                          accounts:read      · class A
+  GET    /v1/accounts/{id}                     accounts:read      · class A
 
 Messaging
-  GET    /v1/conversations                     conversations:read
-  GET    /v1/conversations/{id}                conversations:read
-  GET    /v1/conversations/{id}/messages       messages:read
-  GET    /v1/messages/{id}                     messages:read
-  POST   /v1/messages                          messages:send      · Idempotency-Key required
-  GET    /v1/templates                         templates:read
+  GET    /v1/conversations                     conversations:read · class A
+  GET    /v1/conversations/{id}                conversations:read · class A
+  GET    /v1/conversations/{id}/messages       messages:read      · class A
+  GET    /v1/messages/{id}                     messages:read      · class A
+  POST   /v1/messages                          messages:send      · class C · Idempotency-Key · D13
+  GET    /v1/templates                         templates:read     · class B (provider-backed)
 
 Media
-  POST   /v1/media                             media:write        · Idempotency-Key required
-  GET    /v1/media/{id}                        media:read
-  GET    /v1/media/{id}/download                media:read
+  POST   /v1/media                             media:write        · class C · Idempotency-Key · D10
+  GET    /v1/media/{id}                        media:read         · class A
+  GET    /v1/media/{id}/download               media:read         · class B
 
 Publishing
-  POST   /v1/posts                             posts:write
-  GET    /v1/posts/{id}                        posts:read
-  GET    /v1/posts/{id}/status                 posts:read
-  POST   /v1/posts/{id}/publish                posts:publish      · Idempotency-Key required
-  POST   /v1/posts/{id}/schedule               posts:schedule
-  DELETE /v1/posts/{id}/schedule               posts:schedule
+  POST   /v1/posts                             posts:write        · class C
+  GET    /v1/posts/{id}                        posts:read         · class A
+  GET    /v1/posts/{id}/status                 posts:read         · class A
+  POST   /v1/posts/{id}/publish                posts:publish      · class C · Idempotency-Key · D9
+  POST   /v1/posts/{id}/schedule               posts:schedule     · class C
+  DELETE /v1/posts/{id}/schedule               posts:schedule     · class C
 
 Webhooks
-  GET    /v1/webhooks                          webhooks:read
-  POST   /v1/webhooks                          webhooks:manage
-  PATCH  /v1/webhooks/{id}                     webhooks:manage
-  DELETE /v1/webhooks/{id}                     webhooks:manage
-  POST   /v1/webhooks/{id}/rotate-secret       webhooks:manage
-  POST   /v1/webhooks/{id}/test                webhooks:manage
+  GET    /v1/webhooks                          webhooks:read      · class A
+  POST   /v1/webhooks                          webhooks:manage    · class C
+  PATCH  /v1/webhooks/{id}                     webhooks:manage    · class C
+  DELETE /v1/webhooks/{id}                     webhooks:manage    · class C
+  POST   /v1/webhooks/{id}/rotate-secret       webhooks:manage    · class C
+  POST   /v1/webhooks/{id}/test                webhooks:manage    · class C (outbound amplifier)
 
 Usage
-  GET    /v1/usage                             usage:read
+  GET    /v1/usage                             usage:read         · class A
+
+Credential lifecycle (D12) — Developer area, user-JWT authenticated, NOT partner-key authenticated
 
 Frozen alias — no new actions, sunset per D1
   POST   /partner-api  {action: get_status | list_templates | send_template}
 ```
 
-**Contacts** (PRD §19) are included only if a v1 consumer requires them; no current consumer
-does. Listed here as deferred rather than dropped.
+Note that credential lifecycle endpoints are authenticated by a **user JWT**, not a partner key: a
+partner key must never be able to mint or broaden another key.
 
 ### 7.1 Cross-cutting conventions
 
 - **Pagination:** opaque cursors only. No offset pagination — it is unstable under concurrent
   writes, which conversation and message lists are by definition.
 - **IDs:** opaque, prefixed, stable (`acc_`, `conv_`, `msg_`, `post_`, `media_`, `evt_`, `wh_`).
-  Provider IDs are exposed as clearly named separate fields, never as the primary ID.
-- **Idempotency:** required on every operation marked above. Reusing the existing
-  `claim_partner_idempotency` semantics unchanged, including the `attempt_token` fence and the
-  indeterminate state.
+  Provider IDs appear as clearly named separate fields, never as the primary ID.
+- **Idempotency:** required where marked, reusing `claim_partner_idempotency` semantics unchanged,
+  subject to D13.
 - **Unknown fields:** clients must ignore them; additive optional fields are non-breaking.
 
 ---
 
 ## 8. Data-model delta
 
-All migrations additive. Existing tables keep their current shape during the alias window.
+All migrations additive.
 
 | Table | Change | Driven by |
 |---|---|---|
-| `partner_api_key_accounts` | **New.** Join table. **Must** carry composite FK `(social_account_id, workspace_id)` | D4 |
-| `partner_api_keys` | `social_account_id` retained, `NOT NULL` kept until alias sunset | D4 |
+| `partner_api_key_accounts` | **New.** **Both** composite FKs + `UNIQUE (key_id, social_account_id)` | D4 |
+| `partner_api_keys` | `social_account_id` retained `NOT NULL` until alias sunset; add rotation fields (successor key id, overlap expiry) | D4, D12 |
 | `partner_webhooks` | **New.** Per-subscription HMAC secret, event filter, platform, account filter, health state | D5 |
-| `partner_webhook_deliveries` | **New.** Transactional outbox. `UNIQUE (webhook_id, source_event_id)` | D5 |
-| `partner_audit_logs` | **New.** Append-only; no `UPDATE`/`DELETE` grant to any role | PRD §30 |
-| `partner_api_usage` | Add `meter` dimension (requests / messages / posts / media / webhook deliveries) | PRD §26 |
-| `partner_api_keys.scopes` | Values migrate to the generic vocabulary; old values remain accepted | D3 |
+| `partner_webhook_deliveries` | **New.** Transactional outbox; `UNIQUE (webhook_id, source_event_id)` | D5 |
+| `partner_dispatch_intents` | **New.** Durable pre-provider-call record | D13 |
+| `partner_audit_logs` | **New.** Append-only; no `UPDATE`/`DELETE` grant to any role | D12, PRD §30 |
+| `partner_api_usage` | Add `meter` dimension; distinguish **reserved / confirmed / indeterminate** | PRD §26, §3.1 |
 
 **Not created in v1:** `partner_applications`, `partner_oauth_clients`, `partner_oauth_grants`,
-`partner_installations` — all deferred with OAuth (§5).
+`partner_installations` — deferred with OAuth (§5).
 
-**Naming note.** The PRD §40 lists `partner_idempotency_keys` and `partner_webhooks`. The
-existing table is `partner_api_idempotency`. Per PRD §40's own instruction not to duplicate
-existing structures merely to satisfy naming, the existing name stands.
+**Naming.** PRD §40 lists `partner_idempotency_keys`; the existing table is
+`partner_api_idempotency`. Per PRD §40's own instruction not to duplicate existing structures for
+naming, the existing name stands.
 
 ---
 
@@ -560,81 +698,155 @@ existing structures merely to satisfy naming, the existing name stands.
 
 Additional to `ARCHITECTURE.md`, which is required reading for any implementer.
 
-1. **Tenancy is proven in the database, not asserted in code.** Every new partner-scoped table
-   carries a composite FK to the workspace. This is the single most important invariant in the
-   programme (D4).
+1. **Tenancy is proven in the database, not asserted in code.** Every partner-scoped table carries
+   the composite FKs that make a cross-workspace row unrepresentable (D4). Request-time checks
+   through a service-role client are defence in depth, **not** the proof — a service-role client
+   bypasses RLS by design, so an application check is only as good as the code path taken.
 2. **A caller-supplied ID is never trusted.** Resource IDs are checked against the credential's
-   resolved allowance on every request.
-3. **Secrets never in URLs.** Keys in headers; webhook secrets never returned after creation.
-4. **Webhook signing covers the exact raw body**, with timestamp, and a documented tolerance
-   window for replay rejection.
-5. **SSRF validation on every webhook destination**, revalidated on every redirect hop —
-   matching the hardening already in the n8n node's `safeFetchAndStage`.
-6. **Redaction on every log path.** Never log keys, tokens, authorization headers, webhook
+   resolved allowance on every request; a resource outside it is `resource_not_found` (D11).
+3. **Authorization is an intersection** of scope, account binding, and platform capability (D3).
+4. **Secrets never in URLs.** Keys in headers; webhook secrets never returned after creation.
+5. **A partner key can never mint or broaden a credential** — lifecycle is user-JWT only (D12).
+6. **Webhook signing covers the exact raw body**, with timestamp and a documented replay tolerance.
+7. **SSRF validation on every webhook destination**, revalidated on every redirect hop — matching
+   the hardening in the n8n node's `safeFetchAndStage`. Applies to `POST /v1/webhooks/{id}/test`,
+   which is an outbound amplifier (D7 class C).
+8. **Redaction on every log path.** Never log keys, tokens, authorization headers, webhook
    secrets, or message bodies.
-7. **The admin UI is not the security boundary.** Backend authorisation is mandatory and
-   independent.
+9. **CORS is not authorization.** `ARCHITECTURE.md` §25 forbids copying `Access-Control-Allow-Origin: *`
+   into new authenticated functions by default. The existing `partner-api` uses `*`; for a
+   header-authenticated, non-browser API this is defensible, but it must be an explicitly reviewed
+   decision recorded in the plan, not inherited by copy-paste into new routes.
+10. **The admin UI is not the security boundary.** Backend authorisation is mandatory and
+    independent.
 
 ---
 
 ## 10. Testing and acceptance
 
-Release-blocking, per PRD §46:
+Release-blocking, per PRD §46.
 
-- **Tenant isolation.** For every resource family, attempt cross-workspace and cross-account
-  access with a valid credential. These tests block release. They are the tests that would catch
-  a D4 join table built without its composite FK.
+**Prerequisite: the gate must actually run.** Per §3.3.8, no Deno test currently executes in CI.
+A CI job that discovers and runs `supabase/functions/**/*.test.ts` is a **Phase 0 deliverable**;
+until it exists, every "release-blocking" claim below is aspirational.
+
+- **Tenant isolation.** For every resource family, attempt cross-workspace and cross-account access
+  with a valid credential. These block release. They are the tests that would catch a D4 join table
+  built with only one composite FK.
 - **Authentication matrix.** Valid / invalid / revoked / expired / insufficient-scope /
-  wrong-account.
-- **Idempotency.** Duplicate request; same key with a different body; concurrent duplicates;
-  provider timeout producing an indeterminate outcome; lease takeover after a dead attempt.
-- **Rate limit and quota under concurrency**, including the D7 limiter-unavailable path for both
-  a read and a billable send.
+  wrong-account / legacy-scope-not-widened (D3).
+- **Idempotency, including SQL-level concurrency.** Duplicate request; same key different body;
+  concurrent duplicates; observed-indeterminate; lease takeover after a dead attempt; and the D13
+  dispatch-intent path. Unit tests over stubbed clients cannot demonstrate these — they require
+  real concurrent transactions against Postgres.
+- **Rate limit and quota under concurrency**, including the D7 limiter-unavailable path for one
+  operation in each risk class.
 - **Webhooks.** Signature; tampered body; timestamp outside tolerance; retry ladder; duplicate
-  `event_id`; disabled endpoint; SSRF rejection; and **crash-during-dispatch recovery**, which is
-  the specific property the outbox exists to provide.
+  `event_id`; disabled endpoint; SSRF rejection; and **crash-during-dispatch recovery**, the
+  specific property the outbox exists to provide.
 - **Contract tests** validating the implementation against the OpenAPI document.
 - **One certified end-to-end integration** — external client → Partner API → provider → webhook.
 
 ### Definition of done per endpoint
 
-PRD §53's sixteen-point list is adopted unchanged and is not restated here.
+PRD §53's sixteen-point list is adopted unchanged, plus: a declared D7 risk class, a declared D11
+account-selection rule, and an OpenAPI entry that CI validates.
 
 ---
 
 ## 11. Open questions
 
-1. **Danat's migration window.** D1 and D3 are cheap only while Danat has not gone live. What is
-   Danat's actual timeline, and who owns the coordination? *This is the highest-value unknown in
-   the document* — it converts several decisions from cheap to expensive.
-2. **Quota source.** Per-key by hand, or derived from `subscription_plans`? Carried forward
-   unresolved from the 2026-08-13 spec, open question 3. v1 keeps per-key.
+1. **Danat inventory and migration window.** *Highest-value unknown.* H1/H2 in §3.4 are
+   unconfirmed: how many environments hold `pk_live_urCb…`, is there deployed client code, is
+   there a dormant retry job, and who owns the coordination? D1, D3 and D7 are affordable only if
+   this comes back clean. **This must be answered before any of those three is executed.**
+2. **Quota semantics.** Should `current_usage_count` count accepted-only, or accepted-plus-
+   indeterminate as today? §8 proposes splitting the counters; the commercial answer is a product
+   decision. Related: is quota per-key by hand, or derived from `subscription_plans`? Carried
+   forward from the 2026-08-13 spec, open question 3.
 3. **`ecommerce-whatsapp-api` disposition.** Deprecate with a sunset once `/v1` messaging is
    stable, or maintain indefinitely? Carried forward from the 2026-08-13 spec, open question 1.
-4. **Webhook delivery volume.** The outbox worker's cadence and concurrency need a load estimate.
-   Currently unknowable — zero webhooks exist (§3.4).
-5. **Does the n8n node migrate onto `/v1`?** PRD §38 says node operations should call the Partner
-   API rather than private surfaces. Today the node calls `n8n-api` with `profiles.api_key`.
-   Converging is coherent with D8's "converge later" but needs its own migration plan.
+4. **Webhook delivery volume.** The outbox worker's cadence and concurrency need a load estimate,
+   currently unknowable — zero webhooks exist.
+5. **D13 mechanism.** Whether the dispatch intent is a row in a new table, a state on the
+   idempotency row, or a provider-side reference depends on what WhatsApp Cloud exposes. To be
+   settled in the messaging phase, not here.
 
 ---
 
 ## 12. Correction log
 
-Records what changed and why, across review rounds. Entries are appended, never edited.
+Appended, never edited.
 
 ### v1.0 — 2026-08-25 — initial draft
 
 Authored from the PRD plus a verification pass over the working tree and production database.
-Findings that shaped the draft rather than following from the PRD:
+Findings that shaped the draft rather than following from the PRD: the foundation is far more
+complete than the PRD assumes (§3.1); the delivery outbox specified on 2026-08-13 was never built
+(§3.3.1); exactly one credential exists and has never sent a message (§3.4); the limiter fails
+open for billable sends (§3.3.3); two API-key systems exist, one plaintext (D8).
 
-- The foundation is far more complete than the PRD assumes; PRD Phase 1 is largely delivered
-  (§3.1).
-- The delivery outbox specified on 2026-08-13 was never built, and the PRD's webhook product
-  depends on it (§3.3.1, D5).
-- Exactly one credential exists and it has never sent a message (§3.4) — which is what makes D1,
-  D3 and D7 affordable now.
-- The rate limiter fails open for billable sends (§3.3.3, D7).
-- Two independent API-key systems exist, one storing plaintext keys (D8).
-- The Partner API's existing test files are excluded from CI by the vitest `include` pattern, so
-  they gate nothing (§3.3.8). Added after the first draft, on a separate verification pass.
+### v1.0a — 2026-08-25 — CI finding
+
+Added §3.3.8 after a separate verification pass: `vite.config.ts:45` scopes vitest to `src/**`, so
+every partner-api Deno test is excluded from CI and gates nothing. 30 such tests pass locally in
+728ms.
+
+### v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort)
+
+18 findings, 5 blockers. Verified against source before acceptance; the load-bearing ones
+(preflight request-id, the existing `UNIQUE (id, workspace_id)` constraint, the send-path
+ordering) were re-checked directly.
+
+**Accepted, changing a decision:**
+
+- **D3 rewritten.** Scope aliasing was privilege escalation: `whatsapp:template.send` authorises
+  *template* sending, while `messages:send` covers free-form messages and, under D4, any newly
+  bound account. Aliasing withdrawn; the single key is reissued instead. *(blocker)*
+- **D4 corrected.** One composite FK is insufficient — it proves the account's workspace, not the
+  key's. Both FKs now required, matching the `partner_api_usage` precedent already in the schema.
+  *(blocker)*
+- **D2 reversed.** v1.0 froze the implemented envelope; since D1 already keeps the alias, `/v1` is
+  free to adopt the PRD's structure. It now does, retaining `retryable` as a deliberate
+  improvement on the PRD.
+- **D7 reclassified.** "Billable vs read" left webhook tests (SSRF amplification), uploads, and
+  provider-backed reads uncovered. Replaced with three risk classes.
+- **D9 strengthened.** A port that delegates to a monolith is not yet a boundary, and cannot emit
+  `post.published` transactionally. Now requires an extracted in-process seam plus same-transaction
+  outbox enqueue. *(blocker)*
+- **D5 extended.** The outbox alone is insufficient without transactional producers.
+- **D6 corrected.** `message.sent` renamed `message.accepted` — the code only knows
+  `accepted_by_meta`, and the old name overstated it.
+- **D1 sunset fixed.** "Whichever is sooner" could remove the alias while Danat still used it;
+  replaced with three conjunctive conditions.
+- **D8 given a containment rule** — deferral without one lets the plaintext credential keep
+  spreading.
+- **D10 made conditional** on a documented control matrix rather than "reuse the pipeline".
+
+**Accepted, adding a decision:**
+
+- **D13 (new).** A crash between Meta accepting and the row settling lets a retry re-send to a
+  real customer. The `attempt_token` fence prevents bad *settles*, not double *dispatches*. The
+  no-duplicate guarantee is withdrawn until a durable pre-dispatch record exists. *(blocker)*
+- **D11 (new).** Account selection was undefined once a key may hold many accounts. *(blocker)*
+- **D12 (new).** Credential lifecycle was neither specified nor deferred; a public API cannot be
+  operated with hand-written SQL.
+
+**Accepted, correcting a claim:**
+
+- §3.1 quota row — "consumed only by a Meta-accepted send" contradicted the implementation and
+  this spec's own indeterminate policy; now states accepted-*or-indeterminate*.
+- §3.1 request-id row — narrowed to application responses: the CORS preflight at
+  `partner-api/index.ts:70` returns before `requestId` is generated at `:75`.
+- §3.1 test status — "well-tested" downgraded; the tests do not run in CI and cannot demonstrate
+  SQL concurrency.
+- §3.4 — conclusions downgraded to hypotheses H1/H2. One credential does not prove one consumer,
+  one deployment, or one environment.
+- §5 — Contacts and n8n convergence moved from conditional prose into the non-goals table with
+  re-entry criteria.
+
+**Not accepted:**
+
+- The reviewer's suggestion to drop `retryable` in favour of strict PRD conformance. The PRD's
+  envelope is silent on retryability, which pushes a transient-vs-permanent classification table
+  onto every integrator. Retained deliberately and documented as an intentional divergence (D2).
