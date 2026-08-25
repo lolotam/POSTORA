@@ -1348,22 +1348,23 @@ export function DatabaseConnectorsManager() {
                     </div>
 
                     <div className="space-y-1.5">
-                      <Label className="text-xs">Connector Type</Label>
-                      <Select
-                        value={form.connector_type}
-                        onValueChange={(val) => setForm({ ...form, connector_type: val as ConnectorType })}
-                      >
-                        <SelectTrigger className="h-9 text-xs">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {CONNECTOR_DIRECTORY.map((d) => (
-                            <SelectItem key={d.id} value={d.id} className="text-xs">
-                              {d.title}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                      <div className="flex items-center justify-between">
+                        <Label className="text-xs">Connector Type</Label>
+                        <span className="text-[10px] text-muted-foreground flex items-center gap-1 font-normal">
+                          <Lock className="w-3 h-3" /> Fixed to preset
+                        </span>
+                      </div>
+                      <div className="h-9 px-3 rounded-md border border-input bg-muted/50 flex items-center justify-between gap-2 text-xs font-medium text-foreground cursor-not-allowed select-none">
+                        <div className="flex items-center gap-2 truncate">
+                          <ConnectorBrandLogo id={form.connector_type} className="w-4 h-4 shrink-0" />
+                          <span className="truncate">
+                            {CONNECTOR_DIRECTORY.find((d) => d.id === form.connector_type)?.title || form.connector_type}
+                          </span>
+                        </div>
+                        <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
+                          Read-Only
+                        </Badge>
+                      </div>
                     </div>
                   </div>
 
