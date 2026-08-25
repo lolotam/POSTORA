@@ -1,5 +1,6 @@
-import { useSearchParams, Link } from "react-router-dom";
+import { Navigate, useSearchParams, Link } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { Icon3D, GradientHeading, GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
@@ -28,6 +29,13 @@ export default function CommentsAutomationPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const platformParam = searchParams.get("platform") as CommentPlatform;
   const platform: CommentPlatform = PLATFORMS.some((p) => p.id === platformParam) ? platformParam : "facebook";
+  const { flags, isLoading: flagsLoading } = useFeatureFlags();
+
+  // Matches the guard CommentManagerPage already carries: comment automation is gated by
+  // the same flag as the comment surface it configures.
+  if (!flagsLoading && !flags.commentManager) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   const selectedPlatformMeta = PLATFORMS.find((p) => p.id === platform) || PLATFORMS[0];
 

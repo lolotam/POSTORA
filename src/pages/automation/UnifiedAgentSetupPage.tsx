@@ -1,5 +1,6 @@
-import { useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { AI_AGENT_TABS, AiAgentManager, type AiAgentTab } from "@/components/messaging/AiAgentManager";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
 import { Icon3D, GradientHeading, GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
@@ -24,11 +25,26 @@ const PLATFORMS: PlatformOption[] = [
 
 export type AgentSurface = "dms" | "comments";
 
+const PLATFORM_FLAG: Record<AiAgentPlatform, keyof ReturnType<typeof useFeatureFlags>["flags"]> = {
+  whatsapp: "msgWhatsapp",
+  facebook: "msgFacebook",
+  instagram: "msgInstagram",
+  threads: "msgThreads",
+};
+
 export default function UnifiedAgentSetupPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   
   const platformParam = searchParams.get("platform") as AiAgentPlatform;
   const platform: AiAgentPlatform = PLATFORMS.some((p) => p.id === platformParam) ? platformParam : "whatsapp";
+  const { flags, isLoading: flagsLoading } = useFeatureFlags();
+
+  // The pages this replaced redirected when their platform flag was off. Without the
+  // same guard, /automation/... let anyone mutate handler and auto-reply config for a
+  // platform the operator has disabled.
+  if (!flagsLoading && !flags[PLATFORM_FLAG[platform]]) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   const selectedPlatformMeta = PLATFORMS.find((p) => p.id === platform) || PLATFORMS[0];
 
@@ -130,43 +146,35 @@ export default function UnifiedAgentSetupPage() {
             {/* Target Surface Selector (DMs vs Comments) */}
             <div className="lg:col-span-5 space-y-1.5">
               <label className="text-xs font-semibold uppercase tracking-wider text-muted-foreground ml-1">
-                2. Target Task / Surface
+                2. Surfaces This Agent Answers
               </label>
-              <div className="grid grid-cols-2 gap-2" role="tablist" aria-label="Target Surface">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={surface === "dms"}
-                  onClick={() => handleSurfaceChange("dms")}
-                  className={cn(
-                    "flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-sm font-medium transition-all duration-200",
-                    surface === "dms"
-                      ? "bg-primary/15 border-primary text-foreground shadow-sm ring-1 ring-primary/40 font-semibold"
-                      : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                  )}
-                >
+              {/* Indicators, not a selector. There is one ai_agent_config per PLATFORM --
+                  useAiAgentConfig keys on platform alone and ai_get_config/ai_upsert_config
+                  take no surface -- so the same prompt, model and caps answer both DMs and
+                  comments. These were tabs until 2026-08-25, which meant picking "Post
+                  Comments" and editing silently overwrote the DM agent while the banner
+                  claimed otherwise. Make them selectable again only alongside a real
+                  per-surface config on the backend. */}
+              <div className="grid grid-cols-2 gap-2" aria-label="Surfaces this agent answers">
+                <div className="flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border border-primary/40 bg-primary/10 text-sm font-medium text-foreground">
                   <MessageSquare className="w-4 h-4 text-sky-400" />
                   <span>Direct Messages</span>
-                </button>
+                </div>
 
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={surface === "comments"}
-                  disabled={!selectedPlatformMeta.supportsComments}
-                  onClick={() => handleSurfaceChange("comments")}
+                <div
                   className={cn(
-                    "flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-sm font-medium transition-all duration-200",
-                    !selectedPlatformMeta.supportsComments
-                      ? "opacity-40 cursor-not-allowed bg-muted/20 border-border/30 text-muted-foreground"
-                      : surface === "comments"
-                      ? "bg-primary/15 border-primary text-foreground shadow-sm ring-1 ring-primary/40 font-semibold"
-                      : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    "flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl border text-sm font-medium",
+                    selectedPlatformMeta.supportsComments
+                      ? "border-primary/40 bg-primary/10 text-foreground"
+                      : "border-border/30 bg-muted/20 text-muted-foreground opacity-60",
                   )}
+                  title={selectedPlatformMeta.supportsComments
+                    ? undefined
+                    : `${selectedPlatformMeta.label} has no comment surface`}
                 >
                   <MessageCircle className="w-4 h-4 text-emerald-400" />
                   <span>Post Comments</span>
-                </button>
+                </div>
               </div>
             </div>
           </div>
@@ -183,10 +191,10 @@ export default function UnifiedAgentSetupPage() {
               </Badge>
               <span>•</span>
               <Badge variant="secondary" className="font-medium text-foreground">
-                {surface === "dms" ? "Direct Messages (Inbound DMs)" : "Post Comments Automation"}
+                Direct Messages and Post Comments
               </Badge>
             </div>
-            <span className="hidden sm:inline">Settings save automatically per channel</span>
+            <span className="hidden sm:inline">One agent per channel, saved automatically</span>
           </div>
         </Reveal>
 
@@ -200,7 +208,7 @@ export default function UnifiedAgentSetupPage() {
             innerClassName="p-4 md:p-6"
           >
             <AiAgentManager
-              key={`${platform}-${surface}`}
+              key={platform}
               platform={platform}
               activeTab={activeTab}
               onTabChange={handleTabChange}

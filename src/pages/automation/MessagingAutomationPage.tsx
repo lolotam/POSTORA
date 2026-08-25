@@ -1,5 +1,6 @@
-import { useSearchParams, Link } from "react-router-dom";
+import { Navigate, useSearchParams, Link } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
@@ -24,10 +25,25 @@ const PLATFORMS: PlatformOption[] = [
   { id: "threads", label: "Threads", colorPreset: "violet", description: "Automated handling for Threads replies and direct mentions" },
 ];
 
+const PLATFORM_FLAG: Record<AiAgentPlatform, keyof ReturnType<typeof useFeatureFlags>["flags"]> = {
+  whatsapp: "msgWhatsapp",
+  facebook: "msgFacebook",
+  instagram: "msgInstagram",
+  threads: "msgThreads",
+};
+
 export default function MessagingAutomationPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const platformParam = searchParams.get("platform") as AiAgentPlatform;
   const platform: AiAgentPlatform = PLATFORMS.some((p) => p.id === platformParam) ? platformParam : "whatsapp";
+  const { flags, isLoading: flagsLoading } = useFeatureFlags();
+
+  // The pages this replaced redirected when their platform flag was off. Without the
+  // same guard, /automation/... let anyone mutate handler and auto-reply config for a
+  // platform the operator has disabled.
+  if (!flagsLoading && !flags[PLATFORM_FLAG[platform]]) {
+    return <Navigate to="/dashboard" replace />;
+  }
 
   const selectedPlatformMeta = PLATFORMS.find((p) => p.id === platform) || PLATFORMS[0];
 

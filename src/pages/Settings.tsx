@@ -31,9 +31,26 @@ import {
   Database,
 } from "lucide-react";
 
+/** Mirrors the TabsTrigger values below; an unknown ?tab= falls back to the first. */
+const SETTINGS_TABS = [
+  "profile",
+  "connectors",
+  "appearance",
+  "subscription",
+  "api",
+  "notifications",
+  "security",
+  "privacy",
+  "integrations",
+] as const satisfies readonly string[];
+
 export default function Settings() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const activeTab = searchParams.get("tab") || "profile";
+  // An unrecognised ?tab= used to reach the controlled <Tabs> verbatim, which rendered the tab
+  // bar with nothing selected and no TabsContent at all -- a blank settings page from a stale
+  // bookmark or a typo. Fall back instead of trusting the query string.
+  const requestedTab = searchParams.get("tab");
+  const activeTab = requestedTab && SETTINGS_TABS.includes(requestedTab) ? requestedTab : "profile";
   const [isSaving, setIsSaving] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -78,10 +95,17 @@ export default function Settings() {
   };
 
   const handleTabChange = (nextTab: string) => {
-    setSearchParams((prev) => {
-      prev.set("tab", nextTab);
-      return prev;
-    });
+    // replace, not push: without it every tab click adds a history entry, so Back walks the
+    // user through the tabs they visited instead of leaving Settings. The sibling automation
+    // pages already do this. Copy prev rather than mutating it in place.
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("tab", nextTab);
+        return next;
+      },
+      { replace: true },
+    );
   };
 
   return (
