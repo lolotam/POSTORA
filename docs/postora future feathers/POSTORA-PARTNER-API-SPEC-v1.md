@@ -1,6 +1,6 @@
 # Postora Partner API — Specification v1
 
-**Status:** Draft, revised after review round 1 · **Version:** 1.1 · **Date:** 2026-08-25
+**Status:** Draft, revised after review rounds 1-2 · **Version:** 1.3 · **Date:** 2026-08-25
 **Supersedes scope of:** `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md` (v2, WhatsApp-only)
 **Source PRD:** `docs/postora future feathers/POSTORA_PARTNER_API_PRD_v1.0.md`
 **Implementation plan:** `docs/postora future feathers/POSTORA-PARTNER-API-IMPLEMENTATION-PLAN.md`
@@ -289,11 +289,27 @@ credential would silently gain authority its holder never requested.
 
 **Replacement.** No aliasing. There is exactly one key (§3.4), so:
 
-1. Legacy scope strings remain accepted **at exactly their current capability** — WhatsApp
-   template send only — and are never widened.
+1. Legacy scope strings remain accepted **at exactly their current capability** — and are never
+   widened.
 2. The Danat key is **reissued** with explicit generic scopes as part of its migration, which is a
    deliberate grant with a human decision behind it.
 3. Legacy scope strings are then rejected for new keys.
+
+**(R3) The explicit legacy allowlist.** "Current capability" must be enumerated, not inferred,
+because one of the three legacy scopes currently grants **nothing at all**:
+
+| Legacy scope | Actions it authorises **today** | Capability after migration |
+|---|---|---|
+| `whatsapp:template.send` | `send_template` only | Exactly that. **Not** free-form messaging, not another platform, not a newly bound account |
+| `whatsapp:templates.read` | `list_templates` only | Exactly that |
+| `whatsapp:webhooks.manage` | **Nothing — no action exists behind it** (§3.2) | **Nothing.** It must never map to `webhooks:manage` |
+
+The third row is the trap. `whatsapp:webhooks.manage` is held by the live Danat key and is inert
+today. Mapping it to `webhooks:manage` when the webhook API arrives would convert **zero
+capability into full webhook CRUD plus outbound test** — an SSRF-capable, class-C surface. That is
+precisely the escalation this decision was rewritten to prevent, arriving through a different
+door. Every legacy scope is tested for what it grants, and the dormant one is tested to prove it
+grants nothing.
 
 **Authorization is an intersection, not a lookup.** A request is permitted only if the scope
 allows the *operation*, the bound accounts allow the *resource*, and the platform capability
@@ -496,14 +512,30 @@ monolith is untouched. Review round 1 correctly identified two problems:
 **Decision, in three parts.**
 
 1. **The seam is an extracted in-process use case**, not an HTTP call and not an import of
-   `index.ts`. The narrow publish-invocation path is extracted into `_shared/` behind
-   `PublishPort`; both `process-post`'s entrypoint and the Partner API route call it. Provider
-   branches stay where they are.
+   `index.ts`. The narrow publish-invocation path lives in `_shared/` behind `PublishPort`; both
+   `process-post`'s entrypoint and the Partner API route call it.
 2. **The status transition and the outbox enqueue happen in one database transaction.** Whatever
-   writes the terminal `platform_posts` status also writes the delivery row. This is the minimum
-   modification to the legacy path, and it is required — not optional.
-3. **No wholesale refactor.** The ten provider branches are untouched by this programme; the
-   `process-post` split remains a separate initiative (see the roadmap's Core 1).
+   writes the terminal `platform_posts` status also writes the delivery row. Required, not
+   optional — and "whatever writes" means *every* writer, not only the new port (see the plan's
+   writer inventory).
+3. **(R3) The provider branches must move, and pretending otherwise was incoherent.** v1.2 said
+   the port is in `_shared/`, must not import `index.ts`, must not bridge over HTTP — *and* that
+   the ten provider branches stay inside `process-post/index.ts`. Those four constraints cannot
+   all hold: if the branch bodies live in the entrypoint, a shared use case cannot reach them by
+   any permitted route.
+
+   The minimum constructible design, which must be written out **before** implementation starts:
+
+   - `PublishPort` (the interface) lives in `_shared/platforms/`, alongside the existing
+     `types.ts` / `media-helpers.ts` / `polling-helpers.ts` that already establish this location.
+   - Each `postToX` **function body moves** from `process-post/index.ts` into
+     `_shared/platforms/<platform>.ts` as a `PublishPort` implementation. This is a *move*, not a
+     rewrite: the provider logic itself is not redesigned.
+   - Both callers obtain implementations from one registry.
+
+   So the honest scope is: **the branches move, their contents do not change.** What remains out
+   of scope is redesigning provider logic, changing per-platform behaviour, or restructuring the
+   dispatcher beyond what the move requires — that is the separate Core 1 refactor.
 
 **Consequence stated honestly.** v1 publishing inherits `process-post`'s current per-platform
 behaviour and failure modes. The port is an *architectural* boundary, not a behavioural
@@ -553,6 +585,19 @@ sends would become public-contract behaviour.
 | **Multi-account publishing** (`POST /v1/posts`) | `targets[]`, each naming an `account_id`. An empty array is `validation_error`; there is no "publish to everything" shorthand |
 | **Alias endpoint** | Uses `partner_api_keys.social_account_id` (the primary), which is why that column survives until sunset (D4) |
 
+**(R3) Ownership rules for the non-messaging resources**, which v1.2 left for implementers to
+invent — and which determine whether a rotated key, a differently scoped key, or another bound
+account can read a resource:
+
+| Resource | Owner | Consequence |
+|---|---|---|
+| **Media** | **Workspace-owned**, with the creating key recorded for audit | A rotated or replaced key can still reach media it uploaded; any key bound to the same workspace may reference it. Key-owned media would be orphaned by rotation, which D12 makes routine |
+| **Webhook subscriptions** | **Key-owned**, with an optional account filter | A subscription must die with its credential. Workspace-owned subscriptions would outlive a revoked key and keep delivering to a partner whose access was withdrawn |
+| **Usage** | **Key-scoped by default**, workspace-scoped with `usage:read` on a workspace-level key | Billing attribution follows the credential |
+
+`POST /v1/media` takes no `account_id` — media is not account-scoped. Account association happens
+when the media is *used*, by the send or publish that references it.
+
 **Rationale.** Requiring an explicit `account_id` on mutations even when only one account is bound
 is deliberate: the alternative silently changes meaning the day a second account is added, and the
 failure mode is a message sent from the wrong identity.
@@ -601,13 +646,38 @@ fail:
 | Record **after** the call returns | at-least-once | A crash mid-call lets a retry **send a second real message**. This is today's behaviour |
 | Record **before** the call | **at-most-once** | A crash between the record and the call abandons a request that was **never sent** |
 
-**Decision: record before the call, and accept at-most-once.** Once the pre-call boundary is
-durable, a takeover **must never re-dispatch** — it resolves to `indeterminate`.
+**Decision: record before the call, and accept at-most-once as the default.** Once the pre-call
+boundary is durable, a takeover **must never re-dispatch** — it resolves to `indeterminate`.
 
-**Rationale.** The two failures are not symmetric. An abandoned-but-never-sent message is fully
-recoverable: the partner observes `indeterminate`, checks, and re-sends under a *new*
-`Idempotency-Key`. A duplicate message to a customer is not recoverable by anyone. Choosing
-at-most-once puts the residual risk where a partner can act on it.
+**(R3) `indeterminate` is terminal, and the earlier rationale was wrong.** v1.2 justified this
+choice by claiming an abandoned message is "fully recoverable — the partner observes
+`indeterminate`, checks, and re-sends under a new `Idempotency-Key`." **That is false, and the
+error matters.** The durable intent exists in *both* crash cases — the one where the message was
+never sent, and the one where the provider accepted it — and with no provider-side lookup the two
+are **indistinguishable**. Telling a partner to re-send on `indeterminate` therefore reintroduces
+exactly the duplicate this decision exists to prevent.
+
+The honest contract:
+
+- `indeterminate` is a **terminal state**. It is not safely retryable, and the API must never
+  advise retry on it.
+- The record is resolvable **only** by reconciliation that proves non-delivery. Where the provider
+  offers no such lookup — WhatsApp Cloud does not — it stays terminal.
+- Each terminal `indeterminate` requires a **named escalation path**: it surfaces to the operator,
+  and a human decides whether to contact the recipient or re-send deliberately under a new key,
+  accepting the duplicate risk with full knowledge.
+
+**Corrected rationale.** At-most-once is preferred not because the failure is recoverable — it is
+not — but because it **shrinks the ambiguity window from the whole provider call to the gap
+between a durable write and the next instruction**, and because a message Postora silently drops
+is an internal failure it can detect, count and alarm on, whereas a duplicate is an external
+failure the customer experiences and the partner cannot undo.
+
+**(R3) This is a default, not a universal truth.** The ordering of harms is use-case-dependent:
+for a critical alert, a reservation confirmation, or a payment notification, a dropped message may
+be worse than a duplicate. v1 ships **at-most-once for everyone**. A narrowly defined, per-key
+opt-in at-least-once policy is a recognised future option, explicitly **not** in v1 scope, and
+must not be added without its own decision record.
 
 Required design:
 
@@ -724,6 +794,24 @@ Additional to `ARCHITECTURE.md`, which is required reading for any implementer.
    the composite FKs that make a cross-workspace row unrepresentable (D4). Request-time checks
    through a service-role client are defence in depth, **not** the proof — a service-role client
    bypasses RLS by design, so an application check is only as good as the code path taken.
+
+   **(R3) This applies to every new table, not only the join table.** v1.2 specified the double
+   composite FK for `partner_api_key_accounts` and left the others to inherit the principle by
+   implication, which is exactly how such a guarantee gets lost. Each new table below must state
+   its constraint, and each needs a negative database test proving the cross-workspace row cannot
+   be written:
+
+   | Table | Must make unrepresentable |
+   |---|---|
+   | `partner_api_key_accounts` | A key and an account from different workspaces (both composite FKs, D4) |
+   | `partner_dispatch_intents` | An intent whose key and target account disagree on workspace |
+   | `partner_webhooks` | A subscription whose key and account filter disagree on workspace |
+   | `partner_webhook_deliveries` | A delivery row whose subscription belongs to another workspace |
+   | `partner_audit_logs` | An audit row attributed to a workspace other than its target's |
+   | Media association | A `media_file_id` referenced by a post or message in another workspace |
+
+   Where a composite FK is genuinely impossible for a table, that must be stated explicitly with
+   the compensating control named — silence is not an acceptable answer.
 2. **A caller-supplied ID is never trusted.** Resource IDs are checked against the credential's
    resolved allowance on every request; a resource outside it is `resource_not_found` (D11).
 3. **Authorization is an intersection** of scope, account binding, and platform capability (D3).
@@ -889,3 +977,36 @@ Reviewing the implementation plan surfaced two defects in the spec itself:
   every endpoint-delivering phase.
 
 Also corrected: the `partnerApiKeys.ts` non-enumerable-error citation, `:81` → `:85`.
+
+### v1.3 — 2026-08-25 — plan review round 2, spec consequences
+
+Round 2 attacked the round-1 fixes rather than repeating findings. Five blockers; the three that
+land on the spec were all defects in my own reasoning, not merely in wording.
+
+- **D13's rationale was false, and the contract is now corrected.** v1.2 claimed an abandoned
+  message is "fully recoverable — the partner observes `indeterminate` and re-sends under a new
+  key." The durable intent exists in *both* crash cases, and without a provider lookup they are
+  indistinguishable — so advising a re-send reintroduces the very duplicate the decision prevents.
+  `indeterminate` is now **terminal**, not retryable, with a named operator escalation path. The
+  corrected justification for at-most-once is that it shrinks the ambiguity window and converts an
+  external, unfixable failure into an internal, detectable one — **not** that it is recoverable.
+  *(blocker)*
+- **D13 is now stated as a default, not a universal truth.** For a critical alert or a payment
+  notification, a dropped message may be worse than a duplicate. v1 ships one policy for everyone;
+  opt-in at-least-once is recorded as a future option and explicitly out of v1 scope.
+- **D9's constraints were mutually unsatisfiable.** It required a `_shared/` port, forbade
+  importing `index.ts`, forbade an HTTP bridge, *and* required the ten provider branches to stay
+  inside `process-post/index.ts`. Those cannot all hold. The honest scope is now stated: the
+  branch bodies **move** to `_shared/platforms/<platform>.ts`; their contents do not change.
+  *(blocker)*
+- **The tenancy guarantee applied to only one table.** §9.1 asserted the principle for "every
+  partner-scoped table" but v1.2 specified constraints only for the join table. A per-table
+  constraint matrix is now mandatory, with a negative test each, and "impossible here" must name
+  its compensating control. *(blocker)*
+- **D3 gained an explicit legacy allowlist.** The dormant `whatsapp:webhooks.manage` scope — held
+  by the live key, authorising nothing today — would become full webhook CRUD plus an SSRF-capable
+  outbound test if mapped to `webhooks:manage`. The round-1 fix tested free-form sending and
+  cross-account access but never the dormant scope, so the escalation could have arrived through a
+  different door.
+- **D11 gained ownership rules** for media (workspace-owned), webhook subscriptions (key-owned,
+  so they die with the credential) and usage — all previously left for implementers to invent.

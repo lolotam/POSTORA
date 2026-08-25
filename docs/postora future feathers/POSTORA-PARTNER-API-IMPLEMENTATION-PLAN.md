@@ -1,7 +1,7 @@
 # Postora Partner API — Implementation Plan
 
-**Status:** Draft, revised after review round 1 · **Version:** 1.1 · **Date:** 2026-08-25
-**Specification:** `docs/postora future feathers/POSTORA-PARTNER-API-SPEC-v1.md` (v1.2)
+**Status:** Draft, revised after review rounds 1-2 · **Version:** 1.2 · **Date:** 2026-08-25
+**Specification:** `docs/postora future feathers/POSTORA-PARTNER-API-SPEC-v1.md` (v1.3)
 **Source PRD:** `docs/postora future feathers/POSTORA_PARTNER_API_PRD_v1.0.md`
 
 > **No code is written by this document.** It orders work, states what blocks what, and defines
@@ -32,43 +32,52 @@ boundary and leave a coherent product.
 
 ---
 
-## 2. Dependency graph
+## 2. Dependencies
+
+**Phase numbers are labels, not an execution order.** Review round 2 correctly showed that the
+v1.1 arrow diagram encoded both false blocks (media waiting on sends) and missing ones (webhook
+CRUD needs the `/v1` router; `message.accepted` needs the send path; GA needs more than P8). What
+follows replaces it with **deliverable-level prerequisites** and explicit parallel lanes.
+
+### 2.1 Prerequisites, per deliverable
+
+| Deliverable | Requires | Why |
+|---|---|---|
+| Any "release-blocking test" claim | P0 integration harness **and** CI gate | Spec §3.3.8; stubbed unit tests cannot prove SQL concurrency (§3.1) |
+| Any phase exit at all | P0 staging environment | A phase cannot be validated as a *release* without somewhere to release it |
+| Migrating the **live key** under D1/D3/D7 | P0 Danat inventory | Spec §3.4 H1/H2 unconfirmed. Implementing for *new* keys is **not** blocked — see the P0 fallback |
+| D11 account selection (P2) | D4 join table (P1) | Selection is meaningless with one pinned account |
+| `/v1` router + envelope (P2) | P1 error/limiter conventions | Every later route inherits them |
+| Webhook CRUD (P5) | **P2 `/v1` router and conventions** | It is `/v1` surface like any other. *Missing from the v1.1 graph* |
+| Any public send route (P3) | D13 gate passing | Binary — see P3 |
+| `message.accepted` (P6) | **P3 send path** | There is no producer until sends exist. *Missing from v1.1* |
+| Any **advertised** webhook event | Its own certified transactional producer | Outbox-table existence is not sufficient (D5 R1) |
+| Media endpoints (P4) | P1 + P2 only — **not P3** | Media does not require sending to work. *v1.1 falsely blocked this* |
+| Rich-media messaging (P9) | **P3 and P4** | Needs both the send path and the media controls. *v1.1 listed only P4* |
+| `post.*` events (P8) | P7 seam **and** P5 substrate | Events must enqueue in the status transaction |
+| Public publishing API (P8) | P4 media | A publishing API that cannot post an image is not coherent |
+| GA (P10) | **P6 and, if in scope, P9** — not merely P8 | *v1.1 understated this* |
+| GA | P1 lifecycle (D12) | Partners cannot be onboarded by hand-written SQL |
+
+### 2.2 Parallel lanes
+
+After P0, P1 and P2, three lanes proceed **concurrently**. They are independent and must not be
+read as a queue:
 
 ```text
-P0 Prerequisites + EMERGENCY send hardening
- │   (integration harness · CI gate · D13 stop-gap · Danat inventory)
- ├──► P1 Foundation hardening (D2 D4 D7 D12 audit)
- │     └──► P2 Read surface ──► P3 Text/template send (D13 gate)
- │                                    │
- │                                    ├──► P4 Media (D10)
- │                                    │      │
- │                                    │      ├──► P9 Rich-media messaging
- │                                    │      │
- └──► P5 Webhook substrate ──► P6 Messaging + account events
-       (outbox · worker · CRUD)              │
-                                             ▼
-                              P7 Publishing seam (internal only, D9)
-                                             │
-                                             ▼
-                              P8 Publishing API + post.* events
-                                             │
-                                             ▼
-                                          P10 GA
+P0 ──► P1 ──► P2 ──┬──► Lane M (messaging):   P3 ──────────────► P9 ─┐
+                   │                                ▲               │
+                   ├──► Lane A (media):       P4 ───┘               ├──► P10 GA
+                   │                                                │
+                   └──► Lane W (webhooks):    P5 ──► P6 ────────────┤
+                                                      │             │
+                                        P7 ──► P8 ────┘             │
+                                    (needs P4 + P5)                 │
 ```
 
-**Hard blocks:**
-
-| This | cannot start before | Because |
-|---|---|---|
-| Any "release-blocking test" claim | P0 integration harness **and** CI gate | Spec §3.3.8; and stubbed unit tests cannot prove SQL concurrency (§3.1) |
-| Executing D1 / D3 / D7 on the **live key** | P0 Danat inventory | Spec §3.4 H1/H2 are unconfirmed hypotheses. Implementing them for *new* keys is not blocked — see §3 P0 fallback |
-| P2 account selection (D11) | P1 join table (D4) | Selection is meaningless with one pinned account |
-| Any public send route | P3 D13 gate | Binary: either D13 passes, or send routes stay closed |
-| Rich-media messaging | P4 media controls | Otherwise an interim media contract gets invented, or unsafe external URLs accepted |
-| Any **advertised** webhook event | its own certified transactional producer | Outbox-table existence is not sufficient (D5 R1) |
-| `post.*` events | P7 seam | Events must enqueue in the status transaction |
-| Public publishing API | P4 media | A publishing API that cannot post an image is not a coherent product |
-| GA | P1 lifecycle (D12) | Partners cannot be onboarded by hand-written SQL |
+**Why this matters practically:** P4 can block indefinitely if the media pipeline turns out to
+have no malware scanning (a real possibility — see P4). Under a strict numeric reading that gap
+would stall all webhook work, which has nothing to do with it. Lane W proceeds regardless.
 
 ---
 
@@ -95,6 +104,17 @@ is a deliberate, reversible decision that removes the risk in an afternoon; choo
 D13 here instead simply pulls P3.1–3.3 forward. **Leaving it open is not an option**, because a
 dormant Danat job or a leaked key is sufficient to trigger it.
 
+**If disablement is chosen, it is a safety suspension, not a silent break.** D1 freezes the alias
+and its sunset conditions do not cover withdrawing an action, so this must be handled as an
+explicit, temporary, documented exception:
+
+| Element | Requirement |
+|---|---|
+| Response | A typed, retryable-false error (`temporarily_unavailable`) with a stable code — never a 404, never a generic 500 |
+| Notification | Danat's named owner told before it takes effect, not after |
+| Record | Logged as a decision with a date and an owner |
+| Restoration | Automatic on P3's D13 gate passing; the restoration is verified, not assumed |
+
 #### 0B — Make correctness checkable
 
 | # | Deliverable | Spec ref |
@@ -102,6 +122,14 @@ dormant Danat job or a leaked key is sufficient to trigger it.
 | 0.3 | **Postgres integration-test harness**: migrated database, concurrent-transaction runner. Without it, none of the idempotency, takeover, rate-limit or quota guarantees can be tested at all | §3.1, §10 |
 | 0.4 | CI job running `deno test` over `supabase/functions/**` | §3.3.8 |
 | 0.5 | Seeded runtime contract tests wired to the OpenAPI document | PRD §31 |
+| 0.6 | **Minimal isolated staging environment**, with environment-specific credentials | PRD §45 |
+
+**Why staging is here and not at GA.** v1.1 created staging in the final phase, *after* every
+risky release — migrations, credential lifecycle, sends, media, webhooks, publishing. The
+integration harness proves database behaviour but not deployed routing, secret wiring, worker
+scheduling, provider connectivity, or environment isolation, so every earlier phase would have had
+to either deploy straight to production or go unvalidated as a real release. P10 now *certifies*
+staging-to-production separation rather than creating staging for the first time.
 
 0.4 is nearly free — the 30 existing partner-api tests pass locally in 728ms; it is a wiring gap.
 0.3 is not free, and it is the more important of the two: **the tests that matter most are the
@@ -112,17 +140,17 @@ while every consequential database guarantee stays unproven.
 
 | # | Deliverable | Spec ref |
 |---|---|---|
-| 0.6 | OpenAPI 3.1 skeleton: servers, security schemes, scopes, error component, pagination, rate-limit headers. No endpoints yet | §3.3.4 |
-| 0.7 | **Contract-drift gate, defined concretely**: named comparison mechanism, a committed baseline document, semantic breaking-change rules (field removal, type narrowing, enum removal, required-field addition), and runtime contract tests. Schema validity alone, or bumping `info.version`, must **not** be able to satisfy it | PRD §47 |
-| 0.8 | Security threat review of the v1 surface, with recorded disposition | PRD §50 |
-| 0.9 | **Recorded** CORS decision for `/v1` — `ARCHITECTURE.md` §25 forbids inheriting `*` by copy-paste. For a header-authenticated non-browser API `*` is defensible, but it must be reviewed and written down | §9.9 |
-| 0.10 | D8 containment check added to the review gate: no new surface authenticates with `profiles.api_key` | D8 |
+| 0.7 | OpenAPI 3.1 skeleton: servers, security schemes, scopes, error component, pagination, rate-limit headers. No endpoints yet | §3.3.4 |
+| 0.8 | **Contract-drift gate, defined concretely**: named comparison mechanism, a committed baseline document, semantic breaking-change rules (field removal, type narrowing, enum removal, required-field addition), and runtime contract tests. Schema validity alone, or bumping `info.version`, must **not** be able to satisfy it | PRD §47 |
+| 0.9 | Security threat review of the v1 surface, with recorded disposition | PRD §50 |
+| 0.10 | **Recorded** CORS decision for `/v1` — `ARCHITECTURE.md` §25 forbids inheriting `*` by copy-paste. For a header-authenticated non-browser API `*` is defensible, but it must be reviewed and written down | §9.9 |
+| 0.11 | D8 containment check added to the review gate: no new surface authenticates with `profiles.api_key` | D8 |
 
 #### 0D — External
 
 | # | Deliverable | Spec ref |
 |---|---|---|
-| 0.11 | **Danat credential inventory**: how many environments hold `pk_live_urCb…`, is there deployed client code, any dormant retry job, who owns coordination | §3.4, §11.1 |
+| 0.12 | **Danat credential inventory**: how many environments hold `pk_live_urCb…`, is there deployed client code, any dormant retry job, who owns coordination | §3.4, §11.1 |
 
 **Exit criteria.** Every one of the following is evidenced, not asserted:
 
@@ -134,7 +162,7 @@ while every consequential database guarantee stays unproven.
 - the CORS decision is recorded with its rationale;
 - the Danat inventory is written down, and H1/H2 are confirmed or replaced with what is true.
 
-**Fallback if Danat is unreachable (0.11).** The block is narrower than "Phase 1 cannot start".
+**Fallback if Danat is unreachable (0.12).** The block is narrower than "Phase 1 cannot start".
 Split it:
 
 - **D1** — extend the alias window; no other change.
@@ -145,6 +173,16 @@ Split it:
   behaviour untouched until coordinated.
 
 Phase 1 therefore proceeds regardless; only the migration of the one live credential waits.
+
+**The legacy adapter policy — required for the fallback to actually hold.** D1 has the alias and
+`/v1` converge on shared use cases (P2, P3). Without an explicit rule, that convergence would
+silently drag new limiter classes, new scope semantics and the new envelope onto the live alias —
+defeating the fallback that was supposed to protect it. Therefore:
+
+> The alias adapter pins its **own** envelope, scope interpretation, account selection and limiter
+> policy, and passes them into the shared use case as parameters. A shared use case must never
+> read a policy from ambient configuration. Anything a caller does not pin is a defect, and the
+> P2 alias-compatibility test is what catches it.
 
 ---
 
@@ -159,8 +197,27 @@ No new partner-facing endpoints except credential lifecycle.
 | 1.2 | `partner_audit_logs`, append-only — no `UPDATE`/`DELETE` grant to any role | D12 |
 | 1.3 | Credential lifecycle: create / rotate-with-overlap / revoke, in the Developer area, **user-JWT authenticated** | D12 |
 | 1.4 | Risk-class enforcement in the limiter: A fails open, B and C fail closed with `503 limiter_unavailable` + `Retry-After` | D7 |
-| 1.5 | `X-RateLimit-Limit` / `-Remaining` / `-Reset` on every response | §3.3.2 |
-| 1.6 | Legacy scopes pinned at current capability, never widened; generic scopes available for new keys | D3 |
+| 1.5 | `X-RateLimit-*` headers, **with defined response classes** — see below | §3.3.2 |
+| 1.6 | Legacy scopes pinned at current capability per the D3 allowlist, never widened; generic scopes available for new keys | D3 |
+| 1.7 | **Tenancy constraint matrix** applied to every new partner table, each with a negative database test | §9.1 |
+
+**1.5, made implementable.** "Headers on every response" is not achievable: an invalid key, a
+missing credential, a preflight, and a failure before limiter consumption have no resolved
+per-key limit. Define it as:
+
+| Response class | Headers |
+|---|---|
+| Authenticated, limiter consumed | All three, real values |
+| Authenticated, limiter unavailable (D7) | Omitted; `Retry-After` instead |
+| Pre-auth failures (401 `invalid_key`, `key_revoked`, `key_expired`) | **Omitted** — there is no key whose budget could be reported, and fabricating one leaks whether a key exists |
+| CORS preflight | Omitted |
+| The frozen alias | Per the legacy adapter policy — the alias contract does not change |
+
+**1.7 exists because the round-1 fix was too narrow.** v1.1 required the double composite FK for
+`partner_api_key_accounts` and left every other new table to inherit the principle by implication.
+Spec §9.1 now carries the full matrix — dispatch intents, webhooks, deliveries, audit logs, media
+association — and each row needs its own negative test. Service-role code bypasses RLS, so a
+request-time check is not the proof.
 
 **Moved out of this phase.** Splitting the usage counters (reserved / confirmed / indeterminate)
 depended on an unresolved product decision (§7 item 2) and would have made Phase 1 unable to
@@ -170,9 +227,13 @@ complete deterministically. It now sits in P10 as 10.1, gated on that decision.
 
 - **D4:** a tenant-isolation test proves a key cannot reach an account outside its bindings. The
   test is written to **fail against a single-composite-FK implementation** — that is its purpose.
-- **D3, full intersection:** a legacy-scope key cannot send free-form messages, *and* cannot reach
-  a newly bound account, *and* cannot act on a platform outside its original grant. Testing only
-  the first leaves the escalation D3 exists to prevent.
+- **D3, full intersection, every legacy scope:** a legacy-scope key cannot send free-form messages,
+  *and* cannot reach a newly bound account, *and* cannot act on a platform outside its original
+  grant. **Critically, `whatsapp:webhooks.manage` — held by the live key and authorising nothing
+  today — is tested to prove it grants no `/v1` capability whatsoever.** v1.1 tested only the send
+  scope; mapping the dormant one to `webhooks:manage` in P5 would turn zero capability into full
+  webhook CRUD plus an SSRF-capable outbound test, which is the exact escalation D3 was rewritten
+  to prevent, arriving through a different door.
 - **D12, full lifecycle:** plaintext is shown exactly once and is not retrievable afterwards;
   creation is refused for a non-owner/admin; rotation works **before, during, and after** the
   overlap window, with the old secret rejected after expiry; revocation is irreversible; an
@@ -202,7 +263,15 @@ account selection and the error envelope with nothing at risk.
 | 2.4 | `GET /v1/conversations`, `/{id}`, `/{id}/messages`, `GET /v1/messages/{id}` | §7 |
 | 2.5 | Account selection per the D11 table, including non-enumerable `resource_not_found` | D11 |
 | 2.6 | Opaque cursor pagination; prefixed opaque IDs | §7.1 |
-| 2.7 | `GET /v1/usage` | §7 |
+| 2.7 | `GET /v1/usage` — **only if its final schema is settled first**; otherwise it moves to P10 with 10.1 | §7, §11.2 |
+
+**On 2.7.** Splitting the usage counters (reserved / confirmed / indeterminate) was moved to P10
+because it waits on a product decision (§7 item 2). Shipping `GET /v1/usage` here would freeze a
+public contract whose counters and commercial meaning are still open, and P4 additionally
+introduces storage/transfer meter dimensions. Either settle the schema before P2 — an extensible
+`meters[]` shape rather than fixed fields would do it — or ship the endpoint in P10. **Do not ship
+it in P2 with fixed counters.** Meter-dimension migrations belong to P10 alone, never split
+between P4 and P10.
 | 2.8 | OpenAPI entries + contract tests | PRD §31 |
 
 **Exit criteria — a per-endpoint matrix, not a spot check.** For every endpoint above:
@@ -306,7 +375,22 @@ in this phase** — events are certified individually in P6 and P8.
 | 5.5 | Canonical headers: `X-Postora-Event`, `-Timestamp`, `-Event-Id`, `-Signature: sha256=…` | PRD §22.2 |
 | 5.6 | Webhook CRUD + rotate-secret, class C, SSRF-validated per redirect hop | D7, §9.7 |
 | 5.7 | `webhook.test` — the one event this phase does certify, since it has no external producer | D6 |
-| 5.8 | **Producer ledger** — a table, filled in as producers are certified in P6/P8, with one row per event: transition, function, stable source ID, transaction mechanism, crash test | *new — see below* |
+| 5.8 | **Producer ledger** — one row per **(event type, writer path)**, not per event; preceded by a database-write inventory. Columns: transition, writing function, stable occurrence ID, transaction mechanism, crash test | *new — see below* |
+| 5.9 | **Webhook secret rotation semantics** — see below | D5, §9 |
+
+**5.8, corrected.** v1.1 said "one row per event", which certifies one function and proves
+nothing about the others. The same transition can be committed by several paths — an OAuth
+callback, a disconnect action, a token refresh, a health check, an admin operation, a retry, a
+provider callback. An event is certified only when **every path capable of committing its
+transition** is either covered or explicitly prohibited, which requires enumerating the writers
+first.
+
+**5.9, because rotation is a delivery problem, not just a credential one.** Immediate rotation
+either breaks a live receiver mid-deployment or changes the signature on retries of an event that
+was queued under the old secret — and the event ID is immutable across those retries. Specify:
+one-time display at creation; a bounded overlap during which both secrets verify; **the secret
+version captured on the delivery row at enqueue time**, so a retry is signed with the secret that
+was current when the event occurred; and an audit entry per rotation.
 
 **Why 5.4 and 5.8 exist.** Round 1 identified that a correct outbox schema can silently accumulate
 undelivered rows with nobody noticing, and that "transactional enqueue at every producer" is a
@@ -316,9 +400,17 @@ without an explicit ledger and operational visibility.
 **Exit criteria.**
 
 - A crash-during-dispatch test recovers the event.
-- **Exactly one outbox row exists per source event** — asserted directly, not inferred. (A test
-  that merely checks "delivered at least once" passes even when the `UNIQUE` constraint is
-  missing, which is precisely the invariant at stake.)
+- **Cardinality, correctly stated.** v1.1 said "exactly one outbox row per source event", which is
+  wrong in two directions: one event matching three subscriptions *should* produce three rows, and
+  `accepted` / `delivered` / `read` for the same message share one provider message ID and would
+  collide. The invariant is defined against an **event-occurrence ID** that identifies the
+  transition, not the resource:
+  - exactly one row per `(webhook_id, event_occurrence_id)`;
+  - **zero** rows for non-matching subscriptions;
+  - **distinct** occurrence IDs for distinct transitions of the same underlying resource.
+
+  Asserted directly — a test that only checks "delivered at least once" passes with the `UNIQUE`
+  constraint missing entirely, which is the invariant at stake.
 - The `event_id` is immutable across retries, while delivery *attempts* may repeat.
 - SSRF rejection proven, including on redirect hops.
 - The retry ladder is observed end to end, and exhaustion disables the endpoint visibly.
@@ -350,21 +442,48 @@ An event without a certified transactional producer stays unadvertised, even if 
 **Goal.** Do the risky extraction on its own, behind the existing UI, with **no public API
 attached**. When something breaks here, it is unambiguously the seam.
 
+**This is explicitly a migration phase, not a product increment.** It ships no partner-visible
+value, and stopping the programme here would leave nothing new for a partner. That is accepted
+deliberately — the alternative is doing this extraction underneath a new public API, where a
+production parity failure and a new-API defect are indistinguishable. It is therefore governed
+like a migration, with the controls in the exit criteria below.
+
+**Entry criterion — the writer inventory.** Before any code moves: enumerate **every** path that
+can commit a terminal `platform_posts` status or create a schedule row. Candidates include
+`process-post` itself, `process-scheduled-posts`, retry paths, provider callbacks, and any admin
+or repair operation. v1.1 changed one invocation seam and asserted atomicity for "whatever writes"
+terminal status — if another writer exists, that assertion is simply false and events are lost
+silently.
+
 | # | Deliverable | Spec ref |
 |---|---|---|
-| 7.1 | Extract the narrow publish invocation into `_shared/` behind `PublishPort` — **in-process; not an HTTP bridge, not an import of `index.ts`** | D9 |
-| 7.2 | `process-post`'s entrypoint calls the port, so there is exactly one publish path | D9 |
-| 7.3 | Terminal `platform_posts` status transition and outbox enqueue in **one transaction** | D9, D5 |
-| 7.4 | Schedule-row creation and its enqueue likewise in one transaction (this is what `post.scheduled` needs) | D6 |
+| 7.0 | **Writer inventory** for terminal status and schedule rows — an entry criterion, not a deliverable | D9, D5 |
+| 7.1 | `PublishPort` interface in `_shared/platforms/`, alongside the existing `types.ts` / `media-helpers.ts` / `polling-helpers.ts` | D9 |
+| 7.2 | **Each `postToX` body moves** to `_shared/platforms/<platform>.ts` as a `PublishPort` implementation. A *move*, not a rewrite — the provider logic is unchanged | D9 |
+| 7.3 | Both `process-post`'s entrypoint and the future Partner API route obtain implementations from one registry, so there is exactly one publish path | D9 |
+| 7.4 | Terminal `platform_posts` transition and outbox enqueue in **one database operation used by every writer from 7.0** | D9, D5 |
+| 7.5 | Schedule-row creation and its enqueue likewise, in one transaction — this is what `post.scheduled` needs | D6 |
 
-**Exit criteria.** Publishing through the existing UI is unchanged in behaviour and in per-platform
-results. A crash after a platform result is written still produces a queued delivery row. No
-public endpoint exists yet.
+**Why 7.2 changed.** v1.1 required a `_shared/` port, forbade importing `index.ts`, forbade an HTTP
+bridge, *and* required the provider branches to stay inside `process-post/index.ts`. Those four
+constraints are mutually unsatisfiable: if the branch bodies live in the entrypoint, no permitted
+route reaches them. The branches move; their contents do not change. Spec D9(R3) carries the full
+reasoning.
 
-**Risk.** This is the riskiest extraction in the programme — `process-post/index.ts` is 7,202 lines
-with ten platform branches. **Scope discipline is the mitigation: extract the invocation, not the
-branches.** If the extraction starts reaching into provider logic, stop; that is the separate
-Core 1 refactor.
+**Exit criteria — migration controls, not just "behaviour unchanged":**
+
+- **Shadow parity:** for a bounded soak period, publishes run through the new path and their
+  per-platform results are compared against the previous behaviour, with a recorded match rate.
+- **Feature flag and rollback:** the port is switchable back without a deploy, and the rollback is
+  *exercised* at least once, not merely available.
+- **Every writer from 7.0** goes through the single atomic operation — verified by inventory, not
+  by inspection of the port alone.
+- A crash after a platform result is written still produces a queued delivery row.
+- No public endpoint exists.
+
+**Risk.** The riskiest work in the programme — `process-post/index.ts` is 7,202 lines with ten
+platform branches. Scope discipline is the mitigation: **move the branches, do not redesign
+them.** If the work starts changing provider behaviour, stop; that is the separate Core 1 refactor.
 
 ---
 
@@ -415,7 +534,7 @@ refused. Every platform/type combination is either supported or returns
 | 10.2 | Developer documentation per PRD §32, fake credentials and synthetic data | PRD §32 |
 | 10.3 | Postman collection generated from OpenAPI; no production secret committed | PRD §33 |
 | 10.4 | Changelog and deprecation policy published | PRD §43–44 |
-| 10.5 | Staging environment; a staging key must not authenticate against production — **tested** | PRD §45 |
+| 10.5 | **Certify** staging-to-production separation — a staging key must not authenticate against production, tested. (Staging itself is created in P0.6, not here) | PRD §45 |
 | 10.6 | Documented divergences: `retryable` (D2), and D13's actual delivery guarantee | D2, D13 |
 | 10.7 | Alias sunset armed: telemetry on alias traffic, per D1's three conjunctive conditions | D1 |
 | 10.8 | **Certified end-to-end integration** — see below | PRD §46.8 |
@@ -439,6 +558,35 @@ requires the P0 integration harness to be running the tests that prove it.
 
 ---
 
+## 3b. The minimum viable tranche — what to build if only half of this ships
+
+Review round 2 asked which phases are load-bearing and which are expansion bets. The answer
+matters, because the only verified partner usage in production is **status and template reads,
+with no sends ever** (spec §3.4). Media, publishing and rich messaging are bets on demand that has
+not yet been observed; a supportable messaging API is not.
+
+**Tranche 1 — prove the platform (P0, P1, P2, P3, P5, P6, and a reduced P10).**
+
+| Included | Why it is load-bearing |
+|---|---|
+| P0 | Closes a live customer-facing defect; without the harness and staging nothing else is verifiable |
+| P1 | Tenancy, credential lifecycle, limiter policy. Without D12 no partner can be onboarded at all |
+| P2 | The `/v1` contract shape, frozen before a second consumer exists |
+| P3 | Text and template sending — the one capability a partner has actually asked for |
+| P5 + P6 | Events are what makes an integration two-way; without them a partner must poll |
+| P10 (reduced) | Docs, changelog, staging certification, one certified integration |
+
+**Tranche 2 — expansion, on evidence (P4, P7, P8, P9).** Media brings malware-scanning
+infrastructure; publishing brings a 7,202-line seam extraction. Both are substantial, and both are
+justified by *demand*, not by architecture. Deferring them until Tranche 1 is in real use is the
+lower-risk sequence.
+
+**Recommendation.** Ship Tranche 1, get it used, and let observed partner demand order Tranche 2.
+This is not a scope cut disguised as staging — Tranche 1 is a complete, supportable product on its
+own, which is the test every phase boundary in this plan is held to.
+
+---
+
 ## 4. Risk register
 
 ### Programme risks — the likely failure modes
@@ -452,7 +600,9 @@ defect below.
 | **Producer sprawl** | "Transactional enqueue at every producer" spans inbound webhooks, status callbacks, health checks and several OAuth paths. One missed producer silently voids at-least-once | The 5.8 producer ledger; per-event certification in P6/P8 rather than per-phase |
 | **Phase-size-driven partial delivery** | Large phases ship half-integrated; seam regressions become indistinguishable from new-API defects | The v1.1 split: 8 phases became 11, with the riskiest extraction (P7) isolated from its consumer (P8) |
 | **No operational ownership of the outbox worker** | A correct schema accumulates undelivered rows indefinitely with nobody watching | 5.4 makes scheduling, metrics, alerting and redrive deliverables |
-| **Decisions executed on unconfirmed hypotheses** | D1/D3/D7 justified by "one consumer" that was never verified | P0.11 inventory; the split fallback in P0 so the programme is not blocked on an external party |
+| **Decisions executed on unconfirmed hypotheses** | D1/D3/D7 justified by "one consumer" that was never verified | P0.12 inventory; the split fallback in P0 so the programme is not blocked on an external party |
+| **Hidden phase size** | Even at 11 phases, P0, P4 and P5 each contain several deployable increments — realistically the programme is 16–20 releases, not 11. Underestimating this is how a plan slips without anyone noticing a decision being made | P0 is already sub-divided (0A–0D) and should be released that way; P4 splits at the security-infrastructure/endpoint boundary; P5 splits at the delivery-machinery/subscription-API boundary. **Phase count is a planning label, not a release count** |
+| **Building expansion bets before the platform is used** | Media and publishing absorb malware-scanning infrastructure and a 7,202-line extraction, for demand that has never been observed (spec §3.4: zero sends, zero webhooks) | The Tranche 1 / Tranche 2 split in §3b |
 
 ### Defect risks
 
@@ -578,3 +728,66 @@ Eight phases ordered by dependency and irreversibility.
 - **Programme-level risks were added** to the register, which previously listed only individual
   defects and missed the most likely failure mode: a partially integrated platform with green
   unit tests and unproven database semantics.
+
+### v1.2 — 2026-08-25 — review round 2 (Codex `gpt-5.6-sol`, high effort)
+
+Round 2 judged the round-1 fixes rather than repeating findings: 19 findings, 5 blockers, and an
+explicit **"I would not approve execution yet."** All accepted. Several were defects in the
+round-1 fixes themselves, and three were errors in my own reasoning rather than in wording.
+
+**Round-1 fixes that did not hold:**
+
+- **D13's rationale was false** *(blocker)* — see spec v1.3. "The partner observes `indeterminate`
+  and re-sends" cannot work: the durable intent exists in both the never-sent and the
+  possibly-sent case, and they are indistinguishable. `indeterminate` is now terminal, with an
+  operator escalation path, and the justification for at-most-once is restated honestly.
+- **D9 was unconstructible** *(blocker)* — a `_shared/` port, no `index.ts` import, no HTTP
+  bridge, *and* provider branches staying in the entrypoint cannot all hold. P7.2 now moves the
+  branch bodies to `_shared/platforms/`; contents unchanged.
+- **The tenancy fix covered one table** *(blocker)* — the double composite FK was specified for
+  the join table only, leaving dispatch intents, webhooks, deliveries, audit logs and media
+  association to inherit the principle by implication. Now a per-table matrix (1.7, spec §9.1).
+- **The dependency graph had both false and missing blocks** *(blocker)* — media was falsely
+  blocked on sending; webhook CRUD's dependency on the `/v1` router, `message.accepted`'s on the
+  send path, P9's on P3, and GA's on P6/P9 were all missing. Replaced with deliverable-level
+  prerequisites plus explicit parallel lanes.
+- **The Danat fallback leaked** *(blocker)* — shared use cases would have dragged new limiter and
+  scope semantics onto the frozen alias, and disabling `send_template` was a compatibility break
+  D1's sunset does not cover. Added the legacy adapter policy and safety-suspension semantics.
+- **The producer ledger recorded events, not writers** — the same transition can be committed by
+  several paths; certifying one function proves nothing about the rest. Now one row per
+  (event type, writer path), preceded by a write inventory.
+- **The dedup criterion was wrong in two directions** — one event matching three subscriptions
+  *should* produce three rows, and `accepted`/`delivered`/`read` share a provider message ID.
+  Restated against an event-occurrence ID.
+- **The dormant scope was untested** — `whatsapp:webhooks.manage` is held by the live key and
+  authorises nothing; mapping it to `webhooks:manage` would convert zero capability into
+  SSRF-capable webhook CRUD. The D3 tests covered sending but not this.
+
+**New problems the round-1 restructure introduced:**
+
+- **P4-before-P5 was ambiguous serialization** — a media scanning gap would have stalled unrelated
+  webhook work. Parallel lanes now explicit.
+- **`GET /v1/usage` in P2 froze a contract whose counters move in P10**, with meter dimensions
+  split between P4 and P10. Now gated on settling the schema first.
+- **P7 had no observable outcome** — it is now framed as an explicit non-product migration with
+  shadow parity, an exercised rollback, a soak period, and a writer inventory as its entry
+  criterion.
+
+**Other:**
+
+- Staging moved from P10 to P0.6. Creating it after every risky release meant earlier phases would
+  deploy straight to production or go unvalidated as releases.
+- Webhook secret rotation specified: one-time display, bounded overlap, and the secret version
+  captured on the delivery row so retries of an already-queued event stay verifiable.
+- `X-RateLimit-*` given per-response-class semantics; "every response" was not implementable, and
+  fabricating values pre-auth would leak whether a key exists.
+- Added §3b, the minimum viable tranche, and two programme risks: hidden phase size (realistically
+  16–20 releases, not 11) and building expansion bets before the platform has been used.
+
+**Still open after round 2.** The reviewer's position is that execution should not begin until a
+**D13 decision artifact** exists: proven provider capabilities, an executable state machine, the
+terminal `indeterminate` contract, and the partner-facing behaviour when reconciliation is
+impossible. That artifact is P3.1, and the reviewer would pull it before P0 completes. That is a
+reasonable position and is recorded here as the single highest-value next step — it is not
+resolved by this revision.
