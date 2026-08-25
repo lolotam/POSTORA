@@ -99,6 +99,26 @@ Deno.test("an honest oversized Content-Length is refused before the body is read
   );
 });
 
+Deno.test("an external abort surfaces as AbortError rather than a timeout", async () => {
+  const controller = new AbortController();
+  const pending = new CloudGraphFetcher().fetchMediaBytes(
+    { platform: "whatsapp", accessToken: "t", mediaUrl: "https://scontent.fbcdn.net/a" },
+    { maxBytes: 1024, timeoutMs: 5_000 },
+    (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        });
+      }),
+    controller.signal,
+  );
+  controller.abort();
+  const error = await assertRejects(() => pending);
+  assertEquals((error as Error).name, "AbortError");
+});
+
 Deno.test("a hung download aborts as a timeout", async () => {
   await assertRejects(
     () =>

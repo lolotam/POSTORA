@@ -14,6 +14,7 @@ export type WhatsAppAction =
   | "whatsapp_get_analytics"
   | "whatsapp_list_conversations"
   | "whatsapp_get_messages"
+  | "whatsapp_get_media"
   | "whatsapp_mark_read"
   | "whatsapp_send_media"
   | "whatsapp_send_interactive"
@@ -35,6 +36,7 @@ export const WHATSAPP_ACTION_MINIMUM_ROLE: Record<
   whatsapp_get_analytics: "viewer",
   whatsapp_list_conversations: "viewer",
   whatsapp_get_messages: "viewer",
+  whatsapp_get_media: "viewer",
   whatsapp_mark_read: "agent",
   whatsapp_send_media: "agent",
   whatsapp_send_interactive: "agent",

@@ -3,6 +3,14 @@ import { isDirectInstagramAccount, getPageTokenForMessaging, getSendCredentials 
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
+import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
+import {
+  MAX_MEDIA_ROWS,
+  OUTBOUND_SIGN_TTL_SECONDS,
+  ownedStoragePath,
+  resolveWhatsAppMedia,
+  signMediaPath,
+} from "../_shared/whatsappMediaResolver.ts";
 import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 import {
@@ -1287,17 +1295,30 @@ Deno.serve(async (req) => {
 
       if (msgsError) throw msgsError;
 
-      // Format to match the Message interface expected by ConversationDetail
-      const messages = (msgs || []).map((m: any) => ({
-        id: m.id,
-        message: m.message_text || "",
-        from: { name: m.from_name || m.from_phone || "Unknown", id: m.from_phone || "" },
-        to: [{ name: "", id: m.to_phone || "" }],
-        created_time: m.timestamp,
-        attachments: m.media_url ? [{ file_url: m.media_url }] : [],
-      }));
+      const messages = (msgs || []).map((m: any) => toWhatsAppMessageView(m));
 
       return jsonResponse({ messages });
+    }
+
+    // ACTION: whatsapp_get_media
+    if (action === "whatsapp_get_media") {
+      const { social_account_id, message_row_ids } = body;
+      if (!social_account_id || !Array.isArray(message_row_ids)) {
+        throw new Error("social_account_id and message_row_ids required");
+      }
+      if (message_row_ids.length > MAX_MEDIA_ROWS) {
+        throw new Error(`message_row_ids exceeds ${MAX_MEDIA_ROWS}`);
+      }
+
+      const media = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_get_media",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        resolveWhatsAppMedia(adminClient, accountAccess, { messageRowIds: message_row_ids }));
+
+      return jsonResponse({ media });
     }
 
     // ACTION: whatsapp_mark_read
@@ -1325,8 +1346,10 @@ Deno.serve(async (req) => {
 
     // ACTION: whatsapp_send_media
     if (action === "whatsapp_send_media") {
-      const { social_account_id, recipient_phone, media_url, media_type, caption } = body;
-      if (!social_account_id || !recipient_phone || !media_url) throw new Error("social_account_id, recipient_phone, and media_url required");
+      const { social_account_id, recipient_phone, media_url, media_path, media_type, caption } = body;
+      if (!social_account_id || !recipient_phone || (!media_url && !media_path)) {
+        throw new Error("social_account_id, recipient_phone, and media_url or media_path required");
+      }
 
       const account = await withWhatsAppActionAccess({
         client: whatsappAccessClient,
@@ -1336,6 +1359,17 @@ Deno.serve(async (req) => {
       }, (access) => Promise.resolve(access));
       const phoneNumberId = account.platformUserId;
 
+      let transportUrl = media_url as string | undefined;
+      let persistedMediaUrl = media_url as string | undefined;
+      if (media_path) {
+        const path = ownedStoragePath(media_path, user.id);
+        const signed = await signMediaPath(adminClient, path, OUTBOUND_SIGN_TTL_SECONDS);
+        if (!signed) throw new Error("could not sign media_path");
+        transportUrl = signed;
+        persistedMediaUrl = path;
+      }
+      if (!transportUrl) throw new Error("media_url or media_path required");
+
       const mType = media_type || "document";
       const transport = await resolveWhatsAppTransport(adminClient, {
           id: account.accountId,
@@ -1344,12 +1378,13 @@ Deno.serve(async (req) => {
           connection_mode: account.connectionMode,
           account_metadata: account.accountMetadata as Record<string, unknown> | null,
       });
+      const sourceName = String(media_path || media_url || "file");
       const data: any = (await transport.sendMedia({
         recipientPhone: recipient_phone,
-        mediaUrl: media_url,
+        mediaUrl: transportUrl,
         mediaType: (mType === "image" || mType === "video" || mType === "document" || mType === "audio") ? mType : "document",
         caption,
-        fileName: mType === "document" ? media_url.split("/").pop() || "file" : undefined,
+        fileName: mType === "document" ? sourceName.split("/").pop() || "file" : undefined,
       })).raw;
       const sentMessageId = data?.messages?.[0]?.id || data?.key?.id;
 
@@ -1366,7 +1401,9 @@ Deno.serve(async (req) => {
         to_phone: recipient_phone,
         message_text: caption || `[${mType}]`,
         message_type: mType,
-        media_url: media_url,
+        // media_url holds either an http(s):// provider URL (legacy/coexistence)
+        // or a bucket-relative storage path. whatsapp_get_media branches on the http prefix.
+        media_url: persistedMediaUrl,
         media_type: mType,
         direction: "outbound",
         status: "sent",
