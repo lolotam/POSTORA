@@ -97,6 +97,7 @@ describe("WhatsAppMediaAttachment", () => {
       getConversationState: vi.fn(),
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
+      sendVoice: vi.fn(),
     };
   });
 

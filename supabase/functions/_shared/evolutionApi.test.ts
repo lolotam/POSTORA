@@ -44,7 +44,7 @@ Deno.test("Evolution API client sends instance creation to the configured public
   });
 });
 
-Deno.test("Evolution API client sends text, media, and delete-for-everyone through the instance routes", async () => {
+Deno.test("Evolution API client sends text, media, audio, and delete-for-everyone through the instance routes", async () => {
   const calls: Array<{ url: string; body: unknown }> = [];
   const apiKey = crypto.randomUUID();
   const api = createEvolutionApi(async (url, init) => {
@@ -58,6 +58,11 @@ Deno.test("Evolution API client sends text, media, and delete-for-everyone throu
     mediaType: "image",
     media: "https://cdn.example/image.jpg",
     caption: "caption",
+  });
+  await api.sendWhatsAppAudio("postora-account-1", {
+    number: "+96550000000",
+    audio: "https://cdn.example/voice.webm",
+    encoding: true,
   });
   await api.deleteMessageForEveryone("postora-account-1", {
     id: "3EB0ABC",
@@ -77,6 +82,14 @@ Deno.test("Evolution API client sends text, media, and delete-for-everyone throu
         mediatype: "image",
         media: "https://cdn.example/image.jpg",
         caption: "caption",
+      },
+    },
+    {
+      url: "https://wa.postora.cloud/message/sendWhatsAppAudio/postora-account-1",
+      body: {
+        number: "+96550000000",
+        audio: "https://cdn.example/voice.webm",
+        encoding: true,
       },
     },
     {

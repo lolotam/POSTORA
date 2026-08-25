@@ -121,4 +121,23 @@ describe("createWhatsAppInboxApi", () => {
       message_row_id: "row-1",
     });
   });
+
+  it("sends media_path on whatsapp_send_voice", async () => {
+    const api = createWhatsAppInboxApi();
+    callMessagingApi.mockResolvedValue({ success: true, message_id: "3EB0" });
+    await api.sendVoice({
+      social_account_id: "acct",
+      recipient_phone: "96550000000",
+      media_path: "user/whatsapp/outbound/voice.webm",
+      duration_seconds: 7,
+      mime_type: "audio/webm;codecs=opus",
+    });
+    expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_send_voice", {
+      social_account_id: "acct",
+      recipient_phone: "96550000000",
+      media_path: "user/whatsapp/outbound/voice.webm",
+      duration_seconds: 7,
+      mime_type: "audio/webm;codecs=opus",
+    });
+  });
 });

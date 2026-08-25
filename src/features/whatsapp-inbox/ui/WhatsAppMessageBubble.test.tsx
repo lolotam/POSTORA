@@ -28,6 +28,7 @@ const api: WhatsAppInboxApi = {
   getConversationState: vi.fn(async () => ({ flags: [], pinned: [], mutable: [] })),
   setMessageFlag: vi.fn(),
   revokeMessage: vi.fn(),
+  sendVoice: vi.fn(),
 };
 
 function renderBubble(

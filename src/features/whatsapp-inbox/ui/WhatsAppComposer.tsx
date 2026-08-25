@@ -1,6 +1,6 @@
 import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { FileIcon, Image, Loader2, Mic, Paperclip, Send, Video, X } from "lucide-react";
+import { FileAudio, FileIcon, Image, Loader2, Paperclip, Send, Video, X } from "lucide-react";
 import { toast } from "sonner";
 import { InteractiveMessageBuilder } from "@/components/messaging/InteractiveMessageBuilder";
 import { QuickReplyPicker, SlashCommandSuggestions } from "@/components/messaging/QuickReplyPicker";
@@ -15,13 +15,24 @@ import { Textarea } from "@/components/ui/textarea";
 import { useSendMessage, type Conversation } from "@/hooks/useMessaging";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
+import { waHistoryQueryKey, waLatestQueryKey } from "../application/useWhatsAppMessages";
+import { canRecordForMode } from "../domain/voiceNotePolicy";
+import { voiceNoteCapability, voiceNoteDisabledLabel, type WhatsAppConnectionMode } from "../domain/whatsappCapabilities";
 import { useWhatsAppInboxApi } from "./WhatsAppInboxApiProvider";
+import { WhatsAppVoiceComposer } from "./WhatsAppVoiceComposer";
 
 const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024;
 
 interface WhatsAppComposerProps {
   conversation: Conversation;
   socialAccountId: string;
+  connectionMode?: WhatsAppConnectionMode;
+}
+
+function browserTypeSupported(type: string): boolean {
+  return typeof MediaRecorder !== "undefined"
+    && typeof MediaRecorder.isTypeSupported === "function"
+    && MediaRecorder.isTypeSupported(type);
 }
 
 interface MediaPreview {
@@ -37,15 +48,22 @@ function mediaTypeFor(mimeType: string): "image" | "video" | "audio" | "document
   return "document";
 }
 
-export function WhatsAppComposer({ conversation, socialAccountId }: WhatsAppComposerProps): JSX.Element {
+export function WhatsAppComposer({
+  conversation,
+  socialAccountId,
+  connectionMode = null,
+}: WhatsAppComposerProps): JSX.Element {
   const [messageText, setMessageText] = useState("");
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<MediaPreview | null>(null);
   const [sendingMedia, setSendingMedia] = useState(false);
+  const [voiceBusy, setVoiceBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sendMutation = useSendMessage();
   const api = useWhatsAppInboxApi();
   const queryClient = useQueryClient();
+  const voice = voiceNoteCapability(connectionMode, canRecordForMode(connectionMode, browserTypeSupported));
+  const hiddenMicReason = voice.enabled ? null : voiceNoteDisabledLabel(voice.reason);
 
   const clearPreview = (preview: MediaPreview | null) => {
     if (preview) URL.revokeObjectURL(preview.url);
@@ -171,6 +189,34 @@ export function WhatsAppComposer({ conversation, socialAccountId }: WhatsAppComp
   };
 
   const isSending = sendMutation.isPending || sendingMedia;
+  const showMic = voice.enabled && !messageText.trim() && !mediaPreview && !isSending;
+
+  const handleSendVoice = async (blob: Blob, mimeType: string, durationSeconds: number) => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Not authenticated");
+    const extension = mimeType.includes("ogg") ? "ogg" : mimeType.includes("webm") ? "webm" : "bin";
+    const path = `${user.id}/whatsapp/outbound/${await buildPostoraFileName(user.id, extension)}`;
+    const { error: uploadError } = await supabase.storage
+      .from("media")
+      .upload(path, blob, { contentType: mimeType });
+    if (uploadError) throw uploadError;
+
+    const result = await api.sendVoice({
+      social_account_id: socialAccountId,
+      recipient_phone: conversation.participant_id,
+      media_path: path,
+      duration_seconds: durationSeconds,
+      mime_type: mimeType,
+    });
+    if (result.error_type || result.success === false) {
+      throw new Error(result.error ?? "Failed to send voice note");
+    }
+
+    await queryClient.invalidateQueries({ queryKey: ["messaging-messages", conversation.id] });
+    await queryClient.invalidateQueries({ queryKey: waLatestQueryKey(socialAccountId, conversation.id) });
+    await queryClient.invalidateQueries({ queryKey: waHistoryQueryKey(socialAccountId, conversation.id) });
+    toast.success("Voice note sent");
+  };
 
   return (
     <div className="shrink-0">
@@ -209,49 +255,62 @@ export function WhatsAppComposer({ conversation, socialAccountId }: WhatsAppComp
           visible={showSlashSuggestions}
         />
         <div className="flex items-end gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" aria-label="Attach a file" className="h-9 w-9 shrink-0">
-                <Paperclip className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="start">
-              <DropdownMenuItem onClick={() => handleFileSelect("image/*")} className="gap-2">
-                <Image className="h-4 w-4" /> Image
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleFileSelect("video/*")} className="gap-2">
-                <Video className="h-4 w-4" /> Video
-              </DropdownMenuItem>
-              {/* An audio FILE, not a voice note: this opens the OS picker. Recording arrives in Phase 5. */}
-              <DropdownMenuItem onClick={() => handleFileSelect("audio/*")} className="gap-2">
-                <Mic className="h-4 w-4" /> Audio file
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => handleFileSelect("*/*")} className="gap-2">
-                <FileIcon className="h-4 w-4" /> Document
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          {!voiceBusy && (
+            <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" aria-label="Attach a file" className="h-9 w-9 shrink-0">
+                    <Paperclip className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start">
+                  <DropdownMenuItem onClick={() => handleFileSelect("image/*")} className="gap-2">
+                    <Image className="h-4 w-4" /> Image
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleFileSelect("video/*")} className="gap-2">
+                    <Video className="h-4 w-4" /> Video
+                  </DropdownMenuItem>
+                  {/* An audio FILE, not a voice note: this opens the OS picker. */}
+                  <DropdownMenuItem onClick={() => handleFileSelect("audio/*")} className="gap-2">
+                    <FileAudio className="h-4 w-4" /> Audio file
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => handleFileSelect("*/*")} className="gap-2">
+                    <FileIcon className="h-4 w-4" /> Document
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
 
-          <QuickReplyPicker onSelect={handleQuickReplySelect} />
-          <InteractiveMessageBuilder onSend={handleSendInteractive} />
+              <QuickReplyPicker onSelect={handleQuickReplySelect} />
+              <InteractiveMessageBuilder onSend={handleSendInteractive} />
 
-          <Textarea
-            value={messageText}
-            onChange={handleMessageChange}
-            onKeyDown={handleKeyDown}
-            placeholder={mediaPreview ? "Add a caption..." : "Type a message... (/ for quick replies)"}
-            className="max-h-24 min-h-[36px] resize-none"
-            rows={1}
-          />
-          <Button
-            size="icon"
-            aria-label="Send message"
-            className="h-9 w-9 shrink-0"
-            onClick={handleSend}
-            disabled={(!messageText.trim() && !mediaPreview) || isSending}
-          >
-            {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          </Button>
+              <Textarea
+                value={messageText}
+                onChange={handleMessageChange}
+                onKeyDown={handleKeyDown}
+                placeholder={mediaPreview ? "Add a caption..." : "Type a message... (/ for quick replies)"}
+                className="max-h-24 min-h-[36px] resize-none"
+                rows={1}
+              />
+            </>
+          )}
+          {showMic || voiceBusy ? (
+            <WhatsAppVoiceComposer
+              offered={showMic}
+              onBusyChange={setVoiceBusy}
+              onSend={handleSendVoice}
+            />
+          ) : (
+            <Button
+              size="icon"
+              aria-label="Send message"
+              title={!messageText.trim() && !mediaPreview ? hiddenMicReason ?? undefined : undefined}
+              className="h-9 w-9 shrink-0"
+              onClick={handleSend}
+              disabled={(!messageText.trim() && !mediaPreview) || isSending}
+            >
+              {isSending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            </Button>
+          )}
         </div>
       </div>
     </div>

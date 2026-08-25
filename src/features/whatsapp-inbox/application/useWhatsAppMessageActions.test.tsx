@@ -51,6 +51,7 @@ describe("useWhatsAppMessageActions", () => {
       getConversationState: vi.fn(),
       setMessageFlag,
       revokeMessage: vi.fn(),
+      sendVoice: vi.fn(),
     };
     const { result, queryClient } = renderActions(api);
     queryClient.setQueryData<GetConversationStateResponse>(waConversationStateQueryKey("acct", "conv"), {
@@ -85,6 +86,7 @@ describe("useWhatsAppMessageActions", () => {
       getConversationState: vi.fn(),
       setMessageFlag: vi.fn(),
       revokeMessage,
+      sendVoice: vi.fn(),
     };
     const { result, queryClient } = renderActions(api);
     const invalidate = vi.spyOn(queryClient, "invalidateQueries");

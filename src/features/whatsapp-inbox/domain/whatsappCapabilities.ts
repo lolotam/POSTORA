@@ -47,3 +47,31 @@ export function revokeDisabledLabel(reason: RevokeDisabledReason | null): string
   }
   return null;
 }
+
+export type VoiceNoteDisabledReason = "unsupported_mode" | "unsupported_browser";
+
+export interface VoiceNoteCapability {
+  enabled: boolean;
+  reason: VoiceNoteDisabledReason | null;
+}
+
+export function voiceNoteCapability(
+  connectionMode: WhatsAppConnectionMode,
+  canRecord: boolean,
+): VoiceNoteCapability {
+  if (connectionMode !== "evolution_qr") {
+    return { enabled: false, reason: "unsupported_mode" };
+  }
+  if (!canRecord) return { enabled: false, reason: "unsupported_browser" };
+  return { enabled: true, reason: null };
+}
+
+export function voiceNoteDisabledLabel(reason: VoiceNoteDisabledReason | null): string | null {
+  if (reason === "unsupported_mode") {
+    return "Voice notes are only available on Direct QR accounts";
+  }
+  if (reason === "unsupported_browser") {
+    return "This browser cannot record a voice note";
+  }
+  return null;
+}

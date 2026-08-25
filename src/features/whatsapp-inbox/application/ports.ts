@@ -141,6 +141,21 @@ export interface RevokeMessageResponse {
   error?: string;
 }
 
+export interface SendWhatsAppVoiceRequest {
+  social_account_id: string;
+  recipient_phone: string;
+  media_path: string;
+  duration_seconds: number;
+  mime_type: string;
+}
+
+export interface SendWhatsAppVoiceResponse {
+  success: boolean;
+  message_id?: string | null;
+  error_type?: string;
+  error?: string;
+}
+
 export interface WhatsAppInboxApi {
   getMessagesPage(input: GetMessagesPageRequest): Promise<GetMessagesPageResponse>;
   getMedia(input: GetWhatsAppMediaRequest): Promise<GetWhatsAppMediaResponse>;
@@ -149,6 +164,7 @@ export interface WhatsAppInboxApi {
   getConversationState(input: GetConversationStateRequest): Promise<GetConversationStateResponse>;
   setMessageFlag(input: SetMessageFlagRequest): Promise<SetMessageFlagResponse>;
   revokeMessage(input: RevokeMessageRequest): Promise<RevokeMessageResponse>;
+  sendVoice(input: SendWhatsAppVoiceRequest): Promise<SendWhatsAppVoiceResponse>;
 }
 
 export const WhatsAppInboxApiContext = createContext<WhatsAppInboxApi | null>(null);

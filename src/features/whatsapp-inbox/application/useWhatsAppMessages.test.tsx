@@ -105,6 +105,7 @@ class FakeMessageServer {
         flag: { message_row_id, pinned_at: null, hidden_at: null },
       }),
       revokeMessage: async () => ({ success: true, revoked_at: "2026-08-25T12:00:00.000Z" }),
+      sendVoice: async () => ({ success: true, message_id: "3EB0" }),
     };
   }
 
@@ -226,6 +227,7 @@ describe("useWhatsAppMessages", () => {
         flag: { message_row_id, pinned_at: null, hidden_at: null },
       }),
       revokeMessage: async () => ({ success: true }),
+      sendVoice: async () => ({ success: true, message_id: "3EB0" }),
     };
     const { result } = renderMessages(api, "acct", "conv");
     await waitFor(() => expect(result.current.messages.find((row) => row.id === "x")?.revoked_at).toBeTruthy());
@@ -301,6 +303,7 @@ describe("useWhatsAppMessages", () => {
         flag: { message_row_id, pinned_at: null, hidden_at: null },
       }),
       revokeMessage: async () => ({ success: true }),
+      sendVoice: async () => ({ success: true, message_id: "3EB0" }),
     };
     const { result } = renderMessages(api, "acct", "conv");
     await waitFor(() => expect(result.current.messages[0]?.revoked_at).toBe("2026-08-25T13:00:00.000Z"));

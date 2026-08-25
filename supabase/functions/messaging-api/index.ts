@@ -30,6 +30,10 @@ import {
   WhatsAppRevokeError,
 } from "../_shared/whatsappRevoke.ts";
 import {
+  sendWhatsAppVoice,
+  WhatsAppVoiceSendError,
+} from "../_shared/whatsappVoiceSend.ts";
+import {
   COMMENT_AUTOMATION_HANDLERS,
   MESSAGE_AUTOMATION_HANDLERS,
   resolveAutomationHandler,
@@ -1413,6 +1417,29 @@ Deno.serve(async (req) => {
       return jsonResponse(result);
     }
 
+    // ACTION: whatsapp_send_voice
+    if (action === "whatsapp_send_voice") {
+      const { social_account_id, recipient_phone, media_path, duration_seconds, mime_type } = body;
+      if (!social_account_id) {
+        throw new Error("social_account_id required");
+      }
+
+      const result = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_voice",
+        socialAccountId: social_account_id,
+      }, (accountAccess) =>
+        sendWhatsAppVoice(adminClient, accountAccess, user.id, {
+          recipient_phone,
+          media_path,
+          duration_seconds,
+          mime_type,
+        }, { upsertOutboundConversation }));
+
+      return jsonResponse(result);
+    }
+
     // ACTION: whatsapp_mark_read
     if (action === "whatsapp_mark_read") {
       const { social_account_id, conversation_id } = body;
@@ -1714,6 +1741,10 @@ Deno.serve(async (req) => {
     }
 
     if (err instanceof WhatsAppRevokeError) {
+      return gracefulError(err.message, err.error_type);
+    }
+
+    if (err instanceof WhatsAppVoiceSendError) {
       return gracefulError(err.message, err.error_type);
     }
 

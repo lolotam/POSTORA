@@ -70,6 +70,7 @@ describe("useWhatsAppMedia", () => {
       getConversationState: vi.fn(),
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
+      sendVoice: vi.fn(),
     };
   });
 

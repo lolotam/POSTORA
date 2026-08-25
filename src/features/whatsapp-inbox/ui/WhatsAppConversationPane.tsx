@@ -295,7 +295,11 @@ export function WhatsAppConversationPane({
         )}
       </div>
 
-      <WhatsAppComposer conversation={conversation} socialAccountId={socialAccountId} />
+      <WhatsAppComposer
+        conversation={conversation}
+        socialAccountId={socialAccountId}
+        connectionMode={connectionMode}
+      />
     </div>
   );
 }

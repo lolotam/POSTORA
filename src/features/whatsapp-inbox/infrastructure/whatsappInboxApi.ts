@@ -9,6 +9,8 @@ import type {
   RevokeMessageResponse,
   SendWhatsAppInteractiveRequest,
   SendWhatsAppMediaRequest,
+  SendWhatsAppVoiceRequest,
+  SendWhatsAppVoiceResponse,
   SetMessageFlagRequest,
   SetMessageFlagResponse,
   WhatsAppInboxApi,
@@ -64,6 +66,9 @@ export function createWhatsAppInboxApi(): WhatsAppInboxApi {
     },
     revokeMessage(input: RevokeMessageRequest): Promise<RevokeMessageResponse> {
       return callMessagingApi<RevokeMessageResponse>("whatsapp_revoke_message", { ...input });
+    },
+    sendVoice(input: SendWhatsAppVoiceRequest): Promise<SendWhatsAppVoiceResponse> {
+      return callMessagingApi<SendWhatsAppVoiceResponse>("whatsapp_send_voice", { ...input });
     },
   };
 }

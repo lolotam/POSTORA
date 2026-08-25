@@ -25,7 +25,8 @@ export type WhatsAppAction =
   | "whatsapp_send_product_list"
   | "whatsapp_get_conversation_state"
   | "whatsapp_set_message_flag"
-  | "whatsapp_revoke_message";
+  | "whatsapp_revoke_message"
+  | "whatsapp_send_voice";
 
 export const WHATSAPP_ACTION_MINIMUM_ROLE: Record<
   WhatsAppAction,
@@ -51,6 +52,7 @@ export const WHATSAPP_ACTION_MINIMUM_ROLE: Record<
   whatsapp_get_conversation_state: "viewer",
   whatsapp_set_message_flag: "viewer",
   whatsapp_revoke_message: "agent",
+  whatsapp_send_voice: "agent",
 };
 
 export interface WhatsAppActionAccessRequest {

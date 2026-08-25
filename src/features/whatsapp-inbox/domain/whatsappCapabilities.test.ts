@@ -3,6 +3,8 @@ import {
   isSyntheticProviderId,
   revokeCapability,
   revokeDisabledLabel,
+  voiceNoteCapability,
+  voiceNoteDisabledLabel,
 } from "./whatsappCapabilities";
 
 describe("whatsappCapabilities", () => {
@@ -30,5 +32,16 @@ describe("whatsappCapabilities", () => {
     expect(revokeDisabledLabel("inbound")).toMatch(/your own/i);
     expect(revokeDisabledLabel("synthetic_id")).toMatch(/provider id/i);
     expect(revokeDisabledLabel(null)).toBeNull();
+  });
+
+  it("offers the mic only on evolution_qr when the browser can record", () => {
+    expect(voiceNoteCapability("evolution_qr", true)).toEqual({ enabled: true, reason: null });
+    expect(voiceNoteCapability("evolution_qr", false).reason).toBe("unsupported_browser");
+    expect(voiceNoteCapability("cloud_api", true).reason).toBe("unsupported_mode");
+    expect(voiceNoteCapability("coexistence", true).reason).toBe("unsupported_mode");
+    expect(voiceNoteCapability(null, true).reason).toBe("unsupported_mode");
+    expect(voiceNoteDisabledLabel("unsupported_mode")).toMatch(/Direct QR/i);
+    expect(voiceNoteDisabledLabel("unsupported_browser")).toMatch(/browser/i);
+    expect(voiceNoteDisabledLabel(null)).toBeNull();
   });
 });

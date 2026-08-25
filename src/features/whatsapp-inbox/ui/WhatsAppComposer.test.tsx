@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Conversation } from "@/hooks/useMessaging";
 import type { WhatsAppInboxApi } from "../application/ports";
 import { WhatsAppInboxApiProvider } from "./WhatsAppInboxApiProvider";
@@ -54,13 +54,72 @@ const conversation: Conversation = {
   updated_time: "2026-08-25T10:00:00.000Z",
 };
 
+class FakeMediaRecorder {
+  static isTypeSupported(type: string): boolean {
+    return type.startsWith("audio/webm");
+  }
+
+  ondataavailable: ((event: { data: Blob }) => void) | null = null;
+  onstop: (() => void) | null = null;
+  state: "inactive" | "recording" = "inactive";
+  mimeType: string;
+
+  constructor(_stream: MediaStream, options?: { mimeType?: string }) {
+    this.mimeType = options?.mimeType ?? "";
+  }
+
+  start(): void {
+    this.state = "recording";
+  }
+
+  stop(): void {
+    this.state = "inactive";
+    this.ondataavailable?.({
+      data: new Blob([new Uint8Array(64)], { type: this.mimeType || "audio/webm" }),
+    });
+    this.onstop?.();
+  }
+}
+
+function installVoiceBrowser(): void {
+  Object.defineProperty(navigator, "mediaDevices", {
+    configurable: true,
+    writable: true,
+    value: {
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [{ stop: vi.fn(), kind: "audio", readyState: "live" }],
+      })),
+    },
+  });
+  vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+  vi.stubGlobal("AudioContext", function AudioContext() {
+    return {
+      state: "running",
+      close: vi.fn(async () => {}),
+      createMediaStreamSource: () => ({ connect: vi.fn() }),
+      createAnalyser: () => ({
+        fftSize: 256,
+        frequencyBinCount: 8,
+        getByteTimeDomainData: (buffer: Uint8Array) => buffer.fill(128),
+        connect: vi.fn(),
+      }),
+    };
+  });
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => (
+    window.setTimeout(() => callback(0), 16) as unknown as number
+  ));
+  vi.stubGlobal("cancelAnimationFrame", (id: number) => window.clearTimeout(id));
+}
+
 describe("WhatsAppComposer outbound upload", () => {
   let sendMedia: ReturnType<typeof vi.fn>;
+  let sendVoice: ReturnType<typeof vi.fn>;
   let api: WhatsAppInboxApi;
   let queryClient: QueryClient;
 
   beforeEach(() => {
     sendMedia = vi.fn(async () => ({}));
+    sendVoice = vi.fn(async () => ({ success: true, message_id: "3EB0" }));
     api = {
       getMessagesPage: vi.fn(),
       getMedia: vi.fn(),
@@ -69,6 +128,7 @@ describe("WhatsAppComposer outbound upload", () => {
       getConversationState: vi.fn(),
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
+      sendVoice,
     };
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     vi.spyOn(queryClient, "invalidateQueries");
@@ -79,14 +139,22 @@ describe("WhatsAppComposer outbound upload", () => {
     URL.revokeObjectURL = vi.fn();
   });
 
-  function renderComposer() {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function renderComposer(connectionMode: "evolution_qr" | "cloud_api" | "coexistence" | null = null) {
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={queryClient}>
         <WhatsAppInboxApiProvider api={api}>{children}</WhatsAppInboxApiProvider>
       </QueryClientProvider>
     );
     return render(
-      <WhatsAppComposer conversation={conversation} socialAccountId="account-1" />,
+      <WhatsAppComposer
+        conversation={conversation}
+        socialAccountId="account-1"
+        connectionMode={connectionMode}
+      />,
       { wrapper },
     );
   }
@@ -115,5 +183,58 @@ describe("WhatsAppComposer outbound upload", () => {
       queryKey: ["messaging-messages", conversation.id],
     });
     expect(URL.revokeObjectURL).toHaveBeenCalledWith("blob:preview");
+  });
+
+  it("hides the mic for a cloud account", () => {
+    installVoiceBrowser();
+    renderComposer("cloud_api");
+    expect(screen.queryByRole("button", { name: /record voice note/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /send message/i }).getAttribute("title")).toMatch(/Direct QR/i);
+  });
+
+  it("replaces Send with the mic on a Direct QR account when the text box is empty", () => {
+    installVoiceBrowser();
+    renderComposer("evolution_qr");
+    expect(screen.getByRole("button", { name: /record voice note/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /send message/i })).not.toBeInTheDocument();
+  });
+
+  it("labels Attach ▸ Audio as a file attachment, not a voice note", async () => {
+    renderComposer("cloud_api");
+    const trigger = screen.getByRole("button", { name: /attach a file/i });
+    fireEvent.pointerDown(trigger, { button: 0, buttons: 1, pointerType: "mouse" });
+    fireEvent.click(trigger);
+    await waitFor(() => {
+      expect(screen.getByRole("menuitem", { name: /audio file/i })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("menuitem", { name: /^voice note/i })).not.toBeInTheDocument();
+  });
+
+  it("uploads a recorded note under the caller uid and sends media_path", async () => {
+    installVoiceBrowser();
+    upload.mockResolvedValue({ data: { path: "user-uuid/whatsapp/outbound/voice.webm" }, error: null });
+    renderComposer("evolution_qr");
+    fireEvent.pointerDown(screen.getByRole("button", { name: /record voice note/i }), {
+      button: 0,
+      clientX: 200,
+    });
+    await waitFor(() => expect(screen.getByTestId("wa-voice-recording")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /stop recording/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: /send voice note/i })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: /send voice note/i }));
+
+    await waitFor(() => expect(sendVoice).toHaveBeenCalled());
+    expect(upload).toHaveBeenCalledWith(
+      expect.stringMatching(/^user-uuid\/whatsapp\/outbound\//),
+      expect.any(Blob),
+      expect.objectContaining({ contentType: "audio/webm;codecs=opus" }),
+    );
+    expect(sendVoice).toHaveBeenCalledWith(expect.objectContaining({
+      social_account_id: "account-1",
+      recipient_phone: conversation.participant_id,
+      media_path: expect.stringMatching(/^user-uuid\/whatsapp\/outbound\//),
+      mime_type: "audio/webm;codecs=opus",
+    }));
+    expect(getPublicUrl).not.toHaveBeenCalled();
   });
 });
