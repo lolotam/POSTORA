@@ -134,11 +134,11 @@ export default function UnifiedInboxesPage() {
               </div>
             </div>
 
-            {/* Right: Platform Icon Selector Banner & Action Button */}
+            {/* Right: Platform Square 3D Icon Selector & Action Button */}
             <div className="flex flex-wrap items-center gap-3 shrink-0">
-              {/* Platform Selector Pill Bar */}
+              {/* Platform Selector Square 3D Bar */}
               <div
-                className="flex items-center gap-1.5 p-1 rounded-2xl bg-card/80 backdrop-blur-xl border border-border/60 shadow-sm"
+                className="flex items-center gap-2.5 p-1.5 rounded-2xl bg-card border border-border/80 shadow-sm"
                 role="tablist"
                 aria-label="Inbox Channels"
               >
@@ -151,21 +151,32 @@ export default function UnifiedInboxesPage() {
                       role="tab"
                       aria-selected={isSelected}
                       onClick={() => handlePlatformChange(p.id)}
+                      title={`${p.label} - ${p.subLabel}`}
                       className={cn(
-                        "flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all duration-200 cursor-pointer focus:outline-none",
+                        "relative w-13 h-13 sm:w-15 sm:h-15 md:w-16 md:h-16 rounded-2xl flex flex-col items-center justify-center border transition-all duration-300 cursor-pointer group focus:outline-none overflow-visible",
+                        // 3D glass specular highlight
+                        "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/35 before:via-white/10 before:to-transparent before:pointer-events-none",
                         isSelected
-                          ? "bg-primary text-primary-foreground shadow-md shadow-primary/25 font-bold scale-[1.02]"
-                          : "text-muted-foreground hover:text-foreground hover:bg-muted/60"
+                          ? "bg-gradient-to-b from-primary/20 via-card to-card border-primary ring-2 ring-primary/40 shadow-[0_10px_20px_-4px_rgba(var(--primary-rgb,59,130,246),0.4),inset_0_1.5px_2px_rgba(255,255,255,0.8)] -translate-y-1 scale-105"
+                          : "bg-secondary/80 hover:bg-secondary border-border/60 shadow-md hover:border-primary/50 hover:shadow-xl hover:scale-110 hover:-translate-y-1"
                       )}
                     >
-                      <PlatformIcon platform={p.id} size="sm" className="shrink-0" />
-                      <span>{p.label}</span>
+                      <PlatformIcon
+                        platform={p.id}
+                        size="xl"
+                        className="drop-shadow-[0_4px_6px_rgba(0,0,0,0.25)] transition-transform duration-300 group-hover:scale-110"
+                      />
+                      {isSelected && (
+                        <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-md ring-2 ring-background animate-in zoom-in-50 duration-200">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                        </div>
+                      )}
                     </button>
                   );
                 })}
               </div>
 
-              <Button asChild variant="outline" size="sm" className="h-9 gap-1.5 border-primary/30 hover:bg-primary/10 text-xs">
+              <Button asChild variant="outline" size="sm" className="h-10 gap-1.5 border-primary/30 hover:bg-primary/10 text-xs">
                 <Link to={`/automation/messaging?platform=${platform}`}>
                   <Sparkles className="w-3.5 h-3.5 text-primary" />
                   <span className="hidden sm:inline">Automation</span>
@@ -183,7 +194,7 @@ export default function UnifiedInboxesPage() {
           <div className="space-y-4">
             {platform === "whatsapp" && (
               <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-card/60 backdrop-blur-md border border-border/50 rounded-2xl p-4 shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-card border border-border/80 rounded-2xl p-4 shadow-sm">
                   <div>
                     <h3 className="font-bold text-sm sm:text-base text-foreground flex items-center gap-2">
                       <PlatformIcon platform="whatsapp" size="sm" />

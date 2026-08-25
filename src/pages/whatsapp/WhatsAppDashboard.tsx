@@ -7,13 +7,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
 import {
   whatsappLegacyTabTarget,
-  whatsappNavItems,
-  whatsappSectionDescriptions,
   whatsappSectionRoute,
 } from "@/components/whatsapp/waNav";
 import { useMessagingAccounts, type MessagingAccount } from "@/hooks/useMessaging";
-
-const dashboardSectionItems = whatsappNavItems.filter((item) => item.path !== "");
 
 function ConnectionStatusCard({ accounts, isLoading }: { accounts: MessagingAccount[]; isLoading: boolean }) {
   return (
@@ -159,44 +155,6 @@ function ShortcutStat({
   );
 }
 
-function SectionCards() {
-  return (
-    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-      {dashboardSectionItems.map((item) => (
-        <SectionCard key={item.path} item={item} />
-      ))}
-    </div>
-  );
-}
-
-function SectionCard({ item }: { item: (typeof dashboardSectionItems)[number] }) {
-  const Icon = item.icon;
-
-  return (
-    <Link to={whatsappSectionRoute(item.path)} className="group block">
-      <Card
-        interactive
-        className="h-full transition-colors group-hover:border-[#25D366]/60 group-hover:bg-[#DCF8C6]/20 dark:group-hover:bg-[#075E54]/20"
-      >
-        <CardContent className="flex h-full flex-col gap-4 p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#25D366]/10 text-[#128C7E] transition-colors group-hover:bg-[#25D366] group-hover:text-[#075E54] dark:text-[#25D366]">
-              <Icon className="h-5 w-5" />
-            </div>
-            <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-1 group-hover:text-[#128C7E] dark:group-hover:text-[#25D366]" />
-          </div>
-          <div>
-            <h2 className="font-semibold text-foreground">{item.label}</h2>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              {whatsappSectionDescriptions[item.path]}
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-    </Link>
-  );
-}
-
 export default function WhatsAppDashboard() {
   const [searchParams] = useSearchParams();
   // Resolved through the shared helper so retired sections keep their deep links; matching on
@@ -218,7 +176,6 @@ export default function WhatsAppDashboard() {
       />
       <ConnectionStatusCard accounts={whatsappAccounts} isLoading={isLoading} />
       <QuickStats accountCount={whatsappAccounts.length} />
-      <SectionCards />
     </div>
   );
 }

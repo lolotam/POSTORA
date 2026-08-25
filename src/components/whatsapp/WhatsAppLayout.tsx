@@ -119,8 +119,8 @@ function WhatsAppLayoutContent() {
                 content pane must not be pushed down by the nav. */}
             <aside
               className={cn(
-                "wa-app hidden min-h-0 shrink-0 flex-col border-r bg-background/95 transition-[width] duration-200 ease-in-out lg:flex",
-                collapsed ? "w-16" : "w-60",
+                "wa-app flex min-h-0 shrink-0 flex-col border-r bg-card/95 backdrop-blur-md transition-[width] duration-200 ease-in-out",
+                collapsed ? "w-16" : "w-56 lg:w-60",
               )}
             >
               <div className={cn("flex-1 overflow-y-auto", collapsed ? "p-2 px-1.5 scrollbar-none" : "p-3")}>

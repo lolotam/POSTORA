@@ -152,8 +152,8 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                     socialAccountId={selectedAccountId}
                     onSelectContact={selectConversation}
                   />
-                  <div className="border rounded-lg overflow-hidden flex h-[600px]">
-                    <div className="w-80 border-r shrink-0 flex flex-col">
+                  <div className="border border-border/80 bg-card rounded-2xl shadow-sm overflow-hidden flex h-[620px]">
+                    <div className="w-80 border-r border-border/60 bg-card/60 shrink-0 flex flex-col">
                       {platformTab === "whatsapp" && <LabelFilter selectedLabelId={labelFilter} onSelect={setLabelFilter} />}
                       <div className="flex-1 overflow-hidden">
                         <ConversationList
@@ -165,7 +165,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                         />
                       </div>
                     </div>
-                    <div className="flex-1">
+                    <div className="flex-1 bg-background/50 dark:bg-card/40">
                       <ConversationDetail
                         conversation={selectedConversation}
                         socialAccountId={selectedAccountId}
@@ -189,8 +189,8 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
             platformFilter="facebook"
           />
           {selectedAccountId && (
-            <div className="border rounded-lg overflow-hidden flex h-[600px]">
-              <div className="w-80 border-r shrink-0">
+            <div className="border border-border/80 bg-card rounded-2xl shadow-sm overflow-hidden flex h-[620px]">
+              <div className="w-80 border-r border-border/60 bg-card/60 shrink-0">
                 <ConversationList
                   conversations={conversations}
                   selectedId={selectedConversation?.id || null}
@@ -198,7 +198,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                   isLoading={convsLoading}
                 />
               </div>
-              <div className="flex-1">
+              <div className="flex-1 bg-background/50 dark:bg-card/40">
                 <ConversationDetail
                   conversation={selectedConversation}
                   socialAccountId={selectedAccountId}
@@ -231,8 +231,8 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
             </div>
           )}
           {selectedAccountId && (
-            <div className="border rounded-lg overflow-hidden flex h-[600px]">
-              <div className="w-80 border-r shrink-0">
+            <div className="border border-border/80 bg-card rounded-2xl shadow-sm overflow-hidden flex h-[620px]">
+              <div className="w-80 border-r border-border/60 bg-card/60 shrink-0">
                 <ConversationList
                   conversations={conversations}
                   selectedId={selectedConversation?.id || null}
@@ -240,7 +240,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                   isLoading={convsLoading}
                 />
               </div>
-              <div className="flex-1">
+              <div className="flex-1 bg-background/50 dark:bg-card/40">
                 <ConversationDetail
                   conversation={selectedConversation}
                   socialAccountId={selectedAccountId}
