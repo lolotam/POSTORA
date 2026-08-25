@@ -132,32 +132,38 @@ export default function UnifiedAgentSetupPage() {
 
   return (
     <DashboardLayout>
-      <div className="w-full space-y-8 pb-12">
-        {/* Header */}
+      <div className="w-full space-y-6 pb-12">
+        {/* Header (Left-aligned as before) */}
         <Reveal>
-          <div className="flex flex-col items-center text-center space-y-2 max-w-3xl mx-auto">
-            <div className="flex items-center justify-center gap-2.5">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
               <Icon3D icon={Bot} variant="violet" size="md" />
-              <GradientHeading preset="violet-sky" size="xl" as="h1">
-                Agent Setup Portal
-              </GradientHeading>
-              <Badge variant="outline" className="border-violet-500/30 text-violet-400 bg-violet-500/10 gap-1 text-xs">
-                <Sparkles className="w-3 h-3" /> Unified AI Studio
-              </Badge>
+              <div>
+                <div className="flex items-center gap-2">
+                  <GradientHeading preset="violet-sky" size="lg" as="h1">
+                    Agent Setup Portal
+                  </GradientHeading>
+                  <Badge variant="outline" className="border-violet-500/30 text-violet-400 bg-violet-500/10 gap-1 text-xs">
+                    <Sparkles className="w-3 h-3" /> Unified AI Studio
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Configure intelligent AI assistants, knowledge bases, database connectors, and automations across all social channels
+                </p>
+              </div>
             </div>
-            <p className="text-sm text-muted-foreground">
-              Configure intelligent AI assistants, knowledge bases, database connectors, and automations across all social channels.
-            </p>
           </div>
         </Reveal>
 
-        {/* Small Centered 3D Platform Cards */}
+        <GradientDivider tone="violet" />
+
+        {/* Small Centered 3D Platform Cards (Exact Landing Page Carousel Style & Size) */}
         <Reveal delay={30}>
-          <div className="flex flex-col items-center space-y-3">
+          <div className="flex flex-col items-center space-y-3 py-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Select Platform
+              Select Social Channel
             </span>
-            <div className="flex items-center justify-center gap-3 sm:gap-4 flex-wrap max-w-3xl" role="tablist" aria-label="Social Channels">
+            <div className="flex items-center justify-center gap-4 sm:gap-6 flex-wrap" role="tablist" aria-label="Social Channels">
               {PLATFORMS.map((p) => {
                 const isSelected = platform === p.id;
                 return (
@@ -168,25 +174,30 @@ export default function UnifiedAgentSetupPage() {
                     aria-selected={isSelected}
                     onClick={() => handlePlatformChange(p.id)}
                     className={cn(
-                      "group relative flex flex-col items-center justify-center p-3 sm:p-3.5 rounded-2xl border transition-all duration-200 min-w-[110px] sm:min-w-[130px] text-center cursor-pointer",
-                      isSelected
-                        ? "bg-card/90 border-primary shadow-lg shadow-primary/10 ring-2 ring-primary/40 -translate-y-1 scale-105"
-                        : "bg-card/40 hover:bg-card/70 border-border/60 hover:border-border hover:-translate-y-0.5"
+                      "flex flex-col items-center gap-2.5 flex-shrink-0 transition-transform duration-300 hover:scale-105 hover:-translate-y-1 cursor-pointer group focus:outline-none",
                     )}
                   >
-                    <div className="mb-1.5 transition-transform duration-200 group-hover:scale-110">
-                      <Icon3D
-                        icon={() => <PlatformIcon platform={p.id} className="w-5 h-5" />}
-                        variant={p.colorPreset}
-                        size="sm"
-                      />
+                    <div
+                      className={cn(
+                        "relative w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border shadow-lg transition-all duration-300",
+                        isSelected
+                          ? "border-primary shadow-xl shadow-primary/25 ring-2 ring-primary/40 bg-primary/10 -translate-y-1 scale-105"
+                          : "border-border/50 hover:border-primary/40 hover:shadow-xl"
+                      )}
+                    >
+                      <PlatformIcon platform={p.id} size="xl" />
+                      {isSelected && (
+                        <CheckCircle2 className="w-4 h-4 text-primary absolute -top-1.5 -right-1.5 bg-background rounded-full shadow" />
+                      )}
                     </div>
-                    <span className={cn("text-xs sm:text-sm font-semibold transition-colors", isSelected ? "text-foreground" : "text-muted-foreground group-hover:text-foreground")}>
+                    <span
+                      className={cn(
+                        "text-xs md:text-sm font-medium transition-colors",
+                        isSelected ? "text-foreground font-semibold" : "text-muted-foreground group-hover:text-foreground"
+                      )}
+                    >
                       {p.label}
                     </span>
-                    {isSelected && (
-                      <CheckCircle2 className="w-3.5 h-3.5 text-primary absolute top-2 right-2" />
-                    )}
                   </button>
                 );
               })}
@@ -194,93 +205,46 @@ export default function UnifiedAgentSetupPage() {
           </div>
         </Reveal>
 
-        {/* Option Cards: Direct Messaging & Post Comments (Select Both Supported) */}
+        {/* Compact Option Cards: Direct Messaging & Post Comments (Centered, Same Height) */}
         <Reveal delay={50}>
-          <div className="flex flex-col items-center space-y-3 max-w-2xl mx-auto w-full">
+          <div className="flex flex-col items-center space-y-2.5 max-w-lg mx-auto w-full pt-1">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Automated Surfaces (Select one or both)
             </span>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
-              {/* Direct Messaging Card */}
+            <div className="flex items-center justify-center gap-3 w-full">
+              {/* Direct Messaging Button */}
               <button
                 type="button"
                 onClick={handleToggleDms}
                 className={cn(
-                  "relative flex items-center justify-between p-4 rounded-2xl border transition-all duration-200 text-left group cursor-pointer",
+                  "flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-xl border text-sm font-medium transition-all duration-200 cursor-pointer h-10 shadow-sm",
                   dmsActive
-                    ? "bg-sky-500/10 border-sky-500/50 ring-1 ring-sky-500/30 shadow-md shadow-sky-500/5"
-                    : "bg-card/40 border-border/60 hover:bg-card/70 hover:border-border"
+                    ? "bg-primary/15 border-primary text-foreground ring-1 ring-primary/40 font-semibold shadow-primary/10"
+                    : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50"
                 )}
               >
-                <div className="flex items-center gap-3">
-                  <div className={cn(
-                    "h-10 w-10 rounded-xl flex items-center justify-center transition-colors shrink-0",
-                    dmsActive ? "bg-sky-500/20 text-sky-400" : "bg-muted text-muted-foreground"
-                  )}>
-                    <MessageSquare className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-semibold text-sm text-foreground">Direct Messaging</h4>
-                      {dmsActive && <Badge variant="outline" className="text-[10px] text-sky-400 border-sky-500/30 py-0 h-4">Enabled</Badge>}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Inbound direct chats & DM automations
-                    </p>
-                  </div>
-                </div>
-                <Checkbox
-                  checked={dmsActive}
-                  onCheckedChange={handleToggleDms}
-                  className="data-[state=checked]:bg-sky-500 data-[state=checked]:border-sky-500"
-                />
+                <MessageSquare className="w-4 h-4 text-sky-400 shrink-0" />
+                <span>Direct Messaging</span>
+                {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-1 shrink-0" />}
               </button>
 
-              {/* Post Comments Card */}
+              {/* Post Comments Button */}
               <button
                 type="button"
                 disabled={!selectedPlatformMeta.supportsComments}
                 onClick={handleToggleComments}
                 className={cn(
-                  "relative flex items-center justify-between p-4 rounded-2xl border transition-all duration-200 text-left group",
+                  "flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-xl border text-sm font-medium transition-all duration-200 h-10 shadow-sm",
                   !selectedPlatformMeta.supportsComments
-                    ? "opacity-50 cursor-not-allowed bg-muted/20 border-border/30"
+                    ? "opacity-40 cursor-not-allowed bg-muted/20 border-border/30 text-muted-foreground"
                     : commentsActive
-                    ? "bg-emerald-500/10 border-emerald-500/50 ring-1 ring-emerald-500/30 shadow-md shadow-emerald-500/5 cursor-pointer"
-                    : "bg-card/40 border-border/60 hover:bg-card/70 hover:border-border cursor-pointer"
+                    ? "bg-primary/15 border-primary text-foreground ring-1 ring-primary/40 font-semibold cursor-pointer shadow-primary/10"
+                    : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
                 )}
               >
-                <div className="flex items-center gap-3">
-                  <div className={cn(
-                    "h-10 w-10 rounded-xl flex items-center justify-center transition-colors shrink-0",
-                    !selectedPlatformMeta.supportsComments
-                      ? "bg-muted/40 text-muted-foreground"
-                      : commentsActive
-                      ? "bg-emerald-500/20 text-emerald-400"
-                      : "bg-muted text-muted-foreground"
-                  )}>
-                    <MessageCircle className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-semibold text-sm text-foreground">Post Comments</h4>
-                      {!selectedPlatformMeta.supportsComments ? (
-                        <Badge variant="outline" className="text-[10px] text-muted-foreground py-0 h-4">N/A on WhatsApp</Badge>
-                      ) : commentsActive ? (
-                        <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30 py-0 h-4">Enabled</Badge>
-                      ) : null}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      Public post replies & comment moderation
-                    </p>
-                  </div>
-                </div>
-                <Checkbox
-                  checked={commentsActive}
-                  disabled={!selectedPlatformMeta.supportsComments}
-                  onCheckedChange={handleToggleComments}
-                  className="data-[state=checked]:bg-emerald-500 data-[state=checked]:border-emerald-500"
-                />
+                <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                <span>Post Comments</span>
+                {commentsActive && selectedPlatformMeta.supportsComments && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-1 shrink-0" />}
               </button>
             </div>
           </div>
