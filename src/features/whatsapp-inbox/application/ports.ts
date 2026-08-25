@@ -157,14 +157,15 @@ export interface SendWhatsAppVoiceResponse {
 }
 
 export interface WhatsAppInboxApi {
-  getMessagesPage(input: GetMessagesPageRequest): Promise<GetMessagesPageResponse>;
-  getMedia(input: GetWhatsAppMediaRequest): Promise<GetWhatsAppMediaResponse>;
+  getMessagesPage(input: GetMessagesPageRequest, signal?: AbortSignal): Promise<GetMessagesPageResponse>;
+  getMedia(input: GetWhatsAppMediaRequest, signal?: AbortSignal): Promise<GetWhatsAppMediaResponse>;
   sendMedia(input: SendWhatsAppMediaRequest): Promise<unknown>;
   sendInteractive(input: SendWhatsAppInteractiveRequest): Promise<unknown>;
   getConversationState(input: GetConversationStateRequest): Promise<GetConversationStateResponse>;
   setMessageFlag(input: SetMessageFlagRequest): Promise<SetMessageFlagResponse>;
   revokeMessage(input: RevokeMessageRequest): Promise<RevokeMessageResponse>;
   sendVoice(input: SendWhatsAppVoiceRequest): Promise<SendWhatsAppVoiceResponse>;
+  downloadBlob(blob: Blob, filename: string): void;
 }
 
 export const WhatsAppInboxApiContext = createContext<WhatsAppInboxApi | null>(null);

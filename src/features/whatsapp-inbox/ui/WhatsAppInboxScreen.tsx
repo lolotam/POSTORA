@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Plus } from "lucide-react";
+import { CheckSquare, Download, Loader2, Plus, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { AccountSelector } from "@/components/messaging/AccountSelector";
 import { LabelFilter } from "@/components/messaging/ConversationLabels";
@@ -15,6 +15,7 @@ import { WhatsAppMediaScope } from "../application/useWhatsAppMedia";
 import { createWhatsAppInboxApi } from "../infrastructure/whatsappInboxApi";
 import { WhatsAppConnectionStatusChip } from "./WhatsAppConnectionStatusChip";
 import { WhatsAppConversationPane } from "./WhatsAppConversationPane";
+import { WhatsAppExportDialog } from "./WhatsAppExportDialog";
 import { WhatsAppInboxApiProvider } from "./WhatsAppInboxApiProvider";
 
 export function WhatsAppInboxScreen(): JSX.Element {
@@ -25,6 +26,10 @@ export function WhatsAppInboxScreen(): JSX.Element {
   const [searchParams, setSearchParams] = useSearchParams();
   const [newConversationOpen, setNewConversationOpen] = useState(false);
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
+  const [exportOpen, setExportOpen] = useState(false);
+  const [visibleConversations, setVisibleConversations] = useState<Conversation[]>([]);
   const ignoredRouteChatIdRef = useRef<string | null>(null);
   const { assignments } = useWhatsAppLabels();
   const { setCompact } = useWhatsAppChrome();
@@ -119,14 +124,66 @@ export function WhatsAppInboxScreen(): JSX.Element {
                   onSelect={handleAccountChange}
                   platformFilter="whatsapp"
                 />
-                <Button size="sm" onClick={() => setNewConversationOpen(true)} className="shrink-0 gap-1.5">
-                  <Plus className="h-4 w-4" />
-                  New Conversation
-                </Button>
+                <div className="flex shrink-0 items-center gap-2">
+                  {selectionMode ? (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setSelectedIds(new Set(visibleConversations.map((c) => c.id)))}
+                        className="gap-1.5"
+                      >
+                        <CheckSquare className="h-4 w-4" />
+                        Select all
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => setExportOpen(true)}
+                        disabled={selectedIds.size === 0}
+                        className="gap-1.5"
+                      >
+                        <Download className="h-4 w-4" />
+                        Export{selectedIds.size > 0 ? ` (${selectedIds.size})` : ""}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label="Leave selection mode"
+                        onClick={() => { setSelectionMode(false); setSelectedIds(new Set()); }}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </>
+                  ) : (
+                    <>
+                      <Button size="sm" variant="outline" onClick={() => setSelectionMode(true)} className="gap-1.5">
+                        <CheckSquare className="h-4 w-4" />
+                        Select
+                      </Button>
+                      <Button size="sm" onClick={() => setNewConversationOpen(true)} className="gap-1.5">
+                        <Plus className="h-4 w-4" />
+                        New Conversation
+                      </Button>
+                    </>
+                  )}
+                </div>
               </div>
 
               {selectedAccountId && (
                 <>
+                  <WhatsAppExportDialog
+                    open={exportOpen}
+                    onOpenChange={setExportOpen}
+                    socialAccountId={selectedAccountId}
+                    accountLabel={selectedAccount?.platform_username || selectedAccount?.platform_user_id || "WhatsApp"}
+                    chats={conversations
+                      .filter((conv) => selectedIds.has(conv.id))
+                      .map((conv) => ({
+                        conversationId: conv.id,
+                        participantName: conv.participant_name,
+                        participantPhone: conv.participant_id,
+                      }))}
+                  />
                   <NewConversationDialog
                     open={newConversationOpen}
                     onOpenChange={setNewConversationOpen}
@@ -151,6 +208,15 @@ export function WhatsAppInboxScreen(): JSX.Element {
                           onSelect={selectConversation}
                           isLoading={conversationsLoading}
                           showLabels
+                          selectionMode={selectionMode}
+                          selectedIds={selectedIds}
+                          onToggleSelect={(conv) => setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(conv.id)) next.delete(conv.id);
+                            else next.add(conv.id);
+                            return next;
+                          })}
+                          onFilteredChange={setVisibleConversations}
                         />
                       </div>
                     </aside>

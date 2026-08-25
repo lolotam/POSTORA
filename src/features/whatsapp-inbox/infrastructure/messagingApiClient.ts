@@ -13,7 +13,10 @@ const MAX_ATTEMPTS = 3;
 export async function callMessagingApi<T = unknown>(
   action: string,
   body: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<T> {
+  if (signal?.aborted) throw abortError();
+
   let { data: { session } } = await supabase.auth.getSession();
   if (!session?.access_token) {
     const { data: refreshed } = await supabase.auth.refreshSession();
@@ -26,6 +29,7 @@ export async function callMessagingApi<T = unknown>(
 
   let lastError: Error = new Error(`${action} failed`);
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    if (signal?.aborted) throw abortError();
     const response = await fetch(`${supabaseUrl}/functions/v1/messaging-api`, {
       method: "POST",
       headers: {
@@ -34,6 +38,7 @@ export async function callMessagingApi<T = unknown>(
         apikey: anonKey,
       },
       body: JSON.stringify({ action, ...body }),
+      signal,
     });
 
     const payload = await response.json().catch(() => ({ error: response.statusText }));
@@ -46,4 +51,8 @@ export async function callMessagingApi<T = unknown>(
     if (!RETRYABLE_STATUSES.has(response.status) || attempt === MAX_ATTEMPTS) throw lastError;
   }
   throw lastError;
+}
+
+function abortError(): DOMException {
+  return new DOMException("Aborted", "AbortError");
 }

@@ -18,10 +18,11 @@ describe("createWhatsAppInboxApi", () => {
     callMessagingApi.mockResolvedValue({ messages: [] });
     const api = createWhatsAppInboxApi();
     await api.getMessagesPage({ social_account_id: "acct", conversation_id: "conv" });
+    // The export loop passes an AbortSignal through, so the caller is a 3-arg call now.
     expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_get_messages", {
       social_account_id: "acct",
       conversation_id: "conv",
-    });
+    }, undefined);
   });
 
   it("sends limit and before for a history page", async () => {
@@ -42,7 +43,7 @@ describe("createWhatsAppInboxApi", () => {
       conversation_id: "conv",
       limit: 40,
       before,
-    });
+    }, undefined);
   });
 
   it("sends whatsapp_get_media through the shared retrying caller", async () => {
@@ -51,7 +52,7 @@ describe("createWhatsAppInboxApi", () => {
     expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_get_media", {
       social_account_id: "acct",
       message_row_ids: ["row-1", "row-2"],
-    });
+    }, undefined);
   });
 
   it("sends media_path on whatsapp_send_media", async () => {

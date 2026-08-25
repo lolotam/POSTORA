@@ -16,6 +16,7 @@ import type {
   WhatsAppInboxApi,
   WhatsAppMessage,
 } from "../application/ports";
+import { downloadBlob } from "./downloadBlob";
 import { callMessagingApi } from "./messagingApiClient";
 
 function toInboxMessages(payload: GetMessagesPageResponse, conversationId: string): WhatsAppMessage[] {
@@ -29,21 +30,28 @@ function toInboxMessages(payload: GetMessagesPageResponse, conversationId: strin
 
 export function createWhatsAppInboxApi(): WhatsAppInboxApi {
   return {
-    async getMessagesPage(input: GetMessagesPageRequest): Promise<GetMessagesPageResponse> {
+    async getMessagesPage(
+      input: GetMessagesPageRequest,
+      signal?: AbortSignal,
+    ): Promise<GetMessagesPageResponse> {
       const body: Record<string, unknown> = {
         social_account_id: input.social_account_id,
         conversation_id: input.conversation_id,
       };
       if (input.limit != null) body.limit = input.limit;
       if (input.before != null) body.before = input.before;
-      const payload = await callMessagingApi<GetMessagesPageResponse>("whatsapp_get_messages", body);
+      const payload = await callMessagingApi<GetMessagesPageResponse>(
+        "whatsapp_get_messages",
+        body,
+        signal,
+      );
       return {
         messages: toInboxMessages(payload, input.conversation_id),
         page_info: payload.page_info,
       };
     },
-    getMedia(input: GetWhatsAppMediaRequest): Promise<GetWhatsAppMediaResponse> {
-      return callMessagingApi<GetWhatsAppMediaResponse>("whatsapp_get_media", { ...input });
+    getMedia(input: GetWhatsAppMediaRequest, signal?: AbortSignal): Promise<GetWhatsAppMediaResponse> {
+      return callMessagingApi<GetWhatsAppMediaResponse>("whatsapp_get_media", { ...input }, signal);
     },
     sendMedia(input: SendWhatsAppMediaRequest): Promise<unknown> {
       return callMessagingApi("whatsapp_send_media", { ...input });
@@ -70,5 +78,6 @@ export function createWhatsAppInboxApi(): WhatsAppInboxApi {
     sendVoice(input: SendWhatsAppVoiceRequest): Promise<SendWhatsAppVoiceResponse> {
       return callMessagingApi<SendWhatsAppVoiceResponse>("whatsapp_send_voice", { ...input });
     },
+    downloadBlob,
   };
 }
