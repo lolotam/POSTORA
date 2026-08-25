@@ -84,8 +84,6 @@ export async function fetchAiSettings(supabaseAdmin: any): Promise<{
   let primaryModel = 'google/gemini-2.5-flash';
   let fallbackProvider = '';
   let fallbackModel = '';
-  let configuredLastResortProvider = '';
-  let configuredLastResortModel = '';
 
   for (const s of settings || []) {
     try {

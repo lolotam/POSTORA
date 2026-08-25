@@ -201,8 +201,12 @@ async function persistEvolutionMessage(
         console.error(`[whatsapp-evolution-webhook] media understanding skipped: ${outcome.reason}`);
       }
       const agentInput = outcome.understood ? outcome.agentText : inboundText;
+      // Without this the reply endpoint falls back to counting characters, and the English
+      // data-marker around an Arabic transcript wins -- the exact bug this feature hit on
+      // the Cloud path. Evolution needs the same hint.
       await triggerAiAgentReply(
         account, conversationId, account.platform_user_id, remoteNumber, agentInput,
+        outcome.understood ? outcome.languageCode : undefined,
       );
     });
     return true;

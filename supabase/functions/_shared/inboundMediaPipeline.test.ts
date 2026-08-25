@@ -244,3 +244,24 @@ Deno.test("transcribed content cannot close its own delimiter block", () => {
   // Exactly the opening and closing fence, and nothing the content injected.
   assertEquals(composed.split(fence).length - 1, 2);
 });
+
+Deno.test("the same model configured bare and namespaced runs once, not twice", async () => {
+  // Dedupe must happen after normalisation. "google/gemini-2.5-flash" and
+  // "gemini-2.5-flash" are one model; treating them as two burns a rung and bills twice.
+  const { resolveSttTiers } = await import("./inboundMediaPipeline.ts");
+  const rows = [
+    { key: "default_ai_model_stt", value: { provider_code: "gemini", model_id: "gemini/gemini-2.5-flash" } },
+    { key: "default_ai_model_stt_fallback", value: { provider_code: "gemini", model_id: "gemini-2.5-flash" } },
+  ];
+  const admin = {
+    from: (t: string) =>
+      t === "system_settings"
+        ? { select: () => ({ in: () => Promise.resolve({ data: rows, error: null }) }) }
+        : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) }) }) },
+  } as any;
+  Deno.env.set("GOOGLE_AI_STUDIO_KEY", "k");
+  const tiers = await resolveSttTiers(admin);
+  const gemini = tiers.filter((t) => t.provider === "gemini");
+  assertEquals(gemini.length, 1, "the duplicate must collapse");
+  assertEquals(gemini[0].model, "gemini-2.5-flash", "and be stored bare");
+});

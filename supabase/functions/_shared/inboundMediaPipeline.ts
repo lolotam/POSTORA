@@ -9,6 +9,7 @@
 // Spec: docs/specs/2026-08-25-inbound-media-understanding.md (D4, D6, D7, D9).
 
 import {
+  bareModelId,
   classifyMime,
   DEFAULT_LIMITS,
   understandInboundMedia,
@@ -112,7 +113,10 @@ export async function resolveSttTiers(
 
   for (const tier of ordered) {
     if (!tier.provider || !tier.model) continue;
-    const dedupeKey = `${tier.provider}/${tier.model}`;
+    // Normalise BEFORE deduping: the same model can be configured namespaced in one tier
+    // and bare in another, and both would otherwise survive and be called twice.
+    const model = bareModelId(tier.provider, tier.model);
+    const dedupeKey = `${tier.provider}/${model}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
     const apiKey = await resolveProviderKey(admin, tier.provider, cache);
@@ -120,7 +124,7 @@ export async function resolveSttTiers(
       console.warn(`[media-understanding] no API key for ${tier.provider}; skipping that tier`);
       continue;
     }
-    tiers.push({ provider: tier.provider, model: tier.model, apiKey });
+    tiers.push({ provider: tier.provider, model, apiKey });
   }
   return tiers;
 }
