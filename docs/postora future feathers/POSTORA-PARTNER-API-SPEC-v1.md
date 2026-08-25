@@ -58,7 +58,7 @@ API Foundation" is, with the exceptions in §3.3, largely delivered.
 | PRD requirement | Status | Evidence and precise scope of the claim |
 |---|---|---|
 | API-key auth, hashed at rest | Built | `_shared/partnerApiKeys.ts` — SHA-256 hex digest, `pk_live_` prefix, plaintext never stored |
-| Non-enumerable key errors | Built | `partnerApiKeys.ts:81` — unknown and malformed keys return an identical 401 |
+| Non-enumerable key errors | Built | `partnerApiKeys.ts:85` — unknown and malformed keys return an identical 401 |
 | Workspace/account binding | Built, DB-enforced | `20260813120000_partner_api_foundation.sql` — composite FK `(social_account_id, workspace_id)` makes cross-workspace key misuse impossible in the database, not merely in code |
 | Scopes | Built | `PartnerScope` in `partnerApiKeys.ts`; enforced by `assertScope` + `partner-api/router.ts` |
 | Request IDs | Built **for application responses** | `partner-api/index.ts:75` — every post-`OPTIONS` exit path stamps header and body. **The CORS preflight at `:70` returns before the id is generated and carries neither** |
@@ -462,7 +462,10 @@ apology. A refused class-B/C request is retryable and harmless.
 keep spreading. Therefore, binding for v1:
 
 1. **No new surface may authenticate with `profiles.api_key`.** Every new integration point uses
-   Partner API keys. This is a review gate, not a guideline.
+   Partner API keys. **(R2)** This is enforced, not aspirational: it is an exit criterion on every
+   endpoint-delivering phase, and the check is mechanical — grep the phase's diff for
+   `profiles.api_key` and for reads of `profiles` in an auth path. A containment rule with no
+   enforcement hook is how the weaker credential outlives its own deprecation.
 2. The security posture is recorded here as a known weakness: plaintext at rest, unscoped user
    authority, so a database disclosure yields directly usable credentials.
 3. Re-entry criteria: once `/v1` messaging is GA and the n8n node has a migration path (§5),
@@ -588,19 +591,38 @@ lets a retry take over the expired lease and send the customer a **second real m
 **Decision.** The no-duplicate guarantee is **withdrawn until this is closed**, and closing it is a
 prerequisite for `POST /v1/messages` GA.
 
-Required design (mechanism to be settled in the plan's messaging phase):
+**(R2) The tradeoff is unavoidable and must be chosen explicitly.** A durable write and a provider
+HTTP call cannot be made atomic. Process death can occur between *any* durable state change and
+the provider invocation, so exactly-once is unreachable and the only real choice is which way to
+fail:
 
-1. **Persist a dispatch intent before the provider call**, recording that a provider request is
-   about to be issued, with the provider-request identifier where one exists.
-2. **A takeover must be able to distinguish** "claimed but never dispatched" (safe to retry) from
-   "dispatched, outcome unknown" (must **not** re-dispatch; resolve to `indeterminate`).
-3. **Reconciliation** — where the provider offers a lookup by client reference, an indeterminate
-   record is reconciled rather than left permanently stuck. WhatsApp Cloud offers no client-side
+| Boundary | Guarantee | Failure mode |
+|---|---|---|
+| Record **after** the call returns | at-least-once | A crash mid-call lets a retry **send a second real message**. This is today's behaviour |
+| Record **before** the call | **at-most-once** | A crash between the record and the call abandons a request that was **never sent** |
+
+**Decision: record before the call, and accept at-most-once.** Once the pre-call boundary is
+durable, a takeover **must never re-dispatch** — it resolves to `indeterminate`.
+
+**Rationale.** The two failures are not symmetric. An abandoned-but-never-sent message is fully
+recoverable: the partner observes `indeterminate`, checks, and re-sends under a *new*
+`Idempotency-Key`. A duplicate message to a customer is not recoverable by anyone. Choosing
+at-most-once puts the residual risk where a partner can act on it.
+
+Required design:
+
+1. **Persist a dispatch intent before the provider call**, recording that a request is about to be
+   issued, with the provider-request identifier where one exists.
+2. **Takeover never re-dispatches** past a durable intent. The state machine must be written out
+   explicitly, and tested by crashing **both** immediately before and immediately after the
+   provider invocation.
+3. **Reconciliation** — where the provider offers lookup by client reference, an indeterminate
+   record is reconciled rather than left permanently stuck. WhatsApp Cloud exposes no client-side
    idempotency key, so reconciliation is best-effort and the conservative branch is refusal.
 
-**Interim position until built.** `send_template` and `POST /v1/messages` are documented as
-**at-least-once under process failure**, not exactly-once. Partners are told plainly that a crash
-window exists, rather than being given a guarantee Postora cannot keep.
+**Interim position until built.** The already-deployed `send_template` is documented as
+**at-least-once under process failure**, not exactly-once. This is not a resting state: because
+that path is live and reachable today (§3.4), closing it is emergency work, not a later phase.
 
 **Why this matters more than it looks.** The rest of the idempotency design is genuinely
 rigorous, which makes an unqualified "no duplicates" claim in the developer docs highly credible —
@@ -850,3 +872,20 @@ ordering) were re-checked directly.
 - The reviewer's suggestion to drop `retryable` in favour of strict PRD conformance. The PRD's
   envelope is silent on retryability, which pushes a transient-vs-permanent classification table
   onto every integrator. Retained deliberately and documented as an intentional divergence (D2).
+
+### v1.2 — 2026-08-25 — plan review round 1, spec consequences
+
+Reviewing the implementation plan surfaced two defects in the spec itself:
+
+- **D13 rewritten.** The plan review correctly showed that "distinguish never-dispatched from
+  dispatched-unknown" is not achievable as stated: process death can occur between *any* durable
+  write and the provider call, so exactly-once is unreachable. The spec now names the tradeoff
+  explicitly and **chooses at-most-once** (record before the call, never re-dispatch), on the
+  grounds that an abandoned-never-sent message is recoverable by the partner and a duplicate
+  customer message is not. The interim wording is also corrected: because `send_template` is
+  deployed and reachable *today*, closing this is emergency work, not a later phase.
+- **D8 given an enforcement hook.** The containment rule existed only as prose and in the plan's
+  risk register, so no phase could fail because of it. It is now a mechanical exit criterion on
+  every endpoint-delivering phase.
+
+Also corrected: the `partnerApiKeys.ts` non-enumerable-error citation, `:81` → `:85`.
