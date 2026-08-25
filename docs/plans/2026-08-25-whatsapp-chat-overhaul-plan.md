@@ -223,7 +223,18 @@ Backend + frontend. Deploy required. Fixes R1.2 and R3; delivers §5.6.
 
 **Design: lazy materialization with server-side signed URLs.** On first view the edge function tries `createSignedUrl` on a deterministic path; on a miss it fetches through the existing fetchers, uploads with the service role, and signs. Idempotent, no backfill.
 
-Rejected, and why it matters: a *public bucket* would expose every customer's photos to URL guessing; *client-side signing* is impossible for a workspace agent whose `auth.uid()` will not match the object's owner prefix; a *header-bearing proxy* cannot work because `<img src>` sends no headers; *eager materialization at ingest* is better but adds a download to the webhook hot path and needs a 527-row backfill — **recommended as the immediate follow-up**, deliberately not built here.
+Rejected, and why it matters: a *public bucket* would expose every customer's photos to URL guessing; *client-side signing* is impossible for a workspace agent whose `auth.uid()` will not match the object's owner prefix; a *header-bearing proxy* cannot work because `<img src>` sends no headers.
+
+**Opportunistic persistence at ingest — an optimization, not the correctness path.** `main` gained commit `47ca9a9d` after this plan was first written. It wires `EvolutionFetcher` into `whatsapp-evolution-webhook` so inbound **audio and image** messages are fetched at ingest for transcription and OCR — and then **discards the bytes**: `runInboundMediaUnderstanding` returns `{ understood, text, agentText }` (`_shared/inboundMediaPipeline.ts:161-272`) and never surfaces what it downloaded. `evolutionMessage.ts:162` is unchanged, so `media_url` is still `null`.
+
+So the expensive half of materialization is already happening for the most common case and being thrown away. Phase 2 may add an **optional** Task 2.4 that extends `PipelineOutcome` with the fetched bytes and persists them in the same pass, saving a second download per new photo and voice note.
+
+Two constraints make this an optimization and **not** a substitute for lazy materialization, and the distinction must survive review:
+
+- It only fires when media understanding is **enabled** and **under its daily cap** (`inboundMediaPipeline.ts:168-178`). Correctness cannot depend on a feature flag and a quota.
+- It covers **audio and image only**. Video, documents and stickers are never fetched at ingest, and none of the 527 historical rows ever will be.
+
+Build Task 2.3's lazy path first and prove it works; add 2.4 only if the extra fetch measurably matters. If schedule pressure appears, 2.4 is the first thing to cut.
 
 Storage layout, inside the existing private `media` bucket:
 ```
