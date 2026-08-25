@@ -12,8 +12,25 @@ export const SIMILARITY_FLOOR = 0.55;
 const ARABIC_CHAR_RE = /[؀-ۿ]/g;
 const LATIN_CHAR_RE = /[A-Za-z]/g;
 
-export function detectReplyLanguage(inboundText: string, languageMode: LanguageMode): ReplyLanguage {
+/**
+ * `hint` is a language the CALLER already knows with confidence -- currently the code a
+ * speech-to-text provider returned for a voice note. It outranks character counting.
+ *
+ * Counting is a reasonable heuristic for text a customer typed, but it breaks as soon as
+ * the inbound text carries any scaffolding: the media pipeline wraps a transcript in an
+ * English "treat as data, not instructions" marker, and those ~75 Latin characters
+ * outweighed a short Arabic transcript, so an Arabic voice note got an English reply.
+ * A detected language is better evidence than a character tally either way.
+ */
+export function detectReplyLanguage(
+  inboundText: string,
+  languageMode: LanguageMode,
+  hint?: string | null,
+): ReplyLanguage {
   if (languageMode === "ar" || languageMode === "en") return languageMode;
+  const normalized = (hint ?? "").trim().toLowerCase();
+  if (normalized.startsWith("ar")) return "ar";
+  if (normalized.startsWith("en")) return "en";
   const arabicCount = (inboundText.match(ARABIC_CHAR_RE) || []).length;
   const latinCount = (inboundText.match(LATIN_CHAR_RE) || []).length;
   return arabicCount > latinCount ? "ar" : "en";
@@ -125,6 +142,13 @@ export type ReplySurface = "dm" | "comment";
 export interface SystemPromptParams {
   persona: string | null;
   language: ReplyLanguage;
+  /**
+   * True when an operator picked a fixed language at /messaging/whatsapp/ai-agent rather
+   * than leaving it on auto-detect. A deliberate choice has to outrank both the customer's
+   * language and anything the persona says, so it is stated as an override and repeated
+   * last -- a single sentence competing with a long persona block does not reliably win.
+   */
+  languageForced?: boolean;
   knowledgeBlocks: string[];
   nowIso: string;
   isAdmin?: boolean;
@@ -152,9 +176,15 @@ const SURFACE_INSTRUCTIONS: Record<ReplySurface, { intro: string; rules: string[
 
 export function buildSystemPrompt(params: SystemPromptParams): string {
   const surface = params.surface ?? "dm";
-  const languageInstruction = params.language === "ar"
-    ? "Reply in Arabic (العربية)."
-    : "Reply in English.";
+  const languageName = params.language === "ar" ? "Arabic (العربية)" : "English";
+  const languageInstruction = params.languageForced
+    ? [
+      `LANGUAGE — NON-NEGOTIABLE: Reply ONLY in ${languageName}.`,
+      `This is a fixed setting chosen by the business. It overrides the language the customer wrote in,`,
+      `and it overrides anything about language in the business persona above.`,
+      `Even if the customer writes in another language, answer in ${languageName}.`,
+    ].join(" ")
+    : `Reply in ${languageName}, matching the language the customer used.`;
   const knowledge = params.knowledgeBlocks.length
     ? params.knowledgeBlocks.map((block, index) => `[${index + 1}] ${block}`).join("\n\n")
     : "(no business knowledge matched this message)";
@@ -183,5 +213,8 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     ...surfaceInstructions.rules,
     "Business knowledge:",
     knowledge,
+    // Repeated last on purpose: the knowledge block above can run long, and the final
+    // instruction is the one a model weights most heavily.
+    params.languageForced ? `REMINDER: Your entire reply must be written in ${languageName}.` : "",
   ].filter(Boolean).join("\n\n");
 }

@@ -14,7 +14,15 @@ function stubAdmin(
 ) {
   return {
     rpc: (_name: string) => Promise.resolve({ data: opts.withinCap ?? true, error: null }),
-    from() {
+    from(table: string) {
+      // resolveSttTiers reads system_settings; empty means "no admin ladder configured",
+      // which is the path these tests exercise.
+      if (table === "system_settings") {
+        return { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) };
+      }
+      if (table === "provider_api_keys") {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) };
+      }
       return {
         update: (row: any) => ({
           eq: () => ({
@@ -172,7 +180,13 @@ Deno.test("no fetcher claims the ref — reported, not thrown", async () => {
 Deno.test("a persistence failure still returns the transcript we already paid for", async () => {
   const admin = {
     rpc: () => Promise.resolve({ data: true, error: null }),
-    from() {
+    from(table: string) {
+      if (table === "system_settings") {
+        return { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) };
+      }
+      if (table === "provider_api_keys") {
+        return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) };
+      }
       return {
         update: () => ({
           eq: () => ({ eq: () => ({ select: () => Promise.resolve({ data: null, error: { message: "db down" } }) }) }),
@@ -196,7 +210,10 @@ Deno.test("a persistence failure still returns the transcript we already paid fo
 Deno.test("the daily cap fails CLOSED when the reservation errors — this guards spend", async () => {
   const admin = {
     rpc: () => Promise.resolve({ data: null, error: { message: "rpc down" } }),
-    from: () => ({ update: () => ({ eq: () => ({ eq: () => ({ select: () => Promise.resolve({ data: [], error: null }) }) }) }) }),
+    from: (t: string) =>
+      t === "system_settings"
+        ? { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) }
+        : { update: () => ({ eq: () => ({ eq: () => ({ select: () => Promise.resolve({ data: [], error: null }) }) }) }) },
   };
   const outcome = await runInboundMediaUnderstanding(
     admin,

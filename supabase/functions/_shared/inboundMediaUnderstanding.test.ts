@@ -178,3 +178,123 @@ Deno.test("a large payload does not blow the stack during base64 encoding", asyn
   );
   assert(outcome.ok);
 });
+
+Deno.test("the admin ladder is honoured in order, ElevenLabs first", async () => {
+  const hit: string[] = [];
+  const outcome = await understandInboundMedia(AUDIO, "audio", "audio/ogg", {
+    limits: LIMITS,
+    tiers: [
+      { provider: "elevenlabs", model: "eleven_scribe_v1", apiKey: "e" },
+      { provider: "gemini", model: "gemini-2.5-flash-preview-native-audio", apiKey: "g" },
+      { provider: "openai", model: "whisper-1", apiKey: "o" },
+    ],
+    fetcher: (url) => {
+      hit.push(String(url));
+      return Promise.resolve(new Response(JSON.stringify({ text: "من إيلفن لابس" }), { status: 200 }));
+    },
+  });
+  assert(outcome.ok);
+  assertEquals(outcome.result.provider, "elevenlabs");
+  assertEquals(outcome.result.model, "eleven_scribe_v1");
+  assertEquals(hit.length, 1, "must not call the lower tiers after a success");
+  assert(hit[0].includes("elevenlabs.io"));
+});
+
+Deno.test("a failing primary falls through to gemini, then to whisper", async () => {
+  const hit: string[] = [];
+  const outcome = await understandInboundMedia(AUDIO, "audio", "audio/ogg", {
+    limits: LIMITS,
+    tiers: [
+      { provider: "elevenlabs", model: "eleven_scribe_v1", apiKey: "e" },
+      { provider: "gemini", model: "gem-audio", apiKey: "g" },
+      { provider: "openai", model: "whisper-1", apiKey: "o" },
+    ],
+    fetcher: (url) => {
+      hit.push(String(url));
+      if (String(url).includes("openai.com")) {
+        return Promise.resolve(new Response(JSON.stringify({ text: "last resort" }), { status: 200 }));
+      }
+      return Promise.resolve(new Response("boom", { status: 500 }));
+    },
+  });
+  assert(outcome.ok);
+  assertEquals(outcome.result.provider, "openai");
+  assertEquals(hit.length, 3);
+});
+
+Deno.test("an image skips speech-only tiers instead of burning the ladder on them", async () => {
+  // ElevenLabs and Whisper cannot see. If they consumed rungs, a receipt photo would fail
+  // even though Gemini further down could read it.
+  const hit: string[] = [];
+  const payload = JSON.stringify({ description: "a KNET receipt", text: "KD 12", fields: {} });
+  const outcome = await understandInboundMedia(new Uint8Array([9]), "image", "image/jpeg", {
+    limits: LIMITS,
+    tiers: [
+      { provider: "elevenlabs", model: "eleven_scribe_v1", apiKey: "e" },
+      { provider: "gemini", model: "gemini-2.5-flash", apiKey: "g" },
+      { provider: "openai", model: "whisper-1", apiKey: "o" },
+    ],
+    fetcher: (url) => {
+      hit.push(String(url));
+      return Promise.resolve(geminiResponse(payload));
+    },
+  });
+  assert(outcome.ok);
+  assertEquals(outcome.result.provider, "gemini");
+  assertEquals(hit.length, 1);
+  assert(hit[0].includes("generativelanguage"));
+});
+
+Deno.test("a tier with no API key is dropped, not counted as a failure", async () => {
+  const outcome = await understandInboundMedia(AUDIO, "audio", "audio/ogg", {
+    limits: LIMITS,
+    tiers: [
+      { provider: "elevenlabs", model: "eleven_scribe_v1", apiKey: "" },
+      { provider: "openai", model: "whisper-1", apiKey: "o" },
+    ],
+    fetcher: () => Promise.resolve(new Response(JSON.stringify({ text: "ok" }), { status: 200 })),
+  });
+  assert(outcome.ok);
+  assertEquals(outcome.result.provider, "openai");
+});
+
+Deno.test("ElevenLabs sends the documented parameters and captures its metadata", async () => {
+  let sentModel = "", tagEvents = "", granularity = "";
+  const outcome = await understandInboundMedia(AUDIO, "audio", "audio/ogg; codecs=opus", {
+    limits: LIMITS,
+    tiers: [{ provider: "elevenlabs", model: "scribe_v2", apiKey: "e" }],
+    fetcher: (_url, init) => {
+      const form = init?.body as FormData;
+      sentModel = String(form.get("model_id"));
+      tagEvents = String(form.get("tag_audio_events"));
+      granularity = String(form.get("timestamps_granularity"));
+      return Promise.resolve(new Response(JSON.stringify({
+        language_code: "ara",
+        language_probability: 0.9955,
+        audio_duration_secs: 6.1335,
+        text: "كنت عايز أعرف الخدمات",
+      }), { status: 200 }));
+    },
+  });
+  assert(outcome.ok);
+  assertEquals(sentModel, "scribe_v2");
+  // Audio-event tags would reach the agent as if the customer had said them.
+  assertEquals(tagEvents, "false");
+  assertEquals(granularity, "none");
+  assertEquals(outcome.result.language_code, "ara");
+  assertEquals(outcome.result.confidence, 0.9955);
+  assertEquals(outcome.result.duration_seconds, 6.1335);
+});
+
+Deno.test("a multi-channel ElevenLabs response is read rather than treated as empty", async () => {
+  const outcome = await understandInboundMedia(AUDIO, "audio", "audio/ogg", {
+    limits: LIMITS,
+    tiers: [{ provider: "elevenlabs", model: "scribe_v2", apiKey: "e" }],
+    fetcher: () =>
+      Promise.resolve(new Response(JSON.stringify({
+        transcripts: [{ text: "channel one", language_code: "eng", language_probability: 0.9 }],
+      }), { status: 200 })),
+  });
+  assert(outcome.ok);
+  assertEquals(outcome.result.text, "channel one");
+});
