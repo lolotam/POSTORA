@@ -973,22 +973,21 @@ export function DatabaseConnectorsManager() {
                     </span>
                   </div>
 
-                  {/* Big Clean Connect Button */}
+                  {/* Prominent High-Contrast Connect Button */}
                   <Button
-                    size="sm"
                     variant={isConnected ? "outline" : "default"}
                     className={cn(
-                      "h-8.5 px-4 text-xs font-semibold rounded-xl shadow-sm transition-all duration-200 pointer-events-none group-hover:shadow-md",
+                      "h-10 px-5 text-xs sm:text-sm font-bold rounded-xl shadow-sm transition-all duration-200 pointer-events-none group-hover:shadow-md group-hover:scale-[1.02]",
                       !isConnected && "bg-primary text-primary-foreground hover:bg-primary/90 shadow-primary/25"
                     )}
                   >
                     {isConnected ? (
                       <>
-                        <Pencil className="w-3.5 h-3.5 mr-1" /> Configure
+                        <Pencil className="w-3.5 h-3.5 mr-1.5" /> Configure
                       </>
                     ) : (
                       <>
-                        <Plus className="w-3.5 h-3.5 mr-1" /> Connect
+                        <Plus className="w-4 h-4 mr-1.5 stroke-[2.5]" /> Connect
                       </>
                     )}
                   </Button>
