@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { FileIcon, Image, Loader2, Mic, Paperclip, Send, Video, X } from "lucide-react";
 import { toast } from "sonner";
 import { InteractiveMessageBuilder } from "@/components/messaging/InteractiveMessageBuilder";
@@ -14,7 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useSendMessage, type Conversation } from "@/hooks/useMessaging";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
-import { callMessagingApi } from "@/features/whatsapp-inbox/infrastructure/messagingApiClient";
+import { useWhatsAppInboxApi } from "./WhatsAppInboxApiProvider";
 
 const MAX_ATTACHMENT_BYTES = 16 * 1024 * 1024;
 
@@ -43,6 +44,8 @@ export function WhatsAppComposer({ conversation, socialAccountId }: WhatsAppComp
   const [sendingMedia, setSendingMedia] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const sendMutation = useSendMessage();
+  const api = useWhatsAppInboxApi();
+  const queryClient = useQueryClient();
 
   const clearPreview = (preview: MediaPreview | null) => {
     if (preview) URL.revokeObjectURL(preview.url);
@@ -56,22 +59,21 @@ export function WhatsAppComposer({ conversation, socialAccountId }: WhatsAppComp
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
       const extension = mediaPreview.file.name.split(".").pop() || "bin";
-      const path = `whatsapp-media/${await buildPostoraFileName(user.id, extension)}`;
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const path = `${user.id}/whatsapp/outbound/${await buildPostoraFileName(user.id, extension)}`;
+      const { error: uploadError } = await supabase.storage
         .from("media")
         .upload(path, mediaPreview.file);
       if (uploadError) throw uploadError;
 
-      const { data: urlData } = supabase.storage.from("media").getPublicUrl(uploadData.path);
-
-      await callMessagingApi("whatsapp_send_media", {
+      await api.sendMedia({
         social_account_id: socialAccountId,
         recipient_phone: conversation.participant_id,
-        media_url: urlData.publicUrl,
+        media_path: path,
         media_type: mediaTypeFor(mediaPreview.type),
         caption: messageText.trim() || undefined,
       });
 
+      await queryClient.invalidateQueries({ queryKey: ["messaging-messages", conversation.id] });
       toast.success("Media sent");
       clearPreview(mediaPreview);
       setMessageText("");
@@ -157,7 +159,7 @@ export function WhatsAppComposer({ conversation, socialAccountId }: WhatsAppComp
 
   const handleSendInteractive = async (payload: unknown) => {
     try {
-      await callMessagingApi("whatsapp_send_interactive", {
+      await api.sendInteractive({
         social_account_id: socialAccountId,
         recipient_phone: conversation.participant_id,
         interactive: payload,

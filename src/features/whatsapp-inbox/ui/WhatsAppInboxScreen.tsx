@@ -11,10 +11,14 @@ import { useConversations, useMessagingAccounts, type Conversation } from "@/hoo
 import { useWhatsAppLabels } from "@/hooks/useWhatsAppLabels";
 import { cn } from "@/lib/utils";
 import { parseInboxRoute, withInboxRoute } from "@/lib/whatsappInboxRoute";
+import { WhatsAppMediaScope } from "../application/useWhatsAppMedia";
+import { createWhatsAppInboxApi } from "../infrastructure/whatsappInboxApi";
 import { WhatsAppConnectionStatusChip } from "./WhatsAppConnectionStatusChip";
 import { WhatsAppConversationPane } from "./WhatsAppConversationPane";
+import { WhatsAppInboxApiProvider } from "./WhatsAppInboxApiProvider";
 
 export function WhatsAppInboxScreen(): JSX.Element {
+  const api = useMemo(() => createWhatsAppInboxApi(), []);
   const { accounts, isLoading: accountsLoading } = useMessagingAccounts();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
@@ -80,9 +84,11 @@ export function WhatsAppInboxScreen(): JSX.Element {
 
   if (accountsLoading) {
     return (
-      <div className="flex h-full min-h-0 items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
+      <WhatsAppInboxApiProvider api={api}>
+        <div className="flex h-full min-h-0 items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      </WhatsAppInboxApiProvider>
     );
   }
 
@@ -93,76 +99,83 @@ export function WhatsAppInboxScreen(): JSX.Element {
     : conversations;
 
   return (
-    <div data-testid="wa-inbox-shell" className="flex h-full min-h-0 flex-col overflow-hidden">
-      <WhatsAppConnectionStatusChip
-        connectedAccounts={accounts}
-        selectedAccountId={selectedAccountId}
-      />
+    <WhatsAppInboxApiProvider api={api}>
+      <WhatsAppMediaScope
+        key={`${selectedAccountId ?? "none"}:${selectedConversation?.id ?? ""}`}
+        socialAccountId={selectedAccountId}
+      >
+        <div data-testid="wa-inbox-shell" className="flex h-full min-h-0 flex-col overflow-hidden">
+          <WhatsAppConnectionStatusChip
+            connectedAccounts={accounts}
+            selectedAccountId={selectedAccountId}
+          />
 
-      {whatsappAccounts.length > 0 && (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="flex min-h-0 shrink-0 items-center justify-between gap-3 border-b p-3">
-            <AccountSelector
-              accounts={accounts}
-              selectedId={selectedAccountId}
-              onSelect={handleAccountChange}
-              platformFilter="whatsapp"
-            />
-            <Button size="sm" onClick={() => setNewConversationOpen(true)} className="shrink-0 gap-1.5">
-              <Plus className="h-4 w-4" />
-              New Conversation
-            </Button>
-          </div>
-
-          {selectedAccountId && (
-            <>
-              <NewConversationDialog
-                open={newConversationOpen}
-                onOpenChange={setNewConversationOpen}
-                socialAccountId={selectedAccountId}
-                onSelectContact={selectConversation}
-              />
-              <div className="flex min-h-0 flex-1 overflow-hidden">
-                <aside
-                  data-testid="wa-conversation-list"
-                  className={cn(
-                    "min-h-0 w-full shrink-0 flex-col border-r lg:w-80",
-                    selectedConversation ? "hidden lg:flex" : "flex",
-                  )}
-                >
-                  <div className="min-h-0 shrink-0 pt-2">
-                    <LabelFilter selectedLabelId={labelFilter} onSelect={setLabelFilter} />
-                  </div>
-                  <div className="min-h-0 flex-1 overflow-hidden">
-                    <ConversationList
-                      conversations={filteredConversations}
-                      selectedId={selectedConversation?.id || null}
-                      onSelect={selectConversation}
-                      isLoading={conversationsLoading}
-                      showLabels
-                    />
-                  </div>
-                </aside>
-
-                <section
-                  className={cn(
-                    "min-h-0 min-w-0 flex-1 flex-col",
-                    selectedConversation ? "flex" : "hidden lg:flex",
-                  )}
-                >
-                  <WhatsAppConversationPane
-                    conversation={selectedConversation}
-                    socialAccountId={selectedAccountId}
-                    pageId={pageId}
-                    onScrollStateChange={setCompact}
-                    onBack={() => selectConversation(null)}
-                  />
-                </section>
+          {whatsappAccounts.length > 0 && (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex min-h-0 shrink-0 items-center justify-between gap-3 border-b p-3">
+                <AccountSelector
+                  accounts={accounts}
+                  selectedId={selectedAccountId}
+                  onSelect={handleAccountChange}
+                  platformFilter="whatsapp"
+                />
+                <Button size="sm" onClick={() => setNewConversationOpen(true)} className="shrink-0 gap-1.5">
+                  <Plus className="h-4 w-4" />
+                  New Conversation
+                </Button>
               </div>
-            </>
+
+              {selectedAccountId && (
+                <>
+                  <NewConversationDialog
+                    open={newConversationOpen}
+                    onOpenChange={setNewConversationOpen}
+                    socialAccountId={selectedAccountId}
+                    onSelectContact={selectConversation}
+                  />
+                  <div className="flex min-h-0 flex-1 overflow-hidden">
+                    <aside
+                      data-testid="wa-conversation-list"
+                      className={cn(
+                        "min-h-0 w-full shrink-0 flex-col border-r lg:w-80",
+                        selectedConversation ? "hidden lg:flex" : "flex",
+                      )}
+                    >
+                      <div className="min-h-0 shrink-0 pt-2">
+                        <LabelFilter selectedLabelId={labelFilter} onSelect={setLabelFilter} />
+                      </div>
+                      <div className="min-h-0 flex-1 overflow-hidden">
+                        <ConversationList
+                          conversations={filteredConversations}
+                          selectedId={selectedConversation?.id || null}
+                          onSelect={selectConversation}
+                          isLoading={conversationsLoading}
+                          showLabels
+                        />
+                      </div>
+                    </aside>
+
+                    <section
+                      className={cn(
+                        "min-h-0 min-w-0 flex-1 flex-col",
+                        selectedConversation ? "flex" : "hidden lg:flex",
+                      )}
+                    >
+                      <WhatsAppConversationPane
+                        conversation={selectedConversation}
+                        socialAccountId={selectedAccountId}
+                        pageId={pageId}
+                        onScrollStateChange={setCompact}
+                        onBack={() => selectConversation(null)}
+                      />
+                    </section>
+                  </div>
+                </>
+              )}
+            </div>
           )}
         </div>
-      )}
-    </div>
+      </WhatsAppMediaScope>
+    </WhatsAppInboxApiProvider>
   );
 }

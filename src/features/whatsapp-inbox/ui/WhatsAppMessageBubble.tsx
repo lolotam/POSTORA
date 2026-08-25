@@ -1,50 +1,37 @@
 import { format } from "date-fns";
-import { Contact, Download, FileIcon, MapPin } from "lucide-react";
+import { Contact, MapPin } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/hooks/useMessaging";
+import type { WhatsAppAttachment } from "../application/ports";
+import { WhatsAppMediaAttachment } from "./WhatsAppMediaAttachment";
 
-export type WhatsAppMessage = Message;
+export type WhatsAppMessage = Message & {
+  media_understanding?: string | null;
+};
 
 interface WhatsAppMessageBubbleProps {
   message: WhatsAppMessage;
   isSent: boolean;
 }
 
-function MediaRenderer({ attachments }: { attachments: WhatsAppMessage["attachments"] }) {
-  if (!attachments || attachments.length === 0) return null;
+function isInboxAttachment(value: Message["attachments"][number]): value is Message["attachments"][number] & WhatsAppAttachment {
+  const candidate = value as WhatsAppAttachment;
+  return typeof candidate.kind === "string" && typeof candidate.message_row_id === "string";
+}
 
-  return (
-    <>
-      {attachments.map((attachment, index) => (
-        <div key={index} className="mt-2">
-          {attachment.image_data?.url && (
-            <a href={attachment.image_data.url} target="_blank" rel="noopener noreferrer">
-              <img
-                src={attachment.image_data.url}
-                alt="attachment"
-                className="max-h-48 max-w-full cursor-pointer rounded-lg object-cover transition-opacity hover:opacity-90"
-              />
-            </a>
-          )}
-          {attachment.video_data?.url && (
-            <video src={attachment.video_data.url} controls className="max-h-48 max-w-full rounded-lg" />
-          )}
-          {attachment.file_url && !attachment.image_data && !attachment.video_data && (
-            <a
-              href={attachment.file_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 rounded-lg bg-background/50 p-2 transition-colors hover:bg-background/80"
-            >
-              <FileIcon className="h-4 w-4 shrink-0" />
-              <span className="truncate text-xs underline">{attachment.name || "Download file"}</span>
-              <Download className="ml-auto h-3 w-3 shrink-0" />
-            </a>
-          )}
-        </div>
-      ))}
-    </>
-  );
+function inboxAttachments(message: WhatsAppMessage): WhatsAppAttachment[] {
+  return (message.attachments ?? []).filter(isInboxAttachment).map((attachment) => ({
+    kind: attachment.kind,
+    message_row_id: attachment.message_row_id,
+    mime_type: attachment.mime_type ?? null,
+    name: attachment.name ?? null,
+    needs_fetch: attachment.needs_fetch ?? true,
+    file_url: attachment.file_url ?? null,
+    duration_seconds: "duration_seconds" in attachment
+      ? (attachment as WhatsAppAttachment).duration_seconds
+      : undefined,
+  }));
 }
 
 function InlineMediaFromText({ text }: { text: string }) {
@@ -76,6 +63,8 @@ export function WhatsAppMessageBubble({ message, isSent }: WhatsAppMessageBubble
     || message.message.startsWith("[Contact]")
     || message.message.startsWith("[Reaction]")
   );
+  const attachments = inboxAttachments(message);
+  const understanding = message.media_understanding?.trim();
 
   return (
     <div className={cn("group flex max-w-[75%] flex-col", isSent ? "ml-auto items-end" : "items-start")}>
@@ -93,8 +82,26 @@ export function WhatsAppMessageBubble({ message, isSent }: WhatsAppMessageBubble
         ) : message.message ? (
           <p className="whitespace-pre-wrap">{message.message}</p>
         ) : null}
-        <MediaRenderer attachments={message.attachments} />
+        {attachments.map((attachment) => (
+          <WhatsAppMediaAttachment
+            key={attachment.message_row_id}
+            attachment={attachment}
+            createdTime={message.created_time}
+          />
+        ))}
       </div>
+      {understanding ? (
+        <Collapsible className="mt-1 max-w-full">
+          <CollapsibleTrigger
+            className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+          >
+            AI description
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <p className="mt-1 text-[11px] text-muted-foreground">{understanding}</p>
+          </CollapsibleContent>
+        </Collapsible>
+      ) : null}
       <span className="mt-0.5 text-[10px] text-muted-foreground">
         {format(new Date(message.created_time), "MMM d, h:mm a")}
       </span>

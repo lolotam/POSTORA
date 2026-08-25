@@ -1,11 +1,15 @@
 import type { ReactElement } from "react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Conversation, Message, MessagingAccount } from "@/hooks/useMessaging";
 import { WhatsAppChromeProvider } from "@/components/whatsapp/WhatsAppChromeContext";
-import { WhatsAppInboxScreen } from "../ui/WhatsAppInboxScreen";
+import type { WhatsAppInboxApi } from "../application/ports";
+import { WhatsAppMediaScope } from "../application/useWhatsAppMedia";
 import { WhatsAppConversationPane } from "../ui/WhatsAppConversationPane";
+import { WhatsAppInboxApiProvider } from "../ui/WhatsAppInboxApiProvider";
+import { WhatsAppInboxScreen } from "../ui/WhatsAppInboxScreen";
 
 const testState = vi.hoisted(() => ({
   accounts: [] as MessagingAccount[],
@@ -94,15 +98,34 @@ const conversation: Conversation = {
   updated_time: "2026-08-25T10:00:00.000Z",
 };
 
+const fakeApi: WhatsAppInboxApi = {
+  getMedia: vi.fn(async () => ({ media: [] })),
+  sendMedia: vi.fn(async () => ({})),
+  sendInteractive: vi.fn(async () => ({})),
+};
+
+function testQueryClient(): QueryClient {
+  return new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+}
+
 function renderWithProviders(
   ui: ReactElement,
-  options: { accounts?: MessagingAccount[]; route?: string } = {},
+  options: { accounts?: MessagingAccount[]; route?: string; withInboxApi?: boolean } = {},
 ) {
   testState.accounts = options.accounts ?? [account];
+  const inner = options.withInboxApi ? (
+    <WhatsAppInboxApiProvider api={fakeApi}>
+      <WhatsAppMediaScope socialAccountId={account.id}>{ui}</WhatsAppMediaScope>
+    </WhatsAppInboxApiProvider>
+  ) : ui;
   return render(
-    <MemoryRouter initialEntries={[options.route ?? "/messaging/whatsapp/conversations"]}>
-      <WhatsAppChromeProvider>{ui}</WhatsAppChromeProvider>
-    </MemoryRouter>,
+    <QueryClientProvider client={testQueryClient()}>
+      <MemoryRouter initialEntries={[options.route ?? "/messaging/whatsapp/conversations"]}>
+        <WhatsAppChromeProvider>{inner}</WhatsAppChromeProvider>
+      </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -188,6 +211,7 @@ describe("WhatsAppConversationPane scroll state", () => {
         pageId={account.platform_user_id}
         onScrollStateChange={onScrollStateChange}
       />,
+      { withInboxApi: true },
     );
     const pane = screen.getByTestId("wa-message-pane");
     onScrollStateChange.mockClear();
@@ -215,17 +239,14 @@ describe("WhatsAppConversationPane scroll state", () => {
 describe("WhatsAppConversationPane composer", () => {
   it("can send a message", () => {
     testState.messages = [];
-    render(
-      <MemoryRouter>
-        <WhatsAppChromeProvider>
-          <WhatsAppConversationPane
-            conversation={conversation}
-            socialAccountId="account-1"
-            pageId="96550000000"
-            onScrollStateChange={() => {}}
-          />
-        </WhatsAppChromeProvider>
-      </MemoryRouter>,
+    renderWithProviders(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId="account-1"
+        pageId="96550000000"
+        onScrollStateChange={() => {}}
+      />,
+      { withInboxApi: true },
     );
 
     const box = screen.getByPlaceholderText(/type a message/i);
@@ -242,17 +263,14 @@ describe("WhatsAppConversationPane composer", () => {
 
   it("offers attachment and quick-reply affordances", () => {
     testState.messages = [];
-    render(
-      <MemoryRouter>
-        <WhatsAppChromeProvider>
-          <WhatsAppConversationPane
-            conversation={conversation}
-            socialAccountId="account-1"
-            pageId="96550000000"
-            onScrollStateChange={() => {}}
-          />
-        </WhatsAppChromeProvider>
-      </MemoryRouter>,
+    renderWithProviders(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId="account-1"
+        pageId="96550000000"
+        onScrollStateChange={() => {}}
+      />,
+      { withInboxApi: true },
     );
 
     expect(screen.getByRole("button", { name: /attach a file/i })).toBeInTheDocument();

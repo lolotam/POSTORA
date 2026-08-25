@@ -63,9 +63,33 @@ Deno.test("typed attachments keep file_url and derive kind from media_type", () 
     message_row_id: "row-1",
     mime_type: "video/mp4",
     name: "clip.mp4",
+    duration_seconds: null,
     needs_fetch: true,
     file_url: "https://lookaside.fbsbx.com/clip",
   }]);
+});
+
+// Inbound Evolution rows carry only a mime type, so duration is normally absent and the
+// player falls back to the loaded audio element. Outbound voice notes record it, and the
+// player prefers it because an element's duration is unknown until metadata loads.
+Deno.test("duration_seconds is read from media_metadata when the sender recorded it", () => {
+  const view = toWhatsAppMessageView({
+    id: "row-2",
+    media_type: "audio",
+    media_metadata: { mime_type: "audio/ogg; codecs=opus", duration_seconds: 7 },
+  });
+  assertEquals(view.attachments[0].duration_seconds, 7);
+});
+
+Deno.test("a zero or non-numeric duration is treated as absent rather than rendered as 0:00", () => {
+  for (const duration of [0, -3, "7", null]) {
+    const view = toWhatsAppMessageView({
+      id: "row-3",
+      media_type: "audio",
+      media_metadata: { mime_type: "audio/ogg", duration_seconds: duration },
+    });
+    assertEquals(view.attachments[0].duration_seconds, null);
+  }
 });
 
 Deno.test("sticker renders as an image kind", () => {
@@ -87,7 +111,7 @@ Deno.test("the legacy envelope fields stay in place", () => {
   assertEquals(view.created_time, "2026-08-25T12:00:00.000Z");
 });
 
-Deno.test("revoked_at and revoked_by are not mapped — the columns do not exist yet", () => {
+Deno.test("revoked_at and revoked_by are not mapped yet — Phase 4 wires them to the UI", () => {
   const view = toWhatsAppMessageView({
     ...row(),
     revoked_at: "2026-08-25T12:00:00.000Z",

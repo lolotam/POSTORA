@@ -40,6 +40,7 @@ export interface WhatsAppAttachmentView {
   message_row_id: string;
   mime_type: string | null;
   name: string | null;
+  duration_seconds: number | null;
   needs_fetch: boolean;
   file_url: string | null;
 }
@@ -66,6 +67,11 @@ function metadataString(meta: Record<string, unknown> | null, key: string): stri
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function metadataNumber(meta: Record<string, unknown> | null, key: string): number | null {
+  const value = meta?.[key];
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
+}
+
 export function toWhatsAppMessageView(row: WhatsAppMessageRow): WhatsAppMessageView {
   return {
     id: row.id,
@@ -89,6 +95,10 @@ function attachmentsFor(row: WhatsAppMessageRow): WhatsAppAttachmentView[] {
     message_row_id: row.id,
     mime_type: metadataString(meta, "mime_type"),
     name: metadataString(meta, "filename") ?? metadataString(meta, "file_name"),
+    // Inbound Evolution rows carry only a mime type, so this is usually null and the player
+    // falls back to the loaded element. Outbound voice notes record it (Phase 5), and the
+    // player prefers it because an element duration is not known until metadata loads.
+    duration_seconds: metadataNumber(meta, "duration_seconds") ?? metadataNumber(meta, "seconds"),
     // Storage paths and lookaside Graph URLs are not browser-safe; the client
     // must go through whatsapp_get_media for a signed URL.
     needs_fetch: true,

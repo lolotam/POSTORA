@@ -22,6 +22,11 @@ function collectSourceFiles(directory: string): string[] {
     .sort();
 }
 
+// 2026-08-25: this began timing out at the 5s default once src/features/ landed -- it walks and
+// reads every source file synchronously, so its cost grows with the tree while the rest of the
+// suite competes for the same threads. The timeout is raised rather than the walk narrowed: the
+// guarantee is "no source file anywhere", and sampling a subset would quietly stop guarding the
+// files most likely to be new. Nothing about what it asserts has changed.
 it("no frontend source hardcodes a *.supabase.co hosted URL from an env project id", () => {
   const sourceRoot = path.resolve(process.cwd(), "src");
   const sourceFiles = collectSourceFiles(sourceRoot);
@@ -41,4 +46,4 @@ it("no frontend source hardcodes a *.supabase.co hosted URL from an env project 
       );
     }
   }
-});
+}, 30_000);

@@ -23,4 +23,23 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": "off",
     },
   },
+  {
+    files: [
+      "src/features/whatsapp-inbox/application/**/*.{ts,tsx}",
+      "src/features/whatsapp-inbox/domain/**/*.{ts,tsx}",
+    ],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: [
+            "**/infrastructure/**",
+            "**/infrastructure/*",
+            "@/features/whatsapp-inbox/infrastructure/**",
+            "@/features/whatsapp-inbox/infrastructure/*",
+          ],
+          message: "whatsapp-inbox application/ and domain/ must depend on application/ports.ts, not infrastructure. The composition root injects the adapter.",
+        }],
+      }],
+    },
+  },
 );
