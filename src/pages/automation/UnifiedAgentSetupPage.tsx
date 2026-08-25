@@ -159,11 +159,11 @@ export default function UnifiedAgentSetupPage() {
 
         {/* Centered Large 3D Glossy Platform Cards */}
         <Reveal delay={30}>
-          <div className="flex flex-col items-center space-y-4 py-4">
+          <div className="flex flex-col items-center space-y-5 py-6">
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
               Select Social Channel
             </span>
-            <div className="flex items-center justify-center gap-6 sm:gap-8 md:gap-10 flex-wrap" role="tablist" aria-label="Social Channels">
+            <div className="flex items-center justify-center gap-8 sm:gap-10 md:gap-14 flex-wrap" role="tablist" aria-label="Social Channels">
               {PLATFORMS.map((p) => {
                 const isSelected = platform === p.id;
                 return (
@@ -174,34 +174,34 @@ export default function UnifiedAgentSetupPage() {
                     aria-selected={isSelected}
                     onClick={() => handlePlatformChange(p.id)}
                     className={cn(
-                      "flex flex-col items-center gap-3.5 flex-shrink-0 transition-all duration-300 hover:scale-105 hover:-translate-y-2 cursor-pointer group focus:outline-none",
+                      "flex flex-col items-center gap-4 flex-shrink-0 transition-all duration-300 hover:scale-105 hover:-translate-y-2.5 cursor-pointer group focus:outline-none",
                     )}
                   >
                     <div
                       className={cn(
-                        "relative w-24 h-24 sm:w-28 sm:h-28 md:w-32 md:h-32 rounded-3xl backdrop-blur-2xl flex items-center justify-center border transition-all duration-300 overflow-visible",
-                        // Glossy specular highlight & deep 3D bevel shadow
-                        "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-3xl before:bg-gradient-to-b before:from-white/35 before:via-white/10 before:to-transparent before:pointer-events-none",
+                        "relative w-28 h-28 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-[2rem] backdrop-blur-2xl flex items-center justify-center border transition-all duration-300 overflow-visible",
+                        // Ultra glossy 3D glass refraction and specular highlight
+                        "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-[2rem] before:bg-gradient-to-b before:from-white/40 before:via-white/15 before:to-transparent before:pointer-events-none",
                         isSelected
-                          ? "bg-gradient-to-b from-primary/20 via-card/80 to-card/60 border-primary ring-4 ring-primary/40 shadow-[0_20px_45px_-8px_rgba(var(--primary-rgb,59,130,246),0.4),0_8px_16px_-4px_rgba(0,0,0,0.3),inset_0_2px_3px_rgba(255,255,255,0.8),inset_0_-3px_6px_rgba(0,0,0,0.2)] -translate-y-2 scale-105"
-                          : "bg-gradient-to-b from-card/90 via-card/70 to-card/50 border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.3),0_4px_10px_-2px_rgba(0,0,0,0.15),inset_0_1.5px_2px_rgba(255,255,255,0.6),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:border-primary/50 hover:shadow-[0_20px_40px_-8px_rgba(0,0,0,0.45),inset_0_2px_3px_rgba(255,255,255,0.85)]"
+                          ? "bg-gradient-to-b from-primary/25 via-card/85 to-card/60 border-primary ring-4 ring-primary/40 shadow-[0_24px_50px_-10px_rgba(var(--primary-rgb,59,130,246),0.5),0_10px_20px_-4px_rgba(0,0,0,0.35),inset_0_2.5px_4px_rgba(255,255,255,0.9),inset_0_-4px_8px_rgba(0,0,0,0.25)] -translate-y-2.5 scale-105"
+                          : "bg-gradient-to-b from-card/95 via-card/75 to-card/55 border-border/70 shadow-[0_16px_35px_-8px_rgba(0,0,0,0.35),0_6px_14px_-2px_rgba(0,0,0,0.2),inset_0_2px_3px_rgba(255,255,255,0.7),inset_0_-3px_6px_rgba(0,0,0,0.2)] hover:border-primary/60 hover:shadow-[0_24px_48px_-10px_rgba(0,0,0,0.5),inset_0_2.5px_4px_rgba(255,255,255,0.9)]"
                       )}
                     >
                       <PlatformIcon
                         platform={p.id}
-                        size="2xl"
-                        className="drop-shadow-lg transition-transform duration-300 group-hover:scale-110 group-hover:drop-shadow-xl"
+                        size="3xl"
+                        className="drop-shadow-[0_12px_14px_rgba(0,0,0,0.3)] transition-transform duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_16px_20px_rgba(0,0,0,0.4)]"
                       />
                       {isSelected && (
-                        <div className="absolute -top-2.5 -right-2.5 w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/40 ring-2 ring-background animate-in zoom-in-50 duration-200">
-                          <CheckCircle2 className="w-4 h-4 sm:w-5 sm:h-5" />
+                        <div className="absolute -top-3 -right-3 w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-xl shadow-primary/50 ring-4 ring-background animate-in zoom-in-50 duration-200">
+                          <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6" />
                         </div>
                       )}
                     </div>
                     <span
                       className={cn(
-                        "text-sm sm:text-base font-semibold tracking-tight transition-colors",
-                        isSelected ? "text-foreground font-bold" : "text-muted-foreground group-hover:text-foreground"
+                        "text-base sm:text-lg font-bold tracking-tight transition-colors",
+                        isSelected ? "text-foreground font-extrabold" : "text-muted-foreground group-hover:text-foreground"
                       )}
                     >
                       {p.label}

@@ -6,7 +6,7 @@ export type ExtendedPlatform = Platform;
 interface PlatformIconProps {
   platform: ExtendedPlatform;
   className?: string;
-  size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
+  size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl";
 }
 
 const platformColors: Record<ExtendedPlatform, string> = {
@@ -29,7 +29,8 @@ const sizes = {
   md: "w-5 h-5",
   lg: "w-6 h-6",
   xl: "w-10 h-10",
-  "2xl": "w-16 h-16 md:w-20 md:h-20",
+  "2xl": "w-16 h-16",
+  "3xl": "w-20 h-20 sm:w-24 sm:h-24",
 };
 
 export function PlatformIcon({ platform, className, size = "md" }: PlatformIconProps) {
