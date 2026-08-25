@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
 import { buildObservation, flushObservations, type UnmatchedObservation } from "../_shared/unmatchedWebhookObservation.ts";
 import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
+import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
@@ -21,6 +22,7 @@ interface WhatsAppAccount {
   platform_username?: string | null;
   access_token: string | null;
   account_metadata: Record<string, unknown> | null;
+  connection_mode?: string | null;
 }
 
 interface MessageContent {
@@ -198,7 +200,7 @@ async function findAnyWhatsAppAccount(
 async function findWhatsAppAccount(adminClient: any, phoneNumberId: string): Promise<WhatsAppAccount | null> {
   const { data: accounts } = await adminClient
     .from("social_accounts")
-    .select("id, user_id, workspace_id, platform_user_id, platform_username, access_token, account_metadata")
+    .select("id, user_id, workspace_id, platform_user_id, platform_username, access_token, account_metadata, connection_mode")
     .eq("platform", "whatsapp")
     .eq("platform_user_id", phoneNumberId)
     .eq("is_active", true)
@@ -509,8 +511,44 @@ async function handleLiveMessages(
     // messages reach the agent. Imported/history/echo messages never get
     // here (see handleHistorySync guard), so the AI cannot reply to them.
     if (automationHandler === "internal" && !ruleReplied) {
-      triggerAiAgentReply(account, conversationId, phoneNumberId, from, messageText)
-        .catch((e) => console.error("[whatsapp-webhook] AI agent dispatch failed:", e?.message || e));
+      // Media the agent could read: understand it FIRST, then hand the agent the
+      // transcript instead of "[Audio message]". The understanding involves a download
+      // and a model call, so it runs in the background to keep Meta's webhook fast --
+      // and the agent trigger moves inside that continuation, because firing the agent
+      // before the transcript exists is the bug this feature fixes.
+      const understandableKind = mediaType === "audio" || mediaType === "image";
+      const mediaMime = (mediaMetadata as { mime_type?: string } | null)?.mime_type ?? null;
+
+      if (understandableKind && mediaMime) {
+        const mediaRowId = insertedRows[0]?.id ?? null;
+        await runInBackground("whatsapp inbound media understanding", async () => {
+          const outcome = await runInboundMediaUnderstanding(adminClient, {
+            account: {
+              id: account.id,
+              user_id: account.user_id,
+              platform_user_id: account.platform_user_id,
+              connection_mode: account.connection_mode,
+              access_token: accessToken,
+              account_metadata: account.account_metadata,
+            },
+            messageRowId: mediaRowId,
+            mediaId: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
+            mediaUrl,
+            mimeType: mediaMime,
+            // WhatsApp puts any typed caption in messageText; the placeholder is not one.
+            caption: messageText.startsWith("[") ? null : messageText,
+            platform: "whatsapp",
+          });
+
+          // Understood or not, the agent still replies -- it just falls back to the
+          // placeholder, which is exactly today's behaviour.
+          const agentInput = outcome.understood ? outcome.agentText : messageText;
+          await triggerAiAgentReply(account, conversationId, phoneNumberId, from, agentInput);
+        });
+      } else {
+        triggerAiAgentReply(account, conversationId, phoneNumberId, from, messageText)
+          .catch((e) => console.error("[whatsapp-webhook] AI agent dispatch failed:", e?.message || e));
+      }
     }
   }
 
