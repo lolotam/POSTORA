@@ -62,7 +62,7 @@ function WhatsAppLayoutContent() {
             <div
               className={cn(
                 "flex flex-col px-4 transition-all duration-200 motion-reduce:transition-none sm:px-6 lg:flex-row lg:items-center lg:justify-between",
-                compact ? "gap-2 py-2" : "gap-4 py-4",
+                compact ? "gap-1.5 py-1.5" : "gap-3 py-2.5",
               )}
             >
               <div className="flex items-center gap-3">
@@ -86,18 +86,18 @@ function WhatsAppLayoutContent() {
                 <div
                   className={cn(
                     "flex items-center justify-center rounded-full bg-white/10 ring-1 ring-white/20 transition-all duration-200 motion-reduce:transition-none",
-                    compact ? "h-8 w-8" : "h-11 w-11",
+                    compact ? "h-7 w-7" : "h-9 w-9",
                   )}
                 >
-                  <MessageCircle className={cn("transition-all duration-200 motion-reduce:transition-none", compact ? "h-5 w-5" : "h-6 w-6")} />
+                  <MessageCircle className={cn("transition-all duration-200 motion-reduce:transition-none", compact ? "h-4 w-4" : "h-5 w-5")} />
                 </div>
                 <div>
-                  <h1 className={cn("font-semibold leading-tight transition-all duration-200 motion-reduce:transition-none", compact ? "text-lg" : "text-xl")}>
+                  <h1 className={cn("font-semibold leading-tight transition-all duration-200 motion-reduce:transition-none", compact ? "text-base" : "text-lg")}>
                     WhatsApp Business
                   </h1>
                   <p
                     className={cn(
-                      "hidden overflow-hidden text-sm text-white/75 transition-all duration-200 motion-reduce:transition-none sm:block",
+                      "hidden overflow-hidden text-xs text-white/75 transition-all duration-200 motion-reduce:transition-none sm:block",
                       compact ? "max-h-0 opacity-0" : "max-h-6 opacity-100",
                     )}
                   >
@@ -108,11 +108,11 @@ function WhatsAppLayoutContent() {
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                 <WorkspaceSwitcher />
                 <Link
-                  to="/dashboard"
-                  className="inline-flex w-fit items-center gap-2 rounded-lg bg-white/10 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
+                  to="/messaging"
+                  className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
                 >
-                  <ArrowLeft className="h-4 w-4" />
-                  Back to Postora
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  All Inboxes
                 </Link>
               </div>
             </div>
@@ -124,20 +124,23 @@ function WhatsAppLayoutContent() {
             <aside
               className={cn(
                 "wa-app hidden min-h-0 shrink-0 flex-col border-r bg-background/95 transition-[width] duration-200 ease-in-out lg:flex",
-                collapsed ? "w-[68px]" : "w-60",
+                collapsed ? "w-16" : "w-60",
               )}
             >
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className={cn("flex-1 overflow-y-auto", collapsed ? "p-2 px-1.5 scrollbar-none" : "p-3")}>
                 <WhatsAppNavList collapsed={collapsed} />
               </div>
-              <div className="border-t p-2">
+              <div className="border-t p-2 flex justify-center">
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => setCollapsed((previous) => !previous)}
                   aria-expanded={!collapsed}
                   aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-                  className={cn("w-full gap-2 text-muted-foreground", collapsed && "px-0")}
+                  className={cn(
+                    "text-muted-foreground",
+                    collapsed ? "h-9 w-9 p-0 justify-center rounded-xl" : "w-full gap-2 px-3"
+                  )}
                 >
                   {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
                   {!collapsed && <span>Collapse</span>}

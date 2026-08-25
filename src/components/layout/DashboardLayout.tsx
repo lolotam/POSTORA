@@ -163,32 +163,16 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       });
     }
 
-    const messagingChildren = [
-      ...(flags.msgWhatsapp ? [
-        { icon: MessageSquare, label: "WhatsApp", path: "/messaging/whatsapp" },
-      ] : []),
-      ...(flags.msgFacebook ? [{ icon: Facebook, label: "Facebook", path: "/messaging/facebook" }] : []),
-      ...(flags.msgInstagram ? [{ icon: Camera, label: "Instagram", path: "/messaging/instagram" }] : []),
-      ...(flags.msgThreads ? [{ icon: AtSign, label: "Threads", path: "/messaging/thread" }] : []),
-      ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
-    ];
-
-    if (messagingChildren.length > 0) {
-      entries.push({
-        type: "dropdown",
-        icon: MessageSquare,
-        label: "Inboxes",
-        basePath: "/messaging/",
-        children: messagingChildren,
-      });
-    }
+    const hasMessagingFlags = flags.msgWhatsapp || flags.msgFacebook || flags.msgInstagram || flags.msgThreads;
 
     const automationChildren = [
       { icon: Sparkles, label: "Overview", path: "/automation" },
       { icon: Bot, label: "Agent Setup", path: "/automation/agents" },
-      { icon: MessageSquare, label: "Messaging Automation", path: "/automation/messaging" },
+      ...(hasMessagingFlags ? [{ icon: MessageSquare, label: "Unified Inboxes", path: "/messaging" }] : []),
+      ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
+      { icon: Zap, label: "Messaging Automation", path: "/automation/messaging" },
       { icon: MessageCircle, label: "Comments Automation", path: "/automation/comments" },
-      { icon: Database, label: "Database Connectors", path: "/settings?tab=connectors" },
+      { icon: Database, label: "Database Connectors", path: "/settings?tab=integrations" },
     ];
 
     entries.push({

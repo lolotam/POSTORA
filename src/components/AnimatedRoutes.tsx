@@ -70,6 +70,7 @@ const FacebookAnalytics = lazyWithRetry(() => import("@/pages/analytics/Facebook
 const InstagramAnalytics = lazyWithRetry(() => import("@/pages/analytics/InstagramAnalytics"), "InstagramAnalytics");
 const ThreadsAnalytics = lazyWithRetry(() => import("@/pages/analytics/ThreadsAnalytics"), "ThreadsAnalytics");
 const TikTokAnalytics = lazyWithRetry(() => import("@/pages/analytics/TikTokAnalytics"), "TikTokAnalytics");
+const UnifiedInboxesPage = lazyWithRetry(() => import("@/pages/messaging/UnifiedInboxesPage"), "UnifiedInboxesPage");
 const FacebookMessaging = lazyWithRetry(() => import("@/pages/messaging/FacebookMessaging"), "FacebookMessaging");
 const InstagramMessaging = lazyWithRetry(() => import("@/pages/messaging/InstagramMessaging"), "InstagramMessaging");
 const WhatsAppLayout = lazyWithRetry(() => import("@/components/whatsapp/WhatsAppLayout"), "WhatsAppLayout");
@@ -262,6 +263,9 @@ export function AnimatedRoutes() {
         <Route path="/analytics/threads" element={<ProtectedRoute><AnimatedPage><ThreadsAnalytics /></AnimatedPage></ProtectedRoute>} />
         <Route path="/threads" element={<Navigate to="/analytics/threads" replace />} />
         <Route path="/analytics/tiktok" element={<ProtectedRoute><AnimatedPage><TikTokAnalytics /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/messaging" element={<ProtectedRoute><AnimatedPage><UnifiedInboxesPage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/inbox" element={<Navigate to="/messaging" replace />} />
+        <Route path="/inboxes" element={<Navigate to="/messaging" replace />} />
         <Route path="/messaging/facebook" element={<ProtectedRoute><AnimatedPage><FacebookMessaging /></AnimatedPage></ProtectedRoute>} />
         <Route path="/messaging/instagram" element={<ProtectedRoute><AnimatedPage><InstagramMessaging /></AnimatedPage></ProtectedRoute>} />
         <Route path="/messaging/whatsapp" element={<ProtectedRoute><WhatsAppLayout /></ProtectedRoute>}>
