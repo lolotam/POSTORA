@@ -70,6 +70,9 @@ import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 
 interface DashboardLayoutProps {
   children: React.ReactNode;
+  contentClassName?: string;
+  noPadding?: boolean;
+  hideFooter?: boolean;
 }
 
 // Nav item types
@@ -103,7 +106,7 @@ const getUserMenuItems = (isAdmin: boolean) => [
   { icon: Mail, label: "Contact Us", path: "/contact" },
 ];
 
-export function DashboardLayout({ children }: DashboardLayoutProps) {
+export function DashboardLayout({ children, contentClassName, noPadding = false, hideFooter = false }: DashboardLayoutProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [mobileExpandedDropdown, setMobileExpandedDropdown] = useState<string | null>(null);
@@ -667,38 +670,42 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       </header>
 
       {/* Main Content */}
-      <main className="app-main flex-1 overflow-auto">
-        <div className="p-4 md:p-6 lg:p-8 2xl:p-10 w-full">{children}</div>
+      <main className="app-main flex-1 overflow-auto flex flex-col">
+        <div className={cn(noPadding ? "w-full flex-1 flex flex-col p-0" : "p-4 md:p-6 lg:p-8 2xl:p-10 w-full", contentClassName)}>
+          {children}
+        </div>
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-border bg-card/50">
-        <div className="container mx-auto px-6 py-8">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-            <Logo size="sm" />
-            <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
-              <a href="https://postora.cloud/docs" target="_blank" rel="noopener noreferrer" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                Documentation
-              </a>
-              <a href="https://postora.cloud/privacy" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                Privacy Policy
-              </a>
-              <a href="https://postora.cloud/terms" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                Terms of Service
-              </a>
-              <a href="https://postora.cloud/cookies" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                Cookie Policy
-              </a>
-              <a href="https://postora.cloud/google-api-disclosure" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                Google API Disclosure
-              </a>
+      {!hideFooter && (
+        <footer className="border-t border-border bg-card/50">
+          <div className="container mx-auto px-6 py-8">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-6">
+              <Logo size="sm" />
+              <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
+                <a href="https://postora.cloud/docs" target="_blank" rel="noopener noreferrer" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  Documentation
+                </a>
+                <a href="https://postora.cloud/privacy" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  Privacy Policy
+                </a>
+                <a href="https://postora.cloud/terms" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  Terms of Service
+                </a>
+                <a href="https://postora.cloud/cookies" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  Cookie Policy
+                </a>
+                <a href="https://postora.cloud/google-api-disclosure" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
+                  Google API Disclosure
+                </a>
+              </div>
+              <p className="text-sm text-muted-foreground">
+                © 2026 Postora. A product developed and operated by WALEED PROLIFE LLC. All rights reserved.
+              </p>
             </div>
-            <p className="text-sm text-muted-foreground">
-              © 2026 Postora. A product developed and operated by WALEED PROLIFE LLC. All rights reserved.
-            </p>
           </div>
-        </div>
-      </footer>
+        </footer>
+      )}
     </div>
   );
 }

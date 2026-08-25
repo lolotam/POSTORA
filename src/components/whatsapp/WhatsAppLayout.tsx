@@ -7,6 +7,7 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { WhatsAppNavList } from "./WhatsAppNavList";
 import { WhatsAppChromeProvider, useWhatsAppChrome } from "./WhatsAppChromeContext";
 import { WhatsAppWorkspaceProvider } from "./WhatsAppWorkspaceProvider";
@@ -52,12 +53,7 @@ function WhatsAppLayoutContent() {
   return (
     <WhatsAppWorkspaceProvider>
       <TooltipProvider>
-        {/* h-screen is 100vh, which on iOS Safari includes the collapsing URL bar and clips
-            the composer off the bottom of the chat. dvh fixes that, but the two cannot simply
-            sit side by side: they generate rules of equal specificity, so the winner would be
-            whichever Tailwind happens to emit last. The @supports variant is deterministic --
-            it wins wherever dvh is understood and is absent everywhere else. */}
-        <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground supports-[height:100dvh]:h-[100dvh]">
+        <div className="flex h-[calc(100vh-3.5rem)] supports-[height:100dvh]:h-[calc(100dvh-3.5rem)] flex-col overflow-hidden bg-background text-foreground">
           <header className="z-40 shrink-0 border-b border-[#25D366]/20 bg-[#075E54] text-white shadow-sm">
             <div
               className={cn(
@@ -170,8 +166,10 @@ function WhatsAppLayoutContent() {
 
 export default function WhatsAppLayout() {
   return (
-    <WhatsAppChromeProvider>
-      <WhatsAppLayoutContent />
-    </WhatsAppChromeProvider>
+    <DashboardLayout noPadding hideFooter>
+      <WhatsAppChromeProvider>
+        <WhatsAppLayoutContent />
+      </WhatsAppChromeProvider>
+    </DashboardLayout>
   );
 }

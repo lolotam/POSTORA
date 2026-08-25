@@ -25,6 +25,10 @@ vi.mock("@/components/messaging/WhatsAppCoexistenceSetupBanner", () => ({
   WhatsAppCoexistenceSetupBanner: () => <div>Coexistence setup</div>,
 }));
 
+vi.mock("@/components/layout/DashboardLayout", () => ({
+  DashboardLayout: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+}));
+
 function ChromeProbe() {
   const { setCompact, setImmersive } = useWhatsAppChrome();
   return (
