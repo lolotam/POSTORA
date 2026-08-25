@@ -12,9 +12,13 @@ vi.mock("@/hooks/useAiAgentTools", () => ({
         description: "Searches inventory database for matching products and pricing",
         tool_type: "n8n_webhook",
         url: "https://api.postora.cloud/rest/v1/products",
-        secret: "test-secret",
+        has_secret: true,
         is_enabled: true,
         admin_only: false,
+        connector_type: "supabase",
+        permissions: { search_products: true, check_stock: true, lookup_orders: false },
+        read_only_mode: true,
+        enable_cache: true,
         created_at: "2026-08-25T10:00:00Z",
       },
     ],
@@ -42,6 +46,8 @@ describe("DatabaseConnectorsManager", () => {
 
     expect(screen.getByText("search_products")).toBeInTheDocument();
     expect(screen.getByText(/Searches inventory database/i)).toBeInTheDocument();
+    expect(screen.getByText("Supabase (Self-Hosted / Cloud)")).toBeInTheDocument();
+    expect(screen.getByText(/Protected Webhook/i)).toBeInTheDocument();
     expect(screen.getByText("New Connector")).toBeInTheDocument();
     expect(screen.getByText("Preset Integrations")).toBeInTheDocument();
   });
@@ -57,8 +63,8 @@ describe("DatabaseConnectorsManager", () => {
     fireEvent.click(presetBtn);
 
     expect(screen.getByText("Choose a Connector Integration")).toBeInTheDocument();
-    expect(screen.getByText("Supabase (Self-Hosted / Cloud)")).toBeInTheDocument();
     expect(screen.getByText("WooCommerce Store")).toBeInTheDocument();
     expect(screen.getByText("Shopify Storefront / Admin")).toBeInTheDocument();
+    expect(screen.getByText("PostgreSQL / MySQL REST API")).toBeInTheDocument();
   });
 });

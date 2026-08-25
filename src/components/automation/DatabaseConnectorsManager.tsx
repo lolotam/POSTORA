@@ -34,19 +34,9 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { useAiAgentTools, type AiAgentTool, type AiAgentToolInput } from "@/hooks/useAiAgentTools";
+import { useAiAgentTools, type AiAgentTool, type AiAgentToolInput, type ConnectorType } from "@/hooks/useAiAgentTools";
 import { validateAiToolName, validateAiToolUrl } from "@/lib/aiTools";
 import { cn } from "@/lib/utils";
-
-export type ConnectorType =
-  | "supabase"
-  | "mysql_postgres"
-  | "woocommerce"
-  | "shopify"
-  | "salla"
-  | "zid"
-  | "formula"
-  | "custom_rest";
 
 interface ConnectorPreset {
   id: ConnectorType;
@@ -175,12 +165,16 @@ export function DatabaseConnectorsManager() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [presetDialogOpen, setPresetDialogOpen] = useState(false);
   const [editingName, setEditingName] = useState<string | null>(null);
+  const [editingHasSecret, setEditingHasSecret] = useState(false);
+  const [clearSecret, setClearSecret] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
 
   const openCreate = () => {
     setForm(emptyForm);
     setEditingName(null);
+    setEditingHasSecret(false);
+    setClearSecret(false);
     setFormError(null);
     setDialogOpen(true);
   };
@@ -201,6 +195,8 @@ export function DatabaseConnectorsManager() {
       enable_cache: true,
     });
     setEditingName(null);
+    setEditingHasSecret(false);
+    setClearSecret(false);
     setFormError(null);
     setPresetDialogOpen(false);
     setDialogOpen(true);
@@ -211,17 +207,20 @@ export function DatabaseConnectorsManager() {
       name: tool.name,
       description: tool.description,
       url: tool.url || "",
-      secret: tool.secret || "",
+      // Never pre-fill a stored secret; the placeholder tells the user one exists.
+      secret: "",
       is_enabled: tool.is_enabled,
       admin_only: tool.admin_only,
-      connector_type: "custom_rest",
-      permission_search_products: true,
-      permission_check_stock: true,
-      permission_lookup_orders: false,
-      read_only_mode: true,
-      enable_cache: true,
+      connector_type: tool.connector_type,
+      permission_search_products: tool.permissions?.search_products ?? false,
+      permission_check_stock: tool.permissions?.check_stock ?? false,
+      permission_lookup_orders: tool.permissions?.lookup_orders ?? false,
+      read_only_mode: tool.read_only_mode,
+      enable_cache: tool.enable_cache,
     });
     setEditingName(tool.name);
+    setEditingHasSecret(tool.has_secret);
+    setClearSecret(false);
     setFormError(null);
     setDialogOpen(true);
   };
@@ -240,10 +239,24 @@ export function DatabaseConnectorsManager() {
       name: form.name,
       description: form.description,
       url: form.url,
-      secret: form.secret || null,
       is_enabled: form.is_enabled,
       admin_only: form.admin_only,
+      connector_type: form.connector_type,
+      permissions: {
+        search_products: form.permission_search_products,
+        check_stock: form.permission_check_stock,
+        lookup_orders: form.permission_lookup_orders,
+      },
+      read_only_mode: form.read_only_mode,
+      enable_cache: form.enable_cache,
     };
+    // Omitting `secret` keeps the stored value server-side; a non-empty value
+    // replaces it, and clear_secret explicitly removes it.
+    if (form.secret.trim() !== "") {
+      payload.secret = form.secret.trim();
+    } else if (editingName && editingHasSecret && clearSecret) {
+      payload.clear_secret = true;
+    }
 
     upsertTool.mutate(payload, {
       onSuccess: () => {
@@ -358,6 +371,9 @@ export function DatabaseConnectorsManager() {
                   </div>
 
                   <div className="flex items-center gap-1.5">
+                    <Badge variant="outline" className="text-[10px]">
+                      {CONNECTOR_PRESETS.find((p) => p.id === tool.connector_type)?.title || "Custom REST"}
+                    </Badge>
                     <Badge variant={tool.is_enabled ? "default" : "secondary"} className="text-[10px]">
                       {tool.is_enabled ? "Active Tool" : "Disabled"}
                     </Badge>
@@ -376,7 +392,7 @@ export function DatabaseConnectorsManager() {
 
                 <div className="flex items-center justify-between pt-2 border-t border-border/40 text-xs">
                   <span className="text-muted-foreground font-mono truncate max-w-[180px]">
-                    {tool.secret ? "🔒 Protected Webhook" : "🔓 Public Endpoint"}
+                    {tool.has_secret ? "🔒 Protected Webhook" : "🔓 Public Endpoint"}
                   </span>
 
                   <div className="flex items-center gap-1">
@@ -535,9 +551,21 @@ export function DatabaseConnectorsManager() {
                 type="password"
                 value={form.secret || ""}
                 onChange={(e) => setForm((c) => ({ ...c, secret: e.target.value }))}
-                placeholder="Optional shared secret for verification"
+                placeholder={editingName && editingHasSecret
+                  ? "A secret is saved — leave blank to keep it"
+                  : "Optional shared secret for verification"}
                 className="font-mono text-xs"
               />
+              {editingName && editingHasSecret && (
+                <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                  <Checkbox
+                    checked={clearSecret}
+                    onCheckedChange={(checked) => setClearSecret(!!checked)}
+                    aria-label="Remove the saved secret"
+                  />
+                  <span>Remove the saved secret</span>
+                </label>
+              )}
             </div>
 
             {/* Permissions Checklist */}
@@ -583,7 +611,11 @@ export function DatabaseConnectorsManager() {
                     <Lock className="w-3.5 h-3.5 text-primary" />
                     <span>Read-Only Mode & Multi-Tenant Isolation</span>
                   </div>
-                  <Badge variant="outline" className="text-[10px] text-emerald-400 border-emerald-500/30">Active</Badge>
+                  <Switch
+                    checked={form.read_only_mode}
+                    onCheckedChange={(checked) => setForm((c) => ({ ...c, read_only_mode: checked }))}
+                    aria-label="Read-only mode"
+                  />
                 </div>
 
                 <div className="flex items-center justify-between p-2 rounded-lg bg-muted/40 border border-border/40">

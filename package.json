@@ -9,6 +9,7 @@
     "build:dev": "vite build --mode development",
     "lint": "eslint .",
     "test": "vitest run",
+    "typecheck": "tsc -b --noEmit",
     "preview": "vite preview",
     "check:edge-env": "node scripts/check-edge-env-drift.mjs",
     "check:edge-env:local": "node scripts/check-edge-env-local.mjs"

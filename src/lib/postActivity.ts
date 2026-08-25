@@ -1,7 +1,7 @@
 interface PostActivityDates {
   created_at: string;
-  scheduled_at: string | null;
-  posted_at: string | null;
+  scheduled_at?: string | null;
+  posted_at?: string | null;
 }
 
 export function getPostActivityTimestamp(post: PostActivityDates): number {
