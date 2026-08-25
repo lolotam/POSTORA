@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   Database,
   Globe,
@@ -19,10 +19,15 @@ import {
   Copy,
   CheckCircle2,
   Zap,
+  Unlink,
+  Link2,
+  Radio,
+  ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -38,6 +43,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/hooks/useAuth";
+import { supabase } from "@/integrations/supabase/client";
+import { HIGGSFIELD_CALLBACK_PATH } from "@/lib/higgsfieldOAuthReturn";
 import { useAiAgentTools, type AiAgentTool, type AiAgentToolInput, type ConnectorType } from "@/hooks/useAiAgentTools";
 import { validateAiToolName, validateAiToolUrl } from "@/lib/aiTools";
 import { cn } from "@/lib/utils";
@@ -128,6 +135,27 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
             d="M48.5 35.2c-5.8 0-9.6 3.1-9.6 7.8 0 8.8 12.8 7.4 12.8 11.2 0 1.8-1.6 2.4-3.8 2.4-3.8 0-8.6-1.6-8.6-1.6l-1.8 8.9s4.2 1.9 10 1.9c6.4 0 10.4-3.1 10.4-8 0-9.2-12.8-7.7-12.8-11.4 0-1.5 1.3-2.2 3.4-2.2 3.2 0 7.4 1.3 7.4 1.3l1.8-8.6s-3.7-1.7-9.2-1.7z"
             fill="#FFFFFF"
           />
+        </svg>
+      );
+
+    case "higgsfield":
+      return (
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+          <rect width="100" height="100" rx="24" fill="#1A1028" />
+          <path
+            d="M26 24V76L50 88L74 76V24L50 12L26 24Z"
+            stroke="url(#higgs-grad)"
+            strokeWidth="7"
+            strokeLinejoin="round"
+          />
+          <path d="M50 12V88M26 24L74 76M74 24L26 76" stroke="url(#higgs-grad)" strokeWidth="5" strokeLinecap="round" />
+          <circle cx="50" cy="50" r="10" fill="#F43F5E" />
+          <defs>
+            <linearGradient id="higgs-grad" x1="26" y1="12" x2="74" y2="88" gradientUnits="userSpaceOnUse">
+              <stop stopColor="#F43F5E" />
+              <stop offset="1" stopColor="#8B5CF6" />
+            </linearGradient>
+          </defs>
         </svg>
       );
 
@@ -222,6 +250,7 @@ export interface ConnectorDirectoryItem {
   brandColor: string;
   iconBg: string;
   supportsMcp: boolean;
+  isOAuth?: boolean;
   mcpServerName?: string;
   defaultPermissions: {
     searchProducts: boolean;
@@ -323,6 +352,23 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     iconBg: "bg-indigo-500/10 border-indigo-500/20 text-indigo-400",
     supportsMcp: false,
     defaultPermissions: { searchProducts: false, checkStock: false, lookupOrders: true },
+  },
+  {
+    id: "higgsfield",
+    name: "higgsfield_ai_studio",
+    category: "automation",
+    categoryLabel: "AI Generation",
+    title: "Higgsfield AI Studio",
+    shortDesc: "BYO generation for AI video, character sheets, and image creation.",
+    description: "Connect your personal Higgsfield account. BYO generation bills Higgsfield directly and does not consume your Postora plan quota.",
+    defaultUrl: "https://api.higgsfield.ai/v1",
+    suggestedPrompt: "Generate custom AI video scenes, character portraits, and cinematic UGC content.",
+    brandColor: "text-rose-500",
+    iconBg: "bg-rose-500/10 border-rose-500/20 text-rose-400",
+    supportsMcp: true,
+    isOAuth: true,
+    mcpServerName: "higgsfield-mcp-server",
+    defaultPermissions: { searchProducts: false, checkStock: false, lookupOrders: false },
   },
   {
     id: "supabase",
@@ -444,6 +490,67 @@ export function DatabaseConnectorsManager() {
   const [modalTab, setModalTab] = useState<"credentials" | "mcp" | "overview">("credentials");
   const [copiedMcp, setCopiedMcp] = useState(false);
 
+  // Higgsfield OAuth State
+  const [higgsfieldConnected, setHiggsfieldConnected] = useState(false);
+  const [higgsfieldAccount, setHiggsfieldAccount] = useState<string | null>(null);
+  const [higgsfieldBusy, setHiggsfieldBusy] = useState(false);
+
+  const checkHiggsfieldStatus = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.functions.invoke("higgsfield-oauth", {
+        body: { action: "status", scope_kind: "user" },
+      });
+      if (!error && data) {
+        const user = data?.user ?? data;
+        setHiggsfieldConnected(!!(data?.connected ?? user?.connected));
+        setHiggsfieldAccount(user?.account_email ?? data?.account_id ?? null);
+      }
+    } catch {
+      setHiggsfieldConnected(false);
+      setHiggsfieldAccount(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkHiggsfieldStatus();
+  }, [checkHiggsfieldStatus]);
+
+  const connectHiggsfield = async () => {
+    setHiggsfieldBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("higgsfield-oauth", {
+        body: {
+          action: "authorize_url",
+          scope_kind: "user",
+          redirect_uri: `${window.location.origin}${HIGGSFIELD_CALLBACK_PATH}`,
+          return_to: "/settings?tab=integrations",
+        },
+      });
+      if (error || !data?.url) throw error ?? new Error(data?.error || "Could not retrieve authorization URL");
+      window.location.assign(data.url);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to initiate Higgsfield connection");
+      setHiggsfieldBusy(false);
+    }
+  };
+
+  const disconnectHiggsfield = async () => {
+    setHiggsfieldBusy(true);
+    try {
+      await supabase.functions.invoke("higgsfield-oauth", {
+        body: { action: "disconnect", scope_kind: "user" },
+      });
+      setHiggsfieldConnected(false);
+      setHiggsfieldAccount(null);
+      toast.success("Higgsfield account disconnected");
+      setDialogOpen(false);
+    } catch (e: any) {
+      toast.error(e.message || "Failed to disconnect Higgsfield");
+    } finally {
+      setHiggsfieldBusy(false);
+    }
+  };
+
   const apiKey = profile?.api_key || "YOUR_POSTORA_API_KEY";
 
   // Map configured tools by connector_type
@@ -473,6 +580,13 @@ export function DatabaseConnectorsManager() {
   }, [searchQuery, activeCategory]);
 
   const handleCardClick = (preset: ConnectorDirectoryItem) => {
+    if (preset.id === "higgsfield" && !higgsfieldConnected) {
+      // Direct 1-click connect flow for Higgsfield
+      setSelectedPreset(preset);
+      setDialogOpen(true);
+      return;
+    }
+
     const existingTool = configuredToolsMap.get(preset.id);
     setSelectedPreset(preset);
     setFormError(null);
@@ -601,6 +715,9 @@ export function DatabaseConnectorsManager() {
     setTimeout(() => setCopiedMcp(false), 2000);
   };
 
+  // Connected count
+  const connectedCount = tools.length + (higgsfieldConnected ? 1 : 0);
+
   if (isLoading) {
     return (
       <div className="flex justify-center py-12">
@@ -610,201 +727,378 @@ export function DatabaseConnectorsManager() {
   }
 
   return (
-    <div className="space-y-6">
-      {/* Header & Description */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h3 className="text-xl font-bold text-foreground">Integrations & Connectors Directory</h3>
-            <Badge variant="outline" className="border-primary/30 text-primary bg-primary/10 text-xs gap-1">
-              <Sparkles className="w-3 h-3" /> Auto-Approved & MCP Ready
-            </Badge>
+    <div className="space-y-8">
+      {/* Directory Section */}
+      <div className="space-y-6">
+        {/* Header & Description */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-xl font-bold text-foreground">Integrations & Connectors Directory</h3>
+              <Badge variant="outline" className="border-primary/30 text-primary bg-primary/10 text-xs gap-1">
+                <Sparkles className="w-3 h-3" /> Auto-Approved & MCP Ready
+              </Badge>
+            </div>
+            <p className="text-sm text-muted-foreground mt-1">
+              Connect your e-commerce stores, payment gateways, databases, and AI generation servers with authentic brand tools.
+            </p>
           </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Connect your e-commerce stores, payment gateways, databases, and MCP servers. All tools are auto-authenticated using your account quotas.
-          </p>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              size="sm"
+              onClick={() => {
+                setSelectedPreset(CONNECTOR_DIRECTORY[0]);
+                setEditingTool(null);
+                setForm(emptyForm);
+                setDialogOpen(true);
+              }}
+              className="gap-1.5"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Custom Webhook</span>
+            </Button>
+          </div>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
-          <Button
-            size="sm"
-            onClick={() => {
-              setSelectedPreset(CONNECTOR_DIRECTORY[0]);
-              setEditingTool(null);
-              setForm(emptyForm);
-              setDialogOpen(true);
-            }}
-            className="gap-1.5"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Custom Webhook</span>
-          </Button>
-        </div>
-      </div>
+        {/* Filter and Search Bar */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
+          {/* Category Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none">
+            {(
+              [
+                { id: "all", label: "All Connectors" },
+                { id: "ecommerce", label: "E-Commerce" },
+                { id: "payments", label: "Payments" },
+                { id: "database", label: "Databases" },
+                { id: "automation", label: "Automation" },
+                { id: "mcp", label: "⚡ MCP Ready" },
+              ] as const
+            ).map((cat) => {
+              const isActive = activeCategory === cat.id;
+              return (
+                <button
+                  key={cat.id}
+                  type="button"
+                  onClick={() => setActiveCategory(cat.id)}
+                  className={cn(
+                    "px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all shrink-0 cursor-pointer border",
+                    isActive
+                      ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                      : "bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50"
+                  )}
+                >
+                  {cat.label}
+                </button>
+              );
+            })}
+          </div>
 
-      {/* Filter and Search Bar */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
-        {/* Category Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none">
-          {(
-            [
-              { id: "all", label: "All Connectors" },
-              { id: "ecommerce", label: "E-Commerce" },
-              { id: "payments", label: "Payments" },
-              { id: "database", label: "Databases" },
-              { id: "automation", label: "Automation" },
-              { id: "mcp", label: "⚡ MCP Ready" },
-            ] as const
-          ).map((cat) => {
-            const isActive = activeCategory === cat.id;
+          {/* Search Bar */}
+          <div className="relative w-full sm:w-64">
+            <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+            <Input
+              placeholder="Search connectors..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 h-9 text-xs rounded-xl bg-card/60"
+            />
+          </div>
+        </div>
+
+        {/* Connectors Grid (3D Brand Cards with Logo on Left and Text on Right) */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+          {filteredDirectory.map((preset) => {
+            const isHiggs = preset.id === "higgsfield";
+            const isConnected = isHiggs ? higgsfieldConnected : configuredToolsMap.has(preset.id);
+            const tool = configuredToolsMap.get(preset.id);
+
             return (
-              <button
-                key={cat.id}
-                type="button"
-                onClick={() => setActiveCategory(cat.id)}
+              <div
+                key={preset.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => handleCardClick(preset)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleCardClick(preset);
+                  }
+                }}
                 className={cn(
-                  "px-3.5 py-1.5 rounded-xl text-xs font-medium transition-all shrink-0 cursor-pointer border",
-                  isActive
-                    ? "bg-primary text-primary-foreground border-primary shadow-sm"
-                    : "bg-muted/40 hover:bg-muted text-muted-foreground hover:text-foreground border-border/50"
+                  "relative group flex flex-col justify-between p-5 rounded-2xl border transition-all duration-300 ease-out text-left cursor-pointer backdrop-blur-xl overflow-hidden",
+                  // 3D Glassmorphism, specular top highlight and multi-layered depth
+                  "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/30 before:via-white/5 before:to-transparent before:pointer-events-none",
+                  isConnected
+                    ? "bg-gradient-to-b from-primary/15 via-card/90 to-card/60 border-primary/50 shadow-[0_16px_36px_-8px_rgba(var(--primary-rgb,59,130,246),0.3),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:shadow-[0_22px_48px_-8px_rgba(var(--primary-rgb,59,130,246),0.45)] hover:border-primary"
+                    : "bg-gradient-to-b from-card/95 via-card/80 to-card/60 border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.3),0_4px_10px_-2px_rgba(0,0,0,0.15),inset_0_1.5px_2px_rgba(255,255,255,0.6),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:scale-[1.015] hover:border-primary/50 hover:shadow-[0_20px_42px_-8px_rgba(0,0,0,0.45),inset_0_2px_3px_rgba(255,255,255,0.85)]"
                 )}
               >
-                {cat.label}
-              </button>
+                {/* Top Row: Logo on Left + Text & Badges on Right */}
+                <div className="flex items-start gap-4">
+                  {/* 3D Brand Logo Container on Left */}
+                  <div
+                    className={cn(
+                      "relative shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border border-border/50 shadow-md transition-all duration-300 group-hover:scale-110 group-hover:-translate-y-0.5 group-hover:shadow-lg group-hover:border-primary/40",
+                      "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/35 before:via-white/10 before:to-transparent before:pointer-events-none",
+                      isConnected && "border-primary/40 shadow-primary/20"
+                    )}
+                  >
+                    <div className="transition-transform duration-300 group-hover:scale-105 group-hover:rotate-1">
+                      <ConnectorBrandLogo id={preset.id} className="w-8 h-8 sm:w-9 sm:h-9 drop-shadow-sm" />
+                    </div>
+                    {isConnected && (
+                      <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/40 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                        <Check className="w-3 h-3 stroke-[3]" />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Content on Right of Logo */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between gap-1.5">
+                      <h4 className="font-bold text-sm sm:text-base text-foreground tracking-tight group-hover:text-primary transition-colors truncate">
+                        {preset.title}
+                      </h4>
+
+                      {preset.supportsMcp && (
+                        <Badge variant="outline" className="bg-violet-500/10 text-violet-400 border-violet-500/30 text-[9px] py-0 h-4.5 shrink-0">
+                          ⚡ MCP
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 mt-0.5 mb-1.5">
+                      <span className="text-[11px] font-medium text-muted-foreground">
+                        {preset.categoryLabel}
+                      </span>
+                      {isConnected && (
+                        <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[9px] gap-1 py-0 h-4 shrink-0">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          Connected
+                        </Badge>
+                      )}
+                    </div>
+
+                    <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                      {preset.shortDesc}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Bottom Row: Status Indicator & Clean Prominent Connect Button */}
+                <div className="mt-4 pt-3.5 border-t border-border/40 flex items-center justify-between text-xs">
+                  <div className="flex items-center gap-1.5 text-muted-foreground text-[11px]">
+                    <span
+                      className={cn(
+                        "w-2 h-2 rounded-full",
+                        isConnected && (!tool || tool.is_enabled)
+                          ? "bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400/50"
+                          : isConnected
+                          ? "bg-amber-400"
+                          : "bg-muted-foreground/30"
+                      )}
+                    />
+                    <span>
+                      {isConnected
+                        ? isHiggs
+                          ? `Connected (${higgsfieldAccount?.split("@")[0] || "Active"})`
+                          : tool?.is_enabled
+                          ? "Active in AI Agent"
+                          : "Configured (Disabled)"
+                        : "Ready to Connect"}
+                    </span>
+                  </div>
+
+                  {/* Big Clean Connect Button */}
+                  <Button
+                    size="sm"
+                    variant={isConnected ? "outline" : "default"}
+                    className={cn(
+                      "h-8.5 px-4 text-xs font-semibold rounded-xl shadow-sm transition-all duration-200 pointer-events-none group-hover:shadow-md",
+                      !isConnected && "bg-primary text-primary-foreground hover:bg-primary/90 shadow-primary/25"
+                    )}
+                  >
+                    {isConnected ? (
+                      <>
+                        <Pencil className="w-3.5 h-3.5 mr-1" /> Configure
+                      </>
+                    ) : (
+                      <>
+                        <Plus className="w-3.5 h-3.5 mr-1" /> Connect
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
             );
           })}
         </div>
-
-        {/* Search Bar */}
-        <div className="relative w-full sm:w-64">
-          <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
-          <Input
-            placeholder="Search connectors..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 h-9 text-xs rounded-xl bg-card/60"
-          />
-        </div>
       </div>
 
-      {/* Connectors Grid (3D Brand Cards with Logo on Left and Text on Right) */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-        {filteredDirectory.map((preset) => {
-          const isConnected = configuredToolsMap.has(preset.id);
-          const tool = configuredToolsMap.get(preset.id);
+      {/* Connected Integrations & Active Servers Section (Below Directory) */}
+      <div className="pt-6 border-t border-border/50 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5">
+            <h4 className="text-lg font-bold text-foreground">Connected Integrations & Active Servers</h4>
+            <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30 text-xs gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              {connectedCount} Connected
+            </Badge>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Active integrations automatically attach live tool capabilities to your AI agents
+          </p>
+        </div>
 
-          return (
-            <div
-              key={preset.id}
-              role="button"
-              tabIndex={0}
-              onClick={() => handleCardClick(preset)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  handleCardClick(preset);
-                }
-              }}
-              className={cn(
-                "relative group flex flex-col justify-between p-5 rounded-2xl border transition-all duration-300 ease-out text-left cursor-pointer backdrop-blur-xl overflow-hidden",
-                // 3D Glassmorphism, specular top highlight and multi-layered depth
-                "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/30 before:via-white/5 before:to-transparent before:pointer-events-none",
-                isConnected
-                  ? "bg-gradient-to-b from-primary/15 via-card/90 to-card/60 border-primary/50 shadow-[0_16px_36px_-8px_rgba(var(--primary-rgb,59,130,246),0.3),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:shadow-[0_22px_48px_-8px_rgba(var(--primary-rgb,59,130,246),0.45)] hover:border-primary"
-                  : "bg-gradient-to-b from-card/95 via-card/80 to-card/60 border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.3),0_4px_10px_-2px_rgba(0,0,0,0.15),inset_0_1.5px_2px_rgba(255,255,255,0.6),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:scale-[1.015] hover:border-primary/50 hover:shadow-[0_20px_42px_-8px_rgba(0,0,0,0.45),inset_0_2px_3px_rgba(255,255,255,0.85)]"
-              )}
-            >
-              {/* Top Row: Logo on Left + Text & Badges on Right */}
-              <div className="flex items-start gap-4">
-                {/* 3D Brand Logo Container on Left */}
-                <div
-                  className={cn(
-                    "relative shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border border-border/50 shadow-md transition-all duration-300 group-hover:scale-110 group-hover:-translate-y-0.5 group-hover:shadow-lg group-hover:border-primary/40",
-                    "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/35 before:via-white/10 before:to-transparent before:pointer-events-none",
-                    isConnected && "border-primary/40 shadow-primary/20"
-                  )}
-                >
-                  <div className="transition-transform duration-300 group-hover:scale-105 group-hover:rotate-1">
-                    <ConnectorBrandLogo id={preset.id} className="w-8 h-8 sm:w-9 sm:h-9 drop-shadow-sm" />
-                  </div>
-                  {isConnected && (
-                    <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/40 ring-2 ring-background animate-in zoom-in-50 duration-200">
-                      <Check className="w-3 h-3 stroke-[3]" />
+        {connectedCount === 0 ? (
+          <Card className="border-dashed border-border/60 bg-card/30">
+            <CardContent className="flex flex-col items-center justify-center py-10 text-center space-y-3">
+              <div className="h-12 w-12 rounded-2xl bg-muted/60 flex items-center justify-center text-muted-foreground">
+                <Database className="h-6 w-6" />
+              </div>
+              <div className="max-w-md space-y-1">
+                <h5 className="font-semibold text-sm text-foreground">No servers connected yet</h5>
+                <p className="text-xs text-muted-foreground">
+                  Select any card above (Shopify, WooCommerce, Salla, MyFatoorah, Supabase, or Higgsfield) and click "Connect" to activate live store tools.
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {/* Higgsfield Connected Card */}
+            {higgsfieldConnected && (
+              <Card className="border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 via-card/85 to-card/60 backdrop-blur-xl shadow-sm">
+                <CardHeader className="p-4 pb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-12 h-12 rounded-xl bg-secondary/80 flex items-center justify-center border border-border/50 shadow-sm shrink-0">
+                        <ConnectorBrandLogo id="higgsfield" className="w-7 h-7" />
+                      </div>
+                      <div>
+                        <CardTitle className="text-sm font-bold text-foreground">Higgsfield AI Studio</CardTitle>
+                        <CardDescription className="text-xs truncate max-w-[180px]">
+                          {higgsfieldAccount || "BYO Generation Connected"}
+                        </CardDescription>
+                      </div>
                     </div>
-                  )}
-                </div>
 
-                {/* Content on Right of Logo */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between gap-1.5">
-                    <h4 className="font-bold text-sm sm:text-base text-foreground tracking-tight group-hover:text-primary transition-colors truncate">
-                      {preset.title}
-                    </h4>
+                    <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px] gap-1 py-0 h-5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      Connected
+                    </Badge>
+                  </div>
+                </CardHeader>
 
-                    {preset.supportsMcp && (
-                      <Badge variant="outline" className="bg-violet-500/10 text-violet-400 border-violet-500/30 text-[9px] py-0 h-4.5 shrink-0">
-                        ⚡ MCP
-                      </Badge>
-                    )}
+                <CardContent className="p-4 pt-0 space-y-3">
+                  <div className="p-2.5 rounded-xl bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between">
+                    <span>Quota: BYO Direct Billing</span>
+                    <span className="font-medium text-emerald-400">Zero Postora Credits</span>
                   </div>
 
-                  <div className="flex items-center gap-1.5 mt-0.5 mb-1.5">
-                    <span className="text-[11px] font-medium text-muted-foreground">
-                      {preset.categoryLabel}
-                    </span>
-                    {isConnected && (
-                      <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[9px] gap-1 py-0 h-4 shrink-0">
+                  <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5"
+                    >
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Connected</span>
+                    </Button>
+
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={disconnectHiggsfield}
+                      disabled={higgsfieldBusy}
+                      className="h-8 text-xs text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
+                    >
+                      <Unlink className="w-3.5 h-3.5 mr-1" /> Disconnect
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Configured Database & E-Commerce Tools Cards */}
+            {tools.map((tool) => {
+              const preset = CONNECTOR_DIRECTORY.find((p) => p.id === tool.connector_type) || CONNECTOR_DIRECTORY[0];
+
+              return (
+                <Card key={tool.id} className="border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 via-card/85 to-card/60 backdrop-blur-xl shadow-sm">
+                  <CardHeader className="p-4 pb-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-secondary/80 flex items-center justify-center border border-border/50 shadow-sm shrink-0">
+                          <ConnectorBrandLogo id={tool.connector_type} className="w-7 h-7" />
+                        </div>
+                        <div>
+                          <CardTitle className="text-sm font-bold text-foreground font-mono truncate max-w-[150px]">
+                            {tool.name}
+                          </CardTitle>
+                          <CardDescription className="text-xs truncate max-w-[180px]">
+                            {preset.title}
+                          </CardDescription>
+                        </div>
+                      </div>
+
+                      <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px] gap-1 py-0 h-5">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                         Connected
                       </Badge>
-                    )}
-                  </div>
+                    </div>
+                  </CardHeader>
 
-                  <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                    {preset.shortDesc}
-                  </p>
-                </div>
-              </div>
+                  <CardContent className="p-4 pt-0 space-y-3">
+                    <div className="p-2.5 rounded-xl bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between">
+                      <span className="font-mono truncate max-w-[160px]">{tool.url || "API Endpoint"}</span>
+                      <span className="font-medium text-emerald-400">{tool.is_enabled ? "Active Tool" : "Disabled"}</span>
+                    </div>
 
-              {/* Bottom Row: Status Indicator & Clean Prominent Connect Button */}
-              <div className="mt-4 pt-3.5 border-t border-border/40 flex items-center justify-between text-xs">
-                <div className="flex items-center gap-1.5 text-muted-foreground text-[11px]">
-                  <span
-                    className={cn(
-                      "w-2 h-2 rounded-full",
-                      isConnected && tool?.is_enabled
-                        ? "bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400/50"
-                        : isConnected
-                        ? "bg-amber-400"
-                        : "bg-muted-foreground/30"
-                    )}
-                  />
-                  <span>{isConnected && tool?.is_enabled ? "Active in AI Agent" : isConnected ? "Configured (Disabled)" : "Ready to Connect"}</span>
-                </div>
+                    <div className="flex items-center justify-between pt-2 border-t border-border/40">
+                      {/* Green Connected Mark & Button */}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleCardClick(preset)}
+                        className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5 cursor-pointer"
+                      >
+                        <Check className="w-3.5 h-3.5 stroke-[3]" />
+                        <span>Connected</span>
+                      </Button>
 
-                {/* Big Clean Connect Button */}
-                <Button
-                  size="sm"
-                  variant={isConnected ? "outline" : "default"}
-                  className={cn(
-                    "h-8.5 px-4 text-xs font-semibold rounded-xl shadow-sm transition-all duration-200 pointer-events-none group-hover:shadow-md",
-                    !isConnected && "bg-primary text-primary-foreground hover:bg-primary/90 shadow-primary/25"
-                  )}
-                >
-                  {isConnected ? (
-                    <>
-                      <Pencil className="w-3.5 h-3.5 mr-1" /> Configure
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="w-3.5 h-3.5 mr-1" /> Connect
-                    </>
-                  )}
-                </Button>
-              </div>
-            </div>
-          );
-        })}
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleCardClick(preset)}
+                          className="h-8 text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          <Pencil className="w-3 h-3 mr-1" /> Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
+                          onClick={() => {
+                            if (confirm(`Are you sure you want to disconnect '${tool.name}'?`)) {
+                              deleteTool.mutate(tool.id, {
+                                onSuccess: () => toast.success(`Connector '${tool.name}' disconnected`),
+                              });
+                            }
+                          }}
+                        >
+                          <Trash2 className="h-3.5 h-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Interactive Detail & Connection Modal */}
@@ -820,7 +1114,7 @@ export function DatabaseConnectorsManager() {
               <div>
                 <DialogTitle className="text-lg flex items-center gap-2">
                   <span>{selectedPreset?.title || "Connector Configuration"}</span>
-                  {editingTool && (
+                  {(editingTool || (selectedPreset?.id === "higgsfield" && higgsfieldConnected)) && (
                     <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px]">
                       Connected
                     </Badge>
@@ -838,177 +1132,233 @@ export function DatabaseConnectorsManager() {
             </div>
           </DialogHeader>
 
-          {/* Modal Tabs */}
-          <Tabs value={modalTab} onValueChange={(v: any) => setModalTab(v)} className="w-full mt-2">
-            <TabsList className="grid grid-cols-3 w-full bg-muted/60 h-9 p-1">
-              <TabsTrigger value="credentials" className="text-xs">
-                Credentials & API
-              </TabsTrigger>
-              <TabsTrigger value="mcp" disabled={!selectedPreset?.supportsMcp} className="text-xs">
-                Model Context Protocol (MCP)
-              </TabsTrigger>
-              <TabsTrigger value="overview" className="text-xs">
-                Security & Isolation
-              </TabsTrigger>
-            </TabsList>
-
-            {/* TAB 1: Credentials & API */}
-            <TabsContent value="credentials" className="space-y-4 pt-3">
-              {formError && (
-                <div className="p-3 text-xs bg-destructive/10 border border-destructive/30 text-destructive rounded-xl">
-                  {formError}
-                </div>
-              )}
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Tool Name (Unique Identifier)</Label>
-                  <Input
-                    value={form.name}
-                    onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") })}
-                    placeholder="e.g. shopify_store"
-                    className="font-mono text-xs h-9"
-                  />
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Connector Type</Label>
-                  <Select
-                    value={form.connector_type}
-                    onValueChange={(val) => setForm({ ...form, connector_type: val as ConnectorType })}
-                  >
-                    <SelectTrigger className="h-9 text-xs">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {CONNECTOR_DIRECTORY.map((d) => (
-                        <SelectItem key={d.id} value={d.id} className="text-xs">
-                          {d.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs">API Endpoint / Webhook URL</Label>
-                <Input
-                  value={form.url}
-                  onChange={(e) => setForm({ ...form, url: e.target.value })}
-                  placeholder="https://your-store.com/api/..."
-                  className="font-mono text-xs h-9"
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs">
-                  API Key / Secret Token {editingHasSecret && "(Stored securely)"}
-                </Label>
-                <Input
-                  type="password"
-                  value={form.secret}
-                  onChange={(e) => {
-                    setForm({ ...form, secret: e.target.value });
-                    if (clearSecret) setClearSecret(false);
-                  }}
-                  placeholder={editingHasSecret ? "•••••••••••••••• (Leave blank to keep existing secret)" : "Enter API Key or Secret"}
-                  className="text-xs h-9"
-                />
-                {editingHasSecret && (
-                  <div className="flex items-center gap-2 pt-1">
-                    <Checkbox
-                      id="clear-secret-chk"
-                      checked={clearSecret}
-                      onCheckedChange={(c) => setClearSecret(Boolean(c))}
-                    />
-                    <Label htmlFor="clear-secret-chk" className="text-xs text-muted-foreground cursor-pointer">
-                      Remove stored secret from database
-                    </Label>
+          {/* Special OAuth UI for Higgsfield */}
+          {selectedPreset?.id === "higgsfield" ? (
+            <div className="space-y-4 pt-3">
+              <div className="p-4 rounded-xl border border-border/60 bg-muted/20 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h4 className="font-semibold text-sm text-foreground">Direct Higgsfield OAuth Authentication</h4>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Connect your personal Higgsfield account with 1-click. All generation is billed to Higgsfield and does not consume Postora quota.
+                    </p>
                   </div>
+                  {higgsfieldConnected && (
+                    <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-xs">
+                      Active
+                    </Badge>
+                  )}
+                </div>
+
+                {higgsfieldConnected && higgsfieldAccount && (
+                  <p className="text-xs font-mono text-emerald-400 bg-emerald-500/10 p-2 rounded-lg border border-emerald-500/20">
+                    Connected Account: {higgsfieldAccount}
+                  </p>
                 )}
               </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-xs">AI Tool Prompt & Trigger Instructions</Label>
-                <Textarea
-                  rows={2}
-                  value={form.description}
-                  onChange={(e) => setForm({ ...form, description: e.target.value })}
-                  placeholder="Explain when the AI agent should call this tool..."
-                  className="text-xs leading-relaxed resize-none"
-                />
+              <div className="flex items-center justify-between pt-4 border-t border-border/40">
+                <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="text-xs h-8">
+                  Cancel
+                </Button>
+
+                {higgsfieldConnected ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={disconnectHiggsfield}
+                    disabled={higgsfieldBusy}
+                    className="text-xs h-8 text-rose-500 border-rose-500/30 hover:bg-rose-500/10"
+                  >
+                    {higgsfieldBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Unlink className="w-3.5 h-3.5 mr-1" />}
+                    <span>Disconnect Account</span>
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    onClick={connectHiggsfield}
+                    disabled={higgsfieldBusy}
+                    className="text-xs h-8 gap-1.5 bg-rose-600 hover:bg-rose-700 text-white"
+                  >
+                    {higgsfieldBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
+                    <span>Connect with Higgsfield</span>
+                  </Button>
+                )}
               </div>
+            </div>
+          ) : (
+            <>
+              {/* Modal Tabs */}
+              <Tabs value={modalTab} onValueChange={(v: any) => setModalTab(v)} className="w-full mt-2">
+                <TabsList className="grid grid-cols-3 w-full bg-muted/60 h-9 p-1">
+                  <TabsTrigger value="credentials" className="text-xs">
+                    Credentials & API
+                  </TabsTrigger>
+                  <TabsTrigger value="mcp" disabled={!selectedPreset?.supportsMcp} className="text-xs">
+                    Model Context Protocol (MCP)
+                  </TabsTrigger>
+                  <TabsTrigger value="overview" className="text-xs">
+                    Security & Isolation
+                  </TabsTrigger>
+                </TabsList>
 
-              {/* Capability Permissions */}
-              <div className="p-3 rounded-xl border border-border/60 bg-muted/20 space-y-2.5">
-                <Label className="text-xs font-semibold text-foreground">Capability Permissions</Label>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="perm-search"
-                      checked={form.permission_search_products}
-                      onCheckedChange={(c) => setForm({ ...form, permission_search_products: Boolean(c) })}
+                {/* TAB 1: Credentials & API */}
+                <TabsContent value="credentials" className="space-y-4 pt-3">
+                  {formError && (
+                    <div className="p-3 text-xs bg-destructive/10 border border-destructive/30 text-destructive rounded-xl">
+                      {formError}
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Tool Name (Unique Identifier)</Label>
+                      <Input
+                        value={form.name}
+                        onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") })}
+                        placeholder="e.g. shopify_store"
+                        className="font-mono text-xs h-9"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Connector Type</Label>
+                      <Select
+                        value={form.connector_type}
+                        onValueChange={(val) => setForm({ ...form, connector_type: val as ConnectorType })}
+                      >
+                        <SelectTrigger className="h-9 text-xs">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {CONNECTOR_DIRECTORY.map((d) => (
+                            <SelectItem key={d.id} value={d.id} className="text-xs">
+                              {d.title}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">API Endpoint / Webhook URL</Label>
+                    <Input
+                      value={form.url}
+                      onChange={(e) => setForm({ ...form, url: e.target.value })}
+                      placeholder="https://your-store.com/api/..."
+                      className="font-mono text-xs h-9"
                     />
-                    <Label htmlFor="perm-search" className="text-xs cursor-pointer">
-                      Search Products
-                    </Label>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="perm-stock"
-                      checked={form.permission_check_stock}
-                      onCheckedChange={(c) => setForm({ ...form, permission_check_stock: Boolean(c) })}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">
+                      API Key / Secret Token {editingHasSecret && "(Stored securely)"}
+                    </Label>
+                    <Input
+                      type="password"
+                      value={form.secret}
+                      onChange={(e) => {
+                        setForm({ ...form, secret: e.target.value });
+                        if (clearSecret) setClearSecret(false);
+                      }}
+                      placeholder={editingHasSecret ? "•••••••••••••••• (Leave blank to keep existing secret)" : "Enter API Key or Secret"}
+                      className="text-xs h-9"
                     />
-                    <Label htmlFor="perm-stock" className="text-xs cursor-pointer">
-                      Check Stock
-                    </Label>
+                    {editingHasSecret && (
+                      <div className="flex items-center gap-2 pt-1">
+                        <Checkbox
+                          id="clear-secret-chk"
+                          checked={clearSecret}
+                          onCheckedChange={(c) => setClearSecret(Boolean(c))}
+                        />
+                        <Label htmlFor="clear-secret-chk" className="text-xs text-muted-foreground cursor-pointer">
+                          Remove stored secret from database
+                        </Label>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <Checkbox
-                      id="perm-orders"
-                      checked={form.permission_lookup_orders}
-                      onCheckedChange={(c) => setForm({ ...form, permission_lookup_orders: Boolean(c) })}
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">AI Tool Prompt & Trigger Instructions</Label>
+                    <Textarea
+                      rows={2}
+                      value={form.description}
+                      onChange={(e) => setForm({ ...form, description: e.target.value })}
+                      placeholder="Explain when the AI agent should call this tool..."
+                      className="text-xs leading-relaxed resize-none"
                     />
-                    <Label htmlFor="perm-orders" className="text-xs cursor-pointer">
-                      Lookup Orders
-                    </Label>
                   </div>
-                </div>
-              </div>
 
-              {/* Toggles */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/60 bg-muted/10">
-                  <div className="space-y-0.5">
-                    <Label className="text-xs font-medium">Read-Only Guard</Label>
-                    <p className="text-[10px] text-muted-foreground">Disallows any write operations</p>
+                  {/* Capability Permissions */}
+                  <div className="p-3 rounded-xl border border-border/60 bg-muted/20 space-y-2.5">
+                    <Label className="text-xs font-semibold text-foreground">Capability Permissions</Label>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id="perm-search"
+                          checked={form.permission_search_products}
+                          onCheckedChange={(c) => setForm({ ...form, permission_search_products: Boolean(c) })}
+                        />
+                        <Label htmlFor="perm-search" className="text-xs cursor-pointer">
+                          Search Products
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id="perm-stock"
+                          checked={form.permission_check_stock}
+                          onCheckedChange={(c) => setForm({ ...form, permission_check_stock: Boolean(c) })}
+                        />
+                        <Label htmlFor="perm-stock" className="text-xs cursor-pointer">
+                          Check Stock
+                        </Label>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <Checkbox
+                          id="perm-orders"
+                          checked={form.permission_lookup_orders}
+                          onCheckedChange={(c) => setForm({ ...form, permission_lookup_orders: Boolean(c) })}
+                        />
+                        <Label htmlFor="perm-orders" className="text-xs cursor-pointer">
+                          Lookup Orders
+                        </Label>
+                      </div>
+                    </div>
                   </div>
-                  <Switch
-                    checked={form.read_only_mode}
-                    onCheckedChange={(c) => setForm({ ...form, read_only_mode: c })}
-                  />
-                </div>
 
-                <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/60 bg-muted/10">
-                  <div className="space-y-0.5">
-                    <Label className="text-xs font-medium">Smart Cache</Label>
-                    <p className="text-[10px] text-muted-foreground">Caches repeated product queries</p>
+                  {/* Toggles */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/60 bg-muted/10">
+                      <div className="space-y-0.5">
+                        <Label className="text-xs font-medium">Read-Only Guard</Label>
+                        <p className="text-[10px] text-muted-foreground">Disallows any write operations</p>
+                      </div>
+                      <Switch
+                        checked={form.read_only_mode}
+                        onCheckedChange={(c) => setForm({ ...form, read_only_mode: c })}
+                      />
+                    </div>
+
+                    <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/60 bg-muted/10">
+                      <div className="space-y-0.5">
+                        <Label className="text-xs font-medium">Smart Cache</Label>
+                        <p className="text-[10px] text-muted-foreground">Caches repeated product queries</p>
+                      </div>
+                      <Switch
+                        checked={form.enable_cache}
+                        onCheckedChange={(c) => setForm({ ...form, enable_cache: c })}
+                      />
+                    </div>
                   </div>
-                  <Switch
-                    checked={form.enable_cache}
-                    onCheckedChange={(c) => setForm({ ...form, enable_cache: c })}
-                  />
-                </div>
-              </div>
-            </TabsContent>
+                </TabsContent>
 
-            {/* TAB 2: Model Context Protocol (MCP) */}
-            <TabsContent value="mcp" className="space-y-4 pt-3">
-              <div className="p-3.5 rounded-xl bg-violet-500/10 border border-violet-500/30 space-y-2">
-                <div className="flex items-center gap-2">
+                {/* TAB 2: Model Context Protocol (MCP) */}
+                <TabsContent value="mcp" className="space-y-4 pt-3">
+                  <div className="p-3.5 rounded-xl bg-violet-500/10 border border-violet-500/30 space-y-2">
+                    <div className="flex items-center gap-2">
                   <Zap className="w-4 h-4 text-violet-400" />
                   <h4 className="font-semibold text-xs text-foreground">Auto-Approved MCP Connection</h4>
                 </div>
@@ -1108,6 +1458,8 @@ export function DatabaseConnectorsManager() {
               </Button>
             </div>
           </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
     </div>

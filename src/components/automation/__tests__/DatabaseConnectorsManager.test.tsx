@@ -37,7 +37,7 @@ describe("DatabaseConnectorsManager", () => {
     });
   });
 
-  it("renders connector directory cards in ChatGPT/Claude style", () => {
+  it("renders connector directory cards and active connected servers", () => {
     render(
       <QueryClientProvider client={queryClient}>
         <DatabaseConnectorsManager />
@@ -49,9 +49,11 @@ describe("DatabaseConnectorsManager", () => {
     expect(screen.getByText("WooCommerce Store")).toBeInTheDocument();
     expect(screen.getByText("Salla (سلة)")).toBeInTheDocument();
     expect(screen.getByText("MyFatoorah")).toBeInTheDocument();
-    expect(screen.getByText("Supabase (PostgreSQL)")).toBeInTheDocument();
+    expect(screen.getByText("Higgsfield AI Studio")).toBeInTheDocument();
+    expect(screen.getAllByText("Supabase (PostgreSQL)").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("Custom Webhook")).toBeInTheDocument();
-    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("Connected Integrations & Active Servers")).toBeInTheDocument();
+    expect(screen.getAllByText("Connected").length).toBeGreaterThanOrEqual(1);
   });
 
   it("opens connector configuration modal when clicking a card", () => {

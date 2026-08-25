@@ -17,6 +17,7 @@ export const CONNECTOR_TYPES = [
   "zid",
   "myfatoorah",
   "stripe",
+  "higgsfield",
   "formula",
   "custom_rest",
   "mcp_custom",

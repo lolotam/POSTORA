@@ -16,7 +16,6 @@ import {
   SubscriptionSection,
   IntegrationsSection,
 } from "@/components/settings";
-import { HiggsfieldConnectionCard } from "@/components/settings/HiggsfieldConnectionCard";
 
 import {
   User,
@@ -175,7 +174,6 @@ export default function Settings() {
           <TabsContent value="integrations" className="mt-6 space-y-8">
             <DatabaseConnectorsManager />
             <IntegrationsSection />
-            <HiggsfieldConnectionCard />
           </TabsContent>
 
           {/* Appearance Tab */}
