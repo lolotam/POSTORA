@@ -582,21 +582,27 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return handleCorsOptions();
   try {
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) return unauthorizedResponse();
+    if (!authHeader || !/^Bearer\s+/i.test(authHeader)) return unauthorizedResponse();
     const url = Deno.env.get("SUPABASE_URL")!;
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const anonKey =
       Deno.env.get("SUPABASE_ANON_KEY") ||
       Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!;
-    const token = authHeader.replace("Bearer ", "");
-    const anon = createClient(url, anonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
-    const {
-      data: { user },
-    } = await anon.auth.getUser(token);
-    if (!user) return unauthorizedResponse();
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    const anon = createClient(url, anonKey);
     const admin = createClient(url, serviceKey);
+
+    let user: any = null;
+    const { data: userData, error: userError } = await anon.auth.getUser(token);
+    if (!userError && userData?.user) {
+      user = userData.user;
+    } else {
+      const { data: adminUserData, error: adminUserError } = await admin.auth.getUser(token);
+      if (!adminUserError && adminUserData?.user) {
+        user = adminUserData.user;
+      }
+    }
+    if (!user) return unauthorizedResponse();
     const body = await req.json();
     const { action } = body;
     if (action === "export_graph") {
