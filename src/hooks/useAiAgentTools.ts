@@ -15,8 +15,11 @@ export const CONNECTOR_TYPES = [
   "shopify",
   "salla",
   "zid",
+  "myfatoorah",
+  "stripe",
   "formula",
   "custom_rest",
+  "mcp_custom",
 ] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];

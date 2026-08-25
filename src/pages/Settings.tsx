@@ -49,8 +49,12 @@ export default function Settings() {
   // An unrecognised ?tab= used to reach the controlled <Tabs> verbatim, which rendered the tab
   // bar with nothing selected and no TabsContent at all -- a blank settings page from a stale
   // bookmark or a typo. Fall back instead of trusting the query string.
-  const requestedTab = searchParams.get("tab");
-  const activeTab = requestedTab && SETTINGS_TABS.includes(requestedTab) ? requestedTab : "profile";
+  // Resolves tab, aliasing 'connectors' to 'integrations' for full backward compatibility
+  const rawTab = searchParams.get("tab");
+  const activeTab = rawTab && SETTINGS_TABS.includes(rawTab)
+    ? (rawTab === "connectors" ? "integrations" : rawTab)
+    : "profile";
+
   const [isSaving, setIsSaving] = useState(false);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
@@ -95,9 +99,6 @@ export default function Settings() {
   };
 
   const handleTabChange = (nextTab: string) => {
-    // replace, not push: without it every tab click adds a history entry, so Back walks the
-    // user through the tabs they visited instead of leaving Settings. The sibling automation
-    // pages already do this. Copy prev rather than mutating it in place.
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
@@ -115,7 +116,7 @@ export default function Settings() {
         <div>
           <h1 className="text-3xl font-bold">Settings</h1>
           <p className="text-muted-foreground mt-1">
-            Manage your account, profile, connectors, and preferences.
+            Manage your account, profile, integrations, connectors, and preferences.
           </p>
         </div>
 
@@ -126,9 +127,9 @@ export default function Settings() {
               <User className="w-4 h-4" />
               <span className="hidden sm:inline">Profile</span>
             </TabsTrigger>
-            <TabsTrigger value="connectors" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
-              <Database className="w-4 h-4" />
-              <span className="hidden sm:inline">Connectors</span>
+            <TabsTrigger value="integrations" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+              <Plug className="w-4 h-4" />
+              <span className="hidden sm:inline">Integrations & Connectors</span>
             </TabsTrigger>
             <TabsTrigger value="appearance" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
               <Palette className="w-4 h-4" />
@@ -154,10 +155,6 @@ export default function Settings() {
               <Cookie className="w-4 h-4" />
               <span className="hidden sm:inline">Privacy</span>
             </TabsTrigger>
-            <TabsTrigger value="integrations" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
-              <Plug className="w-4 h-4" />
-              <span className="hidden sm:inline">Integrations</span>
-            </TabsTrigger>
           </TabsList>
 
           {/* Profile Tab */}
@@ -175,9 +172,11 @@ export default function Settings() {
             />
           </TabsContent>
 
-          {/* Connectors Tab */}
-          <TabsContent value="connectors" className="mt-6 space-y-6">
+          {/* Unified Integrations & Connectors Tab */}
+          <TabsContent value="integrations" className="mt-6 space-y-8">
             <DatabaseConnectorsManager />
+            <IntegrationsSection />
+            <HiggsfieldConnectionCard />
           </TabsContent>
 
           {/* Appearance Tab */}
@@ -208,12 +207,6 @@ export default function Settings() {
           {/* Privacy Tab */}
           <TabsContent value="privacy" className="mt-6 space-y-6">
             <CookiePreferencesSection />
-          </TabsContent>
-
-          {/* Integrations Tab */}
-          <TabsContent value="integrations" className="mt-6 space-y-6">
-            <IntegrationsSection />
-            <HiggsfieldConnectionCard />
           </TabsContent>
         </Tabs>
       </div>

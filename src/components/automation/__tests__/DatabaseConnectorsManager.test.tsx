@@ -8,7 +8,7 @@ vi.mock("@/hooks/useAiAgentTools", () => ({
     tools: [
       {
         id: "tool-1",
-        name: "search_products",
+        name: "supabase_product_catalog",
         description: "Searches inventory database for matching products and pricing",
         tool_type: "n8n_webhook",
         url: "https://api.postora.cloud/rest/v1/products",
@@ -37,34 +37,35 @@ describe("DatabaseConnectorsManager", () => {
     });
   });
 
-  it("renders connected database and store tools", () => {
+  it("renders connector directory cards in ChatGPT/Claude style", () => {
     render(
       <QueryClientProvider client={queryClient}>
         <DatabaseConnectorsManager />
       </QueryClientProvider>
     );
 
-    expect(screen.getByText("search_products")).toBeInTheDocument();
-    expect(screen.getByText(/Searches inventory database/i)).toBeInTheDocument();
-    expect(screen.getByText("Supabase (Self-Hosted / Cloud)")).toBeInTheDocument();
-    expect(screen.getByText(/Protected Webhook/i)).toBeInTheDocument();
-    expect(screen.getByText("New Connector")).toBeInTheDocument();
-    expect(screen.getByText("Preset Integrations")).toBeInTheDocument();
+    expect(screen.getByText("Integrations & Connectors Directory")).toBeInTheDocument();
+    expect(screen.getByText("Shopify Storefront")).toBeInTheDocument();
+    expect(screen.getByText("WooCommerce Store")).toBeInTheDocument();
+    expect(screen.getByText("Salla (سلة)")).toBeInTheDocument();
+    expect(screen.getByText("MyFatoorah")).toBeInTheDocument();
+    expect(screen.getByText("Supabase (PostgreSQL)")).toBeInTheDocument();
+    expect(screen.getByText("Custom Webhook")).toBeInTheDocument();
+    expect(screen.getByText("Connected")).toBeInTheDocument();
   });
 
-  it("opens preset picker dialog when clicking Preset Integrations", () => {
+  it("opens connector configuration modal when clicking a card", () => {
     render(
       <QueryClientProvider client={queryClient}>
         <DatabaseConnectorsManager />
       </QueryClientProvider>
     );
 
-    const presetBtn = screen.getByText("Preset Integrations");
-    fireEvent.click(presetBtn);
+    const shopifyCard = screen.getByText("Shopify Storefront");
+    fireEvent.click(shopifyCard);
 
-    expect(screen.getByText("Choose a Connector Integration")).toBeInTheDocument();
-    expect(screen.getByText("WooCommerce Store")).toBeInTheDocument();
-    expect(screen.getByText("Shopify Storefront / Admin")).toBeInTheDocument();
-    expect(screen.getByText("PostgreSQL / MySQL REST API")).toBeInTheDocument();
+    expect(screen.getByText("Credentials & API")).toBeInTheDocument();
+    expect(screen.getByText("Model Context Protocol (MCP)")).toBeInTheDocument();
+    expect(screen.getByText("Security & Isolation")).toBeInTheDocument();
   });
 });
