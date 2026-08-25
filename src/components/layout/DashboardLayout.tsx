@@ -50,6 +50,7 @@ import {
   Headphones,
   ShoppingBag,
   Megaphone,
+  Inbox,
 } from "lucide-react";
 import {
   Tooltip,
@@ -171,7 +172,8 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
     const automationChildren = [
       { icon: Sparkles, label: "Overview", path: "/automation" },
       { icon: Bot, label: "Agent Setup", path: "/automation/agents" },
-      ...(hasMessagingFlags ? [{ icon: MessageSquare, label: "Unified Inboxes", path: "/messaging" }] : []),
+      ...(flags.msgWhatsapp ? [{ icon: MessageSquare, label: "WhatsApp Business", path: "/messaging/whatsapp" }] : []),
+      ...(hasMessagingFlags ? [{ icon: Inbox, label: "Unified Inboxes", path: "/messaging" }] : []),
       ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
       { icon: Zap, label: "Messaging Automation", path: "/automation/messaging" },
       { icon: MessageCircle, label: "Comments Automation", path: "/automation/comments" },

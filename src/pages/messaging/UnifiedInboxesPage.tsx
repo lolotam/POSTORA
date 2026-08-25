@@ -79,7 +79,7 @@ export default function UnifiedInboxesPage() {
 
   const handlePlatformChange = (nextPlatform: InboxPlatform) => {
     if (nextPlatform === "whatsapp") {
-      navigate("/messaging/whatsapp/conversations");
+      navigate("/messaging/whatsapp");
       return;
     }
     setSearchParams(
