@@ -133,6 +133,17 @@ These are the real gaps. Each is a prerequisite for something the PRD promises.
 7. **No OAuth, no applications, no installations.** PRD §12.2, §40 and §50 Phase 6 are entirely
    unbuilt. There is no `partner_applications`, `partner_oauth_*`, or `partner_installations`.
 
+8. **The Partner API's tests never run in CI.** `vite.config.ts:45` sets the vitest
+   `include` to `["src/**/*.{test,spec}.*"]`, so every Deno test under `supabase/functions/**`
+   is outside the pattern. `.github/workflows/test.yml` runs only `bun run test` (vitest) and
+   `npx tsc --noEmit`. Consequently `partner-api/isolation.test.ts`,
+   `partner-api/router.test.ts`, `_shared/partnerApiIdempotency.test.ts`,
+   `partnerApiKeys.test.ts` and `partnerApiMetering.test.ts` **exist but gate nothing.**
+
+   This is load-bearing for §10: the spec declares tenant-isolation tests release-blocking, and
+   under today's CI they would block nothing. A Deno test job is therefore a Phase 0
+   prerequisite, not a testing nicety — see the implementation plan.
+
 ### 3.4 Live production state — the decisive fact
 
 Queried against the production database on 2026-08-25:
@@ -625,3 +636,5 @@ Findings that shaped the draft rather than following from the PRD:
   D3 and D7 affordable now.
 - The rate limiter fails open for billable sends (§3.3.3, D7).
 - Two independent API-key systems exist, one storing plaintext keys (D8).
+- The Partner API's existing test files are excluded from CI by the vitest `include` pattern, so
+  they gate nothing (§3.3.8). Added after the first draft, on a separate verification pass.
