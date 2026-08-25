@@ -5,6 +5,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useMessages, type Conversation } from "@/hooks/useMessaging";
 import { sortMessagesForDisplay } from "@/lib/messageOrder";
+import { WhatsAppComposer } from "./WhatsAppComposer";
 import { WhatsAppMessageBubble } from "./WhatsAppMessageBubble";
 
 interface WhatsAppConversationPaneProps {
@@ -131,6 +132,8 @@ export function WhatsAppConversationPane({
         )}
         <div ref={messagesEndRef} />
       </div>
+
+      <WhatsAppComposer conversation={conversation} socialAccountId={socialAccountId} />
     </div>
   );
 }

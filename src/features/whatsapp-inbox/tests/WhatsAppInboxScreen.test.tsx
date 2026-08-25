@@ -11,12 +11,23 @@ const testState = vi.hoisted(() => ({
   accounts: [] as MessagingAccount[],
   conversations: [] as Conversation[],
   messages: [] as Message[],
+  sendMessage: vi.fn(),
 }));
 
 vi.mock("@/hooks/useMessaging", () => ({
   useMessagingAccounts: () => ({ accounts: testState.accounts, isLoading: false }),
   useConversations: () => ({ data: testState.conversations, isLoading: false }),
   useMessages: () => ({ data: testState.messages, isLoading: false }),
+  useSendMessage: () => ({ mutate: testState.sendMessage, isPending: false }),
+}));
+
+vi.mock("@/components/messaging/QuickReplyPicker", () => ({
+  QuickReplyPicker: () => <div>Quick replies</div>,
+  SlashCommandSuggestions: () => null,
+}));
+
+vi.mock("@/components/messaging/InteractiveMessageBuilder", () => ({
+  InteractiveMessageBuilder: () => <div>Interactive</div>,
 }));
 
 vi.mock("@/hooks/useWhatsAppLabels", () => ({
@@ -193,5 +204,58 @@ describe("WhatsAppConversationPane scroll state", () => {
     fireEvent.scroll(pane, { target: { scrollTop: 23 } });
     act(() => animationFrames.shift()?.(0));
     expect(onScrollStateChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
+// Regression, 2026-08-25: the Phase 1 brief described the pane as a port of
+// ConversationDetail.tsx:240-284 -- a range that stops just short of the composer at :312-366.
+// Both implementers followed it literally, and the forked screen shipped read-only: no text
+// box, no attachments, no quick replies. Reading a WhatsApp inbox you cannot reply in is a
+// regression against the screen this replaces.
+describe("WhatsAppConversationPane composer", () => {
+  it("can send a message", () => {
+    testState.messages = [];
+    render(
+      <MemoryRouter>
+        <WhatsAppChromeProvider>
+          <WhatsAppConversationPane
+            conversation={conversation}
+            socialAccountId="account-1"
+            pageId="96550000000"
+            onScrollStateChange={() => {}}
+          />
+        </WhatsAppChromeProvider>
+      </MemoryRouter>,
+    );
+
+    const box = screen.getByPlaceholderText(/type a message/i);
+    fireEvent.change(box, { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: /send message/i }));
+
+    expect(testState.sendMessage).toHaveBeenCalled();
+    expect(testState.sendMessage.mock.calls[0][0]).toMatchObject({
+      message: "hello",
+      platform: "whatsapp",
+      recipientPhone: conversation.participant_id,
+    });
+  });
+
+  it("offers attachment and quick-reply affordances", () => {
+    testState.messages = [];
+    render(
+      <MemoryRouter>
+        <WhatsAppChromeProvider>
+          <WhatsAppConversationPane
+            conversation={conversation}
+            socialAccountId="account-1"
+            pageId="96550000000"
+            onScrollStateChange={() => {}}
+          />
+        </WhatsAppChromeProvider>
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByRole("button", { name: /attach a file/i })).toBeInTheDocument();
+    expect(screen.getByText("Quick replies")).toBeInTheDocument();
   });
 });
