@@ -4,7 +4,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type User } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 import { resolveWhatsAppCloudCredentials } from "../_shared/whatsappCloudCredentials.ts";
 
@@ -27,24 +27,37 @@ serve(async (req) => {
   try {
     // Auth check
     const authHeader = req.headers.get("Authorization");
-    if (!authHeader) {
+    if (!authHeader || !/^Bearer\s+/i.test(authHeader)) {
       return new Response(JSON.stringify({ error: "Missing authorization" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    const token = authHeader.replace(/^Bearer\s+/i, "");
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-      global: { headers: { Authorization: authHeader } },
-    });
+    const supabaseAnon = createClient(supabaseUrl, supabaseAnonKey);
     // Service-role client for reading the user's WhatsApp social_account
     const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey);
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
+    // The token is passed to getUser() explicitly rather than injected as a client header: newer
+    // supabase-js returns "Auth session missing" for the no-arg form when the client holds no
+    // session of its own. The service-role retry covers a stale SUPABASE_ANON_KEY in this
+    // container; GoTrue validates the bearer token the same way either way, so it widens nothing.
+    let user: User | null = null;
+    const { data: userData, error: userError } = await supabaseAnon.auth.getUser(token);
+    if (!userError && userData?.user) {
+      user = userData.user;
+    } else {
+      const { data: adminUserData, error: adminUserError } = await supabaseAdmin.auth.getUser(token);
+      if (!adminUserError && adminUserData?.user) {
+        user = adminUserData.user;
+      }
+    }
+
+    if (!user) {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -151,7 +164,7 @@ serve(async (req) => {
     });
   } catch (error) {
     console.error("whatsapp-profile error:", error);
-    return new Response(JSON.stringify({ error: error.message }), {
+    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

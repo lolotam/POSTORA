@@ -31,6 +31,7 @@ import {
   embedKnowledgeDual,
   resolveDualEmbeddingConfig,
 } from "../_shared/knowledgeEmbeddings.ts";
+import { deleteFromOpeninary, getOpeninaryConfig, openinaryDeliveryUrl } from "../_shared/openinary.ts";
 
 const BUCKET = "ai-knowledge";
 const GRAPH_API = "https://graph.facebook.com/v21.0";
@@ -287,19 +288,56 @@ async function uploadGraphExport(
   contentType: string,
   userEmail: string,
 ): Promise<string> {
+  const folder = `media/${sanitizeEmailForFolder(userEmail)}/knowledge-graph`;
+  const body = typeof contents === "string"
+    ? contents
+    : (new Uint8Array(contents).buffer as ArrayBuffer);
+
+  const openinaryConfig = getOpeninaryConfig();
+  if (openinaryConfig) {
+    const targetFolder = `${openinaryConfig.folderPrefix}/${folder}`;
+    const requestedPath = `${targetFolder}/${fileName}`;
+    try {
+      // The Cloudinary path below uploads with overwrite=true; Openinary suffixes collisions
+      // instead, so the previous export has to be removed or each regeneration leaks another copy.
+      await deleteFromOpeninary(openinaryConfig, requestedPath);
+      const form = new FormData();
+      form.append("folder", targetFolder);
+      form.append("files", new File([body], fileName, { type: contentType }));
+      const res = await fetch(`${openinaryConfig.serverUrl}/api/upload`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${openinaryConfig.apiKey}` },
+        body: form,
+        signal: AbortSignal.timeout(120_000),
+      });
+      const payload = await res.json().catch(() => null);
+      const stored = payload?.files?.[0]?.path;
+      // COLLISION-AS-FAILURE, as in _shared/openinary.ts: a suffixed path is not the URL the
+      // exports row will hand back, so treat any rename as a failed upload.
+      if (res.ok && payload?.success && stored === requestedPath) {
+        return openinaryDeliveryUrl(openinaryConfig, stored);
+      }
+      // Openinary enforces a media MIME allow-list, so text/html and application/zip may be
+      // rejected outright. Log it — a silent fallback makes a permanently dead branch look healthy.
+      console.warn(
+        `[uploadGraphExport] Openinary did not store ${fileName} (HTTP ${res.status}): ${payload?.error ?? stored ?? "no stored path"} — falling back to Cloudinary`,
+      );
+    } catch (err) {
+      console.warn("[uploadGraphExport] Openinary upload failed, trying Cloudinary fallback:", err);
+    }
+  }
+
   const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
   const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
   const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
-  if (!cloudName || !apiKey || !apiSecret) throw new Error("Cloudinary is not configured");
-  const folder = `media/${sanitizeEmailForFolder(userEmail)}/knowledge-graph`;
+  if (!cloudName || !apiKey || !apiSecret) {
+    throw new Error("Storage provider not configured (Openinary or Cloudinary required)");
+  }
   const timestamp = Math.floor(Date.now() / 1000);
   const signature = await cloudinarySignature(
     `folder=${folder}&overwrite=true&public_id=${fileName}&timestamp=${timestamp}${apiSecret}`,
   );
   const form = new FormData();
-  const body = typeof contents === "string"
-    ? contents
-    : (new Uint8Array(contents).buffer as ArrayBuffer);
   form.append("file", new Blob([body], { type: contentType }), fileName);
   form.append("api_key", apiKey);
   form.append("timestamp", String(timestamp));
