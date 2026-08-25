@@ -44,6 +44,8 @@
 
 - **`main` auto-deploys the frontend**, so backend changes deploy *before* their PR merges. Any contract change must therefore be safe for the **currently deployed** frontend, not only the new one.
 
+- **Rebase onto latest `main` immediately before every merge.** A concurrent Antigravity agent lands its own PRs on `main` while these phases are in flight, so a branch cut six phases ago is stale by the time it merges. `git fetch origin main` and rebase — never a merge commit and never a merge from a stale base — or that agent's already-merged work is dropped. **Re-run the gates after the rebase**: a clean rebase is not evidence the suite still passes.
+
 - **TanStack Query v5 object form only.** `useQuery(key, fn)` positional syntax is not valid v5; every query in this plan uses the object form, and every `useInfiniteQuery` declares `initialPageParam`.
 
 - **Testing:** vitest, colocated. `userEvent` is unusable — use `fireEvent`. Already mocked in `src/test/setup.ts`: `IntersectionObserver` (:19), `scrollIntoView` (:52), `navigator.clipboard` (:62). **`MediaRecorder` and `getUserMedia` are not mocked** — hand-write them. Comment regression tests with the date and symptom, matching `src/lib/messageOrder.test.ts`.
