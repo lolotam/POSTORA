@@ -273,10 +273,12 @@ Storage layout, inside the existing private `media` bucket:
 - Create: `supabase/functions/_shared/whatsappMessageView.ts` + test (the row → API shape mapper), `src/features/whatsapp-inbox/domain/mediaKind.ts` + test
 - Modify: `messaging-api/index.ts:1291-1298,1326-1387`
 
-- [ ] **Step 1: Write the failing tests** for the mapper — `provider_message_id` from `m.message_id` (**named this, not `wamid`**: for QR rows it holds a Baileys `key.id`, which is not a Meta Cloud wamid); `direction`; `revoked_at`, `revoked_by` and `status` (the export's CSV column needs it, and it is one of the mutable fields the overlay carries); `media_understanding`; `attachments` typed with `kind` from `media_type` (`sticker` renders as an image — 26 live rows) and `[]` when `media_type IS NULL`; `file_url` retained for back-compat (§36).
+- [ ] **Step 1: Write the failing tests** for the mapper — `provider_message_id` from `m.message_id` (**named this, not `wamid`**: for QR rows it holds a Baileys `key.id`, which is not a Meta Cloud wamid); `direction`; `status` (the export's CSV column needs it, and it is one of the mutable fields the overlay carries); `media_understanding`; `attachments` typed with `kind` from `media_type` (`sticker` renders as an image — 26 live rows) and `[]` when `media_type IS NULL`; `file_url` retained for back-compat (§36).
 - [ ] **Step 2: Run and confirm failure. Step 3: implement the mapper and use it in the action.**
 
   `revoked_at` in the response is what makes a teammate's delete-for-everyone visible to other workspace members. Without it the column is written and never read.
+
+**Ordering note.** This task does **not** map `revoked_at` / `revoked_by`, even though the overlay design needs them: the migration that creates those columns is Task 4.1. Phase 4 adds them to this same mapper alongside its migration. Mapping a column that does not exist yet would fail at runtime the moment this phase deployed.
 
 - [ ] **Step 4: Add `media_path` to `whatsapp_send_media`.** Assert the prefix is the caller's own uid — reject `../`, an absolute URL, and a foreign uid — then mint a 7-day signed URL server-side and pass that to `transport.sendMedia`. Persist the **durable storage path**, not the expiring signed URL, into `media_url`. Comment that `media_url` now holds either an `http(s)://` provider URL or a bucket-relative path, and that `whatsapp_get_media` branches on the prefix. Existing `media_url` callers are untouched.
 - [ ] **Step 5: Gates, then commit.**
