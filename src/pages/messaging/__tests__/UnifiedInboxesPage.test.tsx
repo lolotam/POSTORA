@@ -50,6 +50,14 @@ vi.mock("@/components/layout/DashboardLayout", () => ({
   DashboardLayout: ({ children }: { children: React.ReactNode }) => <div data-testid="dashboard-layout">{children}</div>,
 }));
 
+vi.mock("@/components/messaging/MessagingInbox", () => ({
+  MessagingInbox: ({ platform }: { platform: string }) => <div data-testid="messaging-inbox">{platform}</div>,
+}));
+
+vi.mock("@/components/messaging/AutomationHandlerCard", () => ({
+  AutomationHandlerCard: ({ platform }: { platform: string }) => <div data-testid="automation-handler">{platform}</div>,
+}));
+
 describe("UnifiedInboxesPage", () => {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
@@ -72,6 +80,27 @@ describe("UnifiedInboxesPage", () => {
     // so no Threads tab is rendered here.
     expect(screen.queryByRole("tab", { name: /Threads/i })).not.toBeInTheDocument();
   });
+
+  it.each(["whatsapp", "facebook", "instagram"])(
+    "places the %s automation handler under the channel icons, above the inbox",
+    (platform) => {
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={[`/messaging?platform=${platform}`]}>
+            <UnifiedInboxesPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      );
+
+      const tabs = screen.getByRole("tablist", { name: "Inbox Channels" });
+      const handler = screen.getByTestId("automation-handler");
+      const inbox = screen.getByTestId("messaging-inbox");
+      expect(handler).toHaveTextContent(platform);
+      // DOCUMENT_POSITION_FOLLOWING: the argument comes after the receiver.
+      expect(tabs.compareDocumentPosition(handler) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(handler.compareDocumentPosition(inbox) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    },
+  );
 
   it("redirects legacy ?platform=threads links to the Threads mentions page", () => {
     render(

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { toast } from "sonner";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
@@ -57,6 +58,15 @@ export function AutomationHandlerCard({
   const accountId = isControlled ? controlledAccountId : ownAccountId;
 
   const { handlers, isLoading, save } = useAutomationHandlers(accountId);
+  // A rejected save used to be invisible: the Select snapped back to the stored value and
+  // nothing said why, which read as "the dropdown refuses to change".
+  const saveHandlers = (patch: Parameters<typeof save.mutate>[0]) =>
+    save.mutate(patch, {
+      onError: (error) =>
+        toast.error("Could not change the automation handler", {
+          description: error instanceof Error ? error.message : "Unknown error",
+        }),
+    });
 
   if (accounts.length === 0) return null;
 
@@ -97,7 +107,7 @@ export function AutomationHandlerCard({
             value={handlers?.automation_handler ?? "internal"}
             options={MESSAGE_OPTIONS}
             disabled={busy}
-            onChange={(value) => save.mutate({ automation_handler: value as MessageAutomationHandler })}
+            onChange={(value) => saveHandlers({ automation_handler: value as MessageAutomationHandler })}
           />
         )}
 
@@ -108,7 +118,7 @@ export function AutomationHandlerCard({
             value={handlers?.comment_automation_handler ?? "off"}
             options={COMMENT_OPTIONS}
             disabled={busy}
-            onChange={(value) => save.mutate({ comment_automation_handler: value as CommentAutomationHandler })}
+            onChange={(value) => saveHandlers({ comment_automation_handler: value as CommentAutomationHandler })}
           />
         )}
 
@@ -151,10 +161,10 @@ interface HandlerRowProps {
 
 function HandlerRow({ label, testId, value, options, disabled, onChange }: HandlerRowProps) {
   return (
-    <div className="flex items-center justify-between gap-4">
+    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <span className="text-sm font-medium">{label}</span>
       <Select value={value} onValueChange={onChange} disabled={disabled}>
-        <SelectTrigger className="w-48" data-testid={testId}>
+        <SelectTrigger className="w-full sm:w-48" data-testid={testId}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

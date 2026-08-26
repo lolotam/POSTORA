@@ -172,22 +172,22 @@ export default function UnifiedInboxesPage() {
                   </Button>
                 </div>
 
-                <MessagingInbox platform="whatsapp" />
                 <AutomationHandlerCard platform="whatsapp" surface="dms" />
+                <MessagingInbox platform="whatsapp" />
               </div>
             )}
 
             {platform === "facebook" && (
               <div className="space-y-4">
-                <MessagingInbox platform="facebook" />
                 <AutomationHandlerCard platform="facebook" surface="dms" />
+                <MessagingInbox platform="facebook" />
               </div>
             )}
 
             {platform === "instagram" && (
               <div className="space-y-4">
-                <MessagingInbox platform="instagram" />
                 <AutomationHandlerCard platform="instagram" surface="dms" />
+                <MessagingInbox platform="instagram" />
               </div>
             )}
           </div>

@@ -376,10 +376,7 @@ Deno.serve(async (req) => {
 
       if (body.comment_automation_handler !== undefined) {
         if (!(COMMENT_AUTOMATION_HANDLERS as readonly unknown[]).includes(body.comment_automation_handler)) {
-          return jsonResponse({ error: "comment_automation_handler must be off or n8n" }, 400);
-        }
-        if (body.comment_automation_handler === "internal") {
-          return jsonResponse({ error: "The Postora AI agent does not handle comments yet" }, 400);
+          return jsonResponse({ error: "comment_automation_handler must be off, internal or n8n" }, 400);
         }
         patch.comment_automation_handler = body.comment_automation_handler;
       }

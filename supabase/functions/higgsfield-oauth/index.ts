@@ -241,11 +241,17 @@ Deno.serve(async (req) => {
     }
     if (action === "status") {
       const platform = await loadConnection(db);
-      const { data: byo } = await db
-        .from("higgsfield_connection_status")
-        .select("account_email, expires_at, connected")
+      // Read the table, not the higgsfield_connection_status view: that view is scoped by
+      // `WHERE user_id = auth.uid()`, and `db` holds the service role, under which auth.uid()
+      // is NULL. Through the view every user -- including one whose tokens were stored a
+      // second earlier -- read back as disconnected. Only non-secret columns are selected.
+      const { data: byoRow, error: byoError } = await db
+        .from("higgsfield_connections")
+        .select("account_email, expires_at")
         .eq("user_id", caller.userId)
         .maybeSingle();
+      if (byoError) throw new Error(`Could not read connection: ${byoError.message}`);
+      const byo = byoRow ? { ...byoRow, connected: true } : null;
       let platformConnected = !!(platform?.access_token || platform?.refresh_token);
       if (platformConnected) {
         try {

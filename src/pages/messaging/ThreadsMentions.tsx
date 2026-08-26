@@ -36,6 +36,7 @@ import {
   useAvailableLabels,
   useMentionsSessionPrimed,
 } from "@/hooks/useThreadsMentions";
+import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { ThreadsMentionCard } from "@/components/messaging/threads/ThreadsMentionCard";
 import { ThreadsMentionsFilters } from "@/components/messaging/threads/ThreadsMentionsFilters";
 import { ThreadsRepliesTab } from "@/components/messaging/threads/replies/ThreadsRepliesTab";
@@ -255,6 +256,11 @@ export default function ThreadsMentions() {
               innerClassName="p-4 md:p-6"
             >
               <ThreadsAuthorAvatarProvider accountId={selectedAccountId}>
+                <AutomationHandlerCard
+                  platform="threads"
+                  accountId={selectedAccountId}
+                  surface="comments"
+                />
                 <Tabs value={tab} onValueChange={(nextTab) => setSearchParams({ tab: nextTab })} className="w-full">
                   {/* Unified one-line banner: account selector + Mentions/Replies toggle + Refresh + AI settings */}
                   <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-3 sm:p-4 flex flex-wrap items-center gap-3">

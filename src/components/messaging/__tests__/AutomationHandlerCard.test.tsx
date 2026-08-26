@@ -13,6 +13,9 @@ vi.mock("@/hooks/useAutomationHandlers", () => ({
   useAutomationHandlers: () => ({ handlers, isLoading: false, save }),
 }));
 
+const toastError = vi.fn();
+vi.mock("sonner", () => ({ toast: { error: (...args: unknown[]) => toastError(...args) } }));
+
 const accounts = [
   { id: "a1", platform: "instagram", platform_username: "mybrand", platform_user_id: "1789", is_active: true },
   { id: "t1", platform: "threads", platform_username: "mybrand", platform_user_id: "th-1", is_active: true },
@@ -57,7 +60,25 @@ describe("AutomationHandlerCard", () => {
     fireEvent.keyDown(screen.getByTestId("comments-handler"), { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: "Postora AI Agent" }));
 
-    expect(save.mutate).toHaveBeenCalledWith({ comment_automation_handler: "internal" });
+    expect(save.mutate).toHaveBeenCalledWith({ comment_automation_handler: "internal" }, expect.objectContaining({ onError: expect.any(Function) }));
+  });
+
+  // Regression, 2026-08-26: the server rejected "Postora AI Agent" for comments with a 400
+  // and the card swallowed it, so the Select just snapped back to n8n -- reported as "the
+  // dropdown refuses to change". A rejection must be visible.
+  it("reports a rejected save instead of silently snapping back", async () => {
+    save.mutate.mockImplementation((_patch, options) =>
+      options?.onError?.(new Error("The Postora AI agent does not handle comments yet")),
+    );
+    render(<AutomationHandlerCard platform="instagram" />);
+
+    fireEvent.keyDown(screen.getByTestId("comments-handler"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Postora AI Agent" }));
+
+    expect(toastError).toHaveBeenCalledWith(
+      "Could not change the automation handler",
+      expect.objectContaining({ description: "The Postora AI agent does not handle comments yet" }),
+    );
   });
 
   it("hides the Comments row on WhatsApp, which has no public comments", () => {
