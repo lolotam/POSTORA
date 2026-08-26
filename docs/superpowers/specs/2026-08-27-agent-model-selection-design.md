@@ -16,7 +16,8 @@ and survives its models:
 3. Replace the per-user model catalog with a single global three-slot control that
    applies to every user and every platform.
 
-Each phase is one commit, verified before the next begins.
+Each phase is a stop-and-verify gate. Within a phase, each task commits separately so
+a reviewer can reject one task while approving its neighbour.
 
 ## Constraints that hold across all three phases
 
@@ -156,7 +157,21 @@ design's substance rather than its wording were:
   slow failures, so the floor as first designed would not have run in the case that
   matters most.
 
-Line-number corrections from that review are applied throughout.
+A second round on 2026-08-27 returned REJECT again: objections 1, 2, 4, 7 and 8 were
+confirmed CLOSED, and five new defects were raised. All five are now fixed —
+`deliverModelOutageFloor` moved to its own module (it could not compile in either
+`index.ts` or `tools.ts`), `humanNotified` propagated through `ToolResult` instead of
+inferred, the floor's reserve split so a stalled admin notification cannot starve the
+customer's message, the conversation-mode snapshot moved out of git, and the deploy
+preflight reduced to a single mechanical boolean.
+
+Two objections remain open by decision rather than oversight, both recorded above: the
+concurrent-message apology race (needs a compare-and-set claim; deferred until
+production shows duplicates) and the workspace-blind assignment writes (finding 4's
+follow-up; mitigated here by making the apology copy honest rather than by rebuilding
+the handoff).
+
+Line-number corrections from both rounds are applied throughout.
 
 ---
 
@@ -232,7 +247,10 @@ on it.** In order:
    escalates without posting anything.
 
 3. **Log.** One of two statuses, so the log never overstates what happened:
-   - `escalated_after_model_exhaustion` — the conversation reached a human.
+   - `escalated_after_model_exhaustion` — the conversation was muted for the AI and
+     the handoff completed. Note this means the mode write succeeded; whether a person
+     was actually *reached* is carried separately in `human_notified`, because
+     `escalateConversation` can succeed with no online agent and no admin numbers.
    - `model_exhaustion_unhandled` — every model failed *and* the escalation failed.
      Nothing was sent; the conversation is still on the AI.
 
@@ -341,17 +359,31 @@ and `model_exhaustion_unhandled`. Without this a production outage is filed as `
 
 - `supabase/functions/ai-agent-reply/logic.ts` — `ModelChainExhaustedError`, the four
   apology strings and their selector, and the deadline arithmetic.
-- `supabase/functions/ai-agent-reply/index.ts` — five hoists; a `timeoutMs` parameter
+- `supabase/functions/ai-agent-reply/index.ts` — six hoists; a `timeoutMs` parameter
   on `chatCompletion`; the budget check in the model loop; the typed throw at `:615`;
-  the floor in the catch at `:748`; the error-status set in `logOutcome`.
+  the floor call in the catch at `:748`; the error-status set in `logOutcome`.
+- `supabase/functions/ai-agent-reply/outage-floor.ts` — **new**. `deliverModelOutageFloor`
+  lives here, not in `index.ts` (whose import starts a server) and not in `tools.ts`
+  (which would close an `index → tools → index` cycle, since the floor needs
+  `ReplyRequest`, `errorMessage` and `TextSender`, all private to `index.ts`). It
+  declares its own narrow request and sender interfaces instead.
 - `supabase/functions/ai-agent-reply/tools.ts` — extract and export
-  `escalateConversation()` returning `EscalationOutcome`; `escalateToHuman` calls it.
+  `escalateConversation()` returning `EscalationOutcome` and accepting an optional
+  deadline; `ToolResult` gains `humanNotified` so a tool escalation's real outcome
+  reaches the floor; `escalateToHuman` calls the extracted function.
 - Vitest cover in `src/lib/__tests__/aiAgentReplyLogic.test.ts` for everything pure;
   Deno cover in `tools.test.ts` for the extraction.
 
 The floor helper and the deadline arithmetic must be shaped so they can be tested
 without a network or a database — the pure parts live in `logic.ts`, and the floor
 takes its sender and escalation target as parameters rather than reaching for them.
+
+The 12-second reserve is split: `escalateConversation` receives a 7-second deadline
+after which it stops assigning and truncates admin notifications, leaving the rest to
+protect the customer's message. Only the `ai_conversation_modes` write is mandatory —
+it is what silences the AI, and everything after it is best-effort. `admin_phone_numbers`
+has no cap and the sends are sequential, so without that bound a stalled Graph API
+could consume the whole reserve.
 
 ## Verification
 
@@ -530,8 +562,12 @@ Two guards, both immediately before the deploy:
 1. Assert that all three keys exist, parse, and name a provider in
    `PROVIDER_ENDPOINTS`. Abort the deploy otherwise.
 2. Record the `conversation_id` and current `mode` of every row in
-   `ai_conversation_modes` for the affected users, so a bad cutover's mutes can be
-   reversed without also reversing genuine human handoffs.
+   `ai_conversation_modes`, **to a server-side file outside git** — `conversation_id`
+   holds customer phone numbers and PSIDs, which must not enter permanent history.
+   Reversal correlates that snapshot with `ai_agent_logs` rows carrying either
+   exhaustion status inside the deploy window, since a genuine handoff in the same
+   period has no such log and an existing row *changed* to `human_first` would not show
+   up as merely absent from the snapshot.
 
 `ai_agent_configs.model`, `fallback_model_1` and `fallback_model_2` stay in the
 database, with a code comment at the former read site marking them deprecated and

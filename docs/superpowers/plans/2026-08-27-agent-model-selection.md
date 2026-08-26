@@ -25,7 +25,7 @@
 - `supabase/functions/ai-agent-reply/logic.ts` is pure — no Deno or network imports. It is unit-tested from Vitest at `src/lib/__tests__/aiAgentReplyLogic.test.ts`, which imports it by relative path.
 - The admin-facing provider list for the agent is exactly `openai`, `openrouter`, `gemini`. A provider without an entry in `PROVIDER_ENDPOINTS` must never appear.
 - New `system_settings` keys are exactly `default_ai_model_agent`, `default_ai_model_agent_fallback`, `default_ai_model_agent_fallback_2`.
-- New `ai_agent_logs.status` value is exactly `escalated_after_model_exhaustion`.
+- New `ai_agent_logs.status` values are exactly `escalated_after_model_exhaustion` (the conversation reached a human) and `model_exhaustion_unhandled` (every model failed and so did the handoff). Both are error-level in `system_logs`.
 
 ## File Structure
 
@@ -33,13 +33,14 @@
 |---|---|---|
 | `supabase/functions/ai-agent-reply/logic.ts` | Pure decisions. Gains `ModelChainExhaustedError` and the apology strings. | 1 |
 | `src/lib/__tests__/aiAgentReplyLogic.test.ts` | Vitest cover for the above. | 1 |
-| `supabase/functions/ai-agent-reply/tools.ts` | Tool executors. `escalateConversation` extracted so the floor can escalate without a model; hosts `deliverModelOutageFloor` so it is testable. | 1 |
+| `supabase/functions/ai-agent-reply/tools.ts` | Tool executors. `escalateConversation` extracted so the floor can escalate without a model; `ToolResult` carries `humanNotified`. | 1 |
+| `supabase/functions/ai-agent-reply/outage-floor.ts` | **New.** The floor itself, in its own module so tests never import `index.ts` and no cycle forms. | 1 |
+| `supabase/functions/ai-agent-reply/outage-floor.test.ts` | **New.** Deno cover for every floor branch. | 1 |
 | `supabase/functions/ai-agent-reply/tools.test.ts` | Deno cover for the extraction. | 1 |
 | `supabase/functions/ai-agent-reply/index.ts` | Request pipeline. Hoists, typed throw, the floor, and later the global chain read. | 1, 3 |
 | `supabase/migrations/20260827100000_ai_agent_allowed_models.sql` | Allow-list table, reproducible. | 2 |
 | `supabase/migrations/20260827100100_ai_agent_fallback_models.sql` | The two fallback columns, reproducible. | 2 |
 | `docs/records/2026-08-27-ai-agent-config-models-snapshot.csv` | Pre-cutover record of per-user choices. | 3 |
-| `docs/records/2026-08-27-ai-conversation-modes-precutover.csv` | Pre-cutover conversation modes, so cutover-induced mutes are distinguishable. | 3 |
 | `src/hooks/ai-config/types.ts` | `ModelCategory` and the three category maps gain `agent`. | 3 |
 | `src/hooks/useAIConfiguration.ts` | `MODEL_CATEGORIES` and the two empty maps gain `agent`. | 3 |
 | `src/hooks/__tests__/useAIConfiguration.test.ts` | Vitest cover for `parseSettingsRows` routing the new keys. | 3 |
@@ -242,9 +243,15 @@ git commit -m "feat(ai-agent): typed exhaustion, honest apology copy, and a requ
     assignmentNote: string;
     adminsNotified: number;
   }
-  export function escalateConversation(target: EscalationTarget, reason: string): Promise<EscalationOutcome>;
+  export function escalateConversation(
+    target: EscalationTarget,
+    reason: string,
+    deadlineAt?: number,
+  ): Promise<EscalationOutcome>;
   ```
-  `ToolContext` already has every field of `EscalationTarget`, so it satisfies the type structurally and needs no adapter. Task 3 imports `escalateConversation` and `EscalationTarget`.
+  `ToolContext` already has every field of `EscalationTarget`, so it satisfies the type structurally and needs no adapter. Task 3's `outage-floor.ts` imports `escalateConversation`, `EscalationTarget` and `EscalationOutcome`.
+
+  `ToolResult` also gains `humanNotified?: boolean`, so a tool escalation's real outcome reaches the floor instead of being inferred.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -363,7 +370,10 @@ export interface EscalationOutcome {
 export async function escalateConversation(
   target: EscalationTarget,
   reason: string,
+  deadlineAt?: number,
 ): Promise<EscalationOutcome> {
+  const outOfTime = () => deadlineAt !== undefined && Date.now() >= deadlineAt;
+
   const { error: modeError } = await target.admin
     .from("ai_conversation_modes")
     .upsert(
@@ -377,9 +387,14 @@ export async function escalateConversation(
     );
   if (modeError) throw modeError;
 
-  const { data: agents } = await target.admin
-    .from("whatsapp_agents")
-    .select("id, user_id, status, current_conversations");
+  // The mode upsert above is the only mandatory write -- it is what silences the AI.
+  // Everything below is best-effort and yields to the deadline, so a slow database
+  // cannot consume the caller's whole reserve and starve the customer's message.
+  const { data: agents } = outOfTime()
+    ? { data: [] }
+    : await target.admin
+      .from("whatsapp_agents")
+      .select("id, user_id, status, current_conversations");
   const agent = pickEscalationAgent(agents || [], target.userId);
   let assignmentNote = "No human agent is online right now; the conversation is queued for the team.";
 
@@ -421,6 +436,12 @@ export async function escalateConversation(
 
   let adminsNotified = 0;
   for (const phone of target.adminPhoneNumbers) {
+    // These sends are sequential and admin_phone_numbers has no cap, so an
+    // unreachable Graph API here could otherwise run past the caller's budget.
+    if (outOfTime()) {
+      console.warn("[ai-agent-reply] Escalation deadline reached; admin notifications truncated");
+      break;
+    }
     try {
       await target.sendWhatsAppText(
         waRecipient(phone),
@@ -451,15 +472,22 @@ async function escalateToHuman(context: ToolContext, reason: string): Promise<To
     };
   }
 
-  const { assignmentNote } = await escalateConversation(context, reason);
+  const outcome = await escalateConversation(context, reason);
 
   return {
     output:
-      `Escalation recorded. ${assignmentNote} Tell the customer briefly that a team member will follow up.`,
+      `Escalation recorded. ${outcome.assignmentNote} Tell the customer briefly that a team member will follow up.`,
     escalated: true,
+    // Carried so the outage floor can tell a real handoff from a bare mute. This
+    // returns true whenever the mode write succeeded, even with no online agent and
+    // no admin numbers -- without this the floor would promise a notification that
+    // never happened.
+    humanNotified: outcome.assigned || outcome.adminsNotified > 0,
   };
 }
 ```
+
+Add `humanNotified?: boolean;` to the `ToolResult` interface at `tools.ts:22-26`.
 
 The old `notifyAdmins` helper (`tools.ts:100-114`) is now used only by `notifyAdmin` at `tools.ts:196`. Leave it in place; the loop above is inlined into `escalateConversation` because it must count successes for `EscalationOutcome`.
 
@@ -481,15 +509,24 @@ git commit -m "refactor(ai-agent): escalation no longer requires a working model
 ### Task 3: The floor itself
 
 **Files:**
-- Modify: `supabase/functions/ai-agent-reply/index.ts` — imports, `:508`, `:523`, `:542`, `:615`, `:748-760`
+- Create: `supabase/functions/ai-agent-reply/outage-floor.ts`
+- Modify: `supabase/functions/ai-agent-reply/index.ts` — imports, `:88`, `:184`, `:196`, `:508`, `:523`, `:542`, `:581`, `:590`, `:594`, `:615`, `:640`, `:748-760`
+- Modify: `supabase/functions/ai-agent-reply/tools.ts` — `ToolResult` gains `humanNotified`
+- Test: `supabase/functions/ai-agent-reply/outage-floor.test.ts`
 
 **Interfaces:**
-- Consumes: `ModelChainExhaustedError`, `modelOutageApology` (Task 1); `escalateConversation`, `EscalationTarget` (Task 2); the existing `TextSender` type and `errorMessage` helper in this file.
-- Produces: `ai_agent_logs.status = "escalated_after_model_exhaustion"`. Nothing downstream imports from this file.
+- Consumes: `ModelChainExhaustedError`, `modelOutageApology`, `modelBudgetRemaining` (Task 1); `escalateConversation`, `EscalationTarget`, `EscalationOutcome` (Task 2).
+- Produces: `deliverModelOutageFloor` in its own module, and two `ai_agent_logs` statuses — `escalated_after_model_exhaustion` when the conversation reached a human, `model_exhaustion_unhandled` when the handoff itself failed.
 
 - [ ] **Step 1: Extend the imports**
 
-In `supabase/functions/ai-agent-reply/index.ts`, add `ModelChainExhaustedError`, `modelOutageApology` and the `ReplyLanguage` type to the existing import from `"./logic.ts"`, and add `escalateConversation` plus the `EscalationTarget` type to the existing import from `"./tools.ts"`.
+In `supabase/functions/ai-agent-reply/index.ts`, add `ModelChainExhaustedError`, `modelBudgetRemaining` and the `ReplyLanguage` and `ModelRef` types to the existing import from `"./logic.ts"`, add the `EscalationTarget` type to the existing import from `"./tools.ts"`, and add a new import:
+
+```ts
+import { deliverModelOutageFloor } from "./outage-floor.ts";
+```
+
+`modelOutageApology` is imported by `outage-floor.ts`, not here.
 
 - [ ] **Step 2: Hoist the five values the catch needs**
 
@@ -507,6 +544,9 @@ let modelChain: ModelRef[] = [];
 // iteration would otherwise escalate a second time -- closing and recreating the
 // active assignment, duplicating history, and notifying admins twice.
 let escalated = false;
+// Whether that tool escalation actually reached a person. escalate_to_human reports
+// success on a bare mute, so the floor cannot infer this from `escalated`.
+let escalationNotifiedHuman = false;
 ```
 
 Then change the five assignment sites inside the try from declarations to plain assignments:
@@ -515,13 +555,54 @@ Then change the five assignment sites inside the try from declarations to plain 
 - `index.ts:523` — `const replySender = dryRun ? null : await buildReplySender(admin, request);` becomes `replySender = dryRun ? null : await buildReplySender(admin, request);`
 - Immediately after the `const toolContext: ToolContext = { ... };` literal ends (`index.ts:542` onward), add `escalationTarget = toolContext;`
 - `index.ts:581` — delete the line `let escalated = false;`.
+- `index.ts:640` — `if (result.escalated) escalated = true;` becomes:
+  ```ts
+        if (result.escalated) {
+          escalated = true;
+          if (result.humanNotified) escalationNotifiedHuman = true;
+        }
+  ```
 - `index.ts:590` — `const modelChain = (rawChain.length ? ...` becomes `modelChain = (rawChain.length ? ...`
 
 The `buildSystemPrompt` call at `index.ts:511` uses the `language,` shorthand and is unaffected. The existing reads of `modelChain` at `:594`, `:596-597`, `:612` and `:661` are unaffected, as are the reads of `escalated` at `:640`, `:744` and `:747`.
 
-- [ ] **Step 3: Add the floor helper**
+- [ ] **Step 3: Add the floor helper in its own module**
 
-Add above the `serve(` handler in `index.ts`, next to the other module-level helpers:
+The floor cannot live in `index.ts`: importing that file from a test executes its top-level `serve()`. It cannot live in `tools.ts` either, because it needs `ReplyRequest` (`index.ts:50`), `errorMessage` (`index.ts:68`) and `TextSender` (`index.ts:213`), all module-private — importing them would make an `index → tools → index` cycle with a server start inside it.
+
+Create `supabase/functions/ai-agent-reply/outage-floor.ts`, which declares its own narrow interfaces. The dependency direction becomes `index → outage-floor → tools → logic`, with no cycle:
+
+```ts
+// The floor that runs when every model in the chain failed. Its own module because
+// index.ts starts a server at import time and tools.ts would close an import cycle.
+import { modelOutageApology, type ReplyLanguage } from "./logic.ts";
+import { escalateConversation, type EscalationOutcome, type EscalationTarget } from "./tools.ts";
+
+/** Only what the floor needs. index.ts's ReplyRequest satisfies this structurally. */
+export interface OutageRequest {
+  comment_id?: string;
+  recipient_phone: string;
+}
+
+/** Matches index.ts's TextSender without importing it. */
+export type OutageSender = (recipientId: string, text: string) => Promise<string>;
+
+export interface OutageFloorResult {
+  apology_sent: boolean;
+  escalated: boolean;
+  human_notified: boolean;
+}
+
+/** Of the floor's reserve, this much is for the escalation; the rest protects the send. */
+const ESCALATION_BUDGET_MS = 7_000;
+
+function message(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+```
+
+Then, in that same file:
 
 ```ts
 /**
@@ -539,31 +620,42 @@ Add above the `serve(` handler in `index.ts`, next to the other module-level hel
  * Each step swallows its own errors on purpose: this runs inside a catch, so a
  * throw here would replace a reported model outage with an unrelated error.
  */
-async function deliverModelOutageFloor(
-  request: ReplyRequest,
-  sender: TextSender | null,
+export async function deliverModelOutageFloor(
+  request: OutageRequest,
+  sender: OutageSender | null,
   replyLanguage: ReplyLanguage,
   target: EscalationTarget | null,
-  alreadyEscalated: boolean,
-): Promise<{ apology_sent: boolean; escalated: boolean; human_notified: boolean }> {
+  prior: { escalated: boolean; humanNotified: boolean },
+): Promise<OutageFloorResult> {
   let outcome: EscalationOutcome | null = null;
-  if (!alreadyEscalated && target) {
+  if (!prior.escalated && target) {
     try {
-      outcome = await escalateConversation(target, "All configured AI models failed");
+      // Bounded so the escalation cannot eat the whole reserve and leave nothing
+      // for the customer send. escalateConversation always completes the mode
+      // upsert; only the assignment and the admin notifications yield to it.
+      outcome = await escalateConversation(
+        target,
+        "All configured AI models failed",
+        Date.now() + ESCALATION_BUDGET_MS,
+      );
     } catch (escalationError) {
-      console.error("[ai-agent-reply] Outage escalation failed:", errorMessage(escalationError));
+      console.error("[ai-agent-reply] Outage escalation failed:", message(escalationError));
     }
   }
 
   // Nothing muted the conversation, so an apology now would repeat on every
   // subsequent message. Silence is the lesser failure; the caller logs this as
   // model_exhaustion_unhandled so it is visible rather than merely quiet.
-  const escalated = alreadyEscalated || outcome !== null;
+  const escalated = prior.escalated || outcome !== null;
   if (!escalated) return { apology_sent: false, escalated: false, human_notified: false };
 
-  // A tool escalation already notified whoever it could reach.
-  const humanNotified = alreadyEscalated ||
-    Boolean(outcome && (outcome.assigned || outcome.adminsNotified > 0));
+  // Only a proven contact licenses the "someone has been notified" wording.
+  // escalate_to_human returns escalated: true even when no agent was online and
+  // admin_phone_numbers was empty, so the tool's own outcome has to be carried
+  // here rather than inferred from the fact that it ran.
+  const humanNotified = prior.escalated
+    ? prior.humanNotified
+    : Boolean(outcome && (outcome.assigned || outcome.adminsNotified > 0));
 
   let apologySent = false;
   // A public comment gets no apology. "We're having trouble" posted under a
@@ -573,15 +665,13 @@ async function deliverModelOutageFloor(
       await sender(request.recipient_phone, modelOutageApology(replyLanguage, humanNotified));
       apologySent = true;
     } catch (sendError) {
-      console.error("[ai-agent-reply] Outage apology send failed:", errorMessage(sendError));
+      console.error("[ai-agent-reply] Outage apology send failed:", message(sendError));
     }
   }
 
   return { apology_sent: apologySent, escalated: true, human_notified: humanNotified };
 }
 ```
-
-Add `EscalationOutcome` to the type import from `"./tools.ts"`.
 
 - [ ] **Step 4: Give `chatCompletion` a timeout parameter and enforce the deadline**
 
@@ -652,7 +742,8 @@ At `index.ts:748`, insert between the `console.error` line and the existing `awa
 ```ts
     if (error instanceof ModelChainExhaustedError && !dryRun) {
       const floor = await deliverModelOutageFloor(
-        request, replySender, language, escalationTarget, escalated,
+        request, replySender, language, escalationTarget,
+        { escalated, humanNotified: escalationNotifiedHuman },
       );
       await logOutcome(admin, {
         ...baseLog,
@@ -694,77 +785,147 @@ and change `level: status === "error" ? "error" : "info",` to:
     level: ERROR_LOG_STATUSES.has(status) ? "error" : "info",
 ```
 
-- [ ] **Step 8: Cover the floor's branches**
+- [ ] **Step 8: Cover every branch of the floor**
 
-The floor is the highest-value new control flow in this plan, so it does not ship on live testing alone. Append to `supabase/functions/ai-agent-reply/tools.test.ts` — `deliverModelOutageFloor` takes its sender and target as parameters precisely so it can be driven without a network:
+The floor is the highest-value new control flow in this plan, so it does not ship on live testing alone. `outage-floor.ts` imports nothing that starts a server, so it can be driven directly. Create `supabase/functions/ai-agent-reply/outage-floor.test.ts`:
 
 ```ts
-function floorHarness(overrides: Record<string, unknown> = {}) {
-  const sent: string[] = [];
+import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { deliverModelOutageFloor } from "./outage-floor.ts";
+import type { EscalationTarget } from "./tools.ts";
+
+/** An admin stub whose every query resolves empty: no online agent, nobody notified. */
+function quietAdmin(onTable?: (table: string) => void) {
   return {
-    sent,
-    request: { comment_id: undefined, recipient_phone: "96500000000", ...overrides } as any,
-    sender: (_to: string, text: string) => { sent.push(text); return Promise.resolve("id"); },
+    from(table: string) {
+      onTable?.(table);
+      return {
+        upsert: () => Promise.resolve({ error: null }),
+        select: () => ({
+          eq: () => ({ is: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }),
+          then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
+        }),
+        insert: () => Promise.resolve({ error: null }),
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    },
   };
 }
 
-Deno.test("floor stays silent when the escalation fails", async () => {
-  const h = floorHarness();
-  const target = { ...escalationTargetStub(), admin: { from() { throw new Error("db down"); } } };
-  const result = await deliverModelOutageFloor(h.request, h.sender, "en", target as any, false);
-  // An unmuted conversation would apologise again on every later message.
+function target(overrides: Partial<EscalationTarget> = {}): EscalationTarget {
+  return {
+    admin: quietAdmin(),
+    userId: "00000000-0000-0000-0000-000000000001",
+    platform: "instagram",
+    conversationId: "conversation-1",
+    customerName: "Test customer",
+    adminPhoneNumbers: [],
+    sendWhatsAppText: () => Promise.resolve(),
+    ...overrides,
+  } as EscalationTarget;
+}
+
+function collector() {
+  const sent: string[] = [];
+  return { sent, sender: (_to: string, text: string) => { sent.push(text); return Promise.resolve("id"); } };
+}
+
+const DM = { recipient_phone: "96500000000" };
+const NONE = { escalated: false, humanNotified: false };
+
+Deno.test("a failed escalation sends nothing at all", async () => {
+  const c = collector();
+  const broken = target({ admin: { from() { throw new Error("db down"); } } as never });
+  // An unmuted conversation would apologise again on every later message, forever.
+  const result = await deliverModelOutageFloor(DM, c.sender, "en", broken, NONE);
   assertEquals(result, { apology_sent: false, escalated: false, human_notified: false });
-  assertEquals(h.sent.length, 0);
+  assertEquals(c.sent.length, 0);
 });
 
-Deno.test("floor posts nothing publicly on a comment but still escalates", async () => {
-  const h = floorHarness({ comment_id: "comment-1" });
-  const result = await deliverModelOutageFloor(h.request, h.sender, "en", escalationTargetStub() as any, false);
-  assertEquals(h.sent.length, 0);
+Deno.test("a comment escalates but posts nothing publicly", async () => {
+  const c = collector();
+  const result = await deliverModelOutageFloor(
+    { ...DM, comment_id: "comment-1" }, c.sender, "en", target(), NONE,
+  );
+  assertEquals(c.sent.length, 0);
   assertEquals(result.escalated, true);
 });
 
-Deno.test("floor does not escalate twice when a tool already did", async () => {
-  const h = floorHarness();
-  let escalations = 0;
-  const target = { ...escalationTargetStub(), admin: { from() { escalations++; return stubQuery(); } } };
-  const result = await deliverModelOutageFloor(h.request, h.sender, "en", target as any, true);
-  assertEquals(escalations, 0);
+Deno.test("a prior tool escalation is not repeated", async () => {
+  const c = collector();
+  const tables: string[] = [];
+  const t = target({ admin: quietAdmin((table) => tables.push(table)) as never });
+  const result = await deliverModelOutageFloor(
+    DM, c.sender, "en", t, { escalated: true, humanNotified: true },
+  );
+  assertEquals(tables.length, 0);
   assertEquals(result.escalated, true);
-  assertEquals(h.sent.length, 1);
+  assertEquals(c.sent.length, 1);
 });
 
-Deno.test("floor does not claim a human was told when none was reached", async () => {
-  const h = floorHarness();
-  // No online agent and no admin numbers: nobody was actually notified.
-  const result = await deliverModelOutageFloor(h.request, h.sender, "en", escalationTargetStub() as any, false);
+Deno.test("the copy does not claim a notification that did not happen", async () => {
+  const c = collector();
+  const result = await deliverModelOutageFloor(DM, c.sender, "en", target(), NONE);
   assertEquals(result.human_notified, false);
-  assertEquals(h.sent[0].includes("notified"), false);
+  assertEquals(c.sent[0].includes("notified"), false);
+});
+
+// escalate_to_human reports escalated: true on a bare mute, so a prior escalation
+// that reached nobody must still use the conservative wording.
+Deno.test("a prior escalation that reached nobody keeps the queued wording", async () => {
+  const c = collector();
+  const result = await deliverModelOutageFloor(
+    DM, c.sender, "en", target(), { escalated: true, humanNotified: false },
+  );
+  assertEquals(result.human_notified, false);
+  assertEquals(c.sent[0].includes("notified"), false);
+});
+
+Deno.test("a null sender still escalates", async () => {
+  // buildReplySender returns null on a dry run, and the caller skips the floor then --
+  // but the floor must not depend on that guard holding.
+  const result = await deliverModelOutageFloor(DM, null, "en", target(), NONE);
+  assertEquals(result.apology_sent, false);
+  assertEquals(result.escalated, true);
+});
+
+Deno.test("a failing sender leaves the escalation in place", async () => {
+  const failing = () => Promise.reject(new Error("Graph API 500"));
+  const result = await deliverModelOutageFloor(DM, failing, "en", target(), NONE);
+  assertEquals(result.apology_sent, false);
+  assertEquals(result.escalated, true);
+});
+
+Deno.test("the Arabic apology is used for an Arabic conversation", async () => {
+  const c = collector();
+  await deliverModelOutageFloor(DM, c.sender, "ar", target(), NONE);
+  assertEquals(/[؀-ۿ]/.test(c.sent[0]), true);
 });
 ```
 
-Write `escalationTargetStub()` and `stubQuery()` as local helpers in that file, following the shape of the existing `context()` helper at its top. Export `deliverModelOutageFloor` from `index.ts` so the test can import it, or move it into `tools.ts` if importing from `index.ts` pulls in the `serve()` call — prefer moving it.
+The dry-run case needs no test here: `index.ts` guards the whole floor with `!dryRun` and `replySender` is null on a sandbox run, both covered above.
 
 - [ ] **Step 9: Verify the file type-checks and the suites still pass**
 
-Run: `bun run typecheck && bun run test && deno test --allow-none supabase/functions/ai-agent-reply/tools.test.ts`
-Expected: all PASS. `bun run typecheck` covers `src/` only, so also run `deno check supabase/functions/ai-agent-reply/index.ts` and expect no errors.
+Run: `bun run typecheck && bun run test && deno test --allow-none supabase/functions/ai-agent-reply/`
+Expected: all PASS. `bun run typecheck` covers `src/` only, so also run `deno check supabase/functions/ai-agent-reply/index.ts` and expect no errors — in particular no import cycle, which is what `outage-floor.ts` exists to avoid.
 
 - [ ] **Step 10: Commit**
 
 ```bash
 git commit -m "fix(ai-agent): a total model failure now reaches the customer and a human" -- \
   supabase/functions/ai-agent-reply/index.ts \
-  supabase/functions/ai-agent-reply/tools.ts \
-  supabase/functions/ai-agent-reply/tools.test.ts
+  supabase/functions/ai-agent-reply/outage-floor.ts \
+  supabase/functions/ai-agent-reply/outage-floor.test.ts \
+  supabase/functions/ai-agent-reply/tools.ts
 ```
 
 - [ ] **Step 11: Deploy and verify against production**
 
 Via `ssh-contabo-mcp`, with `V=/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/ai-agent-reply`:
 
-1. **Diff before overwriting.** For each of `index.ts`, `logic.ts`, `tools.ts`: `sha256sum $V/<file>` and compare against `tr -d '\r' < supabase/functions/ai-agent-reply/<file> | sha256sum` taken from the **pre-change** repo copy (`git show HEAD~1:...`). Any difference that is not this task's change is a hotfix living only on the volume — **stop and ask** rather than overwriting it.
-2. Copy the three new files into `$V`.
+1. **Diff before overwriting.** For each of `index.ts`, `logic.ts`, `tools.ts` (and confirm `outage-floor.ts` does not yet exist on the volume): `sha256sum $V/<file>` and compare against `tr -d '\r' < supabase/functions/ai-agent-reply/<file> | sha256sum` taken from the **pre-change** repo copy (`git show HEAD~1:...`). Any difference that is not this task's change is a hotfix living only on the volume — **stop and ask** rather than overwriting it.
+2. Copy the four files (`index.ts`, `logic.ts`, `tools.ts`, `outage-floor.ts`) into `$V`.
 3. `sha256sum $V/<file>` again and match the CR-stripped local hash.
 4. From the stack directory: **`docker compose restart functions`**. Not `up -d --no-deps` — that reports success and keeps serving the old code.
 5. Confirm the reload landed: check the container's boot log for the restart, then `curl -s -o /dev/null -w '%{http_code}\n' -X OPTIONS "https://api.postora.cloud/functions/v1/ai-agent-reply"` and expect 200.
@@ -1202,7 +1363,7 @@ git commit -m "feat(admin): one global three-slot model control for the messagin
 
 - [ ] **Step 1: Add the chain loader**
 
-Add above the `serve(` handler in `index.ts`, next to `deliverModelOutageFloor`:
+Add above the `serve(` handler in `index.ts`, next to the other module-level helpers:
 
 ```ts
 // The three admin-managed global slots, in the order they are tried. Written by
@@ -1296,29 +1457,55 @@ If this deploys while the three rows are missing or malformed, every live conver
 
 So, immediately before copying any file:
 
-1. **Assert three usable rows.** All three keys must exist, parse, and name a provider the reply engine can call:
-   ```
-   docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -d postgres -c "
-     select key,
-            value->>'provider_code' as provider,
-            value->>'model_id'      as model,
-            (value->>'provider_code') in ('openai','openrouter','google','gemini') as callable
-     from system_settings
-     where key in ('default_ai_model_agent','default_ai_model_agent_fallback','default_ai_model_agent_fallback_2')
-     order by key;"
-   ```
-   Expected: three rows, every `provider` and `model` non-null, every `callable` true. **Anything else aborts the deploy** — fix the admin page first.
+1. **Assert three usable rows — mechanically, one boolean.** Do not eyeball three result rows; an empty-string `model_id` is non-null yet `isModelSetting` rejects it at runtime, and a callable provider still needs its API key configured.
 
-2. **Record the reversible state.** Capture current conversation modes so a bad cutover's mutes can be told apart from genuine human handoffs:
+   ```
+   docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -d postgres -tAc "
+     select count(*) = 3 as ok
+     from system_settings
+     where key in ('default_ai_model_agent',
+                   'default_ai_model_agent_fallback',
+                   'default_ai_model_agent_fallback_2')
+       and coalesce(btrim(value->>'provider_code'), '') <> ''
+       and coalesce(btrim(value->>'model_id'), '')      <> ''
+       and (value->>'provider_code') in ('openai','openrouter','google','gemini');"
+   ```
+
+   Expected: exactly `t`. **`f` aborts the deploy** — fix the admin page first.
+
+   Then confirm the runtime key for each named provider is present in the functions container (`OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `GOOGLE_AI_STUDIO_KEY` as applicable), since a callable provider with no key fails every call and would take the whole chain to the floor.
+
+2. **Record the reversible state — outside git.** Capture current conversation modes so a bad cutover's mutes can be told apart from genuine handoffs:
    ```
    docker exec postorasupabase-supabase-j8axyh-supabase-db psql -U postgres -d postgres --csv -c "
-     select user_id, platform, conversation_id, mode, updated_at from ai_conversation_modes order by updated_at desc;"
+     select user_id, platform, conversation_id, mode, updated_at from ai_conversation_modes;" \
+     > /root/postora-precutover-modes-20260827.csv && chmod 600 /root/postora-precutover-modes-20260827.csv && \
+     sha256sum /root/postora-precutover-modes-20260827.csv
    ```
-   Save to `docs/records/2026-08-27-ai-conversation-modes-precutover.csv` and commit it. Any row that becomes `human_first` after the deploy timestamp and is not in this file is cutover-induced and reversible.
+
+   **This file is never committed.** `conversation_id` holds customer phone numbers on WhatsApp and PSIDs on Facebook and Instagram; permanent git history is the wrong store for it, and the repo has a standing rule against committing production data. Record the path and the SHA256 in the task report instead.
+
+   The rollback query correlates against the logs rather than against row absence, because an existing `ai_first` row *changed* to `human_first` would not show up as new:
+
+   ```sql
+   -- Conversations the cutover muted: human_first, changed after the deploy, and
+   -- carrying an exhaustion log in the same window. Genuine handoffs have no such log.
+   select m.user_id, m.platform, m.conversation_id
+   from ai_conversation_modes m
+   join ai_agent_logs l
+     on l.user_id = m.user_id
+    and l.conversation_id = m.conversation_id
+    and l.status in ('escalated_after_model_exhaustion', 'model_exhaustion_unhandled')
+    and l.created_at >= :deploy_started_at
+   where m.mode = 'human_first'
+     and m.updated_at >= :deploy_started_at;
+   ```
+
+   To reverse, restore each of those rows to its `mode` in the saved CSV, and delete the ones the CSV does not contain.
 
 - [ ] **Step 6: Deploy and verify on two live platforms**
 
-Confirm both CSVs are committed before deploying. Then diff, copy, hash-verify and **`docker compose restart functions`** as in Task 3 Step 11 — not `up -d --no-deps`.
+Confirm the model snapshot CSV is committed and the modes snapshot exists on the server (path + SHA256 recorded) before deploying. Then diff, copy, hash-verify and **`docker compose restart functions`** as in Task 3 Step 11 — not `up -d --no-deps`.
 
 Verify:
 - Send a real inbound **WhatsApp** message to one of the three enabled accounts. Then:
