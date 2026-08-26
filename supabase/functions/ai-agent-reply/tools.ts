@@ -23,6 +23,7 @@ export interface ToolResult {
   output: string;
   escalated?: boolean;
   retrievedChunkIds?: string[];
+  humanNotified?: boolean;
 }
 
 export const toolDefinitions = [
@@ -113,6 +114,132 @@ async function notifyAdmins(context: ToolContext, text: string): Promise<number>
   return delivered;
 }
 
+/**
+ * Everything an escalation needs, with no dependency on a model having run.
+ * ToolContext satisfies this structurally, so escalateToHuman passes itself.
+ */
+export interface EscalationTarget {
+  admin: any;
+  userId: string;
+  platform: string;
+  conversationId: string;
+  customerName: string;
+  adminPhoneNumbers: string[];
+  sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
+}
+
+export interface EscalationOutcome {
+  assigned: boolean;
+  assignmentNote: string;
+  adminsNotified: number;
+}
+
+/**
+ * Hands a conversation to a human. Callable from the escalate_to_human tool and
+ * from index.ts's model-outage floor, which has no working model to call a tool
+ * with.
+ *
+ * The mode upsert comes first deliberately: it is platform-agnostic and it is
+ * what silences the AI for this conversation from the next inbound message on.
+ * The assignment tables below it are WhatsApp-shaped, so on other platforms the
+ * mode flip plus the admin notification is the whole of the handoff.
+ */
+export async function escalateConversation(
+  target: EscalationTarget,
+  reason: string,
+  deadlineAt?: number,
+): Promise<EscalationOutcome> {
+  const outOfTime = () => deadlineAt !== undefined && Date.now() >= deadlineAt;
+
+  const { error: modeError } = await target.admin
+    .from("ai_conversation_modes")
+    .upsert(
+      {
+        user_id: target.userId,
+        platform: target.platform,
+        conversation_id: target.conversationId,
+        mode: "human_first",
+      },
+      { onConflict: "user_id,platform,conversation_id" },
+    );
+  if (modeError) throw modeError;
+
+  // The mode upsert above is the only mandatory write -- it is what silences the AI.
+  // Everything below is best-effort and yields to the deadline, so a slow database
+  // cannot consume the caller's whole reserve and starve the customer's message.
+  const { data: agents } = outOfTime()
+    ? { data: [] }
+    : await target.admin
+      .from("whatsapp_agents")
+      .select("id, user_id, status, current_conversations");
+  const agent = pickEscalationAgent(agents || [], target.userId);
+  let assignmentNote = "No human agent is online right now; the conversation is queued for the team.";
+
+  if (agent) {
+    const { data: existing } = await target.admin
+      .from("whatsapp_conversation_assignments")
+      .select("id, agent_id")
+      .eq("conversation_id", target.conversationId)
+      .is("unassigned_at", null)
+      .maybeSingle();
+
+    if (existing) {
+      await target.admin
+        .from("whatsapp_conversation_assignments")
+        .update({ unassigned_at: new Date().toISOString() })
+        .eq("id", existing.id);
+    }
+
+    const { error: assignError } = await target.admin
+      .from("whatsapp_conversation_assignments")
+      .insert({
+        conversation_id: target.conversationId,
+        agent_id: agent.id,
+        assigned_by: target.userId,
+        notes: `AI escalation: ${reason}`.slice(0, 500),
+      });
+    if (assignError) throw assignError;
+
+    await target.admin.from("whatsapp_assignment_history").insert({
+      conversation_id: target.conversationId,
+      action: existing ? "transferred" : "assigned",
+      from_agent_id: existing?.agent_id || null,
+      to_agent_id: agent.id,
+      performed_by: target.userId,
+      reason: `AI escalation: ${reason}`.slice(0, 500),
+    });
+    assignmentNote = "An online team member has been assigned to this conversation.";
+  }
+
+  let adminsNotified = 0;
+  for (const phone of target.adminPhoneNumbers) {
+    // These sends are sequential and admin_phone_numbers has no cap, so an
+    // unreachable Graph API here could otherwise run past the caller's budget.
+    if (outOfTime()) {
+      console.warn("[ai-agent-reply] Escalation deadline reached; admin notifications truncated");
+      break;
+    }
+    try {
+      await target.sendWhatsAppText(
+        waRecipient(phone),
+        `🤖 AI agent escalation\nCustomer: ${target.customerName}\nReason: ${reason}\n${assignmentNote}`,
+      );
+      adminsNotified++;
+    } catch (error) {
+      console.error(
+        `[ai-agent-reply] Admin notification to ${phone} failed:`,
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  console.log(
+    `[ai-agent-reply] Escalated conversation (agent: ${agent?.id || "none"}, admins notified: ${adminsNotified})`,
+  );
+
+  return { assigned: Boolean(agent), assignmentNote, adminsNotified };
+}
+
 async function escalateToHuman(context: ToolContext, reason: string): Promise<ToolResult> {
   if (context.dryRun) {
     return {
@@ -122,77 +249,17 @@ async function escalateToHuman(context: ToolContext, reason: string): Promise<To
     };
   }
 
-  // The AI goes silent for this conversation from the next message on.
-  const { error: modeError } = await context.admin
-    .from("ai_conversation_modes")
-    .upsert(
-      {
-        user_id: context.userId,
-        platform: context.platform,
-        conversation_id: context.conversationId,
-        mode: "human_first",
-      },
-      { onConflict: "user_id,platform,conversation_id" },
-    );
-  if (modeError) throw modeError;
-
-  // Auto-assign an online human agent, mirroring the manual flow in
-  // src/hooks/useWhatsAppAgents.ts (close active assignment, log history,
-  // insert the new one).
-  const { data: agents } = await context.admin
-    .from("whatsapp_agents")
-    .select("id, user_id, status, current_conversations");
-  const agent = pickEscalationAgent(agents || [], context.userId);
-  let assignmentNote = "No human agent is online right now; the conversation is queued for the team.";
-
-  if (agent) {
-    const { data: existing } = await context.admin
-      .from("whatsapp_conversation_assignments")
-      .select("id, agent_id")
-      .eq("conversation_id", context.conversationId)
-      .is("unassigned_at", null)
-      .maybeSingle();
-
-    if (existing) {
-      await context.admin
-        .from("whatsapp_conversation_assignments")
-        .update({ unassigned_at: new Date().toISOString() })
-        .eq("id", existing.id);
-    }
-
-    const { error: assignError } = await context.admin
-      .from("whatsapp_conversation_assignments")
-      .insert({
-        conversation_id: context.conversationId,
-        agent_id: agent.id,
-        assigned_by: context.userId,
-        notes: `AI escalation: ${reason}`.slice(0, 500),
-      });
-    if (assignError) throw assignError;
-
-    await context.admin.from("whatsapp_assignment_history").insert({
-      conversation_id: context.conversationId,
-      action: existing ? "transferred" : "assigned",
-      from_agent_id: existing?.agent_id || null,
-      to_agent_id: agent.id,
-      performed_by: context.userId,
-      reason: `AI escalation: ${reason}`.slice(0, 500),
-    });
-    assignmentNote = "An online team member has been assigned to this conversation.";
-  }
-
-  const delivered = await notifyAdmins(
-    context,
-    `🤖 AI agent escalation\nCustomer: ${context.customerName}\nReason: ${reason}\n${assignmentNote}`,
-  );
-  console.log(
-    `[ai-agent-reply] Escalated conversation (agent: ${agent?.id || "none"}, admins notified: ${delivered})`,
-  );
+  const outcome = await escalateConversation(context, reason);
 
   return {
     output:
-      `Escalation recorded. ${assignmentNote} Tell the customer briefly that a team member will follow up.`,
+      `Escalation recorded. ${outcome.assignmentNote} Tell the customer briefly that a team member will follow up.`,
     escalated: true,
+    // Carried so the outage floor can tell a real handoff from a bare mute. This
+    // returns true whenever the mode write succeeded, even with no online agent and
+    // no admin numbers -- without this the floor would promise a notification that
+    // never happened.
+    humanNotified: outcome.assigned || outcome.adminsNotified > 0,
   };
 }
 

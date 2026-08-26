@@ -1,6 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
-import { executeTool, type ToolContext } from "./tools.ts";
+import { escalateConversation, executeTool, type ToolContext } from "./tools.ts";
 
 function context(overrides: Partial<ToolContext>): ToolContext {
   return {
@@ -87,4 +87,70 @@ Deno.test("auto-detect mirrors the customer instead of overriding", async () => 
   });
   assertEquals(prompt.includes("NON-NEGOTIABLE"), false);
   assertEquals(prompt.includes("matching the language the customer used"), true);
+});
+
+// The floor in index.ts escalates without going through the model, so the
+// escalation body has to be callable on its own. This test pins that contract:
+// the conversation is muted for the AI first, because that mute is what stops a
+// second apology going out on the customer's next message.
+Deno.test("escalateConversation mutes the conversation before anything else", async () => {
+  const calls: string[] = [];
+  const admin = {
+    from(table: string) {
+      calls.push(table);
+      return {
+        upsert: () => Promise.resolve({ error: null }),
+        select: () => ({
+          eq: () => ({ is: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }),
+          then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
+        }),
+        insert: () => Promise.resolve({ error: null }),
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    },
+  };
+
+  const outcome = await escalateConversation({
+    admin,
+    userId: "00000000-0000-0000-0000-000000000001",
+    platform: "instagram",
+    conversationId: "ig-conversation",
+    customerName: "Test customer",
+    adminPhoneNumbers: [],
+    sendWhatsAppText: () => Promise.resolve(),
+  }, "All configured AI models failed");
+
+  assertEquals(calls[0], "ai_conversation_modes");
+  assertEquals(outcome.assigned, false);
+  assertEquals(outcome.adminsNotified, 0);
+});
+
+Deno.test("escalateConversation notifies every configured admin number", async () => {
+  const notified: string[] = [];
+  const admin = {
+    from() {
+      return {
+        upsert: () => Promise.resolve({ error: null }),
+        select: () => ({
+          eq: () => ({ is: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }),
+          then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
+        }),
+        insert: () => Promise.resolve({ error: null }),
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    },
+  };
+
+  const outcome = await escalateConversation({
+    admin,
+    userId: "00000000-0000-0000-0000-000000000001",
+    platform: "whatsapp",
+    conversationId: "wa-conversation",
+    customerName: "Test customer",
+    adminPhoneNumbers: ["+96500000001", "+96500000002"],
+    sendWhatsAppText: (recipient) => { notified.push(recipient); return Promise.resolve(); },
+  }, "All configured AI models failed");
+
+  assertEquals(notified, ["96500000001", "96500000002"]);
+  assertEquals(outcome.adminsNotified, 2);
 });
