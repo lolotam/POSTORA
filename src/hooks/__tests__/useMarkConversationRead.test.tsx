@@ -1,0 +1,68 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useMarkConversationRead, type Conversation } from "@/hooks/useMessaging";
+
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: "jwt" } } }),
+      refreshSession: vi.fn(),
+    },
+  },
+}));
+
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ session: { user: { id: "user-1" } } }),
+}));
+
+function conversation(id: string, unread: number): Conversation {
+  return { id, unread_count: unread } as Conversation;
+}
+
+describe("useMarkConversationRead", () => {
+  let client: QueryClient;
+  let resolveRequest: (value: Response) => void;
+
+  beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise<Response>((resolve) => {
+        resolveRequest = resolve;
+      })),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // The badge lives in the conversation list query, not in the thread that was opened. It has
+  // to clear the moment a chat is selected, not one server round-trip later.
+  it("clears the unread badge in the list cache before the server answers", async () => {
+    const listKey = ["messaging-conversations", "acct-1", "WHATSAPP"];
+    client.setQueryData(listKey, [conversation("c-1", 3), conversation("c-2", 1)]);
+    const otherAccountKey = ["messaging-conversations", "acct-2", "WHATSAPP"];
+    client.setQueryData(otherAccountKey, [conversation("c-1", 5)]);
+
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    const { result } = renderHook(() => useMarkConversationRead(), { wrapper });
+
+    act(() => {
+      result.current.mutate({ socialAccountId: "acct-1", conversationId: "c-1" });
+    });
+
+    await waitFor(() => {
+      expect(client.getQueryData<Conversation[]>(listKey)?.map((c) => c.unread_count)).toEqual([0, 1]);
+    });
+    // Same conversation id under another account is a different chat; it is left alone.
+    expect(client.getQueryData<Conversation[]>(otherAccountKey)?.[0].unread_count).toBe(5);
+
+    resolveRequest(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  });
+});

@@ -283,7 +283,21 @@ export function useMarkConversationRead() {
         conversation_id: params.conversationId,
       });
     },
-    onSuccess: () => {
+    // The unread badge belongs to the list, which is a different query from the thread that
+    // was just opened. Clearing it in the cache up front makes the badge disappear the moment
+    // a chat is selected instead of one server round-trip later; the refetch below settles it.
+    onMutate: (params) => {
+      qc.setQueriesData<Conversation[]>(
+        { queryKey: ["messaging-conversations", params.socialAccountId] },
+        (conversations) =>
+          conversations?.map((conversation) =>
+            conversation.id === params.conversationId && conversation.unread_count > 0
+              ? { ...conversation, unread_count: 0 }
+              : conversation,
+          ),
+      );
+    },
+    onSettled: () => {
       qc.invalidateQueries({ queryKey: ["messaging-conversations"] });
     },
   });
