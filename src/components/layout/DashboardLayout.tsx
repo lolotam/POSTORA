@@ -174,8 +174,6 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       { icon: Bot, label: "Agent Setup", path: "/automation/agents" },
       ...(hasMessagingFlags ? [{ icon: Inbox, label: "Unified Inboxes", path: "/messaging" }] : []),
       ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
-      { icon: Zap, label: "Messaging Automation", path: "/automation/messaging" },
-      { icon: MessageCircle, label: "Comments Automation", path: "/automation/comments" },
       { icon: Database, label: "Database Connectors", path: "/settings?tab=integrations" },
     ];
 

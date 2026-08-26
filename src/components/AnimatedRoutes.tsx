@@ -107,8 +107,6 @@ const AdminHiggsfieldCallback = lazyWithRetry(() => import("@/pages/AdminHiggsfi
 const ApiDocumentation = lazyWithRetry(() => import("@/pages/ApiDocumentation"), "ApiDocumentation");
 const EcommerceWhatsAppApi = lazyWithRetry(() => import("@/pages/docs/EcommerceWhatsAppApi"), "EcommerceWhatsAppApi");
 const AutomationHub = lazyWithRetry(() => import("@/pages/automation/AutomationHub"), "AutomationHub");
-const MessagingAutomationPage = lazyWithRetry(() => import("@/pages/automation/MessagingAutomationPage"), "MessagingAutomationPage");
-const CommentsAutomationPage = lazyWithRetry(() => import("@/pages/automation/CommentsAutomationPage"), "CommentsAutomationPage");
 const UnifiedAgentSetupPage = lazyWithRetry(() => import("@/pages/automation/UnifiedAgentSetupPage"), "UnifiedAgentSetupPage");
 const CommentManagerPage = lazyWithRetry(() => import("@/pages/comments/CommentManagerPage"), "CommentManagerPage");
 
@@ -298,8 +296,8 @@ export function AnimatedRoutes() {
         
         {/* Automation Hub */}
         <Route path="/automation" element={<ProtectedRoute><AnimatedPage><AutomationHub /></AnimatedPage></ProtectedRoute>} />
-        <Route path="/automation/messaging" element={<ProtectedRoute><AnimatedPage><MessagingAutomationPage /></AnimatedPage></ProtectedRoute>} />
-        <Route path="/automation/comments" element={<ProtectedRoute><AnimatedPage><CommentsAutomationPage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/automation/messaging" element={<Navigate to="/automation/agents" replace />} />
+        <Route path="/automation/comments" element={<Navigate to="/automation/agents" replace />} />
         <Route path="/automation/agents" element={<ProtectedRoute><AnimatedPage><UnifiedAgentSetupPage /></AnimatedPage></ProtectedRoute>} />
         <Route path="/automation-hub" element={<Navigate to="/automation" replace />} />
         <Route path="/leads-crm" element={<ProtectedRoute><AnimatedPage><LeadsCRM /></AnimatedPage></ProtectedRoute>} />

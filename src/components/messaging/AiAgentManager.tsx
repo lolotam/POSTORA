@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
+import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
 import { AiAgentTestChat } from "@/components/messaging/AiAgentTestChat";
@@ -46,9 +47,10 @@ interface AiAgentManagerProps {
   /** When provided (with onTabChange), the tab bar is URL-controlled for deep links. */
   activeTab?: AiAgentTab;
   onTabChange?: (tab: AiAgentTab) => void;
+  surface?: "dms" | "comments" | "both";
 }
 
-export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }: AiAgentManagerProps = {}) {
+export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, surface = "both" }: AiAgentManagerProps = {}) {
   const { config, isLoading, upsertConfig } = useAiAgentConfig(platform);
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
   const [phoneInput, setPhoneInput] = useState("");
@@ -129,10 +131,8 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }
 
       <TabsContent value="settings" className="mt-0">
         <div className="space-y-4">
-          {/* Only WhatsApp reaches its handler picker from here. The Facebook, Instagram and
-              Threads pages already render this card in their own tab, and a second copy would
-              put two independent account selectors for one setting on the same page. */}
-          {platform === "whatsapp" && <AutomationHandlerCard platform={platform} />}
+          {/* Automation Handler selector (Incoming Messages and/or Comments based on surface) */}
+          <AutomationHandlerCard platform={platform} surface={surface} />
 
           <Card>
             <CardHeader>
@@ -235,6 +235,9 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }
               </div>
             </CardContent>
           </Card>
+
+          {/* Auto-Reply Rules */}
+          <AutoReplyManager platform={platform === "whatsapp" ? undefined : platform} />
 
           <div className="flex justify-end"><Button onClick={save} disabled={upsertConfig.isPending}>{upsertConfig.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save settings</Button></div>
         </div>

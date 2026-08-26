@@ -30,7 +30,7 @@ export default function AutomationHub() {
         "Automate direct message replies, configure keyword rules, assign human agent handoffs, and select between internal AI or n8n workflows for WhatsApp, Messenger, IG, and Threads.",
       icon: MessageSquare,
       variant: "sky" as const,
-      path: "/automation/messaging",
+      path: "/automation/agents?surface=dms",
       badge: "Inbound DMs",
       features: [
         "Rule-based keyword auto-replies",
@@ -46,7 +46,7 @@ export default function AutomationHub() {
         "Automate responses to post comments on Facebook Pages, Instagram Media, and Threads. Auto-hide spam, filter profanity, and trigger high-converting comment-to-DM workflows.",
       icon: MessageCircle,
       variant: "emerald" as const,
-      path: "/automation/comments",
+      path: "/automation/agents?surface=comments",
       badge: "Public Posts",
       features: [
         "Post comment auto-replies",

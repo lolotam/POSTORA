@@ -13,6 +13,7 @@ interface AutomationHandlerCardProps {
   // When the host page already owns an account selection, pass it in so a handler change
   // can never be saved against a different account than the one on screen.
   accountId?: string | null;
+  surface?: "dms" | "comments" | "both";
 }
 
 interface HandlerOption {
@@ -37,7 +38,11 @@ const COMMENT_OPTIONS: HandlerOption[] = [
 // Which agent answers this account. Messages and comments are chosen separately, and each is
 // a single-choice dropdown rather than a set of toggles so two agents can never answer the
 // same item.
-export function AutomationHandlerCard({ platform, accountId: controlledAccountId }: AutomationHandlerCardProps) {
+export function AutomationHandlerCard({
+  platform,
+  accountId: controlledAccountId,
+  surface = "both",
+}: AutomationHandlerCardProps) {
   const { data: socialAccounts = [] } = useSocialAccounts();
   const accounts = useMemo(
     () => socialAccounts.filter((account) => account.platform === platform && account.is_active),
@@ -56,6 +61,8 @@ export function AutomationHandlerCard({ platform, accountId: controlledAccountId
   if (accounts.length === 0) return null;
 
   const busy = isLoading || save.isPending;
+  const showMessages = surface === "dms" || surface === "both";
+  const showComments = (surface === "comments" || surface === "both") && platform !== "whatsapp";
 
   return (
     <Card className="mb-4">
@@ -83,7 +90,7 @@ export function AutomationHandlerCard({ platform, accountId: controlledAccountId
           </Select>
         )}
 
-        {platform !== "threads" && (
+        {showMessages && (
           <HandlerRow
             label="Incoming Messages"
             testId="messages-handler"
@@ -94,7 +101,7 @@ export function AutomationHandlerCard({ platform, accountId: controlledAccountId
           />
         )}
 
-        {platform !== "whatsapp" && (
+        {showComments && (
           <HandlerRow
             label="Comments"
             testId="comments-handler"

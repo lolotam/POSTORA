@@ -214,135 +214,97 @@ export default function UnifiedAgentSetupPage() {
 
         <GradientDivider tone="violet" />
 
-        {/* Compact Option Cards: Direct Messaging & Post Comments (Centered, Same Height) */}
+        {/* Unified Configuration Banner with Inline Surface Toggles on the Right */}
         <Reveal delay={50}>
-          <div className="flex flex-col items-center space-y-2.5 max-w-lg mx-auto w-full pt-1">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Automated Surfaces (Select one or both)
-            </span>
-            <div className="flex items-center justify-center gap-3 w-full">
-              {/* Direct Messaging Button */}
-              <button
-                type="button"
-                onClick={handleToggleDms}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-xl border text-sm font-medium transition-all duration-200 cursor-pointer h-10 shadow-sm",
-                  dmsActive
-                    ? "bg-primary/15 border-primary text-foreground ring-1 ring-primary/40 font-semibold shadow-primary/10"
-                    : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                )}
-              >
-                <MessageSquare className="w-4 h-4 text-sky-400 shrink-0" />
-                <span>Direct Messaging</span>
-                {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-1 shrink-0" />}
-              </button>
+          <div className="space-y-6">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-4 sm:p-5 rounded-2xl bg-card border border-border/80 shadow-sm">
+              {/* Left: Icon, Title, Badge, Description */}
+              <div className="flex items-center gap-3.5">
+                <div className="h-10 w-10 rounded-xl bg-primary/10 text-primary flex items-center justify-center shrink-0">
+                  {dmsActive && !commentsActive ? (
+                    <MessageSquare className="w-5 h-5 text-sky-400" />
+                  ) : !dmsActive && commentsActive ? (
+                    <MessageCircle className="w-5 h-5 text-emerald-400" />
+                  ) : (
+                    <Bot className="w-5 h-5 text-primary" />
+                  )}
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-bold text-base sm:text-lg text-foreground">
+                      {dmsActive && !commentsActive
+                        ? "Direct Messaging Agent Configuration"
+                        : !dmsActive && commentsActive
+                        ? "Post Comments Agent Configuration"
+                        : "Multi-Surface Agent Configuration"}
+                    </h3>
+                    <Badge variant="outline" className="text-primary border-primary/30 bg-primary/10 text-xs">
+                      {selectedPlatformMeta.label} {dmsActive && commentsActive ? "DMs & Comments" : dmsActive ? "DMs" : "Comments"}
+                    </Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Configure AI instructions, knowledge base (RAG), database connectors, and reply thresholds for{" "}
+                    {dmsActive && commentsActive ? "direct messages and post comments" : dmsActive ? "direct messages" : "post comments"}.
+                  </p>
+                </div>
+              </div>
 
-              {/* Post Comments Button */}
-              <button
-                type="button"
-                disabled={!selectedPlatformMeta.supportsComments}
-                onClick={handleToggleComments}
-                className={cn(
-                  "flex-1 flex items-center justify-center gap-2 py-2 px-4 rounded-xl border text-sm font-medium transition-all duration-200 h-10 shadow-sm",
-                  !selectedPlatformMeta.supportsComments
-                    ? "opacity-40 cursor-not-allowed bg-muted/20 border-border/30 text-muted-foreground"
-                    : commentsActive
-                    ? "bg-primary/15 border-primary text-foreground ring-1 ring-primary/40 font-semibold cursor-pointer shadow-primary/10"
-                    : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50 cursor-pointer"
+              {/* Right: Inline Surface Toggle Buttons */}
+              <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+                {/* Direct Messaging Button */}
+                <button
+                  type="button"
+                  onClick={handleToggleDms}
+                  className={cn(
+                    "flex items-center justify-center gap-2 py-2 px-4 rounded-xl border text-xs sm:text-sm font-medium transition-all duration-200 cursor-pointer h-10 shadow-sm",
+                    dmsActive
+                      ? "bg-primary/15 border-primary text-foreground ring-1 ring-primary/40 font-semibold shadow-primary/10"
+                      : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  )}
+                >
+                  <MessageSquare className="w-4 h-4 text-sky-400 shrink-0" />
+                  <span>Direct Messaging</span>
+                  {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
+                </button>
+
+                {/* Post Comments Button */}
+                {selectedPlatformMeta.supportsComments && (
+                  <button
+                    type="button"
+                    onClick={handleToggleComments}
+                    className={cn(
+                      "flex items-center justify-center gap-2 py-2 px-4 rounded-xl border text-xs sm:text-sm font-medium transition-all duration-200 h-10 shadow-sm cursor-pointer",
+                      commentsActive
+                        ? "bg-primary/15 border-primary text-foreground ring-1 ring-primary/40 font-semibold shadow-primary/10"
+                        : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    )}
+                  >
+                    <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>Post Comments</span>
+                    {commentsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
+                  </button>
                 )}
-              >
-                <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>Post Comments</span>
-                {commentsActive && selectedPlatformMeta.supportsComments && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-1 shrink-0" />}
-              </button>
+              </div>
             </div>
+
+            {/* Agent Manager Card */}
+            <GradientRingCard
+              variant={selectedPlatformMeta.colorPreset}
+              padded={false}
+              hoverLift={false}
+              ringIntensity="subtle"
+              innerClassName="p-4 md:p-6"
+            >
+              <AiAgentManager
+                key={`${platform}-${dmsActive ? "dms" : ""}-${commentsActive ? "comments" : ""}`}
+                platform={platform}
+                activeTab={activeTab}
+                onTabChange={handleTabChange}
+                surface={dmsActive && commentsActive ? "both" : dmsActive ? "dms" : "comments"}
+              />
+            </GradientRingCard>
           </div>
         </Reveal>
-
-        <GradientDivider tone="violet" />
-
-        {/* Configuration Sections */}
-        <div className="space-y-8">
-          {/* 1. Direct Messaging Agent Configuration */}
-          {dmsActive && (
-            <Reveal delay={70}>
-              <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-sky-500/5 border border-sky-500/20">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-xl bg-sky-500/15 flex items-center justify-center text-sky-400">
-                      <MessageSquare className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-base text-foreground">Direct Messaging Agent Configuration</h3>
-                        <Badge variant="outline" className="text-sky-400 border-sky-500/30 bg-sky-500/10 text-xs">
-                          {selectedPlatformMeta.label} DMs
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Configure AI instructions, knowledge base (RAG), database connectors, and reply thresholds for direct messages.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <GradientRingCard
-                  variant={selectedPlatformMeta.colorPreset}
-                  padded={false}
-                  hoverLift={false}
-                  ringIntensity="subtle"
-                  innerClassName="p-4 md:p-6"
-                >
-                  <AiAgentManager
-                    key={`${platform}-dms`}
-                    platform={platform}
-                    activeTab={activeTab}
-                    onTabChange={handleTabChange}
-                  />
-                </GradientRingCard>
-              </div>
-            </Reveal>
-          )}
-
-          {/* 2. Post Comments Configuration */}
-          {commentsActive && selectedPlatformMeta.supportsComments && (
-            <Reveal delay={90}>
-              <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-2xl bg-emerald-500/5 border border-emerald-500/20">
-                  <div className="flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-xl bg-emerald-500/15 flex items-center justify-center text-emerald-400">
-                      <MessageCircle className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-base text-foreground">Post Comments Configuration</h3>
-                        <Badge variant="outline" className="text-emerald-400 border-emerald-500/30 bg-emerald-500/10 text-xs">
-                          {selectedPlatformMeta.label} Comments
-                        </Badge>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Configure automated comment responses, keyword triggers, and moderation rules for public posts on {selectedPlatformMeta.label}.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                <GradientRingCard
-                  variant="emerald"
-                  padded={false}
-                  hoverLift={false}
-                  ringIntensity="subtle"
-                  innerClassName="p-4 md:p-6 space-y-6"
-                >
-                  <AutomationHandlerCard
-                    platform={platform}
-                  />
-                  <AutoReplyManager platform={platform === "whatsapp" ? undefined : platform} />
-                </GradientRingCard>
-              </div>
-            </Reveal>
-          )}
-        </div>
       </div>
     </DashboardLayout>
   );
