@@ -28,6 +28,14 @@ Each phase is one commit, verified before the next begins.
 - Every edge function change deploys by the manual volume-copy procedure in
   `docs/runbooks/deploy-edge-function.md`. `npx supabase functions deploy` targets
   Supabase Cloud and fails against this self-hosted stack.
+- **Reload with `docker compose restart functions`, never `docker compose up -d
+  --no-deps functions`.** The runbook's "Why restart, not `up -d`" section is explicit:
+  the function sources are a bind mount, so `up -d` reports `Container ... Running` and
+  changes nothing when the compose config is unchanged — the container keeps serving
+  the old code and the deploy looks successful. `CLAUDE.md` still names the `up -d`
+  form; the runbook is the correct source.
+- Hashes are compared after normalising line endings (`tr -d '\r'`), because the local
+  Windows copy is CRLF and would otherwise never match.
 - The deployed functions volume has drifted from the repo before (the
   `refresh-tokens` server-only hotfix). Every deploy step begins by diffing the
   deployed file against the repo copy, so a hotfix is not silently regressed.
@@ -120,6 +128,35 @@ introduced by this work, and so it can be scheduled separately.
 - `messaging-api` validates model fields only when they are present in the payload:
   `modelFields.filter((field) => field in updates)` at `index.ts:453`.
 - Two rows exist in `whatsapp_agents`, five in `whatsapp_conversation_assignments`.
+- The platform's main service creates every function worker with
+  `workerTimeoutMs = 1 * 60 * 1000` — a hard 60-second ceiling. Read from
+  `/home/deno/functions/main/index.ts` inside
+  `postorasupabase-supabase-j8axyh-supabase-edge-functions` on 2026-08-27.
+  `memoryLimitMb` is 150 in the same block.
+- `CHAT_TIMEOUT_MS` is 25 s (`index.ts:75`), applied per model call via
+  `AbortSignal.timeout` inside `chatCompletion` (`index.ts:88-109`), which currently
+  takes no timeout parameter.
+- `escalated` is declared at `index.ts:581` and set by any tool returning
+  `{escalated: true}`; the model loop continues to a further iteration afterwards so
+  the model can phrase a closing message.
+
+## Review record
+
+This design was reviewed adversarially by Codex (`gpt-5.6-sol`, medium effort,
+read-only) on 2026-08-27, which returned REJECT with nine blocking objections. Every
+one was verified against source before being accepted. The material outcomes are folded
+into the sections above rather than listed separately; the four that changed the
+design's substance rather than its wording were:
+
+- The deploy command in the first draft would have silently served old code.
+- Apologising before escalating created a permanent apology loop on a failed mode
+  write, and let the copy claim a notification that had not happened.
+- A tool-driven escalation followed by a failing iteration escalated twice.
+- The 60-second worker ceiling makes a three-model chain unable to complete at all on
+  slow failures, so the floor as first designed would not have run in the case that
+  matters most.
+
+Line-number corrections from that review are applied throughout.
 
 ---
 
@@ -162,70 +199,187 @@ Two values are currently declared inside the try and are invisible to the catch:
 - `const language = detectReplyLanguage(...)` — `index.ts:508`
 
 Both become `let … = null` declared above the try and assigned at their current
-positions. `buildReplySender` can itself throw (for example
-`"WhatsApp account not found for AI reply"`), in which case `replySender` stays null
-and the floor skips the apology but still escalates and logs.
+positions, along with `modelChain` (`index.ts:590`, needed by the exhaustion log) and
+`escalated` (`index.ts:581`, needed by the double-escalation guard). Five hoists in
+total.
+
+`buildReplySender` can itself throw — for example `"WhatsApp account not found for AI
+reply"`. That is a plain `Error` raised at `:523`, *before* the model loop, so it never
+produces a `ModelChainExhaustedError` and the floor correctly does not run: there is no
+model outage, and no sender to apologise through. An earlier draft of this spec claimed
+that case "skips the apology but still escalates", which was wrong.
 
 ### What the floor does
 
-Guarded by `!dryRun` in full. In order:
+Guarded by `!dryRun` in full. **Escalation runs first, and the apology is conditional
+on it.** In order:
 
-1. **Apology.** A static, non-AI string selected by the already-computed `language`,
-   sent through `replySender`. Skipped when `replySender` is null.
-   **Skipped entirely when `request.comment_id` is set** — on a public comment, a
-   visible "we are having trouble" reply is worse than silence, so a failed comment
-   escalates without posting anything.
-2. **Escalation.** A new exported `escalateConversation()` in `tools.ts`, extracted
+1. **Escalation.** A new exported `escalateConversation()` in `tools.ts`, extracted
    from the body of `escalateToHuman` and called by both. Its first write is
    `ai_conversation_modes` → `human_first` (`tools.ts:127`), keyed
    `(user_id, platform, conversation_id)` and therefore platform-agnostic. Assignment
    to an online `whatsapp_agents` row and the admin WhatsApp notification follow
-   unchanged.
-3. **Log.** `ai_agent_logs.status = "escalated_after_model_exhaustion"`, with
-   `model_chain`, `model_errors` and `fallback_level` continuing to flow into
+   unchanged. It returns an `EscalationOutcome` reporting whether an agent was
+   assigned and how many admins were reached.
+
+   Skipped when the model already escalated through the `escalate_to_human` tool
+   earlier in this same request — see "Not twice in one request" below.
+
+2. **Apology.** A static, non-AI string, sent through `replySender`, **only if step 1
+   succeeded** (or had already happened). Skipped when `replySender` is null and
+   **skipped entirely when `request.comment_id` is set** — on a public comment, a
+   visible "we are having trouble" reply is worse than silence, so a failed comment
+   escalates without posting anything.
+
+3. **Log.** One of two statuses, so the log never overstates what happened:
+   - `escalated_after_model_exhaustion` — the conversation reached a human.
+   - `model_exhaustion_unhandled` — every model failed *and* the escalation failed.
+     Nothing was sent; the conversation is still on the AI.
+
+   Both are error-level in `system_logs` (see "Log level" below). `model_chain`,
+   `model_errors`, `fallback_level`, `apology_sent` and `human_notified` all flow into
    `system_logs.metadata` through the existing `meta` argument of `logOutcome`.
 
 The response body stays `{ok: false, error}` at HTTP 200. Changing the status code is
 not in scope and would have no effect, since no caller reads it for anything but a
 log line.
 
-### Why this does not spam apologies
+### Why escalation comes first
 
-Step 2 sets the conversation to `human_first` before the customer's next message
-arrives. `ai-agent-reply` gates on that mode, so the agent goes quiet for the
-conversation from that point. A customer who sends five messages during a model
-outage receives one apology and one escalation, not five.
+An earlier draft of this design apologised first and escalated second, and claimed the
+mode flip made repeat apologies impossible. It does not — `shouldAiReply` rejects
+`human_first` at `logic.ts:99`, but only once the mode row has actually been written.
+Apologising first opens two repeat paths:
+
+- The mode write fails, the apology has already gone out, and **every subsequent
+  message repeats it forever**.
+- The apology claims a human was notified when the escalation that would have notified
+  them had not yet run, and might fail.
+
+Escalating first closes both. A failed escalation now means no apology at all, logged
+as `model_exhaustion_unhandled` — staying quiet is better than an apology loop, and
+far better than a false promise.
+
+One race survives: two messages arriving inside the same outage can both read the old
+mode before either writes it, producing two apologies. This is accepted for now. It
+needs a compare-and-set claim to close properly, which would add a migration to a
+phase that is otherwise code-only. If `ai_agent_logs` shows two
+`escalated_after_model_exhaustion` rows for one `conversation_id`, that is the signal
+to build it.
+
+### Not twice in one request
+
+`escalated` (`index.ts:581`) is set when the model calls the `escalate_to_human` tool.
+The loop then runs another iteration so the model can phrase a closing message — and
+if every model fails in *that* iteration, the floor would escalate a second time:
+closing and recreating the active assignment, appending duplicate history, and
+notifying admins twice.
+
+`escalated` is therefore hoisted alongside the other four values, and the floor skips
+step 1 when it is already true. The apology still goes out, because the customer
+received no reply either way.
 
 ### Apology text
 
-Two strings, `ar` and `en`, chosen by `detectReplyLanguage`, which already honours
-`config.language_mode` first, then `request.language_hint`, then a character tally of
-the inbound text. This reuses the resolution path established by `7f599cca` and
-`0065633c`; a hardcoded English string would re-open the Arabic-customer class of bug
-those commits closed.
+Four strings: two languages × two outcomes.
+
+`detectReplyLanguage` picks the language, honouring `config.language_mode` first, then
+`request.language_hint`, then a character tally of the inbound text. This reuses the
+resolution path established by `7f599cca` and `0065633c`; a hardcoded English string
+would re-open the Arabic-customer class of bug those commits closed.
+
+The outcome picks the wording, because the handoff is not guaranteed to reach anyone:
+`escalateConversation` writes WhatsApp-shaped assignment rows on every platform and
+notifies nobody when `admin_phone_numbers` is empty. So the copy only claims a
+notification when `EscalationOutcome` proves one happened:
+
+- `assigned || adminsNotified > 0` → "Someone from our team has been notified and will
+  get back to you shortly."
+- otherwise → "Your message is saved and we'll get back to you as soon as we can."
+
+The second string is true regardless: the mode flip does silence the AI, so whoever
+next opens the conversation sees it. Making the handoff itself workspace-aware and
+platform-aware is finding 4's follow-up, not this phase.
+
+### The floor must be reachable
+
+`CHAT_TIMEOUT_MS` is 25 s (`index.ts:75`), and the platform's main service creates
+every function worker with `workerTimeoutMs = 1 * 60 * 1000` — a hard **60-second**
+ceiling, read from the running container on 2026-08-27.
+
+Three sequential model attempts therefore need up to 75 s and **cannot complete**,
+never mind leave room for the floor. `index.ts:72` already records what happens: the
+isolate is killed with "an opaque 500 and no log row". A slow or hanging provider
+would defeat the floor entirely, so the floor would only ever catch models that fail
+*fast*. That is a pre-existing bug this phase has to fix to deliver its own guarantee.
+
+The fix is a deadline rather than a fixed per-call timeout:
+
+```
+WORKER_BUDGET_MS  60_000   the platform's hard kill
+FLOOR_RESERVE_MS  12_000   one customer send plus the escalation writes
+SAFETY_MARGIN_MS   5_000   response serialisation and log writes
+```
+
+`chatCompletion` gains a `timeoutMs` parameter. Before each attempt the loop computes
+what is left, breaks out if it is not positive, and otherwise passes
+`min(CHAT_TIMEOUT_MS, remaining)`. A model skipped for lack of budget is recorded in
+`model_errors` like any other failure, so the chain that ran stays visible in the log.
+
+`CHAT_TIMEOUT_MS` itself stays at 25 s: the clamp handles the multi-model case, and
+lowering the constant would cut off a slow-but-successful single model on the happy
+path.
+
+### Log level
+
+`logOutcome` (`index.ts:192`) sets `system_logs.level` to `error` only when
+`status === "error"`. Both new statuses represent a total model outage, so the
+condition becomes a set membership over `error`, `escalated_after_model_exhaustion`
+and `model_exhaustion_unhandled`. Without this a production outage is filed as `info`.
 
 ## Files
 
-- `supabase/functions/ai-agent-reply/logic.ts` — add `ModelChainExhaustedError`, the
-  two apology strings, and a selector for them.
-- `supabase/functions/ai-agent-reply/index.ts` — hoist `replySender` and `language`;
-  throw the new class at `:615`; add the floor to the catch at `:748`.
+- `supabase/functions/ai-agent-reply/logic.ts` — `ModelChainExhaustedError`, the four
+  apology strings and their selector, and the deadline arithmetic.
+- `supabase/functions/ai-agent-reply/index.ts` — five hoists; a `timeoutMs` parameter
+  on `chatCompletion`; the budget check in the model loop; the typed throw at `:615`;
+  the floor in the catch at `:748`; the error-status set in `logOutcome`.
 - `supabase/functions/ai-agent-reply/tools.ts` — extract and export
-  `escalateConversation()`; `escalateToHuman` calls it.
-- Deno tests alongside the existing suite.
+  `escalateConversation()` returning `EscalationOutcome`; `escalateToHuman` calls it.
+- Vitest cover in `src/lib/__tests__/aiAgentReplyLogic.test.ts` for everything pure;
+  Deno cover in `tools.test.ts` for the extraction.
+
+The floor helper and the deadline arithmetic must be shaped so they can be tested
+without a network or a database — the pure parts live in `logic.ts`, and the floor
+takes its sender and escalation target as parameters rather than reaching for them.
 
 ## Verification
 
-- With a config pointed at three known-dead model strings, on **WhatsApp**: the
-  customer receives the apology, `ai_conversation_modes` shows `human_first` for that
-  conversation, an assignment row appears, and `ai_agent_logs` carries
+Automated, before deploying:
+
+- The deadline arithmetic: full budget, partially spent, exhausted, and negative.
+- The apology selector: both languages × both outcomes, none empty.
+- `ModelChainExhaustedError` is distinguishable from a plain `Error`.
+- The floor: dry run sends nothing; a comment sends nothing but still escalates; a
+  failed escalation suppresses the apology and reports `model_exhaustion_unhandled`;
+  an already-escalated request does not escalate twice but still apologises; a failing
+  sender still leaves the escalation in place.
+
+Against production, after deploying:
+
+- With a **test** config (not one of the three live rows) pointed at three dead model
+  strings, on **WhatsApp**: the apology arrives in the customer's language,
+  `ai_conversation_modes` reads `human_first`, and `ai_agent_logs` carries
   `escalated_after_model_exhaustion`.
 - The same on **Instagram**, confirming the floor is not WhatsApp-specific.
+- A **slow** failure, not only a fast one: point the chain at a model that hangs rather
+  than one that 404s, and confirm the floor still runs inside the 60-second worker
+  budget. A dead-model test passes in milliseconds and proves nothing about the case
+  the deadline exists for.
 - A comment-surface run escalates and logs but posts nothing publicly.
 - A normal successful reply is unchanged; `model_errors` and `fallback_level` still
-  populate when an earlier model in the chain fails and a later one succeeds.
-- Check that `AiAgentLogsView` renders the new status without breaking — the status
-  column has no CHECK, but the UI may switch on known values.
+  populate when an earlier model fails and a later one succeeds.
+- `AiAgentLogsView` renders both new statuses without breaking.
 
 ---
 
@@ -248,8 +402,16 @@ Two new files under `supabase/migrations/`, dated 2026-08-27:
    idx_ai_agent_allowed_models_active ON (is_active, sort_order)`, the `SELECT` grant
    to `authenticated` and `ALL` to `service_role`, `ENABLE ROW LEVEL SECURITY`, and
    both policies (`ai_agent_allowed_models_read_active`,
-   `ai_agent_allowed_models_admin_all`) each preceded by `DROP POLICY IF EXISTS`.
-   **No seed block** — see finding 3.
+   `ai_agent_allowed_models_admin_all`). **No seed block** — see finding 3.
+
+   **The policies are created only when absent, not dropped and recreated.** The
+   `manual-sql` original uses `DROP POLICY IF EXISTS` followed by `CREATE POLICY`,
+   which is fine for a first run against a fresh database but is not a no-op against
+   production: run through plain `psql` without an enclosing transaction, the drop
+   commits on its own, and until the create lands ordinary users read zero rows and
+   admin writes are denied. A failure between the two leaves the policy permanently
+   missing. Guarding each `CREATE POLICY` behind a `pg_policies` existence check
+   instead never touches a live policy at all.
 2. `ai_agent_configs.fallback_model_1` and `fallback_model_2` —
    `ADD COLUMN IF NOT EXISTS`, nullable `text`, no default, no CHECK, no foreign key.
 
@@ -344,9 +506,32 @@ index, its grants and both RLS policies stay in the database untouched.
 the three `system_settings` rows instead, formatting each as
 `${provider_code}/${model_id}` before `parseModelRef`.
 
+**A valid Primary is required, and a gap ends the chain.** Reading the three keys and
+simply filtering out the missing ones would let an unset Primary promote Fallback 2
+into index 0 — where it would run as the primary model and be logged with
+`fallback_level: 0`, hiding both the misconfiguration and which tier actually answered.
+So: no valid Primary means an empty chain and therefore `ModelChainExhaustedError`; a
+missing or malformed Fallback 1 truncates the chain rather than pulling Fallback 2
+forward. "Valid" means the row's value is an object carrying string `provider_code` and
+`model_id`.
+
 The `["gpt-4o-mini"]` last resort at `:590` is removed entirely. An empty global chain
 throws `ModelChainExhaustedError` into Phase 1's floor rather than silently calling a
 model no admin selected.
+
+**The cutover is not freely reversible, so it is gated.** If Task 7 deploys while the
+three rows are missing or malformed, every live conversation takes the floor and is
+switched to `human_first` — and reverting `index.ts` does *not* undo that, because the
+old runtime honours the same mode gate at `:402-443`. The snapshot in §3f records model
+choices only; it carries nothing about conversation modes.
+
+Two guards, both immediately before the deploy:
+
+1. Assert that all three keys exist, parse, and name a provider in
+   `PROVIDER_ENDPOINTS`. Abort the deploy otherwise.
+2. Record the `conversation_id` and current `mode` of every row in
+   `ai_conversation_modes` for the affected users, so a bad cutover's mutes can be
+   reversed without also reversing genuine human handoffs.
 
 `ai_agent_configs.model`, `fallback_model_1` and `fallback_model_2` stay in the
 database, with a code comment at the former read site marking them deprecated and
