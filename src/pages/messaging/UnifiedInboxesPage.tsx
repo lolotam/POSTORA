@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { useSearchParams, Link, useNavigate } from "react-router-dom";
+import { useSearchParams, Link } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MessagingInbox } from "@/components/messaging/MessagingInbox";
 import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
@@ -66,7 +66,6 @@ const INBOX_PLATFORMS: PlatformTabOption[] = [
 
 export default function UnifiedInboxesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
 
   const platformParam = searchParams.get("platform") as InboxPlatform;
@@ -78,10 +77,6 @@ export default function UnifiedInboxesPage() {
     INBOX_PLATFORMS.find((p) => p.id === platform) || INBOX_PLATFORMS[0];
 
   const handlePlatformChange = (nextPlatform: InboxPlatform) => {
-    if (nextPlatform === "whatsapp") {
-      navigate("/messaging/whatsapp");
-      return;
-    }
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
