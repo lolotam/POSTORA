@@ -102,10 +102,20 @@ describe("WhatsAppMediaAttachment", () => {
     };
   });
 
-  it("does not fetch until the bubble enters the viewport", () => {
+  it("does not fetch a bubble that is far outside the pane", async () => {
+    // jsdom gives every element a zero rect, which the geometric fallback would read as
+    // on-screen. Place this one well below the pane so the assertion is about the behaviour
+    // rather than about jsdom's missing layout.
+    const far = vi.spyOn(Element.prototype, "getBoundingClientRect").mockReturnValue({
+      top: 5000, bottom: 5100, left: 0, right: 100, width: 100, height: 100, x: 0, y: 5000,
+      toJSON: () => ({}),
+    } as DOMRect);
+
     renderAttachment(attachment(), api);
+    await Promise.resolve();
     expect(getMedia).not.toHaveBeenCalled();
     expect(screen.getByTestId("wa-media-pending")).toBeInTheDocument();
+    far.mockRestore();
   });
 
   it("never puts file_url on an img", () => {
@@ -197,5 +207,41 @@ describe("WhatsAppMediaAttachment", () => {
     expect(await screen.findByRole("dialog")).toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+});
+
+// Regression, 2026-08-26: media resolution hung on the pending skeleton forever whenever the
+// IntersectionObserver never fired -- which is exactly what Chrome does while a tab is hidden.
+// Confirmed in a real browser: with document.visibilityState "hidden", an observer on a fully
+// on-screen 126x108 element never fires, with or without a root, so every voice note and image
+// stayed a grey box that reads as an attachment that cannot be played.
+//
+// The observers stubbed here never invoke their callback -- the same condition as a hidden tab.
+// Do NOT call triggerIntersect: the point is that media resolves without it.
+describe("WhatsAppMediaAttachment when the observer never fires", () => {
+  beforeEach(() => {
+    stubIntersectionObserver();
+  });
+
+  it("still resolves an on-screen bubble", async () => {
+    const getMedia = vi.fn().mockResolvedValue({
+      media: [media({ kind: "audio", url: "https://signed.example/voice.ogg", mime_type: "audio/ogg" })],
+    });
+    const api = {
+      getMessagesPage: vi.fn(),
+      getMedia,
+      sendMedia: vi.fn(),
+      sendInteractive: vi.fn(),
+      getConversationState: vi.fn(),
+      setMessageFlag: vi.fn(),
+      revokeMessage: vi.fn(),
+      sendVoice: vi.fn(),
+      downloadBlob: vi.fn(),
+    } as unknown as WhatsAppInboxApi;
+
+    renderAttachment(attachment({ kind: "audio" }), api);
+
+    await waitFor(() => expect(getMedia).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId("wa-media-pending")).not.toBeInTheDocument());
   });
 });

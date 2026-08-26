@@ -166,20 +166,55 @@ export function WhatsAppMediaAttachment({
   const { requestMedia, mediaByRowId, requestedRowIds, imageUrls } = useWhatsAppMedia();
   const resolved = mediaByRowId.get(attachment.message_row_id);
 
+  // Laziness must never be the reason media NEVER loads.
+  //
+  // IntersectionObserver alone was that reason: Chrome suspends its callbacks while a tab is
+  // hidden, so a chat opened in a background tab -- or left while it loaded -- kept every
+  // bubble on the pending skeleton, which reads as an attachment that cannot be played.
+  // Verified in a real browser: with document.visibilityState "hidden", an observer on a
+  // fully on-screen 126x108 element never fires, with or without a root.
+  //
+  // So the observer is now one of three triggers, all cheap and idempotent (requestMedia
+  // dedupes by row id): a geometric check for anything already in or near the pane, the
+  // observer for everything scrolled to later, and a visibilitychange re-check for the tab
+  // that was hidden when the thread opened. rootMargin also starts the fetch just before a
+  // bubble arrives rather than at the moment it does.
   useEffect(() => {
     const element = sentinelRef.current;
     if (!element) return;
+
+    const root = scrollRootFor(element);
+    const nearViewport = () => {
+      const box = element.getBoundingClientRect();
+      const bounds = root
+        ? root.getBoundingClientRect()
+        : { top: 0, bottom: window.innerHeight } as DOMRect;
+      const margin = 400;
+      return box.bottom > bounds.top - margin && box.top < bounds.bottom + margin;
+    };
+
+    if (nearViewport()) {
+      setVisible(true);
+      return;
+    }
+
     const observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
-          setVisible(true);
-          observer.disconnect();
-        }
+        if (entries.some((entry) => entry.isIntersecting)) setVisible(true);
       },
-      { root: scrollRootFor(element), threshold: 0.01 },
+      { root, rootMargin: "400px", threshold: 0 },
     );
     observer.observe(element);
-    return () => observer.disconnect();
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible" && nearViewport()) setVisible(true);
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
+    return () => {
+      observer.disconnect();
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
   }, []);
 
   useEffect(() => {
