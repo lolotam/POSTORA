@@ -18,15 +18,31 @@ const testState = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   fetchOlder: vi.fn(),
   hasOlder: false,
+  markReadCalls: 0,
 }));
 
-vi.mock("@/hooks/useMessaging", () => ({
-  useMessagingAccounts: () => ({ accounts: testState.accounts, isLoading: false }),
-  useConversations: () => ({ data: testState.conversations, isLoading: false }),
-  useMessages: () => ({ data: testState.messages, isLoading: false }),
-  useSendMessage: () => ({ mutate: testState.sendMessage, isPending: false }),
-  useMarkConversationRead: () => ({ mutate: vi.fn(), mutateAsync: vi.fn() }),
-}));
+vi.mock("@/hooks/useMessaging", async () => {
+  const { useCallback, useState } = await import("react");
+  return {
+    useMessagingAccounts: () => ({ accounts: testState.accounts, isLoading: false }),
+    useConversations: () => ({ data: testState.conversations, isLoading: false }),
+    useMessages: () => ({ data: testState.messages, isLoading: false }),
+    useSendMessage: () => ({ mutate: testState.sendMessage, isPending: false }),
+    // Models the real useMutation contract, which the old `{ mutate: vi.fn() }` stub did not:
+    // `mutate` is referentially stable, the RESULT OBJECT is new on every render, and calling
+    // mutate re-renders the component as the mutation moves through pending/success. Anything
+    // that lists the result object as an effect dependency therefore loops for real here.
+    // The re-render count is capped so a regression fails an assertion instead of hanging.
+    useMarkConversationRead: () => {
+      const [, setVersion] = useState(0);
+      const mutate = useCallback(() => {
+        testState.markReadCalls += 1;
+        if (testState.markReadCalls <= 25) setVersion((version) => version + 1);
+      }, []);
+      return { mutate, mutateAsync: vi.fn(), isPending: false };
+    },
+  };
+});
 
 vi.mock("@/components/whatsapp/WhatsAppWorkspaceProvider", () => ({
   useWhatsAppWorkspaceContext: () => ({ activeRole: "owner" }),
@@ -276,6 +292,31 @@ describe("WhatsAppConversationPane scroll state", () => {
 // Both implementers followed it literally, and the forked screen shipped read-only: no text
 // box, no attachments, no quick replies. Reading a WhatsApp inbox you cannot reply in is a
 // regression against the screen this replaces.
+describe("WhatsAppConversationPane mark-read", () => {
+  // Incident, 2026-08-26: the effect that marks an opened chat read listed the useMutation
+  // result object as a dependency. Every mutate re-rendered the pane with a fresh object,
+  // which re-ran the effect, which mutated again -- ~100 requests/s per open tab, and since
+  // whatsapp_mark_read invalidates every conversations query, the NotificationBell's
+  // Instagram list refetched on each cycle until Meta rate-limited the app (error 613).
+  it("marks an opened conversation read exactly once", async () => {
+    testState.messages = [];
+    testState.markReadCalls = 0;
+    renderWithProviders(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId="account-1"
+        pageId="96550000000"
+        onScrollStateChange={() => {}}
+      />,
+      { withInboxApi: true },
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(testState.markReadCalls).toBe(1);
+  });
+});
+
 describe("WhatsAppConversationPane composer", () => {
   it("can send a message", () => {
     testState.messages = [];

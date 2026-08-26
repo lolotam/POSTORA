@@ -52,7 +52,11 @@ export function WhatsAppConversationPane({
   );
   const [hiddenUndo, setHiddenUndo] = useState<{ id: string; wasPinned: boolean } | null>(null);
   const undoTimerRef = useRef<number | null>(null);
-  const markRead = useMarkConversationRead();
+  // Only `mutate` goes into the effect below. useMutation's result object is rebuilt on every
+  // render, and listing it as a dependency re-armed the effect after each mutate: an infinite
+  // mark-read loop that took production down on 2026-08-26 (~100 requests/s per open tab, and
+  // every conversations query invalidated on each cycle until Meta rate-limited the app).
+  const { mutate: markConversationRead } = useMarkConversationRead();
   const { activeRole } = useWhatsAppWorkspaceContext();
   const conversationId = conversation?.id;
 
@@ -60,11 +64,11 @@ export function WhatsAppConversationPane({
     if (!conversationId || !socialAccountId) return;
     // whatsapp_mark_read is agent-min; a viewer 403s on every open. Do not relax the policy.
     if (activeRole === "viewer") return;
-    markRead.mutate(
+    markConversationRead(
       { socialAccountId, conversationId },
       { onError: () => undefined },
     );
-  }, [activeRole, conversationId, markRead, socialAccountId]);
+  }, [activeRole, conversationId, markConversationRead, socialAccountId]);
 
   useEffect(() => {
     onScrollStateChange(false);
