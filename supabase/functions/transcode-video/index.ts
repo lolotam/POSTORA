@@ -165,47 +165,21 @@ Deno.serve(async (req) => {
       target_platform || "tiktok"
     );
 
-    // Download the transcoded video
-    console.log("Downloading transcoded video from Cloudinary...");
-    const downloadRes = await fetch(transcodedUrl);
-    if (!downloadRes.ok) {
-      throw new Error(`Failed to download transcoded video: ${downloadRes.status}`);
-    }
-
-    const transcodedBlob = await downloadRes.blob();
-    console.log(`Transcoded video size: ${(transcodedBlob.size / 1024 / 1024).toFixed(2)}MB`);
-
-    // Upload transcoded video to Supabase storage
-    const newFileName = `${user_id}/transcoded_${target_platform}_${Date.now()}.mp4`;
-    
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from("media")
-      .upload(newFileName, transcodedBlob, {
-        contentType: "video/mp4",
-        cacheControl: "3600",
-      });
-
-    if (uploadError) {
-      console.error("Storage upload error:", uploadError);
-      throw new Error("Failed to upload transcoded video to storage");
-    }
-
-    console.log("Uploaded transcoded video to storage:", uploadData.path);
-
-    // Create new media_files record
+    // The transcoded video is a Cloudinary derived asset — store it directly as a
+    // Cloudinary-backed media row (no Supabase Storage write, no byte re-upload).
     const { data: newMediaFile, error: insertError } = await supabase
       .from("media_files")
       .insert({
         user_id: user_id,
-        file_path: uploadData.path,
+        file_path: transcodedUrl,
         file_type: "video",
-        file_size: transcodedBlob.size,
+        file_size: null,
         mime_type: "video/mp4",
-        storage_bucket: "media",
+        storage_bucket: "cloudinary",
+        cloudinary_public_id: publicId,
         metadata: {
           transcoded_from: media_file_id,
           target_platform: target_platform,
-          cloudinary_public_id: publicId,
           original_file_path: mediaFile.file_path,
         },
       })
@@ -219,14 +193,27 @@ Deno.serve(async (req) => {
 
     console.log("Created new media file record:", newMediaFile.id);
 
-    // Get public URL of new file
-    const { data: newUrlData } = supabase.storage
-      .from("media")
-      .getPublicUrl(uploadData.path);
+    // Register provider state so provider-aware readers resolve this row consistently.
+    try {
+      await supabase
+        .from("media_file_providers")
+        .insert({
+          media_file_id: newMediaFile.id,
+          provider: "cloudinary",
+          object_version: 1,
+          object_key: publicId,
+          status: "ready",
+          delivery_url: transcodedUrl,
+          mime_type: "video/mp4",
+        });
+    } catch (providerError) {
+      // Non-fatal: reads fall back to file_path (the Cloudinary URL).
+      console.warn("Provider row insert failed (non-fatal):", providerError);
+    }
 
     const response: TranscodeResponse = {
       success: true,
-      transcoded_url: newUrlData?.publicUrl,
+      transcoded_url: transcodedUrl,
       new_media_file_id: newMediaFile.id,
     };
 

@@ -70,28 +70,50 @@ export async function uploadToOpeninary(config: OpeninaryConfig, imageUrl: strin
   try {
     const source = await request(imageUrl, {}, 30_000);
     if (!source.ok) return { success: false, error: `Source fetch failed: ${source.status}` };
-    const extension = extensionForContentType(source.headers.get("content-type"));
-    if (!extension) return { success: false, error: `Unsupported content type: ${source.headers.get("content-type") || "unknown"}` };
+    const contentType = source.headers.get("content-type")?.split(";")[0].trim() || null;
+    const extension = extensionForContentType(contentType);
+    if (!extension) return { success: false, error: `Unsupported content type: ${contentType || "unknown"}` };
     if (requiredExtension && requiredExtension.toLowerCase().replace("jpeg", "jpg") !== extension) return { success: false, error: `Content type resolves to .${extension}, expected .${requiredExtension}` };
-    const fileName = `${baseName}.${requiredExtension || extension}`;
     const body = await source.blob();
     if (!body.size) return { success: false, error: "Source returned an empty body" };
-    const expectedSize = expectedByteCount ?? body.size;
-    // ADOPT-BEFORE-UPLOAD: exact object identity (path + byte count) means the prior upload succeeded; upload nothing on retry.
-    const existing = await listOpeninaryFolder(config, folder);
-    const match = existing.find((file) => file.name === fileName && shouldAdoptOpeninaryFile(file, `${folder}/${fileName}`, expectedSize));
-    if (match) return { success: true, adopted: true, path: match.path, url: openinaryDeliveryUrl(config, match.path) };
-    const form = new FormData(); form.append("folder", folder); form.append("files", new File([body], fileName, { type: source.headers.get("content-type")!.split(";")[0].trim() }));
-    const response = await request(`${config.serverUrl}/api/upload`, { method: "POST", headers: { Authorization: `Bearer ${config.apiKey}` }, body: form }, 120_000);
-    const result = await response.json().catch(() => null);
-    if (!response.ok || !result?.success) return { success: false, error: `Openinary upload failed: ${result?.error || response.status}` };
-    const stored = result.files?.[0]?.path;
-    const requested = `${folder}/${fileName}`;
-    // COLLISION-AS-FAILURE: a suffixed path is unreachable by the deterministic read URL.
-    if (typeof stored !== "string") return { success: false, error: "Openinary upload returned no stored path" };
-    if (stored !== requested) return { success: false, path: stored, error: `Openinary stored "${stored}" instead of requested "${requested}" (collision rename)` };
-    return { success: true, path: stored, url: openinaryDeliveryUrl(config, stored) };
+    return await storeOpeninaryObject(config, body, folder, baseName, requiredExtension || extension, expectedByteCount);
   } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) }; }
+}
+
+/**
+ * Direct byte upload (Openinary-priority path): no upstream URL required.
+ * Same ADOPT-BEFORE-UPLOAD / COLLISION-AS-FAILURE semantics as uploadToOpeninary.
+ */
+export async function uploadBytesToOpeninary(config: OpeninaryConfig, data: Blob | Uint8Array, folder: string, baseName: string, extension: string, mimeType?: string, expectedByteCount?: number): Promise<OpeninaryUploadResult> {
+  try {
+    // The slice() is a type fix, not a copy for its own sake: a Uint8Array can be backed by a
+    // SharedArrayBuffer, which BlobPart does not accept, and newer lib.dom types reject the
+    // union outright. Slicing yields a Uint8Array whose buffer is a plain ArrayBuffer.
+    const body = data instanceof Blob
+      ? data
+      : new Blob([data.slice().buffer as ArrayBuffer], { type: mimeType || "application/octet-stream" });
+    if (!body.size) return { success: false, error: "Empty upload body" };
+    return await storeOpeninaryObject(config, body, folder, baseName, extension, expectedByteCount);
+  } catch (error) { return { success: false, error: error instanceof Error ? error.message : String(error) }; }
+}
+
+async function storeOpeninaryObject(config: OpeninaryConfig, body: Blob, folder: string, baseName: string, extension: string, expectedByteCount?: number): Promise<OpeninaryUploadResult> {
+  const fileName = `${baseName}.${extension}`;
+  const expectedSize = expectedByteCount ?? body.size;
+  // ADOPT-BEFORE-UPLOAD: exact object identity (path + byte count) means the prior upload succeeded; upload nothing on retry.
+  const existing = await listOpeninaryFolder(config, folder);
+  const match = existing.find((file) => file.name === fileName && shouldAdoptOpeninaryFile(file, `${folder}/${fileName}`, expectedSize));
+  if (match) return { success: true, adopted: true, path: match.path, url: openinaryDeliveryUrl(config, match.path) };
+  const form = new FormData(); form.append("folder", folder); form.append("files", new File([body], fileName, { type: body.type || "application/octet-stream" }));
+  const response = await request(`${config.serverUrl}/api/upload`, { method: "POST", headers: { Authorization: `Bearer ${config.apiKey}` }, body: form }, 120_000);
+  const result = await response.json().catch(() => null);
+  if (!response.ok || !result?.success) return { success: false, error: `Openinary upload failed: ${result?.error || response.status}` };
+  const stored = result.files?.[0]?.path;
+  const requested = `${folder}/${fileName}`;
+  // COLLISION-AS-FAILURE: a suffixed path is unreachable by the deterministic read URL.
+  if (typeof stored !== "string") return { success: false, error: "Openinary upload returned no stored path" };
+  if (stored !== requested) return { success: false, path: stored, error: `Openinary stored "${stored}" instead of requested "${requested}" (collision rename)` };
+  return { success: true, path: stored, url: openinaryDeliveryUrl(config, stored) };
 }
 
 export async function openinaryHealthCheck(config: OpeninaryConfig): Promise<{ ok: boolean; moved?: string[]; error?: string }> {
