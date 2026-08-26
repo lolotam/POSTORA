@@ -121,7 +121,7 @@ export default function UnifiedInboxesPage() {
               <Icon3D icon={MessageSquare} variant="indigo" size="md" />
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <GradientHeading preset="indigo-cyan" size="lg" as="h1">
+                  <GradientHeading preset="sky-violet-pink" size="lg" as="h1">
                     Unified Inboxes
                   </GradientHeading>
                   <Badge variant="outline" className="border-primary/30 text-primary bg-primary/10 gap-1 text-[11px] h-5 py-0">
