@@ -16,7 +16,7 @@ import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerC
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
 import { AiAgentTestChat } from "@/components/messaging/AiAgentTestChat";
-import { AiToolsManager } from "@/components/messaging/AiToolsManager";
+import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConnectorsManager";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
   "is_enabled" | "default_mode" | "language_mode" | "model" | "daily_message_cap" | "reply_cooldown_seconds"
@@ -240,7 +240,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange }
         </div>
       </TabsContent>
       <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} /></TabsContent>
-      <TabsContent value="tools" className="mt-0"><AiToolsManager /></TabsContent>
+      <TabsContent value="tools" className="mt-0"><DatabaseConnectorsManager /></TabsContent>
       <TabsContent value="test" className="mt-0"><AiAgentTestChat platform={platform} /></TabsContent>
       <TabsContent value="logs" className="mt-0"><AiAgentLogsView platform={platform} /></TabsContent>
     </Tabs>

@@ -122,7 +122,11 @@ describe("sanitizeParams", () => {
   });
 
   it("should preserve string arrays as filtered arrays", () => {
-    const spec = { id: "array-test", modality: "image" as const, parameters: [{ name: "tags", type: "string_array" as const, required: false, description: "Tags" }], aspectRatios: [] };
+    const spec = {
+      ...getHiggsfieldModelSpec("image_auto")!,
+      id: "array-test",
+      parameters: [{ name: "tags", type: "string_array" as const, required: false, description: "Tags" }],
+    };
     expect(sanitizeParams(spec, { tags: [" one ", "", 3, "two"] }).tags).toEqual(["one", "two"]);
   });
 

@@ -41,3 +41,7 @@ src/graphify-out/
 
 # Kilo agent worktrees — the community node must exist in exactly two copies (see CLAUDE.md)
 Postora-n8n-community-node/.kilo/
+
+# build artifacts
+*.tsbuildinfo
+deno.lock

@@ -24,7 +24,7 @@ export function GradientHeading({
   const Comp = Tag as any;
   return (
     <Comp className={cn("font-bold tracking-tight", sizeCls, className)}>
-      <span className={cn("bg-clip-text text-transparent bg-gradient-to-r", HEADING_PRESETS[preset])}>
+      <span className={cn("bg-clip-text text-transparent bg-gradient-to-r", HEADING_PRESETS[preset] || HEADING_PRESETS["sky-violet-pink"] || "from-sky-500 via-violet-500 to-pink-500")}>
         {children}
       </span>
     </Comp>

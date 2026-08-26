@@ -554,7 +554,10 @@ Deno.serve(async (req) => {
         .eq("user_id", user.id)
         .order("name");
       if (error) throw error;
-      return jsonResponse({ tools: data || [] });
+      // Stored secrets never leave the server; the client only learns whether
+      // one exists (ARCHITECTURE.md §13: no raw credentials in responses).
+      const tools = (data || []).map(({ secret, ...tool }) => ({ ...tool, has_secret: !!secret }));
+      return jsonResponse({ tools });
     }
 
     // ACTION: ai_upsert_tool
@@ -596,23 +599,53 @@ Deno.serve(async (req) => {
       } catch {
         return jsonResponse({ error: "Tool URL is not a valid URL" }, 400);
       }
-      const row = {
+      // Connector metadata must match the ai_agent_tools CHECK constraints;
+      // anything unrecognized degrades to the neutral defaults.
+      const connectorTypeAllowlist = [
+        "supabase", "mysql_postgres", "woocommerce", "shopify",
+        "salla", "zid", "formula", "custom_rest",
+      ];
+      const connectorType = connectorTypeAllowlist.includes(tool.connector_type)
+        ? tool.connector_type
+        : "custom_rest";
+      const rawPermissions =
+        tool.permissions && typeof tool.permissions === "object" && !Array.isArray(tool.permissions)
+          ? tool.permissions as Record<string, unknown>
+          : {};
+      const permissions = {
+        search_products: rawPermissions.search_products === true,
+        check_stock: rawPermissions.check_stock === true,
+        lookup_orders: rawPermissions.lookup_orders === true,
+      };
+      const row: Record<string, unknown> = {
         user_id: user.id,
         name,
         description: description.slice(0, 500),
         tool_type: "n8n_webhook",
         url: toolUrl,
-        secret: tool.secret ? String(tool.secret) : null,
         is_enabled: tool.is_enabled !== false,
         admin_only: tool.admin_only === true,
+        connector_type: connectorType,
+        permissions,
+        read_only_mode: tool.read_only_mode !== false,
+        enable_cache: tool.enable_cache !== false,
       };
+      // PostgREST upserts only the columns present in the payload, so an edit
+      // that omits `secret` keeps the stored value instead of wiping it. A
+      // non-empty string replaces it; clear_secret explicitly removes it.
+      if (typeof tool.secret === "string" && tool.secret.trim() !== "") {
+        row.secret = tool.secret.trim();
+      } else if (tool.clear_secret === true) {
+        row.secret = null;
+      }
       const { data, error } = await adminClient
         .from("ai_agent_tools")
         .upsert(row, { onConflict: "user_id,name" })
         .select()
         .single();
       if (error) throw error;
-      return jsonResponse({ tool: data });
+      const { secret: savedSecret, ...safeTool } = data as Record<string, unknown>;
+      return jsonResponse({ tool: { ...safeTool, has_secret: !!savedSecret } });
     }
 
     // ACTION: ai_delete_tool

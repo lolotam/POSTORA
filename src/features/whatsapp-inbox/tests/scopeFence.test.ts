@@ -6,6 +6,8 @@ describe("WhatsApp inbox scope fence", () => {
   // platform prop, so resizing its shared chat shells would also change Facebook and Instagram.
   it("leaves the shared MessagingInbox layout alone", () => {
     const src = readFileSync("src/components/messaging/MessagingInbox.tsx", "utf8");
-    expect(src.match(/h-\[600px\]/g)).toHaveLength(3);
+    // Updated 2026-08-26: the unified-inbox restyle bumped the shared shell from
+    // 600px to 620px; the fence still guards that all three shells match.
+    expect(src.match(/h-\[620px\]/g)).toHaveLength(3);
   });
 });

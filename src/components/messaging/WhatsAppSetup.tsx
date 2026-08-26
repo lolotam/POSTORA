@@ -47,7 +47,6 @@ import {
 } from "@/hooks/useWhatsAppConnect";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
-import { WhatsAppAdminSetupGuide } from "./WhatsAppAdminSetupGuide";
 import { useWhatsAppTpStatus } from "@/hooks/useWhatsAppTpStatus";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Info, Clock } from "lucide-react";
@@ -157,9 +156,6 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
 
   return (
     <div className="space-y-6">
-      {/* Admin-only setup guide */}
-      {isAdmin && <WhatsAppAdminSetupGuide />}
-
       {/* Tech Provider approval notice */}
       {!tpLoading && tpStatus !== "approved" && !hasConnected && (
         <Alert className="border-yellow-500/40 bg-yellow-500/5">

@@ -32,7 +32,7 @@ function stubIntersectionObserver() {
 function triggerIntersect(isIntersecting = true) {
   for (const observer of observers) {
     observer.callback(
-      [{ isIntersecting, intersectionRatio: isIntersecting ? 1 : 0, target: document.createElement("div") } as IntersectionObserverEntry],
+      [{ isIntersecting, intersectionRatio: isIntersecting ? 1 : 0, target: document.createElement("div") } as unknown as IntersectionObserverEntry],
       observer as unknown as IntersectionObserver,
     );
   }
@@ -91,13 +91,14 @@ describe("WhatsAppMediaAttachment", () => {
     getMedia = vi.fn();
     api = {
       getMessagesPage: vi.fn(),
-      getMedia,
+      getMedia: getMedia as unknown as WhatsAppInboxApi["getMedia"],
       sendMedia: vi.fn(),
       sendInteractive: vi.fn(),
       getConversationState: vi.fn(),
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
       sendVoice: vi.fn(),
+      downloadBlob: vi.fn(),
     };
   });
 

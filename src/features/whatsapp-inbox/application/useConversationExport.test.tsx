@@ -140,10 +140,10 @@ describe("useConversationExport", () => {
           attachments: [{ kind: "image", message_row_id: "row-1", mime_type: "image/jpeg", name: null }],
         }],
         page_info: { next_before: null, has_more: false },
-      })),
+      })) as unknown as WhatsAppInboxApi["getMessagesPage"],
       getMedia: vi.fn(async () => ({
         media: [{ message_row_id: "row-1", kind: "image", url: "https://signed.example/x.jpg" }],
-      })),
+      })) as unknown as WhatsAppInboxApi["getMedia"],
     }, downloads);
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
 

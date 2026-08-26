@@ -20,7 +20,7 @@ function collectSourceFiles(directory: string): string[] {
 function filesImportingInfrastructure(files: string[]): string[] {
   return files
     .filter((filePath) => INFRA_IMPORT.test(readFileSync(filePath, "utf8")))
-    .map((filePath) => relative(process.cwd(), filePath).replaceAll("\\", "/"));
+    .map((filePath) => relative(process.cwd(), filePath).replace(/\\/g, "/"));
 }
 
 describe("whatsapp-inbox layering", () => {
@@ -44,7 +44,7 @@ describe("whatsapp-inbox layering", () => {
     expect(allUiFiles.length).toBeGreaterThan(0);
 
     const uiFiles = allUiFiles.filter(
-      (filePath) => !filePath.replaceAll("\\", "/").endsWith("/ui/WhatsAppInboxScreen.tsx"),
+      (filePath) => !filePath.replace(/\\/g, "/").endsWith("/ui/WhatsAppInboxScreen.tsx"),
     );
     expect(filesImportingInfrastructure(uiFiles)).toEqual([]);
 

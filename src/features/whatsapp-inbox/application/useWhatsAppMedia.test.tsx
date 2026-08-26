@@ -64,13 +64,14 @@ describe("useWhatsAppMedia", () => {
     }));
     api = {
       getMessagesPage: vi.fn(),
-      getMedia,
+      getMedia: getMedia as unknown as WhatsAppInboxApi["getMedia"],
       sendMedia: vi.fn(),
       sendInteractive: vi.fn(),
       getConversationState: vi.fn(),
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
       sendVoice: vi.fn(),
+      downloadBlob: vi.fn(),
     };
   });
 
@@ -104,7 +105,7 @@ describe("useWhatsAppMedia", () => {
       queryKey: ["wa-media", "acct-1", ["a", "b"]],
     });
     expect(query).toBeTruthy();
-    expect(query?.options.staleTime).toBe(WA_MEDIA_STALE_TIME_MS);
+    expect((query?.options as { staleTime?: number }).staleTime).toBe(WA_MEDIA_STALE_TIME_MS);
     expect(WA_MEDIA_STALE_TIME_MS).toBeLessThan(3600 * 1000);
   });
 

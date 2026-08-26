@@ -123,12 +123,13 @@ describe("WhatsAppComposer outbound upload", () => {
     api = {
       getMessagesPage: vi.fn(),
       getMedia: vi.fn(),
-      sendMedia,
+      sendMedia: sendMedia as unknown as WhatsAppInboxApi["sendMedia"],
       sendInteractive: vi.fn(),
       getConversationState: vi.fn(),
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
-      sendVoice,
+      sendVoice: sendVoice as unknown as WhatsAppInboxApi["sendVoice"],
+      downloadBlob: vi.fn(),
     };
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
     vi.spyOn(queryClient, "invalidateQueries");

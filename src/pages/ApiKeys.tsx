@@ -20,6 +20,8 @@ import {
     ChevronDown,
     ChevronUp,
     ExternalLink,
+    ShieldCheck,
+    Globe,
 } from "lucide-react";
 import {
     Card,
@@ -378,9 +380,9 @@ export default function ApiKeys() {
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div>
-                        <h1 className="text-2xl sm:text-3xl font-bold">API Keys</h1>
+                        <h1 className="text-2xl sm:text-3xl font-bold">MCP & API</h1>
                         <p className="text-muted-foreground mt-1">
-                            Manage your API keys for external integrations
+                            Manage your Model Context Protocol (MCP) servers, API keys, and external integrations
                         </p>
                     </div>
                     <Button variant="gradient" className="w-full sm:w-auto">
@@ -515,6 +517,49 @@ export default function ApiKeys() {
                         {API_ENDPOINTS.map((endpoint) => (
                             <EndpointCard key={`${endpoint.method}-${endpoint.path}`} endpoint={endpoint} />
                         ))}
+                    </CardContent>
+                </Card>
+
+                {/* Direct API & Auto-Approved OAuth / MCP Authorization Guide */}
+                <Card className="border-primary/30 bg-primary/5">
+                    <CardHeader>
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-lg bg-primary/20 flex items-center justify-center">
+                                <ShieldCheck className="w-5 h-5 text-primary" />
+                            </div>
+                            <div className="flex-1">
+                                <div className="flex items-center gap-2">
+                                    <CardTitle className="text-lg">Direct API & OAuth 2.0 Access (Auto-Approved)</CardTitle>
+                                    <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/30">Instant Access</Badge>
+                                </div>
+                                <CardDescription>
+                                    All registered Postora users have immediate, pre-approved access to authenticate external tools (n8n, Zapier, Make, and MCP clients) using their account quotas with zero manual admin approval required.
+                                </CardDescription>
+                            </div>
+                        </div>
+                    </CardHeader>
+                    <CardContent className="space-y-3 text-sm text-muted-foreground">
+                        <p>
+                            When connecting self-hosted tools or custom MCP connectors, authenticate directly using your <strong>Default API Key</strong> above (passed via <code className="font-mono text-xs bg-background px-1.5 py-0.5 rounded border">X-API-Key</code> or <code className="font-mono text-xs bg-background px-1.5 py-0.5 rounded border">Authorization: Bearer &lt;API_KEY&gt;</code>).
+                        </p>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                            <div className="p-3 rounded-xl bg-card border border-border/60">
+                                <h4 className="font-semibold text-foreground text-sm flex items-center gap-1.5 mb-1">
+                                    <Plug className="w-4 h-4 text-sky-400" /> MCP Connection (Instant)
+                                </h4>
+                                <p className="text-xs">
+                                    Plug Postora MCP tools directly into Claude, Cursor, Windsurf, or Antigravity agents. All operations are billed against your active subscription limits.
+                                </p>
+                            </div>
+                            <div className="p-3 rounded-xl bg-card border border-border/60">
+                                <h4 className="font-semibold text-foreground text-sm flex items-center gap-1.5 mb-1">
+                                    <Globe className="w-4 h-4 text-emerald-400" /> Webhooks & OAuth Clients
+                                </h4>
+                                <p className="text-xs">
+                                    Automations and workflows execute under your own tenant isolation. No administrative review or redirect URI whitelisting delay is required.
+                                </p>
+                            </div>
+                        </div>
                     </CardContent>
                 </Card>
 

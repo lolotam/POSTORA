@@ -5,6 +5,7 @@ import { useEffect } from "react";
 
 export interface WhatsAppAgent {
   id: string;
+  workspace_id: string;
   user_id: string;
   display_name: string;
   avatar_url: string | null;
@@ -64,15 +65,28 @@ export function useWhatsAppAgents() {
   // Register as agent
   const registerAgent = useMutation({
     mutationFn: async (params: { display_name: string }) => {
+      // whatsapp_agents requires workspace_id and its uniqueness key is
+      // (workspace_id, user_id) — resolve the caller's personal workspace
+      // before inserting, and conflict on the composite key.
+      const { data: workspace, error: workspaceError } = await supabase
+        .from("workspaces")
+        .select("id")
+        .eq("owner_id", userId!)
+        .eq("is_personal", true)
+        .maybeSingle();
+      if (workspaceError) throw workspaceError;
+      if (!workspace?.id) throw new Error("No personal workspace found for this account");
+      const metadataAvatar = session?.user?.user_metadata?.avatar_url;
       const { data, error } = await supabase
         .from("whatsapp_agents")
         .upsert({
           user_id: userId!,
+          workspace_id: workspace.id,
           display_name: params.display_name,
-          avatar_url: session?.user?.user_metadata?.avatar_url || null,
+          avatar_url: typeof metadataAvatar === "string" ? metadataAvatar : null,
           status: "online",
           last_seen_at: new Date().toISOString(),
-        }, { onConflict: "user_id" })
+        }, { onConflict: "workspace_id,user_id" })
         .select()
         .single();
       if (error) throw error;

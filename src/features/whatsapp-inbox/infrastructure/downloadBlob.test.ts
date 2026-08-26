@@ -12,7 +12,7 @@ describe("downloadBlob", () => {
     revokeObjectURL = vi.fn();
     click = vi.fn();
     vi.stubGlobal("URL", { createObjectURL, revokeObjectURL });
-    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(click);
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(click as unknown as () => void);
   });
 
   afterEach(() => {
