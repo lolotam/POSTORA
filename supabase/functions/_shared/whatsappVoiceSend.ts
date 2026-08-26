@@ -47,6 +47,8 @@ export interface UpsertOutboundConversationParams {
 }
 
 export interface SendWhatsAppVoiceDeps {
+  /** Injected so tests can supply audio bytes without a live storage object. */
+  fetchAudio?: (url: string) => Promise<Response>;
   resolveTransport?: (
     // deno-lint-ignore no-explicit-any
     admin: any,
@@ -114,9 +116,26 @@ export async function sendWhatsAppVoice(
     );
   }
 
+  // The bytes are fetched here rather than handed over as a URL because Evolution's audio
+  // route only reads an uploaded file (see sendWhatsAppAudio). The signed URL is still minted
+  // above -- it is how this function reads its own object out of a private bucket, and keeping
+  // that read server-side is what stops a caller naming an arbitrary URL to fetch.
+  const audioResponse = await (deps.fetchAudio ?? fetch)(signedUrl);
+  if (!audioResponse.ok) {
+    throw new WhatsAppVoiceSendError("could not read the recorded audio", "VALIDATION_ERROR");
+  }
+  const audio = new Uint8Array(await audioResponse.arrayBuffer());
+  if (audio.byteLength === 0) {
+    throw new WhatsAppVoiceSendError("the recorded audio is empty", "VALIDATION_ERROR");
+  }
+
   const sent = await transport.sendVoiceNote({
     recipientPhone,
-    audioUrl: signedUrl,
+    audio,
+    fileName: storagePath.split("/").pop() ?? "voice-note.ogg",
+    mimeType: typeof request.mime_type === "string" && request.mime_type
+      ? request.mime_type
+      : "audio/ogg",
   });
 
   const phoneNumberId = access.platformUserId;

@@ -123,6 +123,29 @@ export function WhatsAppConversationPane({
     prevIdsRef.current = nextIds;
   }, [conversation, socialAccountId, visibleMessages]);
 
+  // Opening a chat must LAND at the newest message, not travel to it.
+  //
+  // Pinning scrollTop once is not enough: at that moment the images are still 96px
+  // placeholders, and each one grows to a few hundred px as it decodes. The document
+  // therefore gets taller *after* the pin, which pushes the newest message back down out of
+  // view -- the reader is left somewhere in old history, and the next append animates all the
+  // way down. That is the "starts at the beginning and races to the end" the user sees.
+  //
+  // So re-pin on every size change for as long as the reader is meant to be at the bottom,
+  // and do it by assignment rather than scrollTo({behavior:"smooth"}) so it never reads as
+  // travel. Once they scroll up, stickToBottomRef goes false and this stops touching them.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (!stickToBottomRef.current) return;
+      el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    for (const child of Array.from(el.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [conversation?.id, socialAccountId]);
+
   useEffect(() => {
     const root = scrollRef.current;
     const sentinel = topSentinelRef.current;

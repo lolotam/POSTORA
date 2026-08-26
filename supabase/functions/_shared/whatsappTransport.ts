@@ -25,7 +25,10 @@ export interface WhatsAppSendMediaInput {
 
 export interface WhatsAppSendVoiceInput {
   recipientPhone: string;
-  audioUrl: string;
+  /** Raw bytes: Evolution's audio route reads only an uploaded file, never a url or base64. */
+  audio: Uint8Array;
+  fileName?: string;
+  mimeType?: string;
 }
 
 export interface WhatsAppTransport {
@@ -122,8 +125,9 @@ export class EvolutionTransport implements WhatsAppTransport, SupportsMessageRev
   sendVoiceNote(input: WhatsAppSendVoiceInput): Promise<EvolutionSendResult> {
     return this.api.sendWhatsAppAudio(this.instanceName, {
       number: input.recipientPhone,
-      audio: input.audioUrl,
-      encoding: true,
+      audio: input.audio,
+      fileName: input.fileName,
+      mimeType: input.mimeType,
     });
   }
 

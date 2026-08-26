@@ -152,21 +152,30 @@ Deno.test("unsupported transport is UNSUPPORTED_CAPABILITY, not a 5xx", async ()
   assertEquals(error.error_type, "UNSUPPORTED_CAPABILITY");
 });
 
-Deno.test("sends a server-signed URL with encoding true and persists the storage path", async () => {
+// 2026-08-26: this asserted that the signed URL was handed to Evolution with encoding:true.
+// Evolution 2.3.7's audio handler reads ONLY an uploaded file -- a url or base64 body throws
+// "File or buffer is undefined" -- so the bytes are fetched here and posted as multipart. The
+// URL is still minted, because that is how this function reads its own object out of a private
+// bucket without letting a caller name an arbitrary URL to fetch.
+Deno.test("uploads the recorded bytes and persists the storage path", async () => {
   const db = new FakeAdmin();
-  const audioCalls: Array<{ number: string; audio: string; encoding?: boolean }> = [];
+  const audioCalls: Array<{ number: string; audio: Uint8Array; fileName?: string }> = [];
   const upserts: Array<{ preview: string; social_account_id: string }> = [];
   const publicUrl = "https://api.postora.cloud/storage/v1/object/sign/media/user-uuid/whatsapp/outbound/voice.webm";
 
   const result = await sendWhatsAppVoice(db, access(), CALLER, request(), {
     now: () => new Date("2026-08-25T15:00:00.000Z"),
+    fetchAudio: async (url) => {
+      assertEquals(url, publicUrl);
+      return new Response(new Uint8Array([9, 8, 7]));
+    },
     signPath: async (_admin, path, ttl) => {
       assertEquals(path, `${CALLER}/whatsapp/outbound/voice.webm`);
       assertEquals(ttl > 0, true);
       return publicUrl;
     },
     resolveTransport: async () => createEvolutionTransport({
-      sendWhatsAppAudio: async (_instance: string, input: { number: string; audio: string; encoding?: boolean }) => {
+      sendWhatsAppAudio: async (_instance: string, input: { number: string; audio: Uint8Array; fileName?: string }) => {
         audioCalls.push(input);
         return { messageId: "3EB0VOICE", raw: { key: { id: "3EB0VOICE" } } };
       },
@@ -177,11 +186,10 @@ Deno.test("sends a server-signed URL with encoding true and persists the storage
   });
 
   assertEquals(result, { success: true, message_id: "3EB0VOICE" });
-  assertEquals(audioCalls, [{
-    number: "1999",
-    audio: publicUrl,
-    encoding: true,
-  }]);
+  assertEquals(audioCalls.length, 1);
+  assertEquals(audioCalls[0].number, "1999");
+  assertEquals(audioCalls[0].audio, new Uint8Array([9, 8, 7]));
+  assertEquals(audioCalls[0].fileName, "voice.webm");
   assertEquals(db.inserts.length, 1);
   const row = db.inserts[0];
   assertEquals(row.message_type, "audio");

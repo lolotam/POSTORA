@@ -48,7 +48,22 @@ Deno.test("Evolution API client sends text, media, audio, and delete-for-everyon
   const calls: Array<{ url: string; body: unknown }> = [];
   const apiKey = crypto.randomUUID();
   const api = createEvolutionApi(async (url, init) => {
-    calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    // The audio route posts multipart, so the body is not always JSON.
+    const raw = init?.body;
+    if (raw instanceof FormData) {
+      const file = raw.get("file");
+      calls.push({
+        url: String(url),
+        body: {
+          number: raw.get("number"),
+          fileName: file instanceof File ? file.name : null,
+          fileType: file instanceof File ? file.type : null,
+          fileBytes: file instanceof File ? file.size : null,
+        },
+      });
+    } else {
+      calls.push({ url: String(url), body: JSON.parse(String(raw)) });
+    }
     return response({ key: { id: "message-1" } });
   }, { baseUrl: "https://wa.postora.cloud", apiKey });
 
@@ -61,8 +76,9 @@ Deno.test("Evolution API client sends text, media, audio, and delete-for-everyon
   });
   await api.sendWhatsAppAudio("postora-account-1", {
     number: "+96550000000",
-    audio: "https://cdn.example/voice.webm",
-    encoding: true,
+    audio: new Uint8Array([1, 2, 3, 4]),
+    fileName: "voice.ogg",
+    mimeType: "audio/ogg",
   });
   await api.deleteMessageForEveryone("postora-account-1", {
     id: "3EB0ABC",
@@ -86,10 +102,15 @@ Deno.test("Evolution API client sends text, media, audio, and delete-for-everyon
     },
     {
       url: "https://wa.postora.cloud/message/sendWhatsAppAudio/postora-account-1",
+      // 2026-08-26: previously a JSON url with encoding:true. Evolution 2.3.7's controller
+      // advertises url/base64 for this route, but the handler behind it reads ONLY an
+      // uploaded file, so a JSON body never reaches the conversion that sets ptt:true and
+      // the recipient sees a file attachment instead of a voice note.
       body: {
         number: "+96550000000",
-        audio: "https://cdn.example/voice.webm",
-        encoding: true,
+        fileName: "voice.ogg",
+        fileType: "audio/ogg",
+        fileBytes: 4,
       },
     },
     {

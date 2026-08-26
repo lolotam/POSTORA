@@ -24,9 +24,11 @@ export interface EvolutionMediaInput {
 
 export interface EvolutionAudioInput {
   number: string;
-  audio: string;
+  /** Raw bytes. Evolution 2.3.7 ignores a url/base64 body on this route -- see sendWhatsAppAudio. */
+  audio: Uint8Array;
+  fileName?: string;
+  mimeType?: string;
   delay?: number;
-  encoding?: boolean;
 }
 
 export interface EvolutionSendResult {
@@ -142,7 +144,12 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
           headers: {
             apikey: apiKey,
             Accept: "application/json",
-            ...(init.body ? { "Content-Type": "application/json" } : {}),
+            // FormData must set its own Content-Type: the multipart boundary is generated with
+            // the body, and forcing application/json here makes the server parse the parts as
+            // JSON and see no file at all.
+            ...(init.body && !(init.body instanceof FormData)
+              ? { "Content-Type": "application/json" }
+              : {}),
             ...(init.headers || {}),
           },
           signal: controller.signal,
@@ -279,18 +286,33 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
         ...(input.fileName ? { fileName: input.fileName } : {}),
       }),
     })),
-    sendWhatsAppAudio: async (instanceName, input) => sendResult(await request(
-      `/message/sendWhatsAppAudio/${encodeURIComponent(instanceName)}`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          number: input.number,
-          audio: input.audio,
-          ...(input.delay != null ? { delay: input.delay } : {}),
-          ...(input.encoding != null ? { encoding: input.encoding } : {}),
+    // Multipart, not JSON, and that is not a style choice.
+    //
+    // Evolution 2.3.7's controller accepts a URL or base64 for this route, but the handler it
+    // forwards to reads ONLY the uploaded file:
+    //
+    //   async audioWhatsapp(e, t) {
+    //     if (t?.buffer) i.audio = t.buffer.toString("base64");
+    //     else throw new Error("File or buffer is undefined.");
+    //
+    // so a JSON body always fails however valid its url/base64 looks. Uploading the bytes is
+    // the only path that reaches the conversion, and the conversion is what sets ptt: true --
+    // without it the recipient gets a file attachment (a paperclip) rather than a voice note.
+    sendWhatsAppAudio: async (instanceName, input) => {
+      const form = new FormData();
+      form.append("number", input.number);
+      if (input.delay != null) form.append("delay", String(input.delay));
+      form.append(
+        "file",
+        new File([input.audio as BlobPart], input.fileName ?? "voice-note.ogg", {
+          type: input.mimeType ?? "audio/ogg",
         }),
-      },
-    )),
+      );
+      return sendResult(await request(
+        `/message/sendWhatsAppAudio/${encodeURIComponent(instanceName)}`,
+        { method: "POST", body: form },
+      ));
+    },
     deleteMessageForEveryone: (instanceName, key) => request(
       `/chat/deleteMessageForEveryone/${encodeURIComponent(instanceName)}`,
       {

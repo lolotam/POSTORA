@@ -51,10 +51,18 @@ Deno.test("revoke is a capability on EvolutionTransport only — CloudApiTranspo
 });
 
 Deno.test("voice notes are a capability on EvolutionTransport only — CloudApiTransport has no stub", async () => {
-  const calls: Array<{ instance: string; encoding?: boolean; audio: string }> = [];
+  const calls: Array<{ instance: string; audio: Uint8Array; fileName?: string; mimeType?: string }> = [];
   const api = {
-    sendWhatsAppAudio: async (instance: string, input: { audio: string; encoding?: boolean }) => {
-      calls.push({ instance, encoding: input.encoding, audio: input.audio });
+    sendWhatsAppAudio: async (
+      instance: string,
+      input: { audio: Uint8Array; fileName?: string; mimeType?: string },
+    ) => {
+      calls.push({
+        instance,
+        audio: input.audio,
+        fileName: input.fileName,
+        mimeType: input.mimeType,
+      });
       return { messageId: "aud-1", raw: {} };
     },
   } as unknown as EvolutionApi;
@@ -72,12 +80,18 @@ Deno.test("voice notes are a capability on EvolutionTransport only — CloudApiT
   if (supportsVoiceNote(evolution)) {
     await evolution.sendVoiceNote({
       recipientPhone: "1999",
-      audioUrl: "https://api.postora.cloud/signed/voice.webm",
+      audio: new Uint8Array([1, 2, 3]),
+      fileName: "voice.ogg",
+      mimeType: "audio/ogg",
     });
   }
+  // 2026-08-26: this asserted a URL and encoding:true, which is what Evolution 2.3.7's
+  // controller advertises -- but the handler behind it reads only an uploaded file, so a URL
+  // never reaches the conversion that sets ptt:true and the recipient gets a paperclip.
   assertEquals(calls, [{
     instance: "postora_instance",
-    encoding: true,
-    audio: "https://api.postora.cloud/signed/voice.webm",
+    audio: new Uint8Array([1, 2, 3]),
+    fileName: "voice.ogg",
+    mimeType: "audio/ogg",
   }]);
 });
