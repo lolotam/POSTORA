@@ -20,13 +20,17 @@ interface PlatformOption {
   supportsComments: boolean;
   colorPreset: "emerald" | "sky" | "rose" | "violet";
   description: string;
+  /** Override label for "DMs" surface button (e.g. Threads calls it "Mentions") */
+  dmsLabel?: string;
+  /** Override label for "Comments" surface button (e.g. Threads calls it "Replies") */
+  commentsLabel?: string;
 }
 
 const PLATFORMS: PlatformOption[] = [
   { id: "whatsapp", label: "WhatsApp", supportsComments: false, colorPreset: "emerald", description: "Direct customer chats, broadcasts & automated catalogs" },
   { id: "facebook", label: "Facebook", supportsComments: true, colorPreset: "sky", description: "Messenger DMs and Page post comment automations" },
   { id: "instagram", label: "Instagram", supportsComments: true, colorPreset: "rose", description: "Direct Inbound messages and Reels/Post comment replies" },
-  { id: "threads", label: "Threads", supportsComments: true, colorPreset: "violet", description: "Mentions, conversation threads and public replies" },
+  { id: "threads", label: "Threads", supportsComments: true, colorPreset: "violet", description: "Mentions, conversation threads and public replies", dmsLabel: "Mentions", commentsLabel: "Replies" },
 ];
 
 export type AgentSurfaceSelection = "dms" | "comments" | "both";
@@ -232,19 +236,32 @@ export default function UnifiedAgentSetupPage() {
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-bold text-base sm:text-lg text-foreground">
-                      {dmsActive && !commentsActive
-                        ? "Direct Messaging Agent Configuration"
-                        : !dmsActive && commentsActive
-                        ? "Post Comments Agent Configuration"
-                        : "Multi-Surface Agent Configuration"}
+                      {(() => {
+                        const dmsName = selectedPlatformMeta.dmsLabel ?? "Direct Messaging";
+                        const commentsName = selectedPlatformMeta.commentsLabel ?? "Post Comments";
+                        if (dmsActive && !commentsActive) return `${dmsName} Agent Configuration`;
+                        if (!dmsActive && commentsActive) return `${commentsName} Agent Configuration`;
+                        return "Multi-Surface Agent Configuration";
+                      })()}
                     </h3>
                     <Badge variant="outline" className="text-primary border-primary/30 bg-primary/10 text-xs">
-                      {selectedPlatformMeta.label} {dmsActive && commentsActive ? "DMs & Comments" : dmsActive ? "DMs" : "Comments"}
+                      {selectedPlatformMeta.label}{" "}
+                      {dmsActive && commentsActive
+                        ? `${selectedPlatformMeta.dmsLabel ?? "DMs"} & ${selectedPlatformMeta.commentsLabel ?? "Comments"}`
+                        : dmsActive
+                        ? (selectedPlatformMeta.dmsLabel ?? "DMs")
+                        : (selectedPlatformMeta.commentsLabel ?? "Comments")}
                     </Badge>
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     Configure AI instructions, knowledge base (RAG), database connectors, and reply thresholds for{" "}
-                    {dmsActive && commentsActive ? "direct messages and post comments" : dmsActive ? "direct messages" : "post comments"}.
+                    {(() => {
+                      const dmsName = (selectedPlatformMeta.dmsLabel ?? "direct messages").toLowerCase();
+                      const commentsName = (selectedPlatformMeta.commentsLabel ?? "post comments").toLowerCase();
+                      if (dmsActive && commentsActive) return `${dmsName} and ${commentsName}`;
+                      if (dmsActive) return dmsName;
+                      return commentsName;
+                    })()}.
                   </p>
                 </div>
               </div>
@@ -263,11 +280,11 @@ export default function UnifiedAgentSetupPage() {
                   )}
                 >
                   <MessageSquare className="w-4 h-4 text-sky-400 shrink-0" />
-                  <span>Direct Messaging</span>
+                  <span>{selectedPlatformMeta.dmsLabel ?? "Direct Messaging"}</span>
                   {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
                 </button>
 
-                {/* Post Comments Button */}
+                {/* Post Comments / Replies Button */}
                 {selectedPlatformMeta.supportsComments && (
                   <button
                     type="button"
@@ -280,7 +297,7 @@ export default function UnifiedAgentSetupPage() {
                     )}
                   >
                     <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>Post Comments</span>
+                    <span>{selectedPlatformMeta.commentsLabel ?? "Post Comments"}</span>
                     {commentsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
                   </button>
                 )}

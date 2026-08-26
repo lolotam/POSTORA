@@ -1,15 +1,13 @@
-import { Navigate, useSearchParams, Link } from "react-router-dom";
+import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
-import { ThreadsRepliesTab } from "@/components/messaging/threads/replies/ThreadsRepliesTab";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
-import { ArrowRight, CheckCircle2 } from "lucide-react";
+import { CheckCircle2, ExternalLink } from "lucide-react";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
 export type CommentPlatform = "facebook" | "instagram" | "threads";
@@ -18,42 +16,36 @@ interface PlatformOption {
   id: CommentPlatform;
   label: string;
   colorPreset: "sky" | "rose" | "violet";
+  /** When true, clicking this platform navigates away instead of loading inline content */
+  externalPath?: string;
 }
 
 const PLATFORMS: PlatformOption[] = [
   { id: "facebook", label: "Facebook", colorPreset: "sky" },
   { id: "instagram", label: "Instagram", colorPreset: "rose" },
-  { id: "threads", label: "Threads", colorPreset: "violet" },
+  // Threads has its own dedicated page at /messaging/thread — redirect there
+  { id: "threads", label: "Threads", colorPreset: "violet", externalPath: "/messaging/thread" },
 ];
 
 export default function CommentManagerPage() {
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
+  const { data: socialAccounts = [] } = useSocialAccounts();
 
   const platformParam = searchParams.get("platform") as CommentPlatform;
   const platform: CommentPlatform = PLATFORMS.some((p) => p.id === platformParam) ? platformParam : "facebook";
 
-  const { data: socialAccounts = [] } = useSocialAccounts();
-  const threadsAccounts = socialAccounts.filter((a) => a.platform === "threads" && a.is_active);
-  const selectedThreadsParam = searchParams.get("accountId");
-  const activeThreadsAccountId = (selectedThreadsParam && threadsAccounts.some((a) => a.id === selectedThreadsParam))
-    ? selectedThreadsParam
-    : threadsAccounts[0]?.id || null;
-
   const selectedPlatformMeta = PLATFORMS.find((p) => p.id === platform) || PLATFORMS[0];
 
-  const handlePlatformChange = (nextPlatform: CommentPlatform) => {
+  const handlePlatformChange = (p: PlatformOption) => {
+    if (p.externalPath) {
+      navigate(p.externalPath);
+      return;
+    }
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
-      next.set("platform", nextPlatform);
-      return next;
-    }, { replace: true });
-  };
-
-  const handleThreadsAccountChange = (accountId: string) => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set("accountId", accountId);
+      next.set("platform", p.id);
       return next;
     }, { replace: true });
   };
@@ -99,7 +91,7 @@ export default function CommentManagerPage() {
                     type="button"
                     role="tab"
                     aria-selected={isSelected}
-                    onClick={() => handlePlatformChange(p.id)}
+                    onClick={() => handlePlatformChange(p)}
                     className="flex flex-col items-center gap-2 flex-shrink-0 transition-all duration-300 cursor-pointer group focus:outline-none"
                   >
                     <div
@@ -117,7 +109,13 @@ export default function CommentManagerPage() {
                         size="2xl"
                         className="drop-shadow-[0_8px_10px_rgba(0,0,0,0.3)] transition-transform duration-300 group-hover:scale-110"
                       />
-                      {isSelected && (
+                      {/* External link indicator for Threads */}
+                      {p.externalPath && (
+                        <div className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-muted border border-border/60 flex items-center justify-center shadow-sm">
+                          <ExternalLink className="w-2.5 h-2.5 text-muted-foreground" />
+                        </div>
+                      )}
+                      {isSelected && !p.externalPath && (
                         <div className="absolute -top-2 -right-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
                           <CheckCircle2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                         </div>
@@ -156,40 +154,6 @@ export default function CommentManagerPage() {
           >
             {platform === "facebook" && <CommentManagerPanel platform="facebook" />}
             {platform === "instagram" && <CommentManagerPanel platform="instagram" />}
-            {platform === "threads" && (
-              <div className="space-y-4">
-                {threadsAccounts.length === 0 ? (
-                  <div className="text-center py-12 space-y-3 bg-muted/20 border border-dashed border-border rounded-xl">
-                    <p className="text-sm text-muted-foreground">No active Threads account connected.</p>
-                    <Button asChild size="sm" variant="outline">
-                      <Link to="/profiles">Connect Threads in Profiles</Link>
-                    </Button>
-                  </div>
-                ) : (
-                  <>
-                    {threadsAccounts.length > 1 && (
-                      <div className="flex items-center gap-2 pb-3 border-b border-border/40">
-                        <span className="text-xs text-muted-foreground font-medium">Select Account:</span>
-                        <div className="flex gap-2">
-                          {threadsAccounts.map((acc) => (
-                            <Button
-                              key={acc.id}
-                              size="sm"
-                              variant={activeThreadsAccountId === acc.id ? "default" : "outline"}
-                              onClick={() => handleThreadsAccountChange(acc.id)}
-                              className="text-xs h-7"
-                            >
-                              @{acc.platform_username || "Threads"}
-                            </Button>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    <ThreadsRepliesTab accountId={activeThreadsAccountId} />
-                  </>
-                )}
-              </div>
-            )}
           </GradientRingCard>
         </Reveal>
       </div>
