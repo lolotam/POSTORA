@@ -280,7 +280,12 @@ export default function WhatsAppDocs() {
               </CardHeader>
               <CardContent className="space-y-3 text-sm flex-1">
                 <p className="text-muted-foreground">
-                  A pure rules responder that matches incoming message text instantly. Setup is done in the <SectionLink path="auto-replies">Auto Replies</SectionLink> page.
+                  A pure rules responder that matches incoming message text instantly. Setup is done in the <Link
+      to="/automation/agents?platform=whatsapp&surface=dms"
+      className="font-medium text-[#128C7E] underline-offset-4 hover:underline dark:text-[#25D366]"
+    >
+      Auto Replies
+    </Link> page.
                 </p>
                 <ul className="space-y-2 text-xs text-muted-foreground bg-muted/40 p-3 rounded-lg">
                   <li><strong>Keyword Rules:</strong> e.g., if message contains <code>["hours", "open"]</code> → send "We are open Sat-Thu, 9am-9pm."</li>
@@ -380,7 +385,12 @@ export default function WhatsAppDocs() {
                   <tbody className="divide-y">
                     <tr>
                       <td className="p-4 font-medium text-foreground">
-                        <SectionLink path="auto-replies">Auto Replies</SectionLink>
+                        <Link
+      to="/automation/agents?platform=whatsapp&surface=dms"
+      className="font-medium text-[#128C7E] underline-offset-4 hover:underline dark:text-[#25D366]"
+    >
+      Auto Replies
+    </Link>
                       </td>
                       <td className="p-4"><code>keyword / away</code></td>
                       <td className="p-4 text-muted-foreground">Business hours, FAQs, instant auto-acknowledgment</td>

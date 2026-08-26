@@ -633,7 +633,7 @@ export default function WhatsAppDashboard() {
               </div>
 
               <Button asChild size="sm" variant="outline" className="w-full gap-1.5 text-xs h-8 mt-2 border-border hover:bg-primary/10">
-                <Link to={whatsappSectionRoute("automation")}>
+                <Link to="/automation/agents?platform=whatsapp&surface=dms">
                   <Sparkles className="h-3.5 w-3.5 text-primary" />
                   Configure AI Agent Rules
                 </Link>

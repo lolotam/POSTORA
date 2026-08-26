@@ -1,29 +1,15 @@
-import { Sparkles } from "lucide-react";
-import { useNavigate, useParams } from "react-router-dom";
-import { AI_AGENT_TABS, AiAgentManager, type AiAgentTab } from "@/components/messaging/AiAgentManager";
-import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
-import { WhatsAppAutomationNav } from "@/components/whatsapp/WhatsAppAutomationNav";
-import { WHATSAPP_BASE_PATH } from "@/components/whatsapp/waNav";
+import { Navigate, useParams } from "react-router-dom";
+import { AI_AGENT_TABS, type AiAgentTab } from "@/components/messaging/AiAgentManager";
 
+const UNIFIED_AGENT_SETTINGS = "/automation/agents?platform=whatsapp&surface=dms";
+
+/**
+ * Legacy WhatsApp AI agent settings now live in the Automation Hub's unified agent
+ * portal. Kept as a route so old deep links (including /ai-agent/:tab) carry over
+ * instead of 404ing; unknown tabs fall back to the portal's default.
+ */
 export default function AiAgent() {
   const { tab } = useParams<{ tab: string }>();
-  const navigate = useNavigate();
-  const activeTab: AiAgentTab = AI_AGENT_TABS.includes(tab as AiAgentTab) ? (tab as AiAgentTab) : "settings";
-
-  return (
-    <div className="space-y-6">
-      <WhatsAppPageHeader
-        icon={Sparkles}
-        title="AI Agent"
-        description="Configure the AI assistant that answers customers automatically."
-      />
-      <WhatsAppAutomationNav />
-      <AiAgentManager
-        activeTab={activeTab}
-        onTabChange={(nextTab) =>
-          navigate(nextTab === "settings" ? `${WHATSAPP_BASE_PATH}/ai-agent` : `${WHATSAPP_BASE_PATH}/ai-agent/${nextTab}`, { replace: true })
-        }
-      />
-    </div>
-  );
+  const validTab = AI_AGENT_TABS.includes(tab as AiAgentTab) ? (tab as AiAgentTab) : null;
+  return <Navigate to={validTab ? `${UNIFIED_AGENT_SETTINGS}&tab=${validTab}` : UNIFIED_AGENT_SETTINGS} replace />;
 }
