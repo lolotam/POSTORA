@@ -337,11 +337,7 @@ export default function UnifiedAgentSetupPage() {
                   <AutomationHandlerCard
                     platform={platform}
                   />
-                  <AutoReplyManager
-                    platform={platform}
-                    title={`${selectedPlatformMeta.label} Comments Auto-Replies & Triggers`}
-                    description={`Set keyword triggers and AI instant replies for public post comments on ${selectedPlatformMeta.label}.`}
-                  />
+                  <AutoReplyManager platform={platform === "whatsapp" ? undefined : platform} />
                 </GradientRingCard>
               </div>
             </Reveal>

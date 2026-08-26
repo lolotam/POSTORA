@@ -108,7 +108,7 @@ describe("WhatsAppVoiceComposer", () => {
   });
 
   it("records, previews, and sends", async () => {
-    const onSend = vi.fn(async () => {});
+    const onSend = vi.fn(async (_blob: Blob, _mimeType: string, _durationSeconds: number) => {});
     render(<WhatsAppVoiceComposer offered onSend={onSend} />);
     await recordThenStop();
     expect(screen.getByRole("button", { name: /discard voice note/i })).toBeInTheDocument();
@@ -124,7 +124,7 @@ describe("WhatsAppVoiceComposer", () => {
   // action and look like a successful send while Evolution rejected it.
   it("refuses to send a blob over MAX_BYTES", async () => {
     installBrowserMocks(HugeMediaRecorder);
-    const onSend = vi.fn(async () => {});
+    const onSend = vi.fn(async (_blob: Blob, _mimeType: string, _durationSeconds: number) => {});
     render(<WhatsAppVoiceComposer offered onSend={onSend} />);
     await recordThenStop();
     expect(screen.getByRole("alert")).toHaveTextContent(/16 MB/i);

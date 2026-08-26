@@ -129,6 +129,7 @@ const conversation: Conversation = {
 };
 
 const fakeApi: WhatsAppInboxApi = {
+  downloadBlob: vi.fn(),
   getMessagesPage: vi.fn(async () => ({ messages: [] })),
   getMedia: vi.fn(async () => ({ media: [] })),
   sendMedia: vi.fn(async () => ({})),
@@ -395,7 +396,7 @@ describe("WhatsAppConversationPane message scroll", () => {
       constructor(callback: IntersectionObserverCallback) {
         observerCallback = callback;
       }
-    } as typeof IntersectionObserver;
+    } as unknown as typeof IntersectionObserver;
     (Element.prototype.scrollIntoView as ReturnType<typeof vi.fn>).mockClear();
   });
 

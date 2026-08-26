@@ -110,7 +110,7 @@ export function WhatsAppMessageContextMenu({
   onHide,
   onRevoke,
 }: WhatsAppMessageContextMenuProps): JSX.Element {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [, setMenuOpen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const timerRef = useRef<number | null>(null);
 
@@ -149,7 +149,7 @@ export function WhatsAppMessageContextMenu({
 
   return (
     <div className="group relative">
-      <ContextMenu open={menuOpen} onOpenChange={setMenuOpen}>
+      <ContextMenu onOpenChange={setMenuOpen}>
         <ContextMenuTrigger asChild>
           <div
             data-testid="wa-bubble"

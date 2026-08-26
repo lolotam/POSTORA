@@ -77,12 +77,11 @@ export default function WhatsAppDashboard() {
       const recentUnread = data.filter((c) => (c.unread_count || 0) > 0).slice(0, 5);
       const recentFeed = (recentUnread.length > 0 ? recentUnread : data.slice(0, 5)).map((c) => ({
         id: c.conversation_id || c.id,
-        name: c.contact_name || c.contact_number || "WhatsApp User",
-        phone: c.contact_number || "",
-        lastMessage: c.last_message || "No messages yet",
+        name: c.participant_name || "WhatsApp User",
+        lastMessage: c.last_message_preview || "No messages yet",
         lastMessageAt: c.last_message_at,
         unreadCount: c.unread_count || 0,
-        avatarUrl: c.contact_avatar,
+        avatarUrl: c.participant_avatar,
       }));
 
       return {

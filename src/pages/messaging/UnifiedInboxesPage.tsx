@@ -3,13 +3,12 @@ import { useSearchParams, Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MessagingInbox } from "@/components/messaging/MessagingInbox";
-import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
 import { AccountSelector } from "@/components/messaging/AccountSelector";
 import { useMessagingAccounts } from "@/hooks/useMessaging";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { GradientDivider, Reveal } from "@/components/fx";
-import { PlatformIcon, type Platform } from "@/components/PlatformIcon";
+import { PlatformIcon } from "@/components/PlatformIcon";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -177,7 +176,7 @@ export default function UnifiedInboxesPage() {
           </div>
         </Reveal>
 
-        <GradientDivider tone="indigo" />
+        <GradientDivider tone="violet" />
 
         {/* Active Platform Inbox View */}
         <Reveal delay={60}>
@@ -217,7 +216,20 @@ export default function UnifiedInboxesPage() {
 
             {platform === "threads" && (
               <div className="space-y-4">
-                <CommentManagerPanel platform="threads" />
+                {/* Centered Wide Bold Threads Mentions Button Banner */}
+                <div className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-violet-500/10 via-indigo-500/15 to-violet-500/10 border border-violet-500/30 rounded-2xl shadow-sm">
+                  <Button
+                    asChild
+                    size="lg"
+                    className="w-full max-w-xl h-12 text-sm sm:text-base font-bold bg-gradient-to-r from-violet-500 to-indigo-500 hover:from-violet-600 hover:to-indigo-600 text-white shadow-md shadow-violet-500/30 hover:shadow-lg hover:shadow-violet-500/40 hover:scale-[1.01] active:scale-[0.99] transition-all gap-2.5 rounded-xl"
+                  >
+                    <Link to="/messaging/thread">
+                      <PlatformIcon platform="threads" size="sm" />
+                      <span>Open Threads Mentions Inbox</span>
+                      <ExternalLink className="w-4 h-4 ml-1" />
+                    </Link>
+                  </Button>
+                </div>
               </div>
             )}
           </div>
