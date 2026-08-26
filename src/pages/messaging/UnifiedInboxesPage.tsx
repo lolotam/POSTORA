@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSearchParams, Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MessagingInbox } from "@/components/messaging/MessagingInbox";
 import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
@@ -98,12 +99,26 @@ export default function UnifiedInboxesPage() {
   return (
     <DashboardLayout>
       <div className="w-full space-y-6 pb-12">
-        {/* Centered Bold Title & 3D Social Media Channels */}
+        {/* Animated Gliding Title & 3D Social Media Channels */}
         <Reveal>
           <div className="flex flex-col items-center justify-center space-y-4 pt-1 pb-2">
-            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground text-center">
-              Unified Inboxes
-            </h1>
+            {/* Animated Title Track moving across the width of the social media section */}
+            <div className="w-full max-w-3xl mx-auto overflow-hidden relative py-3 select-none">
+              <motion.div
+                className="flex items-center justify-center whitespace-nowrap"
+                initial={{ x: "-15%" }}
+                animate={{ x: ["-15%", "15%", "-15%"] }}
+                transition={{
+                  duration: 6,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
+              >
+                <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.35em] sm:tracking-[0.48em] md:tracking-[0.6em] bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 dark:from-sky-400 dark:via-indigo-400 dark:to-fuchsia-400 bg-clip-text text-transparent drop-shadow-sm text-center">
+                  Unified Inboxes
+                </h1>
+              </motion.div>
+            </div>
 
             <div
               className="flex items-center justify-center gap-6 sm:gap-8 md:gap-10 lg:gap-12 px-4 py-3 sm:py-4 flex-wrap bg-transparent"
