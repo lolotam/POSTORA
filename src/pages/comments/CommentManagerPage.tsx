@@ -2,6 +2,7 @@ import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { CommentManagerPanel } from "@/components/comments/CommentManagerPanel";
+import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
@@ -152,8 +153,18 @@ export default function CommentManagerPage() {
             ringIntensity="subtle"
             innerClassName="p-4 md:p-6"
           >
-            {platform === "facebook" && <CommentManagerPanel platform="facebook" />}
-            {platform === "instagram" && <CommentManagerPanel platform="instagram" />}
+            {platform === "facebook" && (
+              <>
+                <AutomationHandlerCard platform="facebook" surface="comments" />
+                <CommentManagerPanel platform="facebook" />
+              </>
+            )}
+            {platform === "instagram" && (
+              <>
+                <AutomationHandlerCard platform="instagram" surface="comments" />
+                <CommentManagerPanel platform="instagram" />
+              </>
+            )}
           </GradientRingCard>
         </Reveal>
       </div>

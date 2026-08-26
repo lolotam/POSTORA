@@ -811,10 +811,8 @@ export function DatabaseConnectorsManager() {
             <Button
               size="sm"
               onClick={() => {
-                setSelectedPreset(CONNECTOR_DIRECTORY[0]);
-                setEditingTool(null);
-                setForm(emptyForm);
-                setDialogOpen(true);
+                const mcpPreset = CONNECTOR_DIRECTORY.find((p) => p.id === "mcp_custom");
+                if (mcpPreset) handleCardClick(mcpPreset);
               }}
               className="gap-1.5"
             >

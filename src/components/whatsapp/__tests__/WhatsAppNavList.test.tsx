@@ -45,11 +45,11 @@ describe("WhatsAppNavList", () => {
     expect(screen.getByRole("link", { name: "Setup" })).toHaveAttribute("aria-current", "page");
   });
 
-  it("keeps Automation active while on one of its sub-sections", () => {
-    // Sub-sections live at their own top-level slugs, so without this the hub would appear
-    // inactive the moment a user opened one of its pages.
+  it("marks its own section active for promoted automation sub-sections", () => {
+    // Quick Replies used to live under the Automation hub; as a top-level section it
+    // must highlight its own entry, not a parent hub item.
     renderNav({}, "/messaging/whatsapp/quick-replies");
-    expect(screen.getByRole("link", { name: "Automation" }).className).toContain("bg-[#128C7E]");
+    expect(screen.getByRole("link", { name: "Quick Replies" })).toHaveAttribute("aria-current", "page");
   });
 
   it("does not keep the dashboard active on child routes", () => {

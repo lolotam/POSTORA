@@ -2,11 +2,9 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
   BookOpen,
-  Bot,
   Building2,
   Clock,
   FileText,
-  Headphones,
   Kanban,
   LayoutDashboard,
   MessageSquare,
@@ -14,7 +12,6 @@ import {
   Radio,
   Settings2,
   ShoppingBag,
-  Sparkles,
   UserCog,
   Users,
   Zap,
@@ -60,7 +57,9 @@ export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "contacts", label: "Contacts", icon: Users },
   { path: "templates", label: "Templates", icon: FileText },
   { path: "analytics", label: "Analytics", icon: BarChart3 },
-  { path: "automation", label: "Automation", icon: Sparkles },
+  { path: "quick-replies", label: "Quick Replies", icon: Zap },
+  { path: "broadcasts", label: "Broadcasting", icon: Radio },
+  { path: "agents", label: "Agents", icon: UserCog },
   { path: "profile", label: "Profile", icon: Building2 },
   { path: "scheduled", label: "Scheduled", icon: Clock },
   { path: "response-stats", label: "Response Stats", icon: PieChart },
@@ -69,34 +68,14 @@ export const whatsappNavItems: WhatsAppNavItem[] = [
   { path: "docs", label: "Docs", icon: BookOpen },
 ];
 
-export interface AutomationTabItem {
-  path: string;
-  label: string;
-  icon: LucideIcon;
-  /** Absolute app route outside /messaging/whatsapp (e.g. the Ad Manager's Human Agent page). */
-  absolute?: boolean;
-}
-
-export const whatsappAutomationTabs: AutomationTabItem[] = [
-  { path: "ai-agent", label: "AI Agent", icon: Sparkles },
-  { path: "quick-replies", label: "Quick Replies", icon: Zap },
-  { path: "auto-replies", label: "Auto Replies", icon: Bot },
-  { path: "broadcasts", label: "Broadcasting", icon: Radio },
-  { path: "agents", label: "Agents", icon: UserCog },
-  { path: "/human-agent", label: "Human Agent", icon: Headphones, absolute: true },
-];
-
 export const whatsappSectionDescriptions: Record<string, string> = {
   conversations: "Handle live customer conversations from the WhatsApp inbox.",
   contacts: "Manage saved contacts, uploads, tags, and customer records.",
   templates: "Review approved message templates and send compliant outreach.",
   analytics: "Track conversation activity, unread messages, and response trends.",
-  automation: "AI agent, quick replies, auto replies, broadcasting, and team agents.",
   "quick-replies": "Keep reusable replies ready for agents and common questions.",
-  "auto-replies": "Automate inbound responses based on keywords and availability.",
   broadcasts: "Plan and send WhatsApp broadcast campaigns to opted-in contacts.",
   agents: "Manage assignments, ownership, and handoff for WhatsApp conversations.",
-  "ai-agent": "Configure the AI assistant that answers customers automatically.",
   profile: "Update business identity details shown through WhatsApp.",
   scheduled: "Review queued WhatsApp messages before they are delivered.",
   "response-stats": "Measure canned response usage and team response performance.",

@@ -8,7 +8,7 @@ import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerC
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
 import { GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
-import { MessageSquare, MessageCircle, CheckCircle2, ShieldCheck, Zap } from "lucide-react";
+import { MessageSquare, MessageCircle, CheckCircle2, Bot, ShieldCheck, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PlatformIcon } from "@/components/PlatformIcon";

@@ -81,11 +81,9 @@ const WhatsAppContacts = lazyWithRetry(() => import("@/pages/whatsapp/Contacts")
 const WhatsAppTemplates = lazyWithRetry(() => import("@/pages/whatsapp/Templates"), "WhatsAppTemplates");
 const WhatsAppAnalytics = lazyWithRetry(() => import("@/pages/whatsapp/Analytics"), "WhatsAppAnalytics");
 const WhatsAppQuickReplies = lazyWithRetry(() => import("@/pages/whatsapp/QuickReplies"), "WhatsAppQuickReplies");
-const WhatsAppAutoReplies = lazyWithRetry(() => import("@/pages/whatsapp/AutoReplies"), "WhatsAppAutoReplies");
 const WhatsAppBroadcasts = lazyWithRetry(() => import("@/pages/whatsapp/Broadcasts"), "WhatsAppBroadcasts");
 const WhatsAppAgents = lazyWithRetry(() => import("@/pages/whatsapp/Agents"), "WhatsAppAgents");
 const WhatsAppAiAgent = lazyWithRetry(() => import("@/pages/whatsapp/AiAgent"), "WhatsAppAiAgent");
-const WhatsAppAutomation = lazyWithRetry(() => import("@/pages/whatsapp/Automation"), "WhatsAppAutomation");
 const WhatsAppBusinessProfile = lazyWithRetry(() => import("@/pages/whatsapp/BusinessProfile"), "WhatsAppBusinessProfile");
 const WhatsAppScheduled = lazyWithRetry(() => import("@/pages/whatsapp/Scheduled"), "WhatsAppScheduled");
 const WhatsAppResponseStats = lazyWithRetry(() => import("@/pages/whatsapp/ResponseStats"), "WhatsAppResponseStats");
@@ -274,12 +272,15 @@ export function AnimatedRoutes() {
           <Route path="templates" element={<AnimatedPage><WhatsAppTemplates /></AnimatedPage>} />
           <Route path="analytics" element={<AnimatedPage><WhatsAppAnalytics /></AnimatedPage>} />
           <Route path="quick-replies" element={<AnimatedPage><WhatsAppQuickReplies /></AnimatedPage>} />
-          <Route path="auto-replies" element={<AnimatedPage><WhatsAppAutoReplies /></AnimatedPage>} />
+          {/* Auto-replies are configured inside the unified agent's settings tab. */}
+          <Route path="auto-replies" element={<Navigate to="/automation/agents?platform=whatsapp&surface=dms" replace />} />
           <Route path="broadcasts" element={<AnimatedPage><WhatsAppBroadcasts /></AnimatedPage>} />
           <Route path="agents" element={<AnimatedPage><WhatsAppAgents /></AnimatedPage>} />
-          <Route path="ai-agent" element={<AnimatedPage><WhatsAppAiAgent /></AnimatedPage>} />
-          <Route path="ai-agent/:tab" element={<AnimatedPage><WhatsAppAiAgent /></AnimatedPage>} />
-          <Route path="automation" element={<AnimatedPage><WhatsAppAutomation /></AnimatedPage>} />
+          {/* Legacy WhatsApp AI agent settings redirect to the Automation Hub, keeping the active tab. */}
+          <Route path="ai-agent" element={<WhatsAppAiAgent />} />
+          <Route path="ai-agent/:tab" element={<WhatsAppAiAgent />} />
+          {/* The WhatsApp automation hub was replaced by the unified Automation Hub portal. */}
+          <Route path="automation" element={<Navigate to="/automation/agents?platform=whatsapp&surface=dms" replace />} />
           <Route path="profile" element={<AnimatedPage><WhatsAppBusinessProfile /></AnimatedPage>} />
           {/* Webhooks now live as a tab inside Setup; existing links and bookmarks land there. */}
           <Route path="webhooks" element={<Navigate to={whatsappRetiredRoutes.webhooks} replace />} />

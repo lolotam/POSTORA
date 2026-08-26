@@ -68,7 +68,21 @@ describe("UnifiedInboxesPage", () => {
     expect(screen.getByRole("tab", { name: /WhatsApp/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Facebook/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Instagram/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /Threads/i })).toBeInTheDocument();
+    // Threads mentions live on their own dedicated page (/messaging/thread),
+    // so no Threads tab is rendered here.
+    expect(screen.queryByRole("tab", { name: /Threads/i })).not.toBeInTheDocument();
+  });
+
+  it("redirects legacy ?platform=threads links to the Threads mentions page", () => {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/messaging?platform=threads"]}>
+          <UnifiedInboxesPage />
+        </MemoryRouter>
+      </QueryClientProvider>
+    );
+
+    expect(screen.queryByRole("tab", { name: /Threads/i })).not.toBeInTheDocument();
   });
 
   it("switches active channel when clicking provider card", () => {

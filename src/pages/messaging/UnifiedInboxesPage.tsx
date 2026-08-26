@@ -1,26 +1,23 @@
-import { useState, useEffect, useMemo } from "react";
 import { useSearchParams, Link } from "react-router-dom";
+import { Navigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { MessagingInbox } from "@/components/messaging/MessagingInbox";
-import { AccountSelector } from "@/components/messaging/AccountSelector";
-import { useMessagingAccounts } from "@/hooks/useMessaging";
-import { useSocialAccounts } from "@/hooks/useSocialAccounts";
-import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { GradientDivider, Reveal } from "@/components/fx";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export type InboxPlatform = "whatsapp" | "facebook" | "instagram" | "threads";
+export type InboxPlatform = "whatsapp" | "facebook" | "instagram";
 
 interface PlatformTabOption {
   id: InboxPlatform;
   label: string;
   subLabel: string;
-  flagKey: "msgWhatsapp" | "msgFacebook" | "msgInstagram" | "msgThreads";
-  colorPreset: "emerald" | "sky" | "rose" | "violet";
+  flagKey: "msgWhatsapp" | "msgFacebook" | "msgInstagram";
+  colorPreset: "emerald" | "sky" | "rose";
 }
 
 const INBOX_PLATFORMS: PlatformTabOption[] = [
@@ -45,26 +42,21 @@ const INBOX_PLATFORMS: PlatformTabOption[] = [
     flagKey: "msgInstagram",
     colorPreset: "rose",
   },
-  {
-    id: "threads",
-    label: "Threads",
-    subLabel: "Mentions & Replies",
-    flagKey: "msgThreads",
-    colorPreset: "violet",
-  },
 ];
 
 export default function UnifiedInboxesPage() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { flags, isLoading: flagsLoading } = useFeatureFlags();
 
-  const platformParam = searchParams.get("platform") as InboxPlatform;
+  const platformParam = searchParams.get("platform") as string;
+
+  // Threads mentions live on their own page — send legacy ?platform=threads links there.
+  if (platformParam === "threads") {
+    return <Navigate to="/messaging/thread" replace />;
+  }
+
   const platform: InboxPlatform = INBOX_PLATFORMS.some((p) => p.id === platformParam)
-    ? platformParam
+    ? (platformParam as InboxPlatform)
     : "whatsapp";
-
-  const selectedPlatformMeta =
-    INBOX_PLATFORMS.find((p) => p.id === platform) || INBOX_PLATFORMS[0];
 
   const handlePlatformChange = (nextPlatform: InboxPlatform) => {
     setSearchParams(
@@ -76,24 +68,6 @@ export default function UnifiedInboxesPage() {
       { replace: true }
     );
   };
-
-  // Connected accounts query
-  const { accounts: messagingAccounts = [], isLoading: accountsLoading } = useMessagingAccounts();
-  const { data: socialAccounts = [] } = useSocialAccounts();
-
-  // Current platform accounts
-  const platformMessagingAccounts = useMemo(() => {
-    return messagingAccounts.filter((a) => a.platform === platform);
-  }, [messagingAccounts, platform]);
-
-  const platformSocialAccounts = useMemo(() => {
-    return socialAccounts.filter((a) => a.platform === platform && a.is_active);
-  }, [socialAccounts, platform]);
-
-  const hasConnectedAccounts =
-    platform === "threads"
-      ? platformSocialAccounts.length > 0
-      : platformMessagingAccounts.length > 0;
 
   return (
     <DashboardLayout>
@@ -199,37 +173,21 @@ export default function UnifiedInboxesPage() {
                 </div>
 
                 <MessagingInbox platform="whatsapp" />
+                <AutomationHandlerCard platform="whatsapp" surface="dms" />
               </div>
             )}
 
             {platform === "facebook" && (
               <div className="space-y-4">
                 <MessagingInbox platform="facebook" />
+                <AutomationHandlerCard platform="facebook" surface="dms" />
               </div>
             )}
 
             {platform === "instagram" && (
               <div className="space-y-4">
                 <MessagingInbox platform="instagram" />
-              </div>
-            )}
-
-            {platform === "threads" && (
-              <div className="space-y-4">
-                {/* Centered Wide Bold Threads Mentions Button Banner */}
-                <div className="flex items-center justify-center p-3 sm:p-4 bg-gradient-to-r from-violet-500/10 via-indigo-500/15 to-violet-500/10 border border-violet-500/30 rounded-2xl shadow-sm">
-                  <Button
-                    asChild
-                    size="lg"
-                    className="w-full max-w-xl h-12 text-sm sm:text-base font-bold bg-gradient-to-r from-violet-500 to-indigo-500 hover:from-violet-600 hover:to-indigo-600 text-white shadow-md shadow-violet-500/30 hover:shadow-lg hover:shadow-violet-500/40 hover:scale-[1.01] active:scale-[0.99] transition-all gap-2.5 rounded-xl"
-                  >
-                    <Link to="/messaging/thread">
-                      <PlatformIcon platform="threads" size="sm" />
-                      <span>Open Threads Mentions Inbox</span>
-                      <ExternalLink className="w-4 h-4 ml-1" />
-                    </Link>
-                  </Button>
-                </div>
+                <AutomationHandlerCard platform="instagram" surface="dms" />
               </div>
             )}
           </div>

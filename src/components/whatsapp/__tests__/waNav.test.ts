@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  whatsappAutomationTabs,
   whatsappLegacyTabTarget,
   whatsappNavItems,
   whatsappRetiredRoutes,
@@ -19,7 +18,9 @@ describe("whatsappNavItems", () => {
       "contacts",
       "templates",
       "analytics",
-      "automation",
+      "quick-replies",
+      "broadcasts",
+      "agents",
       "profile",
       "scheduled",
       "response-stats",
@@ -78,24 +79,5 @@ describe("whatsappLegacyTabTarget", () => {
   it("builds absolute section routes under the mini-app base path", () => {
     expect(whatsappSectionRoute("")).toBe(WHATSAPP_BASE_PATH);
     expect(whatsappSectionRoute("broadcasts")).toBe(`${WHATSAPP_BASE_PATH}/broadcasts`);
-  });
-});
-
-describe("whatsappAutomationTabs", () => {
-  it("groups the automation sub-sections, keeping their original route slugs", () => {
-    const relativeTabs = whatsappAutomationTabs.filter((tab) => !tab.absolute);
-    expect(relativeTabs.map((tab) => tab.path)).toEqual([
-      "ai-agent",
-      "quick-replies",
-      "auto-replies",
-      "broadcasts",
-      "agents",
-    ]);
-  });
-
-  it("links Human Agent to the Ad Manager page, not a duplicate of Agents", () => {
-    const humanAgent = whatsappAutomationTabs.find((tab) => tab.label === "Human Agent");
-    expect(humanAgent?.absolute).toBe(true);
-    expect(humanAgent?.path).toBe("/human-agent");
   });
 });
