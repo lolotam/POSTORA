@@ -119,8 +119,15 @@ describe("WhatsAppMediaAttachment", () => {
     act(() => triggerIntersect());
     const img = await screen.findByRole("img", { name: "photo.jpg" });
     expect(img).toHaveAttribute("src", "https://signed.example/photo.jpg");
-    expect(img).toHaveAttribute("loading", "lazy");
+    // Verified in a real browser on 2026-08-26: loading="lazy" inside the programmatically
+    // scrolled message pane means Chrome never marks these images visible, so they stay
+    // unloaded forever and the bubble renders blank on a perfectly good URL. The laziness
+    // that matters is already in useWhatsAppMedia, which only asks the server to materialise
+    // bytes once the bubble enters the viewport.
+    expect(img).not.toHaveAttribute("loading", "lazy");
     expect(img.className).toContain("max-h-72");
+    // Without a starting box an <img> with only max-* constraints lays out at 0x0.
+    expect(img.className).toContain("min-h-24");
   });
 
   it("renders video with native controls and metadata preload", async () => {

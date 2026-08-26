@@ -53,7 +53,16 @@ function WhatsAppLayoutContent() {
   return (
     <WhatsAppWorkspaceProvider>
       <TooltipProvider>
-        <div className="flex h-[calc(100vh-3.5rem)] supports-[height:100dvh]:h-[calc(100dvh-3.5rem)] flex-col overflow-hidden bg-background text-foreground">
+        {/* Viewport height MINUS the dashboard navbar, at both of its sizes.
+            This shell used to be the top-level layout and owned h-screen. Once it moved inside
+            <DashboardLayout noPadding hideFooter> that meant navbar + 100vh, so the page grew
+            past the viewport and the chat composer fell below the fold. flex-1 does not fix it
+            either: DashboardLayout's root is min-h-screen, an indefinite height, so a flex child
+            grows to its content instead of shrinking. Hence an explicit calc -- and it has to be
+            responsive, because the navbar is h-14 (3.5rem) below md and h-16 (4rem) from md up,
+            so any single constant is wrong at one breakpoint. dvh keeps iOS Safari's collapsing
+            URL bar from clipping the composer. */}
+        <div className="flex h-[calc(100vh-3.5rem)] md:h-[calc(100vh-4rem)] supports-[height:100dvh]:h-[calc(100dvh-3.5rem)] md:supports-[height:100dvh]:h-[calc(100dvh-4rem)] flex-col overflow-hidden bg-background text-foreground">
           <header className="z-40 shrink-0 border-b border-[#25D366]/20 bg-[#075E54] text-white shadow-sm">
             <div
               className={cn(

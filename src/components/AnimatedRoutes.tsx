@@ -137,9 +137,15 @@ const TikTokAuthPage = lazyWithRetry(() => import("@/pages/TikTokAuth"), "TikTok
 const TikTokPublishPage = lazyWithRetry(() => import("@/pages/TikTokPublish"), "TikTokPublish");
 
 // Helper component to wrap pages with transitions
-function AnimatedPage({ children }: { children: React.ReactNode }) {
+//
+// `fill` is opt-in for viewport-locked screens. The wrapper div is normally height-less, which
+// is right for a document-flow page but breaks a child that sizes itself with h-full: the child
+// resolves against this div's content height instead of the layout's, so it grows past the
+// viewport and anything pinned to its bottom (a chat composer) falls below the fold. Pages that
+// scroll normally must NOT pass it -- flex-1 there would fight their own layout.
+function AnimatedPage({ children, fill = false }: { children: React.ReactNode; fill?: boolean }) {
   return (
-    <PageTransition>
+    <PageTransition className={fill ? "flex min-h-0 flex-1 flex-col" : ""}>
       {children}
     </PageTransition>
   );
@@ -267,7 +273,7 @@ export function AnimatedRoutes() {
         <Route path="/messaging/whatsapp" element={<ProtectedRoute><WhatsAppLayout /></ProtectedRoute>}>
           <Route index element={<AnimatedPage><WhatsAppDashboard /></AnimatedPage>} />
           <Route path="pipelines" element={<AnimatedPage><WhatsAppPipelines /></AnimatedPage>} />
-          <Route path="conversations" element={<AnimatedPage><WhatsAppConversations /></AnimatedPage>} />
+          <Route path="conversations" element={<AnimatedPage fill><WhatsAppConversations /></AnimatedPage>} />
           <Route path="contacts" element={<AnimatedPage><WhatsAppContacts /></AnimatedPage>} />
           <Route path="templates" element={<AnimatedPage><WhatsAppTemplates /></AnimatedPage>} />
           <Route path="analytics" element={<AnimatedPage><WhatsAppAnalytics /></AnimatedPage>} />

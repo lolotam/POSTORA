@@ -206,11 +206,22 @@ export function WhatsAppMediaAttachment({
           className="mt-2 block max-w-full"
           onClick={() => openLightbox(resolved.url as string)}
         >
+          {/* Deliberately NOT loading="lazy". These bubbles live in a nested scroll container
+              that is scrolled programmatically to the newest message, and Chrome never marks
+              such images visible, so they stay unloaded forever: a permanently blank bubble
+              whose URL is perfectly good (verified by hand -- HTTP 200 image/jpeg, and a bare
+              new Image() with the same src decodes at full size).
+
+              Nothing is lost by dropping it. The expensive half is already lazy: useWhatsAppMedia
+              only asks the server to materialise bytes once a bubble enters the viewport, so the
+              browser attribute was saving a request we had already decided to make.
+
+              min-h/min-w give the element a box before its bytes arrive -- otherwise an <img>
+              with only max-* constraints lays out at 0x0 and the bubble collapses while loading. */}
           <img
             src={resolved.url}
             alt={attachment.name || "Image attachment"}
-            loading="lazy"
-            className="max-h-72 max-w-full cursor-pointer rounded-lg object-cover"
+            className="min-h-24 min-w-24 max-h-72 max-w-full cursor-pointer rounded-lg bg-muted object-cover"
           />
         </button>
         <ImageLightbox
