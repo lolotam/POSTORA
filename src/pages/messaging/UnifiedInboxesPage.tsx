@@ -7,20 +7,10 @@ import { AccountSelector } from "@/components/messaging/AccountSelector";
 import { useMessagingAccounts } from "@/hooks/useMessaging";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
-import { Icon3D, GradientHeading, GradientDivider, Reveal } from "@/components/fx";
+import { GradientDivider, Reveal } from "@/components/fx";
 import { PlatformIcon, type Platform } from "@/components/PlatformIcon";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  MessageSquare,
-  Sparkles,
-  ArrowRight,
-  CheckCircle2,
-  ExternalLink,
-  PlusCircle,
-  Radio,
-} from "lucide-react";
+import { CheckCircle2, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type InboxPlatform = "whatsapp" | "facebook" | "instagram" | "threads";
@@ -108,33 +98,15 @@ export default function UnifiedInboxesPage() {
   return (
     <DashboardLayout>
       <div className="w-full space-y-6 pb-12">
-        {/* Header: Title and Live Badge */}
+        {/* Centered Bold Title & 3D Social Media Channels */}
         <Reveal>
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-3.5">
-              <Icon3D icon={MessageSquare} variant="indigo" size="md" />
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <GradientHeading preset="sky-violet-pink" size="lg" as="h1">
-                    Unified Inboxes
-                  </GradientHeading>
-                  <Badge variant="outline" className="border-primary/30 text-primary bg-primary/10 gap-1 text-[11px] h-5 py-0">
-                    <Radio className="w-2.5 h-2.5 text-emerald-400 animate-pulse" /> Live Multi-Channel
-                  </Badge>
-                </div>
-                <p className="text-xs text-muted-foreground mt-0.5 hidden sm:block">
-                  Manage customer conversations, direct messages, and post comments across all channels
-                </p>
-              </div>
-            </div>
-          </div>
-        </Reveal>
+          <div className="flex flex-col items-center justify-center space-y-4 pt-1 pb-2">
+            <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-foreground text-center">
+              Unified Inboxes
+            </h1>
 
-        {/* Centered 3D Large Social Media Channels with Transparent Background */}
-        <Reveal delay={30}>
-          <div className="flex flex-col items-center justify-center py-2">
             <div
-              className="flex items-center justify-center gap-4 sm:gap-6 md:gap-8 flex-wrap bg-transparent"
+              className="flex items-center justify-center gap-6 sm:gap-8 md:gap-10 lg:gap-12 px-4 py-3 sm:py-4 flex-wrap bg-transparent"
               role="tablist"
               aria-label="Inbox Channels"
             >
