@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
+import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { AI_AGENT_TABS, AiAgentManager, type AiAgentTab } from "@/components/messaging/AiAgentManager";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
-import { Icon3D, GradientHeading, GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
-import { Bot, MessageSquare, MessageCircle, Sparkles, CheckCircle2, ShieldCheck, Zap } from "lucide-react";
+import { GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
+import { MessageSquare, MessageCircle, CheckCircle2, ShieldCheck, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PlatformIcon } from "@/components/PlatformIcon";
@@ -133,37 +134,32 @@ export default function UnifiedAgentSetupPage() {
   return (
     <DashboardLayout>
       <div className="w-full space-y-6 pb-12">
-        {/* Header (Left-aligned as before) */}
+        {/* Animated Gliding Title & 3D Social Media Channels */}
         <Reveal>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <Icon3D icon={Bot} variant="violet" size="md" />
-              <div>
-                <div className="flex items-center gap-2">
-                  <GradientHeading preset="violet-sky" size="lg" as="h1">
-                    Agent Setup Portal
-                  </GradientHeading>
-                  <Badge variant="outline" className="border-violet-500/30 text-violet-400 bg-violet-500/10 gap-1 text-xs">
-                    <Sparkles className="w-3 h-3" /> Unified AI Studio
-                  </Badge>
-                </div>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Configure intelligent AI assistants, knowledge bases, database connectors, and automations across all social channels
-                </p>
-              </div>
+          <div className="flex flex-col items-center justify-center space-y-4 pt-1 pb-2">
+            {/* Animated Title Track moving across the width of the social media section */}
+            <div className="w-full max-w-3xl mx-auto overflow-hidden relative py-3 select-none">
+              <motion.div
+                className="flex items-center justify-center whitespace-nowrap"
+                initial={{ x: "-15%" }}
+                animate={{ x: ["-15%", "15%", "-15%"] }}
+                transition={{
+                  duration: 6,
+                  repeat: Infinity,
+                  ease: "easeInOut",
+                }}
+              >
+                <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.18em] sm:tracking-[0.25em] md:tracking-[0.3em] bg-gradient-to-r from-violet-500 via-indigo-500 to-sky-500 dark:from-violet-400 dark:via-indigo-400 dark:to-sky-400 bg-clip-text text-transparent drop-shadow-sm text-center">
+                  Agent Setup Portal
+                </h1>
+              </motion.div>
             </div>
-          </div>
-        </Reveal>
 
-        <GradientDivider tone="violet" />
-
-        {/* Centered Large 3D Glossy Platform Cards */}
-        <Reveal delay={30}>
-          <div className="flex flex-col items-center space-y-5 py-6">
-            <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Select Social Channel
-            </span>
-            <div className="flex items-center justify-center gap-8 sm:gap-10 md:gap-14 flex-wrap" role="tablist" aria-label="Social Channels">
+            <div
+              className="flex items-center justify-center gap-6 sm:gap-8 md:gap-10 lg:gap-12 px-4 py-3 sm:py-4 flex-wrap bg-transparent"
+              role="tablist"
+              aria-label="Social Channels"
+            >
               {PLATFORMS.map((p) => {
                 const isSelected = platform === p.id;
                 return (
@@ -173,45 +169,50 @@ export default function UnifiedAgentSetupPage() {
                     role="tab"
                     aria-selected={isSelected}
                     onClick={() => handlePlatformChange(p.id)}
-                    className={cn(
-                      "flex flex-col items-center gap-4 flex-shrink-0 transition-all duration-300 hover:scale-105 hover:-translate-y-2.5 cursor-pointer group focus:outline-none",
-                    )}
+                    className="flex flex-col items-center gap-2 flex-shrink-0 transition-all duration-300 cursor-pointer group focus:outline-none"
                   >
                     <div
                       className={cn(
-                        "relative w-28 h-28 sm:w-36 sm:h-36 md:w-40 md:h-40 rounded-[2rem] backdrop-blur-2xl flex items-center justify-center border transition-all duration-300 overflow-visible",
-                        // Ultra glossy 3D glass refraction and specular highlight
-                        "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-[2rem] before:bg-gradient-to-b before:from-white/40 before:via-white/15 before:to-transparent before:pointer-events-none",
+                        "relative w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl sm:rounded-3xl flex items-center justify-center border transition-all duration-300 overflow-visible",
+                        // 3D glass specular highlight
+                        "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl sm:before:rounded-t-3xl before:bg-gradient-to-b before:from-white/40 before:via-white/15 before:to-transparent before:pointer-events-none",
                         isSelected
-                          ? "bg-gradient-to-b from-primary/25 via-card/85 to-card/60 border-primary ring-4 ring-primary/40 shadow-[0_24px_50px_-10px_rgba(var(--primary-rgb,59,130,246),0.5),0_10px_20px_-4px_rgba(0,0,0,0.35),inset_0_2.5px_4px_rgba(255,255,255,0.9),inset_0_-4px_8px_rgba(0,0,0,0.25)] -translate-y-2.5 scale-105"
-                          : "bg-gradient-to-b from-card/95 via-card/75 to-card/55 border-border/70 shadow-[0_16px_35px_-8px_rgba(0,0,0,0.35),0_6px_14px_-2px_rgba(0,0,0,0.2),inset_0_2px_3px_rgba(255,255,255,0.7),inset_0_-3px_6px_rgba(0,0,0,0.2)] hover:border-primary/60 hover:shadow-[0_24px_48px_-10px_rgba(0,0,0,0.5),inset_0_2.5px_4px_rgba(255,255,255,0.9)]"
+                          ? "bg-gradient-to-b from-primary/25 via-card/85 to-card/60 border-primary ring-4 ring-primary/40 shadow-[0_20px_40px_-8px_rgba(var(--primary-rgb,59,130,246),0.5),0_8px_16px_-4px_rgba(0,0,0,0.35),inset_0_2px_3px_rgba(255,255,255,0.9),inset_0_-3px_6px_rgba(0,0,0,0.25)] -translate-y-1.5 scale-105"
+                          : "bg-card/40 backdrop-blur-md border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.35),0_4px_10px_-2px_rgba(0,0,0,0.2),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:border-primary/60 hover:shadow-[0_18px_36px_-8px_rgba(0,0,0,0.5),inset_0_2px_3px_rgba(255,255,255,0.9)] hover:-translate-y-1.5 hover:scale-105"
                       )}
                     >
                       <PlatformIcon
                         platform={p.id}
-                        size="3xl"
-                        className="drop-shadow-[0_12px_14px_rgba(0,0,0,0.3)] transition-transform duration-300 group-hover:scale-110 group-hover:drop-shadow-[0_16px_20px_rgba(0,0,0,0.4)]"
+                        size="2xl"
+                        className="drop-shadow-[0_8px_10px_rgba(0,0,0,0.3)] transition-transform duration-300 group-hover:scale-110"
                       />
                       {isSelected && (
-                        <div className="absolute -top-3 -right-3 w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-xl shadow-primary/50 ring-4 ring-background animate-in zoom-in-50 duration-200">
-                          <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6" />
+                        <div className="absolute -top-2 -right-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                          <CheckCircle2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                         </div>
                       )}
                     </div>
-                    <span
-                      className={cn(
-                        "text-base sm:text-lg font-bold tracking-tight transition-colors",
-                        isSelected ? "text-foreground font-extrabold" : "text-muted-foreground group-hover:text-foreground"
-                      )}
-                    >
-                      {p.label}
-                    </span>
+
+                    <div className="text-center">
+                      <span
+                        className={cn(
+                          "block text-xs sm:text-sm font-bold tracking-tight transition-colors",
+                          isSelected
+                            ? "text-foreground font-extrabold"
+                            : "text-muted-foreground group-hover:text-foreground"
+                        )}
+                      >
+                        {p.label}
+                      </span>
+                    </div>
                   </button>
                 );
               })}
             </div>
           </div>
         </Reveal>
+
+        <GradientDivider tone="violet" />
 
         {/* Compact Option Cards: Direct Messaging & Post Comments (Centered, Same Height) */}
         <Reveal delay={50}>
