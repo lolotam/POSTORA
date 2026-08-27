@@ -1,9 +1,10 @@
 import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { anonKey, integrationTest, supabaseUrl } from "../_shared/integrationTestGuard.ts";
 
-const FUNCTION_URL = Deno.env.get("SUPABASE_URL") + "/functions/v1/check-subscription";
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const FUNCTION_URL = `${supabaseUrl}/functions/v1/check-subscription`;
+const ANON_KEY = anonKey;
 
-Deno.test("check-subscription: handles CORS preflight request", async () => {
+integrationTest("check-subscription: handles CORS preflight request", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "OPTIONS",
     headers: {
@@ -16,7 +17,7 @@ Deno.test("check-subscription: handles CORS preflight request", async () => {
   assertEquals(corsHeader, "*");
 });
 
-Deno.test("check-subscription: returns 401 when Authorization header is missing", async () => {
+integrationTest("check-subscription: returns 401 when Authorization header is missing", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -31,7 +32,7 @@ Deno.test("check-subscription: returns 401 when Authorization header is missing"
   assertEquals(body.error, "Unauthorized: missing Authorization header");
 });
 
-Deno.test("check-subscription: returns 401 when bearer token is empty", async () => {
+integrationTest("check-subscription: returns 401 when bearer token is empty", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -47,7 +48,7 @@ Deno.test("check-subscription: returns 401 when bearer token is empty", async ()
   assertEquals(body.error, "Unauthorized: missing bearer token");
 });
 
-Deno.test("check-subscription: returns error for expired/invalid token", async () => {
+integrationTest("check-subscription: returns error for expired/invalid token", async () => {
   // Use an obviously expired JWT token
   const expiredToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwiZXhwIjoxfQ.invalid";
 
@@ -83,7 +84,7 @@ Deno.test("check-subscription: returns error for expired/invalid token", async (
  * - Returns 200 status
  * - Returns { subscribed: boolean, product_id: string | null, ... }
  */
-Deno.test("check-subscription: returns subscription status for authenticated user", async () => {
+integrationTest("check-subscription: returns subscription status for authenticated user", async () => {
   // This test is designed to work with the curl_edge_functions tool
   // which automatically includes the user's auth token if they're logged in
   // When run manually, it will test unauthenticated behavior
