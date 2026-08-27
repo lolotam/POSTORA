@@ -31,7 +31,9 @@ function configuredValue(
 export function resolveEmbeddingConfig(
   readEnvironment: EnvironmentReader = Deno.env.get,
 ): EmbeddingConfig {
-  const provider = configuredValue(readEnvironment, "EMBEDDING_PROVIDER", "gemini");
+  // Default to "ollama" (self-hosted bge-m3) — this server has no Gemini key
+  // configured for embeddings. Set EMBEDDING_PROVIDER=gemini explicitly to opt in.
+  const provider = configuredValue(readEnvironment, "EMBEDDING_PROVIDER", "ollama");
 
   if (provider === "gemini") {
     const column = configuredValue(readEnvironment, "EMBEDDING_COLUMN", "embedding");
