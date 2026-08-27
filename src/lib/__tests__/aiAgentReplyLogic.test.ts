@@ -297,7 +297,14 @@ describe("completionFailure", () => {
   });
 
   it("rejects an object that carries neither content nor tool calls", () => {
-    for (const message of [{}, { role: "user" }, { role: "assistant" }, { content: null }]) {
+    for (const message of [
+      {},
+      { role: "user" },
+      { role: "assistant" },
+      { content: null },
+      // An empty array is truthy and an array, but there is nothing in it to call.
+      { role: "assistant", content: null, tool_calls: [] },
+    ]) {
       expect(completionFailure({ choices: [{ message }] }))
         .toBe("Chat completion returned an unusable message");
     }

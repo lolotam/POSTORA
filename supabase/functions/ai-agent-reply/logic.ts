@@ -314,7 +314,9 @@ export function completionFailure(data: unknown): string | null {
   // usability rather than `role` also survives a provider that labels its messages
   // differently; all three configured providers do send role, but nothing needs them to.
   const { content, tool_calls: toolCalls } = message as { content?: unknown; tool_calls?: unknown };
-  if (typeof content !== "string" && !Array.isArray(toolCalls)) {
+  // An empty tool_calls array is no more usable than a missing one: the caller reads
+  // `tool_calls?.length`, finds nothing to execute, and falls out of the loop with no reply.
+  if (typeof content !== "string" && !(Array.isArray(toolCalls) && toolCalls.length > 0)) {
     return "Chat completion returned an unusable message";
   }
   return null;
