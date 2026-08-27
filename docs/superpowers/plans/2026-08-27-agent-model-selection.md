@@ -21,7 +21,7 @@
 - Before any edge-function deploy, diff the deployed file against the repo copy. The functions volume has drifted from the repo before (the `refresh-tokens` server-only hotfix) and a blind copy regresses it.
 - The edge worker is killed at **60 seconds** (`workerTimeoutMs = 1 * 60 * 1000`, read from the platform's main service). Nothing in this plan may assume more.
 - Branch: `feat/agent-model-selection`. Commit scoped to each task's files: `git commit -m "..." -- <files>`. Never commit `b64.txt`, logs, backups, `.env*`, or any secret file.
-- Gate commands, run from the repo root: `bun run lint`, `bun run typecheck`, `bun run test`. Edge-function unit tests: `deno test --allow-none supabase/functions/ai-agent-reply/tools.test.ts`.
+- Gate commands, run from the repo root: `bun run lint`, `bun run typecheck`, `bun run test`. Edge-function unit tests: `deno test supabase/functions/ai-agent-reply/tools.test.ts`.
 - `supabase/functions/ai-agent-reply/logic.ts` is pure — no Deno or network imports. It is unit-tested from Vitest at `src/lib/__tests__/aiAgentReplyLogic.test.ts`, which imports it by relative path.
 - The admin-facing provider list for the agent is exactly `openai`, `openrouter`, `gemini`. A provider without an entry in `PROVIDER_ENDPOINTS` must never appear.
 - New `system_settings` keys are exactly `default_ai_model_agent`, `default_ai_model_agent_fallback`, `default_ai_model_agent_fallback_2`.
@@ -329,7 +329,7 @@ Add `escalateConversation` to the import from `"./tools.ts"` at the top of that 
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `deno test --allow-none supabase/functions/ai-agent-reply/tools.test.ts`
+Run: `deno test supabase/functions/ai-agent-reply/tools.test.ts`
 Expected: FAIL — `escalateConversation` is not exported by `./tools.ts`.
 
 - [ ] **Step 3: Implement the extraction**
@@ -493,7 +493,7 @@ The old `notifyAdmins` helper (`tools.ts:100-114`) is now used only by `notifyAd
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `deno test --allow-none supabase/functions/ai-agent-reply/tools.test.ts`
+Run: `deno test supabase/functions/ai-agent-reply/tools.test.ts`
 Expected: PASS, including the pre-existing tests in that file.
 
 - [ ] **Step 5: Commit**
@@ -907,7 +907,7 @@ The dry-run case needs no test here: `index.ts` guards the whole floor with `!dr
 
 - [ ] **Step 9: Verify the file type-checks and the suites still pass**
 
-Run: `bun run typecheck && bun run test && deno test --allow-none supabase/functions/ai-agent-reply/`
+Run: `bun run typecheck && bun run test && deno test supabase/functions/ai-agent-reply/`
 Expected: all PASS. `bun run typecheck` covers `src/` only, so also run `deno check supabase/functions/ai-agent-reply/index.ts` and expect no errors — in particular no import cycle, which is what `outage-floor.ts` exists to avoid.
 
 - [ ] **Step 10: Commit**
@@ -1441,7 +1441,7 @@ with (`modelChain` is already hoisted by Task 3, so this is an assignment):
 
 - [ ] **Step 3: Verify types and existing suites**
 
-Run: `deno check supabase/functions/ai-agent-reply/index.ts && bun run test && deno test --allow-none supabase/functions/ai-agent-reply/tools.test.ts`
+Run: `deno check supabase/functions/ai-agent-reply/index.ts && bun run test && deno test supabase/functions/ai-agent-reply/tools.test.ts`
 Expected: all PASS.
 
 - [ ] **Step 4: Commit**
