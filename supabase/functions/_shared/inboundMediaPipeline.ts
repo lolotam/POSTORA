@@ -12,6 +12,7 @@ import {
   bareModelId,
   classifyMime,
   DEFAULT_LIMITS,
+  looksLikePdf,
   understandInboundMedia,
   type MediaKind,
   type ProviderTier,
@@ -347,17 +348,16 @@ export async function runInboundMediaUnderstanding(
       console.error(`[media-understanding] mime disagreement: declared ${kind}, resolved ${resolvedKind}`);
       return { understood: false, reason: "mime_mismatch" };
     }
-    // A document must be confirmed by the bytes, not merely declared.
+    // A document must be confirmed by the BYTES, not by any mime.
     //
-    // Meta calls every non-media attachment `file`, so a .docx arrives hinted as a document
-    // and comes back as a mime nothing classifies. For audio and images an unclassified
-    // mime is worth proceeding on -- a transport may simply not know the type, and the
-    // model tolerates a near-miss container. For a document it is the opposite: PDF is the
-    // one format supported, so "not a PDF" is precisely the Word or PowerPoint case that
-    // was deliberately excluded. Proceeding spends a cap slot and a model call to be told
-    // what is already known here.
-    if (kind === "document" && resolvedKind !== "document") {
-      console.error(`[media-understanding] declared a document, but the bytes are ${effectiveMime}`);
+    // Meta calls every non-media attachment `file`, so a .docx arrives hinted as a document.
+    // Checking the resolved mime instead is not enough: CloudGraphFetcher prefers the mime
+    // the webhook declared over the one the download reports, so on WhatsApp Cloud that
+    // check would compare a declaration with itself -- and would also refuse a real PDF
+    // that happened to be labelled application/octet-stream. The magic bytes are the one
+    // piece of evidence no sender and no header controls.
+    if (kind === "document" && !looksLikePdf(bytes)) {
+      console.error(`[media-understanding] declared a document, but the bytes are not a PDF`);
       return { understood: false, reason: "unsupported_type" };
     }
 

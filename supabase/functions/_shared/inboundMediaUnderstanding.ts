@@ -195,6 +195,35 @@ const IMAGE_MIME = /^image\/(jpeg|jpg|png|webp|heic|heif|gif)/i;
  */
 const DOCUMENT_MIME = /^application\/pdf/i;
 
+const PDF_MAGIC = new TextEncoder().encode("%PDF-");
+
+/**
+ * Whether these bytes really are a PDF, decided by the bytes and nothing else.
+ *
+ * Every mime in this system is a *claim*: the webhook's metadata, the Graph lookup, the CDN
+ * header. On WhatsApp Cloud the claim even round-trips -- the fetcher prefers the mime the
+ * webhook declared -- so checking the resolved mime against the declared kind compares a
+ * declaration with itself and confirms nothing. Magic bytes are the one piece of evidence
+ * no sender or header controls.
+ *
+ * Scanned over the first kilobyte rather than at offset zero: readers tolerate junk before
+ * the header, and real-world PDFs sometimes carry it.
+ */
+export function looksLikePdf(bytes: Uint8Array): boolean {
+  const window = bytes.subarray(0, 1024);
+  for (let start = 0; start + PDF_MAGIC.length <= window.length; start += 1) {
+    let matched = true;
+    for (let offset = 0; offset < PDF_MAGIC.length; offset += 1) {
+      if (window[start + offset] !== PDF_MAGIC[offset]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return true;
+  }
+  return false;
+}
+
 export function classifyMime(mimeType: string | null | undefined): MediaKind | null {
   if (!mimeType) return null;
   const bare = mimeType.split(";")[0].trim().toLowerCase();

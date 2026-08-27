@@ -184,9 +184,15 @@ function whenAborted(signal: AbortSignal): Promise<never> {
 async function readCapped(
   response: Response,
   maxBytes: number,
-  timeoutMs = 0,
+  timeoutMs: number,
   signal?: AbortSignal,
 ): Promise<Uint8Array> {
+  // An exhausted budget means the deadline has PASSED, not that there is no deadline.
+  // Reading it as "unlimited" is how a shared download clock turned into an unbounded body
+  // read for exactly the slow download the clock exists to stop.
+  if (timeoutMs <= 0) {
+    throw new MediaFetchError("no time left to read the body", "timeout");
+  }
   const declared = Number(response.headers.get("content-length") ?? "");
   if (Number.isFinite(declared) && declared > maxBytes) {
     throw new MediaFetchError(`declared ${declared} bytes exceeds ${maxBytes}`, "too_large");
@@ -207,16 +213,13 @@ async function readCapped(
   // reads is not enough: a server can send headers, emit one chunk, and then leave the
   // next read pending forever, which would hang the continuation that owes the customer
   // a reply.
-  const budget = timeoutMs > 0 ? timeoutAfter(timeoutMs) : null;
+  const budget = timeoutAfter(timeoutMs);
   const aborted = signal ? whenAborted(signal) : null;
   try {
     while (true) {
-      const racers: Promise<unknown>[] = [reader.read()];
-      if (budget) racers.push(budget.promise);
+      const racers: Promise<unknown>[] = [reader.read(), budget.promise];
       if (aborted) racers.push(aborted);
-      const { done, value } = racers.length > 1
-        ? await Promise.race(racers) as ReadableStreamReadResult<Uint8Array>
-        : await reader.read();
+      const { done, value } = await Promise.race(racers) as ReadableStreamReadResult<Uint8Array>;
       if (done) break;
       if (!value) continue;
       total += value.byteLength;
@@ -322,7 +325,14 @@ function redirectTarget(response: Response, from: string): string | null {
   if (response.status < 300 || response.status >= 400) return null;
   const location = response.headers.get("location");
   if (!location) return null;
-  return new URL(location, from).toString();
+  try {
+    return new URL(location, from).toString();
+  } catch {
+    // The raw TypeError quotes the Location it failed on, and `from` is a signed URL that
+    // a relative resolution would have merged into it. That message is logged verbatim
+    // upstream, so it never leaves this function.
+    throw new MediaFetchError("redirect location is not a valid url", "transport_failed");
+  }
 }
 
 /**
@@ -398,7 +408,17 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
       if (!meta.ok) {
         throw new MediaFetchError(`media lookup ${meta.status}`, meta.status === 404 ? "not_found" : "transport_failed");
       }
-      const data = await meta.json();
+      // Under the shared clock and the size cap like any other body. `meta.json()` is a
+      // body read too, and an unguarded one lets a stalled lookup hang the continuation
+      // that the deadline exists to bound. 64KB is generous for {id, url, mime_type}.
+      const LOOKUP_MAX_BYTES = 64 * 1024;
+      const raw = await readCapped(meta, LOOKUP_MAX_BYTES, remaining(), signal);
+      let data: { url?: string; mime_type?: string };
+      try {
+        data = JSON.parse(new TextDecoder().decode(raw));
+      } catch {
+        throw new MediaFetchError("media lookup returned invalid json", "transport_failed");
+      }
       url = data?.url ?? null;
       mime = mime ?? data?.mime_type ?? null;
       if (!url) throw new MediaFetchError("media lookup returned no url", "not_found");

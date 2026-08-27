@@ -55,6 +55,9 @@ const ACCOUNT_ON = {
   account_metadata: { media_understanding: "audio+image" },
 };
 
+/** Real magic bytes: the document gate reads these, not the mime a header claims. */
+const PDF_BYTES = new TextEncoder().encode("%PDF-1.7 1 0 obj");
+
 function geminiOk(text: string) {
   return () =>
     Promise.resolve(
@@ -246,7 +249,7 @@ Deno.test("a hint cannot spend money the account's mode has not authorised", asy
       kindHint: "document",
     },
     {
-      fetchers: [fetcherReturning(new Uint8Array([1, 2]), "application/pdf")],
+      fetchers: [fetcherReturning(PDF_BYTES, "application/pdf")],
       geminiKey: "k",
       fetcher: () => Promise.reject(new Error("no provider should have been called")),
     },
@@ -367,7 +370,7 @@ Deno.test("a PDF is understood once the account opts documents in", async () => 
       mimeType: "application/pdf",
     },
     {
-      fetchers: [fetcherReturning(new Uint8Array([1, 2]), "application/pdf")],
+      fetchers: [fetcherReturning(PDF_BYTES, "application/pdf")],
       geminiKey: "k",
       fetcher: geminiOk(JSON.stringify({ description: "An invoice.", text: "KWD 250", fields: {} })),
     },
@@ -540,7 +543,52 @@ Deno.test("a real PDF hinted as a document is still read", async () => {
       kindHint: "document",
     },
     {
-      fetchers: [fetcherReturning(new Uint8Array([1, 2]), "application/pdf")],
+      fetchers: [fetcherReturning(PDF_BYTES, "application/pdf")],
+      geminiKey: "k",
+      fetcher: geminiOk(JSON.stringify({ description: "An invoice.", text: "KWD 250", fields: {} })),
+    },
+  );
+  assert(outcome.understood);
+});
+
+Deno.test("a document declared as a PDF but not one in fact is refused", async () => {
+  // The case a mime check cannot catch: CloudGraphFetcher prefers the mime the WhatsApp
+  // webhook declared over the one the download reports, so comparing resolved mime to
+  // declared kind compares a declaration with itself. These bytes are a ZIP -- a .docx --
+  // wearing a PDF label.
+  const docx = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00]);
+  const outcome = await runInboundMediaUnderstanding(
+    stubAdmin(),
+    {
+      account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      messageRowId: null,
+      mediaUrl: "https://cdn/x",
+      mimeType: "application/pdf",
+    },
+    {
+      fetchers: [fetcherReturning(docx, "application/pdf")],
+      geminiKey: "k",
+      fetcher: () => Promise.reject(new Error("no provider should have been called")),
+    },
+  );
+  assert(!outcome.understood);
+  assertEquals(outcome.reason, "unsupported_type");
+});
+
+Deno.test("a real PDF labelled application/octet-stream is still read", async () => {
+  // The other half: judging by mime would refuse a genuine PDF that a transport labelled
+  // generically. The bytes say what it is.
+  const outcome = await runInboundMediaUnderstanding(
+    stubAdmin(),
+    {
+      account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      messageRowId: null,
+      mediaUrl: "https://cdn/x",
+      mimeType: null,
+      kindHint: "document",
+    },
+    {
+      fetchers: [fetcherReturning(PDF_BYTES, "application/octet-stream")],
       geminiKey: "k",
       fetcher: geminiOk(JSON.stringify({ description: "An invoice.", text: "KWD 250", fields: {} })),
     },

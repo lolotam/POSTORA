@@ -3,6 +3,7 @@ import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.t
 import {
   classifyMime,
   DEFAULT_LIMITS,
+  looksLikePdf,
   timeoutFor,
   understandInboundMedia,
   type UnderstandingLimits,
@@ -357,4 +358,20 @@ Deno.test("a multi-channel ElevenLabs response is read rather than treated as em
   });
   assert(outcome.ok);
   assertEquals(outcome.result.text, "channel one");
+});
+
+Deno.test("looksLikePdf reads the bytes, not a label", () => {
+  const enc = (s: string) => new TextEncoder().encode(s);
+  assert(looksLikePdf(enc("%PDF-1.7\n1 0 obj")));
+  // Readers tolerate junk before the header, and real PDFs sometimes carry it.
+  assert(looksLikePdf(enc(`${" ".repeat(200)}%PDF-1.4`)));
+  // A .docx and a .pptx are ZIP containers.
+  assert(!looksLikePdf(new Uint8Array([0x50, 0x4b, 0x03, 0x04])));
+  assert(!looksLikePdf(enc("<!doctype html>")));
+  assert(!looksLikePdf(new Uint8Array()));
+  // Beyond the scanned window is not a PDF for our purposes -- a header a kilobyte deep is
+  // not something a reader would accept either.
+  assert(!looksLikePdf(enc(`${"x".repeat(2000)}%PDF-1.4`)));
+  // Truncated magic must not match.
+  assert(!looksLikePdf(enc("%PDF")));
 });
