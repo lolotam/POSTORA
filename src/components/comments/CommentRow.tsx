@@ -6,7 +6,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { formatDistanceToNow } from "date-fns";
 import { cn } from "@/lib/utils";
 import { CommentActions } from "@/components/comments/CommentActions";
-import type { CommentNode } from "@/components/comments/commentTree";
+import { descendantCount, type CommentNode } from "@/components/comments/commentTree";
 import { depthIndent, depthStyle } from "@/components/comments/commentDepth";
 
 /** Lifted so only one composer is open at a time across the whole thread. */
@@ -106,7 +106,7 @@ export function CommentRow({ node, socialAccountId, composer }: CommentRowProps)
             <CommentActions
               comment={comment}
               socialAccountId={socialAccountId}
-              replyCount={node.replies.length}
+              replyCount={descendantCount(node)}
               onReply={() => composer.onToggle(comment.id)}
             />
           </div>

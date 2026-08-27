@@ -278,8 +278,22 @@ describe("completionFailure", () => {
   });
 
   it("reports a body that parsed but carries no assistant message", () => {
-    expect(completionFailure({ choices: [] })).toBe("Chat completion returned no choices");
-    expect(completionFailure({ choices: [{}] })).toBe("Chat completion returned no choices");
+    expect(completionFailure({ choices: [] })).toBe("Chat completion returned no assistant message");
+    expect(completionFailure({ choices: [{}] })).toBe("Chat completion returned no assistant message");
+  });
+
+  it("reports a choices field that is not an array", () => {
+    expect(completionFailure({ choices: {} })).toBe("Chat completion returned no choices");
+    expect(completionFailure({ choices: "none" })).toBe("Chat completion returned no choices");
+  });
+
+  // Truthiness alone would pass all three. Each then yields neither content nor tool_calls,
+  // so the request ends in "no_reply_generated" having never tried the next model.
+  it("rejects a message that is not an assistant-message object", () => {
+    for (const message of [[], "hello", 0, false]) {
+      expect(completionFailure({ choices: [{ message }] }))
+        .toBe("Chat completion returned no assistant message");
+    }
   });
 
   it("reports a body that is not an object at all", () => {

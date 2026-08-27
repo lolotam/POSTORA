@@ -105,7 +105,9 @@ function N8nEntry({ dispatch }: { dispatch: AgentActivity & { source: "n8n" } })
         </p>
       )}
       <p className="text-xs text-muted-foreground">
-        Handed to your n8n workflow. Postora does not see what it replied — check the run in n8n.
+        {delivered > 0
+          ? "Handed to your n8n workflow. Postora does not see what it replied — check the run in n8n."
+          : "No n8n workflow was subscribed to this event, so nothing was sent."}
       </p>
     </>
   );

@@ -35,9 +35,12 @@ export type AgentActivity =
 
 export function useN8nDispatchLogs(platform: AiAgentPlatform) {
   const { session } = useAuth();
+  const userId = session?.user?.id;
   return useQuery({
-    queryKey: ["n8n-dispatch-logs", platform],
-    enabled: !!session,
+    // Keyed by user for the same reason as useAiAgentLogs: one shared QueryClient, no
+    // cache clear on sign-out, and these rows carry customers' message text.
+    queryKey: ["n8n-dispatch-logs", userId, platform],
+    enabled: !!userId,
     refetchInterval: 15000,
     queryFn: async () => {
       const { data, error } = await (supabase as any)

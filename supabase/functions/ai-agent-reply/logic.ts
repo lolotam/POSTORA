@@ -302,6 +302,13 @@ export function completionFailure(data: unknown): string | null {
     const { message } = body.error as { message?: unknown };
     return typeof message === "string" ? message : "Chat completion failed";
   }
-  if (!body.choices?.[0]?.message) return "Chat completion returned no choices";
+  if (!Array.isArray(body.choices)) return "Chat completion returned no choices";
+  const message = body.choices[0]?.message;
+  // Truthiness is not enough: a string or an array is truthy, passes as a completion, and
+  // then yields neither content nor tool_calls -- the request ends in "no_reply_generated"
+  // having never tried the next model. Same class of miss as accepting a 200 error body.
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return "Chat completion returned no assistant message";
+  }
   return null;
 }

@@ -322,7 +322,7 @@ class Query {
     private readonly rows: any[],
     private readonly updates: any[],
     private readonly table: string,
-    private readonly inserts: any[],
+    private readonly inserts: Array<{ table: string; row: Record<string, unknown> }>,
   ) {}
   select() { return this; }
   like() { return this; }

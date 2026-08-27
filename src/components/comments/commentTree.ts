@@ -14,6 +14,16 @@ export interface CommentThread {
   replyCount: number;
 }
 
+/**
+ * Every reply beneath a node, at any depth.
+ *
+ * Meta deletes a comment's whole subtree with it, so the delete dialog has to name the
+ * full count -- direct replies alone understate what the button removes.
+ */
+export function descendantCount(node: CommentNode): number {
+  return node.replies.reduce((total, reply) => total + 1 + descendantCount(reply), 0);
+}
+
 const newestFirst = (a: Comment, b: Comment) =>
   new Date(b.created_time).getTime() - new Date(a.created_time).getTime();
 
