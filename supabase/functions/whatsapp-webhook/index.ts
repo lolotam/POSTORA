@@ -2,7 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { runInBackground } from "../_shared/background.ts";
 import { buildObservation, flushObservations, type UnmatchedObservation } from "../_shared/unmatchedWebhookObservation.ts";
 import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
-import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
+import {
+  logSkippedUnderstanding,
+  runInboundMediaUnderstanding,
+} from "../_shared/inboundMediaPipeline.ts";
 import { isPlaceholderOnly, MEDIA_PLACEHOLDERS, promptSafeInput } from "./messageContent.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
@@ -558,6 +561,9 @@ async function handleLiveMessages(
               access_token: accessToken,
               account_metadata: account.account_metadata,
             },
+            // Keys the per-sender sub-cap: the customer's phone number, so one number
+            // cannot spend the account's whole daily media allowance.
+            senderId: from,
             messageRowId: mediaRowId,
             mediaId: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
             mediaUrl,
@@ -568,6 +574,9 @@ async function handleLiveMessages(
             platform: "whatsapp",
           });
 
+          if (!outcome.understood) {
+            logSkippedUnderstanding("whatsapp-webhook", outcome.reason);
+          }
           // Understood or not, the agent still replies -- it just falls back to the
           // placeholder, which is exactly today's behaviour.
           const agentInput = outcome.understood ? outcome.agentText : promptSafeText;

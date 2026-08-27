@@ -8,7 +8,10 @@ import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts
 import { buildEvolutionMessageRow, remoteNumberFor } from "../_shared/evolutionMessage.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
-import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
+import {
+  logSkippedUnderstanding,
+  runInboundMediaUnderstanding,
+} from "../_shared/inboundMediaPipeline.ts";
 import { EvolutionFetcher } from "../_shared/inboundMediaFetchers.ts";
 
 const corsHeaders = {
@@ -194,6 +197,9 @@ async function persistEvolutionMessage(
             connection_mode: "evolution_qr",
             account_metadata: account.account_metadata,
           },
+          // Keys the per-sender sub-cap: digits-only, and already the sender id used for
+          // this row's contact.
+          senderId: remoteNumber,
           messageRowId: mediaRowId,
           mediaId: row.message_id as string,
           mimeType: mediaMime,
@@ -205,7 +211,7 @@ async function persistEvolutionMessage(
         : { understood: false as const, reason: "evolution credentials missing" };
 
       if (!outcome.understood) {
-        console.error(`[whatsapp-evolution-webhook] media understanding skipped: ${outcome.reason}`);
+        logSkippedUnderstanding("whatsapp-evolution-webhook", outcome.reason);
       }
       const agentInput = outcome.understood ? outcome.agentText : promptSafeText;
       // Without this the reply endpoint falls back to counting characters, and the English

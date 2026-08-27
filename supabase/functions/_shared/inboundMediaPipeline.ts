@@ -66,6 +66,35 @@ export function modeAllows(mode: MediaUnderstandingMode, kind: MediaKind): boole
 export const DEFAULT_DAILY_CAP = 100;
 
 /**
+ * How many media items ONE sender may have understood per account per day.
+ *
+ * The account cap above protects the bill; this protects the other customers. Without it a
+ * single sender streaming photos exhausts the account's allowance and everyone else's media
+ * is refused for the rest of the day. Overridable per-deployment from app_settings, because
+ * the right number depends on traffic an operator can see and this file cannot.
+ */
+export const DEFAULT_SENDER_CAP = 20;
+const SENDER_CAP_SETTING_KEY = "media_cap_per_sender";
+
+/**
+ * Reasons that mean "working as configured", not "something went wrong".
+ *
+ * Hitting a cap is the feature doing its job, and logging it at error severity trains
+ * operators to ignore the channel where real download and provider failures also appear.
+ */
+const THROTTLE_REASONS = new Set(["sender_cap_reached", "daily_cap_reached"]);
+
+/**
+ * One line, at the severity the reason deserves. Shared so the three webhooks cannot drift
+ * on which outcomes count as failures.
+ */
+export function logSkippedUnderstanding(scope: string, reason: string): void {
+  const line = `[${scope}] media understanding skipped: ${reason}`;
+  if (THROTTLE_REASONS.has(reason)) console.warn(line);
+  else console.error(line);
+}
+
+/**
  * Env var holding each provider's key. provider_api_keys is consulted when the env has
  * none, because the admin UI writes keys there and operators expect that to be enough.
  */
@@ -167,6 +196,15 @@ export interface PipelineAccount {
 
 export interface PipelineInput {
   account: PipelineAccount;
+  /**
+   * The platform's identifier for whoever sent the message: a PSID on Facebook and
+   * Instagram, a digits-only phone number on WhatsApp.
+   *
+   * Required rather than optional on purpose. It is the key of the per-sender sub-cap, and
+   * an optional field would let a future caller omit it and silently opt that whole surface
+   * out of the throttle -- which is the abuse this exists to stop.
+   */
+  senderId: string;
   /** Row id in whatsapp_messages, so the result can be written back. */
   messageRowId: string | null;
   mediaId?: string | null;
@@ -196,39 +234,106 @@ export interface PipelineDeps {
   fetcher?: typeof fetch;
   limits?: UnderstandingLimits;
   dailyCap?: number;
+  /** Supplied by tests; production reads app_settings.media_cap_per_sender. */
+  senderCap?: number;
   geminiKey?: string | null;
   openaiKey?: string | null;
   promptContext?: string | null;
 }
 
 /**
- * Reserves one attempt against today's cap, atomically.
+ * What the reservation decided. `error` is a reservation that could not be made at all --
+ * the RPC is missing or the database refused it -- and is kept distinct from the two caps
+ * so it cannot masquerade as one in the logs. During a deploy window where the functions
+ * are live but the migration has not run, every message would otherwise report
+ * "daily_cap_reached", which is a lie that costs an afternoon to unpick.
+ */
+type ReservationOutcome = "allowed" | "sender_cap" | "account_cap" | "error";
+
+const RESERVATION_REASONS: Record<Exclude<ReservationOutcome, "allowed">, string> = {
+  sender_cap: "sender_cap_reached",
+  account_cap: "daily_cap_reached",
+  error: "quota_unavailable",
+};
+
+/**
+ * The per-sender sub-cap, from app_settings.
+ *
+ * `value` is jsonb, but rows written by different admin surfaces are sometimes a JSON
+ * string wrapping the real value rather than the value itself, so the same double-decode
+ * fetchAiSettings uses is required here. Anything missing, malformed, or non-positive
+ * falls back to the default: a broken settings row must not silently remove the cap.
+ */
+async function resolveSenderCap(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+): Promise<number> {
+  const { data, error } = await admin
+    .from("app_settings")
+    .select("value")
+    .eq("key", SENDER_CAP_SETTING_KEY)
+    .maybeSingle();
+
+  if (error) {
+    console.warn(`[media-understanding] sender cap lookup failed: ${error.message}`);
+    return DEFAULT_SENDER_CAP;
+  }
+
+  let raw = data?.value;
+  if (typeof raw === "string") {
+    try {
+      raw = JSON.parse(raw);
+    } catch {
+      console.warn(`[media-understanding] ${SENDER_CAP_SETTING_KEY} is not valid JSON`);
+      return DEFAULT_SENDER_CAP;
+    }
+  }
+
+  const cap = Number(raw);
+  return Number.isInteger(cap) && cap > 0 ? cap : DEFAULT_SENDER_CAP;
+}
+
+/**
+ * Reserves one attempt against both the account's daily cap and the sender's sub-cap,
+ * atomically, and reports which one refused it.
  *
  * A read-then-act COUNT does not bound spend: concurrent inbound messages all read the
  * same value and all proceed. Counting only successful transcripts was worse still --
  * a provider failing in a loop is billed every time and counted none of them. The RPC
  * increments and reports in one statement, and counts attempts rather than successes.
  *
+ * The sender's counter is checked first and a refusal there never touches the account's,
+ * so one sender being throttled does not spend everyone else's allowance -- see the
+ * migration for why that ordering is the requirement rather than a detail.
+ *
  * Fails CLOSED when the reservation itself errors. This is the opposite of the limiter
  * policy for reads elsewhere in the codebase, and deliberately so: the thing being
  * protected here is money leaving the account, and a refused understanding degrades to
  * the placeholder rather than losing the customer's message.
  */
-async function reserveDailyAttempt(
+interface Reservation {
+  accountId: string;
+  senderId: string;
+  cap: number;
+  senderCap: number;
+}
+
+async function reserveAttempt(
   // deno-lint-ignore no-explicit-any
   admin: any,
-  accountId: string,
-  cap: number,
-): Promise<boolean> {
-  const { data, error } = await admin.rpc("reserve_media_understanding", {
-    p_account_id: accountId,
-    p_cap: cap,
+  reservation: Reservation,
+): Promise<ReservationOutcome> {
+  const { data, error } = await admin.rpc("reserve_media_understanding_attempt", {
+    p_account_id: reservation.accountId,
+    p_cap: reservation.cap,
+    p_sender_id: reservation.senderId,
+    p_sender_cap: reservation.senderCap,
   });
   if (error) {
     console.error("[media-understanding] quota reservation failed:", error.message);
-    return false;
+    return "error";
   }
-  return data === true;
+  return data === "allowed" || data === "sender_cap" || data === "account_cap" ? data : "error";
 }
 
 const FENCE = '"""';
@@ -311,8 +416,15 @@ export async function runInboundMediaUnderstanding(
     }
 
     const cap = deps.dailyCap ?? DEFAULT_DAILY_CAP;
-    if (!(await reserveDailyAttempt(admin, input.account.id, cap))) {
-      return { understood: false, reason: "daily_cap_reached" };
+    const senderCap = deps.senderCap ?? await resolveSenderCap(admin);
+    const verdict = await reserveAttempt(admin, {
+      accountId: input.account.id,
+      senderId: input.senderId,
+      cap,
+      senderCap,
+    });
+    if (verdict !== "allowed") {
+      return { understood: false, reason: RESERVATION_REASONS[verdict] };
     }
 
     const limits = deps.limits ?? DEFAULT_LIMITS;
