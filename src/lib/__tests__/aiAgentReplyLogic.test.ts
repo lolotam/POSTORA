@@ -296,6 +296,25 @@ describe("completionFailure", () => {
     }
   });
 
+  it("rejects an object that carries neither content nor tool calls", () => {
+    for (const message of [{}, { role: "user" }, { role: "assistant" }, { content: null }]) {
+      expect(completionFailure({ choices: [{ message }] }))
+        .toBe("Chat completion returned an unusable message");
+    }
+  });
+
+  it("passes a tool call with no content, which is how every tool turn arrives", () => {
+    expect(completionFailure({
+      choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "1" }] } }],
+    })).toBeNull();
+  });
+
+  // An empty string is a usable answer that happens to be empty. It keeps its existing
+  // outcome -- logged as no_reply_generated -- rather than becoming a model failure.
+  it("passes an empty-string content", () => {
+    expect(completionFailure({ choices: [{ message: { role: "assistant", content: "" } }] })).toBeNull();
+  });
+
   it("reports a body that is not an object at all", () => {
     expect(completionFailure(null)).toBe("Chat completion returned no body");
     expect(completionFailure("upstream timeout")).toBe("Chat completion returned no body");

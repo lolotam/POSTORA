@@ -296,19 +296,26 @@ export function modelBudgetRemaining(startedAt: number, now: number): number {
  */
 export function completionFailure(data: unknown): string | null {
   if (!data || typeof data !== "object") return "Chat completion returned no body";
-  const body = data as { error?: unknown; choices?: Array<{ message?: unknown }> };
+  const body = data as { error?: unknown; choices?: unknown };
   if (typeof body.error === "string") return body.error;
   if (body.error) {
     const { message } = body.error as { message?: unknown };
     return typeof message === "string" ? message : "Chat completion failed";
   }
   if (!Array.isArray(body.choices)) return "Chat completion returned no choices";
-  const message = body.choices[0]?.message;
-  // Truthiness is not enough: a string or an array is truthy, passes as a completion, and
-  // then yields neither content nor tool_calls -- the request ends in "no_reply_generated"
-  // having never tried the next model. Same class of miss as accepting a 200 error body.
+  const message = (body.choices[0] as { message?: unknown } | undefined)?.message;
   if (!message || typeof message !== "object" || Array.isArray(message)) {
     return "Chat completion returned no assistant message";
+  }
+  // The test is what the caller can actually use, not what the message calls itself.
+  // `{}`, `{role:"user"}` and even `{role:"assistant"}` are truthy objects that yield
+  // neither content nor tool_calls, so the request ends in "no_reply_generated" having
+  // never tried the next model -- the same miss as accepting a 200 error body. Checking
+  // usability rather than `role` also survives a provider that labels its messages
+  // differently; all three configured providers do send role, but nothing needs them to.
+  const { content, tool_calls: toolCalls } = message as { content?: unknown; tool_calls?: unknown };
+  if (typeof content !== "string" && !Array.isArray(toolCalls)) {
+    return "Chat completion returned an unusable message";
   }
   return null;
 }
