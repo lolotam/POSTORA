@@ -9,14 +9,19 @@ import {
   formatRelatedFacts,
   formatModelRef,
   type GraphRelationFact,
+  ModelChainExhaustedError,
+  modelBudgetRemaining,
+  type ModelRef,
   parseModelRef,
   resolveEngagementMode,
+  type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
   waRecipient,
 } from "./logic.ts";
 import {
   customToolDefinitions,
+  type EscalationTarget,
   executeCustomTool,
   executeTool,
   toolDefinitions,
@@ -24,6 +29,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from "./tools.ts";
+import { deliverModelOutageFloor } from "./outage-floor.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 import { replyToComment } from "../_shared/commentActions.ts";
@@ -85,7 +91,11 @@ const PROVIDER_ENDPOINTS: Record<string, { url: string; keyEnv: string }> = {
   gemini: GOOGLE_ENDPOINT,
 };
 
-async function chatCompletion(provider: string, payload: Record<string, unknown>): Promise<any> {
+async function chatCompletion(
+  provider: string,
+  payload: Record<string, unknown>,
+  timeoutMs = CHAT_TIMEOUT_MS,
+): Promise<any> {
   const endpoint = PROVIDER_ENDPOINTS[provider] ?? PROVIDER_ENDPOINTS.openai;
   const key = Deno.env.get(endpoint.keyEnv);
   if (!key) throw new Error(`${endpoint.keyEnv} is not configured`);
@@ -95,11 +105,11 @@ async function chatCompletion(provider: string, payload: Record<string, unknown>
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(CHAT_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new Error(`${provider}/${payload.model} timed out after ${CHAT_TIMEOUT_MS / 1000}s`);
+      throw new Error(`${provider}/${payload.model} timed out after ${timeoutMs / 1000}s`);
     }
     throw error;
   }
@@ -178,6 +188,13 @@ async function isDailyCapReached(admin: any, request: ReplyRequest, cap: number)
   return (count || 0) >= cap;
 }
 
+// Statuses that represent a failed reply. Anything else is normal operation.
+const ERROR_LOG_STATUSES = new Set([
+  "error",
+  "escalated_after_model_exhaustion",
+  "model_exhaustion_unhandled",
+]);
+
 // Every outcome is written twice: to ai_agent_logs (user-facing Logs tab,
 // RLS-scoped) and mirrored into system_logs so the /admin/logs page can
 // track all AI agent chats and calls under the "ai" category.
@@ -193,7 +210,7 @@ async function logOutcome(
   const { error: systemLogError } = await admin.from("system_logs").insert({
     source: "ai-agent-reply",
     category: "ai",
-    level: status === "error" ? "error" : "info",
+    level: ERROR_LOG_STATUSES.has(status) ? "error" : "info",
     message: `AI agent reply ${status} (${entry.platform})${entry.error ? `: ${entry.error}` : ""}`,
     user_id: entry.user_id,
     metadata: {
@@ -387,6 +404,21 @@ Deno.serve(async (req) => {
   let usedFallbackLevel = 0;
   const modelErrors: Array<{ model: string; error: string }> = [];
 
+  // Hoisted out of the try below so the model-outage floor in the catch can reach
+  // them. A value declared inside the try is invisible to its own catch.
+  let replySender: TextSender | null = null;
+  let language: ReplyLanguage = "en";
+  let escalationTarget: EscalationTarget | null = null;
+  let modelChain: ModelRef[] = [];
+  // Set when a tool escalated during this request. The loop runs another iteration
+  // afterwards so the model can phrase a closing message, so exhaustion in THAT
+  // iteration would otherwise escalate a second time -- closing and recreating the
+  // active assignment, duplicating history, and notifying admins twice.
+  let escalated = false;
+  // Whether that tool escalation actually reached a person. escalate_to_human reports
+  // success on a bare mute, so the floor cannot infer this from `escalated`.
+  let escalationNotifiedHuman = false;
+
   try {
     const { data: config } = await admin
       .from("ai_agent_configs")
@@ -505,7 +537,7 @@ Deno.serve(async (req) => {
       ? actAsAdmin
       : request.platform === "whatsapp" && adminNumbers.includes(waRecipient(request.recipient_phone));
 
-    const language = detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint);
+    language = detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint);
     const systemPrompt = buildSystemPrompt({
       persona: config.persona_instructions,
       language,
@@ -520,7 +552,7 @@ Deno.serve(async (req) => {
       surface: request.comment_id ? "comment" : "dm",
     });
 
-    const replySender = dryRun ? null : await buildReplySender(admin, request);
+    replySender = dryRun ? null : await buildReplySender(admin, request);
 
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
@@ -560,6 +592,7 @@ Deno.serve(async (req) => {
         await notifyAdmin(recipientPhone, text);
       },
     };
+    escalationTarget = toolContext;
 
     // User-defined connector tools; admin_only ones stay hidden from customers.
     const { data: customToolRows } = await admin
@@ -578,7 +611,6 @@ Deno.serve(async (req) => {
       { role: "user", content: request.inbound_text.slice(0, MAX_INBOUND_CHARS) },
     ];
     const executedToolCalls: Array<{ name: string; arguments: unknown }> = [];
-    let escalated = false;
     let promptTokens = 0;
     let completionTokens = 0;
     let replyText = "";
@@ -587,11 +619,22 @@ Deno.serve(async (req) => {
     // Primary + fallback chain, each entry resolved to its provider endpoint.
     const rawChain = [config.model, config.fallback_model_1, config.fallback_model_2]
       .filter((m): m is string => typeof m === "string" && m.length > 0);
-    const modelChain = (rawChain.length ? rawChain : ["gpt-4o-mini"]).map(parseModelRef);
+    modelChain = (rawChain.length ? rawChain : ["gpt-4o-mini"]).map(parseModelRef);
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       let completion: any = null;
       let lastError: unknown = null;
       for (let mi = 0; mi < modelChain.length; mi++) {
+        // The worker is killed at 60s. Three models at CHAT_TIMEOUT_MS need 75s, so
+        // without this the isolate dies mid-chain and takes the outage floor with it
+        // -- the failure mode index.ts:72 describes. Stop early and let the floor run.
+        const budgetMs = modelBudgetRemaining(startedAt, Date.now());
+        if (budgetMs <= 0) {
+          modelErrors.push({
+            model: formatModelRef(modelChain[mi]),
+            error: "request budget exhausted before this model was tried",
+          });
+          break;
+        }
         try {
           completion = await chatCompletion(modelChain[mi].provider, {
             model: modelChain[mi].model,
@@ -603,7 +646,7 @@ Deno.serve(async (req) => {
               ...customToolDefinitions(customTools),
             ],
             tool_choice: "auto",
-          });
+          }, Math.min(CHAT_TIMEOUT_MS, budgetMs));
           usedModel = formatModelRef(modelChain[mi]);
           usedFallbackLevel = mi;
           break;
@@ -612,7 +655,14 @@ Deno.serve(async (req) => {
           modelErrors.push({ model: formatModelRef(modelChain[mi]), error: errorMessage(err) });
         }
       }
-      if (!completion) throw lastError instanceof Error ? lastError : new Error("All AI models failed");
+      if (!completion) {
+        // Typed so the catch can tell a total model outage apart from the
+        // database, send, and validation errors that share it. Per-model detail
+        // is already in modelErrors.
+        throw new ModelChainExhaustedError(
+          lastError instanceof Error ? lastError.message : "All AI models failed",
+        );
+      }
       promptTokens += completion.usage?.prompt_tokens || 0;
       completionTokens += completion.usage?.completion_tokens || 0;
       const choice = completion.choices?.[0]?.message;
@@ -637,7 +687,10 @@ Deno.serve(async (req) => {
           ? await executeCustomTool(toolContext, customTool, args)
           : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
             (await executeTool(toolContext, toolCall.function.name, args));
-        if (result.escalated) escalated = true;
+        if (result.escalated) {
+          escalated = true;
+          if (result.humanNotified) escalationNotifiedHuman = true;
+        }
         if (result.retrievedChunkIds) retrievedChunkIds.push(...result.retrievedChunkIds);
         messages.push({
           role: "tool",
@@ -747,6 +800,28 @@ Deno.serve(async (req) => {
     return jsonResponse({ ok: true, reply: replyText, escalated, tool_calls: executedToolCalls, is_admin: isAdmin });
   } catch (error) {
     console.error("[ai-agent-reply] Failed:", errorMessage(error));
+    if (error instanceof ModelChainExhaustedError && !dryRun) {
+      const floor = await deliverModelOutageFloor(
+        request, replySender, language, escalationTarget,
+        { escalated, humanNotified: escalationNotifiedHuman },
+      );
+      await logOutcome(admin, {
+        ...baseLog,
+        // Two statuses, so the log never claims more than happened: the second
+        // means every model failed AND the handoff failed, so nothing was sent
+        // and the conversation is still on the AI.
+        status: floor.escalated ? "escalated_after_model_exhaustion" : "model_exhaustion_unhandled",
+        error: errorMessage(error).slice(0, 500),
+        latency_ms: Date.now() - startedAt,
+      }, {
+        used_model: usedModel,
+        fallback_level: usedFallbackLevel,
+        model_errors: modelErrors.length ? modelErrors : null,
+        model_chain: modelChain.map(formatModelRef),
+        ...floor,
+      });
+      return jsonResponse({ ok: false, error: errorMessage(error), escalated: floor.escalated });
+    }
     await logOutcome(admin, {
       ...baseLog,
       status: "error",
