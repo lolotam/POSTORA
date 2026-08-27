@@ -28,10 +28,12 @@ interface Props {
 export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: Props) {
   const [open, setOpen] = useState(false);
 
-  const { data: mentionPost, isLoading: resolvingPost } = useThreadPost(
-    open ? socialAccountId : null,
-    open ? threadsMediaId : null,
-  );
+  const {
+    data: mentionPost,
+    isLoading: resolvingPost,
+    error: postError,
+    refetch: refetchPost,
+  } = useThreadPost(open ? socialAccountId : null, open ? threadsMediaId : null);
 
   // A mention that IS a top-level post has no root_post of its own; it is its own thread.
   const rootPostId = mentionPost?.root_post?.id ?? (mentionPost ? threadsMediaId : null);
@@ -39,9 +41,16 @@ export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: 
   const {
     data: replies = [],
     isLoading: loadingConversation,
-    error,
-    refetch,
+    error: conversationError,
+    refetch: refetchConversation,
   } = useThreadConversation(open ? socialAccountId : null, rootPostId);
+
+  // A failed lookup leaves rootPostId null, which DISABLES the conversation query -- so
+  // without this the card would report "no replies on this thread", which is a different
+  // claim from "we could not find out", and the retry button would re-run a query that
+  // is not the one that failed.
+  const failure = postError ?? conversationError;
+  const retry = postError ? refetchPost : refetchConversation;
 
   // Threads only tells us which post a mention belongs to when it gives us a media id.
   // Without one there is no conversation to fetch, so offering the control would be a lie.
@@ -67,8 +76,8 @@ export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: 
             accountId={socialAccountId}
             replies={replies}
             isLoading={resolvingPost || loadingConversation}
-            error={error ?? undefined}
-            onRetry={() => refetch()}
+            error={failure ?? undefined}
+            onRetry={() => retry()}
             emptyTitle="No replies on this thread"
             emptyDescription="Nobody has replied to the post this mention sits in."
           />

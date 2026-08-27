@@ -114,7 +114,7 @@ export function buildThreads<T>(entries: T[], keys: ThreadKeys<T>): Thread<T>[] 
 
   for (const entry of entries) {
     const parentId = keys.parentId(entry);
-    if (!parentId || !byId.has(parentId) || parentId === keys.id(entry)) {
+    if (parentId == null || !byId.has(parentId) || parentId === keys.id(entry)) {
       roots.push(entry);
       continue;
     }
@@ -186,7 +186,7 @@ export function buildThreads<T>(entries: T[], keys: ThreadKeys<T>): Thread<T>[] 
       if (climbed.has(id)) return current;
       climbed.add(id);
       const parentId = keys.parentId(current);
-      if (!parentId || parentId === id || visited.has(parentId)) return current;
+      if (parentId == null || parentId === id || visited.has(parentId)) return current;
       const parent = byId.get(parentId);
       if (!parent) return current;
       current = parent;
