@@ -260,7 +260,8 @@ CREATE OR REPLACE FUNCTION public.enqueue_agent_reply(
   p_inbound_at TIMESTAMPTZ,
   p_media JSONB DEFAULT '{}'::jsonb,
   p_language_hint TEXT DEFAULT NULL,
-  p_comment_id TEXT DEFAULT NULL
+  p_comment_id TEXT DEFAULT NULL,
+  p_lease_seconds INTEGER DEFAULT 180
 )
 RETURNS TABLE (id UUID, newly_enqueued BOOLEAN)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
@@ -278,13 +279,23 @@ BEGIN
   INSERT INTO public.pending_agent_replies (
     social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
     inbound_text, inbound_at, media_url, media_kind, media_caption, unread_attachments,
-    media_expires_at, language_hint, comment_id
+    media_expires_at, language_hint, comment_id, lease_expires_at
   ) VALUES (
     p_social_account_id, v_user_id, p_platform, p_message_id, p_conversation_id,
     p_recipient_id, p_inbound_text, p_inbound_at,
     p_media->>'url', p_media->>'kind', p_media->>'caption',
     COALESCE((p_media->>'unread')::int, 0),
-    (p_media->>'expires_at')::timestamptz, p_language_hint, p_comment_id
+    (p_media->>'expires_at')::timestamptz, p_language_hint, p_comment_id,
+    -- The enqueuing invocation IS the first owner, so it takes the lease here.
+    --
+    -- Leaving this NULL would make a brand-new row immediately claimable, and the webhook
+    -- never calls claim_agent_replies -- it enqueues and then processes inline. A cron tick
+    -- landing inside that ~50s window would claim the row and re-run the agent CONCURRENTLY
+    -- with the invocation still working on it: finding 2's collision, re-entering through a
+    -- different door. 180s exceeds the 60s worker ceiling, so the lease outlives any living
+    -- owner; a row whose owner died early becomes claimable when it lapses, which is the
+    -- two-minute recovery the brief asks for.
+    now() + make_interval(secs => p_lease_seconds)
   )
   ON CONFLICT ON CONSTRAINT pending_agent_replies_dedup DO NOTHING
   RETURNING pending_agent_replies.id INTO v_id;
@@ -529,7 +540,39 @@ This is the change that makes recovery safe, and it lives inside `ai-agent-reply
 **Files:**
 - Modify: `supabase/functions/ai-agent-reply/index.ts` around `:803`
 
-- [ ] **Step 1: Write the reply down, then send**
+- [ ] **Step 1: Deliver a stored reply without regenerating it**
+
+This is the executor for `decideRecovery`'s `deliver_stored`, and it belongs here rather
+than in the recovery job. The job has no transport: choosing between `replySender`,
+`replyToComment` and the WhatsApp Cloud/Evolution split lives in `getSendCredentials` and
+`resolveWhatsAppTransport`, and duplicating that resolution in a second function is how the
+two drift until a recovered reply goes out on the wrong channel.
+
+So the branch is early, before the model chain, the tool loop, the knowledge retrieval and
+the daily-cap check — all of which the original attempt already ran:
+
+```ts
+// A row that already reached ready_to_send has a reply that was generated once and paid
+// for once. Re-entering generation here is exactly the tool/escalation replay the two-stage
+// design exists to prevent, so this returns before any of it.
+if (request.outbox_id) {
+  const stored = await loadReadyToSend(admin, request.outbox_id);
+  if (stored) {
+    const outboundMessageId = await replySender(request.recipient_phone, stored.generated_reply);
+    await markSent(admin, request.outbox_id, outboundMessageId ?? null);
+    // Logged as a redelivery, not a fresh reply: counting it again would charge the daily
+    // cap twice for one answer.
+    await logOutcome(admin, { ...baseLog, status: "sent", reply_text: stored.generated_reply },
+                     { redelivered: true });
+    return jsonResponse({ ok: true, redelivered: true });
+  }
+}
+```
+
+`replySender` must therefore be resolved **before** this branch — today it is resolved
+partway down the handler, so the resolution moves up. Nothing else about it changes.
+
+- [ ] **Step 2: Write the reply down, then send**
 
 ```ts
 // The order is the whole point. Once this row says ready_to_send, recovery can deliver
@@ -545,7 +588,7 @@ if (request.outbox_id) {
 }
 ```
 
-- [ ] **Step 2: Handle the ambiguous send**
+- [ ] **Step 3: Handle the ambiguous send**
 
 A `replySender` that throws after the platform accepted the message is indistinguishable from one that never reached it. Do not guess:
 
@@ -560,7 +603,12 @@ A `replySender` that throws after the platform accepted the message is indisting
 
 `delivery_unknown` is terminal and surfaces to a human. Finding 1's core point is that exactly-once delivery across Postgres and Meta is not achievable; the honest response is to name the ambiguity rather than resolve it by replaying.
 
-- [ ] **Step 3: Tests** — an injected `replySender` proving exactly one send per outbox id, and proving `markReadyToSend` is called before it. Then commit.
+- [ ] **Step 4: Tests** — an injected `replySender` proving exactly one send per outbox id;
+      proving `markReadyToSend` is called before it; and proving that a `ready_to_send` row
+      reaches the sender **without** the model chain or the tool loop being entered at all
+      (inject both and assert neither ran — that assertion is the two-stage guarantee, and
+      without it the branch could regress to a normal generation and every test would still
+      pass). Then commit.
 
 ---
 
@@ -635,6 +683,13 @@ Deno.test("a reply outside the 24h service window is cancelled, not attempted", 
 Auth mirrors `threads-poll-replies`: bearer `CRON_SECRET`, constant-time compare, **401 on mismatch, never 5xx**.
 
 Per run: `reap_exhausted_agent_replies` first (so exhausted rows leave the table's working set before anything else), then `claim_agent_replies(3, 180, 3)`, then each row sequentially under `RECOVERY_LIMITS.deadlineMs`. Stop early when the deadline is near and leave the rest — their leases lapse and the next run takes them.
+
+Both actions go through the **same** door: a POST to `ai-agent-reply` carrying `outbox_id`.
+The row's own status is what decides which path runs — `ready_to_send` takes Task 4's
+redelivery branch and never reaches generation, `pending` runs the agent normally. The
+recovery job therefore holds no transport logic and no second copy of the send-credential
+resolution; `decideRecovery`'s `deliver_stored` vs `rerun_agent` distinction governs whether
+the job posts at all and how it settles the row, not how the message is sent.
 
 Quota (finding 9): a `deliver_stored` action must **not** re-check `isDailyCapReached`. The original attempt already reserved that spend; refusing on the retry would strand a reply that was already paid for and generated.
 
