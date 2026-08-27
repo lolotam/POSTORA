@@ -98,7 +98,6 @@ export function ThreadsRepliesGroupedByPost({ accountId, replies, onReplyClick }
                 </div>
                 <ThreadsConversationTimeline
                   accountId={accountId}
-                  mediaId={postId}
                   replies={fallback}
                   onReplyClick={onReplyClick}
                 />
@@ -106,7 +105,6 @@ export function ThreadsRepliesGroupedByPost({ accountId, replies, onReplyClick }
             ) : (
               <ThreadsConversationTimeline
                 accountId={accountId}
-                mediaId={postId}
                 replies={conversation}
                 onReplyClick={onReplyClick}
               />

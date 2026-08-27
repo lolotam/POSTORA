@@ -1,17 +1,18 @@
+import { useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Inbox, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ThreadsReply } from "@/hooks/useThreadsReplies";
-import { ThreadsReplyCard } from "./ThreadsReplyCard";
+import { ThreadsThreadCard } from "./ThreadsThreadCard";
+import { buildThreadsReplyThreads } from "./threadsReplyTree";
 import { ThreadsRepliesPermissionAlert } from "./ThreadsRepliesPermissionAlert";
 
 interface Props {
   accountId: string | null;
-  mediaId?: string | null;
   replies: ThreadsReply[];
   isLoading: boolean;
-  error?: any;
+  error?: unknown;
   onRetry?: () => void;
   showApproval?: boolean;
   emptyTitle?: string;
@@ -19,30 +20,8 @@ interface Props {
   onReplyClick?: (reply: ThreadsReply) => void;
 }
 
-type ReplyNode = ThreadsReply & { __children: ReplyNode[] };
-
-function buildReplyTree(replies: ThreadsReply[]): ReplyNode[] {
-  const byId = new Map<string, ReplyNode>();
-  replies.forEach((r) => byId.set(r.id, { ...r, __children: [] }));
-  const roots: ReplyNode[] = [];
-  replies.forEach((r) => {
-    const node = byId.get(r.id)!;
-    const parentId = r.replied_to?.id;
-    const rootId = r.root_post?.id;
-    // Treat as child only when parent is another reply in this list
-    // (not the original post itself).
-    if (parentId && parentId !== rootId && byId.has(parentId)) {
-      byId.get(parentId)!.__children.push(node);
-    } else {
-      roots.push(node);
-    }
-  });
-  return roots;
-}
-
 export function ThreadsReplyList({
   accountId,
-  mediaId,
   replies,
   isLoading,
   error,
@@ -52,6 +31,8 @@ export function ThreadsReplyList({
   emptyDescription = "Replies on this thread will appear here.",
   onReplyClick,
 }: Props) {
+  const threads = useMemo(() => buildThreadsReplyThreads(replies), [replies]);
+
   if (isLoading) {
     return (
       <div className="space-y-3">
@@ -75,7 +56,7 @@ export function ThreadsReplyList({
   }
 
   if (error) {
-    const reason = (error as any)?.reason as string | undefined;
+    const reason = (error as { reason?: string })?.reason;
     if (reason === "missing_scope" || reason === "permission_not_approved" || reason === "expired_token") {
       return <ThreadsRepliesPermissionAlert reason={reason} />;
     }
@@ -109,7 +90,7 @@ export function ThreadsReplyList({
     );
   }
 
-  if (replies.length === 0) {
+  if (threads.length === 0) {
     return (
       <Card>
         <CardContent className="p-8 text-center space-y-2">
@@ -121,28 +102,17 @@ export function ThreadsReplyList({
     );
   }
 
-  const tree = buildReplyTree(replies);
-
-  const renderNode = (node: ReplyNode, depth: number) => (
-    <div key={node.id} className="space-y-3">
-      <ThreadsReplyCard
-        accountId={accountId}
-        reply={node}
-        mediaId={mediaId}
-        showApproval={showApproval}
-        onReplyClick={onReplyClick}
-      />
-      {node.__children.length > 0 && (
-        <div className="ml-6 border-l border-border/60 pl-4 space-y-3">
-          {node.__children.map((child) => renderNode(child, depth + 1))}
-        </div>
-      )}
-    </div>
-  );
-
   return (
     <div className="space-y-3">
-      {tree.map((node) => renderNode(node, 0))}
+      {threads.map((thread) => (
+        <ThreadsThreadCard
+          key={thread.root.id}
+          thread={thread}
+          accountId={accountId}
+          showApproval={showApproval}
+          onReplyClick={onReplyClick}
+        />
+      ))}
     </div>
   );
 }
