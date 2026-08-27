@@ -4,7 +4,10 @@ import { resolveAutomationHandler, resolveCommentAutomationHandler } from "../_s
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
 import { buildCommentPayload, buildMessagePayload, buildMessagingSender, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 import { isOwnComment } from "../_shared/commentAuthor.ts";
-import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
+import {
+  logSkippedUnderstanding,
+  runInboundMediaUnderstanding,
+} from "../_shared/inboundMediaPipeline.ts";
 import { MetaMessagingFetcher } from "../_shared/inboundMediaFetchers.ts";
 import {
   attachmentList,
@@ -319,6 +322,9 @@ Deno.serve(async (req) => {
                     // which replays the page token to a CDN host that never asked for it.
                     account_metadata: account.account_metadata,
                   },
+                  // Keys the per-sender sub-cap, so one Messenger user cannot spend the
+                  // page's whole daily media allowance.
+                  senderId,
                   // Facebook and Instagram messages are not rows in whatsapp_messages, so
                   // there is nothing to write the result back to -- the agent gets it
                   // directly and the transcript is not retained.
@@ -336,7 +342,7 @@ Deno.serve(async (req) => {
                 });
 
                 if (!outcome.understood) {
-                  console.error(`[fb-ig-webhook] media understanding skipped: ${outcome.reason}`);
+                  logSkippedUnderstanding("fb-ig-webhook", outcome.reason);
                 }
                 // Understood or not, the agent still replies -- it just falls back to the
                 // placeholder, which is exactly the previous behaviour.
