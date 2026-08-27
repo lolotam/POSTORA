@@ -60,6 +60,21 @@ export interface UnderstandingModels {
 export interface UnderstandingLimits {
   maxBytes: number;
   timeoutMs: number;
+  /**
+   * Documents get their own model deadline. 10s is tuned for a twenty-second voice note,
+   * but a scanned PDF is a page-by-page read and routinely runs past it -- which surfaces
+   * as a timeout rather than as the answer the model was seconds from returning.
+   *
+   * Bounded by the 60s edge-worker ceiling, not by generosity: the ladder budget is twice
+   * this value, and the worker is killed without a log line if the whole request exceeds
+   * 60s. 20s leaves room for the download plus two Gemini rungs.
+   */
+  documentTimeoutMs?: number;
+}
+
+/** The deadline for one kind. Only documents differ, and only because they are slower. */
+export function timeoutFor(kind: MediaKind, limits: UnderstandingLimits): number {
+  return kind === "document" ? limits.documentTimeoutMs ?? limits.timeoutMs : limits.timeoutMs;
 }
 
 /**
@@ -119,8 +134,11 @@ export const DEFAULT_MODELS: UnderstandingModels = {
 };
 
 export const DEFAULT_LIMITS: UnderstandingLimits = {
+  // 15MB base64-expands to roughly 20MB, which is Gemini's inline-request ceiling. The cap
+  // is that ceiling rather than a policy choice, so it holds for documents too.
   maxBytes: 15 * 1024 * 1024,
   timeoutMs: 10_000,
+  documentTimeoutMs: 20_000,
 };
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -169,12 +187,42 @@ function elevenLabsEndpoint(): string {
 // customers forward files recorded elsewhere.
 const AUDIO_MIME = /^audio\/(ogg|opus|mpeg|mp3|mp4|m4a|wav|x-wav|webm|aac|3gpp)/i;
 const IMAGE_MIME = /^image\/(jpeg|jpg|png|webp|heic|heif|gif)/i;
+/**
+ * PDF only. Gemini reads one natively -- it rasterises the pages itself, so a scanned
+ * contract and a text-layer invoice both work. Word and PowerPoint are deliberately absent:
+ * they are ZIP containers Gemini does not open, and admitting them here would trade a clear
+ * "unsupported" for a confidently wrong answer about a document nothing actually read.
+ */
+const DOCUMENT_MIME = /^application\/pdf/i;
+
+const PDF_MAGIC = new TextEncoder().encode("%PDF-");
+
+/**
+ * Whether these bytes really are a PDF, decided by the bytes and nothing else.
+ *
+ * Every mime in this system is a *claim*: the webhook's metadata, the Graph lookup, the CDN
+ * header. On WhatsApp Cloud the claim even round-trips -- the fetcher prefers the mime the
+ * webhook declared -- so checking the resolved mime against the declared kind compares a
+ * declaration with itself and confirms nothing. The magic is the one piece of evidence no
+ * sender or header controls.
+ *
+ * Matched at offset ZERO, not scanned for. Some readers tolerate junk before the header, but
+ * scanning invites the opposite mistake: `%PDF-` is five ordinary bytes that a .docx can
+ * carry inside its ZIP directory, or a sender can simply place there, and the whole point of
+ * this check is that the sender does not get a say. A genuinely malformed PDF degrades to
+ * its placeholder, which is the cheap failure.
+ */
+export function looksLikePdf(bytes: Uint8Array): boolean {
+  if (bytes.length < PDF_MAGIC.length) return false;
+  return PDF_MAGIC.every((byte, index) => bytes[index] === byte);
+}
 
 export function classifyMime(mimeType: string | null | undefined): MediaKind | null {
   if (!mimeType) return null;
   const bare = mimeType.split(";")[0].trim().toLowerCase();
   if (AUDIO_MIME.test(bare)) return "audio";
   if (IMAGE_MIME.test(bare)) return "image";
+  if (DOCUMENT_MIME.test(bare)) return "document";
   return null;
 }
 
@@ -211,6 +259,16 @@ const IMAGE_PROMPT =
   "If it is a payment receipt, bank transfer, KNET slip, or invoice, report the amount, currency, " +
   "date, reference number, and payer or payee when visible.\n" +
   "If it shows damage, a fault, or a maintenance issue, describe what is wrong and where.\n" +
+  "Return JSON only, no code fence: " +
+  '{"description": string, "text": string, "fields": object}. ' +
+  "Use an empty object for fields when nothing structured is present.";
+
+const DOCUMENT_PROMPT =
+  "Read this document for a customer-service agent. Summarise what it is and what it says, " +
+  "then extract the text that matters.\n" +
+  "If it is an invoice, quotation, receipt, bank transfer, or contract, report the amount, " +
+  "currency, dates, reference or invoice number, and the parties when visible.\n" +
+  "Preserve the original language -- do NOT translate.\n" +
   "Return JSON only, no code fence: " +
   '{"description": string, "text": string, "fields": object}. ' +
   "Use an empty object for fields when nothing structured is present.";
@@ -456,7 +514,10 @@ async function callElevenLabs(
  * common deviation. A parse failure is not an error -- the prose is still useful to the
  * agent, so it becomes the description.
  */
-function parseImagePayload(raw: string): { text: string; extracted?: Record<string, unknown> } {
+function parseVisualPayload(
+  raw: string,
+  kind: MediaKind,
+): { text: string; extracted?: Record<string, unknown> } {
   const unfenced = raw.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
   try {
     const parsed = JSON.parse(unfenced);
@@ -464,7 +525,8 @@ function parseImagePayload(raw: string): { text: string; extracted?: Record<stri
     const ocr = String(parsed?.text ?? "").trim();
     const fields = parsed?.fields && typeof parsed.fields === "object" ? parsed.fields : undefined;
 
-    const composed = [description, ocr && `Text in image: ${ocr}`].filter(Boolean).join("\n");
+    const label = kind === "document" ? "Document text" : "Text in image";
+    const composed = [description, ocr && `${label}: ${ocr}`].filter(Boolean).join("\n");
     return {
       text: composed || unfenced,
       extracted: fields && Object.keys(fields).length > 0 ? fields : undefined,
@@ -474,15 +536,11 @@ function parseImagePayload(raw: string): { text: string; extracted?: Record<stri
   }
 }
 
-/** Boundary cases, enumerated before the code: document kind, zero bytes, over the ceiling. */
+/** Boundary cases, enumerated before the code: zero bytes, over the ceiling. */
 function rejectUnusableMedia(
   bytes: Uint8Array,
-  kind: MediaKind,
   maxBytes: number,
 ): UnderstandingOutcome | null {
-  if (kind === "document") {
-    return { ok: false, reason: "unsupported_type", detail: "documents are not supported yet" };
-  }
   if (bytes.byteLength === 0) return { ok: false, reason: "empty_media" };
   if (bytes.byteLength > maxBytes) {
     return { ok: false, reason: "too_large", detail: `${bytes.byteLength} bytes exceeds ${maxBytes}` };
@@ -490,13 +548,15 @@ function rejectUnusableMedia(
   return null;
 }
 
-function imagePrompt(promptContext?: string): string {
-  return promptContext ? `${IMAGE_PROMPT}\nBusiness context: ${promptContext}` : IMAGE_PROMPT;
+function geminiPrompt(kind: MediaKind, promptContext?: string): string {
+  if (kind === "audio") return AUDIO_PROMPT;
+  const base = kind === "document" ? DOCUMENT_PROMPT : IMAGE_PROMPT;
+  return promptContext ? `${base}\nBusiness context: ${promptContext}` : base;
 }
 
 function geminiResult(raw: string, kind: MediaKind, model: string): MediaUnderstandingResult {
   if (kind === "audio") return { text: raw, kind, provider: "gemini", model };
-  const { text, extracted } = parseImagePayload(raw);
+  const { text, extracted } = parseVisualPayload(raw, kind);
   return {
     text,
     kind,
@@ -522,7 +582,7 @@ async function attemptGemini(
   promptContext?: string,
 ): Promise<ProviderAttempt> {
   try {
-    const prompt = kind === "audio" ? AUDIO_PROMPT : imagePrompt(promptContext);
+    const prompt = geminiPrompt(kind, promptContext);
     const raw = await callGemini(call, prompt);
     return { ok: true, result: geminiResult(raw, kind, call.model) };
   } catch (error) {
@@ -545,9 +605,11 @@ async function attemptWhisper(call: ProviderCall, languageHint?: string): Promis
 
 /** Which providers can do which kind. A speech model cannot look at a receipt. */
 function tierSupports(provider: string, kind: MediaKind): boolean {
-  if (kind === "image") return provider === "gemini" || provider === "google";
-  return provider === "elevenlabs" || provider === "gemini" || provider === "google" ||
-    provider === "openai";
+  const isGemini = provider === "gemini" || provider === "google";
+  // Images and documents are both "look at these bytes" tasks, and Gemini is the only
+  // configured provider that can. ElevenLabs and Whisper are transcribers.
+  if (kind === "image" || kind === "document") return isGemini;
+  return provider === "elevenlabs" || isGemini || provider === "openai";
 }
 
 async function attemptTier(
@@ -582,7 +644,7 @@ async function attemptTier(
       return { ok: true, result: { text, kind, provider: "openai", model: tier.model } };
     }
     // gemini / google
-    const prompt = kind === "audio" ? AUDIO_PROMPT : imagePrompt(config.promptContext);
+    const prompt = geminiPrompt(kind, config.promptContext);
     const raw = await callGemini(providerCall, prompt);
     return { ok: true, result: geminiResult(raw, kind, tier.model) };
   } catch (error) {
@@ -593,8 +655,8 @@ async function attemptTier(
 }
 
 /**
- * Bytes in, text out. Audio uses Gemini with a Whisper fallback; images use Gemini only,
- * since Whisper cannot see. Documents are declined rather than mishandled.
+ * Bytes in, text out. Audio uses Gemini with a Whisper fallback; images and PDFs use
+ * Gemini only, since Whisper cannot see.
  */
 export async function understandInboundMedia(
   input: Uint8Array | ArrayBuffer,
@@ -607,11 +669,12 @@ export async function understandInboundMedia(
   const models = config.models ?? DEFAULT_MODELS;
   const fetcher = config.fetcher ?? fetch;
 
-  const rejected = rejectUnusableMedia(bytes, kind, limits.maxBytes);
+  const rejected = rejectUnusableMedia(bytes, limits.maxBytes);
   if (rejected) return rejected;
 
   const failures: string[] = [];
-  const base = { bytes, mimeType, timeoutMs: limits.timeoutMs, fetcher };
+  const kindTimeoutMs = timeoutFor(kind, limits);
+  const base = { bytes, mimeType, timeoutMs: kindTimeoutMs, fetcher };
 
   let everyFailureWasTimeout = true;
 
@@ -623,7 +686,7 @@ export async function understandInboundMedia(
     // ONE budget across the whole ladder, not timeoutMs per rung. Three tiers each given a
     // fresh 10s meant a message could sit ~30s in providers on top of the download before
     // degrading -- and the customer is waiting for a reply the entire time.
-    const ladderDeadline = Date.now() + limits.timeoutMs * 2;
+    const ladderDeadline = Date.now() + kindTimeoutMs * 2;
     for (const tier of tiers) {
       const remaining = ladderDeadline - Date.now();
       // Only skip when there is genuinely nothing left. An absolute floor here would be a
@@ -637,7 +700,7 @@ export async function understandInboundMedia(
         bytes,
         mimeType,
         // Never more than one tier's worth, never more than what is left.
-        timeoutMs: Math.min(limits.timeoutMs, remaining),
+        timeoutMs: Math.min(kindTimeoutMs, remaining),
         fetcher,
       };
       const attempt = await attemptTier(tier, base, kind, config);

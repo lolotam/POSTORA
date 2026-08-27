@@ -4,6 +4,14 @@ import { resolveAutomationHandler, resolveCommentAutomationHandler } from "../_s
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
 import { buildCommentPayload, buildMessagePayload, buildMessagingSender, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 import { isOwnComment } from "../_shared/commentAuthor.ts";
+import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
+import { MetaMessagingFetcher } from "../_shared/inboundMediaFetchers.ts";
+import {
+  attachmentList,
+  firstReadableAttachment,
+  leadPlaceholder,
+  noteUnreadAttachments,
+} from "./attachments.ts";
 import { matchAutoReplyRule } from "../_shared/autoReplyRules.ts";
 import { handleCommentInternally } from "../_shared/commentAutomation.ts";
 import { normalizeMetaCommentChange } from "./commentEvents.ts";
@@ -222,7 +230,11 @@ Deno.serve(async (req) => {
           }
 
           const senderId: string = event.sender?.id;
-          const messageText: string = event.message.text || (event.message.attachments ? "[Attachment]" : "");
+          const attachments = attachmentList(event.message);
+          const readable = firstReadableAttachment(event.message);
+          // The placeholder names what was sent even when nothing can read it, so the agent
+          // can say "I can see you sent a video" instead of the useless "[Attachment]".
+          const messageText: string = event.message.text || leadPlaceholder(event.message) || "";
 
           // Keyed by this account's stable internal id rather than any Meta-supplied id: Meta
           // represents the same account/conversation with different external ids depending on
@@ -289,8 +301,57 @@ Deno.serve(async (req) => {
           // Deterministic rules outrank the AI; only unclaimed messages reach
           // the agent. Echoes/receipts never get here (filtered above).
           if (automationHandler === "internal" && !ruleReplied) {
-            triggerAiAgentReply(account, platform, conversationId, senderId, messageText)
-              .catch((e) => console.error("[fb-ig-webhook] AI agent dispatch failed:", e?.message || e));
+            const unread = attachments.length - (readable ? 1 : 0);
+
+            if (readable && readable.url) {
+              // Understand the media FIRST, then hand the agent the description instead of
+              // "[Image]". The download and the model call run off the response path to
+              // keep Meta's webhook fast -- and the agent trigger lives INSIDE that
+              // continuation, because firing it before the text exists is this whole bug.
+              await runInBackground("facebook-instagram inbound media understanding", async () => {
+                const outcome = await runInboundMediaUnderstanding(adminClient, {
+                  account: {
+                    id: account.id,
+                    user_id: account.user_id,
+                    platform_user_id: account.platform_user_id,
+                    // No access_token on purpose. Meta's attachment URL is already signed,
+                    // and supplying a token would hand the fetch to CloudGraphFetcher,
+                    // which replays the page token to a CDN host that never asked for it.
+                    account_metadata: account.account_metadata,
+                  },
+                  // Facebook and Instagram messages are not rows in whatsapp_messages, so
+                  // there is nothing to write the result back to -- the agent gets it
+                  // directly and the transcript is not retained.
+                  messageRowId: null,
+                  mediaUrl: readable.url,
+                  // Meta sends no mime; its own word for the attachment is all we have.
+                  kindHint: readable.kind,
+                  caption: event.message.text || null,
+                  platform,
+                }, {
+                  // Bounds which origins this fetch may reach. The generic URL fetcher
+                  // would download from anywhere, which is not what the spec promises for
+                  // inbound media even when the URL arrived over a verified webhook.
+                  fetchers: [new MetaMessagingFetcher()],
+                });
+
+                if (!outcome.understood) {
+                  console.error(`[fb-ig-webhook] media understanding skipped: ${outcome.reason}`);
+                }
+                // Understood or not, the agent still replies -- it just falls back to the
+                // placeholder, which is exactly the previous behaviour.
+                await triggerAiAgentReply(
+                  account, platform, conversationId, senderId,
+                  noteUnreadAttachments(outcome.understood ? outcome.agentText : messageText, unread),
+                  outcome.understood ? outcome.languageCode : undefined,
+                );
+              });
+            } else {
+              triggerAiAgentReply(
+                account, platform, conversationId, senderId,
+                noteUnreadAttachments(messageText, unread),
+              ).catch((e) => console.error("[fb-ig-webhook] AI agent dispatch failed:", e?.message || e));
+            }
           }
         }
 
@@ -520,6 +581,7 @@ async function triggerAiAgentReply(
   conversationId: string,
   senderId: string,
   inboundText: string,
+  languageHint?: string,
 ) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -536,6 +598,9 @@ async function triggerAiAgentReply(
       conversation_id: conversationId,
       recipient_phone: senderId,
       inbound_text: inboundText,
+      // Without this the reply endpoint falls back to counting characters, and the English
+      // data-marker wrapping an Arabic transcript wins. Same hint the WhatsApp path sends.
+      ...(languageHint ? { language_hint: languageHint } : {}),
     }),
   });
   if (!response.ok) {

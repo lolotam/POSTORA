@@ -3,6 +3,7 @@ import { runInBackground } from "../_shared/background.ts";
 import { buildObservation, flushObservations, type UnmatchedObservation } from "../_shared/unmatchedWebhookObservation.ts";
 import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
 import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
+import { isPlaceholderOnly, MEDIA_PLACEHOLDERS, promptSafeInput } from "./messageContent.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
@@ -27,16 +28,21 @@ interface WhatsAppAccount {
 
 // The exact strings extractMessageContent produces when there is no caption. Used to tell
 // "no caption" from a caption that merely looks like one.
-const MEDIA_PLACEHOLDERS: Record<string, string> = {
-  audio: "[Audio message]",
-  image: "[Image]",
-};
-
 interface MessageContent {
   messageText: string;
   mediaUrl: string | null;
   mediaType: string | null;
   mediaMetadata: Record<string, unknown> | null;
+  /**
+   * What the customer actually typed alongside the media, where that is not already
+   * `messageText`.
+   *
+   * Images and videos put their caption straight into `messageText`; a document cannot,
+   * because `messageText` has to carry the filename for the inbox to display. Keeping the
+   * two apart is what lets the filename stay in storage while only the caption -- the part
+   * a human wrote -- reaches the rules and the model.
+   */
+  caption: string | null;
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -241,6 +247,7 @@ async function extractMessageContent(
   let mediaUrl: string | null = null;
   let mediaType: string | null = null;
   let mediaMetadata: Record<string, unknown> | null = null;
+  let caption: string | null = null;
 
   if (msgType === "text") {
     messageText = msg.text?.body || "";
@@ -256,6 +263,9 @@ async function extractMessageContent(
     if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.video?.id, accessToken);
   } else if (msgType === "document") {
     messageText = `[Document] ${msg.document?.filename || ""}`;
+    // Cloud API carries a document caption separately from the filename, and it was being
+    // dropped: a customer writing "here is the signed contract" got nothing through.
+    caption = msg.document?.caption || null;
     mediaType = "document";
     mediaMetadata = { mime_type: msg.document?.mime_type, sha256: msg.document?.sha256, filename: msg.document?.filename, media_id: msg.document?.id };
     if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.document?.id, accessToken);
@@ -281,7 +291,7 @@ async function extractMessageContent(
     messageText = `[${msgType}]`;
   }
 
-  return { messageText, mediaUrl, mediaType, mediaMetadata };
+  return { messageText, mediaUrl, mediaType, mediaMetadata, caption };
 }
 
 function toIsoTimestamp(timestamp: unknown): string {
@@ -410,7 +420,7 @@ async function handleLiveMessages(
     const msgType = msg.type;
     const messageId = msg.id;
 
-    const { messageText, mediaUrl, mediaType, mediaMetadata } =
+    const { messageText, mediaUrl, mediaType, mediaMetadata, caption } =
       await extractMessageContent(msg, accessToken, true);
 
     const conversationId = `wa_${phoneNumberId}_${from.replace(/\D/g, "")}`;
@@ -510,8 +520,17 @@ async function handleLiveMessages(
       ));
     }
 
+    // What the rules and the agent are allowed to read.
+    //
+    // A document's text is "[Document] <filename>", and the sender chooses that filename.
+    // Stored and dispatched it is data; fed to a keyword matcher it lets a sender trigger
+    // an away rule by naming a file, and fed to the model it is an instruction the customer
+    // never typed. Both consumers get the constant instead. Genuine captions -- which the
+    // same check identifies -- still pass through untouched.
+    const promptSafeText = promptSafeInput(mediaType, messageText, caption);
+
     const ruleReplied = automationHandler === "internal"
-      ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken)
+      ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, promptSafeText, accessToken)
       : false;
 
     // Deterministic keyword/away rules outrank the AI; only unanswered
@@ -523,7 +542,8 @@ async function handleLiveMessages(
       // and a model call, so it runs in the background to keep Meta's webhook fast --
       // and the agent trigger moves inside that continuation, because firing the agent
       // before the transcript exists is the bug this feature fixes.
-      const understandableKind = mediaType === "audio" || mediaType === "image";
+      const understandableKind = mediaType === "audio" || mediaType === "image" ||
+        mediaType === "document";
       const mediaMime = (mediaMetadata as { mime_type?: string } | null)?.mime_type ?? null;
 
       if (understandableKind && mediaMime) {
@@ -542,15 +562,15 @@ async function handleLiveMessages(
             mediaId: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
             mediaUrl,
             mimeType: mediaMime,
-            // Compare against the exact placeholder for this type. `startsWith("[")`
-            // discarded genuine captions such as "[URGENT] leaking pipe".
-            caption: messageText === MEDIA_PLACEHOLDERS[mediaType] ? null : messageText,
+            // Compare against this type's placeholder. `startsWith("[")` discarded genuine
+            // captions such as "[URGENT] leaking pipe".
+            caption: caption ?? (isPlaceholderOnly(mediaType, messageText) ? null : messageText),
             platform: "whatsapp",
           });
 
           // Understood or not, the agent still replies -- it just falls back to the
           // placeholder, which is exactly today's behaviour.
-          const agentInput = outcome.understood ? outcome.agentText : messageText;
+          const agentInput = outcome.understood ? outcome.agentText : promptSafeText;
           // The transcript's detected language beats counting characters in text that now
           // carries an English data-marker (see detectReplyLanguage).
           await triggerAiAgentReply(
@@ -559,7 +579,7 @@ async function handleLiveMessages(
           );
         });
       } else {
-        triggerAiAgentReply(account, conversationId, phoneNumberId, from, messageText)
+        triggerAiAgentReply(account, conversationId, phoneNumberId, from, promptSafeText)
           .catch((e) => console.error("[whatsapp-webhook] AI agent dispatch failed:", e?.message || e));
       }
     }

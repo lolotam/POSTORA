@@ -166,6 +166,13 @@ async function persistEvolutionMessage(
   const inboundText = (row.message_text as string) || "";
   if (automationHandler !== "internal" || !inboundText.trim()) return true;
 
+  // Evolution builds "[Document] <filename>" from a sender-chosen name, exactly like the
+  // Cloud path. Keep it out of the keyword matcher and out of the model: there it is an
+  // instruction the customer never typed. The stored row keeps the filename.
+  const promptSafeText = (row.media_type as string | null) === "document"
+    ? "[Document]"
+    : inboundText;
+
   // Same shape as the Cloud path: understand the media FIRST, then give the agent the
   // transcript instead of "[Audio message]". Evolution hands over bytes through its own
   // instance API rather than a URL, which is the only difference -- and it lives entirely
@@ -173,7 +180,7 @@ async function persistEvolutionMessage(
   const mediaKind = row.media_type as string | null;
   const mediaMime = (row.media_metadata as { mime_type?: string } | null)?.mime_type ?? null;
 
-  if ((mediaKind === "audio" || mediaKind === "image") && mediaMime) {
+  if ((mediaKind === "audio" || mediaKind === "image" || mediaKind === "document") && mediaMime) {
     const mediaRowId = insertedRows[0]?.id ?? null;
     await runInBackground("evolution inbound media understanding", async () => {
       const evolutionBase = Deno.env.get("EVOLUTION_API_URL");
@@ -200,7 +207,7 @@ async function persistEvolutionMessage(
       if (!outcome.understood) {
         console.error(`[whatsapp-evolution-webhook] media understanding skipped: ${outcome.reason}`);
       }
-      const agentInput = outcome.understood ? outcome.agentText : inboundText;
+      const agentInput = outcome.understood ? outcome.agentText : promptSafeText;
       // Without this the reply endpoint falls back to counting characters, and the English
       // data-marker around an Arabic transcript wins -- the exact bug this feature hit on
       // the Cloud path. Evolution needs the same hint.
@@ -217,7 +224,7 @@ async function persistEvolutionMessage(
     conversationId,
     account.platform_user_id,
     remoteNumber,
-    inboundText,
+    promptSafeText,
   ).catch((e) => console.error("[whatsapp-evolution-webhook] AI agent dispatch failed:", e?.message || e));
 
   return true;

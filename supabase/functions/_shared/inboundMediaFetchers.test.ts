@@ -5,6 +5,7 @@ import {
   DirectUrlFetcher,
   EvolutionFetcher,
   MediaFetchError,
+  MetaMessagingFetcher,
   selectFetcher,
   type MediaRef,
 } from "./inboundMediaFetchers.ts";
@@ -301,5 +302,296 @@ Deno.test("a body that emits one chunk and never closes times out instead of han
       ),
     MediaFetchError,
     "exceeded",
+  );
+});
+
+Deno.test("MetaMessagingFetcher claims Messenger and Instagram attachments, and nothing else", () => {
+  const fetcher = new MetaMessagingFetcher();
+  const url = "https://cdn.fbsbx.com/v/t59.3654-21/clip.mp4";
+  assert(fetcher.canHandle({ platform: "facebook", mediaUrl: url }));
+  assert(fetcher.canHandle({ platform: "instagram", mediaUrl: url }));
+  assert(!fetcher.canHandle({ platform: "whatsapp", mediaUrl: url }));
+  assert(!fetcher.canHandle({ platform: "facebook", mediaUrl: null }));
+});
+
+Deno.test("cdn.fbsbx.com is accepted — the host Messenger actually serves voice clips from", async () => {
+  // Regression: the pre-existing credentialed list names `lookaside.fbsbx.com`, which
+  // `cdn.fbsbx.com` does NOT suffix-match. Reusing it would refuse every Facebook voice
+  // note while every unit test still passed.
+  const fetched = await new MetaMessagingFetcher().fetchMediaBytes(
+    { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/t59.3654-21/audioclip-1.mp4" },
+    LIMITS,
+    () => Promise.resolve(bodyResponse(new Uint8Array([1, 2]), { "content-type": "video/mp4" })),
+  );
+  assertEquals(fetched.bytes.length, 2);
+});
+
+Deno.test("scontent image hosts and Instagram's CDN are accepted", async () => {
+  for (const host of ["scontent.xx.fbcdn.net", "scontent-lhr8-1.cdninstagram.com"]) {
+    const fetched = await new MetaMessagingFetcher().fetchMediaBytes(
+      { platform: "instagram", mediaUrl: `https://${host}/v/photo.jpg` },
+      LIMITS,
+      () => Promise.resolve(bodyResponse(new Uint8Array([9]), { "content-type": "image/jpeg" })),
+    );
+    assertEquals(fetched.mimeType, "image/jpeg");
+  }
+});
+
+Deno.test("a non-Meta host is refused even though the URL came over a verified webhook", async () => {
+  // The webhook's HMAC proves Meta sent the payload; it does not prove the payload's URL
+  // is Meta's. This is the bound a bare URL fetcher does not give.
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://evil.test/payload.bin" },
+        LIMITS,
+        () => Promise.resolve(bodyResponse(new Uint8Array([1]))),
+      ),
+    MediaFetchError,
+    "refusing to fetch media from evil.test",
+  );
+});
+
+Deno.test("a lookalike host does not pass by suffix", async () => {
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com.evil.test/x" },
+        LIMITS,
+        () => Promise.resolve(bodyResponse(new Uint8Array([1]))),
+      ),
+    MediaFetchError,
+    "refusing to fetch media",
+  );
+});
+
+Deno.test("a Messenger voice clip served as video/mp4 is renamed, and only then", async () => {
+  const fetcher = new MetaMessagingFetcher();
+  const serve = () =>
+    Promise.resolve(bodyResponse(new Uint8Array([1]), { "content-type": "video/mp4" }));
+  const url = "https://cdn.fbsbx.com/v/audioclip-1.mp4";
+
+  const asAudio = await fetcher.fetchMediaBytes(
+    { platform: "facebook", mediaUrl: url, kindHint: "audio" }, LIMITS, serve,
+  );
+  assertEquals(asAudio.mimeType, "audio/mp4");
+
+  // Meta calls a real video "video", never "audio". Without that word the container is
+  // taken at face value, so a genuine video is not transcribed as if it were a voice note.
+  const unhinted = await fetcher.fetchMediaBytes(
+    { platform: "facebook", mediaUrl: url }, LIMITS, serve,
+  );
+  assertEquals(unhinted.mimeType, "video/mp4");
+});
+
+Deno.test("a CDN redirect is followed, and the destination is validated too", async () => {
+  const seen: string[] = [];
+  const fetcher = (url: string | URL | Request) => {
+    seen.push(String(url));
+    if (seen.length === 1) {
+      return Promise.resolve(
+        new Response(null, { status: 302, headers: { location: "https://scontent.fbcdn.net/real.jpg" } }),
+      );
+    }
+    return Promise.resolve(bodyResponse(new Uint8Array([7]), { "content-type": "image/jpeg" }));
+  };
+  const fetched = await new MetaMessagingFetcher().fetchMediaBytes(
+    { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/first.jpg", kindHint: "image" },
+    LIMITS,
+    fetcher as typeof globalThis.fetch,
+  );
+  assertEquals(seen.length, 2);
+  assertEquals(fetched.bytes.length, 1);
+});
+
+Deno.test("a redirect off Meta's hosts is refused rather than followed", async () => {
+  const fetcher = (url: string | URL | Request) =>
+    String(url).includes("evil")
+      ? Promise.resolve(bodyResponse(new Uint8Array([1])))
+      : Promise.resolve(
+        new Response(null, { status: 302, headers: { location: "https://evil.test/steal" } }),
+      );
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/first.jpg" },
+        LIMITS,
+        fetcher as typeof globalThis.fetch,
+      ),
+    MediaFetchError,
+    "refusing to fetch media from evil.test",
+  );
+});
+
+Deno.test("a network error never carries the signed URL into the message", async () => {
+  // Meta's attachment links put the authorisation in the query string, and Deno's network
+  // and TLS errors quote the URL they were fetching. That message is logged verbatim
+  // upstream, so propagating it would write a live credential to the log.
+  const leaky = () =>
+    Promise.reject(
+      new TypeError(
+        "error sending request for url (https://cdn.fbsbx.com/v/x.mp4?oh=SECRETSIG&oe=6A9648F9)",
+      ),
+    );
+  const error = await new MetaMessagingFetcher()
+    .fetchMediaBytes({ platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/x.mp4?oh=SECRETSIG" }, LIMITS, leaky)
+    .then(() => null, (e) => e as MediaFetchError);
+
+  assert(error instanceof MediaFetchError);
+  assert(!error.message.includes("SECRETSIG"), `leaked the signature: ${error.message}`);
+  assert(!error.message.includes("?"), `leaked a query string: ${error.message}`);
+  // Still diagnosable: which host, and which class of failure.
+  assert(error.message.includes("cdn.fbsbx.com"));
+  assert(error.message.includes("TypeError"));
+});
+
+Deno.test("redirects and the body read share one deadline, they do not each get a fresh one", async () => {
+  // A duration is not a budget. Restarted per hop, a two-redirect download consumed four
+  // times the configured timeout -- which is how a 10s download plus a 40s provider ladder
+  // came to 80s against a 60s worker ceiling.
+  const started = Date.now();
+  let hops = 0;
+  // Honours the abort signal, because that is what a real fetch does -- a stub that ignores
+  // it measures the stub, not the deadline.
+  const slowRedirects = (_url: string | URL | Request, init?: RequestInit) => {
+    hops += 1;
+    const location = `https://scontent.fbcdn.net/hop${hops}.jpg`;
+    return new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(
+        () => resolve(new Response(null, { status: 302, headers: { location } })),
+        40,
+      );
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        const aborted = new Error("The operation was aborted");
+        aborted.name = "AbortError";
+        reject(aborted);
+      }, { once: true });
+    });
+  };
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/first.jpg" },
+        { maxBytes: 1024, timeoutMs: 60 },
+        slowRedirects as typeof globalThis.fetch,
+      ),
+    MediaFetchError,
+  );
+  // Three 40ms hops would be 120ms if each restarted the clock. One shared 60ms budget
+  // cannot reach that, whatever the machine is doing.
+  const elapsed = Date.now() - started;
+  assert(elapsed < 115, `download ran ${elapsed}ms, so the budget was not shared`);
+});
+
+Deno.test("a third redirect is refused rather than followed", async () => {
+  const alwaysRedirects = () =>
+    Promise.resolve(
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://scontent.fbcdn.net/again.jpg" },
+      }),
+    );
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/first.jpg" },
+        LIMITS,
+        alwaysRedirects,
+      ),
+    MediaFetchError,
+    "download 302",
+  );
+});
+
+Deno.test("the Evolution api key is bound to the configured instance host", async () => {
+  // The apikey header travels with this request, so the module's own invariant applies:
+  // a credentialed call is never unbounded.
+  await assertRejects(
+    () =>
+      new EvolutionFetcher("https://evo.example.com", "k", "inst").fetchMediaBytes(
+        { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+        LIMITS,
+        // A fetcher that would happily answer, so only the policy can refuse this.
+        () => Promise.resolve(new Response(JSON.stringify({ base64: "AQID" }), { status: 200 })),
+      ).then(async (ok) => {
+        // Sanity: the configured host IS allowed, so the refusal below is about the host,
+        // not about Evolution being broken in this test.
+        assertEquals(ok.bytes.length, 3);
+        await new EvolutionFetcher("not a url", "k", "inst").fetchMediaBytes(
+          { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+          LIMITS,
+          () => Promise.resolve(new Response(JSON.stringify({ base64: "AQID" }), { status: 200 })),
+        );
+      }),
+    MediaFetchError,
+    "EVOLUTION_API_URL is not a valid url",
+  );
+});
+
+Deno.test("a body-read failure does not carry the request url into its message", async () => {
+  // The request path was already guarded; the body path was not. Some runtimes put the URL
+  // they were reading into a stream error, and the pipeline logs that message verbatim.
+  const failingBody = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(
+        new TypeError("error reading body from https://cdn.fbsbx.com/v/x.mp4?oh=SECRETSIG"),
+      );
+    },
+  });
+  const error = await new MetaMessagingFetcher()
+    .fetchMediaBytes(
+      { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/x.mp4" },
+      LIMITS,
+      () => Promise.resolve(new Response(failingBody, { status: 200 })),
+    )
+    .then(() => null, (e) => e as MediaFetchError);
+
+  assert(error instanceof MediaFetchError);
+  assert(!error.message.includes("SECRETSIG"), `leaked the signature: ${error.message}`);
+  assert(!error.message.includes("https://"), `leaked a url: ${error.message}`);
+  assert(error.message.includes("TypeError"));
+});
+
+Deno.test("the Evolution response body is bounded, not read whole", async () => {
+  // Evolution returns the media base64-encoded inside JSON. Reading that envelope with
+  // response.json() was the one body left unbounded.
+  const oversized = "A".repeat(4096);
+  await assertRejects(
+    () =>
+      new EvolutionFetcher("https://evo.example.com", "k", "inst").fetchMediaBytes(
+        { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+        { maxBytes: 64, timeoutMs: 100 },
+        () => Promise.resolve(new Response(JSON.stringify({ base64: oversized }), { status: 200 })),
+      ),
+    MediaFetchError,
+    "exceeded",
+  );
+});
+
+Deno.test("a valid Evolution envelope still decodes", async () => {
+  // The bound must not refuse the ordinary case it exists to cap.
+  const fetched = await new EvolutionFetcher("https://evo.example.com", "k", "inst").fetchMediaBytes(
+    { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+    LIMITS,
+    () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ base64: "AQID", mimetype: "audio/ogg" }), { status: 200 }),
+      ),
+  );
+  assertEquals(fetched.bytes.length, 3);
+  assertEquals(fetched.mimeType, "audio/ogg");
+});
+
+Deno.test("malformed Evolution json is a stable error, not a raw parse failure", async () => {
+  await assertRejects(
+    () =>
+      new EvolutionFetcher("https://evo.example.com", "k", "inst").fetchMediaBytes(
+        { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+        LIMITS,
+        () => Promise.resolve(new Response("not json at all", { status: 200 })),
+      ),
+    MediaFetchError,
+    "evolution returned invalid json",
   );
 });
