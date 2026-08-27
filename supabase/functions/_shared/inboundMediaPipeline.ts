@@ -297,6 +297,19 @@ export async function runInboundMediaUnderstanding(
     if (!kind) return { understood: false, reason: "unsupported_type" };
     if (!modeAllows(mode, kind)) return { understood: false, reason: "kind_not_enabled" };
 
+    // A declaration is trusted to REFUSE, never to accept.
+    //
+    // The bytes decide whether something is a PDF (see looksLikePdf), but that check needs
+    // the download, which happens after a cap slot is already reserved -- so a customer
+    // sending Word documents would burn the account's daily allowance without a single
+    // provider call, and legitimate media later in the day would be turned away. When the
+    // sender has told us it is a .docx, believing them costs nothing and refuses before the
+    // reservation. A false claim of PDF still reaches the byte check.
+    const declaredKind = classifyMime(input.mimeType);
+    if (kind === "document" && input.mimeType && declaredKind !== "document") {
+      return { understood: false, reason: "unsupported_type" };
+    }
+
     const cap = deps.dailyCap ?? DEFAULT_DAILY_CAP;
     if (!(await reserveDailyAttempt(admin, input.account.id, cap))) {
       return { understood: false, reason: "daily_cap_reached" };

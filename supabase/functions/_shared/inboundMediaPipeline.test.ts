@@ -595,3 +595,64 @@ Deno.test("a real PDF labelled application/octet-stream is still read", async ()
   );
   assert(outcome.understood);
 });
+
+Deno.test("a document the sender admits is not a PDF costs no cap slot", async () => {
+  // The byte check needs the download, which happens after the reservation -- so without
+  // this, a customer sending Word documents burns the account's daily allowance and later
+  // legitimate media is turned away, with no provider call ever made.
+  let reserved = 0;
+  const countingAdmin = {
+    ...stubAdmin(),
+    rpc: (_name: string) => {
+      reserved += 1;
+      return Promise.resolve({ data: true, error: null });
+    },
+  };
+  const outcome = await runInboundMediaUnderstanding(
+    countingAdmin,
+    {
+      account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      messageRowId: null,
+      mediaUrl: "https://cdn/x",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      kindHint: "document",
+    },
+    {
+      fetchers: [fetcherReturning(PDF_BYTES, "application/pdf")],
+      geminiKey: "k",
+      fetcher: () => Promise.reject(new Error("no provider should have been called")),
+    },
+  );
+  assert(!outcome.understood);
+  assertEquals(outcome.reason, "unsupported_type");
+  assertEquals(reserved, 0, "a refusal we could make for free still charged the cap");
+});
+
+Deno.test("a false claim of PDF is still caught, just later and at a cap slot", async () => {
+  // The declaration is trusted to refuse, never to accept.
+  let reserved = 0;
+  const countingAdmin = {
+    ...stubAdmin(),
+    rpc: (_name: string) => {
+      reserved += 1;
+      return Promise.resolve({ data: true, error: null });
+    },
+  };
+  const outcome = await runInboundMediaUnderstanding(
+    countingAdmin,
+    {
+      account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      messageRowId: null,
+      mediaUrl: "https://cdn/x",
+      mimeType: "application/pdf",
+    },
+    {
+      fetchers: [fetcherReturning(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), "application/pdf")],
+      geminiKey: "k",
+      fetcher: () => Promise.reject(new Error("no provider should have been called")),
+    },
+  );
+  assert(!outcome.understood);
+  assertEquals(outcome.reason, "unsupported_type");
+  assertEquals(reserved, 1);
+});
