@@ -1,0 +1,241 @@
+# Inbound media: Facebook/Instagram wiring + PDF support
+
+> **For agentic workers:** implement task-by-task. Steps use checkbox (`- [ ]`) syntax.
+
+**Goal:** An image, a voice note, or a PDF sent to any of Postora's four DM surfaces
+reaches the AI agent as text it can reason about, instead of a placeholder.
+
+**Architecture:** Two independent defects, one shared pipeline. `runInboundMediaUnderstanding`
+already does the work and is already correct; Facebook/Instagram simply never call it, and
+every kind gate in the stack refuses `document`. The fix widens the existing seams rather
+than adding a parallel path: a new mode value, a `document` arm through the four gates that
+block it, a platform-supplied `kindHint` for transports that carry no mime, and one new
+caller in `facebook-instagram-webhook` shaped exactly like the WhatsApp one.
+
+**Tech Stack:** Deno edge functions, Gemini 2.5 Flash (multimodal), Supabase Postgres.
+
+**Spec:** `docs/specs/2026-08-25-inbound-media-understanding.md` (this extends D4/D6/D9).
+
+## Evidence (root cause, proven before any fix)
+
+Live rows from the user's own test messages, 2026-08-27:
+
+| Time (UTC) | Platform | What was sent | `ai_agent_logs.inbound_text` |
+|---|---|---|---|
+| 16:15:26 | facebook | text | the Arabic greeting, intact |
+| 16:15:48 | facebook | image | `[Attachment]` |
+| 16:16:39 | facebook | voice clip | `[Attachment]` |
+| 16:20:16 | whatsapp | image | `[Image description & OCR - ...]` |
+| 16:21:16 | whatsapp | PDF | `[Document] 1448O.pdf` |
+
+`social_inbox_events` shows both Facebook attachments arrived intact with working CDN URLs,
+so nothing upstream is losing them.
+
+**Cause 1:** `facebook-instagram-webhook/index.ts:225` collapses every attachment to the
+literal `"[Attachment]"`. `runInboundMediaUnderstanding` has exactly two callers, both
+WhatsApp. `account_metadata.media_understanding` is therefore inert on FB/IG.
+
+**Cause 2:** four gates decline documents on every platform -
+`rejectUnusableMedia` (hard decline), `classifyMime` (no PDF arm), `modeAllows` +
+`MEDIA_UNDERSTANDING_MODES` (no mode admits documents), and the `audio || image` kind gate
+in both WhatsApp webhooks.
+
+## Global Constraints
+
+- **No bytes are stored.** This path fetches into memory, calls Gemini, and persists only
+  extracted text to `whatsapp_messages.media_understanding`. No Supabase bucket, no
+  Openinary, no growth in project storage. Nothing in this plan may add an upload.
+- **Max 15 MB**, unchanged: 15 MB base64-expands to ~20 MB, Gemini's inline-request ceiling.
+- **Documents are Gemini-only.** ElevenLabs and Whisper are transcribers.
+- **Understanding never drops a message.** Every failure path keeps the placeholder.
+- **Deploy is the runtime-checkout path with `restart`**, never `up -d`
+  (`docs/runbooks/deploy-edge-function.md`).
+- Threads is out of scope: it has no DM API. Four surfaces, not five.
+
+## File Structure
+
+| File | Responsibility in this change |
+|---|---|
+| `_shared/inboundMediaUnderstanding.ts` | classify PDFs, document prompt, document deadline, Gemini-only routing |
+| `_shared/inboundMediaPipeline.ts` | new mode, kind table, `kindHint`, mime reconciliation, document label |
+| `whatsapp-webhook/index.ts` | admit `document` to the kind gate |
+| `whatsapp-evolution-webhook/index.ts` | admit `document` to the kind gate |
+| `facebook-instagram-webhook/index.ts` | new caller: per-type placeholders + understanding before the agent fires |
+| `_shared/*.test.ts` | one test per gate; invert the "documents are not supported" test |
+
+---
+
+### Task 1: Documents pass the understanding module
+
+**Files:** Modify `supabase/functions/_shared/inboundMediaUnderstanding.ts`;
+Test `supabase/functions/_shared/inboundMediaUnderstanding.test.ts`
+
+**Interfaces:**
+- Produces: `timeoutFor(kind: MediaKind, limits: UnderstandingLimits): number`,
+  `UnderstandingLimits.documentTimeoutMs?: number`, `classifyMime` returning `"document"`.
+
+- [ ] **Step 1: Widen the limits type and add the per-kind deadline**
+
+`documentTimeoutMs?: number` on `UnderstandingLimits`, defaulting to `30_000`; `timeoutFor`
+returns it for documents and `timeoutMs` otherwise. 10s is tuned for a voice note; a scanned
+PDF is a page-by-page read and runs past it.
+
+- [ ] **Step 2: Classify PDFs**
+
+`const DOCUMENT_MIME = /^application\/pdf/i;` and a third arm in `classifyMime`. PDF only -
+Word and PowerPoint are ZIP containers Gemini does not open, and admitting them would trade
+a clear "unsupported" for a confident answer about a document nothing read.
+
+- [ ] **Step 3: Add `DOCUMENT_PROMPT` and route prompts through one function**
+
+Same `{description, text, fields}` JSON contract as `IMAGE_PROMPT`, so one parser serves
+both. Replace `imagePrompt()` with `geminiPrompt(kind, promptContext)` and update **both**
+call sites (`attemptTier` and `attemptGemini` - the second is easy to miss).
+
+- [ ] **Step 4: Stop declining documents; route them to Gemini**
+
+Delete the `kind === "document"` early return from `rejectUnusableMedia` (it no longer needs
+`kind` at all). `tierSupports`: `image || document` maps to Gemini only.
+
+- [ ] **Step 5: Apply the document deadline everywhere in the ladder**
+
+`kindTimeoutMs` local, used by the single-provider `base`, the `ladderDeadline`, and the
+per-rung `Math.min`. Missing the ladder means a configured tier list silently keeps the
+10s budget.
+
+- [ ] **Step 6: Rename `parseImagePayload` to `parseVisualPayload(raw, kind)`**
+
+`"Text in image:"` reads wrong on a PDF; label by kind.
+
+- [ ] **Step 7: Tests**
+
+Invert the existing "documents are not supported" test. Add: `classifyMime("application/pdf")`
+is `"document"`; `classifyMime("application/msword")` is `null`; a document tier list
+containing only ElevenLabs is filtered to empty; `timeoutFor("document", DEFAULT_LIMITS)` is
+30000 and `timeoutFor("audio", ...)` is 10000.
+
+Run: `deno test supabase/functions/_shared/inboundMediaUnderstanding.test.ts`
+
+---
+
+### Task 2: The pipeline admits documents and platform-declared kinds
+
+**Files:** Modify `supabase/functions/_shared/inboundMediaPipeline.ts`;
+Test `supabase/functions/_shared/inboundMediaPipeline.test.ts`
+
+**Interfaces:**
+- Consumes: `timeoutFor` from Task 1.
+- Produces: mode `"audio+image+document"`, `PipelineInput.kindHint?: MediaKind | null`.
+
+- [ ] **Step 1: Add the mode and replace the condition chain with a table**
+
+New mode value rather than widening `audio+image` - this spends money per document and
+reaches customers, so it is opted into deliberately, matching the module's existing stance.
+`MODE_KINDS: Record<MediaUnderstandingMode, readonly MediaKind[]>`; `modeAllows` becomes a
+lookup.
+
+- [ ] **Step 2: Add `kindHint` and prefer it over the mime**
+
+`const kind = input.kindHint ?? classifyMime(input.mimeType);`
+
+Meta's messaging webhooks send **no mime** - only `type: "audio"` and a CDN URL. Without
+this, every Facebook attachment exits at `unsupported_type`.
+
+- [ ] **Step 3: Reconcile the one known container disagreement**
+
+A Messenger voice clip is `audioclip-....mp4`, served as `video/mp4`, which classifies as
+nothing and would fail the mismatch check. `reconcileMime(kind, mime)` rewrites `video/mp4`
+to `audio/mp4` **only** when the platform declared audio; everything else still trips the
+check.
+
+- [ ] **Step 4: Give the download the kind's budget**
+
+`timeoutFor(kind, limits)` in `fetchMediaBytes`, not `limits.timeoutMs`.
+
+- [ ] **Step 5: Label document text for the agent**
+
+`AGENT_TEXT_LABELS: Record<MediaKind, string>`, document maps to
+`"Document summary & extracted text"`. Exhaustive record, so a future kind fails to compile
+rather than silently falling back to the image label.
+
+- [ ] **Step 6: Tests**
+
+`modeAllows` truth table across all four modes by three kinds; `kindHint` beats a null mime;
+`kindHint` beats a *disagreeing* mime; `video/mp4` plus `kindHint: "audio"` is understood;
+`video/mp4` with no hint still returns `unsupported_type`.
+
+Run: `deno test supabase/functions/_shared/inboundMediaPipeline.test.ts`
+
+---
+
+### Task 3: Both WhatsApp webhooks admit documents
+
+**Files:** Modify `supabase/functions/whatsapp-webhook/index.ts`,
+`supabase/functions/whatsapp-evolution-webhook/index.ts`
+
+- [ ] **Step 1: Cloud webhook**
+
+`understandableKind` gains `"document"`. The caption check is
+`messageText === MEDIA_PLACEHOLDERS[mediaType]`, but a document's text is
+`[Document] <filename>` and `MEDIA_PLACEHOLDERS` has no `document` key, so the filename
+would be passed to the model as a customer caption. Handle the document case explicitly.
+
+- [ ] **Step 2: Evolution webhook**
+
+Same gate, `(mediaKind === "audio" || mediaKind === "image" || mediaKind === "document")`.
+Confirm Evolution actually reports `document` as `media_type` before relying on it.
+
+- [ ] **Step 3: Commit**
+
+---
+
+### Task 4: Facebook and Instagram call the pipeline
+
+**Files:** Modify `supabase/functions/facebook-instagram-webhook/index.ts`
+
+- [ ] **Step 1: Replace the generic placeholder with per-type ones**
+
+`"[Attachment]"` becomes `[Image]` / `[Voice message]` / `[Document]` / `[Video]` from Meta's
+`attachments[0].type`, so a failed understanding still tells the agent what it was.
+
+- [ ] **Step 2: Understand before the agent fires**
+
+Mirror the WhatsApp shape: rules run first on the placeholder; if unclaimed, run
+understanding inside `runInBackground` and move `triggerAiAgentReply` **inside** that
+continuation. Firing the agent before the transcript exists is the whole bug.
+
+Differences from WhatsApp: `messageRowId` is `null` (FB/IG do not write `whatsapp_messages`);
+`caption` is `event.message.text || null`; pass `kindHint` from Meta's type;
+`mimeType: null` (let the fetcher discover it); only the **first** understandable attachment
+is processed and any extras are logged, not silently dropped.
+
+- [ ] **Step 3: Confirm `DirectUrlFetcher` is selected**
+
+`canHandle` requires `mediaUrl && !accessToken`. The FB/IG `PipelineAccount` must therefore
+**not** carry `access_token`, or `CloudGraphFetcher` wins and the fetch fails. Verify.
+
+- [ ] **Step 4: Carry the detected language into the reply**
+
+Check whether FB/IG's `triggerAiAgentReply` accepts a language hint like WhatsApp's. If not,
+extend it - without it the reply endpoint counts characters, and the English data-marker
+wrapping an Arabic transcript wins.
+
+- [ ] **Step 5: Commit**
+
+---
+
+### Task 5: Gates, guards, and enablement
+
+- [ ] **Step 1:** `deno check` every touched function; full `deno test` for `_shared`.
+- [ ] **Step 2:** `npm run lint`, `npx tsc --noEmit`, `npm test` (frontend untouched, but the
+      baseline must stay green: 949 passed / 0 failed).
+- [ ] **Step 3:** `clean-code-guard` on the production diff, `test-guard` on the tests.
+- [ ] **Step 4:** Deploy the five changed edge files via the runtime checkout + `restart`;
+      verify SHA256 with `tr -d '\r'` (the volume is LF, the working copy CRLF).
+- [ ] **Step 5:** Flip `account_metadata.media_understanding` to `audio+image+document` on the
+      WhatsApp and FB/IG accounts. **Without this the retest fails identically** - the
+      accounts currently read `audio+image`.
+- [ ] **Step 6:** Retest live. Stored payloads cannot be replayed: `recordInboxEvent` dedupes
+      on `mid` and the CDN URLs expire, so the user must resend. Check
+      `ai_agent_logs.inbound_text` shows a transcript/description rather than a placeholder,
+      and `media_understanding_usage` counts the attempts.
