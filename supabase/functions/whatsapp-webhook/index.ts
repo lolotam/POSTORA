@@ -6,7 +6,10 @@ import {
   logSkippedUnderstanding,
   runInboundMediaUnderstanding,
 } from "../_shared/inboundMediaPipeline.ts";
-import { isPlaceholderOnly, MEDIA_PLACEHOLDERS, promptSafeInput } from "./messageContent.ts";
+import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
+import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
+import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
+import { isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
@@ -465,6 +468,39 @@ async function handleLiveMessages(
       continue;
     }
 
+    // The outbox row is created HERE, one statement after the insert that consumes Meta's
+    // redelivery, and before any other awaited work.
+    //
+    // That ordering is the whole point. The upsert above is the idempotency claim: once it
+    // succeeds, a redelivery of the same message is a no-op and `continue`s. So every await
+    // between that claim and the enqueue is a window in which a killed worker loses the
+    // message with no possibility of recovery -- the platform will not tell us again. It
+    // used to include the messaging_cache upsert, two contact lookups and processAutoReplies,
+    // which can itself send. Now it includes nothing.
+    const automationHandler = resolveAutomationHandler(account.account_metadata);
+    const promptSafeText = promptSafeInput(mediaType, messageText, caption);
+    const enqueued = automationHandler === "internal"
+      ? await enqueueAgentReply(adminClient, {
+        socialAccountId: account.id,
+        platform: "whatsapp",
+        messageId,
+        conversationId,
+        recipientId: from,
+        inboundText: promptSafeText,
+        // The platform's timestamp, not now(): a delayed webhook must not be ordered as
+        // though it had just arrived, and the 24h window is measured from it.
+        inboundAt: msgTimestamp,
+        mediaUrl,
+        mediaKind: mediaType,
+        mediaCaption: caption,
+      })
+      : null;
+    // A redelivery whose predecessor died after enqueuing does not start a second reply --
+    // the owner holds a lease, and recovery is the backstop. A row that could not be written
+    // at all still replies, which is the one degradation this design accepts.
+    if (enqueued && !enqueued.newlyEnqueued) continue;
+    const outboxId = enqueued?.id ?? null;
+
     // Upsert messaging_cache, incrementing the unread counter
     const { data: cachedConversation } = await adminClient
       .from("messaging_cache")
@@ -494,8 +530,6 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
-    const automationHandler = resolveAutomationHandler(account.account_metadata);
-
     if (automationHandler === "n8n") {
       await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
         adminClient,
@@ -523,74 +557,57 @@ async function handleLiveMessages(
       ));
     }
 
-    // What the rules and the agent are allowed to read.
+    // promptSafeText is computed with the enqueue above, because the row records it.
     //
     // A document's text is "[Document] <filename>", and the sender chooses that filename.
     // Stored and dispatched it is data; fed to a keyword matcher it lets a sender trigger
     // an away rule by naming a file, and fed to the model it is an instruction the customer
     // never typed. Both consumers get the constant instead. Genuine captions -- which the
     // same check identifies -- still pass through untouched.
-    const promptSafeText = promptSafeInput(mediaType, messageText, caption);
-
     const ruleReplied = automationHandler === "internal"
-      ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, promptSafeText, accessToken)
+      ? await processAutoReplies(adminClient, account, {
+        conversationId,
+        phoneNumberId,
+        recipientPhone: from,
+        inboundText: promptSafeText,
+        accessToken,
+        releaseToRule: () => outboxId ? cancelOutboxRow(adminClient, outboxId, "rule_replied") : Promise.resolve(true),
+      })
       : false;
 
     // Deterministic keyword/away rules outrank the AI; only unanswered
     // messages reach the agent. Imported/history/echo messages never get
     // here (see handleHistorySync guard), so the AI cannot reply to them.
+    if (automationHandler === "internal" && ruleReplied && outboxId) {
+      // Covers the suppression paths that return true WITHOUT sending -- an active cooldown,
+      // or a matched rule with no access token. releaseToRule already cancelled the row on
+      // the path that does send, and a second cancel of an already-cancelled row is refused
+      // and logged rather than doing harm.
+      await cancelOutboxRow(adminClient, outboxId, "rule_replied");
+    }
     if (automationHandler === "internal" && !ruleReplied) {
-      // Media the agent could read: understand it FIRST, then hand the agent the
-      // transcript instead of "[Audio message]". The understanding involves a download
-      // and a model call, so it runs in the background to keep Meta's webhook fast --
-      // and the agent trigger moves inside that continuation, because firing the agent
-      // before the transcript exists is the bug this feature fixes.
       const understandableKind = mediaType === "audio" || mediaType === "image" ||
         mediaType === "document";
       const mediaMime = (mediaMetadata as { mime_type?: string } | null)?.mime_type ?? null;
-
-      if (understandableKind && mediaMime) {
-        const mediaRowId = insertedRows[0]?.id ?? null;
-        await runInBackground("whatsapp inbound media understanding", async () => {
-          const outcome = await runInboundMediaUnderstanding(adminClient, {
-            account: {
-              id: account.id,
-              user_id: account.user_id,
-              platform_user_id: account.platform_user_id,
-              connection_mode: account.connection_mode,
-              access_token: accessToken,
-              account_metadata: account.account_metadata,
-            },
-            // Keys the per-sender sub-cap: the customer's phone number, so one number
-            // cannot spend the account's whole daily media allowance.
-            senderId: from,
-            messageRowId: mediaRowId,
-            mediaId: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
-            mediaUrl,
-            mimeType: mediaMime,
+      await replyThroughAgent(adminClient, account, accessToken, {
+        outboxId,
+        phoneNumberId,
+        from,
+        conversationId,
+        promptSafeText,
+        media: understandableKind && mediaMime
+          ? {
+            rowId: insertedRows[0]?.id ?? null,
+            id: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
+            url: mediaUrl,
+            kind: mediaType!,
+            mime: mediaMime,
             // Compare against this type's placeholder. `startsWith("[")` discarded genuine
             // captions such as "[URGENT] leaking pipe".
-            caption: caption ?? (isPlaceholderOnly(mediaType, messageText) ? null : messageText),
-            platform: "whatsapp",
-          });
-
-          if (!outcome.understood) {
-            logSkippedUnderstanding("whatsapp-webhook", outcome.reason);
+            caption: caption ?? (isPlaceholderOnly(mediaType!, messageText) ? null : messageText),
           }
-          // Understood or not, the agent still replies -- it just falls back to the
-          // placeholder, which is exactly today's behaviour.
-          const agentInput = outcome.understood ? outcome.agentText : promptSafeText;
-          // The transcript's detected language beats counting characters in text that now
-          // carries an English data-marker (see detectReplyLanguage).
-          await triggerAiAgentReply(
-            account, conversationId, phoneNumberId, from, agentInput,
-            outcome.understood ? outcome.languageCode : undefined,
-          );
-        });
-      } else {
-        triggerAiAgentReply(account, conversationId, phoneNumberId, from, promptSafeText)
-          .catch((e) => console.error("[whatsapp-webhook] AI agent dispatch failed:", e?.message || e));
-      }
+          : null,
+      });
     }
   }
 
@@ -846,15 +863,31 @@ async function handleContactSync(
 // Returns true when auto-reply rules own this message (a rule replied, or a
 // rule replied recently and the anti-spam cooldown is active), so the AI
 // agent should stay silent. Returns false when no rule claimed the message.
+interface AutoReplyContext {
+  conversationId: string;
+  phoneNumberId: string;
+  recipientPhone: string;
+  inboundText: string;
+  accessToken: string | null;
+  /**
+   * Called once a rule has matched and is about to SEND, and only then. Returning false
+   * means the outbox row could not be released -- someone else is answering this message --
+   * and the rule must stand down rather than duplicate it.
+   *
+   * The release has to happen before the provider call, not after: a kill in between would
+   * leave the row recoverable and the customer would get the rule's answer and then the
+   * agent's. Releasing first fails the other way, which matches the existing precedence --
+   * a matched rule suppresses the agent whether or not its own delivery succeeds.
+   */
+  releaseToRule: () => Promise<boolean>;
+}
+
 async function processAutoReplies(
   adminClient: any,
   account: { id: string; user_id: string },
-  conversationId: string,
-  phoneNumberId: string,
-  recipientPhone: string,
-  inboundText: string,
-  accessToken: string | null
+  context: AutoReplyContext,
 ): Promise<boolean> {
+  const { conversationId, phoneNumberId, recipientPhone, inboundText, accessToken } = context;
   try {
     // Check cooldown — set only after a rule reply, so "active" means a rule
     // answered this conversation within the window and still owns it.
@@ -929,6 +962,12 @@ async function processAutoReplies(
       return true;
     }
 
+    // The rule owns this message now. Release the outbox row before the provider call.
+    if (!await context.releaseToRule()) {
+      console.warn("[whatsapp-webhook] auto-reply stood down: the outbox row moved on");
+      return true;
+    }
+
     const sendRes = await fetch(
       `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
       {
@@ -994,40 +1033,106 @@ async function processAutoReplies(
   }
 }
 
-// Fire-and-forget hand-off to the internal AI agent reply engine. The
-// ai-agent-reply function enforces its own gates (enabled flag, engagement
-// mode, human assignment, 24h window, cooldown, daily cap).
-async function triggerAiAgentReply(
-  account: { id: string; user_id: string },
-  conversationId: string,
-  phoneNumberId: string,
-  recipientPhone: string,
-  inboundText: string,
-  languageHint?: string,
-) {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const response = await fetch(`${supabaseUrl}/functions/v1/ai-agent-reply`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      user_id: account.user_id,
+interface InboundForAgent {
+  /** The row the caller already enqueued, or null when it could not be written. */
+  outboxId: string | null;
+  phoneNumberId: string;
+  from: string;
+  conversationId: string;
+  /** What the rules and the model may read: the placeholder, never a sender-chosen filename. */
+  promptSafeText: string;
+  media: {
+    rowId: string | null;
+    id: string | null;
+    url: string | null;
+    kind: string;
+    mime: string;
+    caption: string | null;
+  } | null;
+}
+
+/**
+ * Hands one inbound message to the AI agent. The ai-agent-reply function enforces its own
+ * gates (enabled flag, engagement mode, human assignment, 24h window, cooldown, daily cap).
+ *
+ * The work item was already recorded by the caller, one statement after the insert that
+ * consumes Meta's redelivery -- see the enqueue there for why that ordering is the whole
+ * guarantee. Everything from here runs in the background, which is ~50s against a 60s
+ * worker ceiling, and is recoverable precisely because the row already exists.
+ */
+async function replyThroughAgent(
+  adminClient: any,
+  account: any,
+  accessToken: string | null,
+  inbound: InboundForAgent,
+): Promise<void> {
+  const { from, conversationId, media, outboxId } = inbound;
+
+  // Both branches run in the background now. The text-only path used to fire and forget
+  // with a bare .catch(), which dropped replies just as readily as the media path did.
+  await runInBackground("whatsapp agent reply", async () => {
+    const understood = await understandInbound(adminClient, account, accessToken, from, media);
+
+    // The agent owns the row from here and settles every outcome itself. A POST that never
+    // reaches it leaves the row pending under its lease -- what recovery is for.
+    await dispatchAgentReply({
+      userId: account.user_id,
       platform: "whatsapp",
-      social_account_id: account.id,
-      conversation_id: conversationId,
-      phone_number_id: phoneNumberId,
-      recipient_phone: recipientPhone,
-      inbound_text: inboundText,
-      ...(languageHint ? { language_hint: languageHint } : {}),
-    }),
+      socialAccountId: account.id,
+      conversationId,
+      recipientId: from,
+      inboundText: understood.text ?? inbound.promptSafeText,
+      phoneNumberId: inbound.phoneNumberId,
+      languageHint: understood.languageHint,
+      outboxId,
+    });
   });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    console.error(`[whatsapp-webhook] ai-agent-reply returned ${response.status}: ${text.slice(0, 200)}`);
+}
+
+/**
+ * The media's transcript or description, or nulls when there is nothing to read.
+ *
+ * `text: null` means "use the caller's placeholder" rather than "empty message" -- an empty
+ * string here would hand the agent a blank customer message.
+ */
+async function understandInbound(
+  // deno-lint-ignore no-explicit-any
+  adminClient: any,
+  // deno-lint-ignore no-explicit-any
+  account: any,
+  accessToken: string | null,
+  from: string,
+  media: InboundForAgent["media"],
+): Promise<{ text: string | null; languageHint: string | undefined }> {
+  if (!media) return { text: null, languageHint: undefined };
+
+  const outcome = await runInboundMediaUnderstanding(adminClient, {
+    account: {
+      id: account.id,
+      user_id: account.user_id,
+      platform_user_id: account.platform_user_id,
+      connection_mode: account.connection_mode,
+      access_token: accessToken,
+      account_metadata: account.account_metadata,
+    },
+    // Keys the per-sender sub-cap: the customer's phone number, so one number cannot spend
+    // the account's whole daily media allowance.
+    senderId: from,
+    messageRowId: media.rowId,
+    mediaId: media.id,
+    mediaUrl: media.url,
+    mimeType: media.mime,
+    caption: media.caption,
+    platform: "whatsapp",
+  });
+
+  if (outcome.understood) {
+    // The transcript's detected language beats counting characters in text that now carries
+    // an English data-marker (see detectReplyLanguage).
+    return { text: outcome.agentText, languageHint: outcome.languageCode };
   }
+  logSkippedUnderstanding("whatsapp-webhook", outcome.reason);
+  return { text: null, languageHint: undefined };
 }
 
 async function resolveMediaUrl(mediaId: string | undefined, token: string | null): Promise<string | null> {

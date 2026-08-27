@@ -8,10 +8,13 @@ import {
   logSkippedUnderstanding,
   runInboundMediaUnderstanding,
 } from "../_shared/inboundMediaPipeline.ts";
+import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
+import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { MetaMessagingFetcher } from "../_shared/inboundMediaFetchers.ts";
 import {
   attachmentList,
   firstReadableAttachment,
+  type InboundAttachment,
   leadPlaceholder,
   noteUnreadAttachments,
 } from "./attachments.ts";
@@ -304,60 +307,16 @@ Deno.serve(async (req) => {
           // Deterministic rules outrank the AI; only unclaimed messages reach
           // the agent. Echoes/receipts never get here (filtered above).
           if (automationHandler === "internal" && !ruleReplied) {
-            const unread = attachments.length - (readable ? 1 : 0);
-
-            if (readable && readable.url) {
-              // Understand the media FIRST, then hand the agent the description instead of
-              // "[Image]". The download and the model call run off the response path to
-              // keep Meta's webhook fast -- and the agent trigger lives INSIDE that
-              // continuation, because firing it before the text exists is this whole bug.
-              await runInBackground("facebook-instagram inbound media understanding", async () => {
-                const outcome = await runInboundMediaUnderstanding(adminClient, {
-                  account: {
-                    id: account.id,
-                    user_id: account.user_id,
-                    platform_user_id: account.platform_user_id,
-                    // No access_token on purpose. Meta's attachment URL is already signed,
-                    // and supplying a token would hand the fetch to CloudGraphFetcher,
-                    // which replays the page token to a CDN host that never asked for it.
-                    account_metadata: account.account_metadata,
-                  },
-                  // Keys the per-sender sub-cap, so one Messenger user cannot spend the
-                  // page's whole daily media allowance.
-                  senderId,
-                  // Facebook and Instagram messages are not rows in whatsapp_messages, so
-                  // there is nothing to write the result back to -- the agent gets it
-                  // directly and the transcript is not retained.
-                  messageRowId: null,
-                  mediaUrl: readable.url,
-                  // Meta sends no mime; its own word for the attachment is all we have.
-                  kindHint: readable.kind,
-                  caption: event.message.text || null,
-                  platform,
-                }, {
-                  // Bounds which origins this fetch may reach. The generic URL fetcher
-                  // would download from anywhere, which is not what the spec promises for
-                  // inbound media even when the URL arrived over a verified webhook.
-                  fetchers: [new MetaMessagingFetcher()],
-                });
-
-                if (!outcome.understood) {
-                  logSkippedUnderstanding("fb-ig-webhook", outcome.reason);
-                }
-                // Understood or not, the agent still replies -- it just falls back to the
-                // placeholder, which is exactly the previous behaviour.
-                await triggerAiAgentReply(
-                  account, platform, conversationId, senderId,
-                  noteUnreadAttachments(outcome.understood ? outcome.agentText : messageText, unread),
-                  outcome.understood ? outcome.languageCode : undefined,
-                );
-              });
-            } else {
-              triggerAiAgentReply(
-                account, platform, conversationId, senderId,
-                noteUnreadAttachments(messageText, unread),
-              ).catch((e) => console.error("[fb-ig-webhook] AI agent dispatch failed:", e?.message || e));
-            }
+            await replyThroughAgent(adminClient, account, platform, {
+              messageId: event.message.mid || `${senderId}:${event.timestamp}`,
+              inboundAt: event.timestamp ? new Date(event.timestamp).toISOString() : new Date().toISOString(),
+              senderId,
+              conversationId,
+              messageText,
+              caption: event.message.text || null,
+              attachments,
+              readable,
+            });
           }
         }
 
@@ -581,36 +540,123 @@ async function processAutoReplies(
 // Fire-and-forget hand-off to the internal AI agent reply engine. The
 // ai-agent-reply function enforces its own gates (enabled flag, engagement
 // mode, human assignment, cooldown, daily cap).
-async function triggerAiAgentReply(
+interface InboundForAgent {
+  messageId: string;
+  inboundAt: string;
+  senderId: string;
+  conversationId: string;
+  /** The placeholder as it stands before understanding: what the agent gets if that fails. */
+  messageText: string;
+  caption: string | null;
+  attachments: unknown[];
+  readable: InboundAttachment | null;
+}
+
+/**
+ * Hands one inbound message to the AI agent, durably.
+ *
+ * The work item is recorded BEFORE the background continuation starts, because that
+ * continuation is ~50s of best-effort work against a 60s worker ceiling and a kill anywhere
+ * in it used to drop the customer's message with no trace. Its own function so the
+ * ownership early-exit is local: this used to sit two loops deep, where a `return` would
+ * have ended the whole webhook without a Response and dropped the sibling events.
+ */
+async function replyThroughAgent(
+  // deno-lint-ignore no-explicit-any
+  adminClient: any,
   account: SocialAccountForMessaging,
   platform: "facebook" | "instagram",
-  conversationId: string,
-  senderId: string,
-  inboundText: string,
-  languageHint?: string,
-) {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const response = await fetch(`${supabaseUrl}/functions/v1/ai-agent-reply`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      user_id: account.user_id,
-      platform,
-      social_account_id: account.id,
-      conversation_id: conversationId,
-      recipient_phone: senderId,
-      inbound_text: inboundText,
-      // Without this the reply endpoint falls back to counting characters, and the English
-      // data-marker wrapping an Arabic transcript wins. Same hint the WhatsApp path sends.
-      ...(languageHint ? { language_hint: languageHint } : {}),
-    }),
+  inbound: InboundForAgent,
+): Promise<void> {
+  const { senderId, conversationId, readable } = inbound;
+  const unread = inbound.attachments.length - (readable ? 1 : 0);
+
+  const enqueued = await enqueueAgentReply(adminClient, {
+    socialAccountId: account.id,
+    platform,
+    messageId: inbound.messageId,
+    conversationId,
+    recipientId: senderId,
+    inboundText: noteUnreadAttachments(inbound.messageText, unread),
+    inboundAt: inbound.inboundAt,
+    mediaUrl: readable?.url ?? null,
+    mediaKind: readable?.kind ?? null,
+    mediaCaption: inbound.caption,
+    unreadAttachments: unread,
   });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    console.error(`[fb-ig-webhook] ai-agent-reply returned ${response.status}: ${text.slice(0, 200)}`);
-  }
+  // A redelivery is not a second customer message. The first invocation owns the row and
+  // holds its lease; the recovery job is the backstop if that invocation dies. This one
+  // acknowledges and stops rather than starting a parallel reply.
+  if (enqueued && !enqueued.newlyEnqueued) return;
+  // A record that could not be made at all is the one degradation accepted: reply anyway.
+  const outboxId = enqueued?.id ?? null;
+
+  // Understand the media FIRST, then hand the agent the description instead of "[Image]".
+  // The download and the model call run off the response path to keep Meta's webhook fast,
+  // and the agent trigger lives INSIDE that continuation because firing it before the text
+  // exists was the original bug.
+  await runInBackground("facebook-instagram agent reply", async () => {
+    const understood = await understandInbound(adminClient, account, platform, senderId, inbound);
+
+    // The agent owns the row from here: it settles every outcome itself. A POST that never
+    // reaches it leaves the row pending under its lease, which is exactly what recovery is
+    // for.
+    await dispatchAgentReply({
+      userId: account.user_id,
+      platform,
+      socialAccountId: account.id,
+      conversationId,
+      recipientId: senderId,
+      inboundText: noteUnreadAttachments(understood.text, unread),
+      // Without this the reply endpoint falls back to counting characters, and the English
+      // data-marker wrapping an Arabic transcript wins.
+      languageHint: understood.languageHint,
+      outboxId,
+    });
+  });
+}
+
+/** The attachment's description, or the placeholder when nothing could read it. */
+async function understandInbound(
+  // deno-lint-ignore no-explicit-any
+  adminClient: any,
+  account: SocialAccountForMessaging,
+  platform: "facebook" | "instagram",
+  senderId: string,
+  inbound: InboundForAgent,
+): Promise<{ text: string; languageHint: string | undefined }> {
+  const { readable } = inbound;
+  if (!readable?.url) return { text: inbound.messageText, languageHint: undefined };
+
+  const outcome = await runInboundMediaUnderstanding(adminClient, {
+    account: {
+      id: account.id,
+      user_id: account.user_id,
+      platform_user_id: account.platform_user_id,
+      // No access_token on purpose. Meta's attachment URL is already signed, and supplying a
+      // token would hand the fetch to CloudGraphFetcher, which replays the page token to a
+      // CDN host that never asked for it.
+      account_metadata: account.account_metadata,
+    },
+    // Keys the per-sender sub-cap, so one Messenger user cannot spend the page's whole daily
+    // media allowance.
+    senderId,
+    // Facebook and Instagram messages are not rows in whatsapp_messages, so there is nothing
+    // to write the result back to -- the agent gets it directly.
+    messageRowId: null,
+    mediaUrl: readable.url,
+    // Meta sends no mime; its own word for the attachment is all we have.
+    kindHint: readable.kind,
+    caption: inbound.caption,
+    platform,
+  }, {
+    // Bounds which origins this fetch may reach. The generic URL fetcher would download from
+    // anywhere, which is not what the spec promises for inbound media even when the URL
+    // arrived over a verified webhook.
+    fetchers: [new MetaMessagingFetcher()],
+  });
+
+  if (outcome.understood) return { text: outcome.agentText, languageHint: outcome.languageCode };
+  logSkippedUnderstanding("fb-ig-webhook", outcome.reason);
+  return { text: inbound.messageText, languageHint: undefined };
 }

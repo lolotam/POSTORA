@@ -273,6 +273,7 @@ export type Database = {
           created_at: string | null
           error: string | null
           id: string
+          idempotency_key: string | null
           inbound_text: string | null
           latency_ms: number | null
           platform: string | null
@@ -289,6 +290,7 @@ export type Database = {
           created_at?: string | null
           error?: string | null
           id?: string
+          idempotency_key?: string | null
           inbound_text?: string | null
           latency_ms?: number | null
           platform?: string | null
@@ -305,6 +307,7 @@ export type Database = {
           created_at?: string | null
           error?: string | null
           id?: string
+          idempotency_key?: string | null
           inbound_text?: string | null
           latency_ms?: number | null
           platform?: string | null
@@ -3366,6 +3369,101 @@ export type Database = {
           used?: boolean | null
         }
         Relationships: []
+      }
+      pending_agent_replies: {
+        Row: {
+          attempts: number
+          claimed_at: string | null
+          comment_id: string | null
+          conversation_id: string
+          created_at: string
+          error: string | null
+          generated_reply: string | null
+          generated_tool_calls: Json | null
+          id: string
+          inbound_at: string
+          inbound_text: string
+          ingress_seq: number
+          language_hint: string | null
+          lease_expires_at: string | null
+          media_caption: string | null
+          media_expires_at: string | null
+          media_kind: string | null
+          media_url: string | null
+          message_id: string
+          platform: string
+          recipient_id: string
+          sent_at: string | null
+          social_account_id: string
+          status: string
+          unread_attachments: number
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          claimed_at?: string | null
+          comment_id?: string | null
+          conversation_id: string
+          created_at?: string
+          error?: string | null
+          generated_reply?: string | null
+          generated_tool_calls?: Json | null
+          id?: string
+          inbound_at: string
+          inbound_text: string
+          ingress_seq?: number
+          language_hint?: string | null
+          lease_expires_at?: string | null
+          media_caption?: string | null
+          media_expires_at?: string | null
+          media_kind?: string | null
+          media_url?: string | null
+          message_id: string
+          platform: string
+          recipient_id: string
+          sent_at?: string | null
+          social_account_id: string
+          status?: string
+          unread_attachments?: number
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          claimed_at?: string | null
+          comment_id?: string | null
+          conversation_id?: string
+          created_at?: string
+          error?: string | null
+          generated_reply?: string | null
+          generated_tool_calls?: Json | null
+          id?: string
+          inbound_at?: string
+          inbound_text?: string
+          ingress_seq?: number
+          language_hint?: string | null
+          lease_expires_at?: string | null
+          media_caption?: string | null
+          media_expires_at?: string | null
+          media_kind?: string | null
+          media_url?: string | null
+          message_id?: string
+          platform?: string
+          recipient_id?: string
+          sent_at?: string | null
+          social_account_id?: string
+          status?: string
+          unread_attachments?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pending_agent_replies_social_account_id_fkey"
+            columns: ["social_account_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       platform_posts: {
         Row: {
@@ -6890,6 +6988,17 @@ export type Database = {
           full_name: string
         }[]
       }
+      advance_agent_reply: {
+        Args: {
+          p_id: string
+          p_from: string
+          p_to: string
+          p_generated_reply?: string
+          p_error?: string
+          p_tool_calls?: Json
+        }
+        Returns: boolean
+      }
       algorithm_sign: {
         Args: { algorithm: string; secret: string; signables: string }
         Returns: string
@@ -6927,6 +7036,14 @@ export type Database = {
           p_max_requests: number
         }
         Returns: Json
+      }
+      claim_agent_replies: {
+        Args: {
+          p_limit: number
+          p_lease_seconds: number
+          p_max_attempts: number
+        }
+        Returns: Database["public"]["Tables"]["pending_agent_replies"]["Row"][]
       }
       claim_ai_knowledge_excel_source: {
         Args: Record<PropertyKey, never>
@@ -7007,6 +7124,25 @@ export type Database = {
           max_posts_per_month: number
           max_posts_per_day: number
           max_media_uploads_per_day: number
+        }[]
+      }
+      enqueue_agent_reply: {
+        Args: {
+          p_social_account_id: string
+          p_platform: string
+          p_message_id: string
+          p_conversation_id: string
+          p_recipient_id: string
+          p_inbound_text: string
+          p_inbound_at: string
+          p_media?: Json
+          p_language_hint?: string
+          p_comment_id?: string
+          p_lease_seconds?: number
+        }
+        Returns: {
+          id: string
+          newly_enqueued: boolean
         }[]
       }
       ensure_personal_workspace: {
@@ -7409,6 +7545,10 @@ export type Database = {
       prune_all_ai_knowledge_entities: {
         Args: Record<PropertyKey, never>
         Returns: number
+      }
+      reap_exhausted_agent_replies: {
+        Args: { p_max_attempts: number }
+        Returns: Database["public"]["Tables"]["pending_agent_replies"]["Row"][]
       }
       redeem_coupon: {
         Args: { p_subscription_id?: string; p_user_id: string; p_code: string }

@@ -7,6 +7,9 @@
 import { matchAutoReplyRule, type AutoReplyMatch, type AutoReplyRule } from "./autoReplyRules.ts";
 import { replyToComment } from "./commentActions.ts";
 import { buildCommentConversationId, postConversationLikePrefix } from "./commentConversation.ts";
+import { enqueueAgentReply } from "./pendingReplies.ts";
+import { dispatchAgentReply } from "./agentReplyDispatch.ts";
+import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 
 export interface CommentAutomationAccount {
   id: string;
@@ -87,33 +90,26 @@ async function ruleAlreadyReplied(
   return (count || 0) > 0;
 }
 
+/**
+ * Hands the comment to the agent. The work item was already recorded by the caller, ahead of
+ * the rule lookup -- see the enqueue in handleCommentInternally for why that ordering is the
+ * guarantee. The agent settles the row itself from here.
+ */
 async function dispatchToAiAgent(
   account: CommentAutomationAccount,
   input: CommentAutomationInput,
-  conversationId: string,
-  fetcher: typeof fetch,
+  context: { conversationId: string; fetcher: typeof fetch; authorKey: string; outboxId: string | null },
 ): Promise<void> {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const response = await fetcher(`${supabaseUrl}/functions/v1/ai-agent-reply`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: account.user_id,
-      platform: account.platform,
-      social_account_id: account.id,
-      conversation_id: conversationId,
-      // Unused by the comment sender, but the request contract requires it and it keeps the
-      // log rows readable.
-      recipient_phone: input.author.id || input.author.username || input.comment.id,
-      inbound_text: input.comment.text,
-      comment_id: input.comment.id,
-    }),
-  });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    console.error(`[comment-automation] ai-agent-reply returned ${response.status}: ${body.slice(0, 200)}`);
-  }
+  await dispatchAgentReply({
+    userId: account.user_id,
+    platform: account.platform,
+    socialAccountId: account.id,
+    conversationId: context.conversationId,
+    recipientId: context.authorKey,
+    inboundText: input.comment.text,
+    commentId: input.comment.id,
+    outboxId: context.outboxId,
+  }, context.fetcher);
 }
 
 // Callers must have already established that this comment is not the account's own (see
@@ -133,6 +129,43 @@ export async function handleCommentInternally(
   const authorKey = input.author.id || input.author.username || input.comment.id;
   const conversationId = buildCommentConversationId(account.id, postId, authorKey);
 
+  // The outbox row is created FIRST, ahead of the rule lookup and any reply.
+  //
+  // Both callers -- the Facebook/Instagram webhook and the Threads ingest -- consume their
+  // social_inbox_events claim before calling this, and that claim is what makes a platform
+  // redelivery a no-op. So every await between the claim and this line is a window in which
+  // a killed worker loses the comment for good: the platform will not tell us again, and no
+  // row exists for recovery to find. It used to hold the rules query and, on a matched rule,
+  // a network send.
+  //
+  // What remains uncovered is the claim itself plus the runInBackground hand-off, which is
+  // scheduling rather than I/O. Closing that last gap needs the claim and the enqueue in one
+  // transaction -- a shared RPC across three call sites, for a window measured in
+  // instructions.
+  const enqueued = await enqueueAgentReply(admin, {
+    socialAccountId: account.id,
+    platform: account.platform,
+    messageId: input.comment.id,
+    conversationId,
+    // Unused by the comment sender, but the request contract requires it and it keeps the
+    // log rows readable.
+    recipientId: authorKey,
+    inboundText: input.comment.text,
+    inboundAt: now.toISOString(),
+    // Set, and this is what makes a recovered reply a public comment rather than a DM to
+    // the author.
+    commentId: input.comment.id,
+  });
+  // Another invocation already owns this comment; it or recovery will answer.
+  if (enqueued && !enqueued.newlyEnqueued) return "skipped";
+  const outboxId = enqueued?.id ?? null;
+
+  /** Nothing will be sent through the agent, so the row must not outlive this decision. */
+  const abandon = async (outcome: CommentAutomationOutcome, reason: string) => {
+    if (outboxId) await cancelOutboxRow(admin, outboxId, reason);
+    return outcome;
+  };
+
   let match: ReturnType<typeof matchAutoReplyRule>;
   try {
     match = matchAutoReplyRule(await loadActiveRules(admin, account), input.comment.text, now);
@@ -140,16 +173,39 @@ export async function handleCommentInternally(
     // The DM path lets the agent answer when rule evaluation fails. Publicly, replying while
     // the rule configuration is in an unknown state is the worse outcome, so this fails closed.
     console.error("[comment-automation] rule lookup failed, not replying:", (error as Error).message);
-    return "skipped";
+    return await abandon("skipped", "rule_lookup_failed");
   }
 
   if (!match) {
-    await dispatchToAiAgent(account, input, conversationId, fetcher);
+    await dispatchToAiAgent(account, input, { conversationId, fetcher, authorKey, outboxId });
     return "agent_dispatched";
   }
 
-  if (await ruleAlreadyReplied(admin, { account, match, conversationId, postId, now })) {
-    return "rule_suppressed";
+  try {
+    if (await ruleAlreadyReplied(admin, { account, match, conversationId, postId, now })) {
+      return await abandon("rule_suppressed", "rule_suppressed");
+    }
+  } catch (error) {
+    // Same reasoning as the rule lookup above: publicly, replying while the throttle's state
+    // is unknown is the worse outcome. A matched rule claims the comment either way, so the
+    // agent must not inherit it.
+    console.error("[comment-automation] suppression check failed, not replying:", (error as Error).message);
+    return await abandon("skipped", "suppression_check_failed");
+  }
+
+  // The rule owns this comment from here, so the outbox row is released BEFORE the send.
+  //
+  // Sending first left the row `pending`: on the success path nothing cancelled it at all,
+  // so every rule-answered comment would ALSO get an AI reply once the lease lapsed. Even
+  // with a cancel afterwards, a kill between the send and the cancel produces the same
+  // duplicate. Cancelling first cannot: if the send then fails, the comment goes unanswered
+  // by the AI too, which is exactly the existing precedence -- a matched rule suppresses the
+  // agent whether or not its delivery succeeded.
+  if (outboxId && !await cancelOutboxRow(admin, outboxId, "rule_replied")) {
+    // The row is no longer ours, so someone else is answering this comment. Sending now
+    // would be the duplicate.
+    console.warn(`[comment-automation] rule stood down on ${input.comment.id}: the outbox row moved on`);
+    return "skipped";
   }
 
   // Recorded in `finally`, before any send failure can propagate. The usage row is the
