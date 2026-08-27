@@ -13,7 +13,6 @@ import {
   Facebook,
   AtSign,
   Video,
-  ExternalLink,
   CheckCircle2,
   Loader2,
   Timer,
@@ -21,7 +20,6 @@ import {
   DollarSign,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { SUPABASE_STUDIO_URL } from "@/lib/supabaseStudio";
 import { useToast } from "@/hooks/use-toast";
 
 const APIFY_ACTOR_KEYS = [
@@ -243,14 +241,6 @@ export function ScrapingServicesSettings() {
               <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Apify Actor Endpoints
               </span>
-              <a
-                href={SUPABASE_STUDIO_URL}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex items-center gap-1 text-[10px] text-primary hover:underline"
-              >
-                <ExternalLink className="w-3 h-3" /> Manage API Key
-              </a>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
