@@ -5,6 +5,7 @@ import { EVOLUTION_MEDIA_TYPES, sendMessage, type MessageSendAccount } from "../
 import { describeMessagingAccount } from "../_shared/n8nMessagingDispatch.ts";
 import { type CommentActionResult, deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
+import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import {
   fetchGlobalSetting,
@@ -699,18 +700,33 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
 
     for (let i = 0; i < mediaBase64Array.length; i++) {
       const base64Data = mediaBase64Array[i];
-      if (typeof base64Data === 'string' && base64Data.trim()) {
-        try {
-          const mediaFile = await uploadFileFromBase64(supabase, userId, base64Data.trim());
-          if (mediaFile?.id) {
-            finalMediaFileIds.push(mediaFile.id);
-          }
-        } catch (err: any) {
-          uploadErrors.push(`base64[${i}]: ${err.message}`);
+      const normalized = normalizeBase64Media(typeof base64Data === 'string' ? base64Data : '', undefined);
+      if (!normalized.ok) {
+        uploadErrors.push(`base64[${i}]: ${describeBase64Failure(normalized.reason)}`);
+        continue;
+      }
+      try {
+        const mediaFile = await uploadFileFromBase64(supabase, userId, normalized.dataUrl);
+        if (mediaFile?.id) {
+          finalMediaFileIds.push(mediaFile.id);
         }
+      } catch (err: any) {
+        uploadErrors.push(`base64[${i}]: ${err.message}`);
       }
     }
 
+    // Previously a console.warn, which meant a post whose image failed to upload went out
+    // as text and reported success. Someone asking for a post WITH media has not been
+    // served by a post without it, and nothing downstream reported the difference.
+    if (uploadErrors.length > 0 && finalMediaFileIds.length === 0) {
+      return new Response(
+        JSON.stringify({
+          error: 'None of the supplied base64 media could be uploaded.',
+          details: uploadErrors,
+        }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
     if (uploadErrors.length > 0) {
       console.warn('Some base64 media failed to upload:', uploadErrors);
     }
@@ -1231,7 +1247,15 @@ async function handleUploadMedia(supabase: any, userId: string, request: Request
   // Handle JSON body (URLs or base64 data)
   if (contentType.includes('application/json')) {
     const body = await request.json();
-    const { media_url, media_urls, file_data, files_data, file_name, file_names } = body;
+    // `media_base64` / `filename` are what POST /api/v1/post and the MCP `upload_media`
+    // tool have always sent. Only `file_data` / `file_name` were read here, so every
+    // base64 upload through those clients fell through to the "no media" branch below and
+    // came back as a 400 that looked like the caller had sent nothing at all.
+    const {
+      media_url, media_urls,
+      file_data, files_data, file_name, file_names,
+      media_base64, filename, mime_type,
+    } = body;
 
     const uploadedFiles: any[] = [];
     const errors: any[] = [];
@@ -1248,11 +1272,19 @@ async function handleUploadMedia(supabase: any, userId: string, request: Request
     }
 
     // Handle single or multiple base64 data
-    const dataItems = files_data || (file_data ? [file_data] : []);
-    const names = file_names || (file_name ? [file_name] : []);
+    const firstBase64 = file_data || media_base64;
+    const dataItems = files_data || (firstBase64 ? [firstBase64] : []);
+    const names = file_names || (file_name || filename ? [file_name || filename] : []);
     for (let i = 0; i < dataItems.length; i++) {
+      // The uploader wants a data URL; clients send raw base64 just as often, and the
+      // tool description promises both.
+      const normalized = normalizeBase64Media(dataItems[i], mime_type);
+      if (!normalized.ok) {
+        errors.push({ index: i, error: describeBase64Failure(normalized.reason) });
+        continue;
+      }
       try {
-        const mediaFile = await uploadFileFromBase64(supabase, userId, dataItems[i], names[i]);
+        const mediaFile = await uploadFileFromBase64(supabase, userId, normalized.dataUrl, names[i]);
         uploadedFiles.push(mediaFile);
       } catch (error: any) {
         errors.push({ index: i, error: error.message });
