@@ -1,4 +1,5 @@
 import { postWebhook } from "./webhookSecurity.ts";
+import { recordN8nDispatch } from "./automationDispatchLog.ts";
 
 export type MessagePlatform = "whatsapp" | "instagram" | "facebook";
 
@@ -293,6 +294,9 @@ export async function dispatchN8nEvent(
   // webhooks would otherwise warn on each one. Having webhooks but matching none is the
   // actionable case (inactive, blank url, or an events list that omits this platform).
   if (unique.length === 0) {
+    // Logged even with nowhere to send: "routed to n8n, nothing was listening" is the
+    // answer to "why did no one reply", and it is invisible without a row.
+    await recordN8nDispatch(adminClient, userId, payload, 0);
     if (configured > 0) {
       console.warn(
         `[n8n-dispatch] ${configured} webhook(s) configured for user ${userId} but none subscribed to ${aliasEvent(payload)}`,
@@ -323,6 +327,7 @@ export async function dispatchN8nEvent(
   };
 
   await Promise.all(Array.from({ length: Math.min(MAX_IN_FLIGHT, unique.length) }, () => deliver()));
+  await recordN8nDispatch(adminClient, userId, payload, unique.length);
   if (skipped > 0) {
     console.error(`[n8n-dispatch] fan-out deadline hit; ${skipped}/${unique.length} destination(s) not delivered`);
   }
