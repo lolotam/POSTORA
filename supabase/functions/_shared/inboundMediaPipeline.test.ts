@@ -8,6 +8,7 @@ import {
   resolveMediaUnderstandingMode,
   runInboundMediaUnderstanding,
 } from "./inboundMediaPipeline.ts";
+import type { PipelineDeps } from "./inboundMediaPipeline.ts";
 import type { InboundMediaFetcher, MediaRef } from "./inboundMediaFetchers.ts";
 
 /** Minimal stand-in for the supabase-js chain the pipeline uses. */
@@ -734,8 +735,11 @@ const AUDIO_DEPS = {
 /** Runs one understanding and hands back the arguments the reservation was called with. */
 async function reservationArgsFor(
   senderId: string,
-  stubOpts: Record<string, unknown> = {},
-  deps: Record<string, unknown> = {},
+  // Concrete types, not Record<string, unknown>: a misspelled `senderCapSettting` would
+  // otherwise be accepted, the test would silently assert the default, and it would pass
+  // while proving nothing.
+  stubOpts: Parameters<typeof stubAdmin>[0] = {},
+  deps: PipelineDeps = {},
 ) {
   const calls: { name: string; args: Record<string, unknown> }[] = [];
   await runInboundMediaUnderstanding(
