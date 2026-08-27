@@ -6,9 +6,8 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { Loader2, Save, Video, RotateCcw, Globe, Image, Bookmark, CreditCard, Palette, Brain, Cpu, Mail, AlertTriangle, UserCheck, BellRing, type LucideIcon } from "lucide-react";
+import { Loader2, Save, Video, RotateCcw, Globe, Image, Bookmark, CreditCard, Palette, Brain, Cpu, AlertTriangle, UserCheck, BellRing, type LucideIcon } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
-import { SUPABASE_STUDIO_URL } from "@/lib/supabaseStudio";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { AIConfigurationTab } from "@/pages/admin/AIConfigurationTab";
@@ -417,31 +416,6 @@ export default function AdminSettings() {
 
             {/* AI Agent (messaging) Models */}
             <AdminAiAgentSection />
-
-
-            {/* Email Templates */}
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-7 h-7 rounded-md bg-primary/10 flex items-center justify-center">
-                    <Mail className="w-3.5 h-3.5 text-primary" />
-                  </div>
-                  <span className="text-sm font-medium">Email Templates</span>
-                </div>
-                <p className="text-xs text-muted-foreground mb-3">
-                  Email templates are managed in the Supabase Dashboard under Authentication → Email Templates.
-                </p>
-                <Button variant="outline" size="sm" asChild>
-                  <a
-                    href={SUPABASE_STUDIO_URL}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open Supabase Dashboard
-                  </a>
-                </Button>
-              </CardContent>
-            </Card>
           </div>
         )}
       </div>
