@@ -43,43 +43,33 @@ export async function takeOutboxRow(
   if (row.status === "ready_to_send" && typeof row.generated_reply === "string") {
     return { mode: "redeliver", text: row.generated_reply };
   }
-  if (row.status === "pending" && await advanceReply(admin, outboxId, "pending", "running")) {
+  if (row.status === "pending" && await advanceReply(admin, { id: outboxId, from: "pending", to: "running" })) {
     return { mode: "generate" };
   }
   return { mode: "refuse", status: row.status };
 }
 
 /**
- * Sends a reply through three durable steps, each confirmed before the next:
+ * The delivery half, shared by both entry points below:
  *
- *   running       -> ready_to_send   the text is now durable
- *   ready_to_send -> sending         a delivery attempt is about to begin
- *   sending       -> sent            the provider returned
+ *   ready_to_send -> sending   a delivery attempt is about to begin
+ *   sending       -> sent      the provider returned
  *
- * The first two are fail-closed: a refusal means the reply is NOT sent. An unpersisted reply
- * that goes out is one nothing can reconcile afterwards, and a row another worker has
- * already moved to `sending` is being delivered by that worker.
+ * The first is fail-closed: a row another worker has already moved to `sending` is being
+ * delivered by that worker, and sending again is the duplicate reply this design prevents.
  *
- * The last is deliberately unchecked. By then the customer has the message; a failed
+ * The second is deliberately unchecked. By then the customer has the message; a failed
  * bookkeeping update must not turn a delivered reply into an error. The row stays in
  * `sending`, its lease lapses, and recovery classifies it delivery_unknown -- which is true.
- *
- * `text` may be null when the row is already `ready_to_send` (a redelivery): the first
- * transition is then skipped rather than refused, and the stored text is what goes out.
  */
-export async function deliverThroughOutbox(
+async function sendAndSettle(
   // deno-lint-ignore no-explicit-any
   admin: any,
   outboxId: string,
   text: string,
   send: (text: string) => Promise<string>,
-  options: { alreadyPersisted?: boolean } = {},
 ): Promise<string> {
-  if (!options.alreadyPersisted) {
-    const persisted = await advanceReply(admin, outboxId, "running", "ready_to_send", { generatedReply: text });
-    if (!persisted) throw new Error("could not persist the reply before sending; refusing to send");
-  }
-  const claimed = await advanceReply(admin, outboxId, "ready_to_send", "sending");
+  const claimed = await advanceReply(admin, { id: outboxId, from: "ready_to_send", to: "sending" });
   if (!claimed) throw new Error("another worker is already delivering this reply");
 
   let outboundMessageId: string;
@@ -88,14 +78,55 @@ export async function deliverThroughOutbox(
   } catch (error) {
     // Only reached when this process survives the throw. A killed isolate runs no catch --
     // which is why `sending` is durable and this is a courtesy, not the guarantee.
-    await advanceReply(admin, outboxId, "sending", "delivery_unknown", {
+    await advanceReply(admin, {
+      id: outboxId,
+      from: "sending",
+      to: "delivery_unknown",
       error: (error as Error)?.message ?? String(error),
     });
     throw error;
   }
 
-  await advanceReply(admin, outboxId, "sending", "sent");
+  await advanceReply(admin, { id: outboxId, from: "sending", to: "sent" });
   return outboundMessageId;
+}
+
+/**
+ * Sends a freshly generated reply, persisting it first.
+ *
+ * `running -> ready_to_send` is fail-closed: an unpersisted reply that goes out is one
+ * nothing can reconcile afterwards, and the customer is better served by the recovery pass
+ * than by a message no record exists of.
+ */
+export async function deliverGeneratedReply(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  outboxId: string,
+  text: string,
+  send: (text: string) => Promise<string>,
+): Promise<string> {
+  const persisted = await advanceReply(admin, {
+    id: outboxId,
+    from: "running",
+    to: "ready_to_send",
+    generatedReply: text,
+  });
+  if (!persisted) throw new Error("could not persist the reply before sending; refusing to send");
+  return await sendAndSettle(admin, outboxId, text, send);
+}
+
+/**
+ * Sends text an earlier attempt already persisted. Regenerates nothing, so no tool call,
+ * escalation or notification can repeat.
+ */
+export function deliverStoredReply(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  outboxId: string,
+  text: string,
+  send: (text: string) => Promise<string>,
+): Promise<string> {
+  return sendAndSettle(admin, outboxId, text, send);
 }
 
 /**
@@ -113,7 +144,7 @@ export async function releaseAfterError(
   outcome: { sideEffectsHappened: boolean; error: string },
 ): Promise<void> {
   if (outcome.sideEffectsHappened) return;
-  await advanceReply(admin, outboxId, "running", "pending", { error: outcome.error });
+  await advanceReply(admin, { id: outboxId, from: "running", to: "pending", error: outcome.error });
 }
 
 /** A gate closed or the agent chose silence: terminal, and nothing was sent. */
@@ -124,5 +155,5 @@ export async function cancelOutboxRow(
   from: "pending" | "running",
   reason: string,
 ): Promise<void> {
-  await advanceReply(admin, outboxId, from, "cancelled", { error: reason });
+  await advanceReply(admin, { id: outboxId, from, to: "cancelled", error: reason });
 }

@@ -124,21 +124,29 @@ export async function enqueueAgentReply(
  * is simply left where it was; its lease lapses; the recovery job classifies it from that
  * state -- which is exactly the truth. Do not "fix" this by making it throw.
  */
+export interface ReplyTransition {
+  id: string;
+  from: PendingReplyStatus;
+  to: PendingReplyStatus;
+  generatedReply?: string | null;
+  error?: string | null;
+}
+
 export async function advanceReply(
   // deno-lint-ignore no-explicit-any
   admin: any,
-  id: string,
-  from: PendingReplyStatus,
-  to: PendingReplyStatus,
-  extra: { generatedReply?: string | null; error?: string | null } = {},
+  transition: ReplyTransition,
 ): Promise<boolean> {
+  // Named fields rather than positional: `from` and `to` are adjacent same-typed strings, and
+  // a transposition would silently move the row backwards through the state machine.
+  const { id, from, to } = transition;
   try {
     const { data, error } = await admin.rpc("advance_agent_reply", {
       p_id: id,
       p_from: from,
       p_to: to,
-      p_generated_reply: extra.generatedReply ?? null,
-      p_error: extra.error?.slice(0, 500) ?? null,
+      p_generated_reply: transition.generatedReply ?? null,
+      p_error: transition.error?.slice(0, 500) ?? null,
     });
     if (error) {
       console.error(`[outbox] ${from} -> ${to} failed for ${id}: ${error.message}`);

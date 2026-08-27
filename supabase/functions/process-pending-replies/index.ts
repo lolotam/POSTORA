@@ -239,7 +239,7 @@ async function settle(admin: any, row: OutboxRow, from: PendingReplyStatus, outc
       console.warn(`[recovery] ${row.id} retryable: ${outcome.detail}`);
       return;
     case "permanent":
-      await advanceReply(admin, row.id, from, "failed", { error: outcome.detail });
+      await advanceReply(admin, { id: row.id, from, to: "failed", error: outcome.detail });
       await surfaceToHumans(admin, row, "recovery_failed", outcome.detail);
       return;
   }
@@ -251,22 +251,22 @@ async function processRow(admin: any, row: OutboxRow): Promise<string> {
 
   switch (action.kind) {
     case "delivery_unknown":
-      await advanceReply(admin, row.id, from, "delivery_unknown", { error: "lease lapsed during a delivery attempt" });
+      await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed during a delivery attempt" });
       await surfaceToHumans(admin, row, "delivery_unknown", "a reply may or may not have reached the customer");
       return action.kind;
     case "hand_to_human":
-      await advanceReply(admin, row.id, from, "delivery_unknown", { error: "lease lapsed while the agent was running" });
+      await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed while the agent was running" });
       await handToHuman(admin, row);
       await surfaceToHumans(admin, row, "delivery_unknown", "the agent was interrupted; a tool or escalation may have run");
       return action.kind;
     case "cancel":
-      await advanceReply(admin, row.id, from, "cancelled", { error: action.reason });
+      await advanceReply(admin, { id: row.id, from, to: "cancelled", error: action.reason });
       return `${action.kind}:${action.reason}`;
     case "deliver_stored":
     case "rerun_agent": {
       const account = await loadAccount(admin, row);
       if (!account) {
-        await advanceReply(admin, row.id, from, "failed", { error: "social account no longer exists" });
+        await advanceReply(admin, { id: row.id, from, to: "failed", error: "social account no longer exists" });
         await surfaceToHumans(admin, row, "recovery_failed", "social account no longer exists");
         return "failed:no_account";
       }

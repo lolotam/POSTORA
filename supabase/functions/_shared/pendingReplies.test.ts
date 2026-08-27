@@ -93,18 +93,20 @@ Deno.test("a text-only message carries an empty media object, not a null one", (
 Deno.test("advanceReply reports the database's verdict, and refuses on error", async () => {
   // This is the confirmed transition. The caller gates a side effect on it, so an RPC error
   // must read as "refused", never as "proceed".
+  const transition = { id: "row-1", from: "ready_to_send", to: "sending" } as const;
+
   const accepted = stubRpc({ data: true });
-  assert(await advanceReply(accepted.admin, "row-1", "ready_to_send", "sending"));
+  assert(await advanceReply(accepted.admin, transition));
   assertEquals(accepted.calls[0].name, "advance_agent_reply");
   assertEquals(accepted.calls[0].args, {
     p_id: "row-1", p_from: "ready_to_send", p_to: "sending", p_generated_reply: null, p_error: null,
   });
 
   const refused = stubRpc({ data: false });
-  assert(!await advanceReply(refused.admin, "row-1", "ready_to_send", "sending"));
+  assert(!await advanceReply(refused.admin, transition));
 
   const errored = stubRpc({ error: { message: "db down" } });
-  assert(!await advanceReply(errored.admin, "row-1", "ready_to_send", "sending"));
+  assert(!await advanceReply(errored.admin, transition));
 });
 
 Deno.test("advanceReply never throws, because a bookkeeping failure must not undo a delivery", async () => {
@@ -112,5 +114,5 @@ Deno.test("advanceReply never throws, because a bookkeeping failure must not und
   // an error response. The row is left in `sending`; its lease lapses; recovery classifies it
   // delivery_unknown -- which is exactly true.
   const admin = { rpc: () => Promise.reject(new Error("socket closed")) };
-  assert(!await advanceReply(admin, "row-1", "sending", "sent"));
+  assert(!await advanceReply(admin, { id: "row-1", from: "sending", to: "sent" }));
 });

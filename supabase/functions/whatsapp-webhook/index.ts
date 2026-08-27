@@ -8,7 +8,7 @@ import {
 } from "../_shared/inboundMediaPipeline.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
-import { isPlaceholderOnly, MEDIA_PLACEHOLDERS, promptSafeInput } from "./messageContent.ts";
+import { isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
@@ -1026,41 +1026,7 @@ async function replyThroughAgent(
   // Both branches run in the background now. The text-only path used to fire and forget
   // with a bare .catch(), which dropped replies just as readily as the media path did.
   await runInBackground("whatsapp agent reply", async () => {
-    let agentInput = inbound.promptSafeText;
-    let languageHint: string | undefined;
-
-    if (media) {
-      // Understand the media FIRST, then hand the agent the transcript instead of
-      // "[Audio message]".
-      const outcome = await runInboundMediaUnderstanding(adminClient, {
-        account: {
-          id: account.id,
-          user_id: account.user_id,
-          platform_user_id: account.platform_user_id,
-          connection_mode: account.connection_mode,
-          access_token: accessToken,
-          account_metadata: account.account_metadata,
-        },
-        // Keys the per-sender sub-cap: the customer's phone number, so one number cannot
-        // spend the account's whole daily media allowance.
-        senderId: from,
-        messageRowId: media.rowId,
-        mediaId: media.id,
-        mediaUrl: media.url,
-        mimeType: media.mime,
-        caption: media.caption,
-        platform: "whatsapp",
-      });
-
-      if (outcome.understood) {
-        agentInput = outcome.agentText;
-        // The transcript's detected language beats counting characters in text that now
-        // carries an English data-marker (see detectReplyLanguage).
-        languageHint = outcome.languageCode;
-      } else {
-        logSkippedUnderstanding("whatsapp-webhook", outcome.reason);
-      }
-    }
+    const understood = await understandInbound(adminClient, account, accessToken, from, media);
 
     // The agent owns the row from here and settles every outcome itself. A POST that never
     // reaches it leaves the row pending under its lease -- what recovery is for.
@@ -1070,12 +1036,58 @@ async function replyThroughAgent(
       socialAccountId: account.id,
       conversationId,
       recipientId: from,
-      inboundText: agentInput,
+      inboundText: understood.text ?? inbound.promptSafeText,
       phoneNumberId: inbound.phoneNumberId,
-      languageHint,
+      languageHint: understood.languageHint,
       outboxId,
     });
   });
+}
+
+/**
+ * The media's transcript or description, or nulls when there is nothing to read.
+ *
+ * `text: null` means "use the caller's placeholder" rather than "empty message" -- an empty
+ * string here would hand the agent a blank customer message.
+ */
+async function understandInbound(
+  // deno-lint-ignore no-explicit-any
+  adminClient: any,
+  // deno-lint-ignore no-explicit-any
+  account: any,
+  accessToken: string | null,
+  from: string,
+  media: InboundForAgent["media"],
+): Promise<{ text: string | null; languageHint: string | undefined }> {
+  if (!media) return { text: null, languageHint: undefined };
+
+  const outcome = await runInboundMediaUnderstanding(adminClient, {
+    account: {
+      id: account.id,
+      user_id: account.user_id,
+      platform_user_id: account.platform_user_id,
+      connection_mode: account.connection_mode,
+      access_token: accessToken,
+      account_metadata: account.account_metadata,
+    },
+    // Keys the per-sender sub-cap: the customer's phone number, so one number cannot spend
+    // the account's whole daily media allowance.
+    senderId: from,
+    messageRowId: media.rowId,
+    mediaId: media.id,
+    mediaUrl: media.url,
+    mimeType: media.mime,
+    caption: media.caption,
+    platform: "whatsapp",
+  });
+
+  if (outcome.understood) {
+    // The transcript's detected language beats counting characters in text that now carries
+    // an English data-marker (see detectReplyLanguage).
+    return { text: outcome.agentText, languageHint: outcome.languageCode };
+  }
+  logSkippedUnderstanding("whatsapp-webhook", outcome.reason);
+  return { text: null, languageHint: undefined };
 }
 
 async function resolveMediaUrl(mediaId: string | undefined, token: string | null): Promise<string | null> {

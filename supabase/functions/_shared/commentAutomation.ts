@@ -103,10 +103,9 @@ async function dispatchToAiAgent(
   admin: any,
   account: CommentAutomationAccount,
   input: CommentAutomationInput,
-  conversationId: string,
-  fetcher: typeof fetch,
-  now: Date,
+  context: { conversationId: string; fetcher: typeof fetch; now: Date },
 ): Promise<boolean> {
+  const { conversationId, fetcher, now } = context;
   // Unused by the comment sender, but the request contract requires it and it keeps the
   // log rows readable.
   const authorRef = input.author.id || input.author.username || input.comment.id;
@@ -163,7 +162,7 @@ export async function handleCommentInternally(
   }
 
   if (!match) {
-    const dispatched = await dispatchToAiAgent(admin, account, input, conversationId, fetcher, now);
+    const dispatched = await dispatchToAiAgent(admin, account, input, { conversationId, fetcher, now });
     return dispatched ? "agent_dispatched" : "skipped";
   }
 

@@ -596,45 +596,7 @@ async function replyThroughAgent(
   // and the agent trigger lives INSIDE that continuation because firing it before the text
   // exists was the original bug.
   await runInBackground("facebook-instagram agent reply", async () => {
-    let agentText = inbound.messageText;
-    let languageHint: string | undefined;
-
-    if (readable && readable.url) {
-      const outcome = await runInboundMediaUnderstanding(adminClient, {
-        account: {
-          id: account.id,
-          user_id: account.user_id,
-          platform_user_id: account.platform_user_id,
-          // No access_token on purpose. Meta's attachment URL is already signed, and
-          // supplying a token would hand the fetch to CloudGraphFetcher, which replays the
-          // page token to a CDN host that never asked for it.
-          account_metadata: account.account_metadata,
-        },
-        // Keys the per-sender sub-cap, so one Messenger user cannot spend the page's whole
-        // daily media allowance.
-        senderId,
-        // Facebook and Instagram messages are not rows in whatsapp_messages, so there is
-        // nothing to write the result back to -- the agent gets it directly.
-        messageRowId: null,
-        mediaUrl: readable.url,
-        // Meta sends no mime; its own word for the attachment is all we have.
-        kindHint: readable.kind,
-        caption: inbound.caption,
-        platform,
-      }, {
-        // Bounds which origins this fetch may reach. The generic URL fetcher would download
-        // from anywhere, which is not what the spec promises for inbound media even when the
-        // URL arrived over a verified webhook.
-        fetchers: [new MetaMessagingFetcher()],
-      });
-
-      if (outcome.understood) {
-        agentText = outcome.agentText;
-        languageHint = outcome.languageCode;
-      } else {
-        logSkippedUnderstanding("fb-ig-webhook", outcome.reason);
-      }
-    }
+    const understood = await understandInbound(adminClient, account, platform, senderId, inbound);
 
     // The agent owns the row from here: it settles every outcome itself. A POST that never
     // reaches it leaves the row pending under its lease, which is exactly what recovery is
@@ -645,11 +607,56 @@ async function replyThroughAgent(
       socialAccountId: account.id,
       conversationId,
       recipientId: senderId,
-      inboundText: noteUnreadAttachments(agentText, unread),
+      inboundText: noteUnreadAttachments(understood.text, unread),
       // Without this the reply endpoint falls back to counting characters, and the English
       // data-marker wrapping an Arabic transcript wins.
-      languageHint,
+      languageHint: understood.languageHint,
       outboxId,
     });
   });
+}
+
+/** The attachment's description, or the placeholder when nothing could read it. */
+async function understandInbound(
+  // deno-lint-ignore no-explicit-any
+  adminClient: any,
+  account: SocialAccountForMessaging,
+  platform: "facebook" | "instagram",
+  senderId: string,
+  inbound: InboundForAgent,
+): Promise<{ text: string; languageHint: string | undefined }> {
+  const { readable } = inbound;
+  if (!readable?.url) return { text: inbound.messageText, languageHint: undefined };
+
+  const outcome = await runInboundMediaUnderstanding(adminClient, {
+    account: {
+      id: account.id,
+      user_id: account.user_id,
+      platform_user_id: account.platform_user_id,
+      // No access_token on purpose. Meta's attachment URL is already signed, and supplying a
+      // token would hand the fetch to CloudGraphFetcher, which replays the page token to a
+      // CDN host that never asked for it.
+      account_metadata: account.account_metadata,
+    },
+    // Keys the per-sender sub-cap, so one Messenger user cannot spend the page's whole daily
+    // media allowance.
+    senderId,
+    // Facebook and Instagram messages are not rows in whatsapp_messages, so there is nothing
+    // to write the result back to -- the agent gets it directly.
+    messageRowId: null,
+    mediaUrl: readable.url,
+    // Meta sends no mime; its own word for the attachment is all we have.
+    kindHint: readable.kind,
+    caption: inbound.caption,
+    platform,
+  }, {
+    // Bounds which origins this fetch may reach. The generic URL fetcher would download from
+    // anywhere, which is not what the spec promises for inbound media even when the URL
+    // arrived over a verified webhook.
+    fetchers: [new MetaMessagingFetcher()],
+  });
+
+  if (outcome.understood) return { text: outcome.agentText, languageHint: outcome.languageCode };
+  logSkippedUnderstanding("fb-ig-webhook", outcome.reason);
+  return { text: inbound.messageText, languageHint: undefined };
 }

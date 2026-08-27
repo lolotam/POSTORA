@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix no-explicit-any
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { deliverThroughOutbox, releaseAfterError, takeOutboxRow } from "./outbox.ts";
+import { deliverGeneratedReply, deliverStoredReply, releaseAfterError, takeOutboxRow } from "./outbox.ts";
 
 /**
  * A stub that plays the database's part faithfully: advance_agent_reply only succeeds when
@@ -45,7 +45,7 @@ Deno.test("a send is wrapped in three durable steps, in that order, and sends on
     sends.push(text);
     return Promise.resolve("wamid.1");
   };
-  const id = await deliverThroughOutbox(admin, "row-1", "hello", send);
+  const id = await deliverGeneratedReply(admin, "row-1", "hello", send);
   assertEquals(id, "wamid.1");
   assertEquals(sends, ["hello"]);
   assertEquals(transitions, ["running->ready_to_send", "ready_to_send->sending", "sending->sent"]);
@@ -58,7 +58,7 @@ Deno.test("a reply that cannot be persisted is NOT sent", async () => {
   const { admin } = stubOutbox({ status: "pending" });
   let sent = 0;
   await assertRejects(
-    () => deliverThroughOutbox(admin, "row-1", "hello", () => { sent++; return Promise.resolve("x"); }),
+    () => deliverGeneratedReply(admin, "row-1", "hello", () => { sent++; return Promise.resolve("x"); }),
     Error,
     "persist",
   );
@@ -72,10 +72,7 @@ Deno.test("a row another worker is already delivering is NOT sent again", async 
   const { admin, transitions } = stubOutbox({ status: "sending", generated_reply: "hello" });
   let sent = 0;
   await assertRejects(
-    () =>
-      deliverThroughOutbox(admin, "row-1", "hello", () => { sent++; return Promise.resolve("x"); }, {
-        alreadyPersisted: true,
-      }),
+    () => deliverStoredReply(admin, "row-1", "hello", () => { sent++; return Promise.resolve("x"); }),
     Error,
     "already delivering",
   );
@@ -88,7 +85,7 @@ Deno.test("a provider that throws leaves the row delivery_unknown, never ready_t
   // reached it. Recovery must not guess: delivery_unknown goes to a human.
   const { admin, row } = stubOutbox({ status: "running" });
   await assertRejects(
-    () => deliverThroughOutbox(admin, "row-1", "hello", () => Promise.reject(new Error("socket reset"))),
+    () => deliverGeneratedReply(admin, "row-1", "hello", () => Promise.reject(new Error("socket reset"))),
     Error,
     "socket reset",
   );
@@ -105,7 +102,7 @@ Deno.test("a failed sending->sent bookkeeping update does not undo a delivery", 
     if (args.p_to === "sent") return Promise.resolve({ data: null, error: { message: "db down" } });
     return original(name, args);
   };
-  const id = await deliverThroughOutbox(admin, "row-1", "hello", () => Promise.resolve("wamid.2"));
+  const id = await deliverGeneratedReply(admin, "row-1", "hello", () => Promise.resolve("wamid.2"));
   assertEquals(id, "wamid.2");
   assertEquals(calls, 3);
 });

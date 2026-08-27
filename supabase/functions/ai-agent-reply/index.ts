@@ -31,7 +31,13 @@ import {
   type ToolResult,
 } from "./tools.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
-import { cancelOutboxRow, deliverThroughOutbox, releaseAfterError, takeOutboxRow } from "./outbox.ts";
+import {
+  cancelOutboxRow,
+  deliverGeneratedReply,
+  deliverStoredReply,
+  releaseAfterError,
+  takeOutboxRow,
+} from "./outbox.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 import { replyToComment } from "../_shared/commentActions.ts";
@@ -640,8 +646,8 @@ Deno.serve(async (req) => {
       const entry = await takeOutboxRow(admin, outboxId);
       if (entry.mode === "redeliver") {
         const sender = replySender;
-        const outboundMessageId = await deliverThroughOutbox(
-          admin, outboxId, entry.text, (text) => sender(request.recipient_phone, text), { alreadyPersisted: true },
+        const outboundMessageId = await deliverStoredReply(
+          admin, outboxId, entry.text, (text) => sender(request.recipient_phone, text),
         );
         await logOutcome(admin, {
           ...baseLog,
@@ -862,7 +868,7 @@ Deno.serve(async (req) => {
       // without guessing. Without one -- callers that predate the outbox -- it is the plain
       // send it always was.
       const outboundMessageId = outboxId
-        ? await deliverThroughOutbox(admin, outboxId, replyText, (text) => sender(request.recipient_phone, text))
+        ? await deliverGeneratedReply(admin, outboxId, replyText, (text) => sender(request.recipient_phone, text))
         : await sender(request.recipient_phone, replyText);
 
       // Local message storage exists only for WhatsApp; FB/IG conversations
