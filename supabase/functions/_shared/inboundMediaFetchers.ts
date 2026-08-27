@@ -44,11 +44,31 @@ function isPrivateHost(hostname: string): boolean {
 }
 
 /**
- * Every URL this module fetches passes through here. `requireAllowlist` is true whenever
- * credentials are attached: an unvalidated origin plus a bearer token is how an access
- * token leaks, and Postora's own resolution step is not a substitute for checking.
+ * Every URL this module fetches passes through here. `allowedHostSuffixes` names the
+ * origins this particular fetch may reach; null means "any public https host".
+ *
+ * It is never null when credentials are attached -- an unvalidated origin plus a bearer
+ * token is how an access token leaks, and Postora's own resolution step is not a substitute
+ * for checking. It is also non-null for uncredentialed fetches whose transport publishes a
+ * known set of CDNs, because "which origins may this VPC be made to call" is a separate
+ * question from "where may a token travel".
  */
-function assertFetchableUrl(rawUrl: string, requireAllowlist: boolean): URL {
+/**
+ * Where a fetch may go, and why it is bounded. The `carriesCredentials` half only shapes
+ * the error, but the distinction is worth keeping: "a token would have leaked here" and
+ * "this VPC was asked to call a stranger" are different incidents.
+ */
+interface HostPolicy {
+  suffixes: string[];
+  carriesCredentials: boolean;
+}
+
+const CREDENTIALED_POLICY: HostPolicy = {
+  suffixes: CREDENTIALED_HOST_SUFFIXES,
+  carriesCredentials: true,
+};
+
+function assertFetchableUrl(rawUrl: string, policy: HostPolicy | null): URL {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -61,14 +81,30 @@ function assertFetchableUrl(rawUrl: string, requireAllowlist: boolean): URL {
   if (isPrivateHost(parsed.hostname)) {
     throw new MediaFetchError("refusing private-network media url", "transport_failed");
   }
-  if (requireAllowlist && !hostIsAllowed(parsed.hostname, CREDENTIALED_HOST_SUFFIXES)) {
+  if (policy && !hostIsAllowed(parsed.hostname, policy.suffixes)) {
     throw new MediaFetchError(
-      `refusing to send credentials to ${parsed.hostname}`,
+      policy.carriesCredentials
+        ? `refusing to send credentials to ${parsed.hostname}`
+        : `refusing to fetch media from ${parsed.hostname}`,
       "transport_failed",
     );
   }
   return parsed;
 }
+
+/**
+ * Meta's messaging CDNs. Wider than CREDENTIALED_HOST_SUFFIXES on purpose: a Messenger
+ * voice clip is served from `cdn.fbsbx.com`, which does NOT suffix-match the
+ * `lookaside.fbsbx.com` entry that list carries, and photos come from `scontent.*.fbcdn.net`.
+ *
+ * No credentials are sent to these hosts -- the URL Meta puts in the webhook is already
+ * signed -- so this list bounds *where the VPC will make a request*, not where a token may
+ * travel. That is the guarantee the spec asks for and that a bare URL fetcher does not give.
+ */
+const META_MEDIA_POLICY = {
+  suffixes: ["fbsbx.com", "fbcdn.net", "cdninstagram.com"],
+  carriesCredentials: false,
+};
 
 export interface MediaRef {
   platform: "whatsapp" | "instagram" | "facebook";
@@ -80,6 +116,12 @@ export interface MediaRef {
   rawBase64?: string | null;
   accessToken?: string | null;
   mimeType?: string | null;
+  /**
+   * What the transport itself called this media, when it knows better than any mime. A
+   * transport fact like `connectionMode`, not a policy one -- the pipeline decides what to
+   * do with it.
+   */
+  kindHint?: "audio" | "image" | "document" | null;
 }
 
 export interface FetchedMedia {
@@ -206,10 +248,10 @@ async function timedFetch(
   url: string,
   init: RequestInit,
   timeoutMs: number,
-  requireAllowlist = false,
+  policy: HostPolicy | null = null,
   external?: AbortSignal,
 ): Promise<Response> {
-  assertFetchableUrl(url, requireAllowlist);
+  assertFetchableUrl(url, policy);
   if (external?.aborted) {
     const error = new Error("The operation was aborted");
     error.name = "AbortError";
@@ -310,7 +352,7 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
         `${GRAPH_BASE}/${encodeURIComponent(ref.mediaId)}`,
         { headers: auth },
         limits.timeoutMs,
-        true,
+        CREDENTIALED_POLICY,
         signal,
       );
       if (!meta.ok) {
@@ -324,12 +366,12 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
 
     // Follow at most two hops, validating each. `redirect: "manual"` means the token is
     // never replayed to a location we have not checked.
-    let response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, true, signal);
+    let response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, CREDENTIALED_POLICY, signal);
     for (let hop = 0; hop < 2; hop += 1) {
       const next = redirectTarget(response, url);
       if (!next) break;
       url = next;
-      response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, true, signal);
+      response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, CREDENTIALED_POLICY, signal);
     }
     if (!response.ok) {
       throw new MediaFetchError(`media download ${response.status}`, "transport_failed");
@@ -382,7 +424,7 @@ export class EvolutionFetcher implements InboundMediaFetcher {
         body: JSON.stringify({ message: { key: { id: ref.mediaId } }, convertToMp4: false }),
       },
       limits.timeoutMs,
-      false,
+      null,
       signal,
     );
     if (!response.ok) {
@@ -415,11 +457,63 @@ export class DirectUrlFetcher implements InboundMediaFetcher {
     if (!ref.mediaUrl) throw new MediaFetchError("no mediaUrl", "not_found");
     // No credentials are attached here, so the allowlist does not apply -- but https-only
     // and the private-network block still do, since this runs service-role inside the VPC.
-    const response = await timedFetch(fetcher, ref.mediaUrl, {}, limits.timeoutMs, false, signal);
+    const response = await timedFetch(fetcher, ref.mediaUrl, {}, limits.timeoutMs, null, signal);
     if (!response.ok) throw new MediaFetchError(`download ${response.status}`, "transport_failed");
     const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs, signal);
     return { bytes, mimeType: ref.mimeType ?? response.headers.get("content-type") ?? "application/octet-stream" };
   }
+}
+
+/**
+ * Facebook and Instagram messaging attachments.
+ *
+ * Meta puts a signed, already-authorised CDN URL straight in the webhook, so nothing is
+ * resolved and no credential is attached -- sending the page token to a CDN would leak it
+ * to a host that never asked. What this fetcher adds over a bare URL download is the
+ * origin bound: the request may only reach a Meta media host, which is the guarantee the
+ * spec makes about inbound media and which DirectUrlFetcher, by design, does not.
+ *
+ * It also owns the one container quirk of this transport, so no platform knowledge leaks
+ * into the shared pipeline: a Messenger voice clip is an `audioclip-....mp4` served as
+ * `video/mp4`. The bytes really are an MP4; only Meta's own `type: "audio"` tells us there
+ * is no picture track. That is the sole condition under which the type is rewritten.
+ */
+export class MetaMessagingFetcher implements InboundMediaFetcher {
+  readonly name = "meta_messaging";
+
+  canHandle(ref: MediaRef): boolean {
+    return Boolean(ref.mediaUrl) && (ref.platform === "facebook" || ref.platform === "instagram");
+  }
+
+  async fetchMediaBytes(
+    ref: MediaRef,
+    limits: FetchLimits,
+    fetcher: typeof fetch = fetch,
+    signal?: AbortSignal,
+  ): Promise<FetchedMedia> {
+    if (!ref.mediaUrl) throw new MediaFetchError("no mediaUrl", "not_found");
+
+    // Meta's CDNs redirect between scontent hosts. `redirect: "manual"` means each hop is
+    // re-validated against the allowlist rather than followed blind.
+    let url = ref.mediaUrl;
+    let response = await timedFetch(fetcher, url, {}, limits.timeoutMs, META_MEDIA_POLICY, signal);
+    for (let hop = 0; hop < 2; hop += 1) {
+      const next = redirectTarget(response, url);
+      if (!next) break;
+      url = next;
+      response = await timedFetch(fetcher, url, {}, limits.timeoutMs, META_MEDIA_POLICY, signal);
+    }
+    if (!response.ok) throw new MediaFetchError(`download ${response.status}`, "transport_failed");
+
+    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs, signal);
+    const served = response.headers.get("content-type") ?? ref.mimeType ?? "application/octet-stream";
+    return { bytes, mimeType: normaliseMetaMime(ref.kindHint, served) };
+  }
+}
+
+function normaliseMetaMime(kindHint: MediaRef["kindHint"], served: string): string {
+  const bare = served.split(";")[0].trim().toLowerCase();
+  return kindHint === "audio" && bare === "video/mp4" ? "audio/mp4" : served;
 }
 
 export function selectFetcher(

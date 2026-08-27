@@ -9,8 +9,9 @@ reaches the AI agent as text it can reason about, instead of a placeholder.
 already does the work and is already correct; Facebook/Instagram simply never call it, and
 every kind gate in the stack refuses `document`. The fix widens the existing seams rather
 than adding a parallel path: a new mode value, a `document` arm through the four gates that
-block it, a platform-supplied `kindHint` for transports that carry no mime, and one new
-caller in `facebook-instagram-webhook` shaped exactly like the WhatsApp one.
+block it, a platform-supplied `kindHint` for transports that carry no mime, a `MetaMessagingFetcher`
+that bounds where Meta media may be fetched from, and one new caller in
+`facebook-instagram-webhook` shaped like the WhatsApp one.
 
 **Tech Stack:** Deno edge functions, Gemini 2.5 Flash (multimodal), Supabase Postgres.
 
@@ -57,7 +58,8 @@ in both WhatsApp webhooks.
 | File | Responsibility in this change |
 |---|---|
 | `_shared/inboundMediaUnderstanding.ts` | classify PDFs, document prompt, document deadline, Gemini-only routing |
-| `_shared/inboundMediaPipeline.ts` | new mode, kind table, `kindHint`, mime reconciliation, document label |
+| `_shared/inboundMediaPipeline.ts` | new mode, kind table, `kindHint`, document label |
+| `_shared/inboundMediaFetchers.ts` | `MetaMessagingFetcher`: Meta-only origin bound, container rename |
 | `whatsapp-webhook/index.ts` | admit `document` to the kind gate |
 | `whatsapp-evolution-webhook/index.ts` | admit `document` to the kind gate |
 | `facebook-instagram-webhook/index.ts` | new caller: per-type placeholders + understanding before the agent fires |
@@ -76,9 +78,14 @@ Test `supabase/functions/_shared/inboundMediaUnderstanding.test.ts`
 
 - [ ] **Step 1: Widen the limits type and add the per-kind deadline**
 
-`documentTimeoutMs?: number` on `UnderstandingLimits`, defaulting to `30_000`; `timeoutFor`
+`documentTimeoutMs?: number` on `UnderstandingLimits`, defaulting to `20_000`; `timeoutFor`
 returns it for documents and `timeoutMs` otherwise. 10s is tuned for a voice note; a scanned
 PDF is a page-by-page read and runs past it.
+
+**Revised from 30s after review.** The ladder budget is twice the per-kind value, so 30s
+allows a 60s provider phase; on top of the download that exceeds the 60s edge-worker
+ceiling, and the worker is killed without a log line. 20s leaves room for the download plus
+two Gemini rungs.
 
 - [ ] **Step 2: Classify PDFs**
 
@@ -112,7 +119,7 @@ per-rung `Math.min`. Missing the ladder means a configured tier list silently ke
 Invert the existing "documents are not supported" test. Add: `classifyMime("application/pdf")`
 is `"document"`; `classifyMime("application/msword")` is `null`; a document tier list
 containing only ElevenLabs is filtered to empty; `timeoutFor("document", DEFAULT_LIMITS)` is
-30000 and `timeoutFor("audio", ...)` is 10000.
+20000 and `timeoutFor("audio", ...)` is 10000.
 
 Run: `deno test supabase/functions/_shared/inboundMediaUnderstanding.test.ts`
 
@@ -141,16 +148,19 @@ lookup.
 Meta's messaging webhooks send **no mime** - only `type: "audio"` and a CDN URL. Without
 this, every Facebook attachment exits at `unsupported_type`.
 
-- [ ] **Step 3: Reconcile the one known container disagreement**
+- [ ] **Step 3: Carry the hint to the fetcher; do NOT reconcile mimes here**
 
-A Messenger voice clip is `audioclip-....mp4`, served as `video/mp4`, which classifies as
-nothing and would fail the mismatch check. `reconcileMime(kind, mime)` rewrites `video/mp4`
-to `audio/mp4` **only** when the platform declared audio; everything else still trips the
-check.
+**Revised after review.** An earlier draft put a `reconcileMime` helper in this module. That
+is Facebook knowledge in a file whose header promises a new platform costs a fetcher and no
+pipeline change. `kindHint` is added to `MediaRef` (a transport fact, like
+`connectionMode`) and the container rename lives in `MetaMessagingFetcher` instead.
 
-- [ ] **Step 4: Give the download the kind's budget**
+- [ ] **Step 4: Leave the download on the standard budget**
 
-`timeoutFor(kind, limits)` in `fetchMediaBytes`, not `limits.timeoutMs`.
+**Revised from "widen it" after review.** `fetchMediaBytes` keeps `limits.timeoutMs`. 15 MB
+from a CDN in 10s is ample, and the widened budget is for the model call, which is the slow
+half. Widening both puts the request over the 60s worker ceiling. A test asserts the
+timeout the fetcher actually receives, so the split cannot drift silently.
 
 - [ ] **Step 5: Label document text for the agent**
 
@@ -206,13 +216,27 @@ continuation. Firing the agent before the transcript exists is the whole bug.
 
 Differences from WhatsApp: `messageRowId` is `null` (FB/IG do not write `whatsapp_messages`);
 `caption` is `event.message.text || null`; pass `kindHint` from Meta's type;
-`mimeType: null` (let the fetcher discover it); only the **first** understandable attachment
-is processed and any extras are logged, not silently dropped.
+`mimeType: null` (let the fetcher discover it).
 
-- [ ] **Step 3: Confirm `DirectUrlFetcher` is selected**
+**Revised after review.** Selecting attachment 0 blind is wrong: Messenger allows up to 30
+attachments, so a customer who sends a video then a photo puts the readable one second.
+Scan for the first attachment with a known kind, and tell **the agent** — not just the log —
+how many were not read, as a webhook-authored line outside the fenced customer content.
 
-`canHandle` requires `mediaUrl && !accessToken`. The FB/IG `PipelineAccount` must therefore
-**not** carry `access_token`, or `CloudGraphFetcher` wins and the fetch fails. Verify.
+- [ ] **Step 3: Add `MetaMessagingFetcher` — do NOT use `DirectUrlFetcher`**
+
+**Revised after review.** `DirectUrlFetcher` passes a null host policy, so it will download
+from any public HTTPS host. The webhook's HMAC proves *Meta sent the payload*, not that the
+payload's URL is Meta's, and the spec promises inbound media is fetched only from the
+transport's own hosts.
+
+`MetaMessagingFetcher` attaches no credentials (Meta's URL is already signed) and bounds the
+origin to `fbsbx.com` / `fbcdn.net` / `cdninstagram.com`, re-validating each redirect hop.
+
+The suffix list is **not** `CREDENTIALED_HOST_SUFFIXES`: that list names
+`lookaside.fbsbx.com`, which `cdn.fbsbx.com` — the host Messenger actually serves voice
+clips from — does not suffix-match. Reusing it would refuse every Facebook voice note while
+every unit test still passed. A test pins `cdn.fbsbx.com`.
 
 - [ ] **Step 4: Carry the detected language into the reply**
 

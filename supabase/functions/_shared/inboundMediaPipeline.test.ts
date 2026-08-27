@@ -130,26 +130,77 @@ Deno.test("Meta's declared kind is used when the webhook carries no mime at all"
   assert(outcome.agentText.includes("Image description & OCR"));
 });
 
-Deno.test("a Messenger voice clip served as video/mp4 is still transcribed", async () => {
-  // Facebook delivers voice notes as `audioclip-….mp4`, whose CDN Content-Type is
-  // video/mp4 — a type classifyMime rejects. The platform's declared kind resolves it.
+Deno.test("a mime the fetcher cannot classify does not veto the platform's declared kind", async () => {
+  // The mismatch guard refuses a *disagreement*, not an absence of opinion. Meta serves a
+  // voice clip as an mp4 container; MetaMessagingFetcher renames it, but a transport that
+  // returns something unclassifiable must still fall back to what the platform declared
+  // rather than dropping the message.
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin(),
     {
       account: ACCOUNT_ON,
       messageRowId: null,
-      mediaUrl: "https://cdn/audioclip.mp4",
+      mediaUrl: "https://cdn/clip",
       mimeType: null,
       kindHint: "audio",
     },
     {
-      fetchers: [fetcherReturning(new Uint8Array([1, 2]), "video/mp4")],
+      fetchers: [fetcherReturning(new Uint8Array([1, 2]), "application/octet-stream")],
       geminiKey: "k",
       fetcher: geminiOk("السلام عليكم"),
     },
   );
   assert(outcome.understood);
   assertEquals(outcome.text, "السلام عليكم");
+});
+
+Deno.test("the kind hint reaches the fetcher, which is what needs it to name the bytes", () => {
+  let seen: unknown = "unset";
+  const capturing = {
+    name: "capture",
+    canHandle: () => true,
+    fetchMediaBytes: (ref: MediaRef) => {
+      seen = ref.kindHint;
+      return Promise.resolve({ bytes: new Uint8Array([1]), mimeType: "audio/mp4" });
+    },
+  };
+  return runInboundMediaUnderstanding(
+    stubAdmin(),
+    { account: ACCOUNT_ON, messageRowId: null, mediaUrl: "https://cdn/x", mimeType: null, kindHint: "audio" },
+    { fetchers: [capturing], geminiKey: "k", fetcher: geminiOk("hi") },
+  ).then(() => {
+    assertEquals(seen, "audio");
+  });
+});
+
+Deno.test("the download keeps the standard deadline even for a document", async () => {
+  // Deliberate, and load-bearing: the widened document budget is for the model call. If the
+  // download took it too, download + ladder would exceed the 60s edge-worker ceiling and
+  // the request would be killed without a log line.
+  let downloadTimeoutMs = -1;
+  await runInboundMediaUnderstanding(
+    stubAdmin(),
+    {
+      account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      messageRowId: null,
+      mediaUrl: "https://cdn/x",
+      mimeType: "application/pdf",
+    },
+    {
+      limits: { maxBytes: 1024, timeoutMs: 11, documentTimeoutMs: 99 },
+      fetchers: [{
+        name: "capture",
+        canHandle: () => true,
+        fetchMediaBytes: (_ref: MediaRef, limits: { timeoutMs: number }) => {
+          downloadTimeoutMs = limits.timeoutMs;
+          return Promise.resolve({ bytes: new Uint8Array([1]), mimeType: "application/pdf" });
+        },
+      }],
+      geminiKey: "k",
+      fetcher: geminiOk(JSON.stringify({ description: "x", text: "", fields: {} })),
+    },
+  );
+  assertEquals(downloadTimeoutMs, 11);
 });
 
 Deno.test("video/mp4 with no declared kind is still refused", async () => {

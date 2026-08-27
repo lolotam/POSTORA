@@ -5,6 +5,7 @@ import {
   DirectUrlFetcher,
   EvolutionFetcher,
   MediaFetchError,
+  MetaMessagingFetcher,
   selectFetcher,
   type MediaRef,
 } from "./inboundMediaFetchers.ts";
@@ -301,5 +302,123 @@ Deno.test("a body that emits one chunk and never closes times out instead of han
       ),
     MediaFetchError,
     "exceeded",
+  );
+});
+
+Deno.test("MetaMessagingFetcher claims Messenger and Instagram attachments, and nothing else", () => {
+  const fetcher = new MetaMessagingFetcher();
+  const url = "https://cdn.fbsbx.com/v/t59.3654-21/clip.mp4";
+  assert(fetcher.canHandle({ platform: "facebook", mediaUrl: url }));
+  assert(fetcher.canHandle({ platform: "instagram", mediaUrl: url }));
+  assert(!fetcher.canHandle({ platform: "whatsapp", mediaUrl: url }));
+  assert(!fetcher.canHandle({ platform: "facebook", mediaUrl: null }));
+});
+
+Deno.test("cdn.fbsbx.com is accepted — the host Messenger actually serves voice clips from", async () => {
+  // Regression: the pre-existing credentialed list names `lookaside.fbsbx.com`, which
+  // `cdn.fbsbx.com` does NOT suffix-match. Reusing it would refuse every Facebook voice
+  // note while every unit test still passed.
+  const fetched = await new MetaMessagingFetcher().fetchMediaBytes(
+    { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/t59.3654-21/audioclip-1.mp4" },
+    LIMITS,
+    () => Promise.resolve(bodyResponse(new Uint8Array([1, 2]), { "content-type": "video/mp4" })),
+  );
+  assertEquals(fetched.bytes.length, 2);
+});
+
+Deno.test("scontent image hosts and Instagram's CDN are accepted", async () => {
+  for (const host of ["scontent.xx.fbcdn.net", "scontent-lhr8-1.cdninstagram.com"]) {
+    const fetched = await new MetaMessagingFetcher().fetchMediaBytes(
+      { platform: "instagram", mediaUrl: `https://${host}/v/photo.jpg` },
+      LIMITS,
+      () => Promise.resolve(bodyResponse(new Uint8Array([9]), { "content-type": "image/jpeg" })),
+    );
+    assertEquals(fetched.mimeType, "image/jpeg");
+  }
+});
+
+Deno.test("a non-Meta host is refused even though the URL came over a verified webhook", async () => {
+  // The webhook's HMAC proves Meta sent the payload; it does not prove the payload's URL
+  // is Meta's. This is the bound a bare URL fetcher does not give.
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://evil.test/payload.bin" },
+        LIMITS,
+        () => Promise.resolve(bodyResponse(new Uint8Array([1]))),
+      ),
+    MediaFetchError,
+    "refusing to fetch media from evil.test",
+  );
+});
+
+Deno.test("a lookalike host does not pass by suffix", async () => {
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com.evil.test/x" },
+        LIMITS,
+        () => Promise.resolve(bodyResponse(new Uint8Array([1]))),
+      ),
+    MediaFetchError,
+    "refusing to fetch media",
+  );
+});
+
+Deno.test("a Messenger voice clip served as video/mp4 is renamed, and only then", async () => {
+  const fetcher = new MetaMessagingFetcher();
+  const serve = () =>
+    Promise.resolve(bodyResponse(new Uint8Array([1]), { "content-type": "video/mp4" }));
+  const url = "https://cdn.fbsbx.com/v/audioclip-1.mp4";
+
+  const asAudio = await fetcher.fetchMediaBytes(
+    { platform: "facebook", mediaUrl: url, kindHint: "audio" }, LIMITS, serve,
+  );
+  assertEquals(asAudio.mimeType, "audio/mp4");
+
+  // Meta calls a real video "video", never "audio". Without that word the container is
+  // taken at face value, so a genuine video is not transcribed as if it were a voice note.
+  const unhinted = await fetcher.fetchMediaBytes(
+    { platform: "facebook", mediaUrl: url }, LIMITS, serve,
+  );
+  assertEquals(unhinted.mimeType, "video/mp4");
+});
+
+Deno.test("a CDN redirect is followed, and the destination is validated too", async () => {
+  const seen: string[] = [];
+  const fetcher = (url: string | URL | Request) => {
+    seen.push(String(url));
+    if (seen.length === 1) {
+      return Promise.resolve(
+        new Response(null, { status: 302, headers: { location: "https://scontent.fbcdn.net/real.jpg" } }),
+      );
+    }
+    return Promise.resolve(bodyResponse(new Uint8Array([7]), { "content-type": "image/jpeg" }));
+  };
+  const fetched = await new MetaMessagingFetcher().fetchMediaBytes(
+    { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/first.jpg", kindHint: "image" },
+    LIMITS,
+    fetcher as typeof globalThis.fetch,
+  );
+  assertEquals(seen.length, 2);
+  assertEquals(fetched.bytes.length, 1);
+});
+
+Deno.test("a redirect off Meta's hosts is refused rather than followed", async () => {
+  const fetcher = (url: string | URL | Request) =>
+    String(url).includes("evil")
+      ? Promise.resolve(bodyResponse(new Uint8Array([1])))
+      : Promise.resolve(
+        new Response(null, { status: 302, headers: { location: "https://evil.test/steal" } }),
+      );
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/first.jpg" },
+        LIMITS,
+        fetcher as typeof globalThis.fetch,
+      ),
+    MediaFetchError,
+    "refusing to fetch media from evil.test",
   );
 });

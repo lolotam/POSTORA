@@ -277,17 +277,6 @@ export function composeAgentText(kind: MediaKind, understood: string, caption?: 
 }
 
 /**
- * Facebook delivers a voice clip as an .mp4 whose CDN Content-Type is `video/mp4`, while
- * declaring the kind separately as `audio`. The container really is MP4; only the declared
- * kind tells us there is no picture in it. Narrow on purpose -- this rewrites one known
- * container disagreement, and anything else still trips the mismatch check.
- */
-function reconcileMime(kind: MediaKind, mime: string): string {
-  const bare = mime.split(";")[0].trim().toLowerCase();
-  return kind === "audio" && bare === "video/mp4" ? "audio/mp4" : mime;
-}
-
-/**
  * Never throws. Every failure path returns `understood: false` and the caller keeps the
  * placeholder, so a media message is never dropped because understanding failed (D7).
  */
@@ -321,6 +310,9 @@ export async function runInboundMediaUnderstanding(
       rawBase64: input.rawBase64 ?? null,
       accessToken: input.account.access_token ?? null,
       mimeType: input.mimeType ?? null,
+      // The fetcher may need it too: a transport that names the kind is usually the same
+      // one whose container mime disagrees with it.
+      kindHint: input.kindHint ?? null,
     };
 
     const fetchers = deps.fetchers ?? [new CloudGraphFetcher(), new DirectUrlFetcher()];
@@ -349,10 +341,7 @@ export async function runInboundMediaUnderstanding(
     // The webhook's mime is metadata; the fetcher's is what the bytes actually are. A
     // disagreement means one of them is wrong, and guessing would label an image as a
     // voice transcript.
-    const effectiveMime = reconcileMime(
-      kind,
-      resolvedMime || input.mimeType || "application/octet-stream",
-    );
+    const effectiveMime = resolvedMime || input.mimeType || "application/octet-stream";
     const resolvedKind = classifyMime(effectiveMime);
     if (resolvedKind && resolvedKind !== kind) {
       console.error(`[media-understanding] mime disagreement: declared ${kind}, resolved ${resolvedKind}`);

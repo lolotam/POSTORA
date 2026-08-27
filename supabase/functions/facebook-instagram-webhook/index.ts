@@ -4,6 +4,9 @@ import { resolveAutomationHandler, resolveCommentAutomationHandler } from "../_s
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
 import { buildCommentPayload, buildMessagePayload, buildMessagingSender, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 import { isOwnComment } from "../_shared/commentAuthor.ts";
+import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
+import { MetaMessagingFetcher } from "../_shared/inboundMediaFetchers.ts";
+import type { MediaKind } from "../_shared/inboundMediaUnderstanding.ts";
 import { matchAutoReplyRule } from "../_shared/autoReplyRules.ts";
 import { handleCommentInternally } from "../_shared/commentAutomation.ts";
 import { normalizeMetaCommentChange } from "./commentEvents.ts";
@@ -17,6 +20,89 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+/**
+ * Meta's own name for an attachment, mapped to what the understanding pipeline calls it.
+ *
+ * A messaging webhook carries NO mime type -- only this word and a signed CDN URL -- so
+ * this map is the whole of what we know about the bytes before downloading them. `video`
+ * and `location` are absent deliberately: nothing here can read them, and a missing entry
+ * is what keeps the message on its placeholder instead of paying for a model call.
+ */
+const META_ATTACHMENT_KINDS: Record<string, MediaKind> = {
+  audio: "audio",
+  image: "image",
+  file: "document",
+};
+
+/**
+ * What the agent sees when understanding is off, unavailable, or fails. Naming the type is
+ * the point: "[Attachment]" told the agent nothing, so it could not even say "I can see you
+ * sent a photo".
+ */
+const META_ATTACHMENT_PLACEHOLDERS: Record<string, string> = {
+  audio: "[Voice message]",
+  image: "[Image]",
+  file: "[Document]",
+  video: "[Video]",
+  location: "[Location]",
+};
+
+interface InboundAttachment {
+  metaType: string;
+  url: string | null;
+  kind: MediaKind | null;
+}
+
+/**
+ * Meta sends an array on messaging events, but the same field arrives wrapped in `data` on
+ * other Graph surfaces, and this file already handles both when dispatching to n8n.
+ */
+function attachmentList(message: { attachments?: unknown }): unknown[] {
+  const raw = message.attachments;
+  if (Array.isArray(raw)) return raw;
+  const data = (raw as { data?: unknown } | null | undefined)?.data;
+  return Array.isArray(data) ? data : [];
+}
+
+function describeAttachment(raw: unknown): InboundAttachment {
+  const item = raw as { type?: string; payload?: { url?: string } } | undefined;
+  const metaType = String(item?.type ?? "");
+  return {
+    metaType,
+    url: item?.payload?.url ?? null,
+    kind: META_ATTACHMENT_KINDS[metaType] ?? null,
+  };
+}
+
+/**
+ * The first attachment we can actually read, which is not always the first one sent.
+ *
+ * Messenger allows up to 30 attachments on one message, and a customer who sends a video
+ * and then the photo they meant to send puts the readable one second. Selecting index 0
+ * blind would answer the video -- that is, answer nothing -- while the photo sat unread.
+ */
+function firstReadableAttachment(message: { attachments?: unknown }): InboundAttachment | null {
+  for (const raw of attachmentList(message)) {
+    const described = describeAttachment(raw);
+    if (described.kind && described.url) return described;
+  }
+  return null;
+}
+
+/**
+ * Tells the agent what it did not see.
+ *
+ * Only one attachment per message is read, and logging the rest server-side does not stop
+ * the agent answering as though it had seen the whole message. The note is written by this
+ * webhook and sits outside the fenced customer content, so it reads as a fact about the
+ * message rather than as something the customer said.
+ */
+function noteUnreadAttachments(agentText: string, unread: number): string {
+  if (unread <= 0) return agentText;
+  const what = unread === 1 ? "1 further attachment" : `${unread} further attachments`;
+  return `${agentText}\n[The customer also sent ${what} that could not be read.]`;
+}
 
 // Anti-loop: track last auto-reply time per conversation
 const lastAutoReplyMap = new Map<string, number>();
@@ -222,7 +308,13 @@ Deno.serve(async (req) => {
           }
 
           const senderId: string = event.sender?.id;
-          const messageText: string = event.message.text || (event.message.attachments ? "[Attachment]" : "");
+          const attachments = attachmentList(event.message);
+          const readable = firstReadableAttachment(event.message);
+          // The placeholder names what was sent even when nothing can read it, so the agent
+          // can say "I can see you sent a video" instead of the useless "[Attachment]".
+          const leadType = attachments.length > 0 ? describeAttachment(attachments[0]).metaType : null;
+          const messageText: string = event.message.text ||
+            (leadType !== null ? META_ATTACHMENT_PLACEHOLDERS[leadType] ?? "[Attachment]" : "");
 
           // Keyed by this account's stable internal id rather than any Meta-supplied id: Meta
           // represents the same account/conversation with different external ids depending on
@@ -289,8 +381,57 @@ Deno.serve(async (req) => {
           // Deterministic rules outrank the AI; only unclaimed messages reach
           // the agent. Echoes/receipts never get here (filtered above).
           if (automationHandler === "internal" && !ruleReplied) {
-            triggerAiAgentReply(account, platform, conversationId, senderId, messageText)
-              .catch((e) => console.error("[fb-ig-webhook] AI agent dispatch failed:", e?.message || e));
+            const unread = attachments.length - (readable ? 1 : 0);
+
+            if (readable && readable.url) {
+              // Understand the media FIRST, then hand the agent the description instead of
+              // "[Image]". The download and the model call run off the response path to
+              // keep Meta's webhook fast -- and the agent trigger lives INSIDE that
+              // continuation, because firing it before the text exists is this whole bug.
+              await runInBackground("facebook-instagram inbound media understanding", async () => {
+                const outcome = await runInboundMediaUnderstanding(adminClient, {
+                  account: {
+                    id: account.id,
+                    user_id: account.user_id,
+                    platform_user_id: account.platform_user_id,
+                    // No access_token on purpose. Meta's attachment URL is already signed,
+                    // and supplying a token would hand the fetch to CloudGraphFetcher,
+                    // which replays the page token to a CDN host that never asked for it.
+                    account_metadata: account.account_metadata,
+                  },
+                  // Facebook and Instagram messages are not rows in whatsapp_messages, so
+                  // there is nothing to write the result back to -- the agent gets it
+                  // directly and the transcript is not retained.
+                  messageRowId: null,
+                  mediaUrl: readable.url,
+                  // Meta sends no mime; its own word for the attachment is all we have.
+                  kindHint: readable.kind,
+                  caption: event.message.text || null,
+                  platform,
+                }, {
+                  // Bounds which origins this fetch may reach. The generic URL fetcher
+                  // would download from anywhere, which is not what the spec promises for
+                  // inbound media even when the URL arrived over a verified webhook.
+                  fetchers: [new MetaMessagingFetcher()],
+                });
+
+                if (!outcome.understood) {
+                  console.error(`[fb-ig-webhook] media understanding skipped: ${outcome.reason}`);
+                }
+                // Understood or not, the agent still replies -- it just falls back to the
+                // placeholder, which is exactly the previous behaviour.
+                await triggerAiAgentReply(
+                  account, platform, conversationId, senderId,
+                  noteUnreadAttachments(outcome.understood ? outcome.agentText : messageText, unread),
+                  outcome.understood ? outcome.languageCode : undefined,
+                );
+              });
+            } else {
+              triggerAiAgentReply(
+                account, platform, conversationId, senderId,
+                noteUnreadAttachments(messageText, unread),
+              ).catch((e) => console.error("[fb-ig-webhook] AI agent dispatch failed:", e?.message || e));
+            }
           }
         }
 
@@ -520,6 +661,7 @@ async function triggerAiAgentReply(
   conversationId: string,
   senderId: string,
   inboundText: string,
+  languageHint?: string,
 ) {
   const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -536,6 +678,9 @@ async function triggerAiAgentReply(
       conversation_id: conversationId,
       recipient_phone: senderId,
       inbound_text: inboundText,
+      // Without this the reply endpoint falls back to counting characters, and the English
+      // data-marker wrapping an Arabic transcript wins. Same hint the WhatsApp path sends.
+      ...(languageHint ? { language_hint: languageHint } : {}),
     }),
   });
   if (!response.ok) {
