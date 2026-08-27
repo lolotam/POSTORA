@@ -150,6 +150,7 @@ export async function escalateConversation(
   deadlineAt?: number,
 ): Promise<EscalationOutcome> {
   const outOfTime = () => deadlineAt !== undefined && Date.now() >= deadlineAt;
+  const msLeft = () => (deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now()));
 
   const { error: modeError } = await target.admin
     .from("ai_conversation_modes")
@@ -175,9 +176,18 @@ export async function escalateConversation(
 
   try {
     if (!outOfTime()) {
-      const { data: agents } = await target.admin
+      // Checking the clock before the query is not enough: a query that hangs runs
+      // past the deadline anyway and eats the reserve the customer's message needs.
+      // Bind the read itself to what is left. The writes below are deliberately NOT
+      // aborted -- cancelling between the assignment insert and its history row
+      // would leave the pair inconsistent, and both are already clock-gated.
+      const remaining = msLeft();
+      const agentQuery = target.admin
         .from("whatsapp_agents")
         .select("id, user_id, status, current_conversations");
+      const { data: agents } = remaining === undefined
+        ? await agentQuery
+        : await agentQuery.abortSignal(AbortSignal.timeout(remaining));
       const agent = pickEscalationAgent(agents || [], target.userId);
 
       // Re-checked after the lookup: it may itself have spent the remaining budget.

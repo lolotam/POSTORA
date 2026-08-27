@@ -116,10 +116,10 @@ Deno.test("the Arabic apology is used for an Arabic conversation", async () => {
 // worse than either failure alone.
 Deno.test("a post-mute assignment failure still counts as escalated", async () => {
   const c = collector();
-  let call = 0;
+  const tables: string[] = [];
   const admin = {
     from(table: string) {
-      call++;
+      tables.push(table);
       if (table === "ai_conversation_modes") {
         return { upsert: () => Promise.resolve({ error: null }) };
       }
@@ -131,10 +131,13 @@ Deno.test("a post-mute assignment failure still counts as escalated", async () =
     DM, c.sender, "en", { ...target(), admin } as never, NONE,
   );
 
+  // The mute must come first — that ordering is what makes a post-mute failure
+  // survivable, so assert it rather than merely that something was queried.
+  assertEquals(tables[0], "ai_conversation_modes");
+  assertEquals(tables.includes("whatsapp_agents"), true);
   assertEquals(result.escalated, true);
   assertEquals(result.apology_sent, true);
   // Nobody was actually reached, so the copy must stay conservative.
   assertEquals(result.human_notified, false);
   assertEquals(c.sent[0].includes("notified"), false);
-  assertEquals(call > 0, true);
 });
