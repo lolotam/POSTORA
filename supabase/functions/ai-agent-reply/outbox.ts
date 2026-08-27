@@ -147,13 +147,34 @@ export async function releaseAfterError(
   await advanceReply(admin, { id: outboxId, from: "running", to: "pending", error: outcome.error });
 }
 
-/** A gate closed or the agent chose silence: terminal, and nothing was sent. */
+/**
+ * A gate closed or the agent chose silence: terminal, and nothing was sent.
+ *
+ * The from-state is read rather than assumed, because the callers cannot all know it. The
+ * delivery gates (agent disabled, cooldown, daily cap, human takeover) run BEFORE
+ * takeOutboxRow, so the row is `pending` on a fresh message but `ready_to_send` on a
+ * redelivery -- and a hardcoded "pending" silently refused the cancel there, leaving the row
+ * to lapse and be retried into the same gate until its attempts ran out. The customer's
+ * outcome was still terminal, but it arrived as `recovery_failed` three attempts later
+ * instead of `cancelled` immediately.
+ *
+ * The read is not a race: advance_agent_reply still only moves a row that is in the state
+ * named, so a row someone else has taken in the meantime is refused, which is correct.
+ */
 export async function cancelOutboxRow(
   // deno-lint-ignore no-explicit-any
   admin: any,
   outboxId: string,
-  from: "pending" | "running",
   reason: string,
 ): Promise<void> {
-  await advanceReply(admin, { id: outboxId, from, to: "cancelled", error: reason });
+  const { data: row, error } = await admin
+    .from("pending_agent_replies")
+    .select("status")
+    .eq("id", outboxId)
+    .maybeSingle();
+  if (error || !row) {
+    console.error(`[outbox] could not read ${outboxId} to cancel it: ${error?.message ?? "missing"}`);
+    return;
+  }
+  await advanceReply(admin, { id: outboxId, from: row.status, to: "cancelled", error: reason });
 }

@@ -1,6 +1,12 @@
 // deno-lint-ignore-file no-import-prefix no-explicit-any
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { deliverGeneratedReply, deliverStoredReply, releaseAfterError, takeOutboxRow } from "./outbox.ts";
+import {
+  cancelOutboxRow,
+  deliverGeneratedReply,
+  deliverStoredReply,
+  releaseAfterError,
+  takeOutboxRow,
+} from "./outbox.ts";
 
 /**
  * A stub that plays the database's part faithfully: advance_agent_reply only succeeds when
@@ -138,6 +144,27 @@ Deno.test("takeOutboxRow: anything else is refused, and nothing runs", async () 
 Deno.test("takeOutboxRow: a missing row is refused rather than treated as fresh", async () => {
   const { admin } = stubOutbox(null);
   assertEquals(await takeOutboxRow(admin, "row-1"), { mode: "refuse", status: "missing" });
+});
+
+Deno.test("a closed gate cancels the row from whatever state it is actually in", async () => {
+  // The delivery gates (agent disabled, cooldown, daily cap, human takeover) run BEFORE
+  // takeOutboxRow, so the row is `pending` on a fresh message but `ready_to_send` on a
+  // redelivery. Assuming "pending" silently refused the cancel on the redelivery path,
+  // leaving the row to lapse and re-hit the same gate until its attempts ran out -- the
+  // customer's outcome arrived as `recovery_failed` three attempts late instead of
+  // `cancelled` at once.
+  for (const status of ["pending", "ready_to_send", "running"]) {
+    const { admin, row } = stubOutbox({ status, generated_reply: "hi" });
+    await cancelOutboxRow(admin, "row-1", "daily_cap_reached");
+    assertEquals(row?.status, "cancelled", `from ${status}`);
+  }
+});
+
+Deno.test("cancelling a row that no longer exists is a no-op, not a throw", async () => {
+  // The caller is on its way to returning a response to Meta; a missing row must not
+  // become an exception that replaces a legitimate skip.
+  const { admin } = stubOutbox(null);
+  await cancelOutboxRow(admin, "row-1", "agent_disabled");
 });
 
 Deno.test("releaseAfterError: no tool fired -> back to pending, so recovery can retry", async () => {

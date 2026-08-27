@@ -501,13 +501,13 @@ Deno.serve(async (req) => {
     // Both are terminal for an outbox row: recovery re-driving it would reach the same
     // answer three times over and then mark it failed for no reason.
     if (!config) {
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "pending", "agent_not_configured");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_not_configured");
       return jsonResponse({ ok: true, skipped: "agent_not_configured" });
     }
     // The Test sandbox works while the agent is still disabled, so users can
     // tune it before switching it on for real customers.
     if (!config.is_enabled && !dryRun) {
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "pending", "agent_disabled");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_disabled");
       return jsonResponse({ ok: true, skipped: "agent_disabled" });
     }
 
@@ -554,7 +554,7 @@ Deno.serve(async (req) => {
         await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
         // Terminal for the work item: a closed gate is a decision, and recovery re-driving
         // the row would only reach the same gate.
-        if (outboxId) await cancelOutboxRow(admin, outboxId, "pending", gate.reason);
+        if (outboxId) await cancelOutboxRow(admin, outboxId, gate.reason);
         return jsonResponse({ ok: true, skipped: gate.reason });
       }
     }
@@ -857,7 +857,7 @@ Deno.serve(async (req) => {
         graph_error: graphError,
         dry_run: dryRun,
       });
-      if (outboxId) await cancelOutboxRow(admin, outboxId, "running", "no_reply_generated");
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated");
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
@@ -950,7 +950,7 @@ Deno.serve(async (req) => {
         // Escalated means the floor did something external -- assigned a human, notified
         // admins, sent an apology. Terminal: recovery re-running this would do it all twice.
         // Unhandled means nothing happened, and the row may be retried once models recover.
-        if (floor.escalated) await cancelOutboxRow(admin, outboxId, "running", "model outage handled by escalation");
+        if (floor.escalated) await cancelOutboxRow(admin, outboxId, "model outage handled by escalation");
         else await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) });
       }
       // apology_sent and human_notified travel in the body so a caller can tell this apart
