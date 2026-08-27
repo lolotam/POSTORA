@@ -1,12 +1,13 @@
 import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { anonKey, integrationTest, supabaseUrl } from "../_shared/integrationTestGuard.ts";
 
-const FUNCTION_URL = Deno.env.get("SUPABASE_URL") + "/functions/v1/check-connection-health";
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const FUNCTION_URL = `${supabaseUrl}/functions/v1/check-connection-health`;
+const ANON_KEY = anonKey;
 const CALLER_JWT = Deno.env.get("CALLER_JWT");
 const OWNED_ACCOUNT_ID = Deno.env.get("OWNED_ACCOUNT_ID");
 const FOREIGN_ACCOUNT_ID = Deno.env.get("FOREIGN_ACCOUNT_ID");
 
-Deno.test("check-connection-health: handles CORS preflight request", async () => {
+integrationTest("check-connection-health: handles CORS preflight request", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "OPTIONS",
     headers: {
@@ -19,7 +20,7 @@ Deno.test("check-connection-health: handles CORS preflight request", async () =>
   assertEquals(corsHeader, "*");
 });
 
-Deno.test("check-connection-health: rejects unsupported methods", async () => {
+integrationTest("check-connection-health: rejects unsupported methods", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "GET",
     headers: {
@@ -30,7 +31,7 @@ Deno.test("check-connection-health: rejects unsupported methods", async () => {
   assertEquals(response.status, 405);
 });
 
-Deno.test("check-connection-health: returns 401 when Authorization header is missing", async () => {
+integrationTest("check-connection-health: returns 401 when Authorization header is missing", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -45,7 +46,7 @@ Deno.test("check-connection-health: returns 401 when Authorization header is mis
   assertExists(body.error);
 });
 
-Deno.test("check-connection-health: returns 401 when bearer token is empty", async () => {
+integrationTest("check-connection-health: returns 401 when bearer token is empty", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -61,7 +62,7 @@ Deno.test("check-connection-health: returns 401 when bearer token is empty", asy
   assertExists(body.error);
 });
 
-Deno.test("check-connection-health: returns 401 for invalid token", async () => {
+integrationTest("check-connection-health: returns 401 for invalid token", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -78,7 +79,7 @@ Deno.test("check-connection-health: returns 401 for invalid token", async () => 
 });
 
 if (CALLER_JWT) {
-  Deno.test("check-connection-health: returns 400 when account_id is missing", async () => {
+  integrationTest("check-connection-health: returns 400 when account_id is missing", async () => {
     const response = await fetch(FUNCTION_URL, {
       method: "POST",
       headers: {
@@ -96,7 +97,7 @@ if (CALLER_JWT) {
 }
 
 if (CALLER_JWT && OWNED_ACCOUNT_ID && FOREIGN_ACCOUNT_ID) {
-  Deno.test("check-connection-health: rejects account_id not owned by caller", async () => {
+  integrationTest("check-connection-health: rejects account_id not owned by caller", async () => {
     const headers = {
       "Content-Type": "application/json",
       "apikey": ANON_KEY,
@@ -129,7 +130,7 @@ if (CALLER_JWT && OWNED_ACCOUNT_ID && FOREIGN_ACCOUNT_ID) {
     assertEquals(JSON.stringify(body).includes(FOREIGN_ACCOUNT_ID), false);
   });
 
-  Deno.test("check-connection-health: allows owned account_id", async () => {
+  integrationTest("check-connection-health: allows owned account_id", async () => {
     const response = await fetch(FUNCTION_URL, {
       method: "POST",
       headers: {

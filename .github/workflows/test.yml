@@ -54,6 +54,41 @@ jobs:
             test-results/
           retention-days: 7
 
+  edge-functions:
+    name: Edge function tests (Deno)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # The 70+ Deno tests under supabase/functions/** were outside every CI
+      # gate until this job existed: vite.config.ts sets the vitest `include` to
+      # src/**, so `bun run test` never walked them. They ran only on a
+      # developer's machine, where a gitignored deno.lock happened to make them
+      # resolve.
+      #
+      # --node-modules-dir=auto is load-bearing, not a style choice: a fresh
+      # checkout has neither deno.lock nor node_modules, and
+      # ai-knowledge-excel-worker/index.test.ts imports `npm:xlsx@0.18.5` while
+      # package.json pins the SheetJS tarball at 0.20.3. Without it, module
+      # resolution fails before a single test runs.
+      #
+      # Tests that fetch() a deployed function register as *ignored* here (see
+      # _shared/integrationTestGuard.ts) because SUPABASE_URL is unset. They are
+      # reported in the summary, not silently dropped.
+      - name: Run edge function tests
+        run: >-
+          deno test
+          --allow-env --allow-net --allow-read --allow-write
+          --no-check --node-modules-dir=auto
+          supabase/functions/
+
   build:
     runs-on: ubuntu-latest
     needs: test
