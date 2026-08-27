@@ -332,6 +332,50 @@ async function buildAdminNotifier(admin: any, request: ReplyRequest): Promise<Te
   return buildWhatsAppTextSender(admin, waAccount, Deno.env.get("WHATSAPP_PHONE_NUMBER_ID"));
 }
 
+// The three admin-managed global slots, in the order they are tried. Written by
+// the AI Agent Models card in /admin/settings.
+const AGENT_MODEL_KEYS = [
+  "default_ai_model_agent",
+  "default_ai_model_agent_fallback",
+  "default_ai_model_agent_fallback_2",
+] as const;
+
+function isModelSetting(value: any): value is { provider_code: string; model_id: string } {
+  return Boolean(value) &&
+    typeof value.provider_code === "string" && value.provider_code.length > 0 &&
+    typeof value.model_id === "string" && value.model_id.length > 0;
+}
+
+/**
+ * Reads the global model chain. One set of models serves every user and every
+ * platform; ai_agent_configs.model and its two fallback columns are deprecated
+ * and no longer read.
+ *
+ * A valid Primary is required and a gap ends the chain. Filtering the missing
+ * slots out instead would let an unset Primary promote Fallback 2 to index 0,
+ * where it would run as the primary model and be logged with fallback_level 0 --
+ * hiding both the misconfiguration and which tier actually answered.
+ */
+async function loadGlobalModelChain(admin: any): Promise<string[]> {
+  const { data, error } = await admin
+    .from("system_settings")
+    .select("key, value")
+    .in("key", AGENT_MODEL_KEYS);
+  if (error) throw error;
+
+  const byKey = new Map((data || []).map((row: any) => [row.key, row.value]));
+  const slots = AGENT_MODEL_KEYS.map((key) => byKey.get(key));
+
+  if (!isModelSetting(slots[0])) return [];
+
+  const chain: string[] = [];
+  for (const slot of slots) {
+    if (!isModelSetting(slot)) break;
+    chain.push(`${slot.provider_code}/${slot.model_id}`);
+  }
+  return chain;
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return handleCorsOptions();
 
@@ -617,9 +661,17 @@ Deno.serve(async (req) => {
 
     const maxIterations = Math.max(1, config.max_tool_iterations || 5);
     // Primary + fallback chain, each entry resolved to its provider endpoint.
-    const rawChain = [config.model, config.fallback_model_1, config.fallback_model_2]
-      .filter((m): m is string => typeof m === "string" && m.length > 0);
-    modelChain = (rawChain.length ? rawChain : ["gpt-4o-mini"]).map(parseModelRef);
+    // Global as of 2026-08-27: config.model, config.fallback_model_1 and
+    // config.fallback_model_2 are deprecated, still in the database but no longer
+    // read. Scheduled for removal after a verification window -- see
+    // docs/superpowers/specs/2026-08-27-agent-model-selection-design.md §3e.
+    const rawChain = await loadGlobalModelChain(admin);
+    if (!rawChain.length) {
+      // No hardcoded last resort. Calling a model no admin selected is how an
+      // unlisted gpt-4o-mini kept answering; a human is the better fallback.
+      throw new ModelChainExhaustedError("No global AI agent model is configured");
+    }
+    modelChain = rawChain.map(parseModelRef);
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       let completion: any = null;
       let lastError: unknown = null;
