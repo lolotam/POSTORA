@@ -457,6 +457,21 @@ Deno.test("transcribed content cannot close its own delimiter block", () => {
   assertEquals(composed.split(fence).length - 1, 2);
 });
 
+// resolveProviderKey queries provider_api_keys as
+// .select("api_key").eq("provider_code", p).maybeSingle() — one eq, then maybeSingle.
+// Chaining eq back onto itself keeps the stub honest whatever the filter count, instead
+// of encoding a shape the caller does not use. The tiers below only reach this branch
+// when a provider has no env key, which is why CI exercises it and a developer machine
+// with OPENAI_API_KEY exported does not.
+function providerKeysStub() {
+  const chain = {
+    select: () => chain,
+    eq: () => chain,
+    maybeSingle: () => Promise.resolve({ data: null }),
+  };
+  return chain;
+}
+
 Deno.test("the same model configured bare and namespaced runs once, not twice", async () => {
   // Dedupe must happen after normalisation. "google/gemini-2.5-flash" and
   // "gemini-2.5-flash" are one model; treating them as two burns a rung and bills twice.
@@ -469,7 +484,7 @@ Deno.test("the same model configured bare and namespaced runs once, not twice", 
     from: (t: string) =>
       t === "system_settings"
         ? { select: () => ({ in: () => Promise.resolve({ data: rows, error: null }) }) }
-        : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) }) }) },
+        : providerKeysStub(),
   } as any;
   Deno.env.set("GOOGLE_AI_STUDIO_KEY", "k");
   const tiers = await resolveSttTiers(admin);
@@ -488,7 +503,7 @@ Deno.test("google and gemini are one provider, so the same model collapses", asy
     from: (t: string) =>
       t === "system_settings"
         ? { select: () => ({ in: () => Promise.resolve({ data: rows, error: null }) }) }
-        : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) }) }) },
+        : providerKeysStub(),
   } as any;
   Deno.env.set("GOOGLE_AI_STUDIO_KEY", "k");
   const tiers = await resolveSttTiers(admin);
