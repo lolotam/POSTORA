@@ -422,3 +422,109 @@ Deno.test("a redirect off Meta's hosts is refused rather than followed", async (
     "refusing to fetch media from evil.test",
   );
 });
+
+Deno.test("a network error never carries the signed URL into the message", async () => {
+  // Meta's attachment links put the authorisation in the query string, and Deno's network
+  // and TLS errors quote the URL they were fetching. That message is logged verbatim
+  // upstream, so propagating it would write a live credential to the log.
+  const leaky = () =>
+    Promise.reject(
+      new TypeError(
+        "error sending request for url (https://cdn.fbsbx.com/v/x.mp4?oh=SECRETSIG&oe=6A9648F9)",
+      ),
+    );
+  const error = await new MetaMessagingFetcher()
+    .fetchMediaBytes({ platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/x.mp4?oh=SECRETSIG" }, LIMITS, leaky)
+    .then(() => null, (e) => e as MediaFetchError);
+
+  assert(error instanceof MediaFetchError);
+  assert(!error.message.includes("SECRETSIG"), `leaked the signature: ${error.message}`);
+  assert(!error.message.includes("?"), `leaked a query string: ${error.message}`);
+  // Still diagnosable: which host, and which class of failure.
+  assert(error.message.includes("cdn.fbsbx.com"));
+  assert(error.message.includes("TypeError"));
+});
+
+Deno.test("redirects and the body read share one deadline, they do not each get a fresh one", async () => {
+  // A duration is not a budget. Restarted per hop, a two-redirect download consumed four
+  // times the configured timeout -- which is how a 10s download plus a 40s provider ladder
+  // came to 80s against a 60s worker ceiling.
+  const started = Date.now();
+  let hops = 0;
+  // Honours the abort signal, because that is what a real fetch does -- a stub that ignores
+  // it measures the stub, not the deadline.
+  const slowRedirects = (_url: string | URL | Request, init?: RequestInit) => {
+    hops += 1;
+    const location = `https://scontent.fbcdn.net/hop${hops}.jpg`;
+    return new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(
+        () => resolve(new Response(null, { status: 302, headers: { location } })),
+        40,
+      );
+      init?.signal?.addEventListener("abort", () => {
+        clearTimeout(timer);
+        const aborted = new Error("The operation was aborted");
+        aborted.name = "AbortError";
+        reject(aborted);
+      }, { once: true });
+    });
+  };
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/first.jpg" },
+        { maxBytes: 1024, timeoutMs: 60 },
+        slowRedirects as typeof globalThis.fetch,
+      ),
+    MediaFetchError,
+  );
+  // Three 40ms hops would be 120ms if each restarted the clock. One shared 60ms budget
+  // cannot reach that, whatever the machine is doing.
+  const elapsed = Date.now() - started;
+  assert(elapsed < 115, `download ran ${elapsed}ms, so the budget was not shared`);
+});
+
+Deno.test("a third redirect is refused rather than followed", async () => {
+  const alwaysRedirects = () =>
+    Promise.resolve(
+      new Response(null, {
+        status: 302,
+        headers: { location: "https://scontent.fbcdn.net/again.jpg" },
+      }),
+    );
+  await assertRejects(
+    () =>
+      new MetaMessagingFetcher().fetchMediaBytes(
+        { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/first.jpg" },
+        LIMITS,
+        alwaysRedirects,
+      ),
+    MediaFetchError,
+    "download 302",
+  );
+});
+
+Deno.test("the Evolution api key is bound to the configured instance host", async () => {
+  // The apikey header travels with this request, so the module's own invariant applies:
+  // a credentialed call is never unbounded.
+  await assertRejects(
+    () =>
+      new EvolutionFetcher("https://evo.example.com", "k", "inst").fetchMediaBytes(
+        { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+        LIMITS,
+        // A fetcher that would happily answer, so only the policy can refuse this.
+        () => Promise.resolve(new Response(JSON.stringify({ base64: "AQID" }), { status: 200 })),
+      ).then(async (ok) => {
+        // Sanity: the configured host IS allowed, so the refusal below is about the host,
+        // not about Evolution being broken in this test.
+        assertEquals(ok.bytes.length, 3);
+        await new EvolutionFetcher("not a url", "k", "inst").fetchMediaBytes(
+          { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+          LIMITS,
+          () => Promise.resolve(new Response(JSON.stringify({ base64: "AQID" }), { status: 200 })),
+        );
+      }),
+    MediaFetchError,
+    "EVOLUTION_API_URL is not a valid url",
+  );
+});

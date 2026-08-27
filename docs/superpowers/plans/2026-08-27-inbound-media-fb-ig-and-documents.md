@@ -162,6 +162,13 @@ from a CDN in 10s is ample, and the widened budget is for the model call, which 
 half. Widening both puts the request over the 60s worker ceiling. A test asserts the
 timeout the fetcher actually receives, so the split cannot drift silently.
 
+**Revised again after round 2.** Passing 10s was not the same as spending 10s: `timedFetch`
+restarted that duration for the initial request, for each of two redirects, and for the body
+read, so a two-hop download could take 40s and the real worst case was ~80s, not 50s. Every
+step now draws from one shared clock (`remainingTimeFrom`), in `CloudGraphFetcher` as well as
+`MetaMessagingFetcher`. Worst case is 10s download + 2x20s ladder = 50s. The test that pins
+this measures elapsed time and fails at ~160ms against the per-hop version.
+
 - [ ] **Step 5: Label document text for the agent**
 
 `AGENT_TEXT_LABELS: Record<MediaKind, string>`, document maps to

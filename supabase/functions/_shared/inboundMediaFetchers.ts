@@ -251,7 +251,7 @@ async function timedFetch(
   policy: HostPolicy | null = null,
   external?: AbortSignal,
 ): Promise<Response> {
-  assertFetchableUrl(url, policy);
+  const target = assertFetchableUrl(url, policy);
   if (external?.aborted) {
     const error = new Error("The operation was aborted");
     error.name = "AbortError";
@@ -272,11 +272,49 @@ async function timedFetch(
       if (external?.aborted) throw error;
       throw new MediaFetchError(`timed out after ${timeoutMs}ms`, "timeout");
     }
-    throw new MediaFetchError((error as Error)?.message ?? "network error", "transport_failed");
+    // The runtime's own message is NOT propagated. A media URL is signed -- Meta's
+    // attachment links carry the authorisation in the query string -- and Deno's network
+    // and TLS errors quote the URL they were fetching. That message is logged verbatim
+    // upstream, which would put a live credential in the log. Host and error class are
+    // enough to diagnose a transport failure and carry no secret.
+    throw new MediaFetchError(
+      `network error contacting ${target.hostname} (${(error as Error)?.name || "Error"})`,
+      "transport_failed",
+    );
   } finally {
     clearTimeout(timer);
     external?.removeEventListener("abort", onExternalAbort);
   }
+}
+
+/**
+ * One shared clock for a whole download.
+ *
+ * `limits.timeoutMs` is a duration, not a budget. Restarted for the initial request, each
+ * redirect and the body read, a two-hop download consumes four times what the operator
+ * configured -- which is how a 10s download and a 40s provider ladder added up to 80s
+ * against a 60s worker ceiling. Every step now draws from the same remaining time, so the
+ * configured number is the total.
+ */
+/**
+ * Pins an Evolution request to the instance the operator configured.
+ *
+ * An unparseable base is a configuration error, not a licence to fetch anywhere: it refuses
+ * rather than falling back to an unbounded policy.
+ */
+function evolutionPolicy(baseUrl: string): HostPolicy {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname;
+  } catch {
+    throw new MediaFetchError("EVOLUTION_API_URL is not a valid url", "transport_failed");
+  }
+  return { suffixes: [host], carriesCredentials: true };
+}
+
+function remainingTimeFrom(totalMs: number): () => number {
+  const endsAt = Date.now() + totalMs;
+  return () => Math.max(0, endsAt - Date.now());
 }
 
 /** A redirect is another origin: validate it exactly as strictly as the first hop. */
@@ -340,6 +378,8 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
     const token = ref.accessToken;
     if (!token) throw new MediaFetchError("no access token", "transport_failed");
     const auth = { Authorization: `Bearer ${token}` };
+    // Lookup, redirects and body read share one budget -- see remainingTimeFrom.
+    const remaining = remainingTimeFrom(limits.timeoutMs);
 
     let url = ref.mediaUrl ?? null;
     let mime = ref.mimeType ?? null;
@@ -351,7 +391,7 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
         fetcher,
         `${GRAPH_BASE}/${encodeURIComponent(ref.mediaId)}`,
         { headers: auth },
-        limits.timeoutMs,
+        remaining(),
         CREDENTIALED_POLICY,
         signal,
       );
@@ -366,18 +406,18 @@ export class CloudGraphFetcher implements InboundMediaFetcher {
 
     // Follow at most two hops, validating each. `redirect: "manual"` means the token is
     // never replayed to a location we have not checked.
-    let response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, CREDENTIALED_POLICY, signal);
+    let response = await timedFetch(fetcher, url, { headers: auth }, remaining(), CREDENTIALED_POLICY, signal);
     for (let hop = 0; hop < 2; hop += 1) {
       const next = redirectTarget(response, url);
       if (!next) break;
       url = next;
-      response = await timedFetch(fetcher, url, { headers: auth }, limits.timeoutMs, CREDENTIALED_POLICY, signal);
+      response = await timedFetch(fetcher, url, { headers: auth }, remaining(), CREDENTIALED_POLICY, signal);
     }
     if (!response.ok) {
       throw new MediaFetchError(`media download ${response.status}`, "transport_failed");
     }
 
-    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs, signal);
+    const bytes = await readCapped(response, limits.maxBytes, remaining(), signal);
     return { bytes, mimeType: mime ?? response.headers.get("content-type") ?? "application/octet-stream" };
   }
 }
@@ -424,7 +464,11 @@ export class EvolutionFetcher implements InboundMediaFetcher {
         body: JSON.stringify({ message: { key: { id: ref.mediaId } }, convertToMp4: false }),
       },
       limits.timeoutMs,
-      null,
+      // The apikey header travels with this request, so the invariant above applies: a
+      // credentialed call is never unbounded. The destination is built from the configured
+      // base, and pinning it here is what stops a tampered EVOLUTION_API_URL from being the
+      // one thing standing between the key and an arbitrary host.
+      evolutionPolicy(this.baseUrl),
       signal,
     );
     if (!response.ok) {
@@ -495,17 +539,18 @@ export class MetaMessagingFetcher implements InboundMediaFetcher {
 
     // Meta's CDNs redirect between scontent hosts. `redirect: "manual"` means each hop is
     // re-validated against the allowlist rather than followed blind.
+    const remaining = remainingTimeFrom(limits.timeoutMs);
     let url = ref.mediaUrl;
-    let response = await timedFetch(fetcher, url, {}, limits.timeoutMs, META_MEDIA_POLICY, signal);
+    let response = await timedFetch(fetcher, url, {}, remaining(), META_MEDIA_POLICY, signal);
     for (let hop = 0; hop < 2; hop += 1) {
       const next = redirectTarget(response, url);
       if (!next) break;
       url = next;
-      response = await timedFetch(fetcher, url, {}, limits.timeoutMs, META_MEDIA_POLICY, signal);
+      response = await timedFetch(fetcher, url, {}, remaining(), META_MEDIA_POLICY, signal);
     }
     if (!response.ok) throw new MediaFetchError(`download ${response.status}`, "transport_failed");
 
-    const bytes = await readCapped(response, limits.maxBytes, limits.timeoutMs, signal);
+    const bytes = await readCapped(response, limits.maxBytes, remaining(), signal);
     const served = response.headers.get("content-type") ?? ref.mimeType ?? "application/octet-stream";
     return { bytes, mimeType: normaliseMetaMime(ref.kindHint, served) };
   }
