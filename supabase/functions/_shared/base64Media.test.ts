@@ -97,8 +97,26 @@ Deno.test("refuses a malformed data URL instead of re-reading it as raw base64",
   });
 });
 
+// CodeRabbit, PR #41: a valid header plus a non-empty body passed without the body ever
+// being decoded, so garbage reached Cloudinary and failed there with a message about its
+// internals rather than about the caller's input.
+Deno.test("refuses a data URL whose body is not base64", () => {
+  assertEquals(normalizeBase64Media("data:image/png;base64,%%%%"), {
+    ok: false,
+    reason: "undecodable",
+  });
+});
+
+Deno.test("refuses raw garbage even when a mime hint is supplied", () => {
+  assertEquals(normalizeBase64Media("%%%not base64%%%", "image/png"), {
+    ok: false,
+    reason: "undecodable",
+  });
+});
+
 Deno.test("failure text tells the caller what to send instead", () => {
   assertEquals(describeBase64Failure("empty"), "Media payload was empty.");
+  assertEquals(describeBase64Failure("undecodable"), "Media payload is not valid base64.");
   assertEquals(
     describeBase64Failure("unrecognised_type").includes("mime_type"),
     true,

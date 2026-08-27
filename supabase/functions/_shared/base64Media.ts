@@ -36,6 +36,24 @@ const SIGNATURES: Signature[] = [
 
 const DATA_URL = /^data:([^;,]+);base64,(.+)$/s;
 
+/**
+ * Decodes the WHOLE payload, not just the sniffing prefix.
+ *
+ * `data:image/png;base64,%%%%` has a valid header and a non-empty body, so a header-only
+ * check calls it good and the garbage travels to Cloudinary, which fails with a message
+ * about its own internals rather than about the caller's input. Failing here says what is
+ * actually wrong, and the payloads are single media files rather than anything where
+ * decoding twice is a cost worth avoiding.
+ */
+function isDecodableBase64(payload: string): boolean {
+  try {
+    atob(payload);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function decodePrefix(payload: string): Uint8Array | null {
   // 4 base64 chars carry 3 bytes, so this is the smallest slice covering SNIFF_BYTES.
   const head = payload.slice(0, Math.ceil(SNIFF_BYTES / 3) * 4);
@@ -60,7 +78,7 @@ export function sniffBase64MimeType(payload: string): string | null {
   return SIGNATURES.find((signature) => matches(bytes, signature))?.mimeType ?? null;
 }
 
-export type Base64MediaFailure = "empty" | "unrecognised_type";
+export type Base64MediaFailure = "empty" | "unrecognised_type" | "undecodable";
 
 export type Base64MediaOutcome =
   | { ok: true; dataUrl: string }
@@ -85,13 +103,20 @@ export function normalizeBase64Media(
   const trimmed = (payload ?? "").trim();
   if (!trimmed) return { ok: false, reason: "empty" };
 
-  if (DATA_URL.test(trimmed)) return { ok: true, dataUrl: trimmed };
+  const asDataUrl = DATA_URL.exec(trimmed);
+  if (asDataUrl) {
+    return isDecodableBase64(asDataUrl[2].replace(/\s+/g, ""))
+      ? { ok: true, dataUrl: trimmed }
+      : { ok: false, reason: "undecodable" };
+  }
 
   // A client that sent a data: prefix we could not parse meant to send a data URL; do not
   // silently reinterpret the whole string as a base64 payload.
   if (trimmed.startsWith("data:")) return { ok: false, reason: "unrecognised_type" };
 
   const stripped = trimmed.replace(/\s+/g, "");
+  if (!isDecodableBase64(stripped)) return { ok: false, reason: "undecodable" };
+
   const mimeType = sniffBase64MimeType(stripped) ?? (mimeHint?.trim() || null);
   if (!mimeType) return { ok: false, reason: "unrecognised_type" };
 
@@ -100,8 +125,8 @@ export function normalizeBase64Media(
 
 /** What to tell the caller, in their terms, when normalisation refuses a payload. */
 export function describeBase64Failure(reason: Base64MediaFailure): string {
-  return reason === "empty"
-    ? "Media payload was empty."
-    : "Could not determine the media type. Send a data URL (data:image/png;base64,...) " +
-      "or pass mime_type alongside the raw base64.";
+  if (reason === "empty") return "Media payload was empty.";
+  if (reason === "undecodable") return "Media payload is not valid base64.";
+  return "Could not determine the media type. Send a data URL (data:image/png;base64,...) " +
+    "or pass mime_type alongside the raw base64.";
 }

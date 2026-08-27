@@ -1271,20 +1271,31 @@ async function handleUploadMedia(supabase: any, userId: string, request: Request
       }
     }
 
-    // Handle single or multiple base64 data
-    const firstBase64 = file_data || media_base64;
-    const dataItems = files_data || (firstBase64 ? [firstBase64] : []);
-    const names = file_names || (file_name || filename ? [file_name || filename] : []);
+    // Handle single or multiple base64 data. Every one of these fields may arrive as a
+    // bare string or as an array -- POST /api/v1/post declares media_base64 as an array
+    // and the MCP create_post schema copies that, so a client reusing the shape it already
+    // knows sends one here. Wrapping an array in another array made normalizeBase64Media
+    // call .trim() on it, which threw out of the loop as a 500.
+    const asList = (value: unknown): unknown[] =>
+      Array.isArray(value) ? value : (value === undefined || value === null ? [] : [value]);
+    const dataItems = [...asList(files_data), ...asList(file_data), ...asList(media_base64)];
+    const names = [...asList(file_names), ...asList(file_name), ...asList(filename)];
     for (let i = 0; i < dataItems.length; i++) {
       // The uploader wants a data URL; clients send raw base64 just as often, and the
       // tool description promises both.
-      const normalized = normalizeBase64Media(dataItems[i], mime_type);
+      const normalized = normalizeBase64Media(
+        typeof dataItems[i] === 'string' ? dataItems[i] as string : '',
+        typeof mime_type === 'string' ? mime_type : undefined,
+      );
       if (!normalized.ok) {
         errors.push({ index: i, error: describeBase64Failure(normalized.reason) });
         continue;
       }
       try {
-        const mediaFile = await uploadFileFromBase64(supabase, userId, normalized.dataUrl, names[i]);
+        const mediaFile = await uploadFileFromBase64(
+          supabase, userId, normalized.dataUrl,
+          typeof names[i] === 'string' ? names[i] as string : undefined,
+        );
         uploadedFiles.push(mediaFile);
       } catch (error: any) {
         errors.push({ index: i, error: error.message });
