@@ -279,3 +279,29 @@ const SAFETY_MARGIN_MS = 5_000;
 export function modelBudgetRemaining(startedAt: number, now: number): number {
   return WORKER_BUDGET_MS - FLOOR_RESERVE_MS - SAFETY_MARGIN_MS - (now - startedAt);
 }
+
+/**
+ * The failure a chat-completion body is carrying, or null when it holds a usable
+ * assistant message.
+ *
+ * Checking the HTTP status alone is not enough. OpenRouter answers 200 with an error
+ * body and no `choices` when the upstream provider rejects the call — observed in
+ * production as `{"error":{"message":"Upstream error from Nvidia: ResourceExhausted:
+ * Worker local total request limit reached (16/16)","code":502}}`. Treated as a
+ * success, that body stops the fallback chain at the first model and throws past the
+ * outage floor, so a transient capacity blip silently drops the customer's message.
+ *
+ * Returning the reason rather than throwing keeps it a pure query: the caller decides
+ * whether this model failed or the whole chain did.
+ */
+export function completionFailure(data: unknown): string | null {
+  if (!data || typeof data !== "object") return "Chat completion returned no body";
+  const body = data as { error?: unknown; choices?: Array<{ message?: unknown }> };
+  if (typeof body.error === "string") return body.error;
+  if (body.error) {
+    const { message } = body.error as { message?: unknown };
+    return typeof message === "string" ? message : "Chat completion failed";
+  }
+  if (!body.choices?.[0]?.message) return "Chat completion returned no choices";
+  return null;
+}

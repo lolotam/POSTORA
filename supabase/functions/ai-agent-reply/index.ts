@@ -5,6 +5,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestResponse } from "../_shared/cors.ts";
 import {
   buildSystemPrompt,
+  completionFailure,
   detectReplyLanguage,
   formatRelatedFacts,
   formatModelRef,
@@ -115,6 +116,11 @@ async function chatCompletion(
   }
   const data = await response.json();
   if (!response.ok) throw new Error(data?.error?.message || "Chat completion failed");
+  // A 200 is not yet a completion -- see completionFailure. Throwing here is what puts
+  // the failure inside the caller's per-model try, so the next model in the chain gets
+  // tried and a total outage still reaches the delivery floor.
+  const failure = completionFailure(data);
+  if (failure) throw new Error(failure);
   return data;
 }
 
@@ -717,8 +723,8 @@ Deno.serve(async (req) => {
       }
       promptTokens += completion.usage?.prompt_tokens || 0;
       completionTokens += completion.usage?.completion_tokens || 0;
-      const choice = completion.choices?.[0]?.message;
-      if (!choice) throw new Error("Chat completion returned no choices");
+      // chatCompletion rejects any body that lacks one, so this cannot be undefined.
+      const choice = completion.choices[0].message;
 
       if (!choice.tool_calls?.length) {
         replyText = (choice.content || "").trim();

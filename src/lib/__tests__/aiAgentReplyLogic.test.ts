@@ -4,6 +4,7 @@ import {
   detectReplyLanguage,
   formatModelRef,
   formatRelatedFacts,
+  completionFailure,
   ModelChainExhaustedError,
   modelBudgetRemaining,
   modelOutageApology,
@@ -260,5 +261,48 @@ describe("modelBudgetRemaining", () => {
   it("goes non-positive once the reserve is all that is left", () => {
     expect(modelBudgetRemaining(1_000, 44_000)).toBeLessThanOrEqual(0);
     expect(modelBudgetRemaining(1_000, 90_000)).toBeLessThan(0);
+  });
+});
+
+describe("completionFailure", () => {
+  // The production failure this exists for: OpenRouter answers HTTP 200 carrying the
+  // upstream provider's rejection and no choices at all. Reproduced against the
+  // configured primary on 2026-08-27, roughly one attempt in three.
+  it("reports the upstream message from a 200 that carries an error body", () => {
+    expect(completionFailure({
+      error: {
+        message: "Upstream error from Nvidia: ResourceExhausted: Worker local total request limit reached (16/16)",
+        code: 502,
+      },
+    })).toContain("ResourceExhausted");
+  });
+
+  it("reports a body that parsed but carries no assistant message", () => {
+    expect(completionFailure({ choices: [] })).toBe("Chat completion returned no choices");
+    expect(completionFailure({ choices: [{}] })).toBe("Chat completion returned no choices");
+  });
+
+  it("reports a body that is not an object at all", () => {
+    expect(completionFailure(null)).toBe("Chat completion returned no body");
+    expect(completionFailure("upstream timeout")).toBe("Chat completion returned no body");
+  });
+
+  it("falls back to a generic reason when the error carries no message", () => {
+    expect(completionFailure({ error: { code: 502 } })).toBe("Chat completion failed");
+    expect(completionFailure({ error: "rate limited" })).toBe("rate limited");
+  });
+
+  // Null is the signal the caller keeps the completion. An error body must win over a
+  // populated choices array, or a partial response would be answered with as if it were
+  // whole.
+  it("passes a usable completion", () => {
+    expect(completionFailure({ choices: [{ message: { role: "assistant", content: "hi" } }] })).toBeNull();
+  });
+
+  it("still fails a completion that has both an error and choices", () => {
+    expect(completionFailure({
+      error: { message: "partial upstream failure" },
+      choices: [{ message: { content: "" } }],
+    })).toBe("partial upstream failure");
   });
 });

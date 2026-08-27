@@ -27,10 +27,19 @@ import { normalizeThreadsReply } from "../threads-webhook/replyEvents.ts";
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-// One Graph call per post per run, so the post window is the cost knob. Two days covers any
-// realistic reply-to-a-recent-post window while keeping a busy account inside single digits
-// of calls per run; `has_replies` then removes the posts nobody answered.
-const LOOKBACK_MS = 2 * 24 * 60 * 60 * 1000;
+// One Graph call per post per run, so the page size is the cost knob -- and the only one.
+//
+// This used to also drop posts older than two days, which silently made the poller blind:
+// people reply to a post for far longer than the post stays recent, and an account whose
+// newest post has aged past the window stopped receiving replies entirely while its
+// mentions kept arriving (mentions are read separately and never had a window). Verified
+// in production 2026-08-27 -- an account whose only post was five days old had two
+// unanswered customer replies sitting in `/conversation` that no run would ever read.
+//
+// Removing it does not raise the ceiling, only the typical case: `/me/threads` already
+// returns at most MAX_POSTS_PER_ACCOUNT, most recent first, and `has_replies` still drops
+// the posts nobody answered. Worst case is (cap + 2) calls per run against a quota measured
+// at 1% by `x-business-use-case-usage` at current volume.
 const MAX_POSTS_PER_ACCOUNT = 15;
 const ACCOUNT_SELECT =
   "id, user_id, platform, platform_user_id, platform_username, access_token, account_metadata";
@@ -45,23 +54,18 @@ interface ThreadsAccount {
   account_metadata: Record<string, unknown> | null;
 }
 
-/** Recent posts worth asking about: within the window, and someone actually replied. */
+/** Posts worth asking about: recent enough to be on the first page, and someone replied. */
 async function recentPostsWithReplies(account: ThreadsAccount): Promise<string[]> {
   const result = await metaGet("/me/threads", account.access_token!, {
-    fields: "id,timestamp,has_replies",
+    fields: "id,has_replies",
     limit: MAX_POSTS_PER_ACCOUNT,
   });
   if (!result.ok || result.data?.error) {
     console.warn(`[threads-poll] ${account.platform_username}: listing posts failed`);
     return [];
   }
-  const cutoff = Date.now() - LOOKBACK_MS;
   return (Array.isArray(result.data?.data) ? result.data.data : [])
-    .filter((post: any) => {
-      if (post?.has_replies !== true) return false;
-      const posted = post?.timestamp ? Date.parse(post.timestamp) : NaN;
-      return Number.isNaN(posted) || posted >= cutoff;
-    })
+    .filter((post: any) => post?.has_replies === true)
     .map((post: any) => String(post.id));
 }
 
