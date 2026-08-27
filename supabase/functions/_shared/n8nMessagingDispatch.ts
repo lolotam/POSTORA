@@ -327,7 +327,9 @@ export async function dispatchN8nEvent(
   };
 
   await Promise.all(Array.from({ length: Math.min(MAX_IN_FLIGHT, unique.length) }, () => deliver()));
-  await recordN8nDispatch(adminClient, userId, payload, unique.length);
+  // Destinations actually attempted, not merely matched: the fan-out deadline can leave
+  // some unreached, and counting those would report a hand-off that never left the box.
+  await recordN8nDispatch(adminClient, userId, payload, unique.length - skipped);
   if (skipped > 0) {
     console.error(`[n8n-dispatch] fan-out deadline hit; ${skipped}/${unique.length} destination(s) not delivered`);
   }

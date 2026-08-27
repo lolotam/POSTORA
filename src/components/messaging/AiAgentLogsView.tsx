@@ -90,7 +90,7 @@ function N8nEntry({ dispatch }: { dispatch: AgentActivity & { source: "n8n" } })
         <SourceBadge source="n8n" />
         {delivered > 0 ? (
           <Badge variant="secondary">
-            sent to {delivered === 1 ? "1 workflow" : `${delivered} workflows`}
+            {delivered === 1 ? "1 workflow" : `${delivered} workflows`}
           </Badge>
         ) : (
           <Badge variant="destructive">no workflow listening</Badge>
