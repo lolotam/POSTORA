@@ -155,7 +155,16 @@ Deno.serve(async (req) => {
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }
-        const url = `${GRAPH_API_BASE}/${page_id}/feed?fields=id,message,created_time,comments{id,from{id,name,picture},message,created_time,is_hidden,comment_count,parent}&limit=25&access_token=${accessToken}`;
+        // `.filter(stream)` is what makes replies visible at all. The comments edge
+        // defaults to `toplevel`, which returns only root comments -- `parent` was
+        // already being requested and always came back empty, so the reply a customer
+        // wrote under their own thread never reached the client. `stream` returns the
+        // whole tree flat, each reply carrying the `parent` the client nests by.
+        const commentFields =
+          "comments.filter(stream){id,from{id,name,picture},message,created_time,is_hidden,comment_count,parent}";
+        const url = `${GRAPH_API_BASE}/${page_id}/feed?fields=${
+          encodeURIComponent(`id,message,created_time,${commentFields}`)
+        }&limit=25&access_token=${accessToken}`;
         const res = await fetch(url);
         result = await res.json();
         break;

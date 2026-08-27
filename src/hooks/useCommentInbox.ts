@@ -48,7 +48,11 @@ function parsePageComments(data: any): Comment[] {
         message: c.message || "",
         created_time: c.created_time,
         is_hidden: c.is_hidden || false,
-        is_reply: false,
+        // The feed request asks for the `stream` filter, so replies arrive in the same
+        // flat list as the comments they answer, each carrying its parent. Reading it
+        // here is what lets the inbox render a thread instead of a pile.
+        is_reply: Boolean(c.parent?.id),
+        parent_id: c.parent?.id,
         post_id: post.id,
         post_message: post.message || "",
         platform: "facebook",

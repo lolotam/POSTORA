@@ -249,7 +249,11 @@ Deno.serve(async (req) => {
           if (inboxResult === "error") {
             console.error(`[fb-ig-webhook] Inbox persist failed for ${platform}; automation not dispatched`);
           }
-          if (inboxResult === "inserted" && automationHandler !== "off") {
+          // Exactly one handler owns a message. "internal" means the Postora agent
+          // answers, so dispatching here too made the n8n workflow reply alongside it --
+          // and, whenever the agent failed, instead of it. The comment branch below and
+          // whatsapp-webhook both gate on "n8n"; this is the surface that drifted.
+          if (inboxResult === "inserted" && automationHandler === "n8n") {
             await runInBackground("facebook-instagram message dispatch", () => dispatchMessageEvent(
               adminClient,
               account.user_id,

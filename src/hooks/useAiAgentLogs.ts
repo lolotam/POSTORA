@@ -21,9 +21,13 @@ export interface AiAgentLog {
 
 export function useAiAgentLogs(platform: AiAgentPlatform) {
   const { session } = useAuth();
+  const userId = session?.user?.id;
   return useQuery({
-    queryKey: ["ai-agent-logs", platform],
-    enabled: !!session,
+    // Keyed by user because the QueryClient is a module-level singleton that survives a
+    // sign-out: keyed by platform alone, signing in as somebody else in the same tab
+    // renders the previous user's cached inbound_text until the refetch lands.
+    queryKey: ["ai-agent-logs", userId, platform],
+    enabled: !!userId,
     refetchInterval: 15000,
     queryFn: async () => {
       const { data, error } = await (supabase as any)

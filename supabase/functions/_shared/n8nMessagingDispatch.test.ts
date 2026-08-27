@@ -307,20 +307,34 @@ function stubAdmin(input: {
   settings: Array<{ key: string; value: Record<string, unknown> }>;
   legacy: Array<Record<string, unknown>>;
   updates: Array<{ key: string; value: Record<string, unknown> }>;
+  inserts?: Array<{ table: string; row: Record<string, unknown> }>;
 }) {
   return {
     from(table: string) {
       const rows = table === "app_settings" ? input.settings : input.legacy;
-      return new Query(rows, input.updates, table);
+      return new Query(rows, input.updates, table, input.inserts ?? []);
     },
   } as any;
 }
 
 class Query {
-  constructor(private readonly rows: any[], private readonly updates: any[], private readonly table: string) {}
+  constructor(
+    private readonly rows: any[],
+    private readonly updates: any[],
+    private readonly table: string,
+    private readonly inserts: Array<{ table: string; row: Record<string, unknown> }>,
+  ) {}
   select() { return this; }
   like() { return this; }
   eq() { return this; }
+  // dispatchN8nEvent records every fan-out to automation_dispatch_log. The write is
+  // wrapped in a try/catch, so a stub without this would still pass -- silently, with
+  // the log never exercised. Kept out of `updates` so the webhook-state assertions in
+  // the other tests stay about webhook state.
+  async insert(row: Record<string, unknown>) {
+    this.inserts.push({ table: this.table, row });
+    return { data: null, error: null };
+  }
   async maybeSingle() { return { data: null, error: null }; }
   async then(resolve: (result: unknown) => unknown) { return resolve({ data: this.rows, error: null }); }
   update(value: Record<string, unknown>) {

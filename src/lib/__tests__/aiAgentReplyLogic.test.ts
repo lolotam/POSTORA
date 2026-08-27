@@ -4,6 +4,7 @@ import {
   detectReplyLanguage,
   formatModelRef,
   formatRelatedFacts,
+  completionFailure,
   ModelChainExhaustedError,
   modelBudgetRemaining,
   modelOutageApology,
@@ -260,5 +261,121 @@ describe("modelBudgetRemaining", () => {
   it("goes non-positive once the reserve is all that is left", () => {
     expect(modelBudgetRemaining(1_000, 44_000)).toBeLessThanOrEqual(0);
     expect(modelBudgetRemaining(1_000, 90_000)).toBeLessThan(0);
+  });
+});
+
+describe("completionFailure", () => {
+  // The production failure this exists for: OpenRouter answers HTTP 200 carrying the
+  // upstream provider's rejection and no choices at all. Reproduced against the
+  // configured primary on 2026-08-27, roughly one attempt in three.
+  it("reports the upstream message from a 200 that carries an error body", () => {
+    expect(completionFailure({
+      error: {
+        message: "Upstream error from Nvidia: ResourceExhausted: Worker local total request limit reached (16/16)",
+        code: 502,
+      },
+    })).toContain("ResourceExhausted");
+  });
+
+  it("reports a body that parsed but carries no assistant message", () => {
+    expect(completionFailure({ choices: [] })).toBe("Chat completion returned no assistant message");
+    expect(completionFailure({ choices: [{}] })).toBe("Chat completion returned no assistant message");
+  });
+
+  it("reports a choices field that is not an array", () => {
+    expect(completionFailure({ choices: {} })).toBe("Chat completion returned no choices");
+    expect(completionFailure({ choices: "none" })).toBe("Chat completion returned no choices");
+  });
+
+  // Truthiness alone would pass all three. Each then yields neither content nor tool_calls,
+  // so the request ends in "no_reply_generated" having never tried the next model.
+  it("rejects a message that is not an assistant-message object", () => {
+    for (const message of [[], "hello", 0, false]) {
+      expect(completionFailure({ choices: [{ message }] }))
+        .toBe("Chat completion returned no assistant message");
+    }
+  });
+
+  it("rejects an object that carries neither content nor tool calls", () => {
+    for (const message of [
+      {},
+      { role: "user" },
+      { role: "assistant" },
+      { content: null },
+      // An empty array is truthy and an array, but there is nothing in it to call.
+      { role: "assistant", content: null, tool_calls: [] },
+    ]) {
+      expect(completionFailure({ choices: [{ message }] }))
+        .toBe("Chat completion returned an unusable message");
+    }
+  });
+
+  it("passes a tool call with no content, which is how every tool turn arrives", () => {
+    expect(completionFailure({
+      choices: [{
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "1", function: { name: "search_knowledge", arguments: "{}" } }],
+        },
+      }],
+    })).toBeNull();
+  });
+
+  // index.ts reads toolCall.function.name outside its own try, so a malformed entry throws
+  // past the model loop -- no fallback, and no outage floor either.
+  it("rejects a tool call the reply loop could not execute", () => {
+    const malformed = [
+      [{}],
+      [null],
+      ["search_knowledge"],
+      [{ id: "1" }],
+      [{ id: "1", function: null }],
+      [{ id: "1", function: {} }],
+      [{ id: "1", function: { name: 42 } }],
+      // One good entry does not rescue a bad one; the loop reaches both.
+      [{ id: "1", function: { name: "ok", arguments: "{}" } }, { id: "2" }],
+    ];
+    for (const tool_calls of malformed) {
+      expect(completionFailure({ choices: [{ message: { role: "assistant", content: null, tool_calls } }] }))
+        .toBe("Chat completion returned a malformed tool call");
+    }
+  });
+
+  // Content alone is a complete answer, so a stray tool_calls value must not be read as one.
+  it("rejects malformed tool calls even when content is present", () => {
+    expect(completionFailure({
+      choices: [{ message: { role: "assistant", content: "hi", tool_calls: [{}] } }],
+    })).toBe("Chat completion returned a malformed tool call");
+  });
+
+  // An empty string is a usable answer that happens to be empty. It keeps its existing
+  // outcome -- logged as no_reply_generated -- rather than becoming a model failure.
+  it("passes an empty-string content", () => {
+    expect(completionFailure({ choices: [{ message: { role: "assistant", content: "" } }] })).toBeNull();
+  });
+
+  it("reports a body that is not an object at all", () => {
+    expect(completionFailure(null)).toBe("Chat completion returned no body");
+    expect(completionFailure("upstream timeout")).toBe("Chat completion returned no body");
+  });
+
+  it("falls back to a generic reason when the error carries no message", () => {
+    expect(completionFailure({ error: { code: 502 } })).toBe("Chat completion failed");
+    expect(completionFailure({ error: "rate limited" })).toBe("rate limited");
+  });
+
+  // Null is the signal the caller keeps the completion. An error body must win over a
+  // populated choices array, or a partial response would be answered with as if it were
+  // whole.
+  it("passes a usable completion", () => {
+    expect(completionFailure({ choices: [{ message: { role: "assistant", content: "hi" } }] })).toBeNull();
+  });
+
+  it("still fails a completion that has both an error and choices", () => {
+    expect(completionFailure({
+      error: { message: "partial upstream failure" },
+      choices: [{ message: { content: "" } }],
+    })).toBe("partial upstream failure");
   });
 });

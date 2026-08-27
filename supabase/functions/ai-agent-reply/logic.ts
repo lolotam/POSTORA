@@ -279,3 +279,61 @@ const SAFETY_MARGIN_MS = 5_000;
 export function modelBudgetRemaining(startedAt: number, now: number): number {
   return WORKER_BUDGET_MS - FLOOR_RESERVE_MS - SAFETY_MARGIN_MS - (now - startedAt);
 }
+
+/**
+ * The failure a chat-completion body is carrying, or null when it holds a usable
+ * assistant message.
+ *
+ * Checking the HTTP status alone is not enough. OpenRouter answers 200 with an error
+ * body and no `choices` when the upstream provider rejects the call — observed in
+ * production as `{"error":{"message":"Upstream error from Nvidia: ResourceExhausted:
+ * Worker local total request limit reached (16/16)","code":502}}`. Treated as a
+ * success, that body stops the fallback chain at the first model and throws past the
+ * outage floor, so a transient capacity blip silently drops the customer's message.
+ *
+ * Returning the reason rather than throwing keeps it a pure query: the caller decides
+ * whether this model failed or the whole chain did.
+ */
+export function completionFailure(data: unknown): string | null {
+  if (!data || typeof data !== "object") return "Chat completion returned no body";
+  const body = data as { error?: unknown; choices?: unknown };
+  if (typeof body.error === "string") return body.error;
+  if (body.error) {
+    const { message } = body.error as { message?: unknown };
+    return typeof message === "string" ? message : "Chat completion failed";
+  }
+  if (!Array.isArray(body.choices)) return "Chat completion returned no choices";
+  const message = (body.choices[0] as { message?: unknown } | undefined)?.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return "Chat completion returned no assistant message";
+  }
+  // The test is what the caller can actually use, not what the message calls itself.
+  // `{}`, `{role:"user"}` and even `{role:"assistant"}` are truthy objects that yield
+  // neither content nor tool_calls, so the request ends in "no_reply_generated" having
+  // never tried the next model -- the same miss as accepting a 200 error body. Checking
+  // usability rather than `role` also survives a provider that labels its messages
+  // differently; all three configured providers do send role, but nothing needs them to.
+  const { content, tool_calls: toolCalls } = message as { content?: unknown; tool_calls?: unknown };
+  // An empty tool_calls array is no more usable than a missing one: the caller reads
+  // `tool_calls?.length`, finds nothing to execute, and falls out of the loop with no reply.
+  const callable = Array.isArray(toolCalls) && toolCalls.length > 0;
+  if (typeof content !== "string" && !callable) {
+    return "Chat completion returned an unusable message";
+  }
+  // Length is not enough. The caller dereferences `toolCall.function.name` outside its own
+  // try block, so one entry missing `function` throws past the model loop entirely -- no
+  // fallback, and not a ModelChainExhaustedError either, so not even the outage floor.
+  // Rejecting here turns that into an ordinary per-model failure.
+  if (callable && !(toolCalls as unknown[]).every(isExecutableToolCall)) {
+    return "Chat completion returned a malformed tool call";
+  }
+  return null;
+}
+
+/** Exactly what the reply loop reads off a tool call before it can run one. */
+function isExecutableToolCall(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const { function: fn } = entry as { function?: unknown };
+  if (!fn || typeof fn !== "object") return false;
+  return typeof (fn as { name?: unknown }).name === "string";
+}
