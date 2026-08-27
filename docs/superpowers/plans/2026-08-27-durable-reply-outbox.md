@@ -2,45 +2,79 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** A customer's inbound message still gets an AI reply when the edge worker that was generating it is killed mid-flight.
+**Goal:** A customer's inbound message still gets an AI reply when the edge worker that was generating it is killed mid-flight — without the recovery itself sending a second reply, repeating a tool call, or escalating twice.
 
-**Architecture:** The webhook durably records the *inbound work item* before starting background work, and a cron-driven recovery function re-drives any item still unfinished after two minutes. Re-driving is made safe by an idempotency key that `ai-agent-reply` checks before it sends, so a worker killed after delivery but before bookkeeping does not produce a second reply.
+**Architecture:** A **two-stage** outbox. The webhook durably records the *inbound work item* before starting background work. `ai-agent-reply` then persists its *generated reply* before sending. Recovery behaves differently on each side of that line: after generation it only re-delivers text it already has, never re-running the agent; before generation it may re-run the agent, but only while nothing externally visible has happened yet. Anything ambiguous goes to a human rather than being replayed.
 
-**Tech Stack:** Postgres (new table, two `SECURITY DEFINER` functions, `pg_cron`), Deno edge functions, `deno test`.
+**Tech Stack:** Postgres (one table, three `SECURITY DEFINER` functions, `pg_cron`), Deno edge functions, `deno test`.
 
-**Spec:** none — this plan is written directly from the task brief pasted on 2026-08-27, whose relevant text is reproduced under "The brief, and where this plan departs from it".
+**Spec:** none — written from the task brief pasted 2026-08-27, whose relevant text is quoted below.
 
-**Status:** DRAFT — awaiting three decisions (marked **Decision required**) before implementation begins.
+**Status:** REVISION 2 — Codex round 1 returned `REJECT` with 8 blocking findings. Seven were verified true and are fixed here; one was verified false and is rejected with evidence. Three **Decision required** markers remain for the reviewer.
+
+---
+
+## Round 1 review outcome
+
+Codex reviewed revision 1 (`afd5962c`) read-only and rejected it. Every claim was checked against the source before being accepted — the record matters, because two of these are load-bearing enough that adopting them on trust would have been as bad as ignoring them.
+
+### Accepted — and what changed
+
+| # | Finding | Verified how | Fixed in |
+|---|---|---|---|
+| 1 | The idempotency check does not cover the external send. `replySender` fires at `ai-agent-reply/index.ts:803`; the `sent` log is written at `:838`; `logOutcome` swallows its insert error at `:213`. A death or a failed insert in between leaves no `sent` row, and recovery sends again. Two concurrent invocations can also both pass `alreadyDelivered` and both send. | Read all three line ranges | Tasks 1, 3, 5 — staged states, a lease, and `delivery_unknown` |
+| 2 | `FOR UPDATE SKIP LOCKED` holds only until the RPC transaction commits. Revision 1's eligibility was `status IN ('pending','sending') AND created_at < now() - interval`, so a row just marked `sending` was **immediately** eligible again and two cron runs could execute it concurrently. | Re-read my own SQL | Task 1 — real `lease_expires_at` |
+| 3 | Claiming 25 rows bumps 25 `attempts` but processes only what the deadline allows. The rest keep their bumped count, and at `attempts = 3` the predicate excludes them forever without ever marking them `failed` — a non-terminal graveyard. Revision 1 called this a "correct trade"; it was a defect. | Traced the predicate | Tasks 1, 6 — batch of 3, and a reaper |
+| 4 | `jsonResponse(data, status = 200)` — so `ai-agent-reply` returns **HTTP 200** carrying `{ok:false}`. Revision 1's "throw on non-2xx, retry 5xx, give up on 4xx" would have marked every generation failure as `sent`. | `_shared/cors.ts:45` | Tasks 4, 5 — parse the body, not the status |
+| 5 | The row stored `inboundText: messageText` (the placeholder) while the plan claimed recovery "re-runs media understanding". It stored no media URL, kind, caption or unread count. A recovered voice note would have produced a generic placeholder reply. | Read my own Task 4 against Task 5 | Task 1 — media reference columns |
+| 6 | `recordPendingReply` returned the same `null` for a duplicate and for a failed insert, and told the caller to proceed. A Meta redelivery therefore invoked the agent with **no** idempotency key, so both invocations could reply. | Read my own Task 2 | Task 2 — `enqueue_agent_reply` returns ownership |
+| 8 | Re-running the agent repeats more than the reply: tool calls, escalation, human assignment and admin notification all happen before the send. The key was checked only at request entry. | `ai-agent-reply/tools.ts` is invoked well before `:803` | The whole two-stage design, and Task 5's gate |
+
+Findings 9–12 (freshness, ordering, human takeover, the 24h service window, quota interaction, retention, generated types, vacuous tests) are accepted and appear in Tasks 1, 5, 6 and 8.
+
+### Rejected — with evidence
+
+**Finding 7: "Threads cannot create the sent log, because `ai_agent_logs.platform` allows only whatsapp/facebook/instagram."** This is **false**. Codex read `20260712000000_ai_agent_foundation.sql` and stopped. `20260822180000_threads_agent_platform.sql` widened that constraint, and the deployed database confirms it:
+
+```
+CHECK (platform = ANY (ARRAY['whatsapp'::text, 'facebook'::text, 'instagram'::text, 'threads'::text]))
+
+platform | count
+---------+------
+whatsapp |  194
+facebook |    9
+instagram|    7
+threads  |    7
+```
+
+Seven Threads rows are logged today. No additive migration is required, and the "verify the deployed production definition" step it asked for has been done — the result is above.
+
+**Finding 11, in part: "the plan omits `src/integrations/supabase/types.ts`."** Partly declined. The house precedent for a service-role-only counter table is that it is **not** in the generated types: `media_understanding_usage` (shipped 2026-08-25) does not appear there, and no browser code can read it because RLS denies all. `pending_agent_replies` is in the same category. Regenerating types for it would add a surface no client may use. The `ai_agent_logs.idempotency_key` column **is** different — that table is read by the Logs tab — so that part is accepted and appears in Task 3.
 
 ---
 
 ## Global Constraints
 
 - Every new table: RLS enabled, explicit policies or a deliberate deny-all, FKs indexed (`ARCHITECTURE.md` §23).
-- `SECURITY DEFINER` functions: controlled `search_path`, minimal grants, no dynamic SQL (§23).
-- No new edge function returns 5xx for an application error — Cloudflare replaces the body and the real reason is lost (memory: `postora-cloudflare-masks-origin-5xx`).
-- The whole inbound request must fit the **60-second edge-worker ceiling**; today's worst case is already ~50s (memory: `postora-edge-worker-60s-ceiling`).
-- Never blindly retry a send that can duplicate a side effect; use idempotency keys (§26).
-- Background work must be idempotent or safely deduplicated (§27).
-- Deploy is manual: files copied into the functions volume, then `docker compose -p postorasupabase-supabase-j8axyh restart functions` (`CLAUDE.md` step 7). `npx supabase functions deploy` does **not** work against this self-hosted stack.
+- `SECURITY DEFINER` functions: controlled `search_path`, minimal grants, no dynamic SQL, positive-parameter validation (§23).
+- No edge function returns 5xx for an application error — Cloudflare replaces the body (memory: `postora-cloudflare-masks-origin-5xx`).
+- Everything must fit the **60-second edge-worker ceiling**; the inbound path's worst case is already ~50s (memory: `postora-edge-worker-60s-ceiling`).
+- Never blindly retry a send that can duplicate a side effect (§26). Background work must be idempotent or safely deduplicated (§27).
+- Deploy is manual: copy into the functions volume, then `docker compose -p postorasupabase-supabase-j8axyh restart functions`. `npx supabase functions deploy` does not work here.
 - Gates: `npx tsc --noEmit`, `npx vitest run`, `deno test --allow-env --allow-read`, `clean-code-guard`, `test-guard`.
-- Branch `feat/durable-reply-outbox`. Commits scoped to named files. **Open a PR; do not merge.**
+- Branch `feat/durable-reply-outbox`. Scoped commits. **Open a PR; do not merge.**
 
 ---
 
-## The brief, and where this plan departs from it
+## The three departures from the brief
 
-Three things in the brief cannot be implemented as written. Each is a decision for the reviewer, not something this plan should quietly substitute.
+Unchanged from revision 1 in substance; Codex agreed with all three.
 
 ### Departure 1 — the durable unit is the inbound work item, not the generated reply
 
-The brief says:
+The brief says to "insert a 'pending' row once the reply is generated but before sending". The webhook never holds a generated reply — it POSTs to `ai-agent-reply`, and generation and delivery both happen inside that function, in another isolate.
 
-> Before `runInBackground()`: Insert a 'pending' row once the reply is generated but before sending.
-
-The webhook never has a generated reply. It calls `triggerAiAgentReply`, which is an HTTP POST to the `ai-agent-reply` function; generation and delivery both happen inside that function, in a different isolate. There is no point in the webhook where `generated_reply` exists.
-
-More importantly, that is not where the loss happens. The window established while fixing #42 is the **whole continuation**:
+And that is not where most of the loss is. The window is the whole continuation:
 
 ```ts
 runInBackground(async () => {
@@ -49,50 +83,61 @@ runInBackground(async () => {
 })
 ```
 
-A worker killed at any point in those ~50 seconds drops the customer's message entirely, and the most likely kill points are *before* generation, not after. An outbox that only starts recording once a reply exists is blind to most of the outage it is meant to survive.
+A row written only after generation is blind to the first 30 seconds of that.
 
-**This plan therefore persists the inbound work item** — everything needed to re-invoke `ai-agent-reply` from scratch — written *before* `runInBackground` is entered. `generated_reply` becomes a nullable column filled in on success, useful for audit rather than for recovery.
+**But Codex's finding 8 shows the brief's instinct was protecting something real.** Re-running the agent is not free: it can repeat tool calls, escalations and admin notifications. So this revision keeps **both**: an inbound work item for pre-generation deaths, *and* a persisted reply for post-generation ones, with different recovery rules on each side.
 
-| | Brief as written | This plan |
-|---|---|---|
-| Row written when | after generation | before background work starts |
-| Row contains | the finished reply | the inbound request |
-| Recovery does | re-send stored text | re-invoke `ai-agent-reply` |
-| Survives a kill during media understanding | no | yes |
-| Survives a kill during generation | no | yes |
-| Survives a kill during delivery | yes | yes |
+### Departure 2 — replay needs delivery idempotency, which does not exist yet
 
-**Decision required.** If the reviewer prefers the brief's version, Task 3 changes shape and Tasks 5–6 shrink considerably.
-
-### Departure 2 — retrying a send needs an idempotency key, and `ai-agent-reply` has none
-
-The brief's Step 5 says the `message_id` UNIQUE constraint prevents double-replies. It does not. It prevents two *rows*; it does nothing about one row being driven twice. The dangerous sequence is:
-
-1. `ai-agent-reply` generates, sends the Messenger message, writes its `ai_agent_logs` row.
-2. The worker dies **before** the outbox row is updated to `sent`.
-3. Two minutes later the recovery job sees an unfinished row and re-invokes.
-4. The customer receives the same answer twice — or a different answer to the same question, which is worse.
-
-`ARCHITECTURE.md` §26 forbids exactly this. So the plan adds an **idempotency key** (the outbox row's `id`) to the `ai-agent-reply` request contract. `ai-agent-reply` records it and refuses to send a second time for a key that already reached `status='sent'`.
-
-This is real added scope the brief did not ask for. It is also the difference between an outbox that protects customers and one that annoys them.
+`UNIQUE(social_account_id, message_id)` prevents two *rows*, not one row being driven twice. Revision 1 tried to solve this with a partial unique index on `ai_agent_logs` and called it a backstop. It is not: the send happens 35 lines before the log, and the log insert's error is swallowed. See Task 5 for what replaced it.
 
 ### Departure 3 — `threads-poll-replies` does not call the agent
 
-The brief says to apply the outbox to `facebook-instagram-webhook` and `threads-poll-replies`. The Threads poller contains no call to `ai-agent-reply`; it hands comments to `_shared/threadsCommentIngest.ts`, and the agent is invoked from `_shared/commentAutomation.ts:98` — which is the **shared** comment path for Facebook, Instagram and Threads alike.
+`_shared/commentAutomation.ts:98` does, for Facebook, Instagram and Threads alike. "Threads only" is not separable there without an arbitrary platform condition.
 
-So "Threads only" is not separable at that call site without a platform condition, which would be an arbitrary line through one code path. Two coherent options:
-
-- **3a (recommended):** cover the whole comment path in `commentAutomation.ts` — all three platforms — since it is one function carrying one risk.
-- **3b:** cover DMs only (`facebook-instagram-webhook`) in this change and leave comments to a follow-up.
+- **3a (recommended):** cover the whole shared comment path — one function, one risk.
+- **3b:** DMs only now, comments as a follow-up.
 
 **Decision required.**
 
-### Also needing a decision — WhatsApp Cloud is on neither list
+### WhatsApp Cloud is on neither list — **Decision required**
 
-The brief excludes WhatsApp Evolution ("it has its own reliability layer") and names FB/IG and Threads as in scope. It never mentions **`whatsapp-webhook`** (the Cloud path). That path runs the identical `runInBackground(understand → trigger)` shape and carries the same ~50s exposure. Leaving it out means the outbox covers the surfaces with less traffic and skips the one with most.
+The brief excludes Evolution and names FB/IG and Threads. `whatsapp-webhook` (Cloud) is never mentioned, runs the identical shape, and carries 194 of the 217 logged agent replies — by far the most traffic. This plan assumes it is out of scope as literally specified, and records it as the largest remaining hole.
 
-This plan **assumes WhatsApp Cloud is out of scope**, as literally specified, and flags it as the largest remaining hole.
+---
+
+## The state machine
+
+Everything below follows from this. A row is always in exactly one state, and every state has a way out.
+
+```
+                enqueued by webhook
+                        |
+                        v
+                   [ pending ]───────────────┐ lease expires, attempts left
+                        |                     │
+        agent claimed   |                     │
+                        v                     │
+                   [ running ]────────────────┤
+                        |                     │
+   reply generated &    |                     │
+   persisted            v                     │
+              [ ready_to_send ]───────────────┤
+                        |                     │
+          send returned |                     │
+          unambiguously v                     │
+                    [ sent ]  (terminal)      │
+                                              │
+   send outcome unknown ──> [ delivery_unknown ] (terminal, needs a human)
+   attempts exhausted   ──> [ failed ]          (terminal, logged to ai_agent_logs)
+   human took over /
+   superseded           ──> [ cancelled ]       (terminal)
+```
+
+Two properties this buys, both of which revision 1 lacked:
+
+- **Recovery from `ready_to_send` never re-runs the agent.** It re-delivers stored text. Tool calls and escalations cannot repeat, because they already happened and are not part of delivery.
+- **Recovery from `pending` may re-run the agent, but only when nothing externally visible has happened yet** — no tool call, no escalation, no `sent` log for the key. Otherwise the row goes to `delivery_unknown` and a human sees it. Guessing is what produces the double reply.
 
 ---
 
@@ -100,54 +145,71 @@ This plan **assumes WhatsApp Cloud is out of scope**, as literally specified, an
 
 | File | Responsibility |
 |---|---|
-| `supabase/migrations/20260828000000_pending_agent_replies.sql` | table, RLS, indexes, `claim_pending_agent_replies`, the `ai_agent_logs` idempotency column, the cron entry |
-| `supabase/functions/_shared/pendingReplies.ts` | **new.** Outbox client: `recordPendingReply`, `markReplySent`, `markReplyFailed`. The single place that knows the table's shape. |
+| `supabase/migrations/20260828000000_pending_agent_replies.sql` | table, RLS, indexes, `enqueue_agent_reply`, `claim_agent_replies`, `reap_exhausted_agent_replies`, `ai_agent_logs.idempotency_key`, two cron entries |
+| `supabase/functions/_shared/pendingReplies.ts` | **new.** Outbox client: enqueue, transition, settle. The only module that knows the table's shape. |
 | `supabase/functions/_shared/pendingReplies.test.ts` | **new.** |
-| `supabase/functions/ai-agent-reply/idempotency.ts` | **new.** `alreadyDelivered`. A sibling module because `index.ts` is a `Deno.serve` module and importing it starts a server. |
-| `supabase/functions/ai-agent-reply/idempotency.test.ts` | **new.** |
-| `supabase/functions/process-pending-replies/index.ts` | **new.** Cron-invoked recovery: claim → re-invoke → settle. |
-| `supabase/functions/process-pending-replies/recovery.ts` | **new.** The pure decision logic, separated so it is testable. |
+| `supabase/functions/_shared/agentReplyResult.ts` | **new.** Parses `ai-agent-reply`'s JSON body into a discriminated union. Shared by the webhooks and the recovery job so they cannot drift. |
+| `supabase/functions/_shared/agentReplyResult.test.ts` | **new.** |
+| `supabase/functions/process-pending-replies/index.ts` | **new.** Cron-invoked recovery. |
+| `supabase/functions/process-pending-replies/recovery.ts` | **new.** Pure decision logic. |
 | `supabase/functions/process-pending-replies/recovery.test.ts` | **new.** |
-| `supabase/functions/ai-agent-reply/index.ts` | accept and honour `idempotency_key` |
-| `supabase/functions/facebook-instagram-webhook/index.ts` | write the row before `runInBackground`; settle it inside |
+| `supabase/functions/ai-agent-reply/index.ts` | accept `outbox_id`; persist the reply before sending; return a typed outcome |
+| `supabase/functions/facebook-instagram-webhook/index.ts` | enqueue before `runInBackground`; settle inside |
 | `supabase/functions/_shared/commentAutomation.ts` | same, for the comment path (Option 3a only) |
 
 ---
 
-## Task 1: The table and its claim function
+## Task 1: The table, the lease, and the reaper
 
 **Files:**
 - Create: `supabase/migrations/20260828000000_pending_agent_replies.sql`
 
 **Interfaces:**
-- Produces: table `public.pending_agent_replies`; function `public.claim_pending_agent_replies(p_limit INTEGER, p_stale_seconds INTEGER, p_max_attempts INTEGER) RETURNS SETOF public.pending_agent_replies`.
+- Produces: table `public.pending_agent_replies`; `enqueue_agent_reply(...) RETURNS TABLE(id UUID, newly_enqueued BOOLEAN)`; `claim_agent_replies(p_limit INTEGER, p_lease_seconds INTEGER, p_max_attempts INTEGER) RETURNS SETOF public.pending_agent_replies`; `reap_exhausted_agent_replies(p_max_attempts INTEGER) RETURNS INTEGER`.
 
-- [ ] **Step 1: Write the table**
+- [ ] **Step 1: The table**
 
 ```sql
 CREATE TABLE IF NOT EXISTS public.pending_agent_replies (
   id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   social_account_id UUID NOT NULL REFERENCES public.social_accounts(id) ON DELETE CASCADE,
-  user_id           UUID NOT NULL,
+  -- Derived inside enqueue_agent_reply from social_accounts, never taken from the caller:
+  -- a webhook passing the wrong user_id would attribute a reply to the wrong tenant.
+  user_id           UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   platform          TEXT NOT NULL,
-  -- The platform's id for the INBOUND message. Dedup key: a webhook redelivery must not
-  -- create a second work item. Called message_id rather than mid because Threads and
-  -- WhatsApp do not use Meta's name for it.
   message_id        TEXT NOT NULL,
   conversation_id   TEXT NOT NULL,
   recipient_id      TEXT NOT NULL,
-  -- Everything ai-agent-reply needs to be re-invoked from scratch. This is the durable
-  -- unit: a worker killed before generation is recoverable only because this is here.
+
+  -- What the customer sent. inbound_text is the placeholder as it stood at enqueue time;
+  -- the media_* columns are what recovery needs to redo the understanding the original
+  -- attempt may not have finished. Revision 1 stored only the first and claimed it could
+  -- do the second.
   inbound_text      TEXT NOT NULL,
+  media_url         TEXT,
+  media_kind        TEXT,
+  media_caption     TEXT,
+  unread_attachments INTEGER NOT NULL DEFAULT 0,
   language_hint     TEXT,
   comment_id        TEXT,
-  -- Filled in on success, for audit. NOT what recovery replays -- see Departure 1. A row
-  -- that reaches 'sent' with this null means the reply went out but the response body was
-  -- not captured, which is not an error.
+  -- Meta's signed URLs expire. Recovery past this point must not pretend it can still read
+  -- the media; it degrades to the placeholder and says so in the reply's log.
+  media_expires_at  TIMESTAMPTZ,
+
+  -- Ordering within a conversation, so two queued messages are never answered backwards.
+  inbound_at        TIMESTAMPTZ NOT NULL,
+
+  -- Persisted by ai-agent-reply BEFORE it sends. Its presence is what makes a row
+  -- re-deliverable without re-running the agent.
   generated_reply   TEXT,
+
   status            TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending', 'sending', 'sent', 'failed')),
+                    CHECK (status IN ('pending','running','ready_to_send','sent',
+                                      'delivery_unknown','failed','cancelled')),
   attempts          INTEGER NOT NULL DEFAULT 0,
+  -- The lease. A claimed row is invisible to other workers until this passes, which is the
+  -- guarantee SKIP LOCKED does NOT give once the claiming transaction commits.
+  lease_expires_at  TIMESTAMPTZ,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   claimed_at        TIMESTAMPTZ,
   sent_at           TIMESTAMPTZ,
@@ -156,83 +218,208 @@ CREATE TABLE IF NOT EXISTS public.pending_agent_replies (
 );
 
 ALTER TABLE public.pending_agent_replies ENABLE ROW LEVEL SECURITY;
--- Deny-all: written only by webhooks and the recovery job, both service-role. No browser
--- surface reads it -- the user-facing record of a reply is ai_agent_logs, which has its
--- own RLS already.
+-- Deny-all. Written only by webhooks and the recovery job, both service-role. The
+-- user-facing record of a reply stays ai_agent_logs, which has its own RLS.
 
--- The recovery job's only query: unfinished rows, oldest first. Partial, because the
--- table is mostly settled rows the job must never scan.
-CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_recoverable
-  ON public.pending_agent_replies (created_at)
-  WHERE status IN ('pending', 'sending');
+-- The claim query: unfinished rows whose lease has lapsed, oldest inbound first.
+CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_claimable
+  ON public.pending_agent_replies (lease_expires_at NULLS FIRST, inbound_at)
+  WHERE status IN ('pending','running','ready_to_send');
 
 CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_account
   ON public.pending_agent_replies (social_account_id);
+
+-- Serves both the ordering check and the retention purge.
+CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_conversation
+  ON public.pending_agent_replies (conversation_id, inbound_at);
 ```
 
-- [ ] **Step 2: Add the claim function to the same migration**
+- [ ] **Step 2: `enqueue_agent_reply` — one statement that also answers "am I the owner?"**
 
-Claiming must be atomic, or two overlapping cron runs drive the same row twice — the very duplicate the outbox exists to avoid.
+Finding 6: the caller must be able to tell "I enqueued this" from "someone else already has it". Returning the same `null` for both is what let a Meta redelivery reply twice.
 
 ```sql
 /**
- * Atomically claims recoverable work: rows still unfinished after p_stale_seconds that
- * have not exhausted p_max_attempts.
+ * Enqueues an inbound work item and reports whether THIS caller created it.
  *
- * FOR UPDATE SKIP LOCKED is what lets two overlapping cron runs coexist -- the second
- * skips what the first holds instead of blocking on it. Claiming moves the row to
- * 'sending' and bumps attempts, so a row whose worker dies again is picked up next pass
- * and eventually exhausts its attempts rather than being retried forever.
+ * newly_enqueued=false means another invocation already owns the work -- a webhook
+ * redelivery, or the same message racing itself. That caller must NOT start processing;
+ * the owner is either still running or the recovery job will take it. Revision 1 could not
+ * express this, so both invocations proceeded and both could reply.
+ *
+ * user_id is read from social_accounts rather than accepted as an argument, so a caller
+ * cannot attribute a reply to the wrong tenant.
  */
-CREATE OR REPLACE FUNCTION public.claim_pending_agent_replies(
+CREATE OR REPLACE FUNCTION public.enqueue_agent_reply(
+  p_social_account_id UUID,
+  p_platform TEXT,
+  p_message_id TEXT,
+  p_conversation_id TEXT,
+  p_recipient_id TEXT,
+  p_inbound_text TEXT,
+  p_inbound_at TIMESTAMPTZ,
+  p_media JSONB DEFAULT '{}'::jsonb,
+  p_language_hint TEXT DEFAULT NULL,
+  p_comment_id TEXT DEFAULT NULL
+)
+RETURNS TABLE (id UUID, newly_enqueued BOOLEAN)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE
+  v_user_id UUID;
+  v_id UUID;
+BEGIN
+  SELECT sa.user_id INTO v_user_id
+    FROM public.social_accounts sa WHERE sa.id = p_social_account_id;
+  IF v_user_id IS NULL THEN
+    RAISE EXCEPTION 'unknown social account %', p_social_account_id;
+  END IF;
+
+  INSERT INTO public.pending_agent_replies (
+    social_account_id, user_id, platform, message_id, conversation_id, recipient_id,
+    inbound_text, inbound_at, media_url, media_kind, media_caption, unread_attachments,
+    media_expires_at, language_hint, comment_id
+  ) VALUES (
+    p_social_account_id, v_user_id, p_platform, p_message_id, p_conversation_id,
+    p_recipient_id, p_inbound_text, p_inbound_at,
+    p_media->>'url', p_media->>'kind', p_media->>'caption',
+    COALESCE((p_media->>'unread')::int, 0),
+    (p_media->>'expires_at')::timestamptz, p_language_hint, p_comment_id
+  )
+  ON CONFLICT ON CONSTRAINT pending_agent_replies_dedup DO NOTHING
+  RETURNING pending_agent_replies.id INTO v_id;
+
+  IF v_id IS NOT NULL THEN
+    RETURN QUERY SELECT v_id, TRUE;
+  ELSE
+    RETURN QUERY
+      SELECT p.id, FALSE FROM public.pending_agent_replies p
+       WHERE p.social_account_id = p_social_account_id AND p.message_id = p_message_id;
+  END IF;
+END;
+$$;
+```
+
+- [ ] **Step 3: `claim_agent_replies` — a real lease**
+
+Finding 2. The claim must make the row *invisible* to other workers, not merely unlocked-and-still-eligible.
+
+```sql
+/**
+ * Claims work by taking a LEASE on it.
+ *
+ * Eligibility is "the lease has lapsed", not "the row is old". Revision 1 used
+ * created_at < now() - interval, which a freshly claimed row satisfies immediately -- so
+ * SKIP LOCKED bought nothing once the claiming transaction committed and two cron runs
+ * could execute the same row side by side.
+ *
+ * Rows are ordered by inbound_at so a conversation's messages are recovered in the order
+ * the customer sent them.
+ */
+CREATE OR REPLACE FUNCTION public.claim_agent_replies(
   p_limit INTEGER,
-  p_stale_seconds INTEGER,
+  p_lease_seconds INTEGER,
   p_max_attempts INTEGER
 )
 RETURNS SETOF public.pending_agent_replies
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 BEGIN
+  IF p_limit <= 0 OR p_lease_seconds <= 0 OR p_max_attempts <= 0 THEN
+    RAISE EXCEPTION 'claim_agent_replies requires positive parameters';
+  END IF;
+
   RETURN QUERY
   WITH claimed AS (
-    SELECT id FROM public.pending_agent_replies
-    WHERE status IN ('pending', 'sending')
-      AND attempts < p_max_attempts
-      AND created_at < now() - make_interval(secs => p_stale_seconds)
-    ORDER BY created_at
-    LIMIT p_limit
-    FOR UPDATE SKIP LOCKED
+    SELECT p.id FROM public.pending_agent_replies p
+     WHERE p.status IN ('pending','running','ready_to_send')
+       AND p.attempts < p_max_attempts
+       AND (p.lease_expires_at IS NULL OR p.lease_expires_at < now())
+     ORDER BY p.inbound_at
+     LIMIT p_limit
+     FOR UPDATE SKIP LOCKED
   )
   UPDATE public.pending_agent_replies p
-     SET status = 'sending', attempts = p.attempts + 1, claimed_at = now()
+     SET attempts         = p.attempts + 1,
+         claimed_at       = now(),
+         lease_expires_at = now() + make_interval(secs => p_lease_seconds)
     FROM claimed
    WHERE p.id = claimed.id
   RETURNING p.*;
 END;
 $$;
-
-REVOKE ALL ON FUNCTION public.claim_pending_agent_replies(INTEGER, INTEGER, INTEGER)
-  FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.claim_pending_agent_replies(INTEGER, INTEGER, INTEGER)
-  TO service_role;
 ```
 
-- [ ] **Step 3: Rehearse against the real database, in a rolled-back transaction**
+Note the status is **not** overwritten on claim: a `ready_to_send` row must stay `ready_to_send`, or the recovery job loses the very fact that tells it "re-deliver, do not re-run".
 
-Over `ssh-contabo-mcp` (`docker exec ... psql`), wrapped in `BEGIN; ... ROLLBACK;` so production is untouched. Assert, and paste the transcript into the PR:
+- [ ] **Step 4: `reap_exhausted_agent_replies` — no permanent graveyard**
 
-- a row created 10 seconds ago is **not** returned with `p_stale_seconds := 120`;
-- the same row backdated 3 minutes **is** returned, once;
-- a second call in the same session does not return it again at `p_max_attempts := 1`;
-- a row already at `attempts = 3` is never returned.
+Finding 3. A row at `attempts = p_max_attempts` is excluded by the claim predicate forever; something must make it terminal and visible.
 
-- [ ] **Step 4: Commit**
+```sql
+/**
+ * Moves exhausted work to a terminal state.
+ *
+ * Without this, a row that reached max attempts is simply never selected again -- alive in
+ * the table, invisible to the job, and invisible to the operator. Revision 1 described that
+ * as rows "eventually exhausting their attempts", which was not true of any state anyone
+ * could observe.
+ *
+ * A row that got as far as ready_to_send is NOT marked failed: a reply may or may not have
+ * reached the customer, and only a human can tell. It becomes delivery_unknown.
+ */
+CREATE OR REPLACE FUNCTION public.reap_exhausted_agent_replies(p_max_attempts INTEGER)
+RETURNS INTEGER
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+DECLARE v_count INTEGER;
+BEGIN
+  UPDATE public.pending_agent_replies
+     SET status = CASE WHEN status = 'ready_to_send' THEN 'delivery_unknown' ELSE 'failed' END,
+         error  = COALESCE(error, 'attempts exhausted'),
+         lease_expires_at = NULL
+   WHERE status IN ('pending','running','ready_to_send')
+     AND attempts >= p_max_attempts
+     AND (lease_expires_at IS NULL OR lease_expires_at < now());
+  GET DIAGNOSTICS v_count = ROW_COUNT;
+  RETURN v_count;
+END;
+$$;
+```
+
+- [ ] **Step 5: Grants and retention**
+
+`REVOKE ALL … FROM PUBLIC, anon, authenticated; GRANT EXECUTE … TO service_role;` for all three. Then (finding 10) a purge, since these rows carry customer message text:
+
+```sql
+DO $$ BEGIN PERFORM cron.unschedule('purge-pending-agent-replies');
+EXCEPTION WHEN OTHERS THEN NULL; END $$;
+
+SELECT cron.schedule('purge-pending-agent-replies', '23 4 * * *', $$
+  DELETE FROM public.pending_agent_replies
+   WHERE status IN ('sent','cancelled') AND created_at < now() - interval '14 days';
+  DELETE FROM public.pending_agent_replies
+   WHERE status IN ('failed','delivery_unknown') AND created_at < now() - interval '90 days';
+$$);
+```
+
+Two windows deliberately: a settled row is transient bookkeeping, but a `failed` or `delivery_unknown` row is the evidence for a customer complaint and must outlive the complaint.
+
+- [ ] **Step 6: Rehearse on the real database, in a rolled-back transaction**
+
+Over `ssh-contabo-mcp`, inside `BEGIN; … ROLLBACK;`. Paste the transcript into the PR. Assert:
+
+1. `enqueue_agent_reply` twice with the same `(account, message_id)` → `newly_enqueued` true then **false**, same id both times.
+2. A row with a live lease is **not** returned by `claim_agent_replies`. *(This is the assertion revision 1's rehearsal could not make, because it had no lease.)*
+3. Two `claim_agent_replies` calls **in two concurrent sessions** — not two sequential calls in one — never return the same row. Sequential calls in one session prove nothing about the case that actually broke.
+4. A `ready_to_send` row survives a claim still `ready_to_send`.
+5. `reap_exhausted_agent_replies` moves an exhausted `pending` to `failed` and an exhausted `ready_to_send` to `delivery_unknown`, and afterwards no row remains in a non-terminal state with `attempts >= max`.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add supabase/migrations/20260828000000_pending_agent_replies.sql
-git commit -m "feat(outbox): a table for inbound work items that outlive their worker"
+git commit -m "feat(outbox): leased work items with no non-terminal graveyard"
 ```
 
 ---
@@ -240,394 +427,200 @@ git commit -m "feat(outbox): a table for inbound work items that outlive their w
 ## Task 2: The outbox client
 
 **Files:**
-- Create: `supabase/functions/_shared/pendingReplies.ts`
-- Test: `supabase/functions/_shared/pendingReplies.test.ts`
+- Create: `supabase/functions/_shared/pendingReplies.ts`, `supabase/functions/_shared/pendingReplies.test.ts`
 
 **Interfaces:**
-- Consumes: nothing.
-- Produces:
-  - `type PendingReplyItem` — the fields Task 1's table needs from a caller.
-  - `recordPendingReply(admin: any, item: PendingReplyItem): Promise<string | null>` — the row id, or `null` when the row could not be written **or already existed**.
-  - `markReplySent(admin: any, id: string, reply: string | null): Promise<void>`
-  - `markReplyFailed(admin: any, id: string, error: string): Promise<void>`
+- Produces: `enqueueAgentReply(admin, item): Promise<{ id: string; newlyEnqueued: boolean } | null>`; `markReadyToSend`, `markSent`, `markDeliveryUnknown`, `markFailed`, `markCancelled`.
 
 - [ ] **Step 1: Write the failing tests**
 
-```ts
-// deno-lint-ignore-file no-import-prefix no-explicit-any
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { recordPendingReply, toRow } from "./pendingReplies.ts";
-
-const ITEM = {
-  socialAccountId: "acc-1",
-  userId: "user-1",
-  platform: "facebook",
-  messageId: "mid-1",
-  conversationId: "conv-1",
-  recipientId: "psid-1",
-  inboundText: "[Image]",
-};
-
-function stubInsert(result: { data?: unknown; error?: unknown }) {
-  return {
-    from: () => ({
-      insert: () => ({ select: () => ({ maybeSingle: () => Promise.resolve(result) }) }),
-    }),
-  };
-}
-
-Deno.test("a duplicate inbound message does not create a second work item", async () => {
-  // Meta redelivers a webhook it believes was not acknowledged. The unique constraint is
-  // what stops that becoming a second reply; recordPendingReply must report it as
-  // "already handled" rather than as an error the caller should log loudly.
-  const admin = stubInsert({ error: { code: "23505", message: "duplicate key" } });
-  assertEquals(await recordPendingReply(admin, ITEM), null);
-});
-
-Deno.test("an outbox write that fails does not stop the reply", async () => {
-  // A reply that goes out with no outbox row is strictly better than no reply at all.
-  // This function must never throw -- the caller's next line is the customer-facing work.
-  const admin = stubInsert({ error: { code: "08006", message: "connection failure" } });
-  assertEquals(await recordPendingReply(admin, ITEM), null);
-});
-
-Deno.test("a recorded item carries everything needed to re-invoke the agent", () => {
-  // If any of these is dropped, recovery silently produces a DIFFERENT reply than the
-  // original would have -- wrong language, wrong conversation, or a DM where a comment
-  // reply was meant. The assertion is on the whole key set, not on presence, so a field
-  // added to the type without being mapped fails here rather than in production.
-  assertEquals(Object.keys(toRow(ITEM)).sort(), [
-    "comment_id",
-    "conversation_id",
-    "inbound_text",
-    "language_hint",
-    "message_id",
-    "platform",
-    "recipient_id",
-    "social_account_id",
-    "user_id",
-  ]);
-});
-```
-
-- [ ] **Step 2: Run them and watch them fail**
-
-Run: `deno test --allow-env supabase/functions/_shared/pendingReplies.test.ts`
-Expected: FAIL — "Module not found".
-
-- [ ] **Step 3: Implement**
+Finding 12 says revision 1's tests were vacuous. These assert on the caller's *decision*, not on a stub's echo:
 
 ```ts
-// Records an inbound message as work that must eventually produce a reply.
-//
-// The point of this module is that the record outlives the isolate. Everything the agent
-// needs to run from scratch is written down BEFORE the work starts, because the worker can
-// die at any point during it and a row written afterwards would never exist.
-
-export interface PendingReplyItem {
-  socialAccountId: string;
-  userId: string;
-  platform: string;
-  messageId: string;
-  conversationId: string;
-  recipientId: string;
-  inboundText: string;
-  languageHint?: string | null;
-  commentId?: string | null;
-}
-
-const UNIQUE_VIOLATION = "23505";
-
-export function toRow(item: PendingReplyItem): Record<string, unknown> {
-  return {
-    social_account_id: item.socialAccountId,
-    user_id: item.userId,
-    platform: item.platform,
-    message_id: item.messageId,
-    conversation_id: item.conversationId,
-    recipient_id: item.recipientId,
-    inbound_text: item.inboundText,
-    language_hint: item.languageHint ?? null,
-    comment_id: item.commentId ?? null,
-  };
-}
-
-/**
- * Records the work item, returning its id.
- *
- * Never throws and never blocks the reply. Two different nulls are deliberately
- * indistinguishable to the caller: the row already existed (a webhook redelivery, which is
- * a success), or the write failed (a degradation we accept). In both cases the correct next
- * action is identical -- carry on and answer the customer.
- */
-export async function recordPendingReply(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
-  item: PendingReplyItem,
-): Promise<string | null> {
-  const { data, error } = await admin
-    .from("pending_agent_replies")
-    .insert(toRow(item))
-    .select("id")
-    .maybeSingle();
-
-  if (error?.code === UNIQUE_VIOLATION) {
-    console.log(`[outbox] ${item.platform}/${item.messageId} already recorded`);
-    return null;
-  }
-  if (error) {
-    console.error(`[outbox] could not record ${item.platform}/${item.messageId}: ${error.message}`);
-    return null;
-  }
-  return data?.id ?? null;
-}
-```
-
-`markReplySent` and `markReplyFailed` follow the same never-throw contract, each a single `update(...).eq("id", id)` whose error is logged and swallowed. `markReplySent` sets `status: "sent"`, `sent_at: new Date().toISOString()`, `generated_reply`. `markReplyFailed` sets `status: "failed"` and `error` truncated to 500 characters.
-
-- [ ] **Step 4: Run the tests**
-
-Run: `deno test --allow-env supabase/functions/_shared/pendingReplies.test.ts`
-Expected: PASS (3 tests).
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add supabase/functions/_shared/pendingReplies.ts supabase/functions/_shared/pendingReplies.test.ts
-git commit -m "feat(outbox): a client that records work items without ever blocking a reply"
-```
-
----
-
-## Task 3: Idempotency in `ai-agent-reply`
-
-Do this **before** wiring any webhook. Until the key exists, every recovery attempt is a potential duplicate reply, and a half-built outbox is worse than none at all.
-
-**Files:**
-- Create: `supabase/functions/ai-agent-reply/idempotency.ts`
-- Test: `supabase/functions/ai-agent-reply/idempotency.test.ts`
-- Modify: `supabase/functions/ai-agent-reply/index.ts` (`ReplyRequest` ~line 57; `baseLog`; the request handler's entry)
-- Modify: `supabase/migrations/20260828000000_pending_agent_replies.sql` — the column belongs in the **same** migration, so the two halves cannot be deployed apart
-
-**Interfaces:**
-- Consumes: nothing from earlier tasks.
-- Produces: `alreadyDelivered(admin, key: string | undefined): Promise<boolean>`; `ReplyRequest.idempotency_key?: string`; column `public.ai_agent_logs.idempotency_key TEXT`.
-
-- [ ] **Step 1: Add the column and index to Task 1's migration**
-
-```sql
-ALTER TABLE public.ai_agent_logs ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
-
--- Partial AND unique: two 'sent' rows for one key is precisely the duplicate reply this
--- prevents, and the database is where that has to be true -- an application-code check
--- loses the race it exists to win. Non-sent rows are unconstrained on purpose: a failed
--- attempt must not block the retry that succeeds.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_agent_logs_idempotency_sent
-  ON public.ai_agent_logs (idempotency_key)
-  WHERE idempotency_key IS NOT NULL AND status = 'sent';
-```
-
-- [ ] **Step 2: Write the failing tests**
-
-```ts
-Deno.test("a key that already sent is refused before the model is called", async () => {
-  const admin = stubLogs([{ id: "log-1" }]);
-  assertEquals(await alreadyDelivered(admin, "key-1"), true);
+Deno.test("a redelivery is told it is not the owner, so it does not dispatch", async () => {
+  // The bug this prevents: Meta redelivers a webhook it thinks was unacknowledged while the
+  // first invocation is still generating. Revision 1 returned a bare null here, the caller
+  // read it as "no outbox row, carry on", and both invocations replied.
+  const admin = stubRpc({ data: [{ id: "row-1", newly_enqueued: false }] });
+  assertEquals(await enqueueAgentReply(admin, ITEM), { id: "row-1", newlyEnqueued: false });
 });
 
-Deno.test("a key that only ever errored is allowed to try again", async () => {
-  // A retry after a failure is the entire point of the outbox. Treating any prior row as
-  // "delivered" would turn one transient provider error into permanent silence for that
-  // customer -- a worse bug than the one being fixed.
-  const admin = stubLogs([]);   // the query filters status='sent', so an error row is absent
-  assertEquals(await alreadyDelivered(admin, "key-1"), false);
+Deno.test("an enqueue that fails outright returns null, and the caller still replies", async () => {
+  // A reply with no outbox row beats no reply. This is the one degradation the brief
+  // explicitly accepts.
+  assertEquals(await enqueueAgentReply(stubRpc({ error: { message: "db down" } }), ITEM), null);
 });
 
-Deno.test("a request with no key is never blocked", async () => {
-  // Every caller that predates the outbox sends no key. They must behave exactly as before,
-  // and must not pay for a lookup either.
-  let queried = false;
-  const admin = { from: () => { queried = true; return stubLogs([]).from(); } };
-  assertEquals(await alreadyDelivered(admin, undefined), false);
-  assertEquals(queried, false);
-});
-
-Deno.test("a lookup that errors fails OPEN", async () => {
-  // Opposite of the media cap's fail-closed. Refusing to answer a customer because a log
-  // lookup failed is worse than a rare duplicate, and the unique index is the backstop
-  // that keeps the duplicate rare rather than routine.
-  assertEquals(await alreadyDelivered(stubLogsError("db down"), "key-1"), false);
-});
-```
-
-- [ ] **Step 3: Run them** — expect FAIL, `alreadyDelivered` not defined.
-
-- [ ] **Step 4: Implement**
-
-```ts
-/**
- * Whether this exact work item has already been delivered.
- *
- * The recovery job cannot tell "the worker died before sending" from "the worker died
- * after sending but before its bookkeeping" -- both leave the same unfinished row. This is
- * the only thing that can, and it is why re-driving a row is safe at all.
- */
-export async function alreadyDelivered(
-  // deno-lint-ignore no-explicit-any
-  admin: any,
-  key: string | undefined,
-): Promise<boolean> {
-  if (!key) return false;
-  const { data, error } = await admin
-    .from("ai_agent_logs")
-    .select("id")
-    .eq("idempotency_key", key)
-    .eq("status", "sent")
-    .limit(1);
-  if (error) {
-    console.error(`[ai-agent-reply] idempotency lookup failed: ${error.message}`);
-    return false;
-  }
-  return (data?.length ?? 0) > 0;
-}
-```
-
-Then in `index.ts`:
-1. add `idempotency_key?: string` to `ReplyRequest` (beside `language_hint`, with a comment saying who sets it);
-2. immediately after the request is parsed, `if (await alreadyDelivered(admin, request.idempotency_key)) return jsonResponse({ ok: true, deduplicated: true });`
-3. add `idempotency_key: request.idempotency_key ?? null` to `baseLog`, so **every** outcome row carries it — not only the `sent` one, or the recovery job cannot distinguish "never ran" from "ran and failed".
-
-- [ ] **Step 5: Run the tests** — expect PASS (4 tests).
-
-- [ ] **Step 6: Prove the unique index actually bites**
-
-In a rolled-back transaction on the real database: insert two `ai_agent_logs` rows with the same key and `status='sent'` — the second must raise `23505`. Then insert one `sent` and one `error` sharing a key — both must succeed. A partial unique index that silently does not apply is indistinguishable from a working one until the day it matters.
-
-- [ ] **Step 7: Commit**
-
-```bash
-git add supabase/functions/ai-agent-reply/idempotency.ts supabase/functions/ai-agent-reply/idempotency.test.ts supabase/functions/ai-agent-reply/index.ts supabase/migrations/20260828000000_pending_agent_replies.sql
-git commit -m "feat(agent): an idempotency key, so a replayed work item cannot reply twice"
-```
-
----
-
-## Task 4: Wire `facebook-instagram-webhook`
-
-**Files:**
-- Modify: `supabase/functions/facebook-instagram-webhook/index.ts` (the `automationHandler === "internal" && !ruleReplied` block ~line 303; `triggerAiAgentReply` ~line 584)
-
-**Interfaces:**
-- Consumes: `recordPendingReply`, `markReplySent`, `markReplyFailed` (Task 2); `idempotency_key` (Task 3).
-
-- [ ] **Step 1: Record before the background work begins**
-
-The row must be written **outside** `runInBackground`, on the response path. Writing it inside means a worker killed early leaves nothing to recover — which is the whole failure being fixed.
-
-```ts
-const pendingId = await recordPendingReply(adminClient, {
-  socialAccountId: account.id,
-  userId: account.user_id,
-  platform,
-  messageId: event.message.mid || `${senderId}:${event.timestamp}`,
-  conversationId,
-  recipientId: senderId,
-  // The placeholder, not the understood text: understanding has not happened yet, and
-  // recovery re-runs it. Storing a transcript here would make the row a snapshot of work
-  // that may never have completed.
-  inboundText: messageText,
-});
-```
-
-Both branches of the existing `if (readable && readable.url)` need it — the plain-text path drops replies the same way.
-
-- [ ] **Step 2: Settle it inside the continuation**
-
-```ts
-try {
-  await triggerAiAgentReply(account, { platform, conversationId, senderId, inboundText: agentText, languageHint, idempotencyKey: pendingId });
-  if (pendingId) await markReplySent(adminClient, pendingId, null);
-} catch (error) {
-  if (pendingId) await markReplyFailed(adminClient, pendingId, errorMessage(error));
-  throw error;   // runInBackground already logs the failure; rethrowing preserves that
-}
-```
-
-Note `triggerAiAgentReply` currently swallows a non-2xx by logging it, so **Step 3 must also make it throw** on failure — otherwise every row settles as `sent` regardless and the outbox records fiction.
-
-- [ ] **Step 3: Collapse `triggerAiAgentReply`'s parameters and make failure observable**
-
-Adding the key would make it a 7-parameter function, past the 4-arg ceiling — and two of the existing parameters are adjacent strings a caller can transpose in silence. Collapse to `(account, request: AgentReplyRequest)` in this step, the same refactor applied to `reserveAttempt` in PR #43. In the same change, make a non-2xx response throw rather than only log.
-
-- [ ] **Step 4: Verify no regression**
-
-Run: `deno test --allow-env --allow-read supabase/functions/facebook-instagram-webhook/` then `deno check supabase/functions/facebook-instagram-webhook/index.ts`
-Expected: PASS, 0 errors.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add supabase/functions/facebook-instagram-webhook/index.ts
-git commit -m "feat(outbox): FB/IG DMs survive a worker that dies mid-reply"
-```
-
----
-
-## Task 5: The recovery job's decision logic
-
-**Files:**
-- Create: `supabase/functions/process-pending-replies/recovery.ts`
-- Test: `supabase/functions/process-pending-replies/recovery.test.ts`
-
-**Interfaces:**
-- Consumes: nothing.
-- Produces: `RECOVERY_LIMITS` (`{ batch: 25, staleSeconds: 120, maxAttempts: 3 }`); `classifyRecovery(row: { attempts: number }, response: RecoveryResponse | null): { action: "sent" | "retry" | "give_up"; reason: string }`; `buildReplyRequest(row): Record<string, unknown>`.
-
-- [ ] **Step 1: Write the failing tests**
-
-```ts
-Deno.test("a row that has exhausted its attempts is failed, not retried", () => {
-  assertEquals(classifyRecovery({ attempts: 3 }, null).action, "give_up");
-});
-
-Deno.test("a deduplicated response settles the row as sent, not as an error", () => {
-  // ai-agent-reply reporting "already delivered" means the FIRST attempt did reach the
-  // customer. Marking that failed would leave a permanently red row for a reply that
-  // actually went out, and send an operator hunting a bug that is not there.
-  assertEquals(classifyRecovery({ attempts: 1 }, { ok: true, deduplicated: true }).action, "sent");
-});
-
-Deno.test("a 5xx is retried; a 4xx is not", () => {
-  // A malformed row will be malformed on every attempt. Retrying it three times buys
-  // nothing and delays the rows queued behind it.
-  assertEquals(classifyRecovery({ attempts: 1 }, { status: 503 }).action, "retry");
-  assertEquals(classifyRecovery({ attempts: 1 }, { status: 400 }).action, "give_up");
-});
-
-Deno.test("the replay request is the original request, not a paraphrase of it", () => {
-  // Recovery must reconstruct exactly what the webhook would have sent. A dropped
-  // language_hint produces an English answer to an Arabic voice note -- the bug #42 fixed,
-  // reintroduced only on the recovery path where nobody would look for it.
-  const row = { id: "row-1", user_id: "u", platform: "facebook", social_account_id: "a",
-                conversation_id: "c", recipient_id: "r", inbound_text: "hi",
-                language_hint: "ara", comment_id: null };
-  assertEquals(buildReplyRequest(row), {
-    user_id: "u", platform: "facebook", social_account_id: "a", conversation_id: "c",
-    recipient_phone: "r", inbound_text: "hi", language_hint: "ara",
-    idempotency_key: "row-1",
-  });
+Deno.test("every field the agent needs survives the round trip, by value", () => {
+  // Object.keys() alone was vacuous -- it proved the names existed, not that they carried
+  // the right values. A media_url mapped from the caption would have passed it.
+  assertEquals(toArgs({ ...ITEM, mediaUrl: "https://cdn/x", mediaKind: "audio",
+                        mediaCaption: "hi", unreadAttachments: 2 }).p_media,
+    { url: "https://cdn/x", kind: "audio", caption: "hi", unread: 2, expires_at: null });
 });
 ```
 
 - [ ] **Step 2: Run them** — expect FAIL, module not found.
-- [ ] **Step 3: Implement** `classifyRecovery` and `buildReplyRequest` as pure functions. `comment_id` is omitted from the request when null, matching how `language_hint` is conditionally spread today.
-- [ ] **Step 4: Run the tests** — expect PASS (4 tests).
+- [ ] **Step 3: Implement.** All transition helpers are non-throwing and log their errors; `enqueueAgentReply` returns `null` only on a genuine failure, never on a duplicate.
+
+> A non-throwing transition can strand a row in `running` when the update fails (finding 12's tail). That is why the lease exists: the row simply becomes claimable again when it lapses. Say so in the module comment, so the next reader does not "fix" it by making it throw.
+
+- [ ] **Step 4: Run them** — expect PASS.
 - [ ] **Step 5: Commit**
 
-```bash
-git add supabase/functions/process-pending-replies/recovery.ts supabase/functions/process-pending-replies/recovery.test.ts
-git commit -m "feat(outbox): the rules for what recovery retries and what it gives up on"
+---
+
+## Task 3: A typed result from `ai-agent-reply`
+
+Finding 4. This must exist before any caller settles a row, or every failure is recorded as a success.
+
+**Files:**
+- Create: `supabase/functions/_shared/agentReplyResult.ts`, `supabase/functions/_shared/agentReplyResult.test.ts`
+- Modify: `supabase/functions/ai-agent-reply/index.ts`
+- Modify: the migration — `ALTER TABLE public.ai_agent_logs ADD COLUMN IF NOT EXISTS idempotency_key TEXT;` plus an index on it (non-unique; see Task 5 for why the unique version was dropped)
+
+**Interfaces:**
+- Produces: `type AgentReplyOutcome = { kind: "sent" | "deduplicated" | "skipped" | "retryable" | "permanent"; detail?: string }`; `parseAgentReplyResult(status: number, body: unknown): AgentReplyOutcome`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+Deno.test("HTTP 200 carrying ok:false is a failure, not a send", () => {
+  // jsonResponse defaults to 200 (_shared/cors.ts:45), so ai-agent-reply's error path
+  // returns 200 {ok:false}. Revision 1 classified on HTTP status and would have marked
+  // every generation failure as delivered.
+  assertEquals(parseAgentReplyResult(200, { ok: false, error: "model chain exhausted" }).kind,
+               "retryable");
+});
+
+Deno.test("a skipped reply is not a sent reply", () => {
+  // {ok:true, skipped:"no_reply_generated"} means the agent deliberately said nothing.
+  // Recording that as 'sent' would claim a reply the customer never got.
+  assertEquals(parseAgentReplyResult(200, { ok: true, skipped: "no_reply_generated" }).kind,
+               "skipped");
+});
+
+Deno.test("a 4xx is permanent and a 5xx is retryable", () => {
+  assertEquals(parseAgentReplyResult(400, {}).kind, "permanent");
+  assertEquals(parseAgentReplyResult(503, {}).kind, "retryable");
+});
+
+Deno.test("an unparseable body is retryable, never sent", () => {
+  // Cloudflare can replace a body wholesale. Defaulting to 'sent' on something we cannot
+  // read is the one classification that loses a customer's reply silently.
+  assertEquals(parseAgentReplyResult(200, "<html>502</html>").kind, "retryable");
+});
 ```
+
+- [ ] **Step 2–3:** run (FAIL), implement, run (PASS).
+
+- [ ] **Step 4: Make `ai-agent-reply` return the union**
+
+Add `outbox_id?: string` to `ReplyRequest`. Keep the existing body shape and add fields — `ARCHITECTURE.md` §36; callers that predate this must be unaffected. Set `idempotency_key: request.outbox_id ?? null` on `baseLog` so **every** outcome row carries it, not only the successful one, or recovery cannot tell "never ran" from "ran and failed".
+
+- [ ] **Step 5: Commit**
+
+---
+
+## Task 4: Persist the reply before sending it
+
+This is the change that makes recovery safe, and it lives inside `ai-agent-reply`.
+
+**Files:**
+- Modify: `supabase/functions/ai-agent-reply/index.ts` around `:803`
+
+- [ ] **Step 1: Write the reply down, then send**
+
+```ts
+// The order is the whole point. Once this row says ready_to_send, recovery can deliver
+// this exact text without re-running the agent -- so a death during or after the send
+// cannot repeat a tool call, an escalation, or an admin notification. Revision 1 had no
+// such line, so every recovery re-ran everything.
+if (request.outbox_id) {
+  await markReadyToSend(admin, request.outbox_id, replyText);
+}
+const outboundMessageId = await replySender(request.recipient_phone, replyText);
+if (request.outbox_id) {
+  await markSent(admin, request.outbox_id, outboundMessageId ?? null);
+}
+```
+
+- [ ] **Step 2: Handle the ambiguous send**
+
+A `replySender` that throws after the platform accepted the message is indistinguishable from one that never reached it. Do not guess:
+
+```ts
+} catch (error) {
+  if (request.outbox_id && sendWasAttempted) {
+    await markDeliveryUnknown(admin, request.outbox_id, errorMessage(error));
+  }
+  throw error;
+}
+```
+
+`delivery_unknown` is terminal and surfaces to a human. Finding 1's core point is that exactly-once delivery across Postgres and Meta is not achievable; the honest response is to name the ambiguity rather than resolve it by replaying.
+
+- [ ] **Step 3: Tests** — an injected `replySender` proving exactly one send per outbox id, and proving `markReadyToSend` is called before it. Then commit.
+
+---
+
+## Task 5: The recovery decision logic
+
+**Files:**
+- Create: `supabase/functions/process-pending-replies/recovery.ts`, `.test.ts`
+
+**Interfaces:**
+- Produces: `RECOVERY_LIMITS = { batch: 3, leaseSeconds: 180, maxAttempts: 3, deadlineMs: 45_000 }`; `decideRecovery(row, context): RecoveryAction`.
+
+`batch: 3`, not 25 (finding 3): each row can hold a ~20s agent call inside a 60s ceiling, so a batch the invocation cannot finish is a batch that strands rows. `leaseSeconds: 180` exceeds the worker ceiling, so a lease never lapses while its holder is still alive.
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+Deno.test("a ready_to_send row is re-delivered, never re-generated", () => {
+  // The single most important rule here. Re-running the agent would repeat any tool call,
+  // escalation or admin notification the first attempt already performed.
+  assertEquals(decideRecovery({ status: "ready_to_send", generated_reply: "hi" }, FRESH).kind,
+               "deliver_stored");
+});
+
+Deno.test("a pending row that already touched the outside world is not re-run", () => {
+  // A death mid-generation may have left tool calls behind. We cannot tell which ran, so we
+  // do not guess -- a human sees it instead.
+  assertEquals(decideRecovery({ status: "pending" },
+    { ...FRESH, priorToolCalls: 1 }).kind, "hand_to_human");
+});
+
+Deno.test("a conversation a human took over is cancelled, not answered", () => {
+  assertEquals(decideRecovery({ status: "pending" }, { ...FRESH, humanTookOver: true }).kind,
+               "cancel");
+});
+
+Deno.test("a superseded message is cancelled, so replies cannot land out of order", () => {
+  // Two queued messages from one customer: answering the older one after the newer produces
+  // a conversation that reads backwards.
+  assertEquals(decideRecovery({ status: "pending", inbound_at: T0 },
+    { ...FRESH, newerPendingInConversation: true }).kind, "cancel");
+});
+
+Deno.test("media whose signed URL has expired degrades to the placeholder, and says so", () => {
+  // Meta's URLs expire. Silently replying to "[Image]" as though it were understood is how
+  // a recovered reply becomes confidently wrong.
+  const action = decideRecovery({ status: "pending", media_url: "https://cdn/x" },
+    { ...FRESH, mediaExpired: true });
+  assertEquals(action.kind, "rerun_agent");
+  assertEquals(action.mediaUsable, false);
+});
+
+Deno.test("a reply outside the 24h service window is cancelled, not attempted", () => {
+  // The platform would reject it. Attempting anyway burns all three attempts and ends in a
+  // 'failed' row whose error says nothing useful.
+  assertEquals(decideRecovery({ status: "pending" }, { ...FRESH, outsideServiceWindow: true })
+    .kind, "cancel");
+});
+```
+
+- [ ] **Step 2–4:** run (FAIL), implement as a pure function, run (PASS). Commit.
 
 ---
 
@@ -635,119 +628,97 @@ git commit -m "feat(outbox): the rules for what recovery retries and what it giv
 
 **Files:**
 - Create: `supabase/functions/process-pending-replies/index.ts`
-- Modify: `supabase/migrations/20260828000000_pending_agent_replies.sql` (cron entry)
+- Modify: the migration (cron entry)
 
-**Interfaces:**
-- Consumes: `claim_pending_agent_replies` (Task 1); `classifyRecovery`, `buildReplyRequest`, `RECOVERY_LIMITS` (Task 5); `markReplySent`, `markReplyFailed` (Task 2).
+- [ ] **Step 1: The function**
 
-- [ ] **Step 1: Write the function**
+Auth mirrors `threads-poll-replies`: bearer `CRON_SECRET`, constant-time compare, **401 on mismatch, never 5xx**.
 
-Authorization mirrors `threads-poll-replies`: `Authorization: Bearer <CRON_SECRET>`, compared in constant time, **401 on mismatch and never 5xx** — Cloudflare replaces a 5xx body and the real reason never reaches the logs.
+Per run: `reap_exhausted_agent_replies` first (so exhausted rows leave the table's working set before anything else), then `claim_agent_replies(3, 180, 3)`, then each row sequentially under `RECOVERY_LIMITS.deadlineMs`. Stop early when the deadline is near and leave the rest — their leases lapse and the next run takes them.
+
+Quota (finding 9): a `deliver_stored` action must **not** re-check `isDailyCapReached`. The original attempt already reserved that spend; refusing on the retry would strand a reply that was already paid for and generated.
+
+- [ ] **Step 2: Cron entry** — `*/2 * * * *`, `net.http_post` with `get_cron_secret()`, same unschedule-then-schedule shape as `20260823090000`.
+
+- [ ] **Step 3: Verify `get_cron_secret()` is non-null** before relying on it — an unset `CRON_SECRET` 503s every run and looks exactly like the job never being scheduled (memory: `postora-cron-secret-unset-503`).
+
+- [ ] **Step 4: End-to-end on the real database** — a backdated `ready_to_send` row is delivered once; invoking twice produces one message and one `ai_agent_logs` row; a backlog of 10 rows drains over consecutive runs with none stuck. Clean up afterwards.
+
+- [ ] **Step 5: Commit**
+
+---
+
+## Task 7: Wire `facebook-instagram-webhook`
+
+**Files:** `supabase/functions/facebook-instagram-webhook/index.ts`
+
+- [ ] **Step 1: Enqueue before `runInBackground`, and respect ownership**
 
 ```ts
-const { data: claimed, error } = await admin.rpc("claim_pending_agent_replies", {
-  p_limit: RECOVERY_LIMITS.batch,
-  p_stale_seconds: RECOVERY_LIMITS.staleSeconds,
-  p_max_attempts: RECOVERY_LIMITS.maxAttempts,
+const enqueued = await enqueueAgentReply(adminClient, {
+  socialAccountId: account.id,
+  platform,
+  messageId: event.message.mid || `${senderId}:${event.timestamp}`,
+  conversationId,
+  recipientId: senderId,
+  inboundText: messageText,
+  inboundAt: new Date(event.timestamp).toISOString(),
+  mediaUrl: readable?.url ?? null,
+  mediaKind: readable?.kind ?? null,
+  mediaCaption: event.message.text || null,
+  unreadAttachments: unread,
 });
+
+// A redelivery is not a second customer message. The first invocation owns it, and the
+// recovery job is the backstop if that invocation dies -- so this one acknowledges and
+// stops rather than starting a parallel reply.
+if (enqueued && !enqueued.newlyEnqueued) return;
 ```
 
-Each claimed row is re-POSTed to `ai-agent-reply` with `idempotency_key: row.id`, then settled by `classifyRecovery`. A row that gives up is marked `failed` **and** written to `ai_agent_logs` with `status: "error"`, so the customer's owner sees it in the Logs tab rather than only in a table nobody opens.
-
-Rows are processed **sequentially**, not concurrently: 25 parallel agent invocations each hold a model call, and the batch would exceed the 60-second ceiling and be killed — recreating the exact failure this job exists to repair. With `batch: 25` and a ~20s worst case per row, even the sequential loop can exceed the ceiling, so the loop carries its own deadline and stops early, leaving the remainder for the next run two minutes later.
-
-- [ ] **Step 2: Add the cron entry to the migration**
-
-```sql
-DO $$
-BEGIN
-  PERFORM cron.unschedule('process-pending-agent-replies');
-EXCEPTION WHEN OTHERS THEN NULL;
-END $$;
-
-SELECT cron.schedule(
-  'process-pending-agent-replies',
-  '*/2 * * * *',
-  $$
-  SELECT net.http_post(
-    url := 'https://api.postora.cloud/functions/v1/process-pending-replies',
-    headers := jsonb_build_object(
-      'Content-Type', 'application/json',
-      'Authorization', 'Bearer ' || get_cron_secret()
-    ),
-    body := '{}'::jsonb
-  );
-  $$
-);
-```
-
-Its own schedule, not a piggyback on `process-scheduled-posts`: that job's cadence is chosen for publishing, and coupling reply recovery to it means one job's slow run silently delays the other's.
-
-- [ ] **Step 3: Verify `get_cron_secret()` returns something**
-
-`SELECT get_cron_secret() IS NOT NULL;` over `ssh-contabo-mcp`, **before** relying on the schedule. An unset `CRON_SECRET` makes the job 503 on every run and looks identical to the job never having been scheduled (memory: `postora-cron-secret-unset-503`).
-
-- [ ] **Step 4: End-to-end test on the real database**
-
-Insert one `pending` row backdated three minutes, invoke the function with the cron secret, and confirm: the row reaches `sent`; exactly one `ai_agent_logs` row exists for its key. Then invoke again and confirm no second reply and no second log row. Clean up the inserted row afterwards.
-
+- [ ] **Step 2: Settle inside the continuation** using `parseAgentReplyResult`, never the HTTP status.
+- [ ] **Step 3: Collapse `triggerAiAgentReply`'s parameters** into `(account, request)` — adding `outbox_id` would make it 7 positional args, two of them transposable strings. Same refactor as `reserveAttempt` in PR #43.
+- [ ] **Step 4: Gates** — `deno test --allow-env --allow-read supabase/functions/facebook-instagram-webhook/`, `deno check`.
 - [ ] **Step 5: Commit**
-
-```bash
-git add supabase/functions/process-pending-replies/index.ts supabase/migrations/20260828000000_pending_agent_replies.sql
-git commit -m "feat(outbox): a cron-driven recovery pass for replies whose worker died"
-```
 
 ---
 
-## Task 7: The comment path — Option 3a only
+## Task 8: The comment path — Option 3a only
 
-**Skip this task entirely if the reviewer chooses 3b.**
+**Skip entirely if the reviewer chooses 3b.**
 
-**Files:**
-- Modify: `supabase/functions/_shared/commentAutomation.ts` (the `ai-agent-reply` POST at ~line 98)
+`_shared/commentAutomation.ts:98`. Same shape as Task 7; `messageId` is the comment id and `commentId` is set, so recovery replies publicly rather than by DM.
 
-Same shape as Task 4. `messageId` is the comment id; `commentId` is set, so recovery re-invokes as a comment reply rather than as a DM — a row that loses `comment_id` would answer a public comment by private message.
+The comment path is already safer than the DM path — it gates on its inbox-event claim — so the enqueue mainly adds recovery, not deduplication.
 
-- [ ] **Step 1:** record before the agent call, using the comment id as `messageId`.
-- [ ] **Step 2:** settle on success and on failure.
-- [ ] **Step 3:** thread `idempotency_key` into the POST body.
-- [ ] **Step 4:** `deno test --allow-env --allow-read supabase/functions/_shared/commentAutomation.test.ts`
+> **Blocker to clear first:** `_shared/commentAutomation.test.ts` has 5 pre-existing `TS2322` errors under `deno check` (`null` assigned to `string` at lines 136 and 142 among others). Unrelated to this work — untouched since `0e386f08` — but they block `deno check` on everything importing the module. Fix in its own commit.
 
-> **Blocker to clear first:** that test file has 5 pre-existing `TS2322` errors under `deno check` (`null` assigned to `string` in its fixtures, at lines 136 and 142 among others). They are unrelated to this work — untouched since `0e386f08` — but they block `deno check` on the module and everything importing it. Fix them in this task, in their own commit, so the gate can pass.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add supabase/functions/_shared/commentAutomation.ts
-git commit -m "feat(outbox): comment replies survive a worker that dies mid-reply"
-```
+> **Not a blocker:** Codex claimed Threads cannot write a `sent` log because of the `ai_agent_logs.platform` CHECK. Verified false — `20260822180000_threads_agent_platform.sql` widened it and production shows 7 Threads rows. No migration needed.
 
 ---
 
-## Task 8: Gates, PR, deploy
+## Task 9: Gates, PR, deploy
 
-- [ ] **Step 1:** `npx tsc --noEmit` → 0 errors.
-- [ ] **Step 2:** `npx vitest run` → all pass. Baseline as of 2026-08-27: **949 passed, 15 skipped, 0 failed**.
-- [ ] **Step 3:** `deno test --allow-env --allow-read` over `_shared/`, `facebook-instagram-webhook/`, `ai-agent-reply/`, `process-pending-replies/` → all pass. Baseline: **428 passed**. `--allow-read` is **required** — without it `planQuotasContract.test.ts` reports a failure that is a missing permission, not a broken test.
-- [ ] **Step 4:** `clean-code-guard` on every changed production file; `test-guard` on every changed test file.
-- [ ] **Step 5:** Push and open a PR whose body states the three departures and the WhatsApp Cloud gap. **Do not merge.**
-- [ ] **Step 6 (after approval only):** apply the migration **first**, then copy the changed function files into the volume, verify SHA256 with `tr -d '\r'` (the volume is LF, the working copy CRLF), and `docker compose -p postorasupabase-supabase-j8axyh restart functions`. Migration first is not a preference: the webhooks reference a table that must already exist, and the reverse order drops every reply for the length of the window.
-- [ ] **Step 7:** `mem0 add_memory` with the outcome; final report.
+- [ ] `npx tsc --noEmit` → 0 errors.
+- [ ] `npx vitest run` → baseline 949 passed / 15 skipped.
+- [ ] `deno test --allow-env --allow-read` over the touched directories → baseline 428 passed. `--allow-read` is required; without it `planQuotasContract.test.ts` reports a permission error that reads as a test failure.
+- [ ] `clean-code-guard` on changed production files; `test-guard` on changed tests.
+- [ ] Regenerate `src/integrations/supabase/types.ts` **for `ai_agent_logs.idempotency_key` only** — that table is read by the Logs tab. `pending_agent_replies` is deliberately absent, matching `media_understanding_usage`: service-role-only, RLS deny-all, no client may read it.
+- [ ] Push, open a PR stating the departures and the open decisions. **Do not merge.**
+- [ ] After approval: migration **first**, then the function files into the volume (SHA256 verified with `tr -d '\r'`), then `docker compose -p postorasupabase-supabase-j8axyh restart functions`. Reversing that order points live webhooks at a table that does not exist.
+- [ ] `mem0 add_memory`; final report.
 
 ---
 
 ## Self-review
 
-**Spec coverage.** Brief Step 1 → Task 1. Step 2 → Task 1 (the table's shape). Step 3 → Task 4, as amended by Departure 1. Step 4 → Tasks 5 and 6. Step 5 → Tasks 1 and 3, as amended by Departure 2. The brief's "do not add to Evolution" is honoured — `whatsapp-evolution-webhook` appears nowhere in the file list.
+**Coverage of the brief.** Steps 1–2 → Task 1. Step 3 → Tasks 4 and 7 (amended by Departure 1 and finding 8: the row is written earlier *and* the reply is persisted before the send). Step 4 → Tasks 5–6. Step 5 → Tasks 1–2, via `enqueue_agent_reply` returning ownership rather than a bare unique constraint. Evolution is untouched, as instructed.
 
-**Placeholders.** None. Every code step carries either the actual code or the actual file and line to change.
+**Type consistency.** `enqueueAgentReply` returns `{ id, newlyEnqueued } | null` in Task 2 and is consumed in Tasks 7–8. `parseAgentReplyResult` returns `AgentReplyOutcome` in Task 3, consumed in Tasks 6–7. `RECOVERY_LIMITS` uses `leaseSeconds` in Tasks 5 and 6 and matches `claim_agent_replies(p_lease_seconds)`.
 
-**Type consistency.** `recordPendingReply` returns `Promise<string | null>` in Task 2 and is consumed as `pendingId: string | null` in Tasks 4 and 7. `classifyRecovery` returns `{ action: "sent" | "retry" | "give_up" }` in Task 5 and is consumed in Task 6. `RECOVERY_LIMITS` uses `staleSeconds` in both Task 5 and Task 6.
+**Every state has an exit.** `pending`/`running`/`ready_to_send` are all claimable once their lease lapses; the reaper makes anything at max attempts terminal; the purge removes terminal rows on two windows. There is no state a row can occupy that nothing observes — the specific defect that sank revision 1.
 
-**Ordering.** Task 3 precedes Task 4 deliberately: wiring a webhook to an outbox whose replays are not yet idempotent means every recovery run risks a duplicate reply.
-
-**Known gaps, stated rather than hidden.**
-1. WhatsApp Cloud (`whatsapp-webhook`) is excluded per the brief and is the largest uncovered surface.
-2. A reply can still be lost if the worker dies *and* the outbox INSERT itself failed — accepted explicitly by the brief, and the failure is logged.
-3. `attempts` is bumped at claim time, not at completion, so a row whose worker dies three times is given up on without three real attempts ever finishing. That is the correct trade: the alternative retries a row that kills its worker forever.
+**Honest limits.**
+1. **Exactly-once delivery is not achievable** across Postgres and Meta. `delivery_unknown` names the ambiguity instead of resolving it by replay, and needs a human. If that queue is never watched, this design degrades to "a small number of replies silently need attention" — an operational commitment, not just code.
+2. **A pre-generation death that already ran tools is handed to a human, not retried.** Conservative on purpose; it means some recoverable work is not recovered automatically.
+3. **WhatsApp Cloud is out of scope** per the brief, and carries 194 of 217 logged agent replies — the largest uncovered surface by a wide margin.
+4. **A death before the enqueue is unrecoverable.** Accepted explicitly by the brief; the window is now milliseconds rather than ~50 seconds.
