@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Bot, Loader2, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -11,7 +11,6 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
-import { formatAllowedModelValue, useAllowedAiAgentModels } from "@/hooks/useAllowedAiAgentModels";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
@@ -21,23 +20,17 @@ import { AiAgentTestChat } from "@/components/messaging/AiAgentTestChat";
 import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConnectorsManager";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
-  "is_enabled" | "default_mode" | "language_mode" | "model" | "daily_message_cap" | "reply_cooldown_seconds"
+  "is_enabled" | "default_mode" | "language_mode" | "daily_message_cap" | "reply_cooldown_seconds"
 >> & AiAgentConfigInput = {
   is_enabled: false,
   default_mode: "human_then_ai",
   language_mode: "auto",
-  // Filled from the admin's allow-list once it loads. A hardcoded id here was the bug:
-  // the server rejects any model outside that list, so every save failed.
-  model: "",
   daily_message_cap: 50,
   reply_cooldown_seconds: 0,
   persona_instructions: "",
   business_profile_text: "",
   admin_phone_numbers: [],
 };
-
-/** Radix Select forbids an empty item value, so "no fallback" needs a sentinel. */
-const NO_FALLBACK = "__none__";
 
 const modeDescriptions: Record<AiAgentMode, string> = {
   ai_first: "The assistant replies first and hands off when needed.",
@@ -58,7 +51,6 @@ interface AiAgentManagerProps {
 
 export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, surface = "both" }: AiAgentManagerProps = {}) {
   const { config, isLoading, upsertConfig } = useAiAgentConfig(platform);
-  const { data: allowedModels = [], isLoading: modelsLoading } = useAllowedAiAgentModels();
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
@@ -71,9 +63,6 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
       persona_instructions: config.persona_instructions || "",
       business_profile_text: config.business_profile_text || "",
       language_mode: config.language_mode,
-      model: config.model,
-      fallback_model_1: config.fallback_model_1 || null,
-      fallback_model_2: config.fallback_model_2 || null,
       temperature: config.temperature,
       admin_phone_numbers: config.admin_phone_numbers || [],
       daily_message_cap: config.daily_message_cap,
@@ -83,34 +72,6 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
       handoff_on_low_confidence: config.handoff_on_low_confidence,
     });
   }, [config]);
-
-  // The server only accepts models the admin curated, and it validates every model field on
-  // the payload -- including the ones the form merely round-trips. A config saved before a
-  // model left the catalog therefore carried a value that made the whole save 400, taking the
-  // persona text with it. Pull anything stale back onto the allow-list before the user saves.
-  const allowedValues = useMemo(() => allowedModels.map(formatAllowedModelValue), [allowedModels]);
-
-  useEffect(() => {
-    if (allowedValues.length === 0) return;
-    setForm((current) => {
-      const next = { ...current };
-      let changed = false;
-      if (!current.model || !allowedValues.includes(current.model)) {
-        next.model = allowedValues[0];
-        changed = true;
-      }
-      for (const field of ["fallback_model_1", "fallback_model_2"] as const) {
-        const value = current[field];
-        if (value && !allowedValues.includes(value)) {
-          next[field] = null;
-          changed = true;
-        }
-      }
-      return changed ? next : current;
-    });
-    // `config` is a trigger, not an input: the effect above may load after this one and put a
-    // stale model back on the form, so the normalisation has to run again on every config load.
-  }, [allowedValues, config]);
 
   const update = <K extends keyof AiAgentConfigInput>(key: K, value: AiAgentConfigInput[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -143,7 +104,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
     });
   };
 
-  if (isLoading || modelsLoading) {
+  if (isLoading) {
     return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
   }
 
@@ -210,45 +171,6 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
                 </div>
               </div>
 
-              <div className="space-y-3">
-                <div className="grid gap-5 md:grid-cols-3">
-                  <div className="space-y-2">
-                    <Label>AI model</Label>
-                    <Select value={form.model || ""} onValueChange={(value) => update("model", value)} disabled={allowedValues.length === 0}>
-                      <SelectTrigger data-testid="agent-model"><SelectValue placeholder="No models available" /></SelectTrigger>
-                      <SelectContent>
-                        {allowedModels.map((model) => (
-                          <SelectItem key={model.id} value={formatAllowedModelValue(model)}>{model.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  {(["fallback_model_1", "fallback_model_2"] as const).map((field, index) => (
-                    <div key={field} className="space-y-2">
-                      <Label>Fallback {index + 1}</Label>
-                      <Select
-                        value={form[field] || NO_FALLBACK}
-                        onValueChange={(value) => update(field, value === NO_FALLBACK ? null : value)}
-                        disabled={allowedValues.length === 0}
-                      >
-                        <SelectTrigger data-testid={`agent-${field}`}><SelectValue /></SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value={NO_FALLBACK}>None</SelectItem>
-                          {allowedModels.map((model) => (
-                            <SelectItem key={model.id} value={formatAllowedModelValue(model)}>{model.label}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ))}
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  {allowedValues.length === 0
-                    ? "No AI models have been enabled yet. Ask an administrator to add one before saving."
-                    : "Replies use the first model; each fallback is tried in turn when the one before it fails."}
-                </p>
-              </div>
-
               <div className="space-y-2">
                 <Label htmlFor="persona-instructions">Persona and instructions</Label>
                 <Textarea id="persona-instructions" value={form.persona_instructions || ""} onChange={(event) => update("persona_instructions", event.target.value)} placeholder="Describe your tone, policies, and how the assistant should help customers." rows={5} />
@@ -313,7 +235,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
           {/* Auto-Reply Rules */}
           <AutoReplyManager platform={platform === "whatsapp" ? undefined : platform} />
 
-          <div className="flex justify-end"><Button onClick={save} disabled={upsertConfig.isPending || allowedValues.length === 0}>{upsertConfig.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save settings</Button></div>
+          <div className="flex justify-end"><Button onClick={save} disabled={upsertConfig.isPending}>{upsertConfig.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save settings</Button></div>
         </div>
       </TabsContent>
       <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} /></TabsContent>
