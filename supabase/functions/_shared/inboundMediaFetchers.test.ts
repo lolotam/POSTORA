@@ -528,3 +528,70 @@ Deno.test("the Evolution api key is bound to the configured instance host", asyn
     "EVOLUTION_API_URL is not a valid url",
   );
 });
+
+Deno.test("a body-read failure does not carry the request url into its message", async () => {
+  // The request path was already guarded; the body path was not. Some runtimes put the URL
+  // they were reading into a stream error, and the pipeline logs that message verbatim.
+  const failingBody = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(
+        new TypeError("error reading body from https://cdn.fbsbx.com/v/x.mp4?oh=SECRETSIG"),
+      );
+    },
+  });
+  const error = await new MetaMessagingFetcher()
+    .fetchMediaBytes(
+      { platform: "facebook", mediaUrl: "https://cdn.fbsbx.com/v/x.mp4" },
+      LIMITS,
+      () => Promise.resolve(new Response(failingBody, { status: 200 })),
+    )
+    .then(() => null, (e) => e as MediaFetchError);
+
+  assert(error instanceof MediaFetchError);
+  assert(!error.message.includes("SECRETSIG"), `leaked the signature: ${error.message}`);
+  assert(!error.message.includes("https://"), `leaked a url: ${error.message}`);
+  assert(error.message.includes("TypeError"));
+});
+
+Deno.test("the Evolution response body is bounded, not read whole", async () => {
+  // Evolution returns the media base64-encoded inside JSON. Reading that envelope with
+  // response.json() was the one body left unbounded.
+  const oversized = "A".repeat(4096);
+  await assertRejects(
+    () =>
+      new EvolutionFetcher("https://evo.example.com", "k", "inst").fetchMediaBytes(
+        { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+        { maxBytes: 64, timeoutMs: 100 },
+        () => Promise.resolve(new Response(JSON.stringify({ base64: oversized }), { status: 200 })),
+      ),
+    MediaFetchError,
+    "exceeded",
+  );
+});
+
+Deno.test("a valid Evolution envelope still decodes", async () => {
+  // The bound must not refuse the ordinary case it exists to cap.
+  const fetched = await new EvolutionFetcher("https://evo.example.com", "k", "inst").fetchMediaBytes(
+    { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+    LIMITS,
+    () =>
+      Promise.resolve(
+        new Response(JSON.stringify({ base64: "AQID", mimetype: "audio/ogg" }), { status: 200 }),
+      ),
+  );
+  assertEquals(fetched.bytes.length, 3);
+  assertEquals(fetched.mimeType, "audio/ogg");
+});
+
+Deno.test("malformed Evolution json is a stable error, not a raw parse failure", async () => {
+  await assertRejects(
+    () =>
+      new EvolutionFetcher("https://evo.example.com", "k", "inst").fetchMediaBytes(
+        { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+        LIMITS,
+        () => Promise.resolve(new Response("not json at all", { status: 200 })),
+      ),
+    MediaFetchError,
+    "evolution returned invalid json",
+  );
+});

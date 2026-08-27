@@ -203,25 +203,18 @@ const PDF_MAGIC = new TextEncoder().encode("%PDF-");
  * Every mime in this system is a *claim*: the webhook's metadata, the Graph lookup, the CDN
  * header. On WhatsApp Cloud the claim even round-trips -- the fetcher prefers the mime the
  * webhook declared -- so checking the resolved mime against the declared kind compares a
- * declaration with itself and confirms nothing. Magic bytes are the one piece of evidence
- * no sender or header controls.
+ * declaration with itself and confirms nothing. The magic is the one piece of evidence no
+ * sender or header controls.
  *
- * Scanned over the first kilobyte rather than at offset zero: readers tolerate junk before
- * the header, and real-world PDFs sometimes carry it.
+ * Matched at offset ZERO, not scanned for. Some readers tolerate junk before the header, but
+ * scanning invites the opposite mistake: `%PDF-` is five ordinary bytes that a .docx can
+ * carry inside its ZIP directory, or a sender can simply place there, and the whole point of
+ * this check is that the sender does not get a say. A genuinely malformed PDF degrades to
+ * its placeholder, which is the cheap failure.
  */
 export function looksLikePdf(bytes: Uint8Array): boolean {
-  const window = bytes.subarray(0, 1024);
-  for (let start = 0; start + PDF_MAGIC.length <= window.length; start += 1) {
-    let matched = true;
-    for (let offset = 0; offset < PDF_MAGIC.length; offset += 1) {
-      if (window[start + offset] !== PDF_MAGIC[offset]) {
-        matched = false;
-        break;
-      }
-    }
-    if (matched) return true;
-  }
-  return false;
+  if (bytes.length < PDF_MAGIC.length) return false;
+  return PDF_MAGIC.every((byte, index) => bytes[index] === byte);
 }
 
 export function classifyMime(mimeType: string | null | undefined): MediaKind | null {

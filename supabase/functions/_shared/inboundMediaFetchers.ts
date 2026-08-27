@@ -231,7 +231,15 @@ async function readCapped(
   } catch (error) {
     // Release the socket on the way out, whether we hit the cap or the deadline.
     await reader.cancel().catch(() => {});
-    throw error;
+    // Ours pass through; the runtime's do not. A body-read failure carries the request URL
+    // in its message on some runtimes, and that message is logged verbatim upstream --
+    // the same leak the request path already guards against.
+    if (error instanceof MediaFetchError) throw error;
+    if ((error as Error)?.name === "AbortError") throw error;
+    throw new MediaFetchError(
+      `body read failed (${(error as Error)?.name || "Error"})`,
+      "transport_failed",
+    );
   } finally {
     budget?.cancel();
     reader.releaseLock?.();
@@ -495,7 +503,17 @@ export class EvolutionFetcher implements InboundMediaFetcher {
       throw new MediaFetchError(`evolution media ${response.status}`, "transport_failed");
     }
 
-    const data = await response.json();
+    // Bounded like every other body. Evolution returns the media base64-encoded inside
+    // JSON, so the envelope is about 4/3 of the bytes plus the wrapper -- twice the byte
+    // ceiling is ample and still stops an unbounded read. decodeBase64Capped applies the
+    // real limit to the payload itself.
+    const raw = await readCapped(response, limits.maxBytes * 2, limits.timeoutMs, signal);
+    let data: { base64?: string; media?: string; mimetype?: string };
+    try {
+      data = JSON.parse(new TextDecoder().decode(raw));
+    } catch {
+      throw new MediaFetchError("evolution returned invalid json", "transport_failed");
+    }
     const base64 = data?.base64 ?? data?.media ?? null;
     if (!base64) throw new MediaFetchError("evolution returned no base64", "not_found");
 
