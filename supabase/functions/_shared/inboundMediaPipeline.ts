@@ -311,19 +311,23 @@ async function resolveSenderCap(
  * protected here is money leaving the account, and a refused understanding degrades to
  * the placeholder rather than losing the customer's message.
  */
+interface Reservation {
+  accountId: string;
+  senderId: string;
+  cap: number;
+  senderCap: number;
+}
+
 async function reserveAttempt(
   // deno-lint-ignore no-explicit-any
   admin: any,
-  accountId: string,
-  senderId: string,
-  cap: number,
-  senderCap: number,
+  reservation: Reservation,
 ): Promise<ReservationOutcome> {
   const { data, error } = await admin.rpc("reserve_media_understanding_attempt", {
-    p_account_id: accountId,
-    p_cap: cap,
-    p_sender_id: senderId,
-    p_sender_cap: senderCap,
+    p_account_id: reservation.accountId,
+    p_cap: reservation.cap,
+    p_sender_id: reservation.senderId,
+    p_sender_cap: reservation.senderCap,
   });
   if (error) {
     console.error("[media-understanding] quota reservation failed:", error.message);
@@ -413,15 +417,14 @@ export async function runInboundMediaUnderstanding(
 
     const cap = deps.dailyCap ?? DEFAULT_DAILY_CAP;
     const senderCap = deps.senderCap ?? await resolveSenderCap(admin);
-    const reservation = await reserveAttempt(
-      admin,
-      input.account.id,
-      input.senderId,
+    const verdict = await reserveAttempt(admin, {
+      accountId: input.account.id,
+      senderId: input.senderId,
       cap,
       senderCap,
-    );
-    if (reservation !== "allowed") {
-      return { understood: false, reason: RESERVATION_REASONS[reservation] };
+    });
+    if (verdict !== "allowed") {
+      return { understood: false, reason: RESERVATION_REASONS[verdict] };
     }
 
     const limits = deps.limits ?? DEFAULT_LIMITS;
