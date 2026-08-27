@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, MessagesSquare } from "lucide-react";
-import { useThreadConversation } from "@/hooks/useThreadsReplies";
+import { useThreadConversation, useThreadPost } from "@/hooks/useThreadsReplies";
 import { ThreadsReplyList } from "@/components/messaging/threads/replies/ThreadsReplyList";
 
 interface Props {
@@ -15,17 +15,33 @@ interface Props {
  * Loading it with the mention list would mean one Graph call per mention on every render
  * of the page -- the reply quota this account is billed against is the same one the quota
  * card warns about, and a list of forty mentions would spend forty calls to render
- * conversations nobody opened. Passing null until `open` keeps the query disabled, so the
- * cost lands on the click that asked for it.
+ * conversations nobody opened. Passing null until `open` keeps both queries disabled, so
+ * the cost lands on the click that asked for it.
+ *
+ * Two calls, not one, and the first is not optional. `threads_mentions.threads_media_id`
+ * holds the MENTION's id -- the ingest writes `r.id` -- while Meta's conversation edge is
+ * documented on the original post and answers `{"data":[]}` for anything else. Verified
+ * against a live mention: `/{mention_id}/conversation` came back empty while
+ * `/{root_post.id}/conversation` returned the real thread. So the mention is resolved to
+ * its root post first, and only then is the conversation requested.
  */
 export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: Props) {
   const [open, setOpen] = useState(false);
+
+  const { data: mentionPost, isLoading: resolvingPost } = useThreadPost(
+    open ? socialAccountId : null,
+    open ? threadsMediaId : null,
+  );
+
+  // A mention that IS a top-level post has no root_post of its own; it is its own thread.
+  const rootPostId = mentionPost?.root_post?.id ?? (mentionPost ? threadsMediaId : null);
+
   const {
     data: replies = [],
-    isLoading,
+    isLoading: loadingConversation,
     error,
     refetch,
-  } = useThreadConversation(open ? socialAccountId : null, open ? threadsMediaId : null);
+  } = useThreadConversation(open ? socialAccountId : null, rootPostId);
 
   // Threads only tells us which post a mention belongs to when it gives us a media id.
   // Without one there is no conversation to fetch, so offering the control would be a lie.
@@ -50,7 +66,7 @@ export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: 
           <ThreadsReplyList
             accountId={socialAccountId}
             replies={replies}
-            isLoading={isLoading}
+            isLoading={resolvingPost || loadingConversation}
             error={error ?? undefined}
             onRetry={() => refetch()}
             emptyTitle="No replies on this thread"

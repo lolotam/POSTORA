@@ -105,13 +105,16 @@ export function buildThreads<T>(entries: T[], keys: ThreadKeys<T>): Thread<T>[] 
   const newestFirst = byTime(keys.createdAt, "newest");
   const nodeOldestFirst = byTime<ThreadNode<T>>((node) => keys.createdAt(node.entry), "oldest");
 
-  const present = new Set(entries.map(keys.id));
+  // Keyed by id rather than a bare Set: the stranded sweep below has to climb parent
+  // links, which needs the entries themselves and not just their presence.
+  const byId = new Map<string, T>();
+  for (const entry of entries) byId.set(keys.id(entry), entry);
   const childrenOf = new Map<string, T[]>();
   const roots: T[] = [];
 
   for (const entry of entries) {
     const parentId = keys.parentId(entry);
-    if (!parentId || !present.has(parentId) || parentId === keys.id(entry)) {
+    if (!parentId || !byId.has(parentId) || parentId === keys.id(entry)) {
       roots.push(entry);
       continue;
     }
@@ -166,12 +169,35 @@ export function buildThreads<T>(entries: T[], keys: ThreadKeys<T>): Thread<T>[] 
 
   const threads = [...roots].sort(newestFirst).map(thread);
 
+  /**
+   * Where a stranded entry's thread should actually start.
+   *
+   * Promoting the stranded entry itself is only right when that entry is ON the cycle.
+   * Given x<->y with z answering x, the newest-first sweep reaches z first, roots z, and
+   * marks it visited -- so when x is finally walked it skips z, and a reply that has a
+   * perfectly good parent ends up as a thread of its own at depth 0. Climbing to the
+   * cycle first puts all three in one thread with z under x, where it belongs.
+   */
+  const cycleRootOf = (entry: T): T => {
+    const climbed = new Set<string>();
+    let current = entry;
+    for (;;) {
+      const id = keys.id(current);
+      if (climbed.has(id)) return current;
+      climbed.add(id);
+      const parentId = keys.parentId(current);
+      if (!parentId || parentId === id || visited.has(parentId)) return current;
+      const parent = byId.get(parentId);
+      if (!parent) return current;
+      current = parent;
+    }
+  };
+
   // A parent cycle -- a naming b while b names a -- leaves both looking like replies, so
   // neither lands in `roots` and both would disappear from the page entirely. The visited
-  // set above stops the walk hanging; this is what stops the entries vanishing. Anything
-  // still unwalked becomes its own thread and pulls its cycle partner in beneath it.
+  // set above stops the walk hanging; this is what stops the entries vanishing.
   for (const stranded of [...entries].sort(newestFirst)) {
-    if (!visited.has(keys.id(stranded))) threads.push(thread(stranded));
+    if (!visited.has(keys.id(stranded))) threads.push(thread(cycleRootOf(stranded)));
   }
 
   return threads.sort((a, b) => newestFirst(a.root, b.root));

@@ -43,8 +43,10 @@ describe("buildThreadsReplyThreads", () => {
     expect(threads[0].replyCount).toBe(2);
   });
 
-  // The old buildTimeline pushed a self-parented reply into its own child list and then
-  // walked into it, recursing until the stack blew and the page went down with it.
+  // The old buildTimeline keyed children by parent id, so a self-parented reply landed in
+  // its own child list. On its own it then vanished -- `walk(null)` never reached it. It
+  // took a second entry sharing that id to make `walk` recurse into the list forever. Both
+  // outcomes are wrong; the walk is bounded now and the entry survives either way.
   it("survives a reply that names itself as its parent", () => {
     const threads = buildThreadsReplyThreads([reply("loop", "2026-08-27T10:00:00Z", "loop")]);
 
@@ -106,6 +108,22 @@ describe("buildThreadsReplyThreads", () => {
       "second",
       "undated",
     ]);
+  });
+
+  // Codex review, PR #40: a descendant of a cycle was rooted before the cycle itself was
+  // walked, so a reply with a perfectly good parent became a thread of its own at depth 0.
+  it("keeps a cycle's descendant under its parent instead of promoting it", () => {
+    const threads = buildThreadsReplyThreads([
+      reply("x", "2026-08-27T10:00:00Z", "y"),
+      reply("y", "2026-08-27T10:01:00Z", "x"),
+      reply("z", "2026-08-27T10:02:00Z", "x"),
+    ]);
+
+    expect(threads).toHaveLength(1);
+    const byId = new Map(threads[0].nodes.map((n) => [n.entry.id, n.depth]));
+    expect([...byId.keys()].sort()).toEqual(["x", "y", "z"]);
+    expect(byId.get("z")).toBeGreaterThan(0);
+    expect(threads[0].replyCount).toBe(2);
   });
 
   it("returns nothing for an empty list", () => {

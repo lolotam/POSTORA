@@ -1,4 +1,4 @@
-import { formatDistanceToNow } from "date-fns";
+import { formatDistanceToNow, isValid } from "date-fns";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,6 +52,13 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
   const username =
     reply.username ?? (isOwned ? selfUsername ?? "Unknown User" : "Unknown User");
   const avatarUrl = isOwned ? selfAvatar ?? getAvatar(username) : getAvatar(username);
+  // date-fns 3 throws RangeError on an invalid date, and this renders inside a list -- one
+  // bad timestamp from Meta would blank the whole page rather than one row. The threading
+  // sort already tolerates these; rendering has to as well.
+  const postedAt = reply.timestamp ? new Date(reply.timestamp) : null;
+  const postedAgo = postedAt && isValid(postedAt)
+    ? formatDistanceToNow(postedAt, { addSuffix: true })
+    : null;
   const topicTagDebug =
     (reply as unknown as { topic_tag_debug?: Record<string, unknown> }).topic_tag_debug ||
     ((reply as unknown as { raw_data?: { topic_tag_debug?: Record<string, unknown> } }).raw_data
@@ -86,10 +93,8 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                     <CornerDownRight className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
                   )}
                   <span className={cn("font-medium text-sm truncate", style.name)}>@{username}</span>
-                  {reply.timestamp && (
-                    <span className="text-xs text-muted-foreground">
-                      {formatDistanceToNow(new Date(reply.timestamp), { addSuffix: true })}
-                    </span>
+                  {postedAgo && (
+                    <span className="text-xs text-muted-foreground">{postedAgo}</span>
                   )}
                   {isOwned && <Badge variant="secondary" className="text-[10px]">You</Badge>}
                   {isHidden && <Badge variant="outline" className="text-[10px]">Hidden</Badge>}

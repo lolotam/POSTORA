@@ -227,6 +227,7 @@ export function ThreadsRepliesTab({ accountId }: Props) {
 
       <ThreadsReplyComposerDialog
         accountId={accountId}
+        mediaId={mediaId}
         open={composerOpen}
         onOpenChange={setComposerOpen}
         replyToId={replyTarget?.id ?? null}
