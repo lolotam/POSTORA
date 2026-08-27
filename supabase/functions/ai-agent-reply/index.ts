@@ -31,6 +31,7 @@ import {
   type ToolResult,
 } from "./tools.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
+import { cancelOutboxRow, deliverThroughOutbox, releaseAfterError, takeOutboxRow } from "./outbox.ts";
 import { adminToolDefinitions, executeAdminTool } from "./admin-tools.ts";
 import { getSendCredentials } from "../_shared/messengerCredentials.ts";
 import { replyToComment } from "../_shared/commentActions.ts";
@@ -65,6 +66,13 @@ interface ReplyRequest {
   comment_id?: string;
   /** Language the caller already detected (e.g. a transcript's "ara"). Beats counting. */
   language_hint?: string;
+  /**
+   * The pending_agent_replies row this request is working for, set by the webhooks and the
+   * recovery job. Its state decides whether this call generates or only redelivers stored
+   * text, and every step that precedes an external side effect is confirmed against it.
+   * Absent from every caller that predates the outbox, and from the sandbox.
+   */
+  outbox_id?: string;
 }
 
 // Comment text is attacker-controlled free text on a public surface. The prompt sees the
@@ -447,7 +455,11 @@ Deno.serve(async (req) => {
     platform: request.platform,
     conversation_id: request.conversation_id,
     inbound_text: request.inbound_text.slice(0, 2000),
+    // On EVERY outcome row, not only the successful one: recovery reads the Logs tab too, and
+    // has to tell "never ran" from "ran and failed" for the same work item.
+    idempotency_key: request.outbox_id ?? null,
   };
+  const outboxId = dryRun ? null : request.outbox_id ?? null;
 
   // Hoisted so the catch block can report which models were attempted.
   let usedModel: string | null = null;
@@ -468,6 +480,10 @@ Deno.serve(async (req) => {
   // Whether that tool escalation actually reached a person. escalate_to_human reports
   // success on a bare mute, so the floor cannot infer this from `escalated`.
   let escalationNotifiedHuman = false;
+  // Whether anything externally visible happened before a failure: a tool ran, or the
+  // outage floor sent something. Decides whether the outbox row may be retried (nothing
+  // happened) or must go to a human (something may have).
+  let sideEffectsHappened = false;
 
   try {
     const { data: config } = await admin
@@ -522,6 +538,9 @@ Deno.serve(async (req) => {
       });
       if (!gate.reply) {
         await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
+        // Terminal for the work item: a closed gate is a decision, and recovery re-driving
+        // the row would only reach the same gate.
+        if (outboxId) await cancelOutboxRow(admin, outboxId, "pending", gate.reason);
         return jsonResponse({ ok: true, skipped: gate.reason });
       }
     }
@@ -603,6 +622,32 @@ Deno.serve(async (req) => {
     });
 
     replySender = dryRun ? null : await buildReplySender(admin, request);
+
+    // The outbox decides what this invocation may do. A row that already holds a generated
+    // reply is DELIVERED, not regenerated -- re-entering the model chain and the tool loop
+    // for it is the tool/escalation replay the two-stage design exists to prevent. A fresh
+    // row is claimed into `running` here, before any tool can fire, so a later kill leaves a
+    // state recovery can classify. Anything else is not ours to run.
+    if (outboxId && replySender) {
+      const entry = await takeOutboxRow(admin, outboxId);
+      if (entry.mode === "redeliver") {
+        const sender = replySender;
+        const outboundMessageId = await deliverThroughOutbox(
+          admin, outboxId, entry.text, (text) => sender(request.recipient_phone, text), { alreadyPersisted: true },
+        );
+        await logOutcome(admin, {
+          ...baseLog,
+          reply_text: entry.text.slice(0, 4000),
+          latency_ms: Date.now() - startedAt,
+          status: "sent",
+        }, { redelivered: true, outbound_message_id: outboundMessageId });
+        return jsonResponse({ ok: true, redelivered: true, reply: entry.text });
+      }
+      if (entry.mode === "refuse") {
+        console.warn(`[ai-agent-reply] outbox row ${outboxId} not runnable: ${entry.status}`);
+        return jsonResponse({ ok: false, error: `outbox row not runnable: ${entry.status}` }, 409);
+      }
+    }
 
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
@@ -740,6 +785,7 @@ Deno.serve(async (req) => {
           // leave args empty; the executor handles missing fields
         }
         executedToolCalls.push({ name: toolCall.function.name, arguments: args });
+        sideEffectsHappened = true;
         const customTool = customToolByName.get(toolCall.function.name);
         const result: ToolResult = customTool
           ? await executeCustomTool(toolContext, customTool, args)
@@ -797,11 +843,19 @@ Deno.serve(async (req) => {
         graph_error: graphError,
         dry_run: dryRun,
       });
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "running", "no_reply_generated");
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
     if (!dryRun && replySender) {
-      const outboundMessageId = await replySender(request.recipient_phone, replyText);
+      const sender = replySender;
+      // With an outbox row, the send is wrapped in three durable steps (persist the text,
+      // mark sending, mark sent) so a kill at any point leaves a state recovery can act on
+      // without guessing. Without one -- callers that predate the outbox -- it is the plain
+      // send it always was.
+      const outboundMessageId = outboxId
+        ? await deliverThroughOutbox(admin, outboxId, replyText, (text) => sender(request.recipient_phone, text))
+        : await sender(request.recipient_phone, replyText);
 
       // Local message storage exists only for WhatsApp; FB/IG conversations
       // are read live from the Graph API.
@@ -878,7 +932,22 @@ Deno.serve(async (req) => {
         model_chain: modelChain.map(formatModelRef),
         ...floor,
       });
-      return jsonResponse({ ok: false, error: errorMessage(error), escalated: floor.escalated });
+      if (outboxId) {
+        // Escalated means the floor did something external -- assigned a human, notified
+        // admins, sent an apology. Terminal: recovery re-running this would do it all twice.
+        // Unhandled means nothing happened, and the row may be retried once models recover.
+        if (floor.escalated) await cancelOutboxRow(admin, outboxId, "running", "model outage handled by escalation");
+        else await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) });
+      }
+      // apology_sent and human_notified travel in the body so a caller can tell this apart
+      // from an ordinary failure: parseAgentReplyResult reads `escalated` as terminal.
+      return jsonResponse({
+        ok: false,
+        error: errorMessage(error),
+        escalated: floor.escalated,
+        apology_sent: floor.apology_sent,
+        human_notified: floor.human_notified,
+      });
     }
     await logOutcome(admin, {
       ...baseLog,
@@ -890,6 +959,7 @@ Deno.serve(async (req) => {
       fallback_level: usedFallbackLevel,
       model_errors: modelErrors.length ? modelErrors : null,
     });
+    if (outboxId) await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) });
     return jsonResponse({ ok: false, error: errorMessage(error) });
   }
 });
