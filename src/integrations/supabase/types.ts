@@ -3382,6 +3382,7 @@ export type Database = {
           id: string
           inbound_at: string
           inbound_text: string
+          ingress_seq: number
           language_hint: string | null
           lease_expires_at: string | null
           media_caption: string | null
@@ -3408,6 +3409,7 @@ export type Database = {
           id?: string
           inbound_at: string
           inbound_text: string
+          ingress_seq?: number
           language_hint?: string | null
           lease_expires_at?: string | null
           media_caption?: string | null
@@ -3434,6 +3436,7 @@ export type Database = {
           id?: string
           inbound_at?: string
           inbound_text?: string
+          ingress_seq?: number
           language_hint?: string | null
           lease_expires_at?: string | null
           media_caption?: string | null

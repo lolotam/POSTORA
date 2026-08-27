@@ -176,5 +176,16 @@ export async function cancelOutboxRow(
     console.error(`[outbox] could not read ${outboxId} to cancel it: ${error?.message ?? "missing"}`);
     return;
   }
+  // Only from a state where nothing has been sent. advance_agent_reply enforces the FROM
+  // state but not which pairs are legal, so a stale caller could otherwise rewrite `sending`,
+  // `sent` or `delivery_unknown` as `cancelled` -- turning a reply the customer may have
+  // received into a record saying nothing was attempted, which is the one lie this table
+  // must never tell.
+  if (!CANCELLABLE.includes(row.status)) {
+    console.warn(`[outbox] refusing to cancel ${outboxId}: ${row.status} is past the point of no send`);
+    return;
+  }
   await advanceReply(admin, { id: outboxId, from: row.status, to: "cancelled", error: reason });
 }
+
+const CANCELLABLE: readonly string[] = ["pending", "running", "ready_to_send"];

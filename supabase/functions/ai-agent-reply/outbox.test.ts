@@ -160,6 +160,17 @@ Deno.test("a closed gate cancels the row from whatever state it is actually in",
   }
 });
 
+Deno.test("a row past the point of no send is never rewritten as cancelled", async () => {
+  // advance_agent_reply enforces the FROM state but not which pairs are legal, so a stale
+  // caller could otherwise turn `sending` -- a reply the customer may already have -- into a
+  // record saying nothing was attempted. That is the one lie this table must never tell.
+  for (const status of ["sending", "sent", "delivery_unknown", "failed", "cancelled"]) {
+    const { admin, row } = stubOutbox({ status, generated_reply: "hi" });
+    await cancelOutboxRow(admin, "row-1", "daily_cap_reached");
+    assertEquals(row?.status, status, `${status} must survive a stale cancel`);
+  }
+});
+
 Deno.test("cancelling a row that no longer exists is a no-op, not a throw", async () => {
   // The caller is on its way to returning a response to Meta; a missing row must not
   // become an exception that replaces a legitimate skip.

@@ -91,16 +91,49 @@ export async function enqueueAgentReply(
   item: PendingReplyItem,
 ): Promise<EnqueueOutcome | null> {
   const label = `${item.platform}/${item.messageId}`;
+
+  // Two attempts, because the RPC is idempotent and a lost RESPONSE is not a lost INSERT.
+  //
+  // Postgres can commit the row and then fail to return -- a dropped connection, a proxy
+  // timeout. Reporting that as "no row" would send the reply now AND leave a committed
+  // `pending` row for recovery to send again in a few minutes: a duplicate, from the very
+  // path meant to prevent them. A retry resolves it, because ON CONFLICT DO NOTHING makes
+  // the second call return the committed row with newly_enqueued=false.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const outcome = await attemptEnqueue(admin, item, label);
+    if (outcome !== "unknown") return outcome;
+  }
+
+  // Both calls failed. A read is a different code path from a write and usually survives
+  // when the write does not, so ask the table directly rather than guessing.
+  const existing = await findExistingRow(admin, item, label);
+  if (existing) return existing;
+
+  // Genuinely unknown. Reply anyway: a reply with no outbox row is the degradation this
+  // design accepts, and it is preferable to a customer who is answered by nobody. If a row
+  // did commit and is invisible to all three of the calls above, recovery may still produce
+  // a second reply -- which is why this is logged at error rather than swallowed.
+  console.error(`[outbox] ownership for ${label} is UNKNOWN after 2 enqueues and a lookup; replying without a row`);
+  return null;
+}
+
+async function attemptEnqueue(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  item: PendingReplyItem,
+  label: string,
+): Promise<EnqueueOutcome | null | "unknown"> {
   try {
     const { data, error } = await admin.rpc("enqueue_agent_reply", toEnqueueArgs(item));
     if (error) {
       console.error(`[outbox] could not record ${label}: ${error.message}`);
-      return null;
+      return "unknown";
     }
     const row = Array.isArray(data) ? data[0] : data;
     if (!row || typeof row.id !== "string" || typeof row.newly_enqueued !== "boolean") {
-      // Fail closed on ownership. Reading garbage as "newly enqueued" would let two
-      // invocations both believe they own the row.
+      // A well-formed response that says something this code does not understand is NOT an
+      // ambiguous write -- retrying would not clarify it. Fail closed on ownership: reading
+      // garbage as "newly enqueued" would let two invocations both believe they own the row.
       console.error(`[outbox] unexpected enqueue result for ${label}`);
       return null;
     }
@@ -108,6 +141,30 @@ export async function enqueueAgentReply(
     return { id: row.id, newlyEnqueued: row.newly_enqueued };
   } catch (error) {
     console.error(`[outbox] enqueue threw for ${label}:`, (error as Error)?.message ?? error);
+    return "unknown";
+  }
+}
+
+/** Did an earlier attempt commit after all? Never reports ownership -- only that a row exists. */
+async function findExistingRow(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  item: PendingReplyItem,
+  label: string,
+): Promise<EnqueueOutcome | null> {
+  try {
+    const { data, error } = await admin
+      .from("pending_agent_replies")
+      .select("id")
+      .eq("social_account_id", item.socialAccountId)
+      .eq("message_id", item.messageId)
+      .maybeSingle();
+    if (error || !data?.id) return null;
+    console.warn(`[outbox] ${label} committed despite a failed enqueue response; treating it as owned elsewhere`);
+    // Deliberately not the owner: this caller never got a confirmed claim, so it must not
+    // start work the row's real owner (or recovery) may also be doing.
+    return { id: data.id, newlyEnqueued: false };
+  } catch {
     return null;
   }
 }

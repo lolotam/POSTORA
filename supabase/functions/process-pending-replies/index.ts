@@ -29,6 +29,7 @@ import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts
 import { MetaMessagingFetcher } from "../_shared/inboundMediaFetchers.ts";
 import type { MediaKind } from "../_shared/inboundMediaUnderstanding.ts";
 import { noteUnreadAttachments } from "../facebook-instagram-webhook/attachments.ts";
+import { escalateConversation, type EscalationTarget } from "../ai-agent-reply/tools.ts";
 import {
   canStartAnotherRow,
   decideRecovery,
@@ -56,6 +57,8 @@ interface OutboxRow {
   language_hint: string | null;
   comment_id: string | null;
   inbound_at: string;
+  /** The tie-breaker that makes (inbound_at, ingress_seq) a total order. */
+  ingress_seq: number;
   generated_reply: string | null;
   status: string;
   attempts: number;
@@ -115,25 +118,56 @@ async function surfaceToHumans(admin: any, row: OutboxRow, status: string, detai
 }
 
 /**
- * Hands the conversation to a person.
+ * Hands the conversation to a person: mutes the AI, assigns an available agent, and
+ * notifies the configured admins.
  *
- * The mode flip is the platform-agnostic core of the escalation path: it is what silences
- * the AI for this conversation from the next inbound message on, and it is the part the
- * outage floor depends on. The WhatsApp-shaped assignment tables and the admin notification
- * need a sender and a tool context this job does not have; the log rows written by the
- * caller are what puts the conversation in front of someone.
+ * This reuses escalateConversation rather than only flipping the mode. A muted conversation
+ * that nobody was told about is the worst of both outcomes -- the customer waits, the AI
+ * will not answer, and the queue that would have surfaced it is silent. Its own doc comment
+ * says the mode upsert always completes and the assignment and notification are
+ * best-effort, which is the right shape here too.
+ *
+ * Failure is reported rather than swallowed, because the caller's log row is what tells an
+ * operator whether a person was actually reached.
  */
-async function handToHuman(admin: any, row: OutboxRow): Promise<void> {
-  const { error } = await admin.from("ai_conversation_modes").upsert(
-    {
-      user_id: row.user_id,
-      platform: row.platform,
-      conversation_id: row.conversation_id,
-      mode: "human_first",
-    },
-    { onConflict: "user_id,platform,conversation_id" },
-  );
-  if (error) console.error(`[recovery] could not hand ${row.id} to a human: ${error.message}`);
+async function handToHuman(admin: any, row: OutboxRow, config: AgentConfigForEscalation): Promise<boolean> {
+  const target: EscalationTarget = {
+    admin,
+    userId: row.user_id,
+    platform: row.platform,
+    conversationId: row.conversation_id,
+    customerName: row.recipient_id,
+    adminPhoneNumbers: config.admin_phone_numbers ?? [],
+    // A cron worker has no sender: the credential resolution that builds one lives in
+    // ai-agent-reply and needs a request. escalateConversation reports adminsNotified
+    // honestly when the send does nothing, and handToHuman logs that case -- so the mute and
+    // the assignment still happen, and nobody is told a person was paged when they were not.
+    sendWhatsAppText: () => Promise.resolve(),
+  };
+  try {
+    const outcome = await escalateConversation(target, "recovery could not determine what the interrupted agent had already done");
+    if (!outcome.assigned && outcome.adminsNotified === 0) {
+      console.warn(`[recovery] ${row.id} muted but nobody was reached; it is visible only in the logs`);
+    }
+    return true;
+  } catch (error) {
+    console.error(`[recovery] could not hand ${row.id} to a human: ${error instanceof Error ? error.message : error}`);
+    return false;
+  }
+}
+
+interface AgentConfigForEscalation {
+  admin_phone_numbers: string[] | null;
+}
+
+async function loadAgentConfig(admin: any, row: OutboxRow): Promise<AgentConfigForEscalation> {
+  const { data } = await admin
+    .from("ai_agent_configs")
+    .select("admin_phone_numbers")
+    .eq("user_id", row.user_id)
+    .eq("platform", row.platform)
+    .maybeSingle();
+  return { admin_phone_numbers: data?.admin_phone_numbers ?? null };
 }
 
 async function loadContext(admin: any, row: OutboxRow) {
@@ -145,12 +179,15 @@ async function loadContext(admin: any, row: OutboxRow) {
       .eq("platform", row.platform)
       .eq("conversation_id", row.conversation_id)
       .maybeSingle(),
+    // "Newer" must use the SAME total order the claim uses, or a message that sorts later
+    // for claiming can sort as not-newer here and both get answered out of order. WhatsApp's
+    // second-resolution timestamps make the tie real, not theoretical.
     admin
       .from("pending_agent_replies")
       .select("id", { count: "exact", head: true })
       .eq("social_account_id", row.social_account_id)
       .eq("conversation_id", row.conversation_id)
-      .gt("inbound_at", row.inbound_at)
+      .or(`inbound_at.gt.${row.inbound_at},and(inbound_at.eq.${row.inbound_at},ingress_seq.gt.${row.ingress_seq})`)
       .in("status", ["pending", "running", "ready_to_send", "sending"]),
   ]);
   return {
@@ -250,18 +287,35 @@ async function processRow(admin: any, row: OutboxRow): Promise<string> {
   const from = row.status as PendingReplyStatus;
 
   switch (action.kind) {
-    case "delivery_unknown":
-      await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed during a delivery attempt" });
+    case "delivery_unknown": {
+      // Gated on the transition. If it was refused, another worker owns this row and is
+      // acting on it; writing a log row here too would double-report one interruption.
+      const claimed = await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed during a delivery attempt" });
+      if (!claimed) return "conceded";
       await surfaceToHumans(admin, row, "delivery_unknown", "a reply may or may not have reached the customer");
       return action.kind;
-    case "hand_to_human":
-      await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed while the agent was running" });
-      await handToHuman(admin, row);
-      await surfaceToHumans(admin, row, "delivery_unknown", "the agent was interrupted; a tool or escalation may have run");
+    }
+    case "hand_to_human": {
+      // Same gate, and here it matters more: escalateConversation mutes the conversation and
+      // notifies people. Doing that on a row another worker already took would silence a
+      // conversation twice and page an admin twice for one interruption.
+      const claimed = await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed while the agent was running" });
+      if (!claimed) return "conceded";
+      const handed = await handToHuman(admin, row, await loadAgentConfig(admin, row));
+      await surfaceToHumans(
+        admin,
+        row,
+        "delivery_unknown",
+        handed
+          ? "the agent was interrupted; a tool or escalation may have run, so it is now with a human"
+          : "the agent was interrupted AND the handoff failed; nobody has been assigned",
+      );
       return action.kind;
-    case "cancel":
-      await advanceReply(admin, { id: row.id, from, to: "cancelled", error: action.reason });
-      return `${action.kind}:${action.reason}`;
+    }
+    case "cancel": {
+      const claimed = await advanceReply(admin, { id: row.id, from, to: "cancelled", error: action.reason });
+      return claimed ? `${action.kind}:${action.reason}` : "conceded";
+    }
     case "deliver_stored":
     case "rerun_agent": {
       const account = await loadAccount(admin, row);

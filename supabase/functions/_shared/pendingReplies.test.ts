@@ -48,6 +48,62 @@ Deno.test("an enqueue that fails outright returns null, and the caller still rep
   assertEquals(await enqueueAgentReply(admin, ITEM), null);
 });
 
+Deno.test("a lost RESPONSE is not a lost INSERT: the retry resolves ownership", async () => {
+  // Postgres can commit the row and then fail to answer. Reporting that as "no row" sends
+  // the reply now AND leaves a committed pending row for recovery to send again in a few
+  // minutes -- a duplicate produced by the machinery meant to prevent them. The RPC is
+  // idempotent, so a second call returns the committed row.
+  let calls = 0;
+  const admin = {
+    rpc: () => {
+      calls++;
+      return calls === 1
+        ? Promise.resolve({ data: null, error: { message: "connection reset" } })
+        : Promise.resolve({ data: [{ id: "row-1", newly_enqueued: false }], error: null });
+    },
+  };
+  assertEquals(await enqueueAgentReply(admin, ITEM), { id: "row-1", newlyEnqueued: false });
+  assertEquals(calls, 2);
+});
+
+Deno.test("when both enqueues fail, a read decides — and never claims ownership", async () => {
+  // A read is a different code path from a write and usually survives when the write does
+  // not. Finding the row means an earlier attempt committed, so this caller is NOT the
+  // owner and must not start work the real owner may also be doing.
+  let reads = 0;
+  const admin = {
+    rpc: () => Promise.resolve({ data: null, error: { message: "connection reset" } }),
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            maybeSingle: () => {
+              reads++;
+              return Promise.resolve({ data: { id: "row-1" }, error: null });
+            },
+          }),
+        }),
+      }),
+    }),
+  };
+  assertEquals(await enqueueAgentReply(admin, ITEM), { id: "row-1", newlyEnqueued: false });
+  assertEquals(reads, 1);
+});
+
+Deno.test("a well-formed but unrecognised answer is not retried, and claims nothing", async () => {
+  // Retrying would not clarify a response the database did give us. Reading it as "newly
+  // enqueued" would let two invocations both believe they own the row.
+  let calls = 0;
+  const admin = {
+    rpc: () => {
+      calls++;
+      return Promise.resolve({ data: [{ nonsense: true }], error: null });
+    },
+  };
+  assertEquals(await enqueueAgentReply(admin, ITEM), null);
+  assertEquals(calls, 1);
+});
+
 Deno.test("an RPC that answers with an unexpected shape is a failure, not ownership", async () => {
   // Fail closed on the caller's side: treating garbage as newly_enqueued=true would let
   // two invocations both believe they own the row.

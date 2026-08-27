@@ -55,7 +55,15 @@ CREATE TABLE IF NOT EXISTS public.pending_agent_replies (
   media_expires_at  TIMESTAMPTZ,
 
   -- Ordering within a conversation, so two queued messages are never answered backwards.
+  --
+  -- inbound_at alone is NOT a total order: WhatsApp sends integer seconds, so two messages
+  -- a customer typed in quick succession routinely carry the identical timestamp. Two
+  -- recovery workers would then each claim one, neither would see the other as newer, and
+  -- both could generate at once -- answering in arbitrary order. ingress_seq is the
+  -- tie-breaker, and (inbound_at, ingress_seq) is used for BOTH claim ordering and the
+  -- "is there a newer message" test so the two cannot disagree.
   inbound_at        TIMESTAMPTZ NOT NULL,
+  ingress_seq       BIGSERIAL NOT NULL,
 
   -- Persisted by ai-agent-reply BEFORE it sends. Its presence is what makes a row
   -- re-deliverable without re-running the agent.
@@ -81,7 +89,7 @@ ALTER TABLE public.pending_agent_replies ENABLE ROW LEVEL SECURITY;
 
 -- The claim query: unfinished rows whose lease has lapsed, oldest inbound first.
 CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_claimable
-  ON public.pending_agent_replies (lease_expires_at NULLS FIRST, inbound_at)
+  ON public.pending_agent_replies (lease_expires_at NULLS FIRST, inbound_at, ingress_seq)
   WHERE status IN ('pending','running','ready_to_send','sending');
 
 CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_account
@@ -92,7 +100,7 @@ CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_user
 
 -- Serves both the ordering check and the retention purge.
 CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_conversation
-  ON public.pending_agent_replies (conversation_id, inbound_at);
+  ON public.pending_agent_replies (conversation_id, inbound_at, ingress_seq);
 
 /**
  * Enqueues an inbound work item and reports whether THIS caller created it.
@@ -179,8 +187,9 @@ $$;
  * The status is deliberately NOT overwritten: a ready_to_send row must stay ready_to_send,
  * or the recovery job loses the very fact that tells it "re-deliver, do not re-run".
  *
- * Rows are ordered by inbound_at so a conversation's messages are recovered in the order
- * the customer sent them.
+ * Rows are ordered by (inbound_at, ingress_seq) so a conversation's messages are recovered
+ * in the order the customer sent them, including the ties WhatsApp's second-resolution
+ * timestamps produce.
  */
 CREATE OR REPLACE FUNCTION public.claim_agent_replies(
   p_limit INTEGER,
@@ -203,7 +212,7 @@ BEGIN
      WHERE p.status IN ('pending','running','ready_to_send','sending')
        AND p.attempts < p_max_attempts
        AND (p.lease_expires_at IS NULL OR p.lease_expires_at < now())
-     ORDER BY p.inbound_at
+     ORDER BY p.inbound_at, p.ingress_seq
      LIMIT p_limit
      FOR UPDATE SKIP LOCKED
   )

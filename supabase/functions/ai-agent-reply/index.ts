@@ -559,6 +559,88 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Everything the reply is delivered through, resolved before any billable work so the
+    // redelivery branch below can send without paying for retrieval it will not use.
+    replySender = dryRun ? null : await buildReplySender(admin, request);
+
+    // Declared here rather than beside the tool loop because persistDelivery reads it, and a
+    // redelivery persists before the loop has run at all. Empty is the truthful value there:
+    // a redelivered reply executed no tools on this invocation.
+    const executedToolCalls: Array<{ name: string; arguments: unknown }> = [];
+
+    /**
+     * Writes what a reply leaves behind. Shared by redelivery and fresh sends.
+     *
+     * `outboundMessageId` is null on a sandbox run, which sends nothing -- the thread turns
+     * are still written there, because the sandbox's whole purpose is to hold a conversation.
+     */
+    const persistDelivery = async (text: string, outboundMessageId: string | null) => {
+      // Local message storage exists only for WhatsApp; FB/IG conversations are read live
+      // from the Graph API.
+      if (request.platform === "whatsapp" && outboundMessageId) {
+        await admin.from("whatsapp_messages").insert({
+          user_id: request.user_id,
+          social_account_id: request.social_account_id,
+          conversation_id: request.conversation_id,
+          message_id: outboundMessageId,
+          from_phone: request.phone_number_id,
+          from_name: "AI Agent",
+          to_phone: request.recipient_phone,
+          message_text: text,
+          message_type: "text",
+          direction: "outbound",
+          status: "sent",
+          timestamp: new Date().toISOString(),
+        });
+      }
+      const { error: threadWriteError } = await admin.from("ai_thread_messages").insert([
+        { thread_id: thread.id, user_id: request.user_id, role: "user", content: request.inbound_text },
+        {
+          thread_id: thread.id,
+          user_id: request.user_id,
+          role: "assistant",
+          content: text,
+          tool_calls: executedToolCalls.length ? executedToolCalls : null,
+        },
+      ]);
+      if (threadWriteError) console.error("[ai-agent-reply] Thread write failed:", threadWriteError.message);
+    };
+
+    // The outbox decides what this invocation may do, and it decides BEFORE any billable
+    // work. A row that already holds a generated reply is DELIVERED, not regenerated --
+    // re-entering the model chain and the tool loop for it is the replay the two-stage
+    // design exists to prevent. A fresh row is claimed into `running` here, before the
+    // embedding lookup below (which calls an external provider) and before any tool can
+    // fire, so a later kill leaves a state recovery can classify rather than one that
+    // wrongly reads as "nothing external happened".
+    if (outboxId && replySender) {
+      const entry = await takeOutboxRow(admin, outboxId);
+      if (entry.mode === "refuse") {
+        console.warn(`[ai-agent-reply] outbox row ${outboxId} not runnable: ${entry.status}`);
+        return jsonResponse({ ok: false, error: `outbox row not runnable: ${entry.status}` }, 409);
+      }
+      if (entry.mode === "redeliver") {
+        const sender = replySender;
+        const outboundMessageId = await deliverStoredReply(
+          admin, outboxId, entry.text, (text) => sender(request.recipient_phone, text),
+        );
+        // The same trail a fresh delivery leaves. Without it the customer has a reply that
+        // is missing from the inbox UI and from the thread the next turn reads -- so the
+        // agent would answer as though it had never spoken, and the cooldown could not see
+        // the assistant turn either. A redelivery only ever runs from `ready_to_send`, which
+        // means the original attempt died at or before its send, so nothing was written yet
+        // and these are not duplicates.
+        await persistDelivery(entry.text, outboundMessageId);
+        await logOutcome(admin, {
+          ...baseLog,
+          reply_text: entry.text.slice(0, 4000),
+          latency_ms: Date.now() - startedAt,
+          status: "sent",
+        }, { redelivered: true, outbound_message_id: outboundMessageId });
+        return jsonResponse({ ok: true, redelivered: true, reply: entry.text });
+      }
+    }
+
     const { data: historyRows } = await admin
       .from("ai_thread_messages")
       .select("role, content")
@@ -635,34 +717,6 @@ Deno.serve(async (req) => {
       surface: request.comment_id ? "comment" : "dm",
     });
 
-    replySender = dryRun ? null : await buildReplySender(admin, request);
-
-    // The outbox decides what this invocation may do. A row that already holds a generated
-    // reply is DELIVERED, not regenerated -- re-entering the model chain and the tool loop
-    // for it is the tool/escalation replay the two-stage design exists to prevent. A fresh
-    // row is claimed into `running` here, before any tool can fire, so a later kill leaves a
-    // state recovery can classify. Anything else is not ours to run.
-    if (outboxId && replySender) {
-      const entry = await takeOutboxRow(admin, outboxId);
-      if (entry.mode === "redeliver") {
-        const sender = replySender;
-        const outboundMessageId = await deliverStoredReply(
-          admin, outboxId, entry.text, (text) => sender(request.recipient_phone, text),
-        );
-        await logOutcome(admin, {
-          ...baseLog,
-          reply_text: entry.text.slice(0, 4000),
-          latency_ms: Date.now() - startedAt,
-          status: "sent",
-        }, { redelivered: true, outbound_message_id: outboundMessageId });
-        return jsonResponse({ ok: true, redelivered: true, reply: entry.text });
-      }
-      if (entry.mode === "refuse") {
-        console.warn(`[ai-agent-reply] outbox row ${outboxId} not runnable: ${entry.status}`);
-        return jsonResponse({ ok: false, error: `outbox row not runnable: ${entry.status}` }, 409);
-      }
-    }
-
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
     // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
@@ -719,7 +773,6 @@ Deno.serve(async (req) => {
       ...history,
       { role: "user", content: request.inbound_text.slice(0, MAX_INBOUND_CHARS) },
     ];
-    const executedToolCalls: Array<{ name: string; arguments: unknown }> = [];
     let promptTokens = 0;
     let completionTokens = 0;
     let replyText = "";
@@ -861,47 +914,21 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
     }
 
+    let outboundMessageId: string | null = null;
     if (!dryRun && replySender) {
       const sender = replySender;
       // With an outbox row, the send is wrapped in three durable steps (persist the text,
       // mark sending, mark sent) so a kill at any point leaves a state recovery can act on
       // without guessing. Without one -- callers that predate the outbox -- it is the plain
       // send it always was.
-      const outboundMessageId = outboxId
+      outboundMessageId = outboxId
         ? await deliverGeneratedReply(admin, outboxId, replyText, (text) => sender(request.recipient_phone, text))
         : await sender(request.recipient_phone, replyText);
-
-      // Local message storage exists only for WhatsApp; FB/IG conversations
-      // are read live from the Graph API.
-      if (request.platform === "whatsapp") {
-        await admin.from("whatsapp_messages").insert({
-          user_id: request.user_id,
-          social_account_id: request.social_account_id,
-          conversation_id: request.conversation_id,
-          message_id: outboundMessageId,
-          from_phone: request.phone_number_id,
-          from_name: "AI Agent",
-          to_phone: request.recipient_phone,
-          message_text: replyText,
-          message_type: "text",
-          direction: "outbound",
-          status: "sent",
-          timestamp: new Date().toISOString(),
-        });
-      }
     }
 
-    const { error: threadWriteError } = await admin.from("ai_thread_messages").insert([
-      { thread_id: thread.id, user_id: request.user_id, role: "user", content: request.inbound_text },
-      {
-        thread_id: thread.id,
-        user_id: request.user_id,
-        role: "assistant",
-        content: replyText,
-        tool_calls: executedToolCalls.length ? executedToolCalls : null,
-      },
-    ]);
-    if (threadWriteError) console.error("[ai-agent-reply] Thread write failed:", threadWriteError.message);
+    // Outside the send block, exactly as before: a sandbox run writes its thread turns
+    // without sending anything.
+    await persistDelivery(replyText, outboundMessageId);
 
     await logOutcome(admin, {
       ...baseLog,

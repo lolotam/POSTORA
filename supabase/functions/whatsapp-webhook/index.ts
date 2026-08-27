@@ -6,6 +6,7 @@ import {
   logSkippedUnderstanding,
   runInboundMediaUnderstanding,
 } from "../_shared/inboundMediaPipeline.ts";
+import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
@@ -467,6 +468,39 @@ async function handleLiveMessages(
       continue;
     }
 
+    // The outbox row is created HERE, one statement after the insert that consumes Meta's
+    // redelivery, and before any other awaited work.
+    //
+    // That ordering is the whole point. The upsert above is the idempotency claim: once it
+    // succeeds, a redelivery of the same message is a no-op and `continue`s. So every await
+    // between that claim and the enqueue is a window in which a killed worker loses the
+    // message with no possibility of recovery -- the platform will not tell us again. It
+    // used to include the messaging_cache upsert, two contact lookups and processAutoReplies,
+    // which can itself send. Now it includes nothing.
+    const automationHandler = resolveAutomationHandler(account.account_metadata);
+    const promptSafeText = promptSafeInput(mediaType, messageText, caption);
+    const enqueued = automationHandler === "internal"
+      ? await enqueueAgentReply(adminClient, {
+        socialAccountId: account.id,
+        platform: "whatsapp",
+        messageId,
+        conversationId,
+        recipientId: from,
+        inboundText: promptSafeText,
+        // The platform's timestamp, not now(): a delayed webhook must not be ordered as
+        // though it had just arrived, and the 24h window is measured from it.
+        inboundAt: msgTimestamp,
+        mediaUrl,
+        mediaKind: mediaType,
+        mediaCaption: caption,
+      })
+      : null;
+    // A redelivery whose predecessor died after enqueuing does not start a second reply --
+    // the owner holds a lease, and recovery is the backstop. A row that could not be written
+    // at all still replies, which is the one degradation this design accepts.
+    if (enqueued && !enqueued.newlyEnqueued) continue;
+    const outboxId = enqueued?.id ?? null;
+
     // Upsert messaging_cache, incrementing the unread counter
     const { data: cachedConversation } = await adminClient
       .from("messaging_cache")
@@ -496,8 +530,6 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
-    const automationHandler = resolveAutomationHandler(account.account_metadata);
-
     if (automationHandler === "n8n") {
       await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
         adminClient,
@@ -525,15 +557,13 @@ async function handleLiveMessages(
       ));
     }
 
-    // What the rules and the agent are allowed to read.
+    // promptSafeText is computed with the enqueue above, because the row records it.
     //
     // A document's text is "[Document] <filename>", and the sender chooses that filename.
     // Stored and dispatched it is data; fed to a keyword matcher it lets a sender trigger
     // an away rule by naming a file, and fed to the model it is an instruction the customer
     // never typed. Both consumers get the constant instead. Genuine captions -- which the
     // same check identifies -- still pass through untouched.
-    const promptSafeText = promptSafeInput(mediaType, messageText, caption);
-
     const ruleReplied = automationHandler === "internal"
       ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, promptSafeText, accessToken)
       : false;
@@ -541,13 +571,17 @@ async function handleLiveMessages(
     // Deterministic keyword/away rules outrank the AI; only unanswered
     // messages reach the agent. Imported/history/echo messages never get
     // here (see handleHistorySync guard), so the AI cannot reply to them.
+    if (automationHandler === "internal" && ruleReplied && outboxId) {
+      // A rule answered, so the agent never will. Terminal, and nothing the recovery pass
+      // should ever pick up.
+      await cancelOutboxRow(adminClient, outboxId, "rule_replied");
+    }
     if (automationHandler === "internal" && !ruleReplied) {
       const understandableKind = mediaType === "audio" || mediaType === "image" ||
         mediaType === "document";
       const mediaMime = (mediaMetadata as { mime_type?: string } | null)?.mime_type ?? null;
       await replyThroughAgent(adminClient, account, accessToken, {
-        messageId,
-        inboundAt: msgTimestamp,
+        outboxId,
         phoneNumberId,
         from,
         conversationId,
@@ -969,8 +1003,8 @@ async function processAutoReplies(
 }
 
 interface InboundForAgent {
-  messageId: string;
-  inboundAt: string;
+  /** The row the caller already enqueued, or null when it could not be written. */
+  outboxId: string | null;
   phoneNumberId: string;
   from: string;
   conversationId: string;
@@ -987,14 +1021,13 @@ interface InboundForAgent {
 }
 
 /**
- * Hands one inbound message to the AI agent, durably. The ai-agent-reply function enforces
- * its own gates (enabled flag, engagement mode, human assignment, 24h window, cooldown,
- * daily cap).
+ * Hands one inbound message to the AI agent. The ai-agent-reply function enforces its own
+ * gates (enabled flag, engagement mode, human assignment, 24h window, cooldown, daily cap).
  *
- * The work item is recorded BEFORE the background continuation starts. That continuation
- * is media understanding plus generation plus delivery -- ~50s against a 60s worker ceiling
- * -- and a kill anywhere in it used to drop the customer's message with no trace. This is
- * the busiest surface, so it was also where most of those losses were.
+ * The work item was already recorded by the caller, one statement after the insert that
+ * consumes Meta's redelivery -- see the enqueue there for why that ordering is the whole
+ * guarantee. Everything from here runs in the background, which is ~50s against a 60s
+ * worker ceiling, and is recoverable precisely because the row already exists.
  */
 async function replyThroughAgent(
   adminClient: any,
@@ -1002,26 +1035,7 @@ async function replyThroughAgent(
   accessToken: string | null,
   inbound: InboundForAgent,
 ): Promise<void> {
-  const { from, conversationId, media } = inbound;
-
-  const enqueued = await enqueueAgentReply(adminClient, {
-    socialAccountId: account.id,
-    platform: "whatsapp",
-    messageId: inbound.messageId,
-    conversationId,
-    recipientId: from,
-    inboundText: inbound.promptSafeText,
-    // The platform's timestamp, not now(): a delayed webhook must not be answered as though
-    // it had just arrived, and the 24h window is measured from it.
-    inboundAt: inbound.inboundAt,
-    mediaUrl: media?.url ?? null,
-    mediaKind: media?.kind ?? null,
-    mediaCaption: media?.caption ?? null,
-  });
-  // A redelivery is not a second customer message. The first invocation owns the row and
-  // holds its lease; recovery is the backstop if it dies. Acknowledge and stop.
-  if (enqueued && !enqueued.newlyEnqueued) return;
-  const outboxId = enqueued?.id ?? null;
+  const { from, conversationId, media, outboxId } = inbound;
 
   // Both branches run in the background now. The text-only path used to fire and forget
   // with a bare .catch(), which dropped replies just as readily as the media path did.
