@@ -492,10 +492,18 @@ Deno.serve(async (req) => {
       .eq("user_id", request.user_id)
       .eq("platform", request.platform)
       .maybeSingle();
-    if (!config) return jsonResponse({ ok: true, skipped: "agent_not_configured" });
+    // Both are terminal for an outbox row: recovery re-driving it would reach the same
+    // answer three times over and then mark it failed for no reason.
+    if (!config) {
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "pending", "agent_not_configured");
+      return jsonResponse({ ok: true, skipped: "agent_not_configured" });
+    }
     // The Test sandbox works while the agent is still disabled, so users can
     // tune it before switching it on for real customers.
-    if (!config.is_enabled && !dryRun) return jsonResponse({ ok: true, skipped: "agent_disabled" });
+    if (!config.is_enabled && !dryRun) {
+      if (outboxId) await cancelOutboxRow(admin, outboxId, "pending", "agent_disabled");
+      return jsonResponse({ ok: true, skipped: "agent_disabled" });
+    }
 
     const { data: modeOverride } = await admin
       .from("ai_conversation_modes")
