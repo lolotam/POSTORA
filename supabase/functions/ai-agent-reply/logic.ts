@@ -218,3 +218,64 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     params.languageForced ? `REMINDER: Your entire reply must be written in ${languageName}.` : "",
   ].filter(Boolean).join("\n\n");
 }
+
+/**
+ * Thrown when every model in the chain failed, or when no model is configured at
+ * all. The outer catch in index.ts is shared with database, send, and validation
+ * errors; only this class means "no model could answer", which is the one case
+ * that escalates to a human.
+ */
+export class ModelChainExhaustedError extends Error {
+  constructor(message = "All AI models failed") {
+    super(message);
+    this.name = "ModelChainExhaustedError";
+  }
+}
+
+/**
+ * Sent verbatim when no model could answer, so it must not depend on a model.
+ *
+ * Language comes from detectReplyLanguage, the same path that decides a normal
+ * reply's language -- a fixed English string here would answer an Arabic customer
+ * in English, the bug closed by commits 7f599cca and 0065633c.
+ *
+ * The outcome decides the wording because the handoff is not guaranteed to reach
+ * anyone: escalateConversation writes WhatsApp-shaped assignment rows on every
+ * platform, and notifies nobody when admin_phone_numbers is empty. Only the
+ * "escalated" variant claims a notification. The "queued" variant is true either
+ * way, because the mode flip does silence the AI for the conversation.
+ */
+const MODEL_OUTAGE_APOLOGY: Record<ReplyLanguage, { escalated: string; queued: string }> = {
+  en: {
+    escalated: "Sorry — I can't answer right now. Someone from our team has been notified and will get back to you shortly.",
+    queued: "Sorry — I can't answer right now. Your message is saved and we'll get back to you as soon as we can.",
+  },
+  ar: {
+    escalated: "عذرًا، لا أستطيع الرد في الوقت الحالي. تم إبلاغ أحد أفراد فريقنا وسيتواصل معك قريبًا.",
+    queued: "عذرًا، لا أستطيع الرد في الوقت الحالي. رسالتك محفوظة وسنعاود التواصل معك في أقرب وقت.",
+  },
+};
+
+export function modelOutageApology(language: ReplyLanguage, humanNotified: boolean): string {
+  return MODEL_OUTAGE_APOLOGY[language][humanNotified ? "escalated" : "queued"];
+}
+
+// The platform creates every function worker with workerTimeoutMs = 60_000 and
+// kills it there -- see index.ts:72, which records what that looks like: an opaque
+// 500 and no log row. Three models at CHAT_TIMEOUT_MS need 75s, so a slow chain
+// cannot finish, and the outage floor dies with the isolate.
+const WORKER_BUDGET_MS = 60_000;
+// One customer send plus the escalation's mode upsert, assignment writes and admin
+// notification.
+const FLOOR_RESERVE_MS = 12_000;
+// Response serialisation and the two log writes that follow the floor.
+const SAFETY_MARGIN_MS = 5_000;
+
+/**
+ * Milliseconds still available for model calls before the floor must be allowed to
+ * run. Non-positive means stop trying models. `now` is a parameter so this stays
+ * pure and testable.
+ */
+export function modelBudgetRemaining(startedAt: number, now: number): number {
+  return WORKER_BUDGET_MS - FLOOR_RESERVE_MS - SAFETY_MARGIN_MS - (now - startedAt);
+}

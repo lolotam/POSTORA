@@ -8,19 +8,6 @@ vi.mock("@/hooks/useAiAgentConfig", () => ({
   useAiAgentConfig: () => ({ config, isLoading: false, upsertConfig }),
 }));
 
-const allowedModels = [
-  { id: "m1", provider: "google", model_id: "gemini-2.5-flash", label: "Google: Gemini 2.5 Flash", is_active: true, sort_order: 10 },
-  { id: "m2", provider: "google", model_id: "gemini-2.5-pro", label: "Google: Gemini 2.5 Pro", is_active: true, sort_order: 20 },
-];
-let modelsResult = { data: allowedModels, isLoading: false };
-
-vi.mock("@/hooks/useAllowedAiAgentModels", async () => {
-  const actual = await vi.importActual<typeof import("@/hooks/useAllowedAiAgentModels")>(
-    "@/hooks/useAllowedAiAgentModels",
-  );
-  return { ...actual, useAllowedAiAgentModels: () => modelsResult };
-});
-
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 // The settings tab is the subject; its neighbours pull in Supabase and are covered elsewhere.
@@ -41,14 +28,14 @@ describe("AiAgentManager", () => {
   beforeEach(() => {
     upsertConfig.mutate.mockReset();
     config = null;
-    modelsResult = { data: allowedModels, isLoading: false };
   });
 
-  // Regression, 2026-08-26: a platform with no config row yet sent the hardcoded default
-  // "gpt-4o-mini", which is not on the admin allow-list, so messaging-api answered
-  // 400 "model is not an allowed model" and NOTHING saved -- reported as "the persona text
-  // is gone when I come back". Every save must carry a model the server will accept.
-  it("saves the persona with an allowed model when the platform has no config yet", () => {
+  // Regression, 2026-08-26: this page sent a hardcoded "gpt-4o-mini" that was not
+  // on the admin allow-list, so messaging-api answered 400 and NOTHING saved --
+  // reported as "the persona text is gone when I come back". Since 2026-08-27 the
+  // model is global and admin-managed, so the page must send no model field at
+  // all: messaging-api only validates fields the payload actually carries.
+  it("saves the persona and sends no model fields", () => {
     render(<AiAgentManager platform="threads" />);
 
     fireEvent.change(screen.getByLabelText("Persona and instructions"), {
@@ -56,13 +43,14 @@ describe("AiAgentManager", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
-    expect(savedPayload()).toMatchObject({
-      persona_instructions: "Answer in Arabic, keep it short.",
-      model: "google/gemini-2.5-flash",
-    });
+    const payload = savedPayload();
+    expect(payload).toMatchObject({ persona_instructions: "Answer in Arabic, keep it short." });
+    expect(payload).not.toHaveProperty("model");
+    expect(payload).not.toHaveProperty("fallback_model_1");
+    expect(payload).not.toHaveProperty("fallback_model_2");
   });
 
-  it("replaces a stored model that has left the allow-list and clears its stale fallbacks", () => {
+  it("ignores a model stored on an existing config instead of sending it back", () => {
     config = {
       is_enabled: true,
       default_mode: "human_then_ai",
@@ -84,29 +72,8 @@ describe("AiAgentManager", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
 
-    expect(savedPayload()).toMatchObject({
-      persona_instructions: "Existing persona",
-      model: "google/gemini-2.5-flash",
-      fallback_model_1: null,
-      fallback_model_2: "google/gemini-2.5-pro",
-    });
-  });
-
-  it("lets a model be chosen from the admin allow-list", async () => {
-    render(<AiAgentManager platform="facebook" />);
-
-    fireEvent.keyDown(screen.getByTestId("agent-model"), { key: "Enter" });
-    fireEvent.click(await screen.findByRole("option", { name: "Google: Gemini 2.5 Pro" }));
-    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
-
-    expect(savedPayload()).toMatchObject({ model: "google/gemini-2.5-pro" });
-  });
-
-  it("blocks saving and says why when no model has been enabled", () => {
-    modelsResult = { data: [], isLoading: false };
-    render(<AiAgentManager platform="instagram" />);
-
-    expect(screen.getByRole("button", { name: /save settings/i })).toBeDisabled();
-    expect(screen.getByText(/No AI models have been enabled yet/i)).toBeInTheDocument();
+    const payload = savedPayload();
+    expect(payload).toMatchObject({ persona_instructions: "Existing persona" });
+    expect(payload).not.toHaveProperty("model");
   });
 });

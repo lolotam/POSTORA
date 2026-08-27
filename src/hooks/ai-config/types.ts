@@ -36,7 +36,7 @@ export interface DefaultModel {
   model_id: string;
 }
 
-export type ModelCategory = 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt';
+export type ModelCategory = 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt' | 'agent';
 
 export interface CategoryDefaults {
   chat: DefaultModel | null;
@@ -45,6 +45,7 @@ export interface CategoryDefaults {
   video: DefaultModel | null;
   search: DefaultModel | null;
   stt: DefaultModel | null;
+  agent: DefaultModel | null;
 }
 
 export interface CategoryFallbacks {
@@ -54,14 +55,15 @@ export interface CategoryFallbacks {
   video: DefaultModel | null;
   search: DefaultModel | null;
   stt: DefaultModel | null;
+  agent: DefaultModel | null;
 }
 
 /**
  * Second fallback tier, tried after CategoryFallbacks.
  *
- * Only `image` is consumed today: generate-image is the sole reader of
- * default_ai_model_*. The other five are written by the admin UI and read by
- * nothing, pending a resolver that wants them.
+ * `image` is read by generate-image; `agent` is read by ai-agent-reply as the
+ * last entry of the messaging agent's global model chain. The other five are
+ * written by the admin UI and read by nothing, pending a resolver that wants them.
  */
 export interface CategoryFallbacks2 {
   chat: DefaultModel | null;
@@ -70,6 +72,7 @@ export interface CategoryFallbacks2 {
   video: DefaultModel | null;
   search: DefaultModel | null;
   stt: DefaultModel | null;
+  agent: DefaultModel | null;
 }
 
 export interface AIConfigData {

@@ -4,6 +4,9 @@ import {
   detectReplyLanguage,
   formatModelRef,
   formatRelatedFacts,
+  ModelChainExhaustedError,
+  modelBudgetRemaining,
+  modelOutageApology,
   parseModelRef,
   pickEscalationAgent,
   resolveEngagementMode,
@@ -202,5 +205,60 @@ describe("parseModelRef", () => {
     expect(formatModelRef(parseModelRef("openrouter/meta-llama/llama-3.3-70b"))).toBe(
       "openrouter/meta-llama/llama-3.3-70b",
     );
+  });
+});
+
+describe("ModelChainExhaustedError", () => {
+  it("is distinguishable from a plain Error", () => {
+    const exhausted = new ModelChainExhaustedError("everything failed");
+    expect(exhausted).toBeInstanceOf(ModelChainExhaustedError);
+    expect(exhausted).toBeInstanceOf(Error);
+    expect(exhausted.message).toBe("everything failed");
+    expect(new Error("everything failed")).not.toBeInstanceOf(ModelChainExhaustedError);
+  });
+
+  it("carries a default message when none is given", () => {
+    expect(new ModelChainExhaustedError().message).toBe("All AI models failed");
+  });
+});
+
+describe("modelOutageApology", () => {
+  it("answers in the customer's language", () => {
+    expect(modelOutageApology("ar", true)).toMatch(/[؀-ۿ]/);
+    expect(modelOutageApology("en", true)).not.toMatch(/[؀-ۿ]/);
+  });
+
+  // escalateConversation writes WhatsApp-shaped assignments on every platform and
+  // notifies nobody when admin_phone_numbers is empty, so the copy may only claim a
+  // notification when EscalationOutcome proved one happened.
+  it("claims a human was told only when one was", () => {
+    expect(modelOutageApology("en", true)).toMatch(/notified/i);
+    expect(modelOutageApology("en", false)).not.toMatch(/notified/i);
+  });
+
+  it("never returns an empty string for any combination", () => {
+    for (const language of ["ar", "en"] as const) {
+      for (const notified of [true, false]) {
+        expect(modelOutageApology(language, notified).trim().length).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("modelBudgetRemaining", () => {
+  // The edge worker is killed at 60s. Three models at CHAT_TIMEOUT_MS (25s) need 75s
+  // and cannot complete -- the isolate dies with an opaque 500 and no log row, taking
+  // the outage floor with it. This is the arithmetic that stops that.
+  it("leaves the floor its reserve on a fresh request", () => {
+    expect(modelBudgetRemaining(1_000, 1_000)).toBe(43_000);
+  });
+
+  it("shrinks as the request ages", () => {
+    expect(modelBudgetRemaining(1_000, 21_000)).toBe(23_000);
+  });
+
+  it("goes non-positive once the reserve is all that is left", () => {
+    expect(modelBudgetRemaining(1_000, 44_000)).toBeLessThanOrEqual(0);
+    expect(modelBudgetRemaining(1_000, 90_000)).toBeLessThan(0);
   });
 });

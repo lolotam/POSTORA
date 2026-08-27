@@ -1,0 +1,12 @@
+# Per-user AI agent model choices captured 2026-08-27, immediately before the
+# global three-slot cutover. For the record only -- no code reads this file.
+#
+# user_id is truncated to its first 8 characters on purpose: this file lives in
+# permanent git history, and full production account identifiers do not belong
+# there. The unredacted export stays server-side; the prefixes are unique across
+# these four rows, which is all this record needs to be useful.
+user_id_prefix,platform,model,fallback_model_1,fallback_model_2,is_enabled
+1122a2d5,instagram,openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,openrouter/tencent/hy3:free,,t
+1122a2d5,whatsapp,openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,openrouter/tencent/hy3:free,gemini/gemini-3.5-flash,t
+12f4ba6a,whatsapp,google/gemini-2.5-flash,google/gemini-2.5-pro,openrouter/liquid/lfm-2.5-2.6b:free,t
+7fe4d34e,whatsapp,openrouter/tencent/hy3:free,openrouter/nvidia/nemotron-3-ultra-550b-a55b:free,gemini/gemini-3.5-flash,f

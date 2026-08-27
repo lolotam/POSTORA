@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Check, ChevronsUpDown, Loader2, Shield, ShieldAlert } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { AIProvider, AIModel, DefaultModel } from '@/hooks/useAIConfiguration';
+import type { AIProvider, AIModel, DefaultModel, ModelCategory } from '@/hooks/useAIConfiguration';
 import { useOpenRouterModels, extractSeries, formatPrice } from '@/hooks/useOpenRouterModels';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -23,7 +23,7 @@ function primarySpecFor(row: AIModel | null, capability: string) {
 }
 
 const CATEGORY_MODALITY: Record<string, string> = {
-  chat: 'text', search: 'text', image: 'image', tts: 'audio', video: 'video',
+  chat: 'text', search: 'text', image: 'image', tts: 'audio', video: 'video', agent: 'text',
 };
 
 const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } | null> = {
@@ -33,10 +33,14 @@ const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } |
   video: null,
   search: null,
   stt: null,
+  // No last resort. ai-agent-reply's hardcoded gpt-4o-mini default is removed in
+  // the same change; an unconfigured chain escalates to a human instead of
+  // silently calling a model no admin chose.
+  agent: null,
 };
 
 interface DefaultModelSelectorProps {
-  category: 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt';
+  category: ModelCategory;
   capability: string;
   title: string;
   description: string;
@@ -50,7 +54,12 @@ interface DefaultModelSelectorProps {
   onSetFallback: (providerCode: string, modelId: string) => void;
   onSetFallback2: (providerCode: string, modelId: string) => void;
   /** Persist the primary model's knobs. Receives the ai_models row id. */
-  onSetAdminParams: (modelRowId: string, params: Record<string, string | number | boolean>) => void;
+  /**
+   * Persist the primary model's knobs. Omit to hide the parameter controls
+   * entirely -- a category whose engine does not read ai_models.admin_params
+   * must not show a Save button that discards what the admin typed.
+   */
+  onSetAdminParams?: (modelRowId: string, params: Record<string, string | number | boolean>) => void;
   isSaving?: boolean;
 }
 
@@ -156,7 +165,7 @@ export function DefaultModelSelector({
               category={category}
             />
 
-            {primaryRow && primarySpec.parameters.length > 0 && (
+            {onSetAdminParams && primaryRow && primarySpec.parameters.length > 0 && (
               <>
                 <Separator />
                 <div className="space-y-2">
