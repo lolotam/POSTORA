@@ -525,8 +525,19 @@ async function handleLiveMessages(
       ));
     }
 
+    // What the rules and the agent are allowed to read.
+    //
+    // A document's text is "[Document] <filename>", and the sender chooses that filename.
+    // Stored and dispatched it is data; fed to a keyword matcher it lets a sender trigger
+    // an away rule by naming a file, and fed to the model it is an instruction the customer
+    // never typed. Both consumers get the constant instead. Genuine captions -- which the
+    // same check identifies -- still pass through untouched.
+    const promptSafeText = mediaType && isPlaceholderOnly(mediaType, messageText)
+      ? MEDIA_PLACEHOLDERS[mediaType]
+      : messageText;
+
     const ruleReplied = automationHandler === "internal"
-      ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, messageText, accessToken)
+      ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, promptSafeText, accessToken)
       : false;
 
     // Deterministic keyword/away rules outrank the AI; only unanswered
@@ -560,13 +571,13 @@ async function handleLiveMessages(
             mimeType: mediaMime,
             // Compare against this type's placeholder. `startsWith("[")` discarded genuine
             // captions such as "[URGENT] leaking pipe".
-            caption: isPlaceholderOnly(mediaType, messageText) ? null : messageText,
+            caption: isPlaceholderOnly(mediaType, messageText) ? null : promptSafeText,
             platform: "whatsapp",
           });
 
           // Understood or not, the agent still replies -- it just falls back to the
           // placeholder, which is exactly today's behaviour.
-          const agentInput = outcome.understood ? outcome.agentText : messageText;
+          const agentInput = outcome.understood ? outcome.agentText : promptSafeText;
           // The transcript's detected language beats counting characters in text that now
           // carries an English data-marker (see detectReplyLanguage).
           await triggerAiAgentReply(
@@ -575,7 +586,7 @@ async function handleLiveMessages(
           );
         });
       } else {
-        triggerAiAgentReply(account, conversationId, phoneNumberId, from, messageText)
+        triggerAiAgentReply(account, conversationId, phoneNumberId, from, promptSafeText)
           .catch((e) => console.error("[whatsapp-webhook] AI agent dispatch failed:", e?.message || e));
       }
     }
