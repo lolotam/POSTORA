@@ -108,8 +108,14 @@ Deno.test("a failed sending->sent bookkeeping update does not undo a delivery", 
 });
 
 Deno.test("takeOutboxRow: a ready_to_send row is redelivered without the agent", async () => {
-  const { admin } = stubOutbox({ status: "ready_to_send", generated_reply: "stored text" });
+  const { admin, transitions, row } = stubOutbox({ status: "ready_to_send", generated_reply: "stored text" });
   assertEquals(await takeOutboxRow(admin, "row-1"), { mode: "redeliver", text: "stored text" });
+  // No transition at all, and the row is still ready_to_send. Claiming it into `running`
+  // here would let the caller fall through to generation -- repeating the tool calls and
+  // escalations the first attempt already performed, which is the whole failure the
+  // two-stage design exists to prevent.
+  assertEquals(transitions, []);
+  assertEquals(row?.status, "ready_to_send");
 });
 
 Deno.test("takeOutboxRow: a pending row is claimed into running before any tool can fire", async () => {

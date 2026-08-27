@@ -31,17 +31,14 @@ function stubRpc(result: { data?: unknown; error?: { message: string } | null })
   };
 }
 
-Deno.test("a redelivery is told it is not the owner, so it does not dispatch", async () => {
+Deno.test("ownership is reported to the caller, so a redelivery does not dispatch", async () => {
   // The bug this prevents: Meta redelivers a webhook it thinks was unacknowledged while the
-  // first invocation is still generating. A bare null here was read by the caller as "no
-  // outbox row, carry on", and both invocations replied.
-  const { admin } = stubRpc({ data: [{ id: "row-1", newly_enqueued: false }] });
-  assertEquals(await enqueueAgentReply(admin, ITEM), { id: "row-1", newlyEnqueued: false });
-});
-
-Deno.test("the first enqueue is told it owns the work", async () => {
-  const { admin } = stubRpc({ data: [{ id: "row-1", newly_enqueued: true }] });
-  assertEquals(await enqueueAgentReply(admin, ITEM), { id: "row-1", newlyEnqueued: true });
+  // first invocation is still generating. A bare null was read by the caller as "no outbox
+  // row, carry on", and both invocations replied.
+  for (const owns of [true, false]) {
+    const { admin } = stubRpc({ data: [{ id: "row-1", newly_enqueued: owns }] });
+    assertEquals(await enqueueAgentReply(admin, ITEM), { id: "row-1", newlyEnqueued: owns });
+  }
 });
 
 Deno.test("an enqueue that fails outright returns null, and the caller still replies", async () => {
