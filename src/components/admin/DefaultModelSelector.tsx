@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { Label } from '@/components/ui/label';
 import { Check, ChevronsUpDown, Loader2, Shield, ShieldAlert } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { AIProvider, AIModel, DefaultModel } from '@/hooks/useAIConfiguration';
+import type { AIProvider, AIModel, DefaultModel, ModelCategory } from '@/hooks/useAIConfiguration';
 import { useOpenRouterModels, extractSeries, formatPrice } from '@/hooks/useOpenRouterModels';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
@@ -23,7 +23,7 @@ function primarySpecFor(row: AIModel | null, capability: string) {
 }
 
 const CATEGORY_MODALITY: Record<string, string> = {
-  chat: 'text', search: 'text', image: 'image', tts: 'audio', video: 'video',
+  chat: 'text', search: 'text', image: 'image', tts: 'audio', video: 'video', agent: 'text',
 };
 
 const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } | null> = {
@@ -33,10 +33,14 @@ const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } |
   video: null,
   search: null,
   stt: null,
+  // No last resort. ai-agent-reply's hardcoded gpt-4o-mini default is removed in
+  // the same change; an unconfigured chain escalates to a human instead of
+  // silently calling a model no admin chose.
+  agent: null,
 };
 
 interface DefaultModelSelectorProps {
-  category: 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt';
+  category: ModelCategory;
   capability: string;
   title: string;
   description: string;
