@@ -312,8 +312,41 @@ describe("completionFailure", () => {
 
   it("passes a tool call with no content, which is how every tool turn arrives", () => {
     expect(completionFailure({
-      choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "1" }] } }],
+      choices: [{
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{ id: "1", function: { name: "search_knowledge", arguments: "{}" } }],
+        },
+      }],
     })).toBeNull();
+  });
+
+  // index.ts reads toolCall.function.name outside its own try, so a malformed entry throws
+  // past the model loop -- no fallback, and no outage floor either.
+  it("rejects a tool call the reply loop could not execute", () => {
+    const malformed = [
+      [{}],
+      [null],
+      ["search_knowledge"],
+      [{ id: "1" }],
+      [{ id: "1", function: null }],
+      [{ id: "1", function: {} }],
+      [{ id: "1", function: { name: 42 } }],
+      // One good entry does not rescue a bad one; the loop reaches both.
+      [{ id: "1", function: { name: "ok", arguments: "{}" } }, { id: "2" }],
+    ];
+    for (const tool_calls of malformed) {
+      expect(completionFailure({ choices: [{ message: { role: "assistant", content: null, tool_calls } }] }))
+        .toBe("Chat completion returned a malformed tool call");
+    }
+  });
+
+  // Content alone is a complete answer, so a stray tool_calls value must not be read as one.
+  it("rejects malformed tool calls even when content is present", () => {
+    expect(completionFailure({
+      choices: [{ message: { role: "assistant", content: "hi", tool_calls: [{}] } }],
+    })).toBe("Chat completion returned a malformed tool call");
   });
 
   // An empty string is a usable answer that happens to be empty. It keeps its existing

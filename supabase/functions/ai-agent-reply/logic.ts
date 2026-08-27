@@ -316,8 +316,24 @@ export function completionFailure(data: unknown): string | null {
   const { content, tool_calls: toolCalls } = message as { content?: unknown; tool_calls?: unknown };
   // An empty tool_calls array is no more usable than a missing one: the caller reads
   // `tool_calls?.length`, finds nothing to execute, and falls out of the loop with no reply.
-  if (typeof content !== "string" && !(Array.isArray(toolCalls) && toolCalls.length > 0)) {
+  const callable = Array.isArray(toolCalls) && toolCalls.length > 0;
+  if (typeof content !== "string" && !callable) {
     return "Chat completion returned an unusable message";
   }
+  // Length is not enough. The caller dereferences `toolCall.function.name` outside its own
+  // try block, so one entry missing `function` throws past the model loop entirely -- no
+  // fallback, and not a ModelChainExhaustedError either, so not even the outage floor.
+  // Rejecting here turns that into an ordinary per-model failure.
+  if (callable && !(toolCalls as unknown[]).every(isExecutableToolCall)) {
+    return "Chat completion returned a malformed tool call";
+  }
   return null;
+}
+
+/** Exactly what the reply loop reads off a tool call before it can run one. */
+function isExecutableToolCall(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") return false;
+  const { function: fn } = entry as { function?: unknown };
+  if (!fn || typeof fn !== "object") return false;
+  return typeof (fn as { name?: unknown }).name === "string";
 }
