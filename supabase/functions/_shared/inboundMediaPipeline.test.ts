@@ -750,14 +750,30 @@ async function reservationArgsFor(
   return calls;
 }
 
-Deno.test("a sender under the sub-cap is understood exactly as before", async () => {
-  const outcome = await runInboundMediaUnderstanding(
-    stubAdmin({ reservation: "allowed" }),
-    audioFrom("+96550000001"),
-    AUDIO_DEPS,
-  );
-  assert(outcome.understood);
-  assertEquals(outcome.text, "hello");
+Deno.test("each reservation verdict maps to its own outcome", async () => {
+  // One table rather than three near-identical tests, and it earns a case none of them had:
+  // an unrecognised verdict. A future migration that returns a different string must fail
+  // CLOSED, not silently let every attempt through.
+  //
+  // The distinctions matter to whoever reads the logs -- raise the account's ceiling, look
+  // at one abusive sender, or find out why the reservation could not be made at all. One
+  // shared reason string would hide all three.
+  const cases: [string, boolean, string][] = [
+    ["allowed", true, ""],
+    ["sender_cap", false, "sender_cap_reached"],
+    ["account_cap", false, "daily_cap_reached"],
+    ["something_a_later_migration_returns", false, "quota_unavailable"],
+  ];
+  for (const [verdict, understood, reason] of cases) {
+    const outcome = await runInboundMediaUnderstanding(
+      stubAdmin({ reservation: verdict }),
+      audioFrom("+96550000001"),
+      AUDIO_DEPS,
+    );
+    assertEquals(outcome.understood, understood, `verdict ${verdict}`);
+    if (!outcome.understood) assertEquals(outcome.reason, reason, `verdict ${verdict}`);
+    else assertEquals(outcome.text, "hello", `verdict ${verdict}`);
+  }
 });
 
 Deno.test("a sender at the sub-cap is declined before anything is downloaded or billed", async () => {
@@ -780,17 +796,6 @@ Deno.test("a sender at the sub-cap is declined before anything is downloaded or 
   assertEquals(outcome.reason, "sender_cap_reached");
 });
 
-Deno.test("the account cap keeps its own reason, so the two refusals stay distinguishable", async () => {
-  // An operator reading logs needs to know whether to raise the account's ceiling or to
-  // look at one abusive sender. One shared reason string would hide that difference.
-  const capped = await runInboundMediaUnderstanding(
-    stubAdmin({ reservation: "account_cap" }),
-    audioFrom("+96550000001"),
-    AUDIO_DEPS,
-  );
-  assert(!capped.understood);
-  assertEquals(capped.reason, "daily_cap_reached");
-});
 
 Deno.test("the reservation names the account, the sender and both caps", async () => {
   const calls = await reservationArgsFor("+96550000001", {}, { dailyCap: 100, senderCap: 20 });
