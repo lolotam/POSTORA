@@ -10,7 +10,13 @@
 
 **Spec:** none — written from the task brief pasted 2026-08-27, whose relevant text is quoted below.
 
-**Status:** REVISION 2 — Codex round 1 returned `REJECT` with 8 blocking findings. Seven were verified true and are fixed here; one was verified false and is rejected with evidence. Three **Decision required** markers remain for the reviewer.
+**Status:** REVISION 4 — all three decisions resolved by the reviewer on 2026-08-27:
+**two-stage** (not the brief's delivery-only shape), the comment path covered for **all three
+platforms**, and **WhatsApp Cloud in scope**. Codex reviewed it twice, rejecting both times: round 1 with 8 blocking findings (7 verified
+true and fixed, 1 verified false and rejected with evidence), round 2 with 6 more. Every
+round-2 finding was verified and is fixed below. **Review stops at two rounds** per the
+project workflow; nothing from round 2 is left unresolved, and the residual limits are stated
+at the end rather than hidden. Ready to implement.
 
 ---
 
@@ -31,6 +37,29 @@ Codex reviewed revision 1 (`afd5962c`) read-only and rejected it. Every claim wa
 | 8 | Re-running the agent repeats more than the reply: tool calls, escalation, human assignment and admin notification all happen before the send. The key was checked only at request entry. | `ai-agent-reply/tools.ts` is invoked well before `:803` | The whole two-stage design, and Task 5's gate |
 
 Findings 9–12 (freshness, ordering, human takeover, the 24h service window, quota interaction, retention, generated types, vacuous tests) are accepted and appear in Tasks 1, 5, 6 and 8.
+
+## Round 2 review outcome
+
+Codex rejected revision 3 as well, and conceded finding 7 in its own words: *"you are
+correct, and I was wrong… I withdraw round-one finding 7 completely."* Six new blocking
+findings, all verified before being accepted:
+
+| # | Finding | Verified how | Fixed in |
+|---|---|---|---|
+| 1 | `ready_to_send` still **spanned the provider call**. A kill between the send succeeding and `markSent` left a row that the unconditional `ready_to_send → deliver_stored` rule would deliver a second time. The `sendWasAttempted` flag guarding it lived in process memory — and a killed process runs no `catch`. | Re-read my own Task 4 | New durable `sending` state; the state machine table |
+| 2 | `running` was **drawn but never entered**. Nothing transitioned into it, and inferring "did a tool fire?" from logs cannot work — a worker can call a tool and die before `logOutcome`. | Traced my own tasks; `logOutcome` is the last step | `advance()` confirmed transition into `running` |
+| 3 | `ModelChainExhaustedError` did not fit the union. `deliverModelOutageFloor` **escalates, notifies a human and sends an apology**, then returns HTTP 200 `{ok:false}` — which revision 3 classified `retryable`. | Read `outage-floor.ts:43-92`; it calls `escalateConversation` then `sender(...)` | New `outage_handled` outcome, terminal |
+| 4 | The live owner held **no lease**, so cron could claim a row alongside the invocation still working on it. *(Already fixed in `a53b5c9d`, after Codex's snapshot — independent confirmation.)* Its second half was new: `return` inside the per-event loop would exit the handler without a `Response` and drop sibling messages. | Read the loop nesting | `continue`, plus a `handleInboundMessage` extraction |
+| 5 | `delivery_unknown` was called "needs a human" but **no human could see it** — deny-all RLS, no UI, and the reaper returned only a count. | Read my own reaper | Reaper returns rows; caller writes `ai_agent_logs` + `system_logs` |
+| 6 | Batch of 3 with a 45s deadline **charges attempts for rows it never processes**. Three runs and the reaper marks them `failed` — a customer with no reply and no attempt ever made, worse than the graveyard it replaced. | Arithmetic on my own limits | Claim one row at a time, time-checked before each claim |
+
+Should-fix 7–10 are accepted too: `media_expires_at` was never populated anywhere (the column
+comment now says what it can and cannot mean); `isDailyCapReached` **counts** rather than
+reserves, so revision 3's "the spend was already reserved" was false and the cap is now
+re-checked before every send; `pending_agent_replies` is added to the generated types after
+all, because §23 as written has no service-role exception and following
+`media_understanding_usage`'s precedent would be following a violation; and the crash-point
+tests are named in each task.
 
 ### Rejected — with evidence
 
@@ -95,14 +124,14 @@ A row written only after generation is blind to the first 30 seconds of that.
 
 `_shared/commentAutomation.ts:98` does, for Facebook, Instagram and Threads alike. "Threads only" is not separable there without an arbitrary platform condition.
 
-- **3a (recommended):** cover the whole shared comment path — one function, one risk.
-- **3b:** DMs only now, comments as a follow-up.
+**Resolved: 3a.** Cover the whole shared comment path — Facebook, Instagram and Threads.
+One function, one risk, no arbitrary platform condition. Task 8.
 
-**Decision required.**
+### WhatsApp Cloud — **resolved: in scope**
 
-### WhatsApp Cloud is on neither list — **Decision required**
+The brief excludes Evolution and names FB/IG and Threads. `whatsapp-webhook` (Cloud) is never mentioned, runs the identical `runInBackground(understand → trigger)` shape, and carries **194 of the 217** logged agent replies — by far the most traffic on the platform. Covering the quieter surfaces while skipping the busiest one would have made the feature mostly decorative, so it is in. Task 9.
 
-The brief excludes Evolution and names FB/IG and Threads. `whatsapp-webhook` (Cloud) is never mentioned, runs the identical shape, and carries 194 of the 217 logged agent replies — by far the most traffic. This plan assumes it is out of scope as literally specified, and records it as the largest remaining hole.
+`whatsapp-evolution-webhook` stays **out**, as the brief instructs.
 
 ---
 
@@ -111,33 +140,59 @@ The brief excludes Evolution and names FB/IG and Threads. `whatsapp-webhook` (Cl
 Everything below follows from this. A row is always in exactly one state, and every state has a way out.
 
 ```
-                enqueued by webhook
+        enqueued by webhook, holding a 180s owner lease
                         |
                         v
-                   [ pending ]───────────────┐ lease expires, attempts left
-                        |                     │
-        agent claimed   |                     │
-                        v                     │
-                   [ running ]────────────────┤
-                        |                     │
-   reply generated &    |                     │
-   persisted            v                     │
-              [ ready_to_send ]───────────────┤
-                        |                     │
-          send returned |                     │
-          unambiguously v                     │
-                    [ sent ]  (terminal)      │
-                                              │
-   send outcome unknown ──> [ delivery_unknown ] (terminal, needs a human)
-   attempts exhausted   ──> [ failed ]          (terminal, logged to ai_agent_logs)
-   human took over /
-   superseded           ──> [ cancelled ]       (terminal)
+                   [ pending ]          nothing external has happened yet
+                        |
+   confirmed before     |
+   any tool or model    v
+                   [ running ]          tools MAY have fired; unknowable after a kill
+                        |
+   reply persisted      |
+                        v
+              [ ready_to_send ]         text exists; NO delivery attempted
+                        |
+   confirmed before     |
+   the provider call    v
+                   [ sending ]          a delivery attempt is in flight
+                        |
+     provider returned  |
+                        v
+                    [ sent ]  (terminal)
+
+   terminal, no automatic retry:
+     [ delivery_unknown ]   an attempt may have reached the customer
+     [ failed ]             attempts exhausted before any delivery attempt
+     [ cancelled ]          human took over, superseded, or outside the send window
 ```
 
-Two properties this buys, both of which revision 1 lacked:
+**Every state transition that precedes an external side effect is confirmed and
+fail-closed.** If the `UPDATE` does not come back affecting exactly one row, the side effect
+does not happen. A non-throwing transition that lets the send proceed anyway is the same
+hole in a new place — revision 3 had exactly that in `markReadyToSend`.
 
-- **Recovery from `ready_to_send` never re-runs the agent.** It re-delivers stored text. Tool calls and escalations cannot repeat, because they already happened and are not part of delivery.
-- **Recovery from `pending` may re-run the agent, but only when nothing externally visible has happened yet** — no tool call, no escalation, no `sent` log for the key. Otherwise the row goes to `delivery_unknown` and a human sees it. Guessing is what produces the double reply.
+The recovery rule is then a function of the state a lapsed lease was found in, and nothing
+else. This is the table; it is the whole safety argument:
+
+| Lapsed in | What is knowable | Recovery does |
+|---|---|---|
+| `pending` | nothing external has happened | **re-run the agent** |
+| `running` | a tool, escalation or notification *may* have fired, and after a kill there is no way to tell | **hand to a human** — never re-run |
+| `ready_to_send` | text exists, no delivery was attempted | **deliver the stored text** |
+| `sending` | a delivery attempt was in flight; it may have reached the customer | **`delivery_unknown`** — never re-send |
+
+Revision 3 had `ready_to_send` spanning the provider call, so a kill between the send
+succeeding and the bookkeeping left a row that recovery would deliver a second time. It also
+drew `running` without ever entering it, so a worker that ran a tool and died still looked
+like `pending`. Both are why `sending` exists and why entering `running` is a durable step
+rather than a label.
+
+The cost is stated plainly: **more work is handed to a human than strictly needs to be.**
+A worker that died in `running` before calling any tool is recoverable in principle, and
+this design will not recover it. Distinguishing those cases needs per-tool checkpoints,
+which is a larger change than this plan. Conservative here means a customer waits for a
+person, not that a customer gets two conflicting replies.
 
 ---
 
@@ -155,7 +210,8 @@ Two properties this buys, both of which revision 1 lacked:
 | `supabase/functions/process-pending-replies/recovery.test.ts` | **new.** |
 | `supabase/functions/ai-agent-reply/index.ts` | accept `outbox_id`; persist the reply before sending; return a typed outcome |
 | `supabase/functions/facebook-instagram-webhook/index.ts` | enqueue before `runInBackground`; settle inside |
-| `supabase/functions/_shared/commentAutomation.ts` | same, for the comment path (Option 3a only) |
+| `supabase/functions/_shared/commentAutomation.ts` | same, for the shared comment path (all three platforms) |
+| `supabase/functions/whatsapp-webhook/index.ts` | same, for WhatsApp Cloud. `whatsapp-evolution-webhook` is deliberately untouched. |
 
 ---
 
@@ -192,8 +248,16 @@ CREATE TABLE IF NOT EXISTS public.pending_agent_replies (
   unread_attachments INTEGER NOT NULL DEFAULT 0,
   language_hint     TEXT,
   comment_id        TEXT,
-  -- Meta's signed URLs expire. Recovery past this point must not pretend it can still read
-  -- the media; it degrades to the placeholder and says so in the reply's log.
+  -- Populated ONLY when the platform states an expiry we can read; NULL means "unknown",
+  -- not "never expires".
+  --
+  -- Meta's messaging attachment URLs are signed and do expire, but the webhook payload
+  -- carries no expiry and the signature is opaque, so for FB/IG this stays NULL. Revision 3
+  -- claimed a `mediaExpired` recovery decision this column cannot support -- it was never
+  -- populated anywhere, and the plan's own test asserted `expires_at: null`. The honest
+  -- design is the other way round: recovery ATTEMPTS the fetch, and an expiry-shaped refusal
+  -- from the CDN is what degrades the attempt to the placeholder. The column exists for
+  -- transports that do declare an expiry, and for the log to record why a fetch was skipped.
   media_expires_at  TIMESTAMPTZ,
 
   -- Ordering within a conversation, so two queued messages are never answered backwards.
@@ -204,7 +268,7 @@ CREATE TABLE IF NOT EXISTS public.pending_agent_replies (
   generated_reply   TEXT,
 
   status            TEXT NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending','running','ready_to_send','sent',
+                    CHECK (status IN ('pending','running','ready_to_send','sending','sent',
                                       'delivery_unknown','failed','cancelled')),
   attempts          INTEGER NOT NULL DEFAULT 0,
   -- The lease. A claimed row is invisible to other workers until this passes, which is the
@@ -224,7 +288,7 @@ ALTER TABLE public.pending_agent_replies ENABLE ROW LEVEL SECURITY;
 -- The claim query: unfinished rows whose lease has lapsed, oldest inbound first.
 CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_claimable
   ON public.pending_agent_replies (lease_expires_at NULLS FIRST, inbound_at)
-  WHERE status IN ('pending','running','ready_to_send');
+  WHERE status IN ('pending','running','ready_to_send','sending');
 
 CREATE INDEX IF NOT EXISTS idx_pending_agent_replies_account
   ON public.pending_agent_replies (social_account_id);
@@ -343,7 +407,7 @@ BEGIN
   RETURN QUERY
   WITH claimed AS (
     SELECT p.id FROM public.pending_agent_replies p
-     WHERE p.status IN ('pending','running','ready_to_send')
+     WHERE p.status IN ('pending','running','ready_to_send','sending')
        AND p.attempts < p_max_attempts
        AND (p.lease_expires_at IS NULL OR p.lease_expires_at < now())
      ORDER BY p.inbound_at
@@ -369,31 +433,70 @@ Finding 3. A row at `attempts = p_max_attempts` is excluded by the claim predica
 
 ```sql
 /**
- * Moves exhausted work to a terminal state.
+ * Moves exhausted work to a terminal state, and RETURNS THE ROWS so the caller can make
+ * them visible.
  *
- * Without this, a row that reached max attempts is simply never selected again -- alive in
- * the table, invisible to the job, and invisible to the operator. Revision 1 described that
- * as rows "eventually exhausting their attempts", which was not true of any state anyone
- * could observe.
+ * Two things this fixes. First, without it a row at max attempts is never selected again --
+ * alive in the table, invisible to the job, invisible to the operator. Second, returning a
+ * bare count (revision 3) was not enough: this table has deny-all RLS and no UI, so a
+ * "terminal, needs a human" state that only exists here is not observable by any human. The
+ * caller writes an ai_agent_logs row for each returned id, which is the surface the customer's
+ * owner already reads.
  *
- * A row that got as far as ready_to_send is NOT marked failed: a reply may or may not have
- * reached the customer, and only a human can tell. It becomes delivery_unknown.
+ * Which terminal state depends on how far the row got, because that is what decides whether
+ * a customer may already have received something:
+ *   pending       -> failed            nothing external happened
+ *   running       -> delivery_unknown  a tool or escalation may have fired
+ *   ready_to_send -> failed            text exists but no delivery was attempted
+ *   sending       -> delivery_unknown  an attempt was in flight
  */
 CREATE OR REPLACE FUNCTION public.reap_exhausted_agent_replies(p_max_attempts INTEGER)
-RETURNS INTEGER
+RETURNS SETOF public.pending_agent_replies
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
+AS $$
+BEGIN
+  RETURN QUERY
+  UPDATE public.pending_agent_replies
+     SET status = CASE WHEN status IN ('running','sending') THEN 'delivery_unknown'
+                       ELSE 'failed' END,
+         error  = COALESCE(error, 'attempts exhausted'),
+         lease_expires_at = NULL
+   WHERE status IN ('pending','running','ready_to_send','sending')
+     AND attempts >= p_max_attempts
+     AND (lease_expires_at IS NULL OR lease_expires_at < now())
+  RETURNING *;
+END;
+$$;
+```
+
+And two confirmed, fail-closed transitions. These are the ones that gate a side effect, so
+they report whether they actually changed a row rather than swallowing the failure:
+
+```sql
+/**
+ * Claims the row for execution, or refuses.
+ *
+ * The WHERE clause names the state the caller believes the row is in, so two workers cannot
+ * both believe they own it. A caller that gets FALSE must NOT proceed -- that is the whole
+ * contract, and it is why this returns BOOLEAN rather than being a fire-and-forget update.
+ */
+CREATE OR REPLACE FUNCTION public.advance_agent_reply(
+  p_id UUID,
+  p_from TEXT,
+  p_to TEXT,
+  p_generated_reply TEXT DEFAULT NULL
+)
+RETURNS BOOLEAN
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
 DECLARE v_count INTEGER;
 BEGIN
   UPDATE public.pending_agent_replies
-     SET status = CASE WHEN status = 'ready_to_send' THEN 'delivery_unknown' ELSE 'failed' END,
-         error  = COALESCE(error, 'attempts exhausted'),
-         lease_expires_at = NULL
-   WHERE status IN ('pending','running','ready_to_send')
-     AND attempts >= p_max_attempts
-     AND (lease_expires_at IS NULL OR lease_expires_at < now());
+     SET status = p_to,
+         generated_reply = COALESCE(p_generated_reply, generated_reply)
+   WHERE id = p_id AND status = p_from;
   GET DIAGNOSTICS v_count = ROW_COUNT;
-  RETURN v_count;
+  RETURN v_count = 1;
 END;
 $$;
 ```
@@ -491,7 +594,15 @@ Finding 4. This must exist before any caller settles a row, or every failure is 
 - Modify: the migration — `ALTER TABLE public.ai_agent_logs ADD COLUMN IF NOT EXISTS idempotency_key TEXT;` plus an index on it (non-unique; see Task 5 for why the unique version was dropped)
 
 **Interfaces:**
-- Produces: `type AgentReplyOutcome = { kind: "sent" | "deduplicated" | "skipped" | "retryable" | "permanent"; detail?: string }`; `parseAgentReplyResult(status: number, body: unknown): AgentReplyOutcome`.
+- Produces: `type AgentReplyOutcome = { kind: "sent" | "redelivered" | "skipped" | "outage_handled" | "retryable" | "permanent"; detail?: string }`; `parseAgentReplyResult(status: number, body: unknown): AgentReplyOutcome`.
+
+`outage_handled` is the case revision 3 got wrong. When every model fails,
+`deliverModelOutageFloor` (`ai-agent-reply/outage-floor.ts:43`) escalates the conversation,
+assigns or notifies a human, **and sends the customer an apology** — then the handler returns
+HTTP 200 carrying `{ok:false, escalated}`. Revision 3's union classified that `retryable`, so
+recovery would have re-run the agent, escalated a second time and sent a second apology. It
+is terminal, not retryable, and `ai-agent-reply` must surface `apology_sent` and
+`human_notified` in the body so the caller can tell it apart from an ordinary failure.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -500,8 +611,18 @@ Deno.test("HTTP 200 carrying ok:false is a failure, not a send", () => {
   // jsonResponse defaults to 200 (_shared/cors.ts:45), so ai-agent-reply's error path
   // returns 200 {ok:false}. Revision 1 classified on HTTP status and would have marked
   // every generation failure as delivered.
-  assertEquals(parseAgentReplyResult(200, { ok: false, error: "model chain exhausted" }).kind,
+  assertEquals(parseAgentReplyResult(200, { ok: false, error: "provider timeout" }).kind,
                "retryable");
+});
+
+Deno.test("a model outage that already apologised and escalated is terminal", () => {
+  // The trap: this ALSO returns 200 {ok:false}. But deliverModelOutageFloor has already
+  // escalated the conversation, notified a human and sent the customer an apology. Retrying
+  // it sends a second apology to someone who has one, and escalates a conversation that is
+  // already escalated.
+  assertEquals(parseAgentReplyResult(200,
+    { ok: false, error: "all models failed", escalated: true, apology_sent: true }).kind,
+    "outage_handled");
 });
 
 Deno.test("a skipped reply is not a sent reply", () => {
@@ -575,18 +696,40 @@ partway down the handler, so the resolution moves up. Nothing else about it chan
 - [ ] **Step 2: Write the reply down, then send**
 
 ```ts
-// The order is the whole point. Once this row says ready_to_send, recovery can deliver
-// this exact text without re-running the agent -- so a death during or after the send
-// cannot repeat a tool call, an escalation, or an admin notification. Revision 1 had no
-// such line, so every recovery re-ran everything.
+// Three durable steps, each confirmed before the next. The order is the whole safety
+// argument, and every one of these transitions gates a side effect:
+//
+//   running       -> ready_to_send   the text is now durable
+//   ready_to_send -> sending         a delivery attempt is about to begin
+//   sending       -> sent            the provider returned
+//
+// Revision 3 collapsed the middle one, so ready_to_send spanned the provider call: a kill
+// between the send succeeding and the bookkeeping left a row recovery would deliver a
+// SECOND time. And its transitions were non-throwing, so a failed persist still fell
+// through to replySender -- the same hole, one line lower.
 if (request.outbox_id) {
-  await markReadyToSend(admin, request.outbox_id, replyText);
+  if (!await advance(admin, request.outbox_id, "running", "ready_to_send", replyText)) {
+    // Refusing to send is the correct failure. An unpersisted reply that goes out is one
+    // nothing can reconcile afterwards, and the customer is better served by the recovery
+    // pass than by a message no record exists of.
+    throw new Error("could not persist the reply before sending");
+  }
+  if (!await advance(admin, request.outbox_id, "ready_to_send", "sending")) {
+    throw new Error("another worker is already delivering this reply");
+  }
 }
+
 const outboundMessageId = await replySender(request.recipient_phone, replyText);
+
 if (request.outbox_id) {
-  await markSent(admin, request.outbox_id, outboundMessageId ?? null);
+  await advance(admin, request.outbox_id, "sending", "sent");
 }
 ```
+
+The last transition is deliberately **not** checked. By then the customer already has the
+message; a failed bookkeeping update must not throw and turn a delivered reply into an
+error. The row is left in `sending`, its lease lapses, and the recovery pass classifies it
+`delivery_unknown` — which is exactly true, and is the honest outcome rather than a guess.
 
 - [ ] **Step 3: Handle the ambiguous send**
 
@@ -594,14 +737,19 @@ A `replySender` that throws after the platform accepted the message is indisting
 
 ```ts
 } catch (error) {
-  if (request.outbox_id && sendWasAttempted) {
-    await markDeliveryUnknown(admin, request.outbox_id, errorMessage(error));
+  // Only meaningful when the process survives to run it. A killed isolate executes no
+  // catch -- which is precisely why the durable `sending` state exists and this handler is
+  // a convenience rather than the guarantee. Revision 3 relied on an in-memory
+  // `sendWasAttempted` flag here and called that its answer to the ambiguity; a flag in a
+  // dead process protects nothing.
+  if (request.outbox_id) {
+    await advance(admin, request.outbox_id, "sending", "delivery_unknown");
   }
   throw error;
 }
 ```
 
-`delivery_unknown` is terminal and surfaces to a human. Finding 1's core point is that exactly-once delivery across Postgres and Meta is not achievable; the honest response is to name the ambiguity rather than resolve it by replaying.
+`delivery_unknown` is terminal and surfaces to a human (Task 6, Step 4). Exactly-once delivery across Postgres and Meta is not achievable; the honest response is to name the ambiguity rather than resolve it by replaying.
 
 - [ ] **Step 4: Tests** — an injected `replySender` proving exactly one send per outbox id;
       proving `markReadyToSend` is called before it; and proving that a `ready_to_send` row
@@ -625,18 +773,28 @@ A `replySender` that throws after the platform accepted the message is indisting
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
-Deno.test("a ready_to_send row is re-delivered, never re-generated", () => {
-  // The single most important rule here. Re-running the agent would repeat any tool call,
-  // escalation or admin notification the first attempt already performed.
-  assertEquals(decideRecovery({ status: "ready_to_send", generated_reply: "hi" }, FRESH).kind,
-               "deliver_stored");
+Deno.test("the lapsed state alone decides what recovery may do", () => {
+  // This table IS the safety argument, so it is asserted as a table. Revision 3 tried to
+  // infer "did anything external happen" from prior tool-call LOGS, which cannot work: a
+  // worker can call a tool and die before logOutcome ever runs, leaving a row that looks
+  // untouched. Only the durable state knows.
+  const cases: [string, string][] = [
+    ["pending",       "rerun_agent"],     // nothing external has happened
+    ["running",       "hand_to_human"],   // a tool or escalation MAY have fired
+    ["ready_to_send", "deliver_stored"],  // text exists, no delivery attempted
+    ["sending",       "delivery_unknown"],// an attempt was in flight; never re-send
+  ];
+  for (const [status, expected] of cases) {
+    assertEquals(decideRecovery({ status, generated_reply: "hi" }, FRESH).kind, expected,
+                 `lapsed in ${status}`);
+  }
 });
 
-Deno.test("a pending row that already touched the outside world is not re-run", () => {
-  // A death mid-generation may have left tool calls behind. We cannot tell which ran, so we
-  // do not guess -- a human sees it instead.
-  assertEquals(decideRecovery({ status: "pending" },
-    { ...FRESH, priorToolCalls: 1 }).kind, "hand_to_human");
+Deno.test("a sending row is never re-delivered, even though the text is right there", () => {
+  // The tempting wrong move. The stored reply is valid and delivery "probably" failed --
+  // but "probably" is how a customer gets the same answer twice.
+  assertEquals(decideRecovery({ status: "sending", generated_reply: "hi" }, FRESH).kind,
+               "delivery_unknown");
 });
 
 Deno.test("a conversation a human took over is cancelled, not answered", () => {
@@ -651,20 +809,18 @@ Deno.test("a superseded message is cancelled, so replies cannot land out of orde
     { ...FRESH, newerPendingInConversation: true }).kind, "cancel");
 });
 
-Deno.test("media whose signed URL has expired degrades to the placeholder, and says so", () => {
-  // Meta's URLs expire. Silently replying to "[Image]" as though it were understood is how
-  // a recovered reply becomes confidently wrong.
-  const action = decideRecovery({ status: "pending", media_url: "https://cdn/x" },
-    { ...FRESH, mediaExpired: true });
-  assertEquals(action.kind, "rerun_agent");
-  assertEquals(action.mediaUsable, false);
-});
-
-Deno.test("a reply outside the 24h service window is cancelled, not attempted", () => {
-  // The platform would reject it. Attempting anyway burns all three attempts and ends in a
-  // 'failed' row whose error says nothing useful.
-  assertEquals(decideRecovery({ status: "pending" }, { ...FRESH, outsideServiceWindow: true })
-    .kind, "cancel");
+Deno.test("a reply outside the send window is cancelled, whatever state it lapsed in", () => {
+  // Applies to deliver_stored too, which revision 3 exempted. Persisting text does not
+  // extend Meta's 24-hour service window -- a stored reply that crosses it is rejected by
+  // the platform exactly like a fresh one, and attempting it burns every remaining attempt
+  // to end in a 'failed' row whose error explains nothing.
+  //
+  // Window rules are per surface: a public comment reply has no 24-hour window, so the
+  // context carries the decision rather than this function assuming a DM.
+  for (const status of ["pending", "ready_to_send"]) {
+    assertEquals(decideRecovery({ status }, { ...FRESH, outsideSendWindow: true }).kind,
+                 "cancel", `lapsed in ${status}`);
+  }
 });
 ```
 
@@ -682,7 +838,32 @@ Deno.test("a reply outside the 24h service window is cancelled, not attempted", 
 
 Auth mirrors `threads-poll-replies`: bearer `CRON_SECRET`, constant-time compare, **401 on mismatch, never 5xx**.
 
-Per run: `reap_exhausted_agent_replies` first (so exhausted rows leave the table's working set before anything else), then `claim_agent_replies(3, 180, 3)`, then each row sequentially under `RECOVERY_LIMITS.deadlineMs`. Stop early when the deadline is near and leave the rest — their leases lapse and the next run takes them.
+Per run: `reap_exhausted_agent_replies` first, then a loop that claims **one row at a time**:
+
+```ts
+while (Date.now() - startedAt < RECOVERY_LIMITS.deadlineMs - RECOVERY_LIMITS.perRowMs) {
+  const [row] = await claim(1);      // claim_agent_replies(1, 180, 3)
+  if (!row) break;
+  await process(row);
+}
+```
+
+One at a time, not a batch. Revision 3 claimed three and processed what the deadline allowed
+— but claiming **increments `attempts`**, so a row the deadline never reached still paid for
+an attempt it never had. Three runs of that and the reaper marks it `failed`: a customer with
+no reply and no recovery ever actually attempted, which is a *worse* outcome than the
+non-terminal graveyard it replaced. Checking the remaining time *before* each claim makes
+every incremented attempt correspond to work that genuinely begins.
+
+Both actions go through the **same** door: a POST to `ai-agent-reply` carrying `outbox_id`.
+The row's own status decides which path runs.
+
+Quota and window, before any send (Codex round 2, finding 8): `isDailyCapReached`
+(`ai-agent-reply/index.ts:181`) **counts** committed `sent` logs — it does not reserve, so
+revision 3's claim that "the original attempt already reserved that spend" was simply false.
+A generated `ready_to_send` reply holds no slot, and other conversations can fill the cap
+before recovery runs. The cap is therefore re-checked before every send, including a stored
+redelivery, and the send window is checked with it.
 
 Both actions go through the **same** door: a POST to `ai-agent-reply` carrying `outbox_id`.
 The row's own status is what decides which path runs — `ready_to_send` takes Task 4's
@@ -691,13 +872,22 @@ recovery job therefore holds no transport logic and no second copy of the send-c
 resolution; `decideRecovery`'s `deliver_stored` vs `rerun_agent` distinction governs whether
 the job posts at all and how it settles the row, not how the message is sent.
 
-Quota (finding 9): a `deliver_stored` action must **not** re-check `isDailyCapReached`. The original attempt already reserved that spend; refusing on the retry would strand a reply that was already paid for and generated.
 
 - [ ] **Step 2: Cron entry** — `*/2 * * * *`, `net.http_post` with `get_cron_secret()`, same unschedule-then-schedule shape as `20260823090000`.
 
 - [ ] **Step 3: Verify `get_cron_secret()` is non-null** before relying on it — an unset `CRON_SECRET` 503s every run and looks exactly like the job never being scheduled (memory: `postora-cron-secret-unset-503`).
 
-- [ ] **Step 4: End-to-end on the real database** — a backdated `ready_to_send` row is delivered once; invoking twice produces one message and one `ai_agent_logs` row; a backlog of 10 rows drains over consecutive runs with none stuck. Clean up afterwards.
+- [ ] **Step 4: Make terminal problems visible to a human**
+
+`delivery_unknown` and `failed` are described as "needs a human", but `pending_agent_replies`
+has deny-all RLS and no UI — a state only this table knows about is not observable by any
+human, and purging it after 90 days does not change that. So the reaper's returned rows are
+written to `ai_agent_logs` (the customer owner's Logs tab) and `system_logs` (the admin Logs
+page) with statuses `delivery_unknown` and `recovery_failed`. `hand_to_human` likewise
+performs a real assignment through the existing escalation path rather than only returning an
+enum value.
+
+- [ ] **Step 5: End-to-end on the real database** — a backdated `ready_to_send` row is delivered once; invoking twice produces one message and one `ai_agent_logs` row; a `sending` row that lapses becomes `delivery_unknown` **and appears in `ai_agent_logs`**; a backlog of 10 rows drains over consecutive runs with none stuck and none marked failed without an attempt. Clean up afterwards.
 
 - [ ] **Step 5: Commit**
 
@@ -724,22 +914,30 @@ const enqueued = await enqueueAgentReply(adminClient, {
   unreadAttachments: unread,
 });
 
-// A redelivery is not a second customer message. The first invocation owns it, and the
-// recovery job is the backstop if that invocation dies -- so this one acknowledges and
-// stops rather than starting a parallel reply.
-if (enqueued && !enqueued.newlyEnqueued) return;
+// A redelivery is not a second customer message. The first invocation owns it (and holds a
+// 180s lease), and the recovery job is the backstop if that invocation dies -- so this one
+// acknowledges and stops rather than starting a parallel reply.
+//
+// `continue`, NOT `return`. This sits inside the loop over the events in one webhook
+// envelope: returning here would exit the handler without its Response and silently drop
+// every remaining message in the same delivery.
+if (enqueued && !enqueued.newlyEnqueued) continue;
 ```
 
 - [ ] **Step 2: Settle inside the continuation** using `parseAgentReplyResult`, never the HTTP status.
 - [ ] **Step 3: Collapse `triggerAiAgentReply`'s parameters** into `(account, request)` — adding `outbox_id` would make it 7 positional args, two of them transposable strings. Same refactor as `reserveAttempt` in PR #43.
+
+- [ ] **Step 3b: Extract the per-message body into a helper.** The enqueue/ownership check
+      needs `continue` semantics, and the block it lives in is already deeply nested inside
+      two loops. Pulling one message's handling into `handleInboundMessage(...)` makes the
+      early exit local and obvious instead of depending on which loop the reader thinks they
+      are in — the mistake revision 3's snippet actually made.
 - [ ] **Step 4: Gates** — `deno test --allow-env --allow-read supabase/functions/facebook-instagram-webhook/`, `deno check`.
 - [ ] **Step 5: Commit**
 
 ---
 
-## Task 8: The comment path — Option 3a only
-
-**Skip entirely if the reviewer chooses 3b.**
+## Task 8: The shared comment path
 
 `_shared/commentAutomation.ts:98`. Same shape as Task 7; `messageId` is the comment id and `commentId` is set, so recovery replies publicly rather than by DM.
 
@@ -751,13 +949,62 @@ The comment path is already safer than the DM path — it gates on its inbox-eve
 
 ---
 
-## Task 9: Gates, PR, deploy
+## Task 9: WhatsApp Cloud
+
+**Files:**
+- Modify: `supabase/functions/whatsapp-webhook/index.ts` — the `automationHandler === "internal" && !ruleReplied` block (~line 539), both branches, and `triggerAiAgentReply` (~line 991)
+
+The busiest surface, and the one whose continuation is longest: it is the path that runs
+media understanding **and** generation inside one `runInBackground`.
+
+- [ ] **Step 1: Enqueue before `runInBackground`, and honour ownership**
+
+`messageId` is the WhatsApp message id (`msg.id`), `recipientId` is `from`, `inboundAt` comes
+from the message timestamp rather than `now()` — a delayed webhook must not be ordered as
+though it had just arrived.
+
+**Both branches need it.** The `else` at ~line 582 (plain text, no understandable media)
+currently calls `triggerAiAgentReply` with a bare `.catch()` and no background wrapper at
+all, so it drops replies just as readily.
+
+- [ ] **Step 2: Settle inside the continuation** with `parseAgentReplyResult`, never the HTTP status.
+
+- [ ] **Step 3: Collapse `triggerAiAgentReply`'s parameters.** It is already 6 positional
+      arguments (`account, conversationId, phoneNumberId, recipientPhone, inboundText,
+      languageHint`) — three adjacent strings a caller can transpose in silence — and
+      `outbox_id` would make it 7. Collapse to `(account, request)` as in Task 7.
+
+- [ ] **Step 4: One extra check this path needs that FB/IG does not.** WhatsApp Cloud
+      enforces the 24-hour service window at the platform, and `SERVICE_WINDOW_MS` already
+      exists in `ai-agent-reply`. A recovered reply is by definition later than the original,
+      so `decideRecovery`'s `outsideServiceWindow` branch (Task 5) is load-bearing here
+      rather than theoretical — assert it against a real WhatsApp row.
+
+- [ ] **Step 5:** `deno test --allow-env --allow-read supabase/functions/whatsapp-webhook/`, `deno check`, commit.
+
+> `whatsapp-evolution-webhook` is **not** touched. The brief excludes it, and it has its own
+> reliability layer.
+
+---
+
+## Task 10: Gates, PR, deploy
 
 - [ ] `npx tsc --noEmit` → 0 errors.
 - [ ] `npx vitest run` → baseline 949 passed / 15 skipped.
 - [ ] `deno test --allow-env --allow-read` over the touched directories → baseline 428 passed. `--allow-read` is required; without it `planQuotasContract.test.ts` reports a permission error that reads as a test failure.
 - [ ] `clean-code-guard` on changed production files; `test-guard` on changed tests.
-- [ ] Regenerate `src/integrations/supabase/types.ts` **for `ai_agent_logs.idempotency_key` only** — that table is read by the Logs tab. `pending_agent_replies` is deliberately absent, matching `media_understanding_usage`: service-role-only, RLS deny-all, no client may read it.
+- [ ] Regenerate `src/integrations/supabase/types.ts` for **both** `ai_agent_logs.idempotency_key` and `pending_agent_replies` with its RPCs.
+
+  Revision 3 omitted the table, on the precedent that `media_understanding_usage` — the
+  comparable service-role-only counter shipped 2026-08-25 — is not in the generated types
+  either. Codex's counter-argument is better: `ARCHITECTURE.md` §23 says schema changes "must
+  be reflected in generated/maintained TypeScript database types" with no service-role
+  exception, and a type declaration grants nothing — RLS and grants remain the security
+  boundary. Following the precedent here would be following a violation.
+
+  Worth raising separately with the reviewer: either §23 should be amended to define the
+  generated types as the browser-accessible subset, or `media_understanding_usage` is a
+  standing gap. Not this PR's job to settle, but it should not be silently copied.
 - [ ] Push, open a PR stating the departures and the open decisions. **Do not merge.**
 - [ ] After approval: migration **first**, then the function files into the volume (SHA256 verified with `tr -d '\r'`), then `docker compose -p postorasupabase-supabase-j8axyh restart functions`. Reversing that order points live webhooks at a table that does not exist.
 - [ ] `mem0 add_memory`; final report.
@@ -772,8 +1019,25 @@ The comment path is already safer than the DM path — it gates on its inbox-eve
 
 **Every state has an exit.** `pending`/`running`/`ready_to_send` are all claimable once their lease lapses; the reaper makes anything at max attempts terminal; the purge removes terminal rows on two windows. There is no state a row can occupy that nothing observes — the specific defect that sank revision 1.
 
-**Honest limits.**
-1. **Exactly-once delivery is not achievable** across Postgres and Meta. `delivery_unknown` names the ambiguity instead of resolving it by replay, and needs a human. If that queue is never watched, this design degrades to "a small number of replies silently need attention" — an operational commitment, not just code.
-2. **A pre-generation death that already ran tools is handed to a human, not retried.** Conservative on purpose; it means some recoverable work is not recovered automatically.
-3. **WhatsApp Cloud is out of scope** per the brief, and carries 194 of 217 logged agent replies — the largest uncovered surface by a wide margin.
-4. **A death before the enqueue is unrecoverable.** Accepted explicitly by the brief; the window is now milliseconds rather than ~50 seconds.
+**Honest limits.** None of these are defects to be fixed later by someone who reads this
+carefully; they are the shape of the problem, and they are stated so the reviewer approves
+them knowingly.
+
+1. **Exactly-once delivery is not achievable** across Postgres and Meta. `delivery_unknown`
+   names the ambiguity rather than resolving it by replay — but that only helps if someone
+   looks. Task 6 Step 4 puts those rows in the Logs tab and `system_logs` for exactly that
+   reason; if nobody watches them, this design degrades to "a small number of replies quietly
+   need attention". That is an operational commitment, not just code.
+2. **Anything that died in `running` goes to a human, never a retry.** A worker that died
+   before calling any tool *is* recoverable in principle, and this will not recover it.
+   Telling those apart needs per-tool checkpoints keyed by `<outbox-id>:<tool-index>`, which
+   is a larger change than this plan. The trade is deliberate: a customer waits for a person,
+   instead of two conflicting replies.
+3. **A death before the enqueue is unrecoverable.** Accepted explicitly by the brief. The
+   window is now milliseconds rather than ~50 seconds.
+4. **Recovery is not instant.** A dead owner's 180s lease must lapse before cron can take the
+   row, and cron runs every two minutes — so worst case is roughly 3–5 minutes before the
+   customer's reply is retried. Shortening the lease below the 60s worker ceiling would let
+   cron collide with a living owner, which is worse than the delay.
+5. **`whatsapp-evolution-webhook` remains uncovered**, as the brief instructs. WhatsApp Cloud
+   is now in scope (Task 9), so this is the only inbound surface without an outbox.
