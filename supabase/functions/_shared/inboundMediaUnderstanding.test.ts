@@ -2,6 +2,8 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   classifyMime,
+  DEFAULT_LIMITS,
+  timeoutFor,
   understandInboundMedia,
   type UnderstandingLimits,
 } from "./inboundMediaUnderstanding.ts";
@@ -19,8 +21,28 @@ function geminiResponse(text: string): Response {
 Deno.test("classifyMime maps WhatsApp voice notes, which arrive with a codecs parameter", () => {
   assertEquals(classifyMime("audio/ogg; codecs=opus"), "audio");
   assertEquals(classifyMime("image/jpeg"), "image");
-  assertEquals(classifyMime("application/pdf"), null);
   assertEquals(classifyMime(null), null);
+});
+
+Deno.test("PDFs classify as documents; other office formats stay unsupported", () => {
+  assertEquals(classifyMime("application/pdf"), "document");
+  assertEquals(classifyMime("APPLICATION/PDF"), "document");
+  // Word and PowerPoint are ZIP containers Gemini does not open. Admitting them would
+  // trade a clear refusal for a confident answer about a document nothing read.
+  assertEquals(classifyMime("application/msword"), null);
+  assertEquals(
+    classifyMime("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+    null,
+  );
+  assertEquals(classifyMime("application/zip"), null);
+});
+
+Deno.test("only documents get the widened model deadline", () => {
+  assertEquals(timeoutFor("document", DEFAULT_LIMITS), 20_000);
+  assertEquals(timeoutFor("audio", DEFAULT_LIMITS), 10_000);
+  assertEquals(timeoutFor("image", DEFAULT_LIMITS), 10_000);
+  // Falls back rather than throwing when a caller supplies limits without the field.
+  assertEquals(timeoutFor("document", { maxBytes: 1, timeoutMs: 7 }), 7);
 });
 
 Deno.test("audio transcribes through Gemini and returns the text verbatim", async () => {
@@ -136,12 +158,50 @@ Deno.test("empty media is refused", async () => {
   assertEquals(outcome.reason, "empty_media");
 });
 
-Deno.test("documents are declined explicitly rather than silently mishandled", async () => {
+Deno.test("a PDF is read by Gemini and its structured fields are kept", async () => {
   const outcome = await understandInboundMedia(
-    AUDIO, "document", "application/pdf", { limits: LIMITS,  geminiKey: "k" },
+    AUDIO,
+    "document",
+    "application/pdf",
+    {
+      limits: LIMITS,
+      geminiKey: "k",
+      fetcher: () =>
+        Promise.resolve(geminiResponse(JSON.stringify({
+          description: "A rental invoice from Danat Al Mustaqbal.",
+          text: "Invoice 1448O — KWD 250 due 2026-09-01",
+          fields: { amount: 250, currency: "KWD", invoice_number: "1448O" },
+        }))),
+    },
+  );
+  assert(outcome.ok);
+  assertEquals(outcome.result.kind, "document");
+  assertEquals(outcome.result.provider, "gemini");
+  // The OCR half is labelled for a document, not "Text in image".
+  assert(outcome.result.text.includes("Document text: Invoice 1448O"));
+  assertEquals(outcome.result.extracted_data?.invoice_number, "1448O");
+});
+
+Deno.test("a transcription-only ladder cannot claim a document", async () => {
+  // ElevenLabs and Whisper are speech models. If they were allowed to consume a rung, a
+  // configured STT ladder would starve the only provider that can actually read a PDF.
+  const outcome = await understandInboundMedia(
+    AUDIO,
+    "document",
+    "application/pdf",
+    {
+      limits: LIMITS,
+      tiers: [
+        { provider: "elevenlabs", model: "scribe_v2", apiKey: "e" },
+        { provider: "openai", model: "whisper-1", apiKey: "o" },
+      ],
+      geminiKey: null,
+      openaiKey: null,
+      fetcher: () => Promise.reject(new Error("no provider should have been called")),
+    },
   );
   assert(!outcome.ok);
-  assertEquals(outcome.reason, "unsupported_type");
+  assertEquals(outcome.reason, "no_provider");
 });
 
 Deno.test("no configured key reports no_provider, not a failure", async () => {

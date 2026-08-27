@@ -30,7 +30,22 @@ interface WhatsAppAccount {
 const MEDIA_PLACEHOLDERS: Record<string, string> = {
   audio: "[Audio message]",
   image: "[Image]",
+  document: "[Document]",
 };
+
+/**
+ * Whether the message text is only this media's placeholder, with nothing the customer typed.
+ *
+ * A document's text is "[Document] <filename>", so an exact match never holds -- and the
+ * filename is chosen by the sender, not typed as a message. Treating it as a caption would
+ * hand the model an attacker-named string presented as the customer's own words.
+ */
+function isPlaceholderOnly(mediaType: string, messageText: string): boolean {
+  const placeholder = MEDIA_PLACEHOLDERS[mediaType];
+  if (!placeholder) return false;
+  return messageText === placeholder ||
+    (mediaType === "document" && messageText.startsWith(`${placeholder} `));
+}
 
 interface MessageContent {
   messageText: string;
@@ -523,7 +538,8 @@ async function handleLiveMessages(
       // and a model call, so it runs in the background to keep Meta's webhook fast --
       // and the agent trigger moves inside that continuation, because firing the agent
       // before the transcript exists is the bug this feature fixes.
-      const understandableKind = mediaType === "audio" || mediaType === "image";
+      const understandableKind = mediaType === "audio" || mediaType === "image" ||
+        mediaType === "document";
       const mediaMime = (mediaMetadata as { mime_type?: string } | null)?.mime_type ?? null;
 
       if (understandableKind && mediaMime) {
@@ -542,9 +558,9 @@ async function handleLiveMessages(
             mediaId: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
             mediaUrl,
             mimeType: mediaMime,
-            // Compare against the exact placeholder for this type. `startsWith("[")`
-            // discarded genuine captions such as "[URGENT] leaking pipe".
-            caption: messageText === MEDIA_PLACEHOLDERS[mediaType] ? null : messageText,
+            // Compare against this type's placeholder. `startsWith("[")` discarded genuine
+            // captions such as "[URGENT] leaking pipe".
+            caption: isPlaceholderOnly(mediaType, messageText) ? null : messageText,
             platform: "whatsapp",
           });
 

@@ -173,7 +173,7 @@ async function persistEvolutionMessage(
   const mediaKind = row.media_type as string | null;
   const mediaMime = (row.media_metadata as { mime_type?: string } | null)?.mime_type ?? null;
 
-  if ((mediaKind === "audio" || mediaKind === "image") && mediaMime) {
+  if ((mediaKind === "audio" || mediaKind === "image" || mediaKind === "document") && mediaMime) {
     const mediaRowId = insertedRows[0]?.id ?? null;
     await runInBackground("evolution inbound media understanding", async () => {
       const evolutionBase = Deno.env.get("EVOLUTION_API_URL");
