@@ -347,6 +347,19 @@ export async function runInboundMediaUnderstanding(
       console.error(`[media-understanding] mime disagreement: declared ${kind}, resolved ${resolvedKind}`);
       return { understood: false, reason: "mime_mismatch" };
     }
+    // A document must be confirmed by the bytes, not merely declared.
+    //
+    // Meta calls every non-media attachment `file`, so a .docx arrives hinted as a document
+    // and comes back as a mime nothing classifies. For audio and images an unclassified
+    // mime is worth proceeding on -- a transport may simply not know the type, and the
+    // model tolerates a near-miss container. For a document it is the opposite: PDF is the
+    // one format supported, so "not a PDF" is precisely the Word or PowerPoint case that
+    // was deliberately excluded. Proceeding spends a cap slot and a model call to be told
+    // what is already known here.
+    if (kind === "document" && resolvedKind !== "document") {
+      console.error(`[media-understanding] declared a document, but the bytes are ${effectiveMime}`);
+      return { understood: false, reason: "unsupported_type" };
+    }
 
     const outcome = await understandInboundMedia(
       bytes,

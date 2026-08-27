@@ -495,3 +495,55 @@ Deno.test("google and gemini are one provider, so the same model collapses", asy
   assertEquals(gemini.length, 1, "the alias duplicate must collapse");
   assertEquals(gemini[0].provider, "gemini", "and canonicalise to the catalog code");
 });
+
+Deno.test("a Word or PowerPoint file hinted as a document never reaches a provider", async () => {
+  // Meta calls every non-media attachment `file`, so a .docx arrives hinted as a document.
+  // PDF is the only format supported; an unclassified mime here is precisely the office
+  // format that was excluded, and paying a model call to be told so is the bug.
+  for (
+    const mime of [
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      "application/octet-stream",
+    ]
+  ) {
+    const outcome = await runInboundMediaUnderstanding(
+      stubAdmin(),
+      {
+        account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+        messageRowId: null,
+        mediaUrl: "https://cdn/x",
+        mimeType: null,
+        kindHint: "document",
+      },
+      {
+        fetchers: [fetcherReturning(new Uint8Array([1, 2]), mime)],
+        geminiKey: "k",
+        fetcher: () => Promise.reject(new Error(`no provider should have been called for ${mime}`)),
+      },
+    );
+    assert(!outcome.understood, `${mime} was understood`);
+    assertEquals(outcome.reason, "unsupported_type", `wrong reason for ${mime}`);
+  }
+});
+
+Deno.test("a real PDF hinted as a document is still read", async () => {
+  // The guard above must not refuse the case it exists to protect.
+  const outcome = await runInboundMediaUnderstanding(
+    stubAdmin(),
+    {
+      account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      messageRowId: null,
+      mediaUrl: "https://cdn/x",
+      mimeType: null,
+      kindHint: "document",
+    },
+    {
+      fetchers: [fetcherReturning(new Uint8Array([1, 2]), "application/pdf")],
+      geminiKey: "k",
+      fetcher: geminiOk(JSON.stringify({ description: "An invoice.", text: "KWD 250", fields: {} })),
+    },
+  );
+  assert(outcome.understood);
+});

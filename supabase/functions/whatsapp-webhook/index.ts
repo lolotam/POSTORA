@@ -3,6 +3,7 @@ import { runInBackground } from "../_shared/background.ts";
 import { buildObservation, flushObservations, type UnmatchedObservation } from "../_shared/unmatchedWebhookObservation.ts";
 import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
 import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
+import { isPlaceholderOnly, MEDIA_PLACEHOLDERS, promptSafeInput } from "./messageContent.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
@@ -27,31 +28,21 @@ interface WhatsAppAccount {
 
 // The exact strings extractMessageContent produces when there is no caption. Used to tell
 // "no caption" from a caption that merely looks like one.
-const MEDIA_PLACEHOLDERS: Record<string, string> = {
-  audio: "[Audio message]",
-  image: "[Image]",
-  document: "[Document]",
-};
-
-/**
- * Whether the message text is only this media's placeholder, with nothing the customer typed.
- *
- * A document's text is "[Document] <filename>", so an exact match never holds -- and the
- * filename is chosen by the sender, not typed as a message. Treating it as a caption would
- * hand the model an attacker-named string presented as the customer's own words.
- */
-function isPlaceholderOnly(mediaType: string, messageText: string): boolean {
-  const placeholder = MEDIA_PLACEHOLDERS[mediaType];
-  if (!placeholder) return false;
-  return messageText === placeholder ||
-    (mediaType === "document" && messageText.startsWith(`${placeholder} `));
-}
-
 interface MessageContent {
   messageText: string;
   mediaUrl: string | null;
   mediaType: string | null;
   mediaMetadata: Record<string, unknown> | null;
+  /**
+   * What the customer actually typed alongside the media, where that is not already
+   * `messageText`.
+   *
+   * Images and videos put their caption straight into `messageText`; a document cannot,
+   * because `messageText` has to carry the filename for the inbox to display. Keeping the
+   * two apart is what lets the filename stay in storage while only the caption -- the part
+   * a human wrote -- reaches the rules and the model.
+   */
+  caption: string | null;
 }
 
 function constantTimeEqual(left: string, right: string): boolean {
@@ -256,6 +247,7 @@ async function extractMessageContent(
   let mediaUrl: string | null = null;
   let mediaType: string | null = null;
   let mediaMetadata: Record<string, unknown> | null = null;
+  let caption: string | null = null;
 
   if (msgType === "text") {
     messageText = msg.text?.body || "";
@@ -271,6 +263,9 @@ async function extractMessageContent(
     if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.video?.id, accessToken);
   } else if (msgType === "document") {
     messageText = `[Document] ${msg.document?.filename || ""}`;
+    // Cloud API carries a document caption separately from the filename, and it was being
+    // dropped: a customer writing "here is the signed contract" got nothing through.
+    caption = msg.document?.caption || null;
     mediaType = "document";
     mediaMetadata = { mime_type: msg.document?.mime_type, sha256: msg.document?.sha256, filename: msg.document?.filename, media_id: msg.document?.id };
     if (resolveMedia) mediaUrl = await resolveMediaUrl(msg.document?.id, accessToken);
@@ -296,7 +291,7 @@ async function extractMessageContent(
     messageText = `[${msgType}]`;
   }
 
-  return { messageText, mediaUrl, mediaType, mediaMetadata };
+  return { messageText, mediaUrl, mediaType, mediaMetadata, caption };
 }
 
 function toIsoTimestamp(timestamp: unknown): string {
@@ -425,7 +420,7 @@ async function handleLiveMessages(
     const msgType = msg.type;
     const messageId = msg.id;
 
-    const { messageText, mediaUrl, mediaType, mediaMetadata } =
+    const { messageText, mediaUrl, mediaType, mediaMetadata, caption } =
       await extractMessageContent(msg, accessToken, true);
 
     const conversationId = `wa_${phoneNumberId}_${from.replace(/\D/g, "")}`;
@@ -532,9 +527,7 @@ async function handleLiveMessages(
     // an away rule by naming a file, and fed to the model it is an instruction the customer
     // never typed. Both consumers get the constant instead. Genuine captions -- which the
     // same check identifies -- still pass through untouched.
-    const promptSafeText = mediaType && isPlaceholderOnly(mediaType, messageText)
-      ? MEDIA_PLACEHOLDERS[mediaType]
-      : messageText;
+    const promptSafeText = promptSafeInput(mediaType, messageText, caption);
 
     const ruleReplied = automationHandler === "internal"
       ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, promptSafeText, accessToken)
@@ -571,7 +564,7 @@ async function handleLiveMessages(
             mimeType: mediaMime,
             // Compare against this type's placeholder. `startsWith("[")` discarded genuine
             // captions such as "[URGENT] leaking pipe".
-            caption: isPlaceholderOnly(mediaType, messageText) ? null : promptSafeText,
+            caption: caption ?? (isPlaceholderOnly(mediaType, messageText) ? null : messageText),
             platform: "whatsapp",
           });
 
