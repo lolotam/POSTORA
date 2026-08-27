@@ -88,6 +88,26 @@ describe("buildThreadsReplyThreads", () => {
     expect(threads.map((t) => t.root.id)).toEqual(["newer", "older", "undated"]);
   });
 
+  // The direction that a first version got wrong: substituting epoch for "no date" made
+  // an undated reply the OLDEST inside a thread, so it rendered above the reply it was
+  // answering while correctly sorting last among roots.
+  it("orders an undated reply last inside a thread too, not first", () => {
+    const threads = buildThreadsReplyThreads([
+      reply("root", "2026-08-27T09:00:00Z"),
+      reply("undated", null, "root"),
+      reply("first", "2026-08-27T09:10:00Z", "root"),
+      reply("second", "2026-08-27T09:20:00Z", "root"),
+    ]);
+
+    expect(threads).toHaveLength(1);
+    expect(threads[0].nodes.map((n) => n.entry.id)).toEqual([
+      "root",
+      "first",
+      "second",
+      "undated",
+    ]);
+  });
+
   it("returns nothing for an empty list", () => {
     expect(buildThreadsReplyThreads([])).toEqual([]);
   });

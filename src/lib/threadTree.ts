@@ -38,20 +38,55 @@ export interface ThreadKeys<T> {
  *
  * Meta deletes a comment's whole subtree with it, so the delete dialog has to name the
  * full count -- direct replies alone understate what the button removes.
+ *
+ * Iterative for the reason given on buildThreads: this runs per row on every render, and
+ * a deep chain must not be able to take the page down.
  */
 export function descendantCount<T>(node: ThreadNode<T>): number {
-  return node.replies.reduce((total, reply) => total + 1 + descendantCount(reply), 0);
+  let total = 0;
+  const pending: ThreadNode<T>[] = [...node.replies];
+  while (pending.length > 0) {
+    const current = pending.pop() as ThreadNode<T>;
+    total += 1;
+    for (const reply of current.replies) pending.push(reply);
+  }
+  return total;
 }
 
 /**
  * Threads' timestamp is optional and Meta has returned unparseable ones, either of which
- * yields NaN. NaN comparisons are all false, so a single bad value makes the sort return
- * an arbitrary order rather than an obviously wrong one. Epoch sorts it last instead.
+ * yields NaN. NaN comparisons are all false, so a single bad value makes a sort return an
+ * arbitrary order rather than an obviously wrong one. Null says "no usable date" so the
+ * comparators can place it deliberately.
  */
-function timeOf(value: string | null | undefined): number {
-  if (!value) return 0;
+function timeOf(value: string | null | undefined): number | null {
+  if (!value) return null;
   const parsed = new Date(value).getTime();
-  return Number.isNaN(parsed) ? 0 : parsed;
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Undated entries sort last in BOTH directions.
+ *
+ * Substituting epoch for "no date" is what a first version did, and it only looks right
+ * from one end: epoch is the largest value under newest-first and the smallest under
+ * oldest-first, so the same undated reply sank to the bottom of the root list and rose to
+ * the top of a conversation -- above the reply it was answering. An entry we cannot place
+ * in time should never displace one we can.
+ */
+function byTime<T>(
+  createdAt: (entry: T) => string | null | undefined,
+  direction: "newest" | "oldest",
+) {
+  return (a: T, b: T): number => {
+    const left = timeOf(createdAt(a));
+    const right = timeOf(createdAt(b));
+    if (left === null || right === null) {
+      if (left === right) return 0;
+      return left === null ? 1 : -1;
+    }
+    return direction === "newest" ? right - left : left - right;
+  };
 }
 
 /**
@@ -67,9 +102,8 @@ function timeOf(value: string | null | undefined): number {
  * run oldest-first, because a thread reads as a conversation.
  */
 export function buildThreads<T>(entries: T[], keys: ThreadKeys<T>): Thread<T>[] {
-  const newestFirst = (a: T, b: T) => timeOf(keys.createdAt(b)) - timeOf(keys.createdAt(a));
-  const oldestFirst = (a: ThreadNode<T>, b: ThreadNode<T>) =>
-    timeOf(keys.createdAt(a.entry)) - timeOf(keys.createdAt(b.entry));
+  const newestFirst = byTime(keys.createdAt, "newest");
+  const nodeOldestFirst = byTime<ThreadNode<T>>((node) => keys.createdAt(node.entry), "oldest");
 
   const present = new Set(entries.map(keys.id));
   const childrenOf = new Map<string, T[]>();
@@ -90,18 +124,43 @@ export function buildThreads<T>(entries: T[], keys: ThreadKeys<T>): Thread<T>[] 
   // the walk rather than render wrong, so the visited set makes that impossible.
   const visited = new Set<string>();
 
-  const build = (entry: T, depth: number): ThreadNode<T> => {
-    visited.add(keys.id(entry));
-    const replies = (childrenOf.get(keys.id(entry)) || [])
-      .filter((child) => !visited.has(keys.id(child)))
-      .map((child) => build(child, depth + 1))
-      .sort(oldestFirst);
-    return { entry, depth, replies };
+  // Both walks below use an explicit stack rather than recursion. Depth here is the length
+  // of a parent chain, which Threads does not bound -- and the ceiling is lower than it
+  // looks: a chain of 2,000 builds fine, 5,000 throws RangeError and takes the page with
+  // it. Facebook and Instagram nest at most one level, so this is Threads' exposure, and
+  // the cost of not having it is a white screen rather than a wrong order.
+  const build = (root: T): ThreadNode<T> => {
+    const rootNode: ThreadNode<T> = { entry: root, depth: 0, replies: [] };
+    visited.add(keys.id(root));
+    const pending: ThreadNode<T>[] = [rootNode];
+    while (pending.length > 0) {
+      const node = pending.pop() as ThreadNode<T>;
+      for (const child of childrenOf.get(keys.id(node.entry)) || []) {
+        if (visited.has(keys.id(child))) continue;
+        visited.add(keys.id(child));
+        const childNode: ThreadNode<T> = { entry: child, depth: node.depth + 1, replies: [] };
+        node.replies.push(childNode);
+        pending.push(childNode);
+      }
+      node.replies.sort(nodeOldestFirst);
+    }
+    return rootNode;
   };
 
-  const flatten = (node: ThreadNode<T>): ThreadNode<T>[] => [node, ...node.replies.flatMap(flatten)];
+  /** Pre-order: the node, then each subtree in reply order. What one frame renders. */
+  const flatten = (rootNode: ThreadNode<T>): ThreadNode<T>[] => {
+    const ordered: ThreadNode<T>[] = [];
+    const pending: ThreadNode<T>[] = [rootNode];
+    while (pending.length > 0) {
+      const node = pending.pop() as ThreadNode<T>;
+      ordered.push(node);
+      for (let i = node.replies.length - 1; i >= 0; i--) pending.push(node.replies[i]);
+    }
+    return ordered;
+  };
+
   const thread = (root: T): Thread<T> => {
-    const nodes = flatten(build(root, 0));
+    const nodes = flatten(build(root));
     return { root, nodes, replyCount: nodes.length - 1 };
   };
 
