@@ -2,6 +2,8 @@
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   composeAgentText,
+  DEFAULT_SENDER_CAP,
+  logSkippedUnderstanding,
   modeAllows,
   resolveMediaUnderstandingMode,
   runInboundMediaUnderstanding,
@@ -10,15 +12,42 @@ import type { InboundMediaFetcher, MediaRef } from "./inboundMediaFetchers.ts";
 
 /** Minimal stand-in for the supabase-js chain the pipeline uses. */
 function stubAdmin(
-  opts: { withinCap?: boolean; captureUpdate?: (row: any) => void; updatedRows?: unknown[] } = {},
+  opts: {
+    withinCap?: boolean;
+    captureUpdate?: (row: any) => void;
+    updatedRows?: unknown[];
+    /** Overrides the reservation verdict outright, for the per-sender cap tests. */
+    reservation?: string;
+    captureRpc?: (name: string, args: Record<string, unknown>) => void;
+    senderCapSetting?: unknown;
+  } = {},
 ) {
   return {
-    rpc: (_name: string) => Promise.resolve({ data: opts.withinCap ?? true, error: null }),
+    rpc: (name: string, args: Record<string, unknown>) => {
+      opts.captureRpc?.(name, args);
+      const verdict = opts.reservation ?? ((opts.withinCap ?? true) ? "allowed" : "account_cap");
+      return Promise.resolve({ data: verdict, error: null });
+    },
     from(table: string) {
       // resolveSttTiers reads system_settings; empty means "no admin ladder configured",
       // which is the path these tests exercise.
       if (table === "system_settings") {
         return { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) };
+      }
+      if (table === "app_settings") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: opts.senderCapSetting === undefined
+                    ? null
+                    : { value: opts.senderCapSetting },
+                  error: null,
+                }),
+            }),
+          }),
+        };
       }
       if (table === "provider_api_keys") {
         return { select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }) };
@@ -118,6 +147,7 @@ Deno.test("Meta's declared kind is used when the webhook carries no mime at all"
     stubAdmin(),
     {
       account: ACCOUNT_ON,
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: null,
@@ -142,6 +172,7 @@ Deno.test("a mime the fetcher cannot classify does not veto the platform's decla
     stubAdmin(),
     {
       account: ACCOUNT_ON,
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/clip",
       mimeType: null,
@@ -169,7 +200,7 @@ Deno.test("the kind hint reaches the fetcher, which is what needs it to name the
   };
   return runInboundMediaUnderstanding(
     stubAdmin(),
-    { account: ACCOUNT_ON, messageRowId: null, mediaUrl: "https://cdn/x", mimeType: null, kindHint: "audio" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: null, mediaUrl: "https://cdn/x", mimeType: null, kindHint: "audio" },
     { fetchers: [capturing], geminiKey: "k", fetcher: geminiOk("hi") },
   ).then(() => {
     assertEquals(seen, "audio");
@@ -185,6 +216,7 @@ Deno.test("the download keeps the standard deadline even for a document", async 
     stubAdmin(),
     {
       account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: "application/pdf",
@@ -211,7 +243,7 @@ Deno.test("video/mp4 with no declared kind is still refused", async () => {
   // the container. A genuine video must not be transcribed as though it were a voice note.
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin(),
-    { account: ACCOUNT_ON, messageRowId: null, mediaUrl: "https://cdn/clip.mp4", mimeType: "video/mp4" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: null, mediaUrl: "https://cdn/clip.mp4", mimeType: "video/mp4" },
     { fetchers: [fetcherReturning(new Uint8Array([1, 2]), "video/mp4")], geminiKey: "k" },
   );
   assert(!outcome.understood);
@@ -225,6 +257,7 @@ Deno.test("a hint that disagrees with the fetched bytes is still caught", async 
     stubAdmin(),
     {
       account: ACCOUNT_ON,
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: null,
@@ -243,6 +276,7 @@ Deno.test("a hint cannot spend money the account's mode has not authorised", asy
     stubAdmin(),
     {
       account: ACCOUNT_ON,
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: null,
@@ -264,6 +298,7 @@ Deno.test("an account that has not opted in makes no provider call at all", asyn
     stubAdmin(),
     {
       account: { ...ACCOUNT_ON, account_metadata: {} },
+      senderId: "sender-1",
       messageRowId: "row-1",
       mediaUrl: "https://cdn/x",
       mimeType: "audio/ogg",
@@ -278,7 +313,7 @@ Deno.test("a successful transcript is labelled so the agent knows it is a transc
   let saved: any = null;
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin({ captureUpdate: (row) => { saved = row; } }),
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg; codecs=opus" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg; codecs=opus" },
     {
       fetchers: [fetcherReturning(new Uint8Array([1, 2]), "audio/ogg")],
       fetcher: geminiOk("متى موعد الدفع؟"),
@@ -302,7 +337,7 @@ Deno.test("a customer caption is preserved alongside the transcript", () => {
 Deno.test("a provider failure degrades rather than throwing — the agent still replies", async () => {
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin(),
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
     {
       fetchers: [fetcherReturning(new Uint8Array([1]), "audio/ogg")],
       fetcher: () => Promise.resolve(new Response("boom", { status: 500 })),
@@ -321,7 +356,7 @@ Deno.test("a download failure degrades rather than throwing", async () => {
   };
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin(),
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
     { fetchers: [failing], geminiKey: "k" },
   );
   assert(!outcome.understood);
@@ -331,7 +366,7 @@ Deno.test("a download failure degrades rather than throwing", async () => {
 Deno.test("the daily cap stops further spend once reached", async () => {
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin({ withinCap: false }),
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
     { fetchers: [fetcherReturning(new Uint8Array([1]), "audio/ogg")], geminiKey: "k", dailyCap: 100 },
   );
   assert(!outcome.understood);
@@ -341,7 +376,7 @@ Deno.test("the daily cap stops further spend once reached", async () => {
 Deno.test("an unsupported mime type is declined before any work", async () => {
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin(),
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "application/msword" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "application/msword" },
     { geminiKey: "k" },
   );
   assert(!outcome.understood);
@@ -353,7 +388,7 @@ Deno.test("a PDF on an audio+image account is refused by the mode, not by the mi
   // can change, "unsupported_type" is a format nothing here can ever read.
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin(),
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "application/pdf" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "application/pdf" },
     { geminiKey: "k" },
   );
   assert(!outcome.understood);
@@ -365,6 +400,7 @@ Deno.test("a PDF is understood once the account opts documents in", async () => 
     stubAdmin(),
     {
       account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      senderId: "sender-1",
       messageRowId: "row-1",
       mediaUrl: "https://cdn/x",
       mimeType: "application/pdf",
@@ -382,7 +418,7 @@ Deno.test("a PDF is understood once the account opts documents in", async () => 
 Deno.test("no fetcher claims the ref — reported, not thrown", async () => {
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin(),
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
     { fetchers: [], geminiKey: "k" },
   );
   assert(!outcome.understood);
@@ -391,7 +427,7 @@ Deno.test("no fetcher claims the ref — reported, not thrown", async () => {
 
 Deno.test("a persistence failure still returns the transcript we already paid for", async () => {
   const admin = {
-    rpc: () => Promise.resolve({ data: true, error: null }),
+    rpc: () => Promise.resolve({ data: "allowed", error: null }),
     from(table: string) {
       if (table === "system_settings") {
         return { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) };
@@ -408,18 +444,21 @@ Deno.test("a persistence failure still returns the transcript we already paid fo
   };
   const outcome = await runInboundMediaUnderstanding(
     admin,
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
     {
       fetchers: [fetcherReturning(new Uint8Array([1]), "audio/ogg")],
       fetcher: geminiOk("hello"),
       geminiKey: "k",
+      // This stub has no app_settings table; supplying the sub-cap keeps the test about
+      // persistence rather than about where the cap is read from.
+      senderCap: 20,
     },
   );
   assert(outcome.understood);
   assertEquals(outcome.text, "hello");
 });
 
-Deno.test("the daily cap fails CLOSED when the reservation errors — this guards spend", async () => {
+Deno.test("a reservation that errors fails CLOSED, and says so — this guards spend", async () => {
   const admin = {
     rpc: () => Promise.resolve({ data: null, error: { message: "rpc down" } }),
     from: (t: string) =>
@@ -429,11 +468,14 @@ Deno.test("the daily cap fails CLOSED when the reservation errors — this guard
   };
   const outcome = await runInboundMediaUnderstanding(
     admin,
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
-    { fetchers: [fetcherReturning(new Uint8Array([1]), "audio/ogg")], geminiKey: "k" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
+    { fetchers: [fetcherReturning(new Uint8Array([1]), "audio/ogg")], geminiKey: "k", senderCap: 20 },
   );
   assert(!outcome.understood);
-  assertEquals(outcome.reason, "daily_cap_reached");
+  // Deliberately NOT "daily_cap_reached". A reservation that could not be made is not a
+  // cap that was reached, and during a window where the functions are deployed ahead of
+  // the migration every message would otherwise report a cap nobody has hit.
+  assertEquals(outcome.reason, "quota_unavailable");
 });
 
 Deno.test("a mime disagreement is refused, not guessed", async () => {
@@ -441,7 +483,7 @@ Deno.test("a mime disagreement is refused, not guessed", async () => {
   // through the audio prompt and label the output a voice transcript.
   const outcome = await runInboundMediaUnderstanding(
     stubAdmin(),
-    { account: ACCOUNT_ON, messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
+    { account: ACCOUNT_ON, senderId: "sender-1", messageRowId: "row-1", mediaUrl: "https://cdn/x", mimeType: "audio/ogg" },
     { fetchers: [fetcherReturning(new Uint8Array([1]), "image/jpeg")], geminiKey: "k" },
   );
   assert(!outcome.understood);
@@ -515,6 +557,7 @@ Deno.test("a Word or PowerPoint file hinted as a document never reaches a provid
       stubAdmin(),
       {
         account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+        senderId: "sender-1",
         messageRowId: null,
         mediaUrl: "https://cdn/x",
         mimeType: null,
@@ -537,6 +580,7 @@ Deno.test("a real PDF hinted as a document is still read", async () => {
     stubAdmin(),
     {
       account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: null,
@@ -561,6 +605,7 @@ Deno.test("a document declared as a PDF but not one in fact is refused", async (
     stubAdmin(),
     {
       account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: "application/pdf",
@@ -582,6 +627,7 @@ Deno.test("a real PDF labelled application/octet-stream is still read", async ()
     stubAdmin(),
     {
       account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: null,
@@ -612,6 +658,7 @@ Deno.test("a document the sender admits is not a PDF costs no cap slot", async (
     countingAdmin,
     {
       account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -635,13 +682,14 @@ Deno.test("a false claim of PDF is still caught, just later and at a cap slot", 
     ...stubAdmin(),
     rpc: (_name: string) => {
       reserved += 1;
-      return Promise.resolve({ data: true, error: null });
+      return Promise.resolve({ data: "allowed", error: null });
     },
   };
   const outcome = await runInboundMediaUnderstanding(
     countingAdmin,
     {
       account: { ...ACCOUNT_ON, account_metadata: { media_understanding: "audio+image+document" } },
+      senderId: "sender-1",
       messageRowId: null,
       mediaUrl: "https://cdn/x",
       mimeType: "application/pdf",
@@ -655,4 +703,150 @@ Deno.test("a false claim of PDF is still caught, just later and at a cap slot", 
   assert(!outcome.understood);
   assertEquals(outcome.reason, "unsupported_type");
   assertEquals(reserved, 1);
+});
+
+// ---------------------------------------------------------------------------
+// Per-sender sub-cap
+//
+// The counting itself is a plpgsql property and is proven against a real database in the
+// migration rehearsal, not here: a stub cannot show that a refused sender left the account
+// counter alone. What these cover is the half that lives in TypeScript -- which verdict
+// maps to which reason, that the sender travels to the RPC verbatim, and where the cap is
+// read from.
+// ---------------------------------------------------------------------------
+
+function audioFrom(senderId: string) {
+  return {
+    account: ACCOUNT_ON,
+    senderId,
+    messageRowId: null,
+    mediaUrl: "https://cdn/x",
+    mimeType: "audio/ogg",
+  };
+}
+
+const AUDIO_DEPS = {
+  fetchers: [fetcherReturning(new Uint8Array([1]), "audio/ogg")],
+  geminiKey: "k",
+  fetcher: geminiOk("hello"),
+};
+
+/** Runs one understanding and hands back the arguments the reservation was called with. */
+async function reservationArgsFor(
+  senderId: string,
+  stubOpts: Record<string, unknown> = {},
+  deps: Record<string, unknown> = {},
+) {
+  const calls: { name: string; args: Record<string, unknown> }[] = [];
+  await runInboundMediaUnderstanding(
+    stubAdmin({ ...stubOpts, captureRpc: (name, args) => calls.push({ name, args }) }),
+    audioFrom(senderId),
+    { ...AUDIO_DEPS, ...deps },
+  );
+  return calls;
+}
+
+Deno.test("a sender under the sub-cap is understood exactly as before", async () => {
+  const outcome = await runInboundMediaUnderstanding(
+    stubAdmin({ reservation: "allowed" }),
+    audioFrom("+96550000001"),
+    AUDIO_DEPS,
+  );
+  assert(outcome.understood);
+  assertEquals(outcome.text, "hello");
+});
+
+Deno.test("a sender at the sub-cap is declined before anything is downloaded or billed", async () => {
+  // The provider and the fetcher both reject: reaching either would mean the refusal came
+  // too late to have saved anything, which is the entire point of refusing.
+  const outcome = await runInboundMediaUnderstanding(
+    stubAdmin({ reservation: "sender_cap" }),
+    audioFrom("+96550000001"),
+    {
+      fetchers: [{
+        name: "must-not-run",
+        canHandle: () => true,
+        fetchMediaBytes: () => Promise.reject(new Error("downloaded despite the sub-cap")),
+      }],
+      geminiKey: "k",
+      fetcher: () => Promise.reject(new Error("called a provider despite the sub-cap")),
+    },
+  );
+  assert(!outcome.understood);
+  assertEquals(outcome.reason, "sender_cap_reached");
+});
+
+Deno.test("the account cap keeps its own reason, so the two refusals stay distinguishable", async () => {
+  // An operator reading logs needs to know whether to raise the account's ceiling or to
+  // look at one abusive sender. One shared reason string would hide that difference.
+  const capped = await runInboundMediaUnderstanding(
+    stubAdmin({ reservation: "account_cap" }),
+    audioFrom("+96550000001"),
+    AUDIO_DEPS,
+  );
+  assert(!capped.understood);
+  assertEquals(capped.reason, "daily_cap_reached");
+});
+
+Deno.test("the reservation names the account, the sender and both caps", async () => {
+  const calls = await reservationArgsFor("+96550000001", {}, { dailyCap: 100, senderCap: 20 });
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].name, "reserve_media_understanding_attempt");
+  assertEquals(calls[0].args, {
+    p_account_id: "acc-1",
+    p_cap: 100,
+    p_sender_id: "+96550000001",
+    p_sender_cap: 20,
+  });
+});
+
+Deno.test("each sender is reserved under its own id, never a shared bucket", async () => {
+  // If the sender were dropped or normalised to a constant here, the sub-cap would become a
+  // second account-wide cap and the whole feature would be inert while every test above
+  // still passed.
+  const first = await reservationArgsFor("+96550000001", {}, { senderCap: 20 });
+  const second = await reservationArgsFor("+96550000002", {}, { senderCap: 20 });
+  assertEquals(first[0].args.p_sender_id, "+96550000001");
+  assertEquals(second[0].args.p_sender_id, "+96550000002");
+});
+
+Deno.test("the sub-cap comes from app_settings, whether stored as a number or as JSON text", async () => {
+  // Rows written by different admin surfaces are sometimes a JSON string wrapping the real
+  // value, so both spellings have to resolve to the same number.
+  const asNumber = await reservationArgsFor("+96550000001", { senderCapSetting: 5 });
+  assertEquals(asNumber[0].args.p_sender_cap, 5);
+
+  const asJsonText = await reservationArgsFor("+96550000001", { senderCapSetting: "5" });
+  assertEquals(asJsonText[0].args.p_sender_cap, 5);
+});
+
+Deno.test("a missing or unusable setting falls back to the default, never to no cap", async () => {
+  for (const setting of [undefined, "not json", "0", "-3", "", null]) {
+    const calls = await reservationArgsFor("+96550000001", { senderCapSetting: setting });
+    assertEquals(
+      calls[0].args.p_sender_cap,
+      DEFAULT_SENDER_CAP,
+      `setting ${JSON.stringify(setting)} should have fallen back to the default`,
+    );
+  }
+});
+
+Deno.test("hitting a cap is logged as a warning; a real failure stays an error", async () => {
+  // Throttling is the feature working. Logging it at error severity teaches operators to
+  // ignore the channel where download and provider failures also arrive.
+  const seen: string[] = [];
+  const warn = console.warn;
+  const error = console.error;
+  console.warn = () => seen.push("warn");
+  console.error = () => seen.push("error");
+  try {
+    logSkippedUnderstanding("test", "sender_cap_reached");
+    logSkippedUnderstanding("test", "daily_cap_reached");
+    logSkippedUnderstanding("test", "download_failed");
+    logSkippedUnderstanding("test", "quota_unavailable");
+  } finally {
+    console.warn = warn;
+    console.error = error;
+  }
+  assertEquals(seen, ["warn", "warn", "error", "error"]);
 });
