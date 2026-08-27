@@ -6,6 +6,8 @@ import {
   logSkippedUnderstanding,
   runInboundMediaUnderstanding,
 } from "../_shared/inboundMediaPipeline.ts";
+import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
+import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { isPlaceholderOnly, MEDIA_PLACEHOLDERS, promptSafeInput } from "./messageContent.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
@@ -540,57 +542,29 @@ async function handleLiveMessages(
     // messages reach the agent. Imported/history/echo messages never get
     // here (see handleHistorySync guard), so the AI cannot reply to them.
     if (automationHandler === "internal" && !ruleReplied) {
-      // Media the agent could read: understand it FIRST, then hand the agent the
-      // transcript instead of "[Audio message]". The understanding involves a download
-      // and a model call, so it runs in the background to keep Meta's webhook fast --
-      // and the agent trigger moves inside that continuation, because firing the agent
-      // before the transcript exists is the bug this feature fixes.
       const understandableKind = mediaType === "audio" || mediaType === "image" ||
         mediaType === "document";
       const mediaMime = (mediaMetadata as { mime_type?: string } | null)?.mime_type ?? null;
-
-      if (understandableKind && mediaMime) {
-        const mediaRowId = insertedRows[0]?.id ?? null;
-        await runInBackground("whatsapp inbound media understanding", async () => {
-          const outcome = await runInboundMediaUnderstanding(adminClient, {
-            account: {
-              id: account.id,
-              user_id: account.user_id,
-              platform_user_id: account.platform_user_id,
-              connection_mode: account.connection_mode,
-              access_token: accessToken,
-              account_metadata: account.account_metadata,
-            },
-            // Keys the per-sender sub-cap: the customer's phone number, so one number
-            // cannot spend the account's whole daily media allowance.
-            senderId: from,
-            messageRowId: mediaRowId,
-            mediaId: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
-            mediaUrl,
-            mimeType: mediaMime,
+      await replyThroughAgent(adminClient, account, accessToken, {
+        messageId,
+        inboundAt: msgTimestamp,
+        phoneNumberId,
+        from,
+        conversationId,
+        promptSafeText,
+        media: understandableKind && mediaMime
+          ? {
+            rowId: insertedRows[0]?.id ?? null,
+            id: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
+            url: mediaUrl,
+            kind: mediaType!,
+            mime: mediaMime,
             // Compare against this type's placeholder. `startsWith("[")` discarded genuine
             // captions such as "[URGENT] leaking pipe".
-            caption: caption ?? (isPlaceholderOnly(mediaType, messageText) ? null : messageText),
-            platform: "whatsapp",
-          });
-
-          if (!outcome.understood) {
-            logSkippedUnderstanding("whatsapp-webhook", outcome.reason);
+            caption: caption ?? (isPlaceholderOnly(mediaType!, messageText) ? null : messageText),
           }
-          // Understood or not, the agent still replies -- it just falls back to the
-          // placeholder, which is exactly today's behaviour.
-          const agentInput = outcome.understood ? outcome.agentText : promptSafeText;
-          // The transcript's detected language beats counting characters in text that now
-          // carries an English data-marker (see detectReplyLanguage).
-          await triggerAiAgentReply(
-            account, conversationId, phoneNumberId, from, agentInput,
-            outcome.understood ? outcome.languageCode : undefined,
-          );
-        });
-      } else {
-        triggerAiAgentReply(account, conversationId, phoneNumberId, from, promptSafeText)
-          .catch((e) => console.error("[whatsapp-webhook] AI agent dispatch failed:", e?.message || e));
-      }
+          : null,
+      });
     }
   }
 
@@ -994,40 +968,114 @@ async function processAutoReplies(
   }
 }
 
-// Fire-and-forget hand-off to the internal AI agent reply engine. The
-// ai-agent-reply function enforces its own gates (enabled flag, engagement
-// mode, human assignment, 24h window, cooldown, daily cap).
-async function triggerAiAgentReply(
-  account: { id: string; user_id: string },
-  conversationId: string,
-  phoneNumberId: string,
-  recipientPhone: string,
-  inboundText: string,
-  languageHint?: string,
-) {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const response = await fetch(`${supabaseUrl}/functions/v1/ai-agent-reply`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      user_id: account.user_id,
-      platform: "whatsapp",
-      social_account_id: account.id,
-      conversation_id: conversationId,
-      phone_number_id: phoneNumberId,
-      recipient_phone: recipientPhone,
-      inbound_text: inboundText,
-      ...(languageHint ? { language_hint: languageHint } : {}),
-    }),
+interface InboundForAgent {
+  messageId: string;
+  inboundAt: string;
+  phoneNumberId: string;
+  from: string;
+  conversationId: string;
+  /** What the rules and the model may read: the placeholder, never a sender-chosen filename. */
+  promptSafeText: string;
+  media: {
+    rowId: string | null;
+    id: string | null;
+    url: string | null;
+    kind: string;
+    mime: string;
+    caption: string | null;
+  } | null;
+}
+
+/**
+ * Hands one inbound message to the AI agent, durably. The ai-agent-reply function enforces
+ * its own gates (enabled flag, engagement mode, human assignment, 24h window, cooldown,
+ * daily cap).
+ *
+ * The work item is recorded BEFORE the background continuation starts. That continuation
+ * is media understanding plus generation plus delivery -- ~50s against a 60s worker ceiling
+ * -- and a kill anywhere in it used to drop the customer's message with no trace. This is
+ * the busiest surface, so it was also where most of those losses were.
+ */
+async function replyThroughAgent(
+  adminClient: any,
+  account: any,
+  accessToken: string | null,
+  inbound: InboundForAgent,
+): Promise<void> {
+  const { from, conversationId, media } = inbound;
+
+  const enqueued = await enqueueAgentReply(adminClient, {
+    socialAccountId: account.id,
+    platform: "whatsapp",
+    messageId: inbound.messageId,
+    conversationId,
+    recipientId: from,
+    inboundText: inbound.promptSafeText,
+    // The platform's timestamp, not now(): a delayed webhook must not be answered as though
+    // it had just arrived, and the 24h window is measured from it.
+    inboundAt: inbound.inboundAt,
+    mediaUrl: media?.url ?? null,
+    mediaKind: media?.kind ?? null,
+    mediaCaption: media?.caption ?? null,
   });
-  if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    console.error(`[whatsapp-webhook] ai-agent-reply returned ${response.status}: ${text.slice(0, 200)}`);
-  }
+  // A redelivery is not a second customer message. The first invocation owns the row and
+  // holds its lease; recovery is the backstop if it dies. Acknowledge and stop.
+  if (enqueued && !enqueued.newlyEnqueued) return;
+  const outboxId = enqueued?.id ?? null;
+
+  // Both branches run in the background now. The text-only path used to fire and forget
+  // with a bare .catch(), which dropped replies just as readily as the media path did.
+  await runInBackground("whatsapp agent reply", async () => {
+    let agentInput = inbound.promptSafeText;
+    let languageHint: string | undefined;
+
+    if (media) {
+      // Understand the media FIRST, then hand the agent the transcript instead of
+      // "[Audio message]".
+      const outcome = await runInboundMediaUnderstanding(adminClient, {
+        account: {
+          id: account.id,
+          user_id: account.user_id,
+          platform_user_id: account.platform_user_id,
+          connection_mode: account.connection_mode,
+          access_token: accessToken,
+          account_metadata: account.account_metadata,
+        },
+        // Keys the per-sender sub-cap: the customer's phone number, so one number cannot
+        // spend the account's whole daily media allowance.
+        senderId: from,
+        messageRowId: media.rowId,
+        mediaId: media.id,
+        mediaUrl: media.url,
+        mimeType: media.mime,
+        caption: media.caption,
+        platform: "whatsapp",
+      });
+
+      if (outcome.understood) {
+        agentInput = outcome.agentText;
+        // The transcript's detected language beats counting characters in text that now
+        // carries an English data-marker (see detectReplyLanguage).
+        languageHint = outcome.languageCode;
+      } else {
+        logSkippedUnderstanding("whatsapp-webhook", outcome.reason);
+      }
+    }
+
+    // The agent owns the row from here and settles every outcome itself. A POST that never
+    // reaches it leaves the row pending under its lease -- what recovery is for.
+    await dispatchAgentReply({
+      userId: account.user_id,
+      platform: "whatsapp",
+      socialAccountId: account.id,
+      conversationId,
+      recipientId: from,
+      inboundText: agentInput,
+      phoneNumberId: inbound.phoneNumberId,
+      languageHint,
+      outboxId,
+    });
+  });
 }
 
 async function resolveMediaUrl(mediaId: string | undefined, token: string | null): Promise<string | null> {

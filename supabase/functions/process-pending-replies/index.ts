@@ -23,7 +23,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { advanceReply, type PendingReplyStatus } from "../_shared/pendingReplies.ts";
-import { parseAgentReplyResult } from "../_shared/agentReplyResult.ts";
+import type { AgentReplyOutcome } from "../_shared/agentReplyResult.ts";
+import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { runInboundMediaUnderstanding } from "../_shared/inboundMediaPipeline.ts";
 import { MetaMessagingFetcher } from "../_shared/inboundMediaFetchers.ts";
 import type { MediaKind } from "../_shared/inboundMediaUnderstanding.ts";
@@ -204,31 +205,25 @@ async function understandMedia(admin: any, row: OutboxRow, account: AccountRow):
   };
 }
 
-async function invokeAgent(row: OutboxRow, account: AccountRow, inboundText: string, languageHint: string | null) {
-  const response = await fetch(`${SUPABASE_URL}/functions/v1/ai-agent-reply`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: row.user_id,
-      platform: row.platform,
-      social_account_id: row.social_account_id,
-      conversation_id: row.conversation_id,
-      recipient_phone: row.recipient_id,
-      inbound_text: inboundText,
-      // The business number: the row does not carry it, and the sender falls back to the
-      // account's own id for exactly this case.
-      ...(row.platform === "whatsapp" ? { phone_number_id: account.platform_user_id } : {}),
-      ...(languageHint ? { language_hint: languageHint } : {}),
-      ...(row.comment_id ? { comment_id: row.comment_id } : {}),
-      outbox_id: row.id,
-    }),
+function invokeAgent(row: OutboxRow, account: AccountRow, inboundText: string, languageHint: string | null) {
+  return dispatchAgentReply({
+    userId: row.user_id,
+    platform: row.platform,
+    socialAccountId: row.social_account_id,
+    conversationId: row.conversation_id,
+    recipientId: row.recipient_id,
+    inboundText,
+    // The business number: the row does not carry it, and the sender falls back to the
+    // account's own id for exactly this case.
+    phoneNumberId: row.platform === "whatsapp" ? account.platform_user_id : null,
+    languageHint,
+    commentId: row.comment_id,
+    outboxId: row.id,
   });
-  const body = await response.json().catch(() => null);
-  return parseAgentReplyResult(response.status, body);
 }
 
 /** Settles a row after ai-agent-reply answered. The agent already moved the row on success. */
-async function settle(admin: any, row: OutboxRow, from: PendingReplyStatus, outcome: ReturnType<typeof parseAgentReplyResult>) {
+async function settle(admin: any, row: OutboxRow, from: PendingReplyStatus, outcome: AgentReplyOutcome) {
   switch (outcome.kind) {
     case "sent":
     case "redelivered":

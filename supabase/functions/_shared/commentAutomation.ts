@@ -7,6 +7,8 @@
 import { matchAutoReplyRule, type AutoReplyMatch, type AutoReplyRule } from "./autoReplyRules.ts";
 import { replyToComment } from "./commentActions.ts";
 import { buildCommentConversationId, postConversationLikePrefix } from "./commentConversation.ts";
+import { enqueueAgentReply } from "./pendingReplies.ts";
+import { dispatchAgentReply } from "./agentReplyDispatch.ts";
 
 export interface CommentAutomationAccount {
   id: string;
@@ -87,33 +89,50 @@ async function ruleAlreadyReplied(
   return (count || 0) > 0;
 }
 
+/**
+ * Records the work item, then hands the comment to the agent.
+ *
+ * The comment path is already gated by its inbox-event claim, so the outbox here mainly buys
+ * recovery rather than deduplication -- a worker killed during generation used to lose the
+ * reply with no trace. `comment_id` on the row is what makes a recovered reply go out as a
+ * public comment rather than as a DM to the author.
+ *
+ * Returns false when another invocation already owns the work.
+ */
 async function dispatchToAiAgent(
+  admin: any,
   account: CommentAutomationAccount,
   input: CommentAutomationInput,
   conversationId: string,
   fetcher: typeof fetch,
-): Promise<void> {
-  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-  const response = await fetcher(`${supabaseUrl}/functions/v1/ai-agent-reply`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${serviceKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      user_id: account.user_id,
-      platform: account.platform,
-      social_account_id: account.id,
-      conversation_id: conversationId,
-      // Unused by the comment sender, but the request contract requires it and it keeps the
-      // log rows readable.
-      recipient_phone: input.author.id || input.author.username || input.comment.id,
-      inbound_text: input.comment.text,
-      comment_id: input.comment.id,
-    }),
+  now: Date,
+): Promise<boolean> {
+  // Unused by the comment sender, but the request contract requires it and it keeps the
+  // log rows readable.
+  const authorRef = input.author.id || input.author.username || input.comment.id;
+  const enqueued = await enqueueAgentReply(admin, {
+    socialAccountId: account.id,
+    platform: account.platform,
+    messageId: input.comment.id,
+    conversationId,
+    recipientId: authorRef,
+    inboundText: input.comment.text,
+    inboundAt: now.toISOString(),
+    commentId: input.comment.id,
   });
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    console.error(`[comment-automation] ai-agent-reply returned ${response.status}: ${body.slice(0, 200)}`);
-  }
+  if (enqueued && !enqueued.newlyEnqueued) return false;
+
+  await dispatchAgentReply({
+    userId: account.user_id,
+    platform: account.platform,
+    socialAccountId: account.id,
+    conversationId,
+    recipientId: authorRef,
+    inboundText: input.comment.text,
+    commentId: input.comment.id,
+    outboxId: enqueued?.id ?? null,
+  }, fetcher);
+  return true;
 }
 
 // Callers must have already established that this comment is not the account's own (see
@@ -144,8 +163,8 @@ export async function handleCommentInternally(
   }
 
   if (!match) {
-    await dispatchToAiAgent(account, input, conversationId, fetcher);
-    return "agent_dispatched";
+    const dispatched = await dispatchToAiAgent(admin, account, input, conversationId, fetcher, now);
+    return dispatched ? "agent_dispatched" : "skipped";
   }
 
   if (await ruleAlreadyReplied(admin, { account, match, conversationId, postId, now })) {

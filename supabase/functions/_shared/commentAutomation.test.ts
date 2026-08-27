@@ -1,5 +1,9 @@
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { handleCommentInternally, type CommentAutomationAccount } from "./commentAutomation.ts";
+import {
+  handleCommentInternally,
+  type CommentAutomationAccount,
+  type CommentAutomationInput,
+} from "./commentAutomation.ts";
 
 const ACCOUNT: CommentAutomationAccount = {
   id: "11111111-2222-3333-4444-555555555555",
@@ -9,7 +13,10 @@ const ACCOUNT: CommentAutomationAccount = {
   platform_user_id: "page-1",
 };
 
-const INPUT = {
+// Typed against the contract rather than inferred from the literal: inference narrowed
+// `author.id` and `post.id` to `string`, so the Threads cases below -- which are precisely
+// the ones with a null id -- failed type-checking while the runtime behaviour was correct.
+const INPUT: CommentAutomationInput = {
   comment: { id: "c1", text: "what is the price" },
   post: { id: "p1" },
   author: { id: "a1", username: "fan" },
