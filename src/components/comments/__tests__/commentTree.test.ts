@@ -80,7 +80,9 @@ describe("buildCommentThreads", () => {
     expect(seen.sort()).toEqual(["a", "b", "c", "d"]);
   });
 
-  it("terminates on a reply chain that closes on itself", () => {
+  // Two comments naming each other are both "replies", so neither qualifies as a root.
+  // Rendering only from roots dropped them from the page without a trace.
+  it("still shows comments caught in a parent cycle", () => {
     const threads = buildCommentThreads([
       comment("self", "2026-08-27T10:00:00Z", "self"),
       comment("x", "2026-08-27T10:01:00Z", "y"),
@@ -88,8 +90,7 @@ describe("buildCommentThreads", () => {
     ]);
 
     const seen = threads.flatMap((t) => t.nodes.map((n) => n.comment.id));
-    expect(seen).toContain("self");
-    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen.sort()).toEqual(["self", "x", "y"]);
   });
 
   it("returns nothing for an empty list", () => {

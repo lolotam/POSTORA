@@ -62,9 +62,20 @@ export function buildCommentThreads(comments: Comment[]): CommentThread[] {
   };
 
   const flatten = (node: CommentNode): CommentNode[] => [node, ...node.replies.flatMap(flatten)];
-
-  return roots.sort(newestFirst).map((root) => {
+  const thread = (root: Comment): CommentThread => {
     const nodes = flatten(build(root, 0));
     return { root, nodes, replyCount: nodes.length - 1 };
-  });
+  };
+
+  const threads = roots.sort(newestFirst).map(thread);
+
+  // A parent cycle -- a naming b while b names a -- leaves both looking like replies, so
+  // neither lands in `roots` and both would disappear from the page entirely. The visited
+  // set above stops the walk hanging; this is what stops the comments vanishing. Anything
+  // still unwalked becomes its own thread and pulls its cycle partner in beneath it.
+  for (const stranded of [...comments].sort(newestFirst)) {
+    if (!visited.has(stranded.id)) threads.push(thread(stranded));
+  }
+
+  return threads.sort((a, b) => newestFirst(a.root, b.root));
 }
