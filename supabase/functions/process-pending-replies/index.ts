@@ -137,17 +137,28 @@ async function handToHuman(admin: any, row: OutboxRow, config: AgentConfigForEsc
     platform: row.platform,
     conversationId: row.conversation_id,
     customerName: row.recipient_id,
-    adminPhoneNumbers: config.admin_phone_numbers ?? [],
+    // DELIBERATELY EMPTY, whatever the account has configured.
+    //
     // A cron worker has no sender: the credential resolution that builds one lives in
-    // ai-agent-reply and needs a request. escalateConversation reports adminsNotified
-    // honestly when the send does nothing, and handToHuman logs that case -- so the mute and
-    // the assignment still happen, and nobody is told a person was paged when they were not.
+    // ai-agent-reply and needs a request. escalateConversation counts an admin as notified
+    // for every callback that RESOLVES, so a no-op transport paired with configured numbers
+    // reports people as paged who were never contacted -- and that false success is worse
+    // than the missing notification, because it is what an operator would rely on. With no
+    // numbers the loop does not run and adminsNotified is honestly zero.
+    adminPhoneNumbers: [],
     sendWhatsAppText: () => Promise.resolve(),
   };
   try {
     const outcome = await escalateConversation(target, "recovery could not determine what the interrupted agent had already done");
-    if (!outcome.assigned && outcome.adminsNotified === 0) {
-      console.warn(`[recovery] ${row.id} muted but nobody was reached; it is visible only in the logs`);
+    // The mute always happens; the assignment is best-effort. Success here means a PERSON is
+    // now attached to the conversation, not merely that it was silenced -- a muted
+    // conversation nobody owns leaves the customer waiting on no one.
+    if (!outcome.assigned) {
+      console.warn(
+        `[recovery] ${row.id}: conversation muted but no agent was available, and this worker cannot notify admins ` +
+          `(${(config.admin_phone_numbers ?? []).length} configured). It is visible in the Logs tab only.`,
+      );
+      return false;
     }
     return true;
   } catch (error) {
@@ -182,13 +193,17 @@ async function loadContext(admin: any, row: OutboxRow) {
     // "Newer" must use the SAME total order the claim uses, or a message that sorts later
     // for claiming can sort as not-newer here and both get answered out of order. WhatsApp's
     // second-resolution timestamps make the tie real, not theoretical.
+    //
+    // No status filter, deliberately. Restricting to active rows meant a newer message that
+    // had ALREADY been answered stopped counting -- so the older one, still working through
+    // recovery, would be delivered after it. A newer message supersedes this one whatever
+    // became of it: the customer has moved on either way.
     admin
       .from("pending_agent_replies")
       .select("id", { count: "exact", head: true })
       .eq("social_account_id", row.social_account_id)
       .eq("conversation_id", row.conversation_id)
-      .or(`inbound_at.gt.${row.inbound_at},and(inbound_at.eq.${row.inbound_at},ingress_seq.gt.${row.ingress_seq})`)
-      .in("status", ["pending", "running", "ready_to_send", "sending"]),
+      .or(`inbound_at.gt.${row.inbound_at},and(inbound_at.eq.${row.inbound_at},ingress_seq.gt.${row.ingress_seq})`),
   ]);
   return {
     humanTookOver: modeRow?.mode === "human_first",

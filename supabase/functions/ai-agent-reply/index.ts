@@ -574,7 +574,11 @@ Deno.serve(async (req) => {
      * `outboundMessageId` is null on a sandbox run, which sends nothing -- the thread turns
      * are still written there, because the sandbox's whole purpose is to hold a conversation.
      */
-    const persistDelivery = async (text: string, outboundMessageId: string | null) => {
+    const persistDelivery = async (
+      text: string,
+      outboundMessageId: string | null,
+      toolCalls: unknown[] = executedToolCalls,
+    ) => {
       // Local message storage exists only for WhatsApp; FB/IG conversations are read live
       // from the Graph API.
       if (request.platform === "whatsapp" && outboundMessageId) {
@@ -600,7 +604,7 @@ Deno.serve(async (req) => {
           user_id: request.user_id,
           role: "assistant",
           content: text,
-          tool_calls: executedToolCalls.length ? executedToolCalls : null,
+          tool_calls: toolCalls.length ? toolCalls : null,
         },
       ]);
       if (threadWriteError) console.error("[ai-agent-reply] Thread write failed:", threadWriteError.message);
@@ -630,10 +634,14 @@ Deno.serve(async (req) => {
         // the assistant turn either. A redelivery only ever runs from `ready_to_send`, which
         // means the original attempt died at or before its send, so nothing was written yet
         // and these are not duplicates.
-        await persistDelivery(entry.text, outboundMessageId);
+        //
+        // The tool calls come from the ROW, not from this invocation -- which ran none. An
+        // empty list here would record a reply that had used tools as having used none.
+        await persistDelivery(entry.text, outboundMessageId, entry.toolCalls ?? []);
         await logOutcome(admin, {
           ...baseLog,
           reply_text: entry.text.slice(0, 4000),
+          tool_calls: entry.toolCalls?.length ? entry.toolCalls : null,
           latency_ms: Date.now() - startedAt,
           status: "sent",
         }, { redelivered: true, outbound_message_id: outboundMessageId });
@@ -922,7 +930,12 @@ Deno.serve(async (req) => {
       // without guessing. Without one -- callers that predate the outbox -- it is the plain
       // send it always was.
       outboundMessageId = outboxId
-        ? await deliverGeneratedReply(admin, outboxId, replyText, (text) => sender(request.recipient_phone, text))
+        ? await deliverGeneratedReply(
+          admin,
+          outboxId,
+          { text: replyText, toolCalls: executedToolCalls },
+          (text) => sender(request.recipient_phone, text),
+        )
         : await sender(request.recipient_phone, replyText);
     }
 

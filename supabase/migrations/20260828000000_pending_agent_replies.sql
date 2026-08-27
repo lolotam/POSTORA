@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS public.pending_agent_replies (
   -- Persisted by ai-agent-reply BEFORE it sends. Its presence is what makes a row
   -- re-deliverable without re-running the agent.
   generated_reply   TEXT,
+  -- The tools the ORIGINAL generation ran, stored with the reply they produced. A redelivery
+  -- executes no tools of its own, so without this the ai_thread_messages row it writes would
+  -- claim the answer came from nowhere -- an audit trail that is wrong precisely for the
+  -- replies that needed recovery.
+  generated_tool_calls JSONB,
 
   status            TEXT NOT NULL DEFAULT 'pending'
                     CHECK (status IN ('pending','running','ready_to_send','sending','sent',
@@ -280,7 +285,8 @@ CREATE OR REPLACE FUNCTION public.advance_agent_reply(
   p_from TEXT,
   p_to TEXT,
   p_generated_reply TEXT DEFAULT NULL,
-  p_error TEXT DEFAULT NULL
+  p_error TEXT DEFAULT NULL,
+  p_tool_calls JSONB DEFAULT NULL
 )
 RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -291,9 +297,10 @@ DECLARE
   v_count INTEGER;
 BEGIN
   UPDATE public.pending_agent_replies
-     SET status          = p_to,
-         generated_reply = COALESCE(p_generated_reply, generated_reply),
-         error           = COALESCE(p_error, error),
+     SET status               = p_to,
+         generated_reply      = COALESCE(p_generated_reply, generated_reply),
+         generated_tool_calls = COALESCE(p_tool_calls, generated_tool_calls),
+         error                = COALESCE(p_error, error),
          sent_at         = CASE WHEN p_to = 'sent' THEN now() ELSE sent_at END,
          -- A terminal row holds no lease; leaving one would keep it in the claimable index
          -- for no reason.
@@ -320,9 +327,9 @@ REVOKE ALL ON FUNCTION public.reap_exhausted_agent_replies(INTEGER)
 GRANT EXECUTE ON FUNCTION public.reap_exhausted_agent_replies(INTEGER)
   TO service_role;
 
-REVOKE ALL ON FUNCTION public.advance_agent_reply(UUID, TEXT, TEXT, TEXT, TEXT)
+REVOKE ALL ON FUNCTION public.advance_agent_reply(UUID, TEXT, TEXT, TEXT, TEXT, JSONB)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.advance_agent_reply(UUID, TEXT, TEXT, TEXT, TEXT)
+GRANT EXECUTE ON FUNCTION public.advance_agent_reply(UUID, TEXT, TEXT, TEXT, TEXT, JSONB)
   TO service_role;
 
 -- ai-agent-reply stamps every log row with the outbox id it was working for, so a replay

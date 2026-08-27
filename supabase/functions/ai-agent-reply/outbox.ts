@@ -10,8 +10,12 @@
 import { advanceReply } from "../_shared/pendingReplies.ts";
 
 export type OutboxEntry =
-  /** Text from an earlier attempt is durable; deliver it and touch nothing else. */
-  | { mode: "redeliver"; text: string }
+  /**
+   * Text from an earlier attempt is durable; deliver it and touch nothing else. `toolCalls`
+   * is what the ORIGINAL generation ran, carried so the thread row a redelivery writes says
+   * where the answer came from instead of claiming it came from nowhere.
+   */
+  | { mode: "redeliver"; text: string; toolCalls: unknown[] | null }
   /** Fresh work, now owned by this invocation. Generation may begin. */
   | { mode: "generate" }
   /** Not ours to run. `status` says why, for the log. */
@@ -35,13 +39,17 @@ export async function takeOutboxRow(
 ): Promise<OutboxEntry> {
   const { data: row, error } = await admin
     .from("pending_agent_replies")
-    .select("status, generated_reply")
+    .select("status, generated_reply, generated_tool_calls")
     .eq("id", outboxId)
     .maybeSingle();
   if (error || !row) return { mode: "refuse", status: error ? `lookup failed: ${error.message}` : "missing" };
 
   if (row.status === "ready_to_send" && typeof row.generated_reply === "string") {
-    return { mode: "redeliver", text: row.generated_reply };
+    return {
+      mode: "redeliver",
+      text: row.generated_reply,
+      toolCalls: Array.isArray(row.generated_tool_calls) ? row.generated_tool_calls : null,
+    };
   }
   if (row.status === "pending" && await advanceReply(admin, { id: outboxId, from: "pending", to: "running" })) {
     return { mode: "generate" };
@@ -102,14 +110,18 @@ export async function deliverGeneratedReply(
   // deno-lint-ignore no-explicit-any
   admin: any,
   outboxId: string,
-  text: string,
+  reply: { text: string; toolCalls: unknown[] },
   send: (text: string) => Promise<string>,
 ): Promise<string> {
+  const { text } = reply;
   const persisted = await advanceReply(admin, {
     id: outboxId,
     from: "running",
     to: "ready_to_send",
     generatedReply: text,
+    // Stored WITH the reply, in the same statement, so a redelivery can never have the text
+    // without knowing what produced it.
+    generatedToolCalls: reply.toolCalls,
   });
   if (!persisted) throw new Error("could not persist the reply before sending; refusing to send");
   return await sendAndSettle(admin, outboxId, text, send);
@@ -166,7 +178,7 @@ export async function cancelOutboxRow(
   admin: any,
   outboxId: string,
   reason: string,
-): Promise<void> {
+): Promise<boolean> {
   const { data: row, error } = await admin
     .from("pending_agent_replies")
     .select("status")
@@ -174,7 +186,7 @@ export async function cancelOutboxRow(
     .maybeSingle();
   if (error || !row) {
     console.error(`[outbox] could not read ${outboxId} to cancel it: ${error?.message ?? "missing"}`);
-    return;
+    return false;
   }
   // Only from a state where nothing has been sent. advance_agent_reply enforces the FROM
   // state but not which pairs are legal, so a stale caller could otherwise rewrite `sending`,
@@ -183,9 +195,9 @@ export async function cancelOutboxRow(
   // must never tell.
   if (!CANCELLABLE.includes(row.status)) {
     console.warn(`[outbox] refusing to cancel ${outboxId}: ${row.status} is past the point of no send`);
-    return;
+    return false;
   }
-  await advanceReply(admin, { id: outboxId, from: row.status, to: "cancelled", error: reason });
+  return await advanceReply(admin, { id: outboxId, from: row.status, to: "cancelled", error: reason });
 }
 
 const CANCELLABLE: readonly string[] = ["pending", "running", "ready_to_send"];

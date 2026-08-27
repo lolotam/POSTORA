@@ -3379,6 +3379,7 @@ export type Database = {
           created_at: string
           error: string | null
           generated_reply: string | null
+          generated_tool_calls: Json | null
           id: string
           inbound_at: string
           inbound_text: string
@@ -3406,6 +3407,7 @@ export type Database = {
           created_at?: string
           error?: string | null
           generated_reply?: string | null
+          generated_tool_calls?: Json | null
           id?: string
           inbound_at: string
           inbound_text: string
@@ -3433,6 +3435,7 @@ export type Database = {
           created_at?: string
           error?: string | null
           generated_reply?: string | null
+          generated_tool_calls?: Json | null
           id?: string
           inbound_at?: string
           inbound_text?: string
@@ -6992,6 +6995,7 @@ export type Database = {
           p_to: string
           p_generated_reply?: string
           p_error?: string
+          p_tool_calls?: Json
         }
         Returns: boolean
       }

@@ -565,15 +565,24 @@ async function handleLiveMessages(
     // never typed. Both consumers get the constant instead. Genuine captions -- which the
     // same check identifies -- still pass through untouched.
     const ruleReplied = automationHandler === "internal"
-      ? await processAutoReplies(adminClient, account, conversationId, phoneNumberId, from, promptSafeText, accessToken)
+      ? await processAutoReplies(adminClient, account, {
+        conversationId,
+        phoneNumberId,
+        recipientPhone: from,
+        inboundText: promptSafeText,
+        accessToken,
+        releaseToRule: () => outboxId ? cancelOutboxRow(adminClient, outboxId, "rule_replied") : Promise.resolve(true),
+      })
       : false;
 
     // Deterministic keyword/away rules outrank the AI; only unanswered
     // messages reach the agent. Imported/history/echo messages never get
     // here (see handleHistorySync guard), so the AI cannot reply to them.
     if (automationHandler === "internal" && ruleReplied && outboxId) {
-      // A rule answered, so the agent never will. Terminal, and nothing the recovery pass
-      // should ever pick up.
+      // Covers the suppression paths that return true WITHOUT sending -- an active cooldown,
+      // or a matched rule with no access token. releaseToRule already cancelled the row on
+      // the path that does send, and a second cancel of an already-cancelled row is refused
+      // and logged rather than doing harm.
       await cancelOutboxRow(adminClient, outboxId, "rule_replied");
     }
     if (automationHandler === "internal" && !ruleReplied) {
@@ -854,15 +863,31 @@ async function handleContactSync(
 // Returns true when auto-reply rules own this message (a rule replied, or a
 // rule replied recently and the anti-spam cooldown is active), so the AI
 // agent should stay silent. Returns false when no rule claimed the message.
+interface AutoReplyContext {
+  conversationId: string;
+  phoneNumberId: string;
+  recipientPhone: string;
+  inboundText: string;
+  accessToken: string | null;
+  /**
+   * Called once a rule has matched and is about to SEND, and only then. Returning false
+   * means the outbox row could not be released -- someone else is answering this message --
+   * and the rule must stand down rather than duplicate it.
+   *
+   * The release has to happen before the provider call, not after: a kill in between would
+   * leave the row recoverable and the customer would get the rule's answer and then the
+   * agent's. Releasing first fails the other way, which matches the existing precedence --
+   * a matched rule suppresses the agent whether or not its own delivery succeeds.
+   */
+  releaseToRule: () => Promise<boolean>;
+}
+
 async function processAutoReplies(
   adminClient: any,
   account: { id: string; user_id: string },
-  conversationId: string,
-  phoneNumberId: string,
-  recipientPhone: string,
-  inboundText: string,
-  accessToken: string | null
+  context: AutoReplyContext,
 ): Promise<boolean> {
+  const { conversationId, phoneNumberId, recipientPhone, inboundText, accessToken } = context;
   try {
     // Check cooldown — set only after a rule reply, so "active" means a rule
     // answered this conversation within the window and still owns it.
@@ -934,6 +959,12 @@ async function processAutoReplies(
       console.error("[whatsapp-webhook] No access token for this account and WHATSAPP_ACCESS_TOKEN not set, cannot send auto-reply");
       // A rule matched: keep AI out even though the send failed, so the AI
       // never overrides a deterministic answer the business configured.
+      return true;
+    }
+
+    // The rule owns this message now. Release the outbox row before the provider call.
+    if (!await context.releaseToRule()) {
+      console.warn("[whatsapp-webhook] auto-reply stood down: the outbox row moved on");
       return true;
     }
 

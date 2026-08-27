@@ -131,11 +131,12 @@ async function attemptEnqueue(
     }
     const row = Array.isArray(data) ? data[0] : data;
     if (!row || typeof row.id !== "string" || typeof row.newly_enqueued !== "boolean") {
-      // A well-formed response that says something this code does not understand is NOT an
-      // ambiguous write -- retrying would not clarify it. Fail closed on ownership: reading
-      // garbage as "newly enqueued" would let two invocations both believe they own the row.
+      // Unknown, NOT null. A response this code cannot read says nothing about whether the
+      // insert committed, and answering row-less on a committed row is what produces a
+      // recovery duplicate. The RPC is idempotent and the unique constraint stops a second
+      // row, so the retry is free and may well return something readable.
       console.error(`[outbox] unexpected enqueue result for ${label}`);
-      return null;
+      return "unknown";
     }
     if (!row.newly_enqueued) console.log(`[outbox] ${label} already owned by another invocation`);
     return { id: row.id, newlyEnqueued: row.newly_enqueued };
@@ -186,6 +187,8 @@ export interface ReplyTransition {
   from: PendingReplyStatus;
   to: PendingReplyStatus;
   generatedReply?: string | null;
+  /** The tools that produced `generatedReply`, so a redelivery can record them truthfully. */
+  generatedToolCalls?: unknown[] | null;
   error?: string | null;
 }
 
@@ -204,6 +207,7 @@ export async function advanceReply(
       p_to: to,
       p_generated_reply: transition.generatedReply ?? null,
       p_error: transition.error?.slice(0, 500) ?? null,
+      p_tool_calls: transition.generatedToolCalls?.length ? transition.generatedToolCalls : null,
     });
     if (error) {
       console.error(`[outbox] ${from} -> ${to} failed for ${id}: ${error.message}`);

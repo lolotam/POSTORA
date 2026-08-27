@@ -181,8 +181,31 @@ export async function handleCommentInternally(
     return "agent_dispatched";
   }
 
-  if (await ruleAlreadyReplied(admin, { account, match, conversationId, postId, now })) {
-    return await abandon("rule_suppressed", "rule_suppressed");
+  try {
+    if (await ruleAlreadyReplied(admin, { account, match, conversationId, postId, now })) {
+      return await abandon("rule_suppressed", "rule_suppressed");
+    }
+  } catch (error) {
+    // Same reasoning as the rule lookup above: publicly, replying while the throttle's state
+    // is unknown is the worse outcome. A matched rule claims the comment either way, so the
+    // agent must not inherit it.
+    console.error("[comment-automation] suppression check failed, not replying:", (error as Error).message);
+    return await abandon("skipped", "suppression_check_failed");
+  }
+
+  // The rule owns this comment from here, so the outbox row is released BEFORE the send.
+  //
+  // Sending first left the row `pending`: on the success path nothing cancelled it at all,
+  // so every rule-answered comment would ALSO get an AI reply once the lease lapsed. Even
+  // with a cancel afterwards, a kill between the send and the cancel produces the same
+  // duplicate. Cancelling first cannot: if the send then fails, the comment goes unanswered
+  // by the AI too, which is exactly the existing precedence -- a matched rule suppresses the
+  // agent whether or not its delivery succeeded.
+  if (outboxId && !await cancelOutboxRow(admin, outboxId, "rule_replied")) {
+    // The row is no longer ours, so someone else is answering this comment. Sending now
+    // would be the duplicate.
+    console.warn(`[comment-automation] rule stood down on ${input.comment.id}: the outbox row moved on`);
+    return "skipped";
   }
 
   // Recorded in `finally`, before any send failure can propagate. The usage row is the

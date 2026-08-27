@@ -90,18 +90,21 @@ Deno.test("when both enqueues fail, a read decides — and never claims ownershi
   assertEquals(reads, 1);
 });
 
-Deno.test("a well-formed but unrecognised answer is not retried, and claims nothing", async () => {
-  // Retrying would not clarify a response the database did give us. Reading it as "newly
-  // enqueued" would let two invocations both believe they own the row.
+Deno.test("an unreadable answer is treated as unknown, not as 'no row'", async () => {
+  // A response this code cannot parse says NOTHING about whether the insert committed.
+  // Treating it as "no row" replies now and leaves a committed row for recovery to answer
+  // again. It gets the retry and the lookup like any other ambiguous outcome.
   let calls = 0;
   const admin = {
     rpc: () => {
       calls++;
-      return Promise.resolve({ data: [{ nonsense: true }], error: null });
+      return calls === 1
+        ? Promise.resolve({ data: [{ nonsense: true }], error: null })
+        : Promise.resolve({ data: [{ id: "row-1", newly_enqueued: false }], error: null });
     },
   };
-  assertEquals(await enqueueAgentReply(admin, ITEM), null);
-  assertEquals(calls, 1);
+  assertEquals(await enqueueAgentReply(admin, ITEM), { id: "row-1", newlyEnqueued: false });
+  assertEquals(calls, 2);
 });
 
 Deno.test("an RPC that answers with an unexpected shape is a failure, not ownership", async () => {
@@ -152,7 +155,12 @@ Deno.test("advanceReply reports the database's verdict, and refuses on error", a
   assert(await advanceReply(accepted.admin, transition));
   assertEquals(accepted.calls[0].name, "advance_agent_reply");
   assertEquals(accepted.calls[0].args, {
-    p_id: "row-1", p_from: "ready_to_send", p_to: "sending", p_generated_reply: null, p_error: null,
+    p_id: "row-1",
+    p_from: "ready_to_send",
+    p_to: "sending",
+    p_generated_reply: null,
+    p_error: null,
+    p_tool_calls: null,
   });
 
   const refused = stubRpc({ data: false });
