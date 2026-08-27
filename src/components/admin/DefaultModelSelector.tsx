@@ -54,7 +54,12 @@ interface DefaultModelSelectorProps {
   onSetFallback: (providerCode: string, modelId: string) => void;
   onSetFallback2: (providerCode: string, modelId: string) => void;
   /** Persist the primary model's knobs. Receives the ai_models row id. */
-  onSetAdminParams: (modelRowId: string, params: Record<string, string | number | boolean>) => void;
+  /**
+   * Persist the primary model's knobs. Omit to hide the parameter controls
+   * entirely -- a category whose engine does not read ai_models.admin_params
+   * must not show a Save button that discards what the admin typed.
+   */
+  onSetAdminParams?: (modelRowId: string, params: Record<string, string | number | boolean>) => void;
   isSaving?: boolean;
 }
 
@@ -160,7 +165,7 @@ export function DefaultModelSelector({
               category={category}
             />
 
-            {primaryRow && primarySpec.parameters.length > 0 && (
+            {onSetAdminParams && primaryRow && primarySpec.parameters.length > 0 && (
               <>
                 <Separator />
                 <div className="space-y-2">

@@ -52,7 +52,6 @@ export function AdminAiAgentSection() {
           onSetDefault={(pc, mid) => setDefaultModel.mutate({ provider_code: pc, model_id: mid, category: "agent" })}
           onSetFallback={(pc, mid) => setFallbackModel.mutate({ provider_code: pc, model_id: mid, category: "agent" })}
           onSetFallback2={(pc, mid) => setFallback2Model.mutate({ provider_code: pc, model_id: mid, category: "agent" })}
-          onSetAdminParams={() => {}}
           isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
         />
       </CardContent>

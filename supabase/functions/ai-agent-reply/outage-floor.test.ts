@@ -109,3 +109,32 @@ Deno.test("the Arabic apology is used for an Arabic conversation", async () => {
   await deliverModelOutageFloor(DM, c.sender, "ar", target(), NONE);
   assertEquals(/[؀-ۿ]/.test(c.sent[0]), true);
 });
+
+// CodeRabbit, PR #37: once the mode upsert lands the conversation is muted, so a
+// later assignment failure must NOT read as "escalation failed" -- that would
+// suppress the apology and leave the customer in permanent silence, which is
+// worse than either failure alone.
+Deno.test("a post-mute assignment failure still counts as escalated", async () => {
+  const c = collector();
+  let call = 0;
+  const admin = {
+    from(table: string) {
+      call++;
+      if (table === "ai_conversation_modes") {
+        return { upsert: () => Promise.resolve({ error: null }) };
+      }
+      // Everything after the mute blows up.
+      throw new Error("assignment table unavailable");
+    },
+  };
+  const result = await deliverModelOutageFloor(
+    DM, c.sender, "en", { ...target(), admin } as never, NONE,
+  );
+
+  assertEquals(result.escalated, true);
+  assertEquals(result.apology_sent, true);
+  // Nobody was actually reached, so the copy must stay conservative.
+  assertEquals(result.human_notified, false);
+  assertEquals(c.sent[0].includes("notified"), false);
+  assertEquals(call > 0, true);
+});
