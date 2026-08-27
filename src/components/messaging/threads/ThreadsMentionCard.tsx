@@ -13,6 +13,7 @@ import { ThreadsAssigneePicker } from "./ThreadsAssigneePicker";
 import { ThreadsReplyComposer } from "./ThreadsReplyComposer";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useThreadsAuthorAvatarContext } from "./ThreadsAuthorAvatarContext";
+import { ThreadsMentionConversation } from "./ThreadsMentionConversation";
 
 interface ThreadsMentionCardProps {
   mention: ThreadsMention;
@@ -237,6 +238,11 @@ export function ThreadsMentionCard({
             </Button>
           )}
         </div>
+
+        <ThreadsMentionConversation
+          socialAccountId={mention.social_account_id}
+          threadsMediaId={mention.threads_media_id}
+        />
       </CardContent>
     </Card>
   );

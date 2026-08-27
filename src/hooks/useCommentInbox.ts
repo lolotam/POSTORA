@@ -29,7 +29,7 @@ interface UseCommentsOptions {
   enabled?: boolean;
 }
 
-function parsePageComments(data: any): Comment[] {
+export function parsePageComments(data: any): Comment[] {
   const comments: Comment[] = [];
   if (!data?.data) return comments;
 
@@ -62,7 +62,7 @@ function parsePageComments(data: any): Comment[] {
   return comments.sort((a, b) => new Date(b.created_time).getTime() - new Date(a.created_time).getTime());
 }
 
-function parseIgComments(data: any): Comment[] {
+export function parseIgComments(data: any): Comment[] {
   const comments: Comment[] = [];
   if (!data?.data) return comments;
 

@@ -26,7 +26,7 @@ interface CommentRowProps {
 }
 
 function CommentHeader({ node }: { node: CommentNode }) {
-  const { comment, depth } = node;
+  const { entry: comment, depth } = node;
   const style = depthStyle(depth);
 
   return (
@@ -74,7 +74,7 @@ function ReplyBox({ authorName, composer, commentId }: {
 }
 
 export function CommentRow({ node, socialAccountId, composer }: CommentRowProps) {
-  const { comment, depth } = node;
+  const { entry: comment, depth } = node;
   const style = depthStyle(depth);
 
   return (

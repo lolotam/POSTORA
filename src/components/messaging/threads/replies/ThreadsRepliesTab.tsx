@@ -129,7 +129,6 @@ export function ThreadsRepliesTab({ accountId }: Props) {
           ) : (
             <ThreadsReplyList
               accountId={accountId}
-              mediaId={mediaId}
               replies={topLevel.data || []}
               isLoading={topLevel.isLoading}
               error={topLevel.error}
@@ -165,7 +164,6 @@ export function ThreadsRepliesTab({ accountId }: Props) {
           ) : (
             <ThreadsConversationTimeline
               accountId={accountId}
-              mediaId={mediaId}
               replies={conversation.data || []}
               onReplyClick={handleReplyClick}
             />
@@ -234,7 +232,6 @@ export function ThreadsRepliesTab({ accountId }: Props) {
         replyToId={replyTarget?.id ?? null}
         replyToPreview={replyTarget?.text ?? null}
         replyToUsername={replyTarget?.username ?? null}
-        mediaId={mediaId}
       />
     </div>
     </ThreadsAuthorAvatarProvider>

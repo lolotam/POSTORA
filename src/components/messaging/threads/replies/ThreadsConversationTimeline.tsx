@@ -1,64 +1,28 @@
 import { useMemo } from "react";
 import type { ThreadsReply } from "@/hooks/useThreadsReplies";
-import { ThreadsReplyCard } from "./ThreadsReplyCard";
 import { Card, CardContent } from "@/components/ui/card";
 import { Inbox } from "lucide-react";
+import { ThreadsThreadCard } from "./ThreadsThreadCard";
+import { buildThreadsReplyThreads } from "./threadsReplyTree";
 
 interface Props {
   accountId: string | null;
-  mediaId: string | null;
   replies: ThreadsReply[];
   onReplyClick?: (reply: ThreadsReply) => void;
 }
 
-interface Node {
-  reply: ThreadsReply;
-  depth: number;
-}
-
 /**
- * Sort by timestamp ASC, then nest by `replied_to.id`.
- * If `replied_to` is null OR the parent is missing from the dataset → treat as root.
+ * The full conversation under one post, as framed threads rather than a flat run.
+ *
+ * This used to carry its own nesting walk. Two of its cases were wrong in ways the
+ * comment inbox had already fixed: a reply naming itself as its parent recursed forever
+ * and took the page down with it, and two replies naming each other left neither
+ * reachable from a root, so both silently disappeared. The walk is now shared.
  */
-function buildTimeline(replies: ThreadsReply[]): Node[] {
-  const sorted = [...replies].sort((a, b) => {
-    const ta = a.timestamp ? new Date(a.timestamp).getTime() : 0;
-    const tb = b.timestamp ? new Date(b.timestamp).getTime() : 0;
-    return ta - tb;
-  });
+export function ThreadsConversationTimeline({ accountId, replies, onReplyClick }: Props) {
+  const threads = useMemo(() => buildThreadsReplyThreads(replies), [replies]);
 
-  const idSet = new Set(sorted.map((r) => r.id));
-  const childrenByParent = new Map<string | null, ThreadsReply[]>();
-
-  for (const r of sorted) {
-    const parent = r.replied_to?.id;
-    const key = parent && idSet.has(parent) ? parent : null;
-    const list = childrenByParent.get(key) || [];
-    list.push(r);
-    childrenByParent.set(key, list);
-  }
-
-  const out: Node[] = [];
-  const walk = (parentId: string | null, depth: number) => {
-    const kids = childrenByParent.get(parentId) || [];
-    for (const k of kids) {
-      out.push({ reply: k, depth });
-      walk(k.id, depth + 1);
-    }
-  };
-  walk(null, 0);
-  return out;
-}
-
-export function ThreadsConversationTimeline({
-  accountId,
-  mediaId,
-  replies,
-  onReplyClick,
-}: Props) {
-  const nodes = useMemo(() => buildTimeline(replies), [replies]);
-
-  if (nodes.length === 0) {
+  if (threads.length === 0) {
     return (
       <Card>
         <CardContent className="p-8 text-center space-y-2">
@@ -74,13 +38,11 @@ export function ThreadsConversationTimeline({
 
   return (
     <div className="space-y-3">
-      {nodes.map(({ reply, depth }) => (
-        <ThreadsReplyCard
-          key={reply.id}
+      {threads.map((thread) => (
+        <ThreadsThreadCard
+          key={thread.root.id}
+          thread={thread}
           accountId={accountId}
-          reply={reply}
-          mediaId={mediaId}
-          indent={Math.min(depth, 5)}
           onReplyClick={onReplyClick}
         />
       ))}

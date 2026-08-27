@@ -24,7 +24,7 @@ describe("buildCommentThreads", () => {
     expect(threads).toHaveLength(1);
     expect(threads[0].root.id).toBe("root");
     expect(threads[0].replyCount).toBe(1);
-    expect(threads[0].nodes.map((n) => n.comment.id)).toEqual(["root", "reply"]);
+    expect(threads[0].nodes.map((n) => n.entry.id)).toEqual(["root", "reply"]);
   });
 
   it("records how deep each reply sits so the frame can colour it", () => {
@@ -60,7 +60,7 @@ describe("buildCommentThreads", () => {
     ]);
 
     expect(threads.map((t) => t.root.id)).toEqual(["newer-root", "older-root"]);
-    expect(threads[1].nodes.map((n) => n.comment.id)).toEqual([
+    expect(threads[1].nodes.map((n) => n.entry.id)).toEqual([
       "older-root",
       "first-reply",
       "second-reply",
@@ -75,7 +75,7 @@ describe("buildCommentThreads", () => {
       comment("d", "2026-08-27T10:03:00Z", "b"),
     ];
 
-    const seen = buildCommentThreads(input).flatMap((t) => t.nodes.map((n) => n.comment.id));
+    const seen = buildCommentThreads(input).flatMap((t) => t.nodes.map((n) => n.entry.id));
 
     expect(seen.sort()).toEqual(["a", "b", "c", "d"]);
   });
@@ -89,7 +89,7 @@ describe("buildCommentThreads", () => {
       comment("y", "2026-08-27T10:02:00Z", "x"),
     ]);
 
-    const seen = threads.flatMap((t) => t.nodes.map((n) => n.comment.id));
+    const seen = threads.flatMap((t) => t.nodes.map((n) => n.entry.id));
     expect(seen.sort()).toEqual(["self", "x", "y"]);
   });
 

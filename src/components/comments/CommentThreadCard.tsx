@@ -43,7 +43,7 @@ export function CommentThreadCard({ thread, socialAccountId, composer }: Comment
 
         {nodes.map((node) => (
           <CommentRow
-            key={node.comment.id}
+            key={node.entry.id}
             node={node}
             socialAccountId={socialAccountId}
             composer={composer}
