@@ -63,6 +63,12 @@ async function findAccount(admin: any, socialAccountId: string): Promise<Evoluti
     .eq("id", socialAccountId)
     .eq("platform", "whatsapp")
     .eq("connection_mode", "evolution_qr")
+    // A deactivated account's Baileys session can stay open for minutes after the
+    // product disconnects it (Evolution's logout races the session teardown), and a
+    // still-open session keeps delivering webhooks. Without this filter those
+    // deliveries kept ingesting messages and dispatching the AI agent for an account
+    // the user believed was gone.
+    .eq("is_active", true)
     .maybeSingle();
   if (error) throw error;
   return data as EvolutionAccount | null;

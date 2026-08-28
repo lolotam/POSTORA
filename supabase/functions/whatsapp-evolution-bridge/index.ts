@@ -9,6 +9,7 @@ import {
 } from "../_shared/evolutionQrAccount.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { runInBackground } from "../_shared/background.ts";
+import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 
 const EVOLUTION_EVENTS: EvolutionEvent[] = [
   "MESSAGES_UPSERT",
@@ -320,21 +321,23 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   return { success: true, social_account_id: body.social_account_id, qr, state };
 }
 
+// Delegates to the shared teardown: whatsapp-oauth's "disconnect" action and this
+// action must not grow two different notions of what disconnecting an Evolution
+// account means. Nothing in the frontend calls this anymore, but a deployed n8n
+// workflow or an external caller could still be hitting it, so the action stays.
 async function logoutInstance(admin: any, userId: string, body: BridgeBody) {
   if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
   const account = await findOwnedAccount(admin, userId, body.social_account_id);
-  const instance = await findInstance(admin, body.social_account_id);
-  await createEvolutionApi().logout(instance.instance_name);
-  const { error } = await admin
-    .from("social_accounts")
-    .update({ is_active: false })
-    .eq("id", account.id)
-    .eq("user_id", userId);
-  if (error) throw error;
-  await admin.from("whatsapp_evolution_instances")
-    .update({ last_connection_state: "close", last_qr: null })
-    .eq("social_account_id", account.id);
-  return { success: true };
+  const teardown = await disconnectWhatsAppAccount(
+    {
+      accountId: account.id,
+      // Legacy rows may predate workspace scoping; the module tolerates null there.
+      workspaceId: account.workspace_id,
+      connectionMode: "evolution_qr",
+    },
+    { admin: admin as unknown as WhatsAppDisconnectAdmin, evolution: createEvolutionApi() },
+  );
+  return { success: true, teardown };
 }
 
 Deno.serve(async (req) => {
