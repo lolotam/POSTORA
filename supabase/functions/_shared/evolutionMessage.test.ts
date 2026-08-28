@@ -66,8 +66,12 @@ Deno.test("only addressable one-to-one chats are persisted", async (t) => {
   const cases: Array<[string, Record<string, unknown>, boolean]> = [
     ["direct chat", {}, true],
     ["group chat", { key: { id: "m", fromMe: false, remoteJid: "120363301653814403@g.us" } }, false],
-    ["privacy id", { key: { id: "m", fromMe: false, remoteJid: "166095025660123@lid" } }, false],
+    ["LID with no number anywhere", { key: { id: "m", fromMe: false, remoteJid: "166095025660123@lid" } }, false],
+    ["LID carrying its number", {
+      key: { id: "m", fromMe: false, remoteJid: "166095025660123@lid", remoteJidAlt: "96555683677@s.whatsapp.net" },
+    }, true],
     ["status broadcast", { key: { id: "m", fromMe: false, remoteJid: "status@broadcast" } }, false],
+    ["newsletter", { key: { id: "m", fromMe: false, remoteJid: "120363144038483540@newsletter" } }, false],
     ["protocol message", { messageType: "protocolMessage" }, false],
     ["no message body", { message: undefined }, false],
   ];
@@ -137,4 +141,44 @@ Deno.test("a device-suffixed chat shares the conversation id of its plain form",
     }),
   )!;
   assertEquals(multiDevice.conversationId, plain.conversationId);
+});
+
+Deno.test("one LID message lands in the same conversation whichever path delivers it", () => {
+  // 2026-08-28: Evolution normalises the live webhook payload to the phone JID but stores
+  // the historical record under the LID, so reading only `remoteJid` split one contact's
+  // messages across wa_<owner>_<phone> and wa_<owner>_<lid>.
+  const live = buildEvolutionMessageRow(ACCOUNT, baileysMessage({
+    key: { id: "AC3A", fromMe: false, remoteJid: "96569983891@s.whatsapp.net", remoteJidAlt: "96569983891@s.whatsapp.net" },
+  }))!;
+  const stored = buildEvolutionMessageRow(ACCOUNT, baileysMessage({
+    key: { id: "AC3A", fromMe: false, remoteJid: "40557493641315@lid", remoteJidAlt: "96569983891@s.whatsapp.net" },
+  }))!;
+
+  assertEquals(stored.conversationId, live.conversationId);
+  assertEquals(stored.row, live.row);
+});
+
+Deno.test("a caller-supplied chat address covers keys that omit the number", () => {
+  // Evolution repeats the LID-to-number alternate on only a few keys per chat, so the sweep
+  // resolves the chat once and carries that address across its remaining messages.
+  const built = buildEvolutionMessageRow(
+    ACCOUNT,
+    baileysMessage({ key: { id: "OLD", fromMe: false, remoteJid: "40557493641315@lid" } }),
+    "96569983891@s.whatsapp.net",
+  )!;
+
+  assertEquals(built.conversationId, "wa_96597950350_96569983891");
+  assertEquals(built.row.from_phone, "96569983891");
+});
+
+Deno.test("a key that names its own number ignores the caller's fallback", () => {
+  // The fallback is a last resort, never an override: a group message swept inside a chat
+  // must not be relabelled as that chat's contact.
+  const built = buildEvolutionMessageRow(
+    ACCOUNT,
+    baileysMessage({ key: { id: "M", fromMe: false, remoteJid: "96555683677@s.whatsapp.net" } }),
+    "96569983891@s.whatsapp.net",
+  )!;
+
+  assertEquals(built.conversationId, "wa_96597950350_96555683677");
 });

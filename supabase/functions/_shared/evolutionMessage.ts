@@ -33,17 +33,34 @@ export interface EvolutionMessageRow {
 // There is deliberately no `!message.status` guard: Evolution stamps a delivery status
 // onto real messages, so that condition dropped genuine traffic instead of the status
 // events it was meant to skip. Requiring a message body is the check actually intended.
-//
-// Group and privacy JIDs are skipped to match the history sync: their digits are not phone
-// numbers, so they would collide inside the wa_<owner>_<number> conversation id and could
-// not be replied to.
 function isPersistableMessage(message: any): boolean {
-  const remoteJid = String(message?.key?.remoteJid || "");
-  return Boolean(message?.message) &&
-    message?.messageType !== "protocolMessage" &&
-    !remoteJid.endsWith("status@broadcast") &&
-    !remoteJid.endsWith("@g.us") &&
-    !remoteJid.endsWith("@lid");
+  return Boolean(message?.message) && message?.messageType !== "protocolMessage";
+}
+
+const DIRECT_JID_SUFFIX = "@s.whatsapp.net";
+const LID_JID_SUFFIX = "@lid";
+
+/**
+ * The phone-addressed JID a message belongs to, or null when it has none.
+ *
+ * Only a subscriber number can address a conversation here: it is both the reply recipient
+ * and half of the wa_<owner>_<number> id. A group, a newsletter or a status broadcast has
+ * none, so those are dropped.
+ *
+ * WhatsApp's LID migration is why this is not simply `key.remoteJid`. A growing share of
+ * one-to-one chats now arrive addressed by an opaque "<id>@lid" identity, with the
+ * subscriber number carried alongside as `key.remoteJidAlt` whenever Evolution knows it.
+ * Reading only `remoteJid` put the same message in two different conversations depending on
+ * which path delivered it: Evolution normalises the live webhook payload to the phone JID
+ * but stores the historical record under the LID, so the sweep wrote wa_<owner>_<lid> for a
+ * message the webhook had already written as wa_<owner>_<phone>.
+ */
+export function addressableJid(key: any): string | null {
+  const remoteJid = String(key?.remoteJid || "");
+  if (remoteJid.endsWith(DIRECT_JID_SUFFIX)) return remoteJid;
+  if (!remoteJid.endsWith(LID_JID_SUFFIX)) return null;
+  const alternate = String(key?.remoteJidAlt || "");
+  return alternate.endsWith(DIRECT_JID_SUFFIX) ? alternate : null;
 }
 
 function describeMessageContent(message: any): EvolutionMessageContent {
@@ -121,13 +138,20 @@ export function remoteNumberFor(remoteJid: string): string {
   return local.replace(/\D/g, "") || remoteJid;
 }
 
+/**
+ * `addressFallback` is the address the caller already resolved for the whole chat. Evolution
+ * repeats the LID-to-number alternate on only a few keys per LID chat, so a sweep that
+ * resolved the chat from one message would otherwise drop every sibling message that does
+ * not repeat it. The live webhook resolves per message and passes nothing.
+ */
 export function buildEvolutionMessageRow(
   account: EvolutionMessageAccount,
   message: any,
+  addressFallback: string | null = null,
 ): EvolutionMessageRow | null {
   if (!isPersistableMessage(message)) return null;
   const messageId = message?.key?.id;
-  const remoteJid = message?.key?.remoteJid;
+  const remoteJid = addressableJid(message?.key) ?? addressFallback;
   if (!messageId || !remoteJid) return null;
 
   const content = describeMessageContent(message);
