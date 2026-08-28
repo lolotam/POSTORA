@@ -114,6 +114,12 @@ export function AiKnowledgeManager({
       return;
     }
     setUploading(true);
+    // Set once the upload succeeds and cleared once the source row exists:
+    // only on that stretch is the object unreferenced storage nobody can see
+    // or delete from the UI (the row is what makes the object reachable).
+    // Every failure on it — a resolved { error } or a rejected request — must
+    // remove the object again.
+    let orphanedObjectPath: string | null = null;
     try {
       // Knowledge files are business documents — price lists, company profiles,
       // internal templates — so they go straight into the private ai-knowledge
@@ -125,29 +131,45 @@ export function AiKnowledgeManager({
         .from(AI_KNOWLEDGE_BUCKET)
         .upload(objectPath, file, { contentType: aiKnowledgeContentType(file.name) });
       if (uploadError) throw uploadError;
-      const { data: source, error } = await (supabase as any)
-        .from("ai_knowledge_sources")
-        .insert({
-          user_id: user.id,
-          source_type: type,
-          file_name: file.name,
-          file_path: aiKnowledgeStorageRef(objectPath),
-          status: "pending",
-        })
-        .select()
-        .single();
-      // The row is what makes the object reachable, so an object with no row is
-      // unreferenced storage nobody can see or delete from the UI.
-      if (error) {
-        await supabase.storage.from(AI_KNOWLEDGE_BUCKET).remove([objectPath]);
-        throw error;
-      }
+      orphanedObjectPath = objectPath;
+      // The row is created through the create_ai_knowledge_source RPC so the
+      // source, its visibility, and its account links land in one
+      // transaction — a direct insert followed by separate link writes could
+      // fail in between and leave a source no account can read. Every
+      // document is shared with every account today; assigning documents to
+      // specific accounts is a later change.
+      const { data: sourceId, error } = await (supabase as any).rpc(
+        "create_ai_knowledge_source",
+        {
+          p_source_type: type,
+          p_file_name: file.name,
+          p_file_path: aiKnowledgeStorageRef(objectPath),
+          p_social_account_ids: [],
+          p_visibility: "shared",
+        },
+      );
+      if (error) throw error;
+      orphanedObjectPath = null;
       await run(
         "ingest_source",
-        { source_id: source.id },
+        { source_id: sourceId },
         "Knowledge file indexed",
       );
     } catch (error) {
+      if (orphanedObjectPath) {
+        try {
+          const { error: removeError } = await supabase.storage
+            .from(AI_KNOWLEDGE_BUCKET)
+            .remove([orphanedObjectPath]);
+          // Compensation reports its own failure but never replaces the
+          // error that caused the rollback.
+          if (removeError) {
+            console.error("Failed to remove orphaned knowledge upload:", removeError);
+          }
+        } catch (cleanupError) {
+          console.error("Failed to remove orphaned knowledge upload:", cleanupError);
+        }
+      }
       toast.error(error instanceof Error ? error.message : "Upload failed");
     } finally {
       setUploading(false);

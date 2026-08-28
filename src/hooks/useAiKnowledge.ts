@@ -12,6 +12,7 @@ export interface AiKnowledgeSource {
   status: "pending" | "processing" | "ready" | "failed";
   error: string | null;
   chunk_count: number;
+  visibility: "shared" | "restricted";
   created_at: string;
 }
 export interface AiKnowledgeGraphExport {
