@@ -35,6 +35,32 @@ import { createClient } from "@supabase/supabase-js";
 import { createHash, randomUUID } from "node:crypto";
 
 const BUCKET = "ai-knowledge";
+
+/**
+ * Mirrors MIME_BY_EXTENSION in src/lib/aiKnowledge.ts.
+ *
+ * Cloudinary serves raw .md assets as application/octet-stream, which the
+ * bucket's MIME allow-list rejects, so the header on the download cannot be
+ * reused. The extension is what the UI validated and what the parser
+ * dispatches on, so it is what the stored object is labelled with.
+ */
+const MIME_BY_EXTENSION = {
+  csv: "text/csv",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls: "application/vnd.ms-excel",
+  pdf: "application/pdf",
+  txt: "text/plain",
+  md: "text/markdown",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+};
+
+function contentTypeFor(fileName) {
+  const extension = fileName?.split(".").pop()?.toLowerCase();
+  return (extension && MIME_BY_EXTENSION[extension]) || "text/plain";
+}
 const CLOUDINARY_RAW_URL = /^https:\/\/res\.cloudinary\.com\/[^/]+\/raw\/upload\/v\d+\/(.+)$/;
 
 const apply = process.argv.includes("--apply");
@@ -115,7 +141,7 @@ async function migrateOne(admin, source, emailByUser) {
 
   const path = objectPath(source.user_id, source.file_name, randomUUID());
   const { error: uploadError } = await admin.storage.from(BUCKET).upload(path, bytes, {
-    contentType: response.headers.get("content-type") || "application/octet-stream",
+    contentType: contentTypeFor(source.file_name),
   });
   if (uploadError) return { status: "failed", reason: `upload: ${uploadError.message}` };
 

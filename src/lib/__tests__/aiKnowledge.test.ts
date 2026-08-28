@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  aiKnowledgeContentType,
   aiKnowledgeObjectPath,
   aiKnowledgeStorageRef,
   getKnowledgeSourceType,
@@ -72,5 +73,28 @@ describe("AI knowledge upload locations", () => {
     expect(aiKnowledgeStorageRef(`${USER_ID}/sources/obj-3.csv`)).toBe(
       `supabase://ai-knowledge/${USER_ID}/sources/obj-3.csv`,
     );
+  });
+});
+
+describe("AI knowledge upload content types", () => {
+  // Regression: the first migration run rejected 11 of 15 files with
+  // "mime type application/octet-stream is not supported". Cloudinary labels raw
+  // .md that way and browsers report File.type as "" for it, so neither source
+  // survives the bucket's allow-list. Every extension the picker accepts must
+  // map to a type the bucket accepts.
+  it.each([
+    ["catalog.csv", "text/csv"],
+    ["profile.md", "text/markdown"],
+    ["notes.TXT", "text/plain"],
+    ["prices.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    ["legacy.xls", "application/vnd.ms-excel"],
+    ["terms.pdf", "application/pdf"],
+    ["menu.JPG", "image/jpeg"],
+    ["logo.png", "image/png"],
+    ["banner.webp", "image/webp"],
+  ] as const)("maps %s", (name, mime) => expect(aiKnowledgeContentType(name)).toBe(mime));
+
+  it("falls back to a permitted type for a name with no extension", () => {
+    expect(aiKnowledgeContentType("README")).toBe("text/plain");
   });
 });

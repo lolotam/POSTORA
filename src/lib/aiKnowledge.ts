@@ -17,6 +17,34 @@ export const AI_KNOWLEDGE_ACCEPT = Object.keys(SOURCE_TYPE_BY_EXTENSION)
   .map((extension) => `.${extension}`)
   .join(",");
 
+const MIME_BY_EXTENSION: Record<string, string> = {
+  csv: "text/csv",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls: "application/vnd.ms-excel",
+  pdf: "application/pdf",
+  txt: "text/plain",
+  md: "text/markdown",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+};
+
+/**
+ * The content type to store an upload under, derived from its extension.
+ *
+ * `File.type` is not usable here. Browsers report an empty string for `.md` and
+ * frequently `application/vnd.ms-excel` for `.csv`, and Supabase Storage falls
+ * back to `application/octet-stream` when the type is empty — which the
+ * ai-knowledge bucket's MIME allow-list rejects, so the upload fails for a file
+ * the UI already accepted. The extension is the same thing the source-type
+ * check and the parser dispatch on, so it is the honest source of truth.
+ */
+export function aiKnowledgeContentType(fileName: string): string {
+  const extension = fileName.split(".").pop()?.toLowerCase();
+  return (extension && MIME_BY_EXTENSION[extension]) || "text/plain";
+}
+
 export function getKnowledgeSourceType(
   fileName: string,
 ): AiKnowledgeSourceType | null {
