@@ -4,6 +4,7 @@ import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
 import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
+import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
 import {
   conversationIdsForFilter,
   keysetOrFilter,
@@ -433,17 +434,13 @@ function isAiAgentPlatform(value: unknown): value is string {
       if (social_account_id && !accountId) {
         return jsonResponse({ error: "Account not found" }, 404);
       }
-      const query = adminClient
-        .from("ai_agent_configs")
-        .select("*")
-        .eq("user_id", user.id);
-      // A config is a brand voice. Asking for one account's config must never
-      // return another account's persona, so the account filter replaces the
-      // platform filter rather than narrowing it.
-      const { data, error } = accountId
-        ? await query.eq("social_account_id", accountId).maybeSingle()
-        : await query.eq("platform", platform).is("social_account_id", null).maybeSingle();
-      if (error) throw error;
+      // Shared with ai-agent-reply so the form can never render a different
+      // config from the one that actually answers customers.
+      const data = await loadAgentConfigForAccount(adminClient, {
+        userId: user.id,
+        platform,
+        accountId,
+      });
       return jsonResponse({ config: data || null });
     }
 
