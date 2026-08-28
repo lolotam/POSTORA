@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { AlertTriangle, RefreshCw, X } from "lucide-react";
 import { PlatformIcon, getPlatformName, ExtendedPlatform } from "@/components/PlatformIcon";
 import { useProfileOAuth } from "@/hooks/useProfileOAuth";
+import { InstagramConnectDialog, type InstagramFlow } from "@/components/profiles/InstagramConnectDialog";
 import { useState } from "react";
 import { Platform } from "@/lib/types";
 
@@ -21,7 +22,13 @@ interface AccountNeedingReauth {
 export function TokenReauthBanner() {
   const { user } = useAuth();
   const [dismissedAccounts, setDismissedAccounts] = useState<Set<string>>(new Set());
-  const { handleReconnectPlatform, connectingPlatform } = useProfileOAuth();
+  const {
+    handleReconnectPlatform,
+    connectingPlatform,
+    instagramFlowRequest,
+    selectInstagramFlow,
+    clearInstagramFlowRequest,
+  } = useProfileOAuth();
 
   const { data: accountsNeedingReauth = [] } = useQuery({
     queryKey: ["accounts-needing-reauth", user?.id],
@@ -68,6 +75,13 @@ export function TokenReauthBanner() {
 
   return (
     <div className="space-y-3">
+      {/* Instagram reconnects ask which login method to use before any redirect. */}
+      <InstagramConnectDialog
+        open={!!instagramFlowRequest}
+        onOpenChange={(open) => { if (!open) clearInstagramFlowRequest(); }}
+        disabled={connectingPlatform === "instagram"}
+        onSelect={(flow: InstagramFlow) => selectInstagramFlow(flow)}
+      />
       {visibleAccounts.map((account) => (
         <Alert
           key={account.id}

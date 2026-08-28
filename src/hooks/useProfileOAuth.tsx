@@ -20,13 +20,21 @@ import {
 // Re-export types for backward compatibility
 export type { FacebookPage, StandaloneInstagram, PageSelectionData } from "./oauth";
 
-export interface InstagramConnectMethodData {
+/**
+ * A pending Instagram connection waiting on the user to choose a login method
+ * (Business Login direct, or via a Facebook Page). Instagram is the only platform
+ * where the flow branches before any provider redirect, so the choice is owned here
+ * rather than by one page — the dashboard reauth banner and the profiles page both
+ * need it, and both connect and reconnect raise it.
+ */
+export interface InstagramFlowRequest {
   profileId: string;
 }
 
 export function useProfileOAuth() {
   const [connectingProfile, setConnectingProfile] = useState<string | null>(null);
   const [connectingPlatform, setConnectingPlatform] = useState<Platform | null>(null);
+  const [instagramFlowRequest, setInstagramFlowRequest] = useState<InstagramFlowRequest | null>(null);
 
   const { toast } = useToast();
   const { user } = useAuth();
@@ -110,16 +118,13 @@ export function useProfileOAuth() {
       if (platform === "tiktok") {
         await handleTikTokConnect(profileId, options);
       } else if (platform === "instagram") {
-        // Instagram needs the user to choose between Business Login and the
-        // Facebook-Business flow, and that picker lives on the Profiles page. Returning
-        // silently here made the dashboard banner's Reconnect button look broken.
+        // Instagram branches before any redirect: ask which login method to use and
+        // stop here. selectInstagramFlow resumes once the user picks. The spinner is
+        // cleared because we are waiting on a person, not on a provider — leaving it
+        // set would disable the dialog's own buttons.
         setConnectingPlatform(null);
         setConnectingProfile(null);
-        toast({
-          title: "Reconnect Instagram from Profiles",
-          description:
-            "Instagram needs you to pick a login method. Open the Profiles page and use Reconnect there.",
-        });
+        setInstagramFlowRequest({ profileId });
         return;
       } else if (platform === "facebook") {
         await handleFacebookConnect(platform, profileId);
@@ -146,9 +151,22 @@ export function useProfileOAuth() {
     }
   }
 
+  /** Resume a pending Instagram connection with the login method the user chose. */
+  const selectInstagramFlow = async (flow: "direct" | "facebook_business") => {
+    if (!instagramFlowRequest) return;
+    const { profileId } = instagramFlowRequest;
+    setInstagramFlowRequest(null);
+    await handleInstagramConnect(profileId, flow);
+  };
+
+  const clearInstagramFlowRequest = () => setInstagramFlowRequest(null);
+
   return {
     connectingProfile,
     connectingPlatform,
+    instagramFlowRequest,
+    selectInstagramFlow,
+    clearInstagramFlowRequest,
     pageSelectionData,
     selectingPage,
     blueskyDialogData,
