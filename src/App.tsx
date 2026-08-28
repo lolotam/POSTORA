@@ -17,6 +17,7 @@ import { ThemeApplier } from "@/components/ThemeApplier";
 import { initErrorTracking } from "@/services/errorTracking";
 import { AnimatedRoutes } from "@/components/AnimatedRoutes";
 import { useScopedActivityStore } from "@/stores/notificationHistoryStore";
+import { useAuthQueryCacheSync } from "@/hooks/useAuthQueryCacheSync";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,11 +38,18 @@ const ActivityStoreScope = () => {
   return null;
 };
 
+/** Drops cached server state whenever the authenticated identity changes. */
+const QueryCacheAuthScope = () => {
+  useAuthQueryCacheSync();
+  return null;
+};
+
 const App = () => (
   <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ActivityStoreScope />
+        <QueryCacheAuthScope />
         <PublishingProvider>
           <ProcessingJobsProvider>
           <VideoProcessingDebugProvider>

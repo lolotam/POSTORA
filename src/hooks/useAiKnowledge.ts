@@ -68,6 +68,18 @@ export function useAiKnowledge() {
     }) => callAiKnowledgeApi(action, body),
     onSuccess: refresh,
   });
+  // html_url/vault_url are durable references (supabase://...) or external
+  // delivery URLs — never browser-ready storage links. Resolve through the
+  // edge function to mint a short-TTL signed URL when the user opens one.
+  const resolveExportUrls = useMutation({
+    mutationFn: async () => {
+      const data = await callAiKnowledgeApi("resolve_export_urls", {});
+      return {
+        html_url: (data.html_url ?? null) as string | null,
+        vault_url: (data.vault_url ?? null) as string | null,
+      };
+    },
+  });
   return {
     user,
     sources: sources.data || [],
@@ -76,5 +88,6 @@ export function useAiKnowledge() {
     graphExport: graphExport.data || null,
     refetch: sources.refetch,
     invoke,
+    resolveExportUrls,
   };
 }

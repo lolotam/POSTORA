@@ -67,10 +67,12 @@ export function buildAiAgentConfigPayload(input: Record<string, unknown>): AiAge
 }
 
 export function useAiAgentConfig(platform: AiAgentPlatform = "whatsapp") {
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   const queryClient = useQueryClient();
+  // Keyed by user id so a cache written by one login is never served to
+  // another after a same-tab account switch.
   const query = useQuery({
-    queryKey: ["ai-agent-config", platform],
+    queryKey: ["ai-agent-config", user?.id, platform],
     queryFn: async () => {
       const data = await callMessagingApi("ai_get_config", { platform });
       return (data.config || null) as AiAgentConfig | null;
@@ -86,7 +88,7 @@ export function useAiAgentConfig(platform: AiAgentPlatform = "whatsapp") {
       });
       return data.config as AiAgentConfig;
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["ai-agent-config", platform] }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["ai-agent-config", user?.id, platform] }),
   });
 
   return { config: query.data, isLoading: query.isLoading, error: query.error, upsertConfig };

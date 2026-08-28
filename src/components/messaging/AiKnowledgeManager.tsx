@@ -30,13 +30,17 @@ export function AiKnowledgeManager({
   platform: AiAgentPlatform;
 }) {
   const { config, upsertConfig } = useAiAgentConfig(platform);
-  const { user, sources, isLoading, graphExport, invoke } = useAiKnowledge();
+  const { user, sources, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
   const isWhatsApp = platform === "whatsapp";
   const catalogHook = useWhatsAppCatalog();
   const waAccount = isWhatsApp ? catalogHook.waAccount : null;
   const catalog = isWhatsApp ? catalogHook.catalog : null;
   const [profile, setProfile] = useState("");
   const [uploading, setUploading] = useState(false);
+  // Set when a stored export link cannot be resolved (e.g. the object is gone
+  // or the row predates signed URLs) — the button degrades to disabled until
+  // exports are regenerated, never to a broken link.
+  const [unresolvable, setUnresolvable] = useState({ html: false, vault: false });
   const profileText = config?.business_profile_text || "";
   useEffect(() => setProfile(profileText), [profileText]);
   const run = async (
@@ -66,6 +70,35 @@ export function AiKnowledgeManager({
         error instanceof Error
           ? error.message
           : "Could not save business profile",
+      );
+    }
+  };
+  const openExport = async (kind: "html" | "vault") => {
+    // The tab is opened synchronously, inside the click's user activation, and
+    // pointed at the signed URL once it arrives. Calling window.open after the
+    // await instead would be treated as an unsolicited popup and silently
+    // blocked, so the button would appear to do nothing.
+    const tab = window.open("", "_blank", "noopener,noreferrer");
+    try {
+      const urls = await resolveExportUrls.mutateAsync();
+      const url = kind === "html" ? urls.html_url : urls.vault_url;
+      if (!url) {
+        tab?.close();
+        setUnresolvable((prev) => ({ ...prev, [kind]: true }));
+        toast.error("Export link is unavailable — regenerate the exports.");
+        return;
+      }
+      if (tab) {
+        tab.location.replace(url);
+      } else {
+        // The browser blocked the pre-opened tab; fall back to this one rather
+        // than losing the link the user just waited for.
+        window.location.assign(url);
+      }
+    } catch (error) {
+      tab?.close();
+      toast.error(
+        error instanceof Error ? error.message : "Could not open export",
       );
     }
   };
@@ -323,25 +356,42 @@ export function AiKnowledgeManager({
           <Button
             variant="outline"
             disabled={invoke.isPending}
-            onClick={() => run("export_graph", {}, "Knowledge graph exports generated")}
+            onClick={async () => {
+              await run("export_graph", {}, "Knowledge graph exports generated");
+              setUnresolvable({ html: false, vault: false });
+            }}
           >
             {invoke.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
             Generate exports
           </Button>
           {graphExport?.html_url && (
-            <Button variant="secondary" asChild>
-              <a href={graphExport.html_url} target="_blank" rel="noreferrer">
+            <Button
+              variant="secondary"
+              disabled={unresolvable.html || resolveExportUrls.isPending}
+              title={unresolvable.html ? "Regenerate exports to refresh this link" : undefined}
+              onClick={() => openExport("html")}
+            >
+              {resolveExportUrls.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
                 <ExternalLink className="mr-2 h-4 w-4" />
-                Open graph
-              </a>
+              )}
+              Open graph
             </Button>
           )}
           {graphExport?.vault_url && (
-            <Button variant="secondary" asChild>
-              <a href={graphExport.vault_url} target="_blank" rel="noreferrer">
+            <Button
+              variant="secondary"
+              disabled={unresolvable.vault || resolveExportUrls.isPending}
+              title={unresolvable.vault ? "Regenerate exports to refresh this link" : undefined}
+              onClick={() => openExport("vault")}
+            >
+              {resolveExportUrls.isPending ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
                 <FileArchive className="mr-2 h-4 w-4" />
-                Download vault
-              </a>
+              )}
+              Download vault
             </Button>
           )}
         </CardContent>
