@@ -13,6 +13,9 @@
 ## Global Constraints
 
 - **Use `fireEvent`, never `userEvent`.** `userEvent.setup()` throws `Cannot redefine property: clipboard` in this project's jsdom. Confirmed again 2026-08-28.
+- **Opening the Radix `Select` needs `keyDown`, not `click`.** `fireEvent.click` on the trigger does not open a Radix select in jsdom. Copy the pattern that already works at `src/components/messaging/__tests__/AiAgentManager.test.tsx:150-152`: `fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" })`, then `fireEvent.click(await screen.findByRole("option", { name: "…" }))`.
+- **`AI_AGENT_TABS` is `readonly string[]`**, not an array of objects (`AiAgentManager.tsx:42`). Any mock must export string ids or the page will not render.
+- **Assertions must distinguish the two outcomes.** A mocked child renders the same markup before and after a remount, so "the button still exists" proves nothing about whether the transition was blocked. Assert on state that actually differs — the URL's `platform` param, or a value only the target account has.
 - **`UnifiedAgentSetupPage.tsx:316` renders `<AiAgentManager key={`${platform}-${dmsActive…}-${commentsActive…}`} …>`.** The `key` forces a remount on platform change and on either toggle, destroying the child's state. A dirty flag held only inside `AiAgentManager` cannot protect those three transitions — this is the constraint the whole design turns on.
 - **In-app route navigation is out of scope.** `App.tsx:62` uses declarative `<BrowserRouter>`; `useBlocker` requires `createBrowserRouter`. Do not add a router migration to this task.
 - **Do not spec copy for the `beforeunload` prompt.** Browsers show their own generic text.
@@ -314,22 +317,24 @@ describe("AiAgentManager unsaved-changes guard", () => {
     fireEvent.change(await screen.findByLabelText(/persona and instructions/i), {
       target: { value: "a brand new persona" },
     });
-    fireEvent.click(screen.getByRole("combobox"));
-    fireEvent.click(await screen.findByText(/second account/i));
+    fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Brand B" }));
 
     expect(await screen.findByText(/you have unsaved changes/i)).toBeInTheDocument();
   });
 
-  it("Keep editing keeps the text and the original account", async () => {
+  it("Keep editing keeps the text and does NOT switch account", async () => {
     render(<AiAgentManager platform="instagram" />);
     const field = await screen.findByLabelText(/persona and instructions/i);
     fireEvent.change(field, { target: { value: "a brand new persona" } });
-    fireEvent.click(screen.getByRole("combobox"));
-    fireEvent.click(await screen.findByText(/second account/i));
+    fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Brand B" }));
     fireEvent.click(await screen.findByRole("button", { name: /keep editing/i }));
 
     expect((field as HTMLTextAreaElement).value).toBe("a brand new persona");
-    expect(screen.getByRole("combobox")).toHaveTextContent(/first account/i);
+    // Assert the account the config hook was actually scoped to, not the trigger's label:
+    // `lastAccountScopedWith()` is the helper the sibling suite already uses for this.
+    expect(lastAccountScopedWith()).toBe("a1");
   });
 
   it("Discard changes switches account and loads its values", async () => {
@@ -337,19 +342,23 @@ describe("AiAgentManager unsaved-changes guard", () => {
     fireEvent.change(await screen.findByLabelText(/persona and instructions/i), {
       target: { value: "a brand new persona" },
     });
-    fireEvent.click(screen.getByRole("combobox"));
-    fireEvent.click(await screen.findByText(/second account/i));
+    fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Brand B" }));
     fireEvent.click(await screen.findByRole("button", { name: /discard changes/i }));
 
-    expect(screen.getByRole("combobox")).toHaveTextContent(/second account/i);
+    expect(lastAccountScopedWith()).toBe("a2");
+    // The typed text is gone and Brand B's own persona is showing.
+    expect((await screen.findByLabelText(/persona and instructions/i) as HTMLTextAreaElement).value)
+      .not.toBe("a brand new persona");
   });
 
   it("switching account with no edits does not prompt", async () => {
     render(<AiAgentManager platform="instagram" />);
-    fireEvent.click(await screen.findByRole("combobox"));
-    fireEvent.click(await screen.findByText(/second account/i));
+    fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" });
+    fireEvent.click(await screen.findByRole("option", { name: "Brand B" }));
 
     expect(screen.queryByText(/you have unsaved changes/i)).not.toBeInTheDocument();
+    expect(lastAccountScopedWith()).toBe("a2");
   });
 });
 ```
@@ -425,12 +434,40 @@ Extract the built object into a local first so form and baseline cannot drift:
     setBaseline(loaded);
 ```
 
-After a successful save, set the baseline to the saved value so the form reads clean again.
+After a successful save, re-baseline to the **exact object that was submitted**, inside the existing
+`onSuccess` callback at `:135-138` — not to a fresh read, which has not arrived yet:
+
+```ts
+    upsertConfig.mutate(form, {
+      onSuccess: () => {
+        setBaseline(form);          // the form is clean again the moment the write lands
+        toast.success("AI agent settings saved");
+      },
+      onError: (error) => toast.error(error.message || "Could not save AI agent settings"),
+    });
+```
+
+Two details that make this safe. `handleSave` returns early on an invalid phone number (`:132-134`),
+so a rejected submit never re-baselines. And `buildAiAgentConfigPayload` normalizes
+`admin_phone_numbers` server-side, so the persisted value can differ slightly from `form` — that is
+fine, because the subsequent config refetch runs the effect again and re-baselines both `form` and
+`baseline` to the normalized truth.
+
+**On `JSON.stringify` and key order** — verified rather than assumed: `update` is
+`setForm((current) => ({ ...current, [key]: value }))` (`:110-112`), and spread preserves insertion
+order for keys that already exist, so an edit cannot reorder the object relative to its baseline.
+Editing a field absent from `defaultConfig` (`model`, `temperature`, …) appends a key and reads
+dirty — which is correct, because it *is* a change.
 
 - [ ] **Step 5: Guard the selector and report upward**
 
 ```ts
-const isDirty = useDirtyForm(form, baseline);
+const formDirty = useDirtyForm(form, baseline);
+// A typed-but-not-yet-added phone number is unsaved work too. `phoneInput` is separate
+// state (`:69`) that `addPhone` moves into `form.admin_phone_numbers` — so a user who
+// types a number and switches account without pressing Add would silently lose it,
+// because `form` never changed.
+const isDirty = formDirty || phoneInput.trim().length > 0;
 const { guard, pending, confirmDiscard, cancel } = useUnsavedChangesGuard(isDirty);
 
 useEffect(() => { onDirtyChange?.(isDirty); }, [isDirty, onDirtyChange]);
@@ -442,8 +479,22 @@ Change the selector at `:169` from a bare setter to a guarded one:
 <Select value={accountId ?? ""} onValueChange={(next) => guard(() => setSelectedAccountId(next))}>
 ```
 
-Render `<UnsavedChangesDialog open={pending} onCancel={cancel} onDiscard={confirmDiscard} />` inside
-the component.
+Render the dialog inside the component, resetting the baseline as part of the discard:
+
+```tsx
+<UnsavedChangesDialog
+  open={pending}
+  onCancel={cancel}
+  onDiscard={() => { setBaseline(null); setPhoneInput(""); confirmDiscard(); }}
+/>
+```
+
+⚠️ `setBaseline(null)` is required, not tidiness. Switching account does **not** remount this
+component — only the query key changes — so until the new account's config settles, `form` still
+holds the discarded text while `baseline` still holds the old account's values. The component would
+keep reporting itself dirty and prompt a second time on the very next transition. Setting the
+baseline to `null` makes `useDirtyForm` read clean for exactly that interval, which is what the
+"not loaded yet" rule already means. Clearing `phoneInput` discards the other half of the edit.
 
 ⚠️ `onDirtyChange` must be memoized by the **parent** (Task 4 passes a `useState` setter, which is
 stable). Do not pass an inline arrow from the parent, or the effect loops.
@@ -487,12 +538,20 @@ import { describe, it, expect, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import UnifiedAgentSetupPage from "../UnifiedAgentSetupPage";
 
+// DashboardLayout wraps this page (`:139`) and calls usePublishing, which throws
+// without its provider. Stub it to a passthrough or the test cannot render at all.
+vi.mock("@/components/layout/DashboardLayout", () => ({
+  DashboardLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}));
+
 // Stub AiAgentManager: this test is about the PAGE's guarding, not the form's internals.
 // The stub reports itself dirty as soon as its button is pressed.
+// AI_AGENT_TABS is readonly string[] in production (`AiAgentManager.tsx:42`) — export the
+// same shape or the page's tab rendering breaks.
 vi.mock("@/components/messaging/AiAgentManager", async () => {
   const { useEffect, useState } = await import("react");
   return {
-    AI_AGENT_TABS: [{ id: "setup", label: "Setup" }],
+    AI_AGENT_TABS: ["settings", "knowledge", "tools", "test", "logs"] as const,
     AiAgentManager: ({ onDirtyChange }: { onDirtyChange?: (d: boolean) => void }) => {
       const [dirty, setDirty] = useState(false);
       useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
@@ -519,8 +578,10 @@ describe("UnifiedAgentSetupPage unsaved guard", () => {
     fireEvent.click(await screen.findByRole("button", { name: /keep editing/i }));
 
     expect(screen.queryByText(/you have unsaved changes/i)).not.toBeInTheDocument();
-    // still on instagram: the dirty child was never remounted
-    expect(screen.getByRole("button", { name: /make dirty/i })).toBeInTheDocument();
+    // Assert the platform did NOT change. The mocked child renders identically before and
+    // after a remount, so "the button still exists" would pass even if the switch happened.
+    // The page keeps platform in the URL (`:87-92`), so the URL is the observable truth.
+    expect(window.location.search).toContain("platform=instagram");
   });
 
   it("prompts before a surface toggle discards edits", async () => {

@@ -4,7 +4,7 @@
 
 **Goal:** Make the three Meta token-exchange adapters — reachable in production for the first time since PR #66 — comply with `ARCHITECTURE.md` §26: explicit timeouts, structured error propagation, sanitized logging, and a real concurrency claim.
 
-**Architecture:** A new `_shared/metaErrors.ts` owns the Meta error shape and the permanent/transient classification, so both the adapters (`_shared/`) and the escalation logic (`refresh-tokens/`) can import it without a circular dependency. The three adapters change return type from `… | null` to a discriminated `MetaRefreshOutcome`, which is the task's whole risk surface — eight `switch` arms in `refresh-tokens/index.ts` branch on the old shape. The credential moves from the query string into a POST body, which removes the token-disclosure class outright rather than sanitizing around it.
+**Architecture:** A new `_shared/metaErrors.ts` owns the Meta error shape and the permanent/transient classification, so both the adapters (`_shared/`) and the escalation logic (`refresh-tokens/`) can import it without a circular dependency. The three adapters change return type from `… | null` to a discriminated `MetaRefreshOutcome`, which is the task's whole risk surface — seven adapter invocations inside `refresh-tokens/index.ts` plus one in `process-scheduled-posts/index.ts` branch on the old shape, and they must all move in a single commit. The credential moves from the query string into a POST body, which removes the token-disclosure class outright rather than sanitizing around it.
 
 **Tech Stack:** Deno edge functions (Supabase self-hosted), `deno test`, PostgREST via `@supabase/supabase-js`.
 
@@ -14,7 +14,9 @@
 
 - **NEVER log a caught fetch error object, a request URL, or a request init.** Deno embeds the full URL — token included — in network error messages; this is measured, not theoretical. Log `error.name` plus a fixed string, or sanitized `data.error` fields only.
 - **NEVER add numeric codes to `PERMANENT_AUTH_ERRORS`.** It is a substring matcher (`refresh-tokens/index.ts:100-110`). `190` would match `"Object with ID '1190345'"` and latch a healthy account red — the exact bug class PR #66 removed.
-- A timeout is **transient**, never permanent. It must never produce `needs_reauth`.
+- A timeout is **transient**, never permanent. It must never produce `needs_reauth` — **including via the `failureCount >= MAX_FAILURES_BEFORE_REAUTH` ceiling.** Three DNS blips must not retire a healthy account; that is the PR #66 outage rediscovered. Infrastructure failure adjusts retry scheduling; only a provider-confirmed dead grant operates the latch.
+- **Tasks 2 and 3 are ONE commit.** The adapters' return type and every consumer change together. Committing the contract change alone leaves a tree where `{ok:false}` is truthy to existing callers — actively worse than before.
+- **Facebook migrates to POST; Instagram and Threads stay on GET.** Verified with real tokens: IG answers `Unsupported post request`, and Threads is unproven behind a permission error. Migrating them blind would fail every refresh and, with the new classifier, latch 21+ accounts red.
 - Only `handleRefreshSuccess` may clear `needs_reauth` / `failure_count` / `last_refresh_error`. Never pre-clear before proving a refresh worked (regression fixed in PR #66).
 - Out of scope: retry logic; the ~52-day revoked-token window; non-Meta adapters.
 - Gates: `deno test supabase/functions/_shared/` (493 passing today), `deno test supabase/functions/refresh-tokens/`, `npx tsc -b --noEmit`, `bun run test`, `bun run build`.
@@ -330,11 +332,17 @@ Expected: no output for the three Meta adapters. (Non-Meta adapters are out of s
 still appear — confirm any hit is not `refreshFacebookToken`, `refreshInstagramBusinessToken`
 or `refreshThreadsToken`.)
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 7: DO NOT COMMIT YET**
+
+🔴 The adapters' new return type and **every** consumer must land in one commit. Between the two,
+existing callers treat `{ ok: false }` as truthy and would write `access_token: undefined` over live
+credentials — a tree that is actively worse than before the change. Leave this work staged and
+continue straight into Task 3; the commit at the end of Task 3 covers both.
+
+Run the adapter tests now to confirm this half is right, then move on without committing:
 
 ```bash
-git add supabase/functions/_shared/social-auth.ts supabase/functions/_shared/metaAdapters.test.ts
-git commit -m "fix(meta): POST the credential, bound the call, return a structured outcome"
+deno test --allow-env --allow-net supabase/functions/_shared/metaAdapters.test.ts
 ```
 
 ---
@@ -343,6 +351,7 @@ git commit -m "fix(meta): POST the credential, bound the call, return a structur
 
 **Files:**
 - Modify: `supabase/functions/refresh-tokens/index.ts` — `handleRefreshFailure`, `PERMANENT_AUTH_ERRORS`, and every `case` that calls a Meta adapter
+- Modify: `supabase/functions/process-scheduled-posts/index.ts:106-150` — **a second consumer outside `refresh-tokens/`**
 - Create: `supabase/functions/refresh-tokens/escalation.test.ts`
 
 **Interfaces:**
@@ -381,12 +390,25 @@ Deno.test("a transient Meta error does not escalate early", () => {
   );
 });
 
-Deno.test("repeated transient failures still escalate at the ceiling", () => {
+Deno.test("three transient failures do NOT latch a healthy account", () => {
+  // The regression guard. The ceiling exists for repeated provider REJECTIONS, not for
+  // infrastructure noise: three DNS blips must never retire a working account, because
+  // the cron then excludes it forever (`needs_reauth.is.null,needs_reauth.eq.false`).
   assertEquals(
     shouldEscalateToReauth({
       failureCount: 3, maxFailures: MAX, isPermanentMessage: false,
       canAttemptRefresh: true,
       providerError: { type: "TimeoutError", transient: true },
+    }),
+    false,
+  );
+});
+
+Deno.test("a non-Meta failure with no provider error still escalates at the ceiling", () => {
+  // Unchanged behaviour for every adapter that reports no structured error.
+  assertEquals(
+    shouldEscalateToReauth({
+      failureCount: 3, maxFailures: MAX, isPermanentMessage: false, canAttemptRefresh: true,
     }),
     true,
   );
@@ -440,6 +462,12 @@ export function shouldEscalateToReauth(input: {
   if (input.isPermanentMessage) return true;
   if (!input.canAttemptRefresh) return true;
   if (input.providerError && isPermanentMetaError(input.providerError)) return true;
+
+  // A known-transient failure never latches, at any count. An unreachable provider is
+  // not evidence that a grant is dead, and the latch is one-way: the cron filters
+  // flagged rows out, so a wrongly-latched account is never retried again.
+  if (input.providerError?.transient) return false;
+
   return input.failureCount >= input.maxFailures;
 }
 ```
@@ -520,27 +548,91 @@ Apply the same transformation to the `threads` arm in both switches, and to the
 `facebook`/`instagram`/`threads` arms inside `refreshSingleAccount` (which `return`s instead of
 pushing to `results`).
 
-- [ ] **Step 8: Prove no Meta call site still uses the old shape**
+- [ ] **Step 8: Fix the second consumer — `process-scheduled-posts` (DO NOT SKIP)**
+
+🔴 `supabase/functions/process-scheduled-posts/index.ts` also calls `refreshFacebookToken`, in the
+just-in-time refresh before publishing a scheduled post. It is the highest-consequence call site in
+the repo and it is **not** in `refresh-tokens/`.
+
+Today (`:106-150`):
+
+```ts
+let refreshResult = null;
+…
+    refreshResult = await refreshFacebookToken(account);   // :112
+…
+if (refreshResult) {                                        // :129
+  const updates: any = {
+    access_token: refreshResult.access_token,
+    token_expires_at: expiresAt.toISOString(),
+  };
+  await supabaseAdmin.from('social_accounts').update(updates).eq('id', account.id);
+}
+```
+
+After the contract change a **failed** refresh returns `{ ok: false, error }`, which is **truthy**.
+`if (refreshResult)` would pass, and the function would write `access_token: undefined` and an
+Invalid Date over a working token — destroying credentials moments before publishing. Rewrite that
+arm to the outcome shape:
+
+```ts
+                    case 'facebook':
+                    case 'instagram': {
+                      // Route by ig_auth_type, exactly as refresh-tokens does. This file
+                      // still sends every Instagram account to the Facebook exchange —
+                      // the same defect PR #66 fixed on the other path but never here, so
+                      // Business Login accounts (21 of 27) hit the wrong endpoint.
+                      const outcome = metaRefreshStrategy(account) === 'ig_refresh'
+                        ? await refreshInstagramBusinessToken(account)
+                        : await refreshFacebookToken(account);
+                      refreshResult = outcome.ok
+                        ? { access_token: outcome.access_token, expires_in: outcome.expires_in }
+                        : null;
+                      break;
+                    }
+```
+
+Import `metaRefreshStrategy` from `../refresh-tokens/refreshEligibility.ts` and
+`refreshInstagramBusinessToken` from `../_shared/social-auth.ts`. If importing across function
+directories is undesirable, move `metaRefreshStrategy` into `_shared/` first — check
+`ARCHITECTURE.md` for the rule before choosing.
+
+Adapting at the boundary keeps the surrounding `if (refreshResult)` block — and the three non-Meta
+adapters that still return the old shape — working unchanged. That is deliberately the smaller
+change: this file publishes posts, and is not where a broader refactor belongs.
+
+⚠️ It must also claim the account before refreshing (Task 4), or a scheduled publish can race a cron
+sweep on the same row. On a failed claim, skip the JIT refresh and publish with the existing token —
+which is already what this file does when a refresh fails, so no new failure path is introduced.
+
+- [ ] **Step 9: Prove no call site still uses the old shape**
 
 ```bash
-grep -n "refreshFacebookToken\|refreshInstagramBusinessToken\|refreshThreadsToken" supabase/functions/refresh-tokens/index.ts
+grep -rn "refreshFacebookToken\|refreshInstagramBusinessToken\|refreshThreadsToken" supabase/functions/ --include=*.ts | grep -v "_shared/social-auth.ts"
 ```
-Every hit must be immediately followed by `outcome.ok` handling, never `if (refreshResult)`.
+Check **every** hit across the whole `supabase/functions/` tree, not just `refresh-tokens/`. Each
+must consume `outcome.ok`, or adapt to `null` at the boundary as in Step 8.
 
-```bash
-deno check supabase/functions/refresh-tokens/index.ts
-```
-Expected: clean. A missed call site fails here, because `MetaRefreshOutcome` is not truthy-testable
-as the old type was.
+⚠️ **Do not rely on `deno check` to catch a missed site.** `deno check
+supabase/functions/process-scheduled-posts/index.ts` **already fails today** with a pre-existing
+`TS18046: 'refreshError' is of type 'unknown'` at `:125`, so a new error there would be lost in
+existing noise — and `refreshResult` is declared `let refreshResult = null`, which widens, so the
+truthiness bug may not surface as a type error at all. The grep above is the real gate.
 
-- [ ] **Step 9: Run the gates and commit**
+- [ ] **Step 10: Run the gates and commit**
 
 ```bash
 deno test --allow-env --allow-read --allow-net supabase/functions/_shared/ supabase/functions/refresh-tokens/
 npx tsc -b --noEmit
-git add supabase/functions/refresh-tokens/ supabase/functions/_shared/
-git commit -m "fix(refresh-tokens): escalate revoked Meta grants immediately instead of after three cycles"
+git add supabase/functions/refresh-tokens/ supabase/functions/_shared/ supabase/functions/process-scheduled-posts/
+git commit -m "fix(meta): return a structured refresh outcome and escalate revoked grants at once
+
+Adapters, refresh-tokens and process-scheduled-posts move together: a partial
+migration leaves {ok:false} truthy to old callers, which would write an undefined
+access_token over a working credential."
 ```
+
+This single commit contains Task 2 and Task 3 in full.
 
 ---
 
@@ -724,12 +816,26 @@ With `CRON_SECRET` from the edge container, force-refresh one account of each ki
 
 - [ ] **Step 5: Confirm no false positives were introduced**
 
+⚠️ Do **not** reuse the post-#66 gate `needs_reauth AND token_expires_at > now() = 0`. It was a valid
+invariant before this change and is invalid after it: a revoked grant keeps a future
+`token_expires_at`, and flagging exactly those rows is what the new code-190 classifier is *for*.
+That gate would roll back a correct implementation.
+
+Use the invariant that still holds — **no account is red because of a transient failure**:
+
 ```sql
-select platform, count(*) filter (where needs_reauth and token_expires_at > now()) as red_but_valid
-from social_accounts where is_active and platform in ('facebook','instagram','threads') group by 1;
+select sa.platform, sa.platform_username, h.status, h.error_message
+from social_accounts sa
+join lateral (
+  select status, error_message from token_refresh_history
+   where account_id = sa.id order by created_at desc limit 1
+) h on true
+where sa.is_active and sa.needs_reauth
+  and sa.platform in ('facebook','instagram','threads')
+  and (h.error_message ilike '%timeout%' or h.error_message ilike '%network%');
 ```
-Expected: `0` for all three, matching the post-#66 baseline. A non-zero result means this change
-re-introduced the bug PR #66 fixed — roll back from the Step 2 backup.
+Expected: **no rows.** Any row here is a healthy account latched by infrastructure noise — the exact
+regression this revision exists to prevent. Roll back from the Step 2 backup.
 
 - [ ] **Step 6: Open the PR**
 

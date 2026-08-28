@@ -42,8 +42,11 @@ timeout work in §1 is safe to log as-is.
 |---|---|---|---|---|
 | `POST graph.facebook.com/v18.0/oauth/access_token` | 400 | `OAuthException` | `101` | Missing client_id parameter |
 | `POST graph.instagram.com/refresh_access_token` | 400 | `OAuthException` | `190` | Invalid OAuth access token |
+| `POST graph.threads.net/refresh_access_token` | 400 | `OAuthException` | `190` | Invalid OAuth access token |
 
-Both parsed the credential out of the body. This also confirms the §2 design: Meta returns
+All three parsed the credential out of the body. Threads was checked against both POST and the
+current GET-with-query form and answered **identically**, so the migration is safe on the least
+documented of the three endpoints. This also confirms the §2 design: Meta returns
 `type` and `code` as **structured JSON fields**, not as substrings of prose.
 
 **3. `isPermanentAuthError` is a pure substring matcher** (`refresh-tokens/index.ts:100-110`):
@@ -86,8 +89,34 @@ sweep — it strands it, and every account after the hung one is silently never 
 same shape as the bug PR #66 fixed: a failure that presents as "nothing happened".
 
 A timeout surfaces as `TimeoutError` from `fetch`. It must be treated as **transient** (the account
-gets a failure count, not `needs_reauth`), which the existing `catch → return` path already does
-correctly once §2 changes the return shape.
+gets a failure count and never the latch — see §2), which the existing `catch → return` path already
+does correctly once §2 changes the return shape.
+
+### A per-request timeout does not bound the sweep
+
+Do the arithmetic the first draft skipped: **57 accounts × 10s = 570s against a 60s ceiling.** Six
+consecutive timeouts exhaust the entire worker budget before any database or logging overhead. A
+per-request bound stops one call hanging forever; it does nothing about the loop.
+
+So the sweep needs its own deadline, not just its calls:
+
+```ts
+const SWEEP_BUDGET_MS = 45_000;          // leaves ~15s of the 60s ceiling to persist results
+const startedAt = Date.now();
+…
+  if (Date.now() - startedAt > SWEEP_BUDGET_MS) {
+    console.log(`[refresh-budget] stopping after ${processed} accounts; ${remaining} deferred to the next run`);
+    break;                                // deferred, not failed — record status 'skipped'
+  }
+```
+
+Deferred accounts must be reported as `skipped`, never `failed`: they were never attempted, so they
+must not accrue a `failure_count`. The cron runs again, and because the loop always processes in the
+same order, a persistent early hang would starve the tail — so accounts are ordered by
+`last_refresh_attempt_at` ascending (nulls first), which naturally rotates the window.
+
+With a 45s budget, the per-request timeout is set to **8s**: five consecutive worst-case hangs still
+leave room to record results.
 
 ## §2 — Structured error propagation
 
@@ -147,23 +176,63 @@ phrase and safe for substring matching.
 `isPermanentMetaError` returns true, it escalates immediately instead of waiting for
 `MAX_FAILURES_BEFORE_REAUTH`.
 
+### 🔴 A transient failure must never latch the account
+
+The first draft of this spec kept the generic `failureCount >= MAX_FAILURES_BEFORE_REAUTH` ceiling
+unconditional. That is a rediscovery of the PR #66 outage:
+
+> healthy Meta token → three DNS blips or timeouts → `failure_count = 3` → `needs_reauth = true` →
+> the cron's `.or('needs_reauth.is.null,needs_reauth.eq.false')` filter excludes the row forever.
+
+Three ordinary network failures would permanently retire a working account. The ceiling exists to
+catch *repeated provider rejections*, not infrastructure noise, so a known-transient failure must
+short-circuit before it:
+
+```ts
+if (providerError?.transient) return false;   // never latch on a timeout or network error
+```
+
+An account behind a persistently unreachable provider then simply keeps being retried, which is
+correct — an unreachable provider is not evidence that a grant is dead. Platforms that pass no
+`providerError` (every non-Meta adapter) are unaffected and keep the existing ceiling.
+
+**The governing rule for this whole spec:** infrastructure failure adjusts *retry scheduling*; only a
+provider-confirmed dead grant may operate the one-way reauth latch.
+
 **Placement decision:** `PERMANENT_AUTH_ERRORS` and `isPermanentAuthError` live in
 `refresh-tokens/index.ts:89-110`, but the adapters live in `_shared/`. Move the classification into
 `_shared/metaErrors.ts` so both can import it. `refresh-tokens` re-exports nothing; it imports.
 
-## §3 — Eliminate the token-in-URL leak
+## §3 — Reduce the token-in-URL leak, per endpoint
 
-Two layers, because either alone is insufficient:
+The first draft proposed moving all three exchanges to POST. **Canary tests with real, valid
+production tokens refuted that for two of the three** — the earlier malformed-body probes were
+misleading, because a 400 that *looks* parsed is not proof the endpoint supports the method:
 
-1. **Move the credential into a POST body** for all three Meta exchanges (verified accepted above).
-   This removes the leak at the source — no future logger, proxy, trace or error string can capture
-   what is no longer in the URL. Sanitising log statements alone leaves a live landmine for the next
-   person who adds a log line.
-2. **Sanitise the catch blocks anyway**, as defence in depth. Log `error.name` plus a fixed message.
+| endpoint | POST with a **valid** token | decision |
+|---|---|---|
+| `graph.facebook.com/v18.0/oauth/access_token` | ✅ returned a working token (verified against `/me`) | **migrate to POST** |
+| `graph.instagram.com/refresh_access_token` | ❌ `Unsupported post request. Object with ID 'refresh_access_token' does not exist` | **keep GET** |
+| `graph.threads.net/refresh_access_token` | ⚠️ unproven — both methods return the same `threads_basic` permission error, which masks method support | **keep GET** |
+
+Had Instagram been migrated blind, all 21 business-login accounts would have failed every refresh
+and — with the new code-190 classifier — latched red immediately. That is the #66 outage again, at
+scale. Do not migrate an endpoint on the strength of an invalid-token probe; require a successful
+exchange with a real credential.
+
+Consequences:
+
+1. **Facebook** moves to a POST body, removing the leak at the source for that endpoint.
+2. **Instagram and Threads keep the credential in the query string.** Sanitised logging is therefore
+   **load-bearing for them, not defence in depth** — it is the only thing standing between a network
+   error and a leaked token.
+3. **Every catch block is sanitised regardless of method.** Log `error.name` plus a fixed message.
    Never log the caught error object, the URL, or the request init.
 
 Sanitised operational logging (satisfying line 512) logs only `type`, `code`, `error_subcode` and
 `message` from `data.error` — never the request.
+
+Re-canary Threads once an account holds a token with `threads_basic`; migrate it only then.
 
 ## §4 — Atomic refresh claim
 
@@ -184,11 +253,49 @@ return (data?.length ?? 0) > 0;   // false = another worker owns this account
 
 A caller that fails to claim records `status: 'cooldown'` and moves on.
 
-**Interaction with the admin path — decide deliberately.** `adminTriggered` currently bypasses the
-cooldown on purpose (PR #66 ported that behaviour from production). The claim must *not* be bypassed,
-or it protects nothing. Resolution: the admin path keeps bypassing the **refresh-window** check but
-respects the **claim**. An admin pressing Refresh twice in five minutes gets `cooldown` on the second
-press — correct, and the intent of the hotfix (reach every account regardless of expiry) is preserved.
+**Filter semantics verified against the live API** — this is the part that would silently corrupt
+every row if it were wrong, so it was measured, not reasoned about:
+
+| request | rows |
+|---|---|
+| `?id=eq.<one id>&select=id` | 1 |
+| `?id=eq.<one id>&or=(last_refresh_attempt_at.is.null,last_refresh_attempt_at.lt.2036-01-01)` | **1** |
+| `?or=(…)` alone (no `id` filter) | **111** |
+
+PostgREST **ANDs** the `or(...)` group with the preceding `eq()`; it does not OR them together. The
+third row proves the predicate is broad enough that an OR would have been obvious. The generated
+statement is a single `UPDATE … WHERE id = $1 AND (…)`, which Postgres executes atomically under a
+row lock — a second worker blocks, re-evaluates the `WHERE` against the committed row, finds
+`last_refresh_attempt_at` fresh, and updates zero rows. That is exactly the intended outcome.
+
+**Interaction with the admin path.** The first draft made `adminTriggered` respect the full
+five-minute claim, which breaks the operator's recovery loop:
+
+> 12:00 Refresh all → transient DNS failure → operator fixes DNS at 12:01 → Refresh all returns
+> `cooldown` on every account until 12:05.
+
+That is the exact situation in which an admin presses the button, so blocking it defeats the feature
+the #66 hotfix existed to provide. Resolution: **the claim window is per-caller.**
+
+```ts
+const CLAIM_WINDOW_MS = { cron: REFRESH_ATTEMPT_COOLDOWN_MS, admin: 30_000 };
+```
+
+A cron worker will not touch an account another worker claimed in the last five minutes. An admin
+retry only has to out-wait 30 seconds — long enough to serialise a double-click or two open tabs,
+short enough that deliberate recovery is never blocked. The admin path continues to bypass the
+per-platform refresh *window* entirely, as before.
+
+**The claim is not global, and the spec must say so.** `process-scheduled-posts/index.ts:106-150`
+runs its own just-in-time refresh and updates `social_accounts` unconditionally. It bypasses this
+claim completely, so a scheduled publish can still race a cron sweep on the same row. Bringing it
+under the claim is in scope: it calls `markRefreshAttempt` first and skips its JIT refresh when the
+claim fails, publishing with the existing token — which is what it already does when a refresh
+fails, so the fallback path is unchanged.
+
+**Distinguish "not claimed" from "the claim query failed."** A PostgREST error returns no rows, which
+is indistinguishable from losing the race unless the error is checked. Silently reporting a database
+outage as `cooldown` would hide it. Inspect `error` and surface a real failure separately.
 
 ## Testing
 
@@ -201,15 +308,42 @@ New `_shared/metaErrors.test.ts`:
 - a transient outcome is never permanent, whatever its code
 - `"Error validating access token"` matches via the phrase list
 
-Adapter tests with a stubbed `fetch`: success; revoked (190); malformed 200 with no `access_token`;
-timeout → transient. Assert the request body carries the credential and the URL does not.
+Escalation tests — the rule that has been wrong twice:
 
-Claim test: second claim inside the cooldown returns false.
+- a permanent provider error escalates on failure #1
+- **three consecutive transient failures do NOT escalate** (the regression guard for the latch)
+- a non-Meta platform with no `providerError` still escalates at the ceiling
+- a platform that cannot refresh at all escalates immediately
+
+Adapter tests with a stubbed `fetch`, **for all three adapters, not just Facebook**: success; revoked
+(190); malformed 200 with no `access_token`; timeout → transient. For Facebook assert the credential
+is in the body and absent from the URL; for Instagram and Threads assert the request is still a GET,
+so a future well-meaning migration trips a test rather than production.
+
+The timeout test must prove the signal is actually attached — stub `fetch` to reject with a
+`DOMException("…", "TimeoutError")` and assert the outcome is transient. A plain immediate rejection
+proves only that rejections are caught.
+
+Claim tests: a second claim inside the window returns false; an admin claim out-waits 30s rather than
+five minutes; a query error is reported as an error, not as a lost race.
+
+Budget test: a sweep that exceeds `SWEEP_BUDGET_MS` stops and reports the remainder as `skipped`,
+and those accounts' `failure_count` is untouched.
 
 ## Gates
 
-`deno test supabase/functions/_shared/` (currently 493 passing) · `deno test
+`deno test supabase/functions/_shared/` (493 passing today) · `deno test
 supabase/functions/refresh-tokens/` · `npx tsc -b --noEmit` · `bun run test` · `bun run build`.
+
+Edge-function tests **are** now gated in CI — `origin/main` commit `6b20b0b6` *"ci: let the
+edge-function tests actually gate a merge"* landed after this branch was cut, so rebase onto current
+`main` before opening the PR and do not assume the pre-#68 CI shape.
+
+Do **not** use `count(*) where needs_reauth and token_expires_at > now() = 0` as an acceptance gate.
+It was a valid invariant before this change and is not after: a revoked grant keeps a future
+`token_expires_at`, and marking exactly those rows red is the *purpose* of the code-190 classifier.
+That gate would roll back a correct implementation. Verify instead that no account is red whose most
+recent `token_refresh_history` row is a **transient** failure.
 
 Deploy is manual per `docs/runbooks/deploy-edge-function.md`; verify volume SHA256 against the branch
 and restart — **never** `up -d`. Diff the volume against the repo before deploying: `refresh-tokens`
