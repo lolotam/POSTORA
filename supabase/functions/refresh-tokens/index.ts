@@ -602,13 +602,64 @@ async function refreshSingleAccount(
   }
 }
 
+/**
+ * Authorize a refresh-tokens request.
+ *
+ * Two accepted callers:
+ *  - the cron job, via CRON_SECRET (or, when CRON_SECRET is unset, the service-role key as a
+ *    bearer token — this stack has shipped without CRON_SECRET before);
+ *  - a signed-in admin, via their Supabase JWT, for the admin "Refresh tokens" button.
+ */
+async function authorizeRefreshRequest(
+  req: Request,
+): Promise<{ ok: true; mode: 'cron' | 'admin' } | { ok: false; response: Response }> {
+  if (Deno.env.get('CRON_SECRET')) {
+    const cron = verifyCronAuth(req);
+    if (cron.ok) return { ok: true, mode: 'cron' };
+  } else {
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+    const header = req.headers.get('authorization') || req.headers.get('Authorization') || '';
+    const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+    if (serviceKey && bearer && bearer === serviceKey) return { ok: true, mode: 'cron' };
+  }
+
+  const authHeader = req.headers.get('Authorization') || req.headers.get('authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return { ok: false, response: errorResponse('Unauthorized', 401) };
+  }
+
+  try {
+    const admin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+    );
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const { data: { user }, error } = await admin.auth.getUser(token);
+    if (error || !user) return { ok: false, response: errorResponse('Unauthorized', 401) };
+
+    const { data: roleData } = await admin
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .eq('role', 'admin')
+      .maybeSingle();
+    if (!roleData) return { ok: false, response: errorResponse('Admin access required', 403) };
+
+    console.log(`refresh-tokens authorized via admin JWT: ${user.id}`);
+    return { ok: true, mode: 'admin' };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, response: errorResponse('Unauthorized', 401) };
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return handleCorsOptions();
   }
 
-  const __cronAuth = verifyCronAuth(req);
-  if (!__cronAuth.ok) return __cronAuth.response;
+  const auth = await authorizeRefreshRequest(req);
+  if (!auth.ok) return auth.response;
 
   try {
     const supabaseAdmin = createClient(
@@ -622,17 +673,23 @@ Deno.serve(async (req) => {
     let accountId: string | null = null;
     let accountIds: string[] = [];
     let force = false;
+    let manual = false;
     let platforms: string[] = [];
-    
+
     try {
       const body = await req.json();
       accountId = body.accountId || null;
       accountIds = body.accountIds || [];
       force = body.force === true;
+      manual = body.manual === true;
       platforms = body.platforms || [];
     } catch {
       // No body or invalid JSON - proceed with default behavior
     }
+
+    // An admin pressing "refresh" is not a scheduled sweep: it should reach every account,
+    // ignoring both the per-platform refresh window and the concurrency cooldown.
+    const adminTriggered = force || manual;
 
     // Single account force refresh mode
     if (accountId && force) {
@@ -776,14 +833,14 @@ Deno.serve(async (req) => {
 
     // Filter accounts that need refresh based on platform-specific windows
     // Skip cron-excluded platforms (like YouTube) in automatic cron cycles
-    const isForceOrManual = force || platforms.length > 0;
     const accountsNeedingRefresh = allAccounts.filter((account: SocialAccountWithDetails) => {
-      // Skip YouTube (and other cron-excluded platforms) in automatic cron cycles
-      // They only refresh via force/manual trigger or when explicitly requested by platform filter
-      if (!isForceOrManual && isCronExcludedPlatform(account.platform)) {
+      // Skip YouTube (and other cron-excluded platforms) in automatic cron cycles.
+      // They only refresh via force/manual trigger or when explicitly requested by platform filter.
+      if (!adminTriggered && platforms.length === 0 && isCronExcludedPlatform(account.platform)) {
         console.log(`[cron-skip] Skipping ${account.platform} account ${account.id} — cron-excluded (JIT refresh only)`);
         return false;
       }
+      if (adminTriggered) return true;
       return tokenNeedsRefresh(account.platform, account.token_expires_at);
     });
 
@@ -820,7 +877,7 @@ Deno.serve(async (req) => {
       });
 
       // Check cooldown to prevent concurrent refresh attempts
-      if (isWithinRefreshCooldown(account.last_refresh_attempt_at)) {
+      if (!adminTriggered && isWithinRefreshCooldown(account.last_refresh_attempt_at)) {
         console.log(`[refresh-cooldown] Account ${account.id} (${account.platform}): Recently attempted, skipping (cooldown: ${REFRESH_ATTEMPT_COOLDOWN_MS / 1000}s)`);
         results.push({ 
           id: account.id, 
@@ -1137,7 +1194,8 @@ Deno.serve(async (req) => {
     }
 
     // Determine trigger type and cron category for logging
-    const triggerType = platforms.length > 0 ? 'cron' : 'manual';
+    const triggerType: 'cron' | 'manual' | 'force' =
+      force ? 'force' : (manual || auth.mode === 'admin') ? 'manual' : 'cron';
     let cronCategory: string | undefined;
     if (platforms.length > 0) {
       // Determine category based on platforms
