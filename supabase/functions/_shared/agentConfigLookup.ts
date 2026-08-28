@@ -8,6 +8,9 @@
 
 export interface AgentConfigScope {
   userId: string;
+  /** Kept on the scope because both call sites already carry it and validate
+   *  the account against it before calling; the lookup itself no longer needs
+   *  it now that the platform fallback is gone. */
   platform: string;
   /** The connected account, or null for a caller that names none (the sandbox,
    *  and the settings form until it learns to pass one). */
@@ -15,19 +18,21 @@ export interface AgentConfigScope {
 }
 
 /**
- * The account's own config, or failing that the owner's config for the platform
- * whatever account it is bound to.
+ * The account's own config, or null.
  *
- * The second lookup is not a leak: `ai_agent_configs_user_id_platform_key` still
- * allows exactly one config per (owner, platform), so "some other account's
- * config" and "this owner's only config for this platform" are the same row.
- * Refusing it does not protect a brand voice, it silences the agent -- which is
- * what a WhatsApp QR reconnect did, since relinking inserts a NEW
- * social_accounts row and leaves the config pinned to the dead one.
+ * There is no platform fallback any more. It existed only while
+ * ai_agent_configs_user_id_platform_key held one config per (owner, platform),
+ * where "some other account's config" and "this owner's only config for this
+ * platform" were the same row. 20260828200000 dropped that constraint and gave
+ * every active account a row of its own, so the fallback would now be a
+ * genuine cross-account read: page B answering in page A's brand voice, and --
+ * once an owner has two configs on a platform -- a multiple-rows error on
+ * every lookup.
  *
- * The day that constraint is dropped, a platform can hold several configs and
- * this fallback becomes a genuine cross-account read. It must be deleted with
- * the contract migration, not carried past it.
+ * An account with no config of its own is therefore unconfigured, and the
+ * caller says so out loud: ai-agent-reply logs agent_not_configured rather
+ * than guessing, and the settings form renders an empty state rather than
+ * another account's persona.
  */
 export async function loadAgentConfigForAccount(
   admin: {
@@ -35,26 +40,16 @@ export async function loadAgentConfigForAccount(
   },
   scope: AgentConfigScope,
 ): Promise<Record<string, unknown> | null> {
-  if (scope.accountId) {
-    const { data: owned, error: ownedError } = await admin
-      .from("ai_agent_configs")
-      .select("*")
-      .eq("user_id", scope.userId)
-      .eq("social_account_id", scope.accountId)
-      .maybeSingle();
-    // Never swallowed. A read that FAILED and a read that found nothing are
-    // opposite facts, and collapsing them is how a statement timeout became a
-    // blank settings form whose Save then wrote defaults over a live persona.
-    // The caller must be able to tell "no config yet" from "I could not look".
-    if (ownedError) throw ownedError;
-    if (owned) return owned as Record<string, unknown>;
-  }
-  const { data: forPlatform, error: platformError } = await admin
+  if (!scope.accountId) return null;
+  const { data, error } = await admin
     .from("ai_agent_configs")
     .select("*")
     .eq("user_id", scope.userId)
-    .eq("platform", scope.platform)
+    .eq("social_account_id", scope.accountId)
     .maybeSingle();
-  if (platformError) throw platformError;
-  return (forPlatform as Record<string, unknown>) ?? null;
+  // Never swallowed. A read that FAILED and a read that found nothing are
+  // opposite facts, and collapsing them is how a statement timeout became a
+  // blank settings form whose Save then wrote defaults over a live persona.
+  if (error) throw error;
+  return (data as Record<string, unknown>) ?? null;
 }
