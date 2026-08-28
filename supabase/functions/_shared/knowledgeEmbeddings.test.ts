@@ -14,6 +14,7 @@ import {
   resolveDualEmbeddingConfig,
   resolveDualEmbeddingConfigFromDb,
   resolveEmbeddingConfig,
+  accountRetrievalRpcName,
   retrievalRpcName,
   retrieveKnowledgeChunks,
   UnstorableEmbeddingWidthError,
@@ -142,9 +143,7 @@ Deno.test("retrieval empty results do not trigger a fallback embed", async () =>
   const providersUsed: string[] = [];
   const chunks = await retrieveKnowledgeChunks(
     okRpc([]),
-    "user-1",
-    "query",
-    6,
+    { userId: "user-1", query: "query", matchCount: 6 },
     dual,
     (_texts: string[], config: EmbeddingConfig) => {
       providersUsed.push(config.provider);
@@ -166,9 +165,7 @@ Deno.test("retrieval fails over to the fallback provider when the primary embed 
       rpcNames.push(name);
       return Promise.resolve({ data: [{ id: "x", content: "hit", similarity: 0.9 }], error: null });
     },
-    "user-1",
-    "query",
-    6,
+    { userId: "user-1", query: "query", matchCount: 6 },
     dual,
     (_texts: string[], config: EmbeddingConfig) => {
       if (config.provider === "ollama") throw new Error("ollama down");
@@ -450,5 +447,59 @@ Deno.test("the DB wrapper refuses a selection that changes a recorded owner", as
       ]), env({})),
     EmbeddingColumnOwnershipError,
     "requires re-embedding",
+  );
+});
+
+
+// Scoping the retrieval is the whole point of PR2: a login with several brands
+// on one platform must not have one brand's agent answer from another's
+// documents. The account only reaches the database through the RPC name and its
+// p_social_account_id argument, so those are what these assert.
+Deno.test("an account-scoped retrieval calls the account matcher with the account id", async () => {
+  const dual = resolveDualEmbeddingConfig(env({ EMBEDDING_PROVIDER: "ollama" }));
+  const calls: Array<{ name: string; params: Record<string, unknown> }> = [];
+  await retrieveKnowledgeChunks(
+    (name: string, params: Record<string, unknown>) => {
+      calls.push({ name, params });
+      return Promise.resolve({ data: [], error: null });
+    },
+    { userId: "user-1", socialAccountId: "account-9", query: "price list", matchCount: 4 },
+    dual,
+    () => Promise.resolve([[0.1]]),
+  );
+
+  assertEquals(calls[0].name, "match_ai_knowledge_chunks_bge_m3_for_account");
+  assertEquals(calls[0].params.p_social_account_id, "account-9");
+  assertEquals(calls[0].params.p_user_id, "user-1");
+});
+
+// The sandbox and any caller with no account context still work, and must not
+// send a null account id to the scoped matcher -- that would match nothing and
+// silently answer every question with no knowledge at all.
+Deno.test("a retrieval with no account falls back to the user-wide matcher", async () => {
+  const dual = resolveDualEmbeddingConfig(env({ EMBEDDING_PROVIDER: "ollama" }));
+  const calls: Array<{ name: string; params: Record<string, unknown> }> = [];
+  await retrieveKnowledgeChunks(
+    (name: string, params: Record<string, unknown>) => {
+      calls.push({ name, params });
+      return Promise.resolve({ data: [], error: null });
+    },
+    { userId: "user-1", socialAccountId: null, query: "price list", matchCount: 4 },
+    dual,
+    () => Promise.resolve([[0.1]]),
+  );
+
+  assertEquals(calls[0].name, "match_ai_knowledge_chunks_bge_m3");
+  assertEquals("p_social_account_id" in calls[0].params, false);
+});
+
+Deno.test("accountRetrievalRpcName pairs with each vector column", () => {
+  assertEquals(
+    accountRetrievalRpcName(resolveDualEmbeddingConfig(env({ EMBEDDING_PROVIDER: "ollama" })).primary),
+    "match_ai_knowledge_chunks_bge_m3_for_account",
+  );
+  assertEquals(
+    accountRetrievalRpcName(resolveDualEmbeddingConfig(env({ EMBEDDING_PROVIDER: "gemini" })).primary),
+    "match_ai_knowledge_chunks_for_account",
   );
 });

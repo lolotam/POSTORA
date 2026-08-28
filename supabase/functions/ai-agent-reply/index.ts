@@ -263,6 +263,65 @@ async function buildWhatsAppTextSender(admin: any, account: any, fallbackPhoneNu
 // two-step publish lives (create a container with reply_to_id, then publish it), so routing
 // Threads through here is what gives the Threads agent a delivery path at all -- Threads
 // exposes no DM API for the Send-API branch below to use.
+// The authenticated test sandbox has no connected account behind it and sends
+// this placeholder. Treated as "no account scope": config and knowledge fall
+// back to the user-wide rows so the sandbox keeps working, rather than
+// resolving a UUID that does not exist.
+const SANDBOX_ACCOUNT_ID = "test";
+
+/**
+ * The connected account this reply belongs to, or null for the sandbox.
+ *
+ * ai-agent-reply is invoked with the service role, which bypasses RLS, so the
+ * account id on the request cannot be trusted on its own: it is resolved by id
+ * AND owner, and a mismatch resolves to null rather than to someone else's
+ * account.
+ */
+async function resolveAgentAccountId(admin: any, request: ReplyRequest): Promise<string | null> {
+  if (!request.social_account_id || request.social_account_id === SANDBOX_ACCOUNT_ID) return null;
+  const { data: account } = await admin
+    .from("social_accounts")
+    .select("id")
+    .eq("id", request.social_account_id)
+    .eq("user_id", request.user_id)
+    .maybeSingle();
+  return account?.id ?? null;
+}
+
+/**
+ * The agent configuration for one connected account.
+ *
+ * A config carries persona, business profile and instructions -- brand voice.
+ * An account must never silently inherit another brand's voice, so this never
+ * falls back to a config already claimed by a different account: an
+ * unconfigured account reads as `agent_not_configured` and stays quiet.
+ *
+ * The second lookup covers the expansion window only. Configs written before
+ * accounts existed have social_account_id NULL, and such a row belongs to
+ * nobody in particular -- adopting it for the platform's account is what the
+ * backfill does, just later. It becomes dead code once the column is NOT NULL
+ * and should be removed with the contract migration.
+ */
+async function loadAgentConfig(admin: any, request: ReplyRequest, accountId: string | null) {
+  if (accountId) {
+    const { data: scoped } = await admin
+      .from("ai_agent_configs")
+      .select("*")
+      .eq("user_id", request.user_id)
+      .eq("social_account_id", accountId)
+      .maybeSingle();
+    if (scoped) return scoped;
+  }
+  const { data: unassigned } = await admin
+    .from("ai_agent_configs")
+    .select("*")
+    .eq("user_id", request.user_id)
+    .eq("platform", request.platform)
+    .is("social_account_id", null)
+    .maybeSingle();
+  return unassigned ?? null;
+}
+
 async function buildCommentReplySender(admin: any, request: ReplyRequest): Promise<TextSender> {
   const { data: account, error } = await admin
     .from("social_accounts")
@@ -492,12 +551,8 @@ Deno.serve(async (req) => {
   let sideEffectsHappened = false;
 
   try {
-    const { data: config } = await admin
-      .from("ai_agent_configs")
-      .select("*")
-      .eq("user_id", request.user_id)
-      .eq("platform", request.platform)
-      .maybeSingle();
+    const knowledgeAccountId = await resolveAgentAccountId(admin, request);
+    const config = await loadAgentConfig(admin, request, knowledgeAccountId);
     // Both are terminal for an outbox row: recovery re-driving it would reach the same
     // answer three times over and then mark it failed for no reason.
     if (!config) {
@@ -671,9 +726,12 @@ Deno.serve(async (req) => {
     try {
       const matchedChunks = await retrieveKnowledgeChunks(
         async (name, params) => await admin.rpc(name, params),
-        request.user_id,
-        request.inbound_text,
-        6,
+        {
+          userId: request.user_id,
+          socialAccountId: knowledgeAccountId,
+          query: request.inbound_text,
+          matchCount: 6,
+        },
         embeddingConfig,
       );
       relevantChunks = matchedChunks.filter(
@@ -688,11 +746,23 @@ Deno.serve(async (req) => {
     let relatedFacts = "";
     if (retrievedChunkIds.length) {
       try {
-        const { data, error } = await admin.rpc("match_ai_knowledge_graph_relations", {
-          p_user_id: request.user_id,
-          p_source_chunk_ids: retrievedChunkIds,
-          match_count: 12,
-        });
+        // Graph expansion is the third retrieval path and the easiest to miss.
+        // Entities are shared across a user's sources by design, so filtering by
+        // entity would let a linked source's entity pull in relations extracted
+        // from an unlinked one. The account-scoped function filters by relation
+        // provenance instead.
+        const { data, error } = knowledgeAccountId
+          ? await admin.rpc("match_ai_knowledge_graph_relations_for_account", {
+            p_user_id: request.user_id,
+            p_social_account_id: knowledgeAccountId,
+            p_source_chunk_ids: retrievedChunkIds,
+            match_count: 12,
+          })
+          : await admin.rpc("match_ai_knowledge_graph_relations", {
+            p_user_id: request.user_id,
+            p_source_chunk_ids: retrievedChunkIds,
+            match_count: 12,
+          });
         if (error) throw error;
         relatedFacts = formatRelatedFacts((data || []) as GraphRelationFact[]);
       } catch (error) {
@@ -750,12 +820,17 @@ Deno.serve(async (req) => {
       customerName: cachedConversation?.participant_name || request.recipient_phone,
       adminPhoneNumbers: config.admin_phone_numbers || [],
       dryRun,
+      // Same scope as the initial lookup. Fixing only the first retrieval path
+      // would leave the model able to reach every source by calling the tool.
       retrieveKnowledge: (query: string, matchCount: number) =>
         retrieveKnowledgeChunks(
           async (name, params) => await admin.rpc(name, params),
-          request.user_id,
-          query,
-          matchCount,
+          {
+            userId: request.user_id,
+            socialAccountId: knowledgeAccountId,
+            query,
+            matchCount,
+          },
           embeddingConfig,
         ),
       sendWhatsAppText: async (recipientPhone: string, text: string) => {
