@@ -22,7 +22,7 @@ export async function refreshFacebookToken(account: SocialAccount): Promise<{ ac
 
         const data = await response.json();
 
-    if (!response.ok || data.error) {
+    if (!response.ok || data.error || !data.access_token) {
             const errorMsg = data.error?.message || data.error?.error_user_msg || 'Facebook token refresh failed';
             console.error('Facebook token refresh failed:', errorMsg);
             return null;
@@ -34,6 +34,32 @@ export async function refreshFacebookToken(account: SocialAccount): Promise<{ ac
         };
     } catch (error) {
         console.error('Error refreshing Facebook token:', error);
+        return null;
+    }
+}
+
+export async function refreshInstagramBusinessToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number } | null> {
+    // Instagram Business Login tokens are Instagram-scoped: they refresh against
+    // graph.instagram.com using the access token itself, not fb_exchange_token.
+    try {
+        const response = await fetch(
+            `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${account.access_token}`
+        );
+
+        const data = await response.json();
+
+        if (!response.ok || data.error || !data.access_token) {
+            const errorMsg = data.error?.message || data.error?.error_user_msg || 'Instagram token refresh failed';
+            console.error('Instagram Business token refresh failed:', errorMsg);
+            return null;
+        }
+
+        return {
+            access_token: data.access_token,
+            expires_in: data.expires_in || 5184000 // 60 days default
+        };
+    } catch (error) {
+        console.error('Error refreshing Instagram Business token:', error);
         return null;
     }
 }
@@ -248,7 +274,7 @@ export async function refreshThreadsToken(account: SocialAccount): Promise<{ acc
 
         const data = await response.json();
 
-        if (data.error || !response.ok) {
+        if (data.error || !response.ok || !data.access_token) {
             const errorMsg = data.error?.message || data.error?.error_user_msg || data.error || 'Threads token refresh failed';
             console.error('Threads token refresh failed:', errorMsg);
             return null;

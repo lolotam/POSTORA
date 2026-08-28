@@ -1,4 +1,9 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import {
+  accountCanAttemptRefresh,
+  metaRefreshStrategy,
+  metaTokenTooYoungToRefresh,
+} from "./refreshEligibility.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import {
@@ -13,6 +18,7 @@ import { createLogger, logTokenEvent } from '../_shared/logging.ts';
 import {
   SocialAccount,
   refreshFacebookToken,
+  refreshInstagramBusinessToken,
   refreshTikTokToken,
   refreshYouTubeToken,
   refreshPinterestToken,
@@ -39,6 +45,7 @@ import {
 
 interface SocialAccountWithDetails extends SocialAccount {
   platform_username?: string;
+  ig_auth_type?: string | null;
   avatar_url?: string;
   account_metadata?: Record<string, unknown>;
   needs_reauth?: boolean;
@@ -300,7 +307,12 @@ async function handleRefreshFailure(
 ): Promise<{ needsReauth: boolean; shouldAlert: boolean }> {
   const currentFailureCount = (account.failure_count || 0) + 1;
   const isPermanentError = isPermanentAuthError(errorMessage) || errorMessage.includes('Token limit exceeded');
-  const needsReauth = isPermanentError || currentFailureCount >= MAX_FAILURES_BEFORE_REAUTH || !account.refresh_token;
+  // A missing refresh token only makes a failure permanent on platforms that actually
+  // use refresh tokens. On Meta's exchange-only platforms it is the normal state, and
+  // treating it as permanent turned every transient hiccup into an instant needs_reauth.
+  const needsReauth = isPermanentError
+    || currentFailureCount >= MAX_FAILURES_BEFORE_REAUTH
+    || !accountCanAttemptRefresh(account);
   
   // Log detailed info for debugging
   console.log(`[refresh-failure] Account ${account.id} (${account.platform}):`, {
@@ -352,8 +364,14 @@ async function refreshSingleAccount(
 ): Promise<RefreshResult> {
   const oldRefreshToken = account.refresh_token;
 
-  // Check if account has refresh token
-  if (!account.refresh_token) {
+  // Meta platforms exchange their access token in place and never hold a refresh
+  // token; only platforms that genuinely need one are failed here.
+  if (metaTokenTooYoungToRefresh(account)) {
+    console.log(`[force-refresh] Account ${account.id} (${account.platform}): token too young for provider refresh`);
+    return { id: account.id, platform: account.platform, status: 'skipped', error: 'Token too new to refresh' };
+  }
+
+  if (!accountCanAttemptRefresh(account)) {
     console.log(`[force-refresh] Account ${account.id} has no refresh token`);
     await handleRefreshFailure(supabaseAdmin, account, 'No refresh token available');
     return { id: account.id, platform: account.platform, status: 'needs_reauth', error: 'No refresh token' };
@@ -381,30 +399,26 @@ async function refreshSingleAccount(
         }
 
       case 'instagram': {
-        // Check if this is a Business Login (direct) Instagram account
-        const igMeta = (account as SocialAccountWithDetails).account_metadata;
-        const isBusinessLogin = igMeta && (igMeta as Record<string, unknown>).account_type === 'business_login';
+        // Business Login accounts hold Instagram-scoped tokens; Page-backed ones hold
+        // Facebook Page tokens. The flavour lives in the ig_auth_type column.
+        const isBusinessLogin = metaRefreshStrategy(account) === 'ig_refresh';
 
         if (isBusinessLogin) {
-          // Instagram Business Login: refresh via graph.instagram.com
           try {
-            const refreshUrl = `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${account.access_token}`;
-            const response = await fetch(refreshUrl);
-            const data = await response.json();
+            refreshResult = await refreshInstagramBusinessToken(account);
 
-            if (data.access_token) {
-              const expiresIn = data.expires_in || 5184000; // 60 days
+            if (refreshResult) {
               const expiresAt = new Date();
-              expiresAt.setSeconds(expiresAt.getSeconds() + expiresIn);
-              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, data.access_token, expiresAt.toISOString());
+              expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
+              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
               if (updated) {
-                const avatarRefreshed = await refreshAndCacheAvatar(account, data.access_token, supabaseAdmin);
+                const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
                 return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
               } else {
                 return { id: account.id, platform: account.platform, status: 'already_refreshed' };
               }
             } else {
-              const errorMsg = data.error?.message || 'Could not refresh Instagram Business Login token';
+              const errorMsg = 'Could not refresh Instagram Business Login token';
               await handleRefreshFailure(supabaseAdmin, account, errorMsg);
               return { id: account.id, platform: account.platform, status: 'failed', error: errorMsg };
             }
@@ -602,13 +616,64 @@ async function refreshSingleAccount(
   }
 }
 
+/**
+ * Authorize a refresh-tokens request.
+ *
+ * Two accepted callers:
+ *  - the cron job, via CRON_SECRET (or, when CRON_SECRET is unset, the service-role key as a
+ *    bearer token — this stack has shipped without CRON_SECRET before);
+ *  - a signed-in admin, via their Supabase JWT, for the admin "Refresh tokens" button.
+ */
+async function authorizeRefreshRequest(
+  req: Request,
+): Promise<{ ok: true; mode: 'cron' | 'admin' } | { ok: false; response: Response }> {
+  if (Deno.env.get('CRON_SECRET')) {
+    const cron = verifyCronAuth(req);
+    if (cron.ok) return { ok: true, mode: 'cron' };
+  } else {
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || '';
+    const header = req.headers.get('authorization') || req.headers.get('Authorization') || '';
+    const bearer = header.toLowerCase().startsWith('bearer ') ? header.slice(7).trim() : '';
+    if (serviceKey && bearer && bearer === serviceKey) return { ok: true, mode: 'cron' };
+  }
+
+  const authHeader = req.headers.get('Authorization') || req.headers.get('authorization');
+  if (!authHeader?.startsWith('Bearer ')) {
+    return { ok: false, response: errorResponse('Unauthorized', 401) };
+  }
+
+  try {
+    const admin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+    );
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    const { data: { user }, error } = await admin.auth.getUser(token);
+    if (error || !user) return { ok: false, response: errorResponse('Unauthorized', 401) };
+
+    const { data: roleData } = await admin
+      .from('user_roles')
+      .select('role')
+      .eq('user_id', user.id)
+      .eq('role', 'admin')
+      .maybeSingle();
+    if (!roleData) return { ok: false, response: errorResponse('Admin access required', 403) };
+
+    console.log(`refresh-tokens authorized via admin JWT: ${user.id}`);
+    return { ok: true, mode: 'admin' };
+  } catch (e) {
+    console.error(e);
+    return { ok: false, response: errorResponse('Unauthorized', 401) };
+  }
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return handleCorsOptions();
   }
 
-  const __cronAuth = verifyCronAuth(req);
-  if (!__cronAuth.ok) return __cronAuth.response;
+  const auth = await authorizeRefreshRequest(req);
+  if (!auth.ok) return auth.response;
 
   try {
     const supabaseAdmin = createClient(
@@ -622,17 +687,23 @@ Deno.serve(async (req) => {
     let accountId: string | null = null;
     let accountIds: string[] = [];
     let force = false;
+    let manual = false;
     let platforms: string[] = [];
-    
+
     try {
       const body = await req.json();
       accountId = body.accountId || null;
       accountIds = body.accountIds || [];
       force = body.force === true;
+      manual = body.manual === true;
       platforms = body.platforms || [];
     } catch {
       // No body or invalid JSON - proceed with default behavior
     }
+
+    // An admin pressing "refresh" is not a scheduled sweep: it should reach every account,
+    // ignoring both the per-platform refresh window and the concurrency cooldown.
+    const adminTriggered = force || manual;
 
     // Single account force refresh mode
     if (accountId && force) {
@@ -651,16 +722,13 @@ Deno.serve(async (req) => {
         return errorResponse(fetchError?.message || 'Account not found');
       }
 
-      // Reset needs_reauth and failure count before attempting refresh
-      await supabaseAdmin
-        .from('social_accounts')
-        .update({ 
-          needs_reauth: false, 
-          failure_count: 0, 
-          last_refresh_error: null,
-          last_refresh_attempt_at: new Date().toISOString()
-        } as Record<string, unknown>)
-        .eq('id', accountId);
+      // Only mark the attempt. Clearing needs_reauth/failure_count here would declare
+      // the account healthy BEFORE proving the refresh works: refreshSingleAccount is
+      // handed the pre-reset object, so a subsequent handleRefreshFailure computes
+      // failure_count from the stale value, stays under MAX_FAILURES_BEFORE_REAUTH and
+      // never restores the flag — leaving a genuinely dead account green.
+      // handleRefreshSuccess is the only place that may clear these.
+      await markRefreshAttempt(supabaseAdmin, accountId);
 
       // Attempt the refresh
       const result = await refreshSingleAccount(supabaseAdmin, account as SocialAccountWithDetails, true);
@@ -701,16 +769,8 @@ Deno.serve(async (req) => {
       const bulkResults: RefreshResult[] = [];
       
       for (const account of accountsToRefresh as SocialAccountWithDetails[]) {
-        // Reset needs_reauth and failure count before attempting refresh
-        await supabaseAdmin
-          .from('social_accounts')
-          .update({ 
-            needs_reauth: false, 
-            failure_count: 0, 
-            last_refresh_error: null,
-            last_refresh_attempt_at: new Date().toISOString()
-          } as Record<string, unknown>)
-          .eq('id', account.id);
+        // See the single-account path: only mark the attempt, never pre-clear health.
+        await markRefreshAttempt(supabaseAdmin, account.id);
 
         // Attempt the refresh
         const result = await refreshSingleAccount(supabaseAdmin, account, true);
@@ -776,14 +836,14 @@ Deno.serve(async (req) => {
 
     // Filter accounts that need refresh based on platform-specific windows
     // Skip cron-excluded platforms (like YouTube) in automatic cron cycles
-    const isForceOrManual = force || platforms.length > 0;
     const accountsNeedingRefresh = allAccounts.filter((account: SocialAccountWithDetails) => {
-      // Skip YouTube (and other cron-excluded platforms) in automatic cron cycles
-      // They only refresh via force/manual trigger or when explicitly requested by platform filter
-      if (!isForceOrManual && isCronExcludedPlatform(account.platform)) {
+      // Skip YouTube (and other cron-excluded platforms) in automatic cron cycles.
+      // They only refresh via force/manual trigger or when explicitly requested by platform filter.
+      if (!adminTriggered && platforms.length === 0 && isCronExcludedPlatform(account.platform)) {
         console.log(`[cron-skip] Skipping ${account.platform} account ${account.id} — cron-excluded (JIT refresh only)`);
         return false;
       }
+      if (adminTriggered) return true;
       return tokenNeedsRefresh(account.platform, account.token_expires_at);
     });
 
@@ -820,7 +880,7 @@ Deno.serve(async (req) => {
       });
 
       // Check cooldown to prevent concurrent refresh attempts
-      if (isWithinRefreshCooldown(account.last_refresh_attempt_at)) {
+      if (!adminTriggered && isWithinRefreshCooldown(account.last_refresh_attempt_at)) {
         console.log(`[refresh-cooldown] Account ${account.id} (${account.platform}): Recently attempted, skipping (cooldown: ${REFRESH_ATTEMPT_COOLDOWN_MS / 1000}s)`);
         results.push({ 
           id: account.id, 
@@ -831,8 +891,17 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Check if account has refresh token
-      if (!account.refresh_token) {
+      // Meta refuses to refresh an Instagram/Threads token under 24h old. Attempting it
+      // anyway records a failure against a perfectly healthy, freshly reconnected account.
+      if (metaTokenTooYoungToRefresh(account)) {
+        console.log(`[refresh-skip] Account ${account.id} (${account.platform}): token too young for provider refresh`);
+        results.push({ id: account.id, platform: account.platform, status: 'skipped', error: 'Token too new to refresh' });
+        continue;
+      }
+
+      // Meta platforms exchange their access token in place and never hold a refresh
+      // token; only platforms that genuinely need one are failed here.
+      if (!accountCanAttemptRefresh(account)) {
         console.log(`Account ${account.id} has no refresh token - marking as needs_reauth`);
         const { shouldAlert } = await handleRefreshFailure(supabaseAdmin, account, 'No refresh token available');
         results.push({ id: account.id, platform: account.platform, status: 'needs_reauth', error: 'No refresh token' });
@@ -852,7 +921,12 @@ Deno.serve(async (req) => {
         switch (account.platform) {
           case 'facebook':
           case 'instagram':
-            refreshResult = await refreshFacebookToken(account);
+            // Instagram Business Login accounts hold Instagram-scoped tokens and must
+            // exchange at graph.instagram.com; Facebook Pages and Page-backed Instagram
+            // accounts use fb_exchange_token.
+            refreshResult = metaRefreshStrategy(account) === 'ig_refresh'
+              ? await refreshInstagramBusinessToken(account)
+              : await refreshFacebookToken(account);
             if (refreshResult) {
               const expiresAt = new Date();
               expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
@@ -1137,7 +1211,8 @@ Deno.serve(async (req) => {
     }
 
     // Determine trigger type and cron category for logging
-    const triggerType = platforms.length > 0 ? 'cron' : 'manual';
+    const triggerType: 'cron' | 'manual' | 'force' =
+      force ? 'force' : (manual || auth.mode === 'admin') ? 'manual' : 'cron';
     let cronCategory: string | undefined;
     if (platforms.length > 0) {
       // Determine category based on platforms
