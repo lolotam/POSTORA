@@ -51,11 +51,12 @@ Deno.test("an account reads its own config", async () => {
   assertEquals(admin.queries.length, 1);
 });
 
-Deno.test("a reconnected account still finds the owner's config for its platform", async () => {
-  // 2026-08-28 incident: relinking WhatsApp by QR inserts a NEW social_accounts
-  // row, so the config stayed pinned to the deactivated predecessor. Reading
-  // only by account id returned nothing and every inbound message was answered
-  // with agent_not_configured.
+Deno.test("an account with no config of its own is unconfigured, not inherited", async () => {
+  // 20260828200000 dropped ai_agent_configs_user_id_platform_key and gave every
+  // active account its own row, so the platform fallback that used to answer
+  // here became a genuine cross-account read -- page B replying in page A's
+  // brand voice. An unconfigured account now reads as exactly that, and the
+  // caller logs agent_not_configured instead of guessing.
   const admin = fakeAdmin([CONFIG]);
   const config = await loadAgentConfigForAccount(admin, {
     userId: OWNER,
@@ -63,14 +64,12 @@ Deno.test("a reconnected account still finds the owner's config for its platform
     accountId: "acc-reconnected",
   });
 
-  assertEquals(config?.id, "cfg-1");
-  assertEquals(config?.persona_instructions, "the brand voice");
+  assertEquals(config, null);
 });
 
-Deno.test("a caller naming no account reads the platform's config, assigned or not", async () => {
-  // The settings form sends no account id. Requiring social_account_id IS NULL
-  // here is what made ai_get_config return null for every user the moment the
-  // expansion migration backfilled that column.
+Deno.test("a caller naming no account gets nothing", async () => {
+  // The settings form always names an account since PR B-1. A caller that does
+  // not cannot be answered without picking a brand voice on its behalf.
   const admin = fakeAdmin([CONFIG]);
   const config = await loadAgentConfigForAccount(admin, {
     userId: OWNER,
@@ -78,8 +77,9 @@ Deno.test("a caller naming no account reads the platform's config, assigned or n
     accountId: null,
   });
 
-  assertEquals(config?.id, "cfg-1");
-  assertEquals(admin.queries[0].social_account_id, undefined);
+  assertEquals(config, null);
+  // And it must not have queried at all -- no account, no lookup.
+  assertEquals(admin.queries.length, 0);
 });
 
 Deno.test("nothing is borrowed across owners or platforms", async (t) => {

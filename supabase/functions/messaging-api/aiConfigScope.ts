@@ -172,14 +172,5 @@ export async function writeAccountScopedConfig(
     )
     .select()
     .single();
-  if (error && String((error as { code?: string }).code) === "23505") {
-    return {
-      data: null,
-      error: {
-        message:
-          "This platform still shares one agent across its accounts. Per-account settings unlock once the account migration completes.",
-      },
-    };
-  }
   return { data, error };
 }
