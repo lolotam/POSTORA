@@ -1,9 +1,10 @@
 import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { anonKey, integrationTest, supabaseUrl } from "../_shared/integrationTestGuard.ts";
 
-const FUNCTION_URL = Deno.env.get("SUPABASE_URL") + "/functions/v1/check-user-mfa";
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const FUNCTION_URL = `${supabaseUrl}/functions/v1/check-user-mfa`;
+const ANON_KEY = anonKey;
 
-Deno.test("check-user-mfa: handles CORS preflight request", async () => {
+integrationTest("check-user-mfa: handles CORS preflight request", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "OPTIONS",
     headers: {
@@ -16,7 +17,7 @@ Deno.test("check-user-mfa: handles CORS preflight request", async () => {
   assertEquals(corsHeader, "*");
 });
 
-Deno.test("check-user-mfa: rejects unsupported methods", async () => {
+integrationTest("check-user-mfa: rejects unsupported methods", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "GET",
     headers: {
@@ -27,7 +28,7 @@ Deno.test("check-user-mfa: rejects unsupported methods", async () => {
   assertEquals(response.status, 405);
 });
 
-Deno.test("check-user-mfa: returns 400 when email is missing", async () => {
+integrationTest("check-user-mfa: returns 400 when email is missing", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -43,7 +44,7 @@ Deno.test("check-user-mfa: returns 400 when email is missing", async () => {
   assertEquals(body.error, "Email is required");
 });
 
-Deno.test("check-user-mfa: does not reveal userExists", async () => {
+integrationTest("check-user-mfa: does not reveal userExists", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -58,7 +59,7 @@ Deno.test("check-user-mfa: does not reveal userExists", async () => {
   assertEquals(Object.prototype.hasOwnProperty.call(body, "userExists"), false);
 });
 
-Deno.test("check-user-mfa: does not return factorId", async () => {
+integrationTest("check-user-mfa: does not return factorId", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -73,7 +74,7 @@ Deno.test("check-user-mfa: does not return factorId", async () => {
   assertEquals(Object.prototype.hasOwnProperty.call(body, "factorId"), false);
 });
 
-Deno.test("check-user-mfa: returns constant hasMFA false regardless of email", async () => {
+integrationTest("check-user-mfa: returns constant hasMFA false regardless of email", async () => {
   const headers = {
     "Content-Type": "application/json",
     "apikey": ANON_KEY,
@@ -96,7 +97,7 @@ Deno.test("check-user-mfa: returns constant hasMFA false regardless of email", a
   assertEquals(await fakeResponse.json(), { hasMFA: false });
 });
 
-Deno.test("check-user-mfa: returns 400 for malformed JSON body", async () => {
+integrationTest("check-user-mfa: returns 400 for malformed JSON body", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {

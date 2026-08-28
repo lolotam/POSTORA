@@ -1,10 +1,11 @@
 import { assertEquals, assertExists } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { anonKey, integrationTest, supabaseUrl } from "../_shared/integrationTestGuard.ts";
 
-const FUNCTION_URL = Deno.env.get("SUPABASE_URL") + "/functions/v1/process-post";
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const FUNCTION_URL = `${supabaseUrl}/functions/v1/process-post`;
+const ANON_KEY = anonKey;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-Deno.test("process-post: handles CORS preflight request", async () => {
+integrationTest("process-post: handles CORS preflight request", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "OPTIONS",
     headers: {
@@ -17,7 +18,7 @@ Deno.test("process-post: handles CORS preflight request", async () => {
   assertEquals(corsHeader, "*");
 });
 
-Deno.test("process-post: returns 400 when post_id is missing", async () => {
+integrationTest("process-post: returns 400 when post_id is missing", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -33,7 +34,7 @@ Deno.test("process-post: returns 400 when post_id is missing", async () => {
   assertEquals(body.error, "Missing post_id");
 });
 
-Deno.test("process-post: returns 401 when Authorization header is missing", async () => {
+integrationTest("process-post: returns 401 when Authorization header is missing", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -49,7 +50,7 @@ Deno.test("process-post: returns 401 when Authorization header is missing", asyn
   assertEquals(body.error, "Unauthorized: missing Authorization header");
 });
 
-Deno.test("process-post: returns 401 when bearer token is empty", async () => {
+integrationTest("process-post: returns 401 when bearer token is empty", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -66,7 +67,7 @@ Deno.test("process-post: returns 401 when bearer token is empty", async () => {
   assertExists(body.error);
 });
 
-Deno.test("process-post: returns 401 for invalid/expired token", async () => {
+integrationTest("process-post: returns 401 for invalid/expired token", async () => {
   const invalidToken = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwiZXhwIjoxfQ.invalid";
 
   const response = await fetch(FUNCTION_URL, {
@@ -85,7 +86,7 @@ Deno.test("process-post: returns 401 for invalid/expired token", async () => {
   assertEquals(body.error, "Unauthorized: invalid token");
 });
 
-Deno.test("process-post: handles invalid JSON body", async () => {
+integrationTest("process-post: handles invalid JSON body", async () => {
   const response = await fetch(FUNCTION_URL, {
     method: "POST",
     headers: {
@@ -101,7 +102,7 @@ Deno.test("process-post: handles invalid JSON body", async () => {
   assertExists(body.error);
 });
 
-Deno.test("process-post: accepts service role key for server-to-server calls", async () => {
+integrationTest("process-post: accepts service role key for server-to-server calls", async () => {
   if (!SERVICE_ROLE_KEY) {
     console.log("Skipping service role test - key not available");
     return;
@@ -124,7 +125,7 @@ Deno.test("process-post: accepts service role key for server-to-server calls", a
   assertEquals(body.error, "Post not found");
 });
 
-Deno.test("process-post: returns 404 for non-existent post with valid auth", async () => {
+integrationTest("process-post: returns 404 for non-existent post with valid auth", async () => {
   if (!SERVICE_ROLE_KEY) {
     console.log("Skipping - service role key not available");
     return;
