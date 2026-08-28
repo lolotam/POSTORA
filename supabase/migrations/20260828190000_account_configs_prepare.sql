@@ -121,6 +121,17 @@ END $$;
 -- config's FK at it moves that check into the schema, where the service
 -- role cannot bypass it. Production has zero mismatching rows, so the new
 -- FK validates cleanly.
+-- Dependants first. The foreign key added below is backed by this unique
+-- index, so on a re-apply -- or against a database where an earlier revision
+-- of this file was already run by hand, which is how it was caught --
+-- dropping the index while the key still references it fails with
+-- "other objects depend on it". Both names are cleared: the pre-platform key
+-- and the one this migration itself creates.
+ALTER TABLE public.ai_agent_configs
+  DROP CONSTRAINT IF EXISTS ai_agent_configs_account_same_owner_platform;
+ALTER TABLE public.ai_agent_configs
+  DROP CONSTRAINT IF EXISTS ai_agent_configs_account_same_owner;
+
 ALTER TABLE public.social_accounts
   DROP CONSTRAINT IF EXISTS social_accounts_id_user_id_platform_key;
 ALTER TABLE public.social_accounts
@@ -130,8 +141,6 @@ ALTER TABLE public.social_accounts
 -- The (id, user_id) key from 20260828140000 stays: ai_knowledge_source_accounts
 -- still references it, and the wider key above does not replace it for that
 -- foreign key.
-ALTER TABLE public.ai_agent_configs
-  DROP CONSTRAINT IF EXISTS ai_agent_configs_account_same_owner;
 ALTER TABLE public.ai_agent_configs
   ADD CONSTRAINT ai_agent_configs_account_same_owner_platform
   FOREIGN KEY (social_account_id, user_id, platform)
