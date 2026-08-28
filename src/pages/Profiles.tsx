@@ -57,7 +57,6 @@ export default function Profiles() {
     current?: number;
     max?: number;
   }>({ open: false, type: "social_account" });
-  const [igConfirmProfileId, setIgConfirmProfileId] = useState<string | null>(null);
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
   const { toast } = useToast();
   const { user } = useAuth();
@@ -98,7 +97,9 @@ export default function Profiles() {
     handleBlueskyOAuthConnect,
     handleFacebookConnect,
     handleInstagramBusinessLogin,
-    handleInstagramConnect,
+    instagramFlowRequest,
+    selectInstagramFlow,
+    clearInstagramFlowRequest,
     handleLinkedInConnect,
     clearPageSelection,
     clearBlueskyDialog,
@@ -150,11 +151,8 @@ export default function Profiles() {
         return;
       }
     }
-    // Instagram: show flow-choice dialog (Direct vs Facebook Business)
-    if (platform === "instagram") {
-      setIgConfirmProfileId(profileId);
-      return;
-    }
+    // Instagram raises a flow-choice request inside useProfileOAuth (Direct vs
+    // Facebook Business), so both connect and reconnect open the same dialog.
     originalHandleConnectPlatform(profileId, platform);
   };
 
@@ -366,15 +364,10 @@ export default function Profiles() {
 
 
       <InstagramConnectDialog
-        open={!!igConfirmProfileId}
-        onOpenChange={(open) => { if (!open) setIgConfirmProfileId(null); }}
+        open={!!instagramFlowRequest}
+        onOpenChange={(open) => { if (!open) clearInstagramFlowRequest(); }}
         disabled={connectingPlatform === "instagram"}
-        onSelect={(flow: InstagramFlow) => {
-          if (igConfirmProfileId) {
-            handleInstagramConnect(igConfirmProfileId, flow);
-            setIgConfirmProfileId(null);
-          }
-        }}
+        onSelect={(flow: InstagramFlow) => selectInstagramFlow(flow)}
       />
 
       <InstagramSelectionDialog
