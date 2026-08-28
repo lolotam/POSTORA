@@ -32,6 +32,10 @@ import {
   resolveDualEmbeddingConfig,
 } from "../_shared/knowledgeEmbeddings.ts";
 import { deleteFromOpeninary, getOpeninaryConfig, openinaryDeliveryUrl } from "../_shared/openinary.ts";
+import {
+  STORAGE_REF_SCHEME,
+  resolveExportUrl,
+} from "../_shared/knowledgeExportUrls.ts";
 
 const BUCKET = "ai-knowledge";
 const GRAPH_API = "https://graph.facebook.com/v21.0";
@@ -338,8 +342,11 @@ async function uploadGraphExport(
         upsert: true,
       });
     if (!storageError) {
-      const publicBase = Deno.env.get("API_EXTERNAL_URL") || Deno.env.get("SUPABASE_PUBLIC_URL") || "https://api.postora.cloud";
-      return `${publicBase.replace(/\/+$/, "")}/storage/v1/object/public/${BUCKET}/${storagePath.replace(/^\/+/, "")}`;
+      // Store a durable backend reference, not a URL: the bucket is private
+      // (a public /object/public/ URL would bypass owner checks and is being
+      // removed), and a pre-signed URL would expire in the row. The owner gets
+      // a short-TTL signed URL from the resolve_export_urls action.
+      return `${STORAGE_REF_SCHEME}${BUCKET}/${storagePath.replace(/^\/+/, "")}`;
     } else {
       console.warn(`[uploadGraphExport] Supabase storage upload error for ${storagePath}:`, storageError);
     }
@@ -403,6 +410,22 @@ async function createGraphExports(admin: AdminClient, userId: string, userEmail:
   );
   if (error) throw error;
   return { html_url: htmlUrl, vault_url: vaultUrl, entity_count: graphEntities.length };
+}
+
+// Stored export values are durable references or external delivery URLs, never
+// browser-ready storage links — resolve them to signed URLs for the owner.
+async function resolveExportUrlsForRow(
+  admin: AdminClient,
+  userEmail: string,
+  htmlUrl: string | null,
+  vaultUrl: string | null,
+) {
+  const ownerFolder = `media/${sanitizeEmailForFolder(userEmail)}`;
+  const [resolvedHtml, resolvedVault] = await Promise.all([
+    resolveExportUrl(admin, htmlUrl, { bucket: BUCKET, ownerFolder }),
+    resolveExportUrl(admin, vaultUrl, { bucket: BUCKET, ownerFolder }),
+  ]);
+  return { html_url: resolvedHtml, vault_url: resolvedVault };
 }
 
 // Best-effort cleanup for both storage generations; a leftover file must not
@@ -608,14 +631,43 @@ Deno.serve(async (req) => {
     if (action === "export_graph") {
       try {
         const exported = await createGraphExports(admin, user.id, user.email || user.id);
+        // The row stores durable references; the response carries signed URLs
+        // so a client that opens the export right away gets a working link.
+        const urls = await resolveExportUrlsForRow(
+          admin,
+          user.email || user.id,
+          exported.html_url,
+          exported.vault_url,
+        );
         await logKnowledgeEvent(admin, user.id, "export_graph", true, exported);
-        return jsonResponse({ ok: true, ...exported });
+        return jsonResponse({ ok: true, ...exported, ...urls });
       } catch (error) {
         await logKnowledgeEvent(admin, user.id, "export_graph", false, {
           error: message(error).slice(0, 500),
         });
         return errorResponse(message(error));
       }
+    }
+    if (action === "resolve_export_urls") {
+      // Read-only: only the caller's own stored row is read — no path is ever
+      // taken from the request, and signing is scoped to the caller's folder.
+      const { data: exportRow } = await (admin as any)
+        .from("ai_knowledge_graph_exports")
+        .select("html_url, vault_url, generated_at")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!exportRow) return errorResponse("Knowledge graph exports not found", 404);
+      const urls = await resolveExportUrlsForRow(
+        admin,
+        user.email || user.id,
+        exportRow.html_url,
+        exportRow.vault_url,
+      );
+      await logKnowledgeEvent(admin, user.id, "resolve_export_urls", true, {
+        html_resolved: exportRow.html_url ? urls.html_url !== null : null,
+        vault_resolved: exportRow.vault_url ? urls.vault_url !== null : null,
+      });
+      return jsonResponse({ ok: true, ...urls, generated_at: exportRow.generated_at });
     }
     if (action === "delete_source") {
       const { data: source } = await (admin as any)

@@ -64,9 +64,11 @@ export interface AiAgentToolInput {
 }
 
 export function useAiAgentTools() {
-  const { session } = useAuth();
+  const { session, user } = useAuth();
   const queryClient = useQueryClient();
-  const queryKey = ["ai-agent-tools"];
+  // Keyed by user id so a cache written by one login is never served to
+  // another after a same-tab account switch.
+  const queryKey = ["ai-agent-tools", user?.id];
 
   const query = useQuery({
     queryKey,
