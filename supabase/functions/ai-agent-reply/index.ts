@@ -3,6 +3,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestResponse } from "../_shared/cors.ts";
+import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
 import {
   buildSystemPrompt,
   completionFailure,
@@ -288,40 +289,6 @@ async function resolveAgentAccountId(admin: any, request: ReplyRequest): Promise
   return account?.id ?? null;
 }
 
-/**
- * The agent configuration for one connected account.
- *
- * A config carries persona, business profile and instructions -- brand voice.
- * An account must never silently inherit another brand's voice, so this never
- * falls back to a config already claimed by a different account: an
- * unconfigured account reads as `agent_not_configured` and stays quiet.
- *
- * The second lookup covers the expansion window only. Configs written before
- * accounts existed have social_account_id NULL, and such a row belongs to
- * nobody in particular -- adopting it for the platform's account is what the
- * backfill does, just later. It becomes dead code once the column is NOT NULL
- * and should be removed with the contract migration.
- */
-async function loadAgentConfig(admin: any, request: ReplyRequest, accountId: string | null) {
-  if (accountId) {
-    const { data: scoped } = await admin
-      .from("ai_agent_configs")
-      .select("*")
-      .eq("user_id", request.user_id)
-      .eq("social_account_id", accountId)
-      .maybeSingle();
-    if (scoped) return scoped;
-  }
-  const { data: unassigned } = await admin
-    .from("ai_agent_configs")
-    .select("*")
-    .eq("user_id", request.user_id)
-    .eq("platform", request.platform)
-    .is("social_account_id", null)
-    .maybeSingle();
-  return unassigned ?? null;
-}
-
 async function buildCommentReplySender(admin: any, request: ReplyRequest): Promise<TextSender> {
   const { data: account, error } = await admin
     .from("social_accounts")
@@ -552,16 +519,25 @@ Deno.serve(async (req) => {
 
   try {
     const knowledgeAccountId = await resolveAgentAccountId(admin, request);
-    const config = await loadAgentConfig(admin, request, knowledgeAccountId);
+    const config = await loadAgentConfigForAccount(admin, {
+      userId: request.user_id,
+      platform: request.platform,
+      accountId: knowledgeAccountId,
+    }) as any;
     // Both are terminal for an outbox row: recovery re-driving it would reach the same
     // answer three times over and then mark it failed for no reason.
+    // Both exits are logged. They were the only two silent ones, and that is why
+    // an agent that had stopped replying for hours showed no evidence at all --
+    // every other refusal in this function writes a row saying which gate closed.
     if (!config) {
+      await logOutcome(admin, { ...baseLog, status: "skipped", error: "agent_not_configured" });
       if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_not_configured");
       return jsonResponse({ ok: true, skipped: "agent_not_configured" });
     }
     // The Test sandbox works while the agent is still disabled, so users can
     // tune it before switching it on for real customers.
     if (!config.is_enabled && !dryRun) {
+      await logOutcome(admin, { ...baseLog, status: "skipped", error: "agent_disabled" });
       if (outboxId) await cancelOutboxRow(admin, outboxId, "agent_disabled");
       return jsonResponse({ ok: true, skipped: "agent_disabled" });
     }
