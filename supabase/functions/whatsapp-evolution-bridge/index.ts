@@ -10,6 +10,7 @@ import {
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { runInBackground } from "../_shared/background.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
+import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_shared/socialAccountQuota.ts";
 
 const EVOLUTION_EVENTS: EvolutionEvent[] = [
   "MESSAGES_UPSERT",
@@ -122,13 +123,7 @@ async function enforceAccountQuota(admin: any, userId: string): Promise<void> {
     .maybeSingle();
   if (role) return;
 
-  const { data: quota, error: quotaError } = await admin
-    .from("user_quotas")
-    .select("max_social_accounts")
-    .eq("user_id", userId)
-    .maybeSingle();
-  if (quotaError) throw quotaError;
-  const maximum = quota?.max_social_accounts ?? 3;
+  const maximum = await resolveMaxSocialAccounts(admin as SocialAccountQuotaClient, userId);
   if (maximum < 0) return;
 
   const { count, error: countError } = await admin
