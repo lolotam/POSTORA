@@ -11,8 +11,8 @@ import {
 } from "../_shared/knowledgeEmbeddings.ts";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import { downloadKnowledgeFile, locateKnowledgeFile } from "../_shared/knowledgeSourceFiles.ts";
 
-const CLOUDINARY_CDN_PREFIX = "https://res.cloudinary.com/";
 const POLL_MS = 15_000;
 // One checkpoint slice equals one Ollama embed HTTP batch (~2-3s), so a crash
 // between an insert and its checkpoint update loses at most one small batch.
@@ -30,6 +30,10 @@ type Source = {
   file_path: string;
   source_type?: string;
   chunk_count?: number | null;
+  // Resolved at claim time. Legacy Cloudinary assets are addressed by an
+  // email-derived folder, so the owner-scope check needs it; sources already
+  // migrated to the private bucket do not.
+  owner_email?: string | null;
 };
 
 function message(error: unknown) {
@@ -70,16 +74,16 @@ export function parseCsvChunks(bytes: ArrayBuffer): KnowledgeChunk[] {
   return workbookToChunks(bytes);
 }
 
-async function downloadSource(admin: any, filePath: string): Promise<Blob> {
-  if (filePath.startsWith(CLOUDINARY_CDN_PREFIX)) {
-    const response = await fetch(filePath);
-    if (!response.ok) throw new Error(`Knowledge file download failed (${response.status})`);
-    return response.blob();
-  }
-  if (/^https?:\/\//.test(filePath)) throw new Error("Knowledge file URL is not allowed");
-  const { data, error } = await admin.storage.from("ai-knowledge").download(filePath);
-  if (error || !data) throw error || new Error("Knowledge file not found");
-  return data;
+// file_path is owner-writable through RLS while this worker holds the service
+// role, so the location is resolved — and scope-checked against the owning
+// user — before any byte is fetched.
+async function downloadSource(admin: any, source: Source): Promise<Blob> {
+  const location = locateKnowledgeFile(source.file_path, {
+    userId: source.user_id,
+    email: source.owner_email,
+  });
+  if (!location) throw new Error("Knowledge file location is not allowed");
+  return await downloadKnowledgeFile(admin, location);
 }
 
 // Delete only the chunks a resume will rewrite: everything at or past the
@@ -127,7 +131,7 @@ export async function processSource(
 ): Promise<SourceOutcome> {
   const resumedFrom = source.chunk_count ?? 0;
   try {
-    const file = await downloadSource(admin, source.file_path);
+    const file = await downloadSource(admin, source);
     const bytes = await file.arrayBuffer();
     const chunks = source.source_type === "csv"
       ? parseCsvChunks(bytes)
@@ -202,7 +206,24 @@ async function claimSource(admin: any): Promise<Source | null> {
   const { data, error } = await admin.rpc("claim_ai_knowledge_excel_source");
   if (error) throw error;
   const source = Array.isArray(data) ? data[0] : data;
-  return source ?? null;
+  if (!source) return null;
+  return { ...source, owner_email: await ownerEmail(admin, source.user_id) };
+}
+
+// The claim RPC returns the source row, which carries no email. A source
+// whose owner cannot be resolved keeps a null email: the scope check then
+// refuses its legacy Cloudinary asset rather than fetching it unchecked.
+async function ownerEmail(admin: any, userId: string): Promise<string | null> {
+  const { data, error } = await admin
+    .from("profiles")
+    .select("email")
+    .eq("id", userId)
+    .maybeSingle();
+  if (error) {
+    console.error(`[ai-knowledge-excel-worker] owner lookup failed: ${error.message}`);
+    return null;
+  }
+  return data?.email ?? null;
 }
 
 async function runOnce(admin: any, deps: WorkerDependencies = defaultDependencies) {

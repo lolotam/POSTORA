@@ -37,6 +37,12 @@ import {
   STORAGE_REF_SCHEME,
   resolveExportUrl,
 } from "../_shared/knowledgeExportUrls.ts";
+import {
+  cloudinaryFolderForEmail,
+  downloadKnowledgeFile,
+  locateKnowledgeFile,
+  type KnowledgeFileOwner,
+} from "../_shared/knowledgeSourceFiles.ts";
 
 const BUCKET = "ai-knowledge";
 const GRAPH_API = "https://graph.facebook.com/v21.0";
@@ -253,33 +259,19 @@ async function setFailed(admin: AdminClient, sourceId: string, error: unknown) {
     .eq("id", sourceId);
 }
 
-// file_path is either a Cloudinary CDN URL (current uploads, stored under
-// media/{user}/ai-knowledge/) or a legacy path in the ai-knowledge storage
-// bucket. Only res.cloudinary.com is fetched — file_path is user-writable
-// via RLS, so any other URL would be an SSRF vector for the service role.
-const CLOUDINARY_CDN_PREFIX = "https://res.cloudinary.com/";
-
-async function downloadSourceFile(admin: AdminClient, filePath: string): Promise<Blob> {
-  if (filePath.startsWith(CLOUDINARY_CDN_PREFIX)) {
-    const response = await fetch(filePath);
-    if (!response.ok) throw new Error(`Knowledge file download failed (${response.status})`);
-    return await response.blob();
-  }
-  if (/^https?:\/\//.test(filePath)) throw new Error("Knowledge file URL is not allowed");
-  const { data: file, error: downloadError } = await admin.storage.from(BUCKET).download(filePath);
-  if (downloadError || !file) throw downloadError || new Error("Knowledge file not found");
-  return file;
+// Reads a source's bytes. file_path is owner-writable through RLS while this
+// runs as the service role, so the location is resolved — and scope-checked
+// against the owner — before anything is fetched.
+async function downloadSourceFile(
+  admin: AdminClient,
+  filePath: string,
+  owner: KnowledgeFileOwner,
+): Promise<Blob> {
+  const location = locateKnowledgeFile(filePath, owner);
+  if (!location) throw new Error("Knowledge file location is not allowed");
+  return await downloadKnowledgeFile(admin, location);
 }
 
-// Same folder-name derivation as cloudinary-upload — the destroy scope
-// below depends on both sides computing the identical user folder.
-function sanitizeEmailForFolder(email: string): string {
-  return email
-    .toLowerCase()
-    .replace(/@/g, "_at_")
-    .replace(/\./g, "_")
-    .replace(/[^a-z0-9_-]/g, "_");
-}
 
 async function cloudinarySignature(value: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(value));
@@ -295,7 +287,7 @@ async function uploadGraphExport(
   contentType: string,
   userEmail: string,
 ): Promise<string> {
-  const folder = `media/${sanitizeEmailForFolder(userEmail)}/knowledge-graph`;
+  const folder = `media/${cloudinaryFolderForEmail(userEmail)}/knowledge-graph`;
   const body = typeof contents === "string"
     ? contents
     : (new Uint8Array(contents).buffer as ArrayBuffer);
@@ -422,7 +414,7 @@ async function resolveExportUrlsForRow(
   htmlUrl: string | null,
   vaultUrl: string | null,
 ) {
-  const ownerFolder = `media/${sanitizeEmailForFolder(userEmail)}`;
+  const ownerFolder = `media/${cloudinaryFolderForEmail(userEmail)}`;
   const [resolvedHtml, resolvedVault] = await Promise.all([
     resolveExportUrl(admin, htmlUrl, { bucket: BUCKET, ownerFolder }),
     resolveExportUrl(admin, vaultUrl, { bucket: BUCKET, ownerFolder }),
@@ -435,36 +427,29 @@ async function resolveExportUrlsForRow(
 async function deleteSourceFile(
   admin: AdminClient,
   filePath: string,
-  userEmail: string,
+  owner: KnowledgeFileOwner,
 ): Promise<void> {
   try {
-    if (!filePath.startsWith(CLOUDINARY_CDN_PREFIX)) {
-      if (!/^https?:\/\//.test(filePath)) await admin.storage.from(BUCKET).remove([filePath]);
+    const location = locateKnowledgeFile(filePath, owner);
+    if (!location) {
+      console.warn("[ai-knowledge-ingest] Skipping cleanup outside caller folder");
+      return;
+    }
+    if (location.kind === "storage") {
+      await admin.storage.from(location.bucket).remove([location.path]);
       return;
     }
     const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
     const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
     const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
-    // URL shape: https://res.cloudinary.com/<cloud>/raw/upload/v<N>/<public_id>
-    // (raw public_ids keep their file extension).
-    const match = filePath.match(/^https:\/\/res\.cloudinary\.com\/[^/]+\/raw\/upload\/v\d+\/(.+)$/);
-    if (!cloudName || !apiKey || !apiSecret || !match) return;
-    const publicId = decodeURIComponent(match[1]);
-    // file_path is user-writable via RLS: without this scope check a user
-    // could point their row at another user's asset and have the service
-    // role destroy it. Only assets inside the caller's own folder qualify.
-    if (!publicId.startsWith(`media/${sanitizeEmailForFolder(userEmail)}/`)) {
-      console.warn("[ai-knowledge-ingest] Skipping destroy outside caller folder:", publicId);
-      return;
-    }
+    if (!cloudName || !apiKey || !apiSecret) return;
     const timestamp = Math.floor(Date.now() / 1000);
-    const signatureBase = `public_id=${publicId}&timestamp=${timestamp}${apiSecret}`;
-    const digest = await crypto.subtle.digest("SHA-1", new TextEncoder().encode(signatureBase));
-    const signature = Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
+    const signature = await cloudinarySignature(
+      `invalidate=true&public_id=${location.publicId}&timestamp=${timestamp}${apiSecret}`,
+    );
     const form = new FormData();
-    form.append("public_id", publicId);
+    form.append("public_id", location.publicId);
+    form.append("invalidate", "true");
     form.append("api_key", apiKey);
     form.append("timestamp", String(timestamp));
     form.append("signature", signature);
@@ -679,7 +664,9 @@ Deno.serve(async (req) => {
         .eq("user_id", user.id)
         .maybeSingle();
       if (!source) return errorResponse("Knowledge source not found", 404);
-      if (source.file_path) await deleteSourceFile(admin, source.file_path, user.email || "");
+      if (source.file_path) {
+        await deleteSourceFile(admin, source.file_path, { userId: user.id, email: user.email });
+      }
       const { error } = await (admin as any)
         .from("ai_knowledge_sources")
         .delete()
@@ -724,7 +711,10 @@ Deno.serve(async (req) => {
           .from("ai_knowledge_sources")
           .update({ status: "processing", error: null })
           .eq("id", source.id);
-        const file = await downloadSourceFile(admin, source.file_path);
+        const file = await downloadSourceFile(admin, source.file_path, {
+          userId: user.id,
+          email: user.email,
+        });
         const chunks = await parseSourceFile(
           source.source_type,
           source.file_name || source.file_path,

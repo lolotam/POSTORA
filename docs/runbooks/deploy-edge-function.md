@@ -128,6 +128,18 @@ Env-var changes are the exception: `restart` reuses the existing container and i
 environment, so after editing `$STACK/.env` use
 `docker compose up -d --force-recreate --no-deps functions`.
 
+### The spreadsheet worker is a second service
+
+`ai-knowledge-excel-worker` runs as its own long-lived container
+(`postorasupabase-supabase-j8axyh-supabase-ai-knowledge-excel-worker`) as well as being reachable
+over HTTP through `functions`. It loads its code — and its `_shared` imports — once at boot, so
+`restart functions` leaves the standalone poller running the previous version. Restart both
+whenever the worker or a module it imports changes:
+
+```bash
+cd "$STACK" && docker compose restart functions ai-knowledge-excel-worker
+```
+
 ---
 
 ## 2. All-functions deploy (refactor touched many)

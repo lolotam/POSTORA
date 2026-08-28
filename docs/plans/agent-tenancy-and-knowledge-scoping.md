@@ -145,6 +145,26 @@ No `ai_*` schema change.
 
 ### PR-SEC — private Cloudinary delivery for knowledge assets (2–4 days + controlled migration)
 
+> **As built (2026-08-28): the private store is the `ai-knowledge` Supabase bucket, not private
+> Cloudinary delivery.** The goal below is unchanged — knowledge files stop being readable by
+> anyone holding a link, and stop carrying the owner's email in their path — but the mechanism is
+> cheaper. PR1 already made that bucket private and shipped
+> `_shared/knowledgeExportUrls.ts`, which is the same durable-reference-plus-signed-URL pattern
+> applied to graph exports. Cloudinary authenticated delivery would have required re-uploading
+> every asset *and* building signed delivery, to arrive at the same place.
+>
+> Uploads now go browser → `ai-knowledge/<user_id>/sources/<uuid>.<ext>` (the leading user id is
+> the bucket's own RLS predicate), and `file_path` stores
+> `supabase://ai-knowledge/<path>`. `_shared/knowledgeSourceFiles.ts` is the shared loader for
+> both ingestion sites and dual-reads the legacy Cloudinary URLs, so steps 3–6 below hold as
+> written. `scripts/migrate-knowledge-assets.mjs` performs step 5.
+>
+> One defect found while building it and fixed in the same PR: neither download site checked that
+> `file_path` pointed inside the owner's own folder. It is owner-writable through RLS while both
+> readers hold the service role, so a user could repoint their row at another user's asset and
+> have it chunked into their own knowledge base. The shared loader enforces the scope check on
+> every branch.
+
 Its own PR, after PR1 and before PR2. Not a `file_path` rewrite:
 
 1. Store a durable private-asset reference (Cloudinary asset/public id + delivery type), never a
