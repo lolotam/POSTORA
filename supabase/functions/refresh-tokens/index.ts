@@ -1,5 +1,9 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
-import { accountCanAttemptRefresh, metaRefreshStrategy } from "./refreshEligibility.ts";
+import {
+  accountCanAttemptRefresh,
+  metaRefreshStrategy,
+  metaTokenTooYoungToRefresh,
+} from "./refreshEligibility.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import {
@@ -362,6 +366,11 @@ async function refreshSingleAccount(
 
   // Meta platforms exchange their access token in place and never hold a refresh
   // token; only platforms that genuinely need one are failed here.
+  if (metaTokenTooYoungToRefresh(account)) {
+    console.log(`[force-refresh] Account ${account.id} (${account.platform}): token too young for provider refresh`);
+    return { id: account.id, platform: account.platform, status: 'skipped', error: 'Token too new to refresh' };
+  }
+
   if (!accountCanAttemptRefresh(account)) {
     console.log(`[force-refresh] Account ${account.id} has no refresh token`);
     await handleRefreshFailure(supabaseAdmin, account, 'No refresh token available');
@@ -713,16 +722,13 @@ Deno.serve(async (req) => {
         return errorResponse(fetchError?.message || 'Account not found');
       }
 
-      // Reset needs_reauth and failure count before attempting refresh
-      await supabaseAdmin
-        .from('social_accounts')
-        .update({ 
-          needs_reauth: false, 
-          failure_count: 0, 
-          last_refresh_error: null,
-          last_refresh_attempt_at: new Date().toISOString()
-        } as Record<string, unknown>)
-        .eq('id', accountId);
+      // Only mark the attempt. Clearing needs_reauth/failure_count here would declare
+      // the account healthy BEFORE proving the refresh works: refreshSingleAccount is
+      // handed the pre-reset object, so a subsequent handleRefreshFailure computes
+      // failure_count from the stale value, stays under MAX_FAILURES_BEFORE_REAUTH and
+      // never restores the flag — leaving a genuinely dead account green.
+      // handleRefreshSuccess is the only place that may clear these.
+      await markRefreshAttempt(supabaseAdmin, accountId);
 
       // Attempt the refresh
       const result = await refreshSingleAccount(supabaseAdmin, account as SocialAccountWithDetails, true);
@@ -763,16 +769,8 @@ Deno.serve(async (req) => {
       const bulkResults: RefreshResult[] = [];
       
       for (const account of accountsToRefresh as SocialAccountWithDetails[]) {
-        // Reset needs_reauth and failure count before attempting refresh
-        await supabaseAdmin
-          .from('social_accounts')
-          .update({ 
-            needs_reauth: false, 
-            failure_count: 0, 
-            last_refresh_error: null,
-            last_refresh_attempt_at: new Date().toISOString()
-          } as Record<string, unknown>)
-          .eq('id', account.id);
+        // See the single-account path: only mark the attempt, never pre-clear health.
+        await markRefreshAttempt(supabaseAdmin, account.id);
 
         // Attempt the refresh
         const result = await refreshSingleAccount(supabaseAdmin, account, true);
@@ -890,6 +888,14 @@ Deno.serve(async (req) => {
           status: 'cooldown', 
           error: 'Recently attempted refresh' 
         });
+        continue;
+      }
+
+      // Meta refuses to refresh an Instagram/Threads token under 24h old. Attempting it
+      // anyway records a failure against a perfectly healthy, freshly reconnected account.
+      if (metaTokenTooYoungToRefresh(account)) {
+        console.log(`[refresh-skip] Account ${account.id} (${account.platform}): token too young for provider refresh`);
+        results.push({ id: account.id, platform: account.platform, status: 'skipped', error: 'Token too new to refresh' });
         continue;
       }
 

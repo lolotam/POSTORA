@@ -1,4 +1,10 @@
-import { platformUsesRefreshToken } from "../_shared/tokenExpiryConstants.ts";
+import {
+  PLATFORM_REFRESH_CONFIG,
+  platformUsesRefreshToken,
+} from "../_shared/tokenExpiryConstants.ts";
+
+/** Meta will not refresh an Instagram/Threads long-lived token younger than 24 hours. */
+const MIN_META_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Can we even attempt a token refresh for this account?
@@ -37,4 +43,32 @@ export function metaRefreshStrategy(
     default:
       return "none";
   }
+}
+
+/**
+ * Meta refuses to refresh an Instagram Business Login or Threads long-lived token that
+ * is less than 24 hours old, and answers with a plain error rather than a token.
+ *
+ * The admin "Refresh all" path deliberately bypasses both the per-platform refresh
+ * window and the attempt cooldown, so without this guard three presses within a day of
+ * a reconnect would record three failures and flag a perfectly healthy new token.
+ *
+ * Issue time is derived from the expiry: these tokens are minted with a known lifetime
+ * (60 days for Meta), so `token_expires_at - accessTokenExpirySeconds` is when it was
+ * issued. Returns false when the expiry is unknown — nothing to prove it is too young.
+ */
+export function metaTokenTooYoungToRefresh(
+  account: { platform: string; ig_auth_type?: string | null; token_expires_at: string | null },
+  now: Date = new Date(),
+): boolean {
+  const strategy = metaRefreshStrategy(account);
+  if (strategy !== "ig_refresh" && strategy !== "threads_refresh") return false;
+  if (!account.token_expires_at) return false;
+
+  const lifetimeSeconds =
+    PLATFORM_REFRESH_CONFIG[account.platform.toLowerCase()]?.accessTokenExpirySeconds;
+  if (!lifetimeSeconds) return false;
+
+  const issuedAt = new Date(account.token_expires_at).getTime() - lifetimeSeconds * 1000;
+  return now.getTime() - issuedAt < MIN_META_TOKEN_AGE_MS;
 }

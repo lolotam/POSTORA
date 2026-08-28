@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { accountCanAttemptRefresh, metaRefreshStrategy } from "./refreshEligibility.ts";
+import {
+  accountCanAttemptRefresh,
+  metaRefreshStrategy,
+  metaTokenTooYoungToRefresh,
+} from "./refreshEligibility.ts";
 
 Deno.test("a Facebook account with no refresh token can still be refreshed by exchange", () => {
   // Regression: this exact account shape used to be marked needs_reauth on sight,
@@ -53,4 +57,59 @@ Deno.test("Facebook and Threads route to their own exchanges", () => {
 
 Deno.test("non-Meta platforms have no exchange strategy", () => {
   assertEquals(metaRefreshStrategy({ platform: "pinterest", ig_auth_type: null }), "none");
+});
+
+Deno.test("a just-reconnected Instagram Business token is too young to refresh", () => {
+  // Meta rejects ig_refresh_token under 24h. Admin "Refresh all" bypasses the cooldown,
+  // so without this guard three presses would flag a healthy new token.
+  const now = new Date("2026-08-28T12:00:00Z");
+  const issuedOneHourAgo = new Date("2026-10-27T11:00:00Z").toISOString(); // now + 60d - 1h
+  assertEquals(
+    metaTokenTooYoungToRefresh(
+      { platform: "instagram", ig_auth_type: "business_login", token_expires_at: issuedOneHourAgo },
+      now,
+    ),
+    true,
+  );
+});
+
+Deno.test("an Instagram Business token older than 24h may refresh", () => {
+  const now = new Date("2026-08-28T12:00:00Z");
+  const issuedThreeDaysAgo = new Date("2026-10-24T12:00:00Z").toISOString(); // now + 60d - 3d
+  assertEquals(
+    metaTokenTooYoungToRefresh(
+      { platform: "instagram", ig_auth_type: "business_login", token_expires_at: issuedThreeDaysAgo },
+      now,
+    ),
+    false,
+  );
+});
+
+Deno.test("Threads is subject to the same minimum age", () => {
+  const now = new Date("2026-08-28T12:00:00Z");
+  const issuedOneHourAgo = new Date("2026-10-27T11:00:00Z").toISOString();
+  assertEquals(
+    metaTokenTooYoungToRefresh({ platform: "threads", token_expires_at: issuedOneHourAgo }, now),
+    true,
+  );
+});
+
+Deno.test("Facebook has no minimum age — fb_exchange_token imposes none", () => {
+  const now = new Date("2026-08-28T12:00:00Z");
+  const issuedOneHourAgo = new Date("2026-10-27T11:00:00Z").toISOString();
+  assertEquals(
+    metaTokenTooYoungToRefresh({ platform: "facebook", token_expires_at: issuedOneHourAgo }, now),
+    false,
+  );
+});
+
+Deno.test("an unknown expiry cannot prove the token is too young", () => {
+  assertEquals(
+    metaTokenTooYoungToRefresh({
+      platform: "instagram",
+      ig_auth_type: "business_login",
+      token_expires_at: null,
+    }),
+    false,
+  );
 });

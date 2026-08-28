@@ -22,7 +22,7 @@ export async function refreshFacebookToken(account: SocialAccount): Promise<{ ac
 
         const data = await response.json();
 
-    if (!response.ok || data.error) {
+    if (!response.ok || data.error || !data.access_token) {
             const errorMsg = data.error?.message || data.error?.error_user_msg || 'Facebook token refresh failed';
             console.error('Facebook token refresh failed:', errorMsg);
             return null;
@@ -274,7 +274,7 @@ export async function refreshThreadsToken(account: SocialAccount): Promise<{ acc
 
         const data = await response.json();
 
-        if (data.error || !response.ok) {
+        if (data.error || !response.ok || !data.access_token) {
             const errorMsg = data.error?.message || data.error?.error_user_msg || data.error || 'Threads token refresh failed';
             console.error('Threads token refresh failed:', errorMsg);
             return null;
