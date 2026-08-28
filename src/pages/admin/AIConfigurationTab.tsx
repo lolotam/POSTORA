@@ -23,6 +23,7 @@ import { useSetFallback2Model, useSetModelAdminParams } from '@/hooks/useAIConfi
 import { toast } from 'sonner';
 import type { AIProvider, AIModel, ModelCategory } from '@/hooks/useAIConfiguration';
 import { embeddingModelNote } from '@/hooks/ai-config/embeddingDimensions';
+import { reEmbedWarningFor, useEmbeddingColumnOwners } from '@/hooks/useEmbeddingColumnOwners';
 import { supabase } from '@/integrations/supabase/client';
 
 function isOAuthProvider(provider: AIProvider | null) {
@@ -41,6 +42,7 @@ export function AIConfigurationTab() {
   const testConnection = useTestConnection();
   const setServiceKey = useSetServiceKey();
   const testService = useTestService();
+  const { data: columnOwners = {} } = useEmbeddingColumnOwners();
 
   // Build list of all provider codes for key status checking
   const allProviderCodes = [
@@ -93,6 +95,18 @@ export function AIConfigurationTab() {
   // already drifted (they omitted 'agent' even though default_ai_model_agent*
   // rows exist in production).
   const handleSetCategoryDefault = async (category: ModelCategory, providerCode: string, modelId: string) => {
+    // Embedding is the one category where changing the model destroys value:
+    // the stored vectors stop being comparable to new queries. The edge function
+    // refuses, but only after the click — ask first, and say what it costs.
+    if (category === 'embedding') {
+      const warning = reEmbedWarningFor(
+        { provider_code: providerCode, model_id: modelId },
+        aiConfig?.models || [],
+        columnOwners,
+        aiConfig?.providers || [],
+      );
+      if (warning && !window.confirm(`${warning}\n\nSwitch anyway?`)) return;
+    }
     try {
       await setDefaultModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category });
       toast.success('Default model updated');
