@@ -16,6 +16,37 @@ There are four agent documents. **`ARCHITECTURE.md` §0 owns the map of which do
 
 On conflict between `ARCHITECTURE.md` and the Task Execution Workflow below, **the workflow wins**.
 
+### Reviewing a pull request (Codex code review)
+
+Codex reviews every PR through OpenAI's GitHub integration, configured in ChatGPT under
+Codex → Settings → Code review. It runs on the ChatGPT seat, so there is no API key and no
+workflow: a `.github/workflows/codex-review.yml` that shells out to the Codex CLI needs
+`OPENAI_API_KEY`, which this project does not have. One was added on 2026-08-28 and removed
+the same day — it reported a green "review" check on every PR while doing nothing, which is
+worse than no check at all.
+
+Ask for a review on demand by commenting `@codex review` on the PR, or `@codex security review`
+for the security-focused pass. Automatic review of every new PR is a toggle in the same
+settings page.
+
+**What a reviewer should hold this repo to**, in rough order of how much damage each one has
+actually caused here:
+
+1. **Edge Functions run under the service role, so RLS is not enforcing tenancy.** Every
+   ownership check has to be structural — in the SQL, or in a composite foreign key — never
+   left to the caller. A function that is safe only because its callers happen to check first
+   is one refactor from being unsafe.
+2. **A migration always lands before the code that depends on it.** Ask of every schema change:
+   what is deployed *right now*, and does this statement still hold for it? A `SET NOT NULL`
+   shipped alongside its own preparation blocked first-time agent saves for 52 accounts.
+3. **Never let a failed read look like an empty one.** A discarded `error` beside a `maybeSingle()`
+   is how a statement timeout became a blank form that overwrote a live persona, and how an
+   ambiguous read deleted an indexed knowledge source.
+4. **Every early return that refuses work must write a log row.** Two silent exits in
+   `ai-agent-reply` turned hours of no replies into an afternoon of blind debugging.
+5. **Permission-shaped state must be monotonic.** Adding a permission must never narrow access;
+   removing one must never widen it.
+
 ### Delegating to another agent (Codex / Grok / OpenCode / Antigravity)
 
 Nothing auto-loads `ARCHITECTURE.md` for a delegated implementer. **Every delegation brief must name `ARCHITECTURE.md` as required reading**, alongside the specific rule sections that apply to the task.
