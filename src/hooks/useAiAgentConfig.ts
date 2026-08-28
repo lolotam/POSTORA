@@ -66,15 +66,23 @@ export function buildAiAgentConfigPayload(input: Record<string, unknown>): AiAge
   return payload as AiAgentConfigInput;
 }
 
-export function useAiAgentConfig(platform: AiAgentPlatform = "whatsapp") {
+export function useAiAgentConfig(platform: AiAgentPlatform = "whatsapp", socialAccountId?: string | null) {
   const { session, user } = useAuth();
   const queryClient = useQueryClient();
   // Keyed by user id so a cache written by one login is never served to
-  // another after a same-tab account switch.
+  // another after a same-tab account switch, and by account so switching the
+  // account selector reads the selected account's config instead of flashing
+  // the previous account's persona. null (no account named) is its own key
+  // element on purpose -- a fixed-shape key stays unambiguous.
   const query = useQuery({
-    queryKey: ["ai-agent-config", user?.id, platform],
+    queryKey: ["ai-agent-config", user?.id, platform, socialAccountId ?? null],
     queryFn: async () => {
-      const data = await callMessagingApi("ai_get_config", { platform });
+      // JSON.stringify drops undefined keys, so an absent account travels
+      // exactly as it did before the parameter existed.
+      const data = await callMessagingApi("ai_get_config", {
+        platform,
+        social_account_id: socialAccountId ?? undefined,
+      });
       return (data.config || null) as AiAgentConfig | null;
     },
     enabled: !!session,
@@ -84,10 +92,13 @@ export function useAiAgentConfig(platform: AiAgentPlatform = "whatsapp") {
     mutationFn: async (input: AiAgentConfigInput) => {
       const data = await callMessagingApi("ai_upsert_config", {
         platform,
+        social_account_id: socialAccountId ?? undefined,
         config: buildAiAgentConfigPayload(input),
       });
       return data.config as AiAgentConfig;
     },
+    // Prefix invalidation: refreshes this account's entry and every other
+    // cached account entry under the same user and platform.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["ai-agent-config", user?.id, platform] }),
   });
 

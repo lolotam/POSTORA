@@ -71,7 +71,40 @@ Absence of links must stop meaning "allow everything".
    restricted source with its last link removed is invisible to everyone; adding a link never
    reduces what an account can see.
 
-### PR B — clone configs to every active account
+### PR B — split in two, because the constraint must drop last
+
+Revision 2 still had the ordering defect it was written to fix. The account selector was in
+PR C while the constraint drop was in PR B, so between them the live frontend would still send
+no `social_account_id`, `ai_upsert_config` would take its unscoped branch, and its
+`ON CONFLICT (user_id, platform)` would hit a constraint that no longer existed — PostgREST
+answers 42P10, and every agent settings save fails. Accepting the review finding was not the
+same as fixing it.
+
+The constraint therefore drops **last**, in its own migration, after the code that no longer
+depends on it is serving traffic.
+
+**PR B-1 — everything except the drop.** Correct while `UNIQUE (user_id, platform)` stands and
+still correct the moment it goes. Also carries the frontend account selector, so the client
+stops relying on the unscoped path before that path loses its conflict target.
+
+**PR B-2 — the drop, then the clone, in one migration.** The clone cannot live in B-1: every row it
+writes is a second config for a `(user_id, platform)` pair, which the surviving constraint
+forbids by construction. It runs unguarded immediately **after** the drop — a unique constraint
+is checked per statement, not at commit, so the clone is only legal once the constraint is
+gone. Both share one transaction, so no session observes uniqueness dropped with an account
+still unconfigured.
+
+The superseded `20260828150000_account_scoped_agents_contract.sql` is **deleted**, not left
+deferred. It sorts before every migration that prepares for it, so a fresh replay would drop
+uniqueness and set NOT NULL before the preparation existed. It was never applied anywhere; B-2
+carries its work at a later timestamp.
+
+**Ordering inside B-2: drop first, then clone.** The reverse is impossible — with one config
+for account A, inserting B's clone while `UNIQUE (user_id, platform)` is still enforced raises
+23505 immediately, because the constraint is checked per statement, not at commit. Both live in
+one transaction, so there is no window in which uniqueness is gone and an account has no config.
+
+### PR B-1 — prepare (details)
 
 1. Migration: for every active messaging account with no config, insert a copy of the owner's
    platform config (persona, model, mode, caps — every column). This is what keeps pages B–F
@@ -126,6 +159,14 @@ the query. Until this ships, the Logs tab must not claim to be account-scoped.
   be restored. Treat PR B as forward-only and say so in the runbook.
 - A cached frontend that reads null and then saves is the exact defect from this morning.
   PR C step 3 is what closes it; ship that before removing the unscoped read.
+
+## Known, deferred
+
+- **Switching accounts discards unsaved edits.** `AiAgentManager` and `AiKnowledgeManager` both
+  replace form state when the newly selected account's read settles, with no dirty check. It
+  costs unsaved keystrokes rather than stored data, so it is the first follow-up rather than a
+  B-1 blocker. `AiAgentTestChat` likewise keeps the previous account's transcript on screen,
+  though its server-side conversation id is correctly account-scoped.
 
 ## Explicitly not in scope
 

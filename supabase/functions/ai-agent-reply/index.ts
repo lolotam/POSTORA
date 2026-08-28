@@ -32,6 +32,7 @@ import {
   type ToolResult,
 } from "./tools.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
+import { resolveAgentAccountId } from "./accountScope.ts";
 import {
   cancelOutboxRow,
   deliverGeneratedReply,
@@ -264,30 +265,6 @@ async function buildWhatsAppTextSender(admin: any, account: any, fallbackPhoneNu
 // two-step publish lives (create a container with reply_to_id, then publish it), so routing
 // Threads through here is what gives the Threads agent a delivery path at all -- Threads
 // exposes no DM API for the Send-API branch below to use.
-// The authenticated test sandbox has no connected account behind it and sends
-// this placeholder. Treated as "no account scope": config and knowledge fall
-// back to the user-wide rows so the sandbox keeps working, rather than
-// resolving a UUID that does not exist.
-const SANDBOX_ACCOUNT_ID = "test";
-
-/**
- * The connected account this reply belongs to, or null for the sandbox.
- *
- * ai-agent-reply is invoked with the service role, which bypasses RLS, so the
- * account id on the request cannot be trusted on its own: it is resolved by id
- * AND owner, and a mismatch resolves to null rather than to someone else's
- * account.
- */
-async function resolveAgentAccountId(admin: any, request: ReplyRequest): Promise<string | null> {
-  if (!request.social_account_id || request.social_account_id === SANDBOX_ACCOUNT_ID) return null;
-  const { data: account } = await admin
-    .from("social_accounts")
-    .select("id")
-    .eq("id", request.social_account_id)
-    .eq("user_id", request.user_id)
-    .maybeSingle();
-  return account?.id ?? null;
-}
 
 async function buildCommentReplySender(admin: any, request: ReplyRequest): Promise<TextSender> {
   const { data: account, error } = await admin
@@ -295,6 +272,13 @@ async function buildCommentReplySender(admin: any, request: ReplyRequest): Promi
     .select("platform, access_token, platform_user_id, ig_auth_type, account_metadata")
     .eq("id", request.social_account_id)
     .eq("user_id", request.user_id)
+    // The platform has to match the request, not merely the owner. Without
+    // this, a request naming platform "instagram" with a Facebook account id
+    // resolved no agent account (resolveAgentAccountId refuses the mismatch),
+    // fell back to the owner's Instagram persona, and then delivered it here
+    // through the Facebook account -- an Instagram voice posted publicly on a
+    // Facebook page. A mismatch must refuse, not deliver a hybrid.
+    .eq("platform", request.platform)
     .maybeSingle();
   if (error || !account) throw new Error("Account not found for AI comment reply");
 
@@ -320,6 +304,7 @@ async function buildReplySender(admin: any, request: ReplyRequest): Promise<Text
       .select("id, platform_user_id, access_token, connection_mode, account_metadata")
       .eq("id", request.social_account_id)
       .eq("user_id", request.user_id)
+      .eq("platform", request.platform)
       .maybeSingle();
     if (error || !account) throw new Error("WhatsApp account not found for AI reply");
     return buildWhatsAppTextSender(admin, account, request.phone_number_id);
@@ -328,8 +313,15 @@ async function buildReplySender(admin: any, request: ReplyRequest): Promise<Text
   const { data: account, error } = await admin
     .from("social_accounts")
     .select("*")
-    .eq("id", request.social_account_id)
+    // Owner alone is not enough. resolveAgentAccountId refuses a platform
+    // mismatch by returning null, which means "fall back to the platform
+    // config" -- so a request naming instagram with a Facebook account id
+    // loaded the Instagram persona and would have delivered it through the
+    // Facebook page. Every sender matches the request's platform so the
+    // mismatch fails here instead of speaking in the wrong brand's voice.
+    .eq("platform", request.platform)
     .eq("user_id", request.user_id)
+    .eq("id", request.social_account_id)
     .maybeSingle();
   if (error || !account) throw new Error("Messaging account not found for AI reply");
   const { graphBase, pageId, pageToken } = await getSendCredentials(admin, account);
@@ -469,13 +461,38 @@ Deno.serve(async (req) => {
     const platform = typeof body.platform === "string" ? body.platform : "whatsapp";
     dryRun = true;
     actAsAdmin = body.act_as_admin === true;
+    // The sandbox tests ONE account's agent. Without this it fabricated the
+    // "test" sentinel, which resolves to no account -- so it fell through to
+    // the platform fallback, and the moment a platform holds more than one
+    // config that fallback's maybeSingle() returns a multiple-rows error and
+    // every test answers agent_not_configured. Naming the account also keeps
+    // knowledge retrieval scoped to the same corpus the live agent would read.
+    const requestedAccount = typeof body.social_account_id === "string" && body.social_account_id.trim()
+      ? body.social_account_id.trim()
+      : null;
+    let sandboxAccountId: string | null = null;
+    if (requestedAccount) {
+      const { data: owned } = await admin
+        .from("social_accounts")
+        .select("id")
+        .eq("id", requestedAccount)
+        .eq("user_id", user.id)
+        .eq("platform", platform)
+        .maybeSingle();
+      // Refused rather than silently downgraded to the sentinel: a test that
+      // quietly exercises a different account's persona is worse than an error.
+      if (!owned) return badRequestResponse("Account not found");
+      sandboxAccountId = owned.id;
+    }
     // Built field by field rather than from the body: comment_id is the one field that makes
     // this function post publicly, and it must never be reachable from a user JWT.
     request = {
       user_id: user.id,
       platform,
-      social_account_id: "test",
-      conversation_id: `test_${platform}_${user.id}`,
+      social_account_id: sandboxAccountId ?? "test",
+      // Keyed by account so one account's test turns cannot replay as
+      // another's; the owner-only key is kept for a caller naming no account.
+      conversation_id: `test_${platform}_${sandboxAccountId ?? user.id}`,
       phone_number_id: "test",
       recipient_phone: "test",
       inbound_text: body.inbound_text,

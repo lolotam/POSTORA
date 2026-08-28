@@ -3,6 +3,12 @@ import { isDirectInstagramAccount, getPageTokenForMessaging, getSendCredentials 
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
+import {
+  parseNamedAccountId,
+  resolveConfigWriteAccount,
+  resolveOwnedAccountId,
+  writeAccountScopedConfig,
+} from "./aiConfigScope.ts";
 import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
 import {
@@ -340,31 +346,6 @@ Deno.serve(async (req) => {
     const supportedAiAgentPlatforms = ["whatsapp", "facebook", "instagram", "threads"];
     const supportedAiAgentModes = ["ai_first", "human_first", "human_then_ai"];
 
-    /**
- * The caller's own account with this id, or null when none was supplied.
- *
- * messaging-api runs its database work with the service role, so RLS is not
- * checking ownership here -- an id from the request body is only ever accepted
- * after it is matched against the caller's own accounts on the requested
- * platform.
- */
-async function resolveOwnedAccountId(
-  adminClient: any,
-  userId: string,
-  platform: string,
-  requested: unknown,
-): Promise<string | null> {
-  if (typeof requested !== "string" || !requested.trim()) return null;
-  const { data } = await adminClient
-    .from("social_accounts")
-    .select("id")
-    .eq("id", requested)
-    .eq("user_id", userId)
-    .eq("platform", platform)
-    .maybeSingle();
-  return data?.id ?? null;
-}
-
 function isAiAgentPlatform(value: unknown): value is string {
       return typeof value === "string" && supportedAiAgentPlatforms.includes(value);
     }
@@ -428,10 +409,26 @@ function isAiAgentPlatform(value: unknown): value is string {
 
     // ACTION: ai_get_config
     if (action === "ai_get_config") {
-      const { platform, social_account_id } = body;
+      const { platform } = body;
       if (!isAiAgentPlatform(platform)) return jsonResponse({ error: "Invalid AI agent platform" }, 400);
-      const accountId = await resolveOwnedAccountId(adminClient, user.id, platform, social_account_id);
-      if (social_account_id && !accountId) {
+      // A malformed id is refused rather than read as "no account named" --
+      // the unscoped read answers for a different account than the caller
+      // thought they named.
+      const named = parseNamedAccountId(body.social_account_id);
+      if ("invalid" in named) {
+        return jsonResponse({ error: "social_account_id must be a non-empty string" }, 400);
+      }
+      const accountId = "absent" in named
+        ? null
+        : await resolveOwnedAccountId(adminClient, user.id, platform, (named as { id: string }).id, {
+          // Active on the read too, so read and write agree. Splitting them
+          // let ai_get_config answer for a deactivated account that
+          // ai_upsert_config then refused with 404 -- a form you can open and
+          // cannot save. The selector never offers an inactive account, so
+          // there is no repair path behind that door anyway.
+          requireActive: true,
+        });
+      if (!("absent" in named) && !accountId) {
         return jsonResponse({ error: "Account not found" }, 404);
       }
       // Shared with ai-agent-reply so the form can never render a different
@@ -505,32 +502,51 @@ function isAiAgentPlatform(value: unknown): value is string {
         }
       }
 
-      const accountId = await resolveOwnedAccountId(
-        adminClient, user.id, platform, body.social_account_id,
-      );
-      if (body.social_account_id && !accountId) {
+      // Same refusal as the read: "" / 0 / false are a caller bug, not an
+      // absent account, and reading them as unscoped writes to whichever
+      // account the server picks instead of the one that was named.
+      const namedWrite = parseNamedAccountId(body.social_account_id);
+      if ("invalid" in namedWrite) {
+        return jsonResponse({ error: "social_account_id must be a non-empty string" }, 400);
+      }
+      // requireActive on the WRITE path only. Reading a deactivated account's
+      // config is legitimate -- an operator inspecting a account whose
+      // credentials expired -- but writing through a stale id would move the
+      // platform's only config back onto the dead row a QR reconnect replaced.
+      const accountId = "absent" in namedWrite
+        ? null
+        : await resolveOwnedAccountId(adminClient, user.id, platform, (namedWrite as { id: string }).id, {
+          requireActive: true,
+        });
+      if (!("absent" in namedWrite) && !accountId) {
         return jsonResponse({ error: "Account not found" }, 404);
       }
-      // Upserting on (user_id, platform) would collapse every account of a
-      // platform onto one row -- the defect this is fixing -- and would break
-      // outright once the legacy constraint is dropped. With an account it
-      // conflicts on the account; without one it keeps writing the single
-      // unassigned row, which is what the old frontend still expects during the
-      // expansion window.
-      const { data, error } = accountId
-        ? await adminClient
-          .from("ai_agent_configs")
-          .upsert(
-            { user_id: user.id, platform, social_account_id: accountId, ...updates },
-            { onConflict: "social_account_id" },
-          )
-          .select()
-          .single()
-        : await adminClient
-          .from("ai_agent_configs")
-          .upsert({ user_id: user.id, platform, ...updates }, { onConflict: "user_id,platform" })
-          .select()
-          .single();
+      // A caller naming no account is resolved to the owner's active
+      // accounts on the platform: exactly one is unambiguous, and zero or
+      // several are refused because picking for the caller would either
+      // write the wrong brand's persona or resurrect a dead account's row.
+      // This is what keeps the action correct after
+      // ai_agent_configs_user_id_platform_key is dropped; while it stands,
+      // a scoped upsert onto the owner's only account is equivalent to the
+      // old unscoped write.
+      const writeScope = accountId
+        ? { accountId }
+        : await resolveConfigWriteAccount(adminClient, user.id, platform);
+      if ("error" in writeScope) {
+        return jsonResponse({ error: writeScope.error }, 400);
+      }
+      // The row decision lives in aiConfigScope so the row it writes can be
+      // asserted directly: while UNIQUE (user_id, platform) stands it updates
+      // the owner's single config for the platform and re-points it at the
+      // named account, because inserting a second row for that pair trips the
+      // surviving constraint with 23505 -- which is what a WhatsApp QR
+      // reconnect produces, the config still bound to the deactivated row.
+      const { data, error } = await writeAccountScopedConfig(adminClient, {
+        userId: user.id,
+        platform,
+        accountId: writeScope.accountId,
+        updates,
+      });
       if (error) throw error;
       return jsonResponse({ config: data });
     }
