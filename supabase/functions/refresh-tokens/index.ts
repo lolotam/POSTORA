@@ -1,4 +1,5 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import { accountCanAttemptRefresh, metaRefreshStrategy } from "./refreshEligibility.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import {
@@ -13,6 +14,7 @@ import { createLogger, logTokenEvent } from '../_shared/logging.ts';
 import {
   SocialAccount,
   refreshFacebookToken,
+  refreshInstagramBusinessToken,
   refreshTikTokToken,
   refreshYouTubeToken,
   refreshPinterestToken,
@@ -39,6 +41,7 @@ import {
 
 interface SocialAccountWithDetails extends SocialAccount {
   platform_username?: string;
+  ig_auth_type?: string | null;
   avatar_url?: string;
   account_metadata?: Record<string, unknown>;
   needs_reauth?: boolean;
@@ -300,7 +303,12 @@ async function handleRefreshFailure(
 ): Promise<{ needsReauth: boolean; shouldAlert: boolean }> {
   const currentFailureCount = (account.failure_count || 0) + 1;
   const isPermanentError = isPermanentAuthError(errorMessage) || errorMessage.includes('Token limit exceeded');
-  const needsReauth = isPermanentError || currentFailureCount >= MAX_FAILURES_BEFORE_REAUTH || !account.refresh_token;
+  // A missing refresh token only makes a failure permanent on platforms that actually
+  // use refresh tokens. On Meta's exchange-only platforms it is the normal state, and
+  // treating it as permanent turned every transient hiccup into an instant needs_reauth.
+  const needsReauth = isPermanentError
+    || currentFailureCount >= MAX_FAILURES_BEFORE_REAUTH
+    || !accountCanAttemptRefresh(account);
   
   // Log detailed info for debugging
   console.log(`[refresh-failure] Account ${account.id} (${account.platform}):`, {
@@ -352,8 +360,9 @@ async function refreshSingleAccount(
 ): Promise<RefreshResult> {
   const oldRefreshToken = account.refresh_token;
 
-  // Check if account has refresh token
-  if (!account.refresh_token) {
+  // Meta platforms exchange their access token in place and never hold a refresh
+  // token; only platforms that genuinely need one are failed here.
+  if (!accountCanAttemptRefresh(account)) {
     console.log(`[force-refresh] Account ${account.id} has no refresh token`);
     await handleRefreshFailure(supabaseAdmin, account, 'No refresh token available');
     return { id: account.id, platform: account.platform, status: 'needs_reauth', error: 'No refresh token' };
@@ -381,9 +390,9 @@ async function refreshSingleAccount(
         }
 
       case 'instagram': {
-        // Check if this is a Business Login (direct) Instagram account
-        const igMeta = (account as SocialAccountWithDetails).account_metadata;
-        const isBusinessLogin = igMeta && (igMeta as Record<string, unknown>).account_type === 'business_login';
+        // Business Login accounts hold Instagram-scoped tokens; Page-backed ones hold
+        // Facebook Page tokens. The flavour lives in the ig_auth_type column.
+        const isBusinessLogin = metaRefreshStrategy(account) === 'ig_refresh';
 
         if (isBusinessLogin) {
           // Instagram Business Login: refresh via graph.instagram.com
@@ -888,8 +897,9 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Check if account has refresh token
-      if (!account.refresh_token) {
+      // Meta platforms exchange their access token in place and never hold a refresh
+      // token; only platforms that genuinely need one are failed here.
+      if (!accountCanAttemptRefresh(account)) {
         console.log(`Account ${account.id} has no refresh token - marking as needs_reauth`);
         const { shouldAlert } = await handleRefreshFailure(supabaseAdmin, account, 'No refresh token available');
         results.push({ id: account.id, platform: account.platform, status: 'needs_reauth', error: 'No refresh token' });
@@ -909,7 +919,12 @@ Deno.serve(async (req) => {
         switch (account.platform) {
           case 'facebook':
           case 'instagram':
-            refreshResult = await refreshFacebookToken(account);
+            // Instagram Business Login accounts hold Instagram-scoped tokens and must
+            // exchange at graph.instagram.com; Facebook Pages and Page-backed Instagram
+            // accounts use fb_exchange_token.
+            refreshResult = metaRefreshStrategy(account) === 'ig_refresh'
+              ? await refreshInstagramBusinessToken(account)
+              : await refreshFacebookToken(account);
             if (refreshResult) {
               const expiresAt = new Date();
               expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);

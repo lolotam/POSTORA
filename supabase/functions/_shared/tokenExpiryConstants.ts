@@ -21,6 +21,17 @@ export interface PlatformRefreshConfig {
   accessTokenExpirySeconds: number;
   isShortLived: boolean;
   cronExcluded?: boolean; // If true, skip this platform in automatic cron cycles
+  /**
+   * Whether the platform issues an OAuth refresh token.
+   *
+   * Meta platforms (Facebook, Instagram, Threads) do not: they issue a long-lived access
+   * token that is exchanged for a new one using the access token itself. A null
+   * refresh_token on those platforms is normal, not a failure.
+   *
+   * Omitted means true, so a platform nobody has configured here keeps the conservative
+   * behaviour of treating a missing refresh token as unrefreshable.
+   */
+  usesRefreshToken?: boolean;
 }
 
 /**
@@ -67,16 +78,19 @@ export const PLATFORM_REFRESH_CONFIG: Record<string, PlatformRefreshConfig> = {
     refreshWindowSeconds: TIME_CONSTANTS.WEEK, // 7 days before expiry
     accessTokenExpirySeconds: TIME_CONSTANTS.MONTH_60,
     isShortLived: false,
+    usesRefreshToken: false, // exchanges the access token; never has a refresh token
   },
   instagram: {
     refreshWindowSeconds: TIME_CONSTANTS.WEEK, // 7 days before expiry
     accessTokenExpirySeconds: TIME_CONSTANTS.MONTH_60,
     isShortLived: false,
+    usesRefreshToken: false, // exchanges the access token; never has a refresh token
   },
   threads: {
     refreshWindowSeconds: TIME_CONSTANTS.WEEK, // 7 days before expiry
     accessTokenExpirySeconds: TIME_CONSTANTS.MONTH_60,
     isShortLived: false,
+    usesRefreshToken: false, // exchanges the access token; never has a refresh token
   },
   linkedin: {
     refreshWindowSeconds: TIME_CONSTANTS.WEEK, // 7 days before expiry
@@ -102,6 +116,17 @@ export const CRON_EXCLUDED_PLATFORMS = ['youtube'] as const;
 export function isCronExcludedPlatform(platform: string): boolean {
   const normalizedPlatform = platform.toLowerCase();
   return PLATFORM_REFRESH_CONFIG[normalizedPlatform]?.cronExcluded ?? false;
+}
+
+/**
+ * Check whether a platform authenticates with an OAuth refresh token.
+ *
+ * Unknown platforms default to true, which is the conservative pre-existing behaviour:
+ * a missing refresh token means the account cannot be refreshed.
+ */
+export function platformUsesRefreshToken(platform: string): boolean {
+  const normalizedPlatform = platform.toLowerCase();
+  return PLATFORM_REFRESH_CONFIG[normalizedPlatform]?.usesRefreshToken ?? true;
 }
 
 /**
