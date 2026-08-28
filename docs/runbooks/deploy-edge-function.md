@@ -50,6 +50,34 @@ Files written with `git show` are always LF, so the hashes compare directly with
 normalisation. (Do not use `"$VOL"/{$FN}/index.ts` — bash brace expansion happens before
 variable expansion, so it produces literal `{` paths.)
 
+### Auditing existing drift
+
+That LF guarantee holds only for files this runbook wrote. Earlier deploys copied straight
+from a Windows checkout, so a large share of the volume still carries CRLF. **Strip CR from
+both sides when comparing**, or a survey reports near-total drift that is purely line endings:
+
+```bash
+diff <(tr -d '\r' < "$VOL/_shared/$f") <(tr -d '\r' < "supabase/functions/_shared/$f")
+```
+
+A drifted file is not automatically stale. Classify each one before copying anything:
+
+| Class | Meaning | Action |
+|---|---|---|
+| A — volume behind | git holds the newer, reviewed version | copy git → volume |
+| B — volume ahead | a hotfix applied straight to the volume, never committed | **port to git first**, then deploy |
+| C — volume missing | file exists in git only | copy git → volume |
+
+Class B is the one that bites: `_shared/cron-auth.ts` carried a `verifyCronOrAdmin` export for
+weeks that git did not have, and `cleanup-media/index.ts` imported it. Deploying git over it
+would have removed an export a live function imports, which takes the whole `functions` service
+into a boot crash-loop — not just that one endpoint. Before copying any `_shared` module, check
+who imports what you are about to remove:
+
+```bash
+grep -rl "<symbol>" --include=*.ts "$VOL"
+```
+
 ---
 
 ## 1. One-function deploy (common case)

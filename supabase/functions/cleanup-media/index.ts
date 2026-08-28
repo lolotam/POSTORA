@@ -1,4 +1,4 @@
-import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import { verifyCronOrAdmin } from "../_shared/cron-auth.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 
@@ -111,8 +111,10 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const __cronAuth = verifyCronAuth(req);
-  if (!__cronAuth.ok) return __cronAuth.response;
+  // Reachable from the cron scheduler and from the admin Media Cleanup page,
+  // so an admin JWT is accepted alongside the cron secret.
+  const auth = await verifyCronOrAdmin(req);
+  if (!auth.ok) return auth.response;
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
