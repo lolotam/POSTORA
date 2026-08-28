@@ -442,6 +442,11 @@ Deno.serve(async (req) => {
           token_expires_at: new Date(
             Date.now() + tokenData.expires_in * 1000,
           ).toISOString(),
+          // A successful refresh means the credentials are healthy again; clearing these
+          // keeps the UI from showing a red Reconnect button over a working token.
+          needs_reauth: false,
+          failure_count: 0,
+          last_refresh_error: null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", account_id);

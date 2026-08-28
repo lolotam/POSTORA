@@ -744,6 +744,11 @@ Deno.serve(async (req) => {
           updated_at: new Date().toISOString(),
           social_profile_id: social_profile_id || null,
           token_expires_at: tokenExpiresAt,
+          // A completed reconnect must clear the health flags, or the account keeps
+          // showing the red "Action Required: Reconnect" button with a valid token.
+          needs_reauth: false,
+          failure_count: 0,
+          last_refresh_error: null,
           account_metadata: {
             type: "page",
             user_token: longLivedUserToken,
@@ -931,6 +936,11 @@ Deno.serve(async (req) => {
             updated_at: new Date().toISOString(),
             social_profile_id: social_profile_id || null,
             token_expires_at: expiresAt,
+            // A completed reconnect must clear the health flags, or the account keeps
+            // showing the red "Action Required: Reconnect" button with a valid token.
+            needs_reauth: false,
+            failure_count: 0,
+            last_refresh_error: null,
           account_metadata: {
             type: "page",
             user_token: longLivedUserToken,
