@@ -8,8 +8,28 @@ const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/openai/embeddings";
 const GEMINI_MODEL = "gemini-embedding-001";
 const GEMINI_DIMENSIONS = 1536;
+const OPENAI_ENDPOINT = "https://api.openai.com/v1/embeddings";
+// OpenRouter does serve embeddings, even though /api/v1/models lists only chat
+// models — that catalog is not evidence of what /embeddings accepts. Each
+// seeded OpenRouter model was verified by a live call before being offered.
+const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/embeddings";
 
-export type EmbeddingProvider = "gemini" | "ollama";
+// ai_knowledge_chunks has exactly two vector columns; a width outside this set
+// has no column to live in and must never be written.
+export const STORABLE_EMBEDDING_DIMENSIONS = [1024, 1536] as const;
+
+// system_settings keys for the admin embedding ladder and for the corpus-owner
+// registry. The owner rows record which model produced the vectors in a column
+// so a later selection cannot silently mix vector spaces.
+const EMBEDDING_SETTING_KEYS = [
+  "default_ai_model_embedding",
+  "default_ai_model_embedding_fallback",
+  "default_ai_model_embedding_fallback_2",
+] as const;
+const columnOwnerKey = (column: EmbeddingConfig["column"]) =>
+  `embedding_column_owner_${column}`;
+
+export type EmbeddingProvider = "gemini" | "ollama" | "openai" | "openrouter";
 export type EnvironmentReader = (name: string) => string | undefined;
 
 export type EmbeddingConfig = {
@@ -20,12 +40,54 @@ export type EmbeddingConfig = {
   ollamaBaseUrl?: string;
 };
 
+export type EmbeddingSelection = {
+  provider_code: string;
+  model_id: string;
+};
+
+// Selection of a model whose recorded width fits no vector column. Thrown
+// rather than skipped: the admin explicitly picked the model, so a silent
+// substitution would be the incident class this ladder exists to prevent.
+export class UnstorableEmbeddingWidthError extends Error {
+  constructor(selection: EmbeddingSelection, width: number) {
+    super(
+      `Embedding model ${selection.provider_code}/${selection.model_id} produces ${width}-dimensional vectors; ` +
+        `only ${STORABLE_EMBEDDING_DIMENSIONS.join(" and ")} can be stored in ai_knowledge_chunks`,
+    );
+    this.name = "UnstorableEmbeddingWidthError";
+  }
+}
+
+// Selection that would change which model owns a populated vector column.
+// Existing vectors are only comparable within one model, so switching owners
+// degrades retrieval to noise until the corpus is re-embedded (out of scope).
+export class EmbeddingColumnOwnershipError extends Error {
+  constructor(
+    column: EmbeddingConfig["column"],
+    owner: string,
+    selection: EmbeddingSelection,
+  ) {
+    super(
+      `Embedding column "${column}" already holds vectors from ${owner}; ` +
+        `switching to ${selection.provider_code}/${selection.model_id} requires re-embedding the existing corpus ` +
+        `(not implemented). Re-select the owning model, or clear the corpus first.`,
+    );
+    this.name = "EmbeddingColumnOwnershipError";
+  }
+}
+
 function configuredValue(
   readEnvironment: EnvironmentReader,
   name: string,
   fallback: string,
 ): string {
   return readEnvironment(name)?.trim() || fallback;
+}
+
+export function embeddingColumnFor(dimensions: number): EmbeddingConfig["column"] {
+  if (dimensions === GEMINI_DIMENSIONS) return "embedding";
+  if (dimensions === OLLAMA_DIMENSIONS) return "embedding_bge_m3";
+  throw new Error(`No vector column stores ${dimensions}-dimensional embeddings`);
 }
 
 export function resolveEmbeddingConfig(
@@ -86,8 +148,11 @@ export function embeddingRecord(
   return { [config.column]: embedding } as Record<EmbeddingConfig["column"], number[]>;
 }
 
+// The RPC is bound to the vector column, not the provider: any 1536-d model
+// (gemini or openai) matches through match_ai_knowledge_chunks, any 1024-d
+// model through the bge-m3 matcher.
 export function retrievalRpcName(config: EmbeddingConfig): string {
-  return config.provider === "gemini"
+  return config.column === "embedding"
     ? "match_ai_knowledge_chunks"
     : "match_ai_knowledge_chunks_bge_m3";
 }
@@ -136,39 +201,366 @@ export function resolveDualEmbeddingConfig(
   return { primary, fallback: providerConfig(readEnvironment, fallbackProvider) };
 }
 
-async function embedWithGemini(texts: string[]): Promise<number[][]> {
-  const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
-  if (!key) throw new Error("GOOGLE_AI_STUDIO_KEY is not configured");
+// ---------------------------------------------------------------------------
+// Admin-selected embedding ladder (system_settings) with env fallback.
+// ---------------------------------------------------------------------------
+
+export type EmbeddingModelCatalogRow = {
+  provider_code: string;
+  model_id: string;
+  is_active: boolean;
+  capabilities: string[];
+  metadata?: Record<string, unknown> | null;
+};
+
+export type ColumnOwners = Partial<Record<EmbeddingConfig["column"], string>>;
+
+// Width Postora would actually request from the model: the requested dimension
+// when the model supports one, else the native width. Null when the catalog row
+// carries no dimensionality record at all.
+export function recordedEmbeddingWidth(
+  metadata: Record<string, unknown> | null | undefined,
+): number | null {
+  const dims = metadata?.embedding_dimensions;
+  if (!dims || typeof dims !== "object") return null;
+  const record = dims as { native?: unknown; requested?: unknown };
+  const width = typeof record.requested === "number"
+    ? record.requested
+    : record.native;
+  return typeof width === "number" ? width : null;
+}
+
+function isStorableWidth(width: number): boolean {
+  return (STORABLE_EMBEDDING_DIMENSIONS as readonly number[]).includes(width);
+}
+
+function selectionConfig(
+  selection: EmbeddingSelection,
+  width: number,
+  readEnvironment: EnvironmentReader,
+): EmbeddingConfig {
+  const column = embeddingColumnFor(width);
+  if (selection.provider_code === "gemini" || selection.provider_code === "openai") {
+    return {
+      provider: selection.provider_code,
+      column,
+      dimensions: width,
+      model: selection.model_id,
+    };
+  }
+  if (selection.provider_code === "ollama") {
+    return {
+      provider: "ollama",
+      column,
+      dimensions: width,
+      model: selection.model_id,
+      ollamaBaseUrl: configuredValue(readEnvironment, "OLLAMA_BASE_URL", "http://ollama:11434"),
+    };
+  }
+  if (selection.provider_code === "openrouter") {
+    return {
+      provider: "openrouter",
+      column,
+      dimensions: width,
+      model: selection.model_id,
+    };
+  }
+  // Any other provider code has no caller. The tier is skipped by the resolver
+  // before reaching this throw.
+  throw new Error(`No embedding caller for provider ${selection.provider_code}`);
+}
+
+function ownerKeyOf(config: EmbeddingConfig): string {
+  return `${config.provider}/${config.model}`;
+}
+
+function assertSelectionOwnsColumns(
+  configs: EmbeddingConfig[],
+  columnOwners: ColumnOwners,
+): void {
+  for (const config of configs) {
+    const owner = columnOwners[config.column];
+    if (owner && owner !== ownerKeyOf(config)) {
+      throw new EmbeddingColumnOwnershipError(
+        config.column,
+        owner,
+        { provider_code: config.provider, model_id: config.model },
+      );
+    }
+  }
+}
+
+// Pure ladder resolution so the policy is testable without a database.
+//
+// Tier semantics:
+//   * No usable primary selection (rows absent, malformed, model missing from
+//     the catalog, inactive, or without the embedding capability) falls back to
+//     today's env-based behaviour — the incident-prevention guarantee.
+//   * A selected model whose recorded width fits no vector column throws
+//     UnstorableEmbeddingWidthError (never silently stored in the wrong column).
+//   * A selection that would change the owning model of a populated column
+//     throws EmbeddingColumnOwnershipError (corpus consistency).
+//   * The dual-write shape has one slot per vector column, so later tiers that
+//     map to an already-assigned column are dropped with a warning; a third
+//     tier matters when the second is absent or unusable.
+export function resolveAdminEmbeddingLadder(
+  primary: EmbeddingSelection | null,
+  fallback: EmbeddingSelection | null,
+  fallback2: EmbeddingSelection | null,
+  catalog: EmbeddingModelCatalogRow[],
+  columnOwners: ColumnOwners,
+  readEnvironment: EnvironmentReader = Deno.env.get,
+): DualEmbeddingConfig {
+  const tiers = [primary, fallback, fallback2].filter(
+    (tier): tier is EmbeddingSelection =>
+      !!tier && typeof tier.provider_code === "string" && typeof tier.model_id === "string",
+  );
+  if (!tiers.length) {
+    const envDual = resolveDualEmbeddingConfig(readEnvironment);
+    // Owner rows only exist once this ladder has written a corpus; when they
+    // do, the env default may no longer be the owner and must be refused too.
+    assertSelectionOwnsColumns([envDual.primary, envDual.fallback].filter(Boolean) as EmbeddingConfig[], columnOwners);
+    return envDual;
+  }
+
+  const byKey = new Map(
+    catalog.map((row) => [`${row.provider_code}/${row.model_id}`, row]),
+  );
+  const configs: EmbeddingConfig[] = [];
+  for (const tier of tiers) {
+    const row = byKey.get(`${tier.provider_code}/${tier.model_id}`);
+    if (!row || !row.is_active || !row.capabilities?.includes("embedding")) {
+      console.warn(
+        `[knowledge-embeddings] ignoring embedding tier ${tier.provider_code}/${tier.model_id}: not an active embedding model`,
+      );
+      continue;
+    }
+    const width = recordedEmbeddingWidth(row.metadata);
+    if (width === null) {
+      console.warn(
+        `[knowledge-embeddings] ignoring embedding tier ${tier.provider_code}/${tier.model_id}: no dimensionality recorded`,
+      );
+      continue;
+    }
+    if (!isStorableWidth(width)) {
+      throw new UnstorableEmbeddingWidthError(tier, width);
+    }
+    const config = selectionConfig(tier, width, readEnvironment);
+    if (configs.some((existing) => existing.column === config.column)) {
+      console.warn(
+        `[knowledge-embeddings] dropping embedding tier ${tier.provider_code}/${tier.model_id}: column ${config.column} already assigned this run`,
+      );
+      continue;
+    }
+    configs.push(config);
+  }
+
+  if (!configs.length) {
+    const envDual = resolveDualEmbeddingConfig(readEnvironment);
+    assertSelectionOwnsColumns([envDual.primary, envDual.fallback].filter(Boolean) as EmbeddingConfig[], columnOwners);
+    return envDual;
+  }
+  assertSelectionOwnsColumns(configs, columnOwners);
+  return { primary: configs[0], fallback: configs[1] ?? null };
+}
+
+function parseSelection(value: unknown): EmbeddingSelection | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.provider_code !== "string" || typeof record.model_id !== "string") {
+    return null;
+  }
+  return { provider_code: record.provider_code, model_id: record.model_id };
+}
+
+type SettingsClient = {
+  from: (table: string) => any;
+};
+
+async function readSettingRows(
+  admin: SettingsClient,
+  keys: readonly string[],
+): Promise<Map<string, unknown>> {
+  try {
+    const { data } = await admin.from("system_settings")
+      .select("key, value")
+      .in("key", [...keys]);
+    return new Map((data || []).map((row: { key: string; value: unknown }) => [row.key, row.value]));
+  } catch (error) {
+    // A settings read failure degrades to the env default, mirroring
+    // fetchCategoryAiSettings: the ladder must hard-fail only on genuinely
+    // inconsistent selections, not on a transient read error.
+    console.warn(
+      "[knowledge-embeddings] system_settings read failed; using env defaults:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return new Map();
+  }
+}
+
+async function readColumnOwners(admin: SettingsClient): Promise<ColumnOwners> {
+  const columns = ["embedding", "embedding_bge_m3"] as const;
+  const keys = columns.map(columnOwnerKey);
+  const rows = await readSettingRows(admin, keys);
+  const owners: ColumnOwners = {};
+  for (const column of columns) {
+    const selection = parseSelection(rows.get(columnOwnerKey(column)));
+    if (selection) owners[column] = `${selection.provider_code}/${selection.model_id}`;
+  }
+  return owners;
+}
+
+async function readModelCatalog(
+  admin: SettingsClient,
+  selections: EmbeddingSelection[],
+): Promise<EmbeddingModelCatalogRow[]> {
+  const modelIds = [...new Set(selections.map((selection) => selection.model_id))];
+  if (!modelIds.length) return [];
+  try {
+    const { data } = await admin.from("ai_models")
+      .select("model_id, is_active, capabilities, metadata, ai_providers!inner(provider_code, is_active)")
+      .in("model_id", modelIds);
+    return (data || [])
+      .filter((row: any) => row.ai_providers?.is_active)
+      .map((row: any) => ({
+        provider_code: row.ai_providers.provider_code as string,
+        model_id: row.model_id as string,
+        is_active: Boolean(row.is_active),
+        capabilities: (row.capabilities || []) as string[],
+        metadata: row.metadata,
+      }));
+  } catch (error) {
+    console.warn(
+      "[knowledge-embeddings] ai_models read failed; treating selections as unknown:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return [];
+  }
+}
+
+// Admin selection first, env behaviour when the selection is absent or unusable.
+// Callers: ai-knowledge-ingest, ai-knowledge-excel-worker (ingest) and
+// ai-agent-reply (RAG retrieval). All three must resolve identically or query
+// vectors stop being comparable with stored vectors.
+export async function resolveDualEmbeddingConfigFromDb(
+  admin: SettingsClient,
+  readEnvironment: EnvironmentReader = Deno.env.get,
+): Promise<DualEmbeddingConfig> {
+  const settingRows = await readSettingRows(admin, EMBEDDING_SETTING_KEYS);
+  const [columnOwners, catalog] = await Promise.all([
+    readColumnOwners(admin),
+    readModelCatalog(
+      admin,
+      EMBEDDING_SETTING_KEYS
+        .map((key) => parseSelection(settingRows.get(key)))
+        .filter((selection): selection is EmbeddingSelection => selection !== null),
+    ),
+  ]);
+  return resolveAdminEmbeddingLadder(
+    parseSelection(settingRows.get("default_ai_model_embedding")),
+    parseSelection(settingRows.get("default_ai_model_embedding_fallback")),
+    parseSelection(settingRows.get("default_ai_model_embedding_fallback_2")),
+    catalog,
+    columnOwners,
+    readEnvironment,
+  );
+}
+
+// First successful write into a vector column claims it for that model. The
+// claim is never overwritten (ignoreDuplicates), so a corpus keeps one owner
+// until it is deleted; resolution above refuses a mismatched successor.
+export async function claimEmbeddingColumnOwnership(
+  admin: SettingsClient,
+  dual: DualEmbeddingConfig,
+): Promise<void> {
+  for (const config of [dual.primary, dual.fallback]) {
+    if (!config) continue;
+    const { error } = await admin.from("system_settings").upsert(
+      {
+        key: columnOwnerKey(config.column),
+        value: { provider_code: config.provider, model_id: config.model },
+        description: `Model that produced the vectors in ai_knowledge_chunks.${config.column}`,
+      },
+      { onConflict: "key", ignoreDuplicates: true },
+    );
+    if (error) {
+      // Ownership is a safety net, not a prerequisite: failing the ingest after
+      // the vectors landed would strand a ready source over bookkeeping.
+      console.warn(
+        `[knowledge-embeddings] could not record ownership of ${config.column}: ${error.message}`,
+      );
+    }
+  }
+}
+
+// OpenAI, OpenRouter and Gemini all speak the same /embeddings dialect (Bearer
+// auth, batched `input`, requested `dimensions`) — Gemini through its
+// OpenAI-compatible endpoint. One caller keeps a third copy of the batching and
+// width-checking from drifting away from the other two.
+async function embedWithOpenAiCompatible(
+  texts: string[],
+  config: EmbeddingConfig,
+  api: { endpoint: string; keyEnvVar: string; label: string },
+): Promise<number[][]> {
+  const key = Deno.env.get(api.keyEnvVar);
+  if (!key) throw new Error(`${api.keyEnvVar} is not configured`);
 
   const embeddings: number[][] = [];
   for (let start = 0; start < texts.length; start += 64) {
-    const response = await fetch(GEMINI_ENDPOINT, {
+    const response = await fetch(api.endpoint, {
       method: "POST",
       headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: GEMINI_MODEL,
+        model: config.model,
         input: texts.slice(start, start + 64),
-        dimensions: GEMINI_DIMENSIONS,
+        dimensions: config.dimensions,
       }),
       signal: AbortSignal.timeout(15_000),
     });
     const payload: { data?: Array<{ embedding?: unknown }> } = await response.json();
     if (!response.ok || !Array.isArray(payload.data)) {
-      throw new Error("Gemini embedding request failed");
+      throw new Error(`${api.label} embedding request failed`);
     }
 
     const batch: unknown[] = payload.data.map((item) => item.embedding);
     if (
       batch.length !== Math.min(64, texts.length - start) ||
       !batch.every((embedding: unknown) =>
-        Array.isArray(embedding) && embedding.length === GEMINI_DIMENSIONS,
+        Array.isArray(embedding) && embedding.length === config.dimensions,
       )
     ) {
-      throw new Error("Gemini returned an unexpected embedding dimension");
+      throw new Error(`${api.label} returned an unexpected embedding dimension`);
     }
     embeddings.push(...batch as number[][]);
   }
   return embeddings;
+}
+
+function embedWithOpenAI(texts: string[], config: EmbeddingConfig): Promise<number[][]> {
+  return embedWithOpenAiCompatible(texts, config, {
+    endpoint: OPENAI_ENDPOINT,
+    keyEnvVar: "OPENAI_API_KEY",
+    label: "OpenAI",
+  });
+}
+
+function embedWithOpenRouter(texts: string[], config: EmbeddingConfig): Promise<number[][]> {
+  return embedWithOpenAiCompatible(texts, config, {
+    endpoint: OPENROUTER_ENDPOINT,
+    keyEnvVar: "OPENROUTER_API_KEY",
+    label: "OpenRouter",
+  });
+}
+
+// GEMINI_ENDPOINT is Google's OpenAI-compatible route, so Bearer auth is
+// correct here. The native generativelanguage route rejects Bearer and wants an
+// x-goog-api-key header instead — do not "fix" one into the other.
+function embedWithGemini(texts: string[], config: EmbeddingConfig): Promise<number[][]> {
+  return embedWithOpenAiCompatible(texts, config, {
+    endpoint: GEMINI_ENDPOINT,
+    keyEnvVar: "GOOGLE_AI_STUDIO_KEY",
+    label: "Gemini",
+  });
 }
 
 export async function embedKnowledge(
@@ -176,7 +568,9 @@ export async function embedKnowledge(
   config: EmbeddingConfig = resolveEmbeddingConfig(),
 ): Promise<number[][]> {
   if (!texts.length) return [];
-  if (config.provider === "gemini") return embedWithGemini(texts);
+  if (config.provider === "gemini") return embedWithGemini(texts, config);
+  if (config.provider === "openai") return embedWithOpenAI(texts, config);
+  if (config.provider === "openrouter") return embedWithOpenRouter(texts, config);
 
   return embedWithOllama(texts, {
     baseUrl: config.ollamaBaseUrl,

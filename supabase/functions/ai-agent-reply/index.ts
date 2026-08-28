@@ -44,7 +44,7 @@ import { replyToComment } from "../_shared/commentActions.ts";
 import { commentConversationLikePrefix, isCommentConversationId } from "../_shared/commentConversation.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 import {
-  resolveDualEmbeddingConfig,
+  resolveDualEmbeddingConfigFromDb,
   retrieveKnowledgeChunks,
 } from "../_shared/knowledgeEmbeddings.ts";
 
@@ -667,7 +667,7 @@ Deno.serve(async (req) => {
     // RAG failure in the logs rather than silencing the agent.
     let relevantChunks: Array<{ id: string; content: string; similarity: number }> = [];
     let ragError: string | null = null;
-    const embeddingConfig = resolveDualEmbeddingConfig();
+    const embeddingConfig = await resolveDualEmbeddingConfigFromDb(admin);
     try {
       const matchedChunks = await retrieveKnowledgeChunks(
         async (name, params) => await admin.rpc(name, params),

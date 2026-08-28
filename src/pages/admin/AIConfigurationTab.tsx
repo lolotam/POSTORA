@@ -21,7 +21,8 @@ import { Input } from '@/components/ui/input';
 import { DefaultModelSelector } from '@/components/admin/DefaultModelSelector';
 import { useSetFallback2Model, useSetModelAdminParams } from '@/hooks/useAIConfiguration';
 import { toast } from 'sonner';
-import type { AIProvider, AIModel } from '@/hooks/ai-config/types';
+import type { AIProvider, AIModel, ModelCategory } from '@/hooks/useAIConfiguration';
+import { embeddingModelNote } from '@/hooks/ai-config/embeddingDimensions';
 import { supabase } from '@/integrations/supabase/client';
 
 function isOAuthProvider(provider: AIProvider | null) {
@@ -88,7 +89,10 @@ export function AIConfigurationTab() {
     }
   };
 
-  const handleSetCategoryDefault = async (category: 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt', providerCode: string, modelId: string) => {
+  // Typed as ModelCategory, not a hand-copied union: the local unions had
+  // already drifted (they omitted 'agent' even though default_ai_model_agent*
+  // rows exist in production).
+  const handleSetCategoryDefault = async (category: ModelCategory, providerCode: string, modelId: string) => {
     try {
       await setDefaultModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category });
       toast.success('Default model updated');
@@ -97,7 +101,7 @@ export function AIConfigurationTab() {
     }
   };
 
-  const handleSetCategoryFallback2 = async (category: 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt', providerCode: string, modelId: string) => {
+  const handleSetCategoryFallback2 = async (category: ModelCategory, providerCode: string, modelId: string) => {
     setFallback2Model.mutate(
       { provider_code: providerCode, model_id: modelId, category },
       {
@@ -117,7 +121,7 @@ export function AIConfigurationTab() {
     );
   };
 
-  const handleSetCategoryFallback = async (category: 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt', providerCode: string, modelId: string) => {
+  const handleSetCategoryFallback = async (category: ModelCategory, providerCode: string, modelId: string) => {
     try {
       await setFallbackModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category });
       toast.success('Fallback model updated');
@@ -161,9 +165,9 @@ export function AIConfigurationTab() {
 
   const providers = aiConfig?.providers || [];
   const models = aiConfig?.models || [];
-  const categoryDefaults = aiConfig?.categoryDefaults || { chat: null, image: null, tts: null, video: null, search: null, stt: null };
-  const categoryFallbacks = aiConfig?.categoryFallbacks || { chat: null, image: null, tts: null, video: null, search: null, stt: null };
-  const categoryFallbacks2 = aiConfig?.categoryFallbacks2 || { chat: null, image: null, tts: null, video: null, search: null, stt: null };
+  const categoryDefaults = aiConfig?.categoryDefaults || { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
+  const categoryFallbacks = aiConfig?.categoryFallbacks || { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
+  const categoryFallbacks2 = aiConfig?.categoryFallbacks2 || { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
 
   if (providers.length === 0) {
     return (
@@ -201,6 +205,9 @@ export function AIConfigurationTab() {
           providers={providers} models={models} currentDefault={categoryDefaults.search} currentFallback={categoryFallbacks.search} onSetDefault={(pc, mid) => handleSetCategoryDefault('search', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('search', pc, mid)} currentFallback2={categoryFallbacks2.search} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('search', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
         <DefaultModelSelector category="stt" capability="stt" title="Speech to Text" description="Default model for voice-to-text transcription" icon={Mic}
           providers={providers} models={models} currentDefault={categoryDefaults.stt} currentFallback={categoryFallbacks.stt} onSetDefault={(pc, mid) => handleSetCategoryDefault('stt', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('stt', pc, mid)} currentFallback2={categoryFallbacks2.stt} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('stt', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
+        <DefaultModelSelector category="embedding" capability="embedding" title="Embedding Models" description="Default vector model for Knowledge Base & RAG search" icon={Layers}
+          providers={providers} models={models} currentDefault={categoryDefaults.embedding} currentFallback={categoryFallbacks.embedding} onSetDefault={(pc, mid) => handleSetCategoryDefault('embedding', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('embedding', pc, mid)} currentFallback2={categoryFallbacks2.embedding} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('embedding', pc, mid)} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
+          modelNote={embeddingModelNote} />
       </div>
 
       {/* Providers Grid */}

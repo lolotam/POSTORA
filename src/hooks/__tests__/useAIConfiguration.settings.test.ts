@@ -43,4 +43,29 @@ describe("parseSettingsRows", () => {
     expect(out.categoryDefaults.image).toBeNull();
     expect(out.categoryFallbacks.image).toBeNull();
   });
+
+  // The embedding category writes the same three system_settings keys the
+  // edge-function ladder reads (default_ai_model_embedding[_fallback[_2]]);
+  // a mis-routed key would silently strand the admin's vector-model choice.
+  it("routes the three embedding slots to their own tiers", () => {
+    const out = parseSettingsRows([
+      { key: "default_ai_model_embedding", value: { provider_code: "ollama", model_id: "bge-m3:latest" } },
+      { key: "default_ai_model_embedding_fallback", value: { provider_code: "gemini", model_id: "gemini-embedding-001" } },
+      { key: "default_ai_model_embedding_fallback_2", value: { provider_code: "openai", model_id: "text-embedding-3-small" } },
+    ]);
+    expect(out.categoryDefaults.embedding).toEqual({ provider_code: "ollama", model_id: "bge-m3:latest" });
+    expect(out.categoryFallbacks.embedding).toEqual({ provider_code: "gemini", model_id: "gemini-embedding-001" });
+    expect(out.categoryFallbacks2.embedding).toEqual({ provider_code: "openai", model_id: "text-embedding-3-small" });
+  });
+
+  it("keeps embedding tiers separate from the similarly-suffixed keys", () => {
+    const out = parseSettingsRows([
+      { key: "default_ai_model_embedding_fallback_2", value: { provider_code: "openai", model_id: "text-embedding-3-small" } },
+      { key: "default_ai_model_stt_fallback", value: { provider_code: "openai", model_id: "whisper-1" } },
+    ]);
+    expect(out.categoryDefaults.embedding).toBeNull();
+    expect(out.categoryFallbacks.embedding).toBeNull();
+    expect(out.categoryFallbacks2.embedding?.model_id).toBe("text-embedding-3-small");
+    expect(out.categoryFallbacks.stt?.model_id).toBe("whisper-1");
+  });
 });

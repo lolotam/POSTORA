@@ -27,9 +27,10 @@ import {
   unauthorizedResponse,
 } from "../_shared/cors.ts";
 import {
+  claimEmbeddingColumnOwnership,
   dualEmbeddingRecord,
   embedKnowledgeDual,
-  resolveDualEmbeddingConfig,
+  resolveDualEmbeddingConfigFromDb,
 } from "../_shared/knowledgeEmbeddings.ts";
 import { deleteFromOpeninary, getOpeninaryConfig, openinaryDeliveryUrl } from "../_shared/openinary.ts";
 import {
@@ -72,7 +73,7 @@ async function replaceChunks(
   userId: string,
   chunks: KnowledgeChunk[],
 ): Promise<StoredChunk[]> {
-  const embeddingConfig = resolveDualEmbeddingConfig();
+  const embeddingConfig = await resolveDualEmbeddingConfigFromDb(admin);
   const embeddings = await embedKnowledgeDual(
     chunks.map((chunk) => chunk.content),
     embeddingConfig,
@@ -97,6 +98,7 @@ async function replaceChunks(
     )
     .select("id, content");
   if (error) throw error;
+  await claimEmbeddingColumnOwnership(admin, embeddingConfig);
   return data as StoredChunk[];
 }
 
@@ -701,14 +703,18 @@ Deno.serve(async (req) => {
       if (!source) return errorResponse("Knowledge source not found", 404);
       if (!["csv", "excel", "pdf", "doc", "image"].includes(source.source_type))
         return errorResponse("Source type not supported", 400);
-      if (source.source_type === "excel") {
+      // Excel and CSV both go to the worker queue: a large tabular file takes
+      // hours to embed and cannot finish inside the edge worker's ~60s ceiling.
+      // chunk_count is zeroed so the worker starts (or restarts) from scratch.
+      if (source.source_type === "excel" || source.source_type === "csv") {
         const { error } = await (admin as any)
           .from("ai_knowledge_sources")
-          .update({ status: "pending", error: null })
+          .update({ status: "pending", chunk_count: 0, error: null })
           .eq("id", source.id);
         if (error) throw error;
-        await logKnowledgeEvent(admin, user.id, "queue_excel_source", true, {
+        await logKnowledgeEvent(admin, user.id, "queue_spreadsheet_source", true, {
           source_id: source.id,
+          source_type: source.source_type,
           file_name: source.file_name,
         });
         return jsonResponse({ ok: true, queued: true }, 202);

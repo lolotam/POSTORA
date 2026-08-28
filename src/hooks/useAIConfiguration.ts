@@ -20,10 +20,10 @@ function parseDefault(val: unknown): DefaultModel | null {
   return null;
 }
 
-const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null };
-const emptyCategoryFallbacks: CategoryFallbacks = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null };
+const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
+const emptyCategoryFallbacks: CategoryFallbacks = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
 
-const MODEL_CATEGORIES: ModelCategory[] = ['chat', 'image', 'tts', 'video', 'search', 'stt', 'agent'];
+const MODEL_CATEGORIES: ModelCategory[] = ['chat', 'image', 'tts', 'video', 'search', 'stt', 'agent', 'embedding'];
 
 export interface ParsedModelSettings {
   defaultModel: DefaultModel | null;
