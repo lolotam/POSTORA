@@ -43,6 +43,13 @@ import {
   locateKnowledgeFile,
   type KnowledgeFileOwner,
 } from "../_shared/knowledgeSourceFiles.ts";
+import {
+  listSourceAccounts,
+  parseSetSourceVisibilityInput,
+  setSourceVisibility,
+  type SetSourceVisibilityInput,
+  SourceVisibilityError,
+} from "./sourceVisibility.ts";
 
 const BUCKET = "ai-knowledge";
 const GRAPH_API = "https://graph.facebook.com/v21.0";
@@ -679,6 +686,53 @@ Deno.serve(async (req) => {
         file_name: source.file_name,
       });
       return jsonResponse({ ok: true });
+    }
+    // Visibility and links are managed together, through the
+    // set_ai_knowledge_source_visibility RPC, so a failure can never leave
+    // them disagreeing. Validation and ownership refusals live in
+    // ./sourceVisibility.ts, which is where they are testable.
+    if (action === "list_source_accounts") {
+      const sourceId = body.source_id;
+      if (typeof sourceId !== "string" || !sourceId) {
+        return errorResponse("source_id is required", 400);
+      }
+      try {
+        const view = await listSourceAccounts(admin, { userId: user.id, sourceId });
+        if (!view) return errorResponse("Knowledge source not found", 404);
+        return jsonResponse({
+          ok: true,
+          visibility: view.visibility,
+          social_account_ids: view.socialAccountIds,
+        });
+      } catch (error) {
+        return errorResponse(message(error));
+      }
+    }
+    if (action === "set_source_visibility") {
+      let input: SetSourceVisibilityInput;
+      try {
+        input = parseSetSourceVisibilityInput(body);
+      } catch (error) {
+        const status = error instanceof SourceVisibilityError ? error.status : 400;
+        return errorResponse(message(error), status);
+      }
+      try {
+        await setSourceVisibility(admin, { userId: user.id, input });
+        await logKnowledgeEvent(admin, user.id, "set_source_visibility", true, {
+          source_id: input.sourceId,
+          visibility: input.visibility,
+          social_account_count: input.socialAccountIds.length,
+        });
+        return jsonResponse({ ok: true });
+      } catch (error) {
+        await logKnowledgeEvent(admin, user.id, "set_source_visibility", false, {
+          source_id: input.sourceId,
+          visibility: input.visibility,
+          error: message(error).slice(0, 500),
+        });
+        const status = error instanceof SourceVisibilityError ? error.status : 400;
+        return errorResponse(message(error), status);
+      }
     }
     if (action === "ingest_source") {
       const { data: source } = await (admin as any)

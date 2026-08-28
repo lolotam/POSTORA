@@ -604,6 +604,7 @@ export type Database = {
           status: string
           updated_at: string | null
           user_id: string
+          visibility: string
         }
         Insert: {
           chunk_count?: number | null
@@ -616,6 +617,7 @@ export type Database = {
           status?: string
           updated_at?: string | null
           user_id: string
+          visibility?: string
         }
         Update: {
           chunk_count?: number | null
@@ -628,6 +630,7 @@ export type Database = {
           status?: string
           updated_at?: string | null
           user_id?: string
+          visibility?: string
         }
         Relationships: []
       }
@@ -7102,6 +7105,16 @@ export type Database = {
         Args: Record<PropertyKey, never>
         Returns: number
       }
+      create_ai_knowledge_source: {
+        Args: {
+          p_source_type: string
+          p_file_name: string
+          p_file_path: string
+          p_social_account_ids: string[]
+          p_visibility?: string
+        }
+        Returns: string
+      }
       create_default_whatsapp_pipeline: {
         Args: { p_workspace_id: string }
         Returns: string
@@ -7604,6 +7617,15 @@ export type Database = {
       }
       record_unmatched_webhook_observations: {
         Args: { p_platform: string; p_observations: Json }
+        Returns: undefined
+      }
+      set_ai_knowledge_source_visibility: {
+        Args: {
+          p_user_id: string
+          p_source_id: string
+          p_visibility: string
+          p_social_account_ids: string[]
+        }
         Returns: undefined
       }
       set_user_quotas_for_plan: {
