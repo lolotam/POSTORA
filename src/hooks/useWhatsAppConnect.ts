@@ -78,6 +78,39 @@ export function useWhatsAppRequestSync() {
   });
 }
 
+/**
+ * Restores a Meta-hosted account that was disconnected in-product.
+ *
+ * Embedded Signup cannot do this: it offers numbers available to *onboard*, so a
+ * number already owned by a WABA never appears there and the operator is left
+ * with a live, healthy number, an empty picker, and no messages arriving.
+ */
+export function useWhatsAppReconnect() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (socialAccountId: string) => {
+      const { data, error } = await supabase.functions.invoke("whatsapp-oauth", {
+        body: { action: "reconnect", social_account_id: socialAccountId },
+      });
+      if (error) throw new Error(error.message || "Failed to reconnect.");
+      if (data?.error) throw new Error(data.error);
+      return data;
+    },
+    onSuccess: () => {
+      toast({
+        title: "WhatsApp reconnected",
+        description: "Webhooks are subscribed again and messages will resume.",
+      });
+      queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Reconnect failed", description: err.message, variant: "destructive" });
+    },
+  });
+}
+
 export function useWhatsAppDisconnect() {
   const queryClient = useQueryClient();
 

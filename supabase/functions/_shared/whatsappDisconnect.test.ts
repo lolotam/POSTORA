@@ -1,6 +1,10 @@
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { createEvolutionApi } from "./evolutionApi.ts";
-import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "./whatsappDisconnect.ts";
+import {
+  disconnectWhatsAppAccount,
+  reconnectWhatsAppAccount,
+  type WhatsAppDisconnectAdmin,
+} from "./whatsappDisconnect.ts";
 
 function response(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -317,4 +321,86 @@ Deno.test("an account with no workspace scoping deactivates by id alone", async 
     filters: [["id", "acc-8"]],
   });
   assertEquals(result.deactivated, true);
+});
+
+Deno.test("reconnect resubscribes the WABA webhook and reactivates the account", async () => {
+  // The state this exists for: a healthy, already-onboarded coexistence number
+  // that the product disconnected. Embedded Signup lists numbers available to
+  // ONBOARD, so it never shows this one and the operator has no way back.
+  const { updates, admin } = recordingAdmin();
+  const graphCalls: Array<{ url: string; method?: string; authorization?: string }> = [];
+
+  const result = await reconnectWhatsAppAccount(
+    {
+      accountId: "acc-9",
+      workspaceId: "ws-9",
+      connectionMode: "coexistence",
+      wabaId: "waba-9",
+      accessToken: "token-9",
+    },
+    { admin, fetcher: graphRecorder(graphCalls) },
+  );
+
+  assertEquals(graphCalls, [{
+    url: "https://graph.facebook.com/v22.0/waba-9/subscribed_apps",
+    method: "POST",
+    authorization: "Bearer token-9",
+  }]);
+  assertEquals(deactivationOf(updates), {
+    table: "social_accounts",
+    values: { is_active: true },
+    filters: [["id", "acc-9"], ["workspace_id", "ws-9"]],
+  });
+  assertEquals(result, { deactivated: false, evolution: "skipped", graph: "ok", warnings: [] });
+});
+
+Deno.test("reconnect leaves the account disconnected when the resubscribe fails", async () => {
+  // The inverse of disconnect's best-effort rule. Reactivating a row whose
+  // webhook subscription is still missing yields an account that looks connected
+  // and silently receives nothing -- the exact state being escaped.
+  const { updates, admin } = recordingAdmin();
+
+  await assertRejects(() =>
+    reconnectWhatsAppAccount(
+      {
+        accountId: "acc-10",
+        workspaceId: "ws-10",
+        connectionMode: "coexistence",
+        wabaId: "waba-10",
+        accessToken: "token-10",
+      },
+      { admin, fetcher: () => Promise.resolve(response({ error: "nope" }, 400)) },
+    )
+  );
+
+  assertEquals(deactivationOf(updates), undefined);
+});
+
+Deno.test("reconnect refuses a Direct QR account", async () => {
+  // A logged-out Baileys session cannot be restored by resubscribing; the
+  // operator has to scan a new QR, and pretending otherwise would reactivate a
+  // row with no live session behind it.
+  const { updates, admin } = recordingAdmin();
+
+  await assertRejects(() =>
+    reconnectWhatsAppAccount(
+      { accountId: "acc-11", workspaceId: "ws-11", connectionMode: "evolution_qr" },
+      { admin, fetcher: graphRecorder([]) },
+    )
+  );
+
+  assertEquals(updates.length, 0);
+});
+
+Deno.test("reconnect refuses an account missing its WABA id or token", async () => {
+  const { updates, admin } = recordingAdmin();
+
+  await assertRejects(() =>
+    reconnectWhatsAppAccount(
+      { accountId: "acc-12", workspaceId: "ws-12", connectionMode: "coexistence", wabaId: null, accessToken: "t" },
+      { admin, fetcher: graphRecorder([]) },
+    )
+  );
+
+  assertEquals(updates.length, 0);
 });

@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedJsonResponse, restrictedErrorResponse } from "../_shared/cors.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
-import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
+import { disconnectWhatsAppAccount, reconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { requireWhatsAppWorkspaceAccess, roleAtLeast, WhatsAppAccessError, type WhatsAppWorkspaceAccessClient, type WorkspaceRole } from "../_shared/whatsappWorkspaceAccess.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v22.0";
@@ -18,6 +18,11 @@ interface ExchangeBody {
 
 interface DisconnectBody {
   action: "disconnect";
+  social_account_id: string;
+}
+
+interface ReconnectBody {
+  action: "reconnect";
   social_account_id: string;
 }
 
@@ -92,7 +97,7 @@ Deno.serve(async (req) => {
 
     const admin = createClient(supabaseUrl, serviceRoleKey);
     const whatsappAccessClient = admin as unknown as WhatsAppWorkspaceAccessClient;
-    const body = (await req.json()) as ExchangeBody | DisconnectBody | RequestSyncBody;
+    const body = (await req.json()) as ExchangeBody | DisconnectBody | ReconnectBody | RequestSyncBody;
 
     async function requireWorkspaceAdmin(workspaceId: string): Promise<void> {
       const { data: member, error } = await admin
@@ -150,6 +155,33 @@ Deno.serve(async (req) => {
           accessToken: account.accessToken || null,
         },
         { admin: admin as unknown as WhatsAppDisconnectAdmin, evolution, fetcher: fetch },
+      );
+
+      return restrictedJsonResponse(req, { success: true, teardown });
+    }
+
+    // ============ RECONNECT (restore a Meta account disconnected in-product) ============
+    // Embedded Signup cannot do this: it lists numbers available to ONBOARD, so a
+    // number already owned by a WABA never appears there. Without this action an
+    // operator who disconnects a healthy coexistence number has no way back.
+    if (body.action === "reconnect") {
+      const account = await requireWhatsAppWorkspaceAccess(
+        whatsappAccessClient, userId, body.social_account_id, "admin",
+      );
+      if (account.connectionMode === "evolution_qr") {
+        return restrictedErrorResponse(req, "Direct QR accounts reconnect by scanning a new QR code", 400);
+      }
+
+      const reconnectMeta = (account.accountMetadata || {}) as Record<string, unknown>;
+      const teardown = await reconnectWhatsAppAccount(
+        {
+          accountId: account.accountId,
+          workspaceId: account.workspaceId,
+          connectionMode: account.connectionMode,
+          wabaId: typeof reconnectMeta.waba_id === "string" ? reconnectMeta.waba_id : null,
+          accessToken: account.accessToken || null,
+        },
+        { admin: admin as unknown as WhatsAppDisconnectAdmin, fetcher: fetch },
       );
 
       return restrictedJsonResponse(req, { success: true, teardown });
