@@ -395,25 +395,21 @@ async function refreshSingleAccount(
         const isBusinessLogin = metaRefreshStrategy(account) === 'ig_refresh';
 
         if (isBusinessLogin) {
-          // Instagram Business Login: refresh via graph.instagram.com
           try {
-            const refreshUrl = `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${account.access_token}`;
-            const response = await fetch(refreshUrl);
-            const data = await response.json();
+            refreshResult = await refreshInstagramBusinessToken(account);
 
-            if (data.access_token) {
-              const expiresIn = data.expires_in || 5184000; // 60 days
+            if (refreshResult) {
               const expiresAt = new Date();
-              expiresAt.setSeconds(expiresAt.getSeconds() + expiresIn);
-              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, data.access_token, expiresAt.toISOString());
+              expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
+              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
               if (updated) {
-                const avatarRefreshed = await refreshAndCacheAvatar(account, data.access_token, supabaseAdmin);
+                const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
                 return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
               } else {
                 return { id: account.id, platform: account.platform, status: 'already_refreshed' };
               }
             } else {
-              const errorMsg = data.error?.message || 'Could not refresh Instagram Business Login token';
+              const errorMsg = 'Could not refresh Instagram Business Login token';
               await handleRefreshFailure(supabaseAdmin, account, errorMsg);
               return { id: account.id, platform: account.platform, status: 'failed', error: errorMsg };
             }
