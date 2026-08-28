@@ -90,6 +90,28 @@ Deno.test("parseMetaError extracts the sanitized fields and marks 5xx transient"
   assertEquals(parseMetaError(503, { error: { message: "upstream" } }).transient, true);
 });
 
+Deno.test("a rate limit is transient, so three of them cannot latch an account", () => {
+  // 429 is not >= 500. Without explicit handling this reads as a hard failure and, after
+  // three, crosses the ceiling and retires a healthy account.
+  for (const code of [4, 17, 32, 613]) {
+    assertEquals(
+      parseMetaError(429, { error: { type: "OAuthException", code, message: "rate limited" } }).transient,
+      true,
+      `code ${code} is a rate limit and must be transient`,
+    );
+  }
+});
+
+Deno.test("structured permanent evidence outranks a 5xx status", () => {
+  // A revoked grant reported alongside a server error must not be retried forever.
+  assertEquals(
+    parseMetaError(500, {
+      error: { type: "OAuthException", code: 190, error_subcode: 463, message: "Session expired" },
+    }).transient,
+    false,
+  );
+});
+
 Deno.test("parseMetaError survives a body with no error object", () => {
   const e = parseMetaError(200, { nonsense: true });
   assertEquals(e.transient, false);
@@ -142,15 +164,53 @@ export function isPermanentMetaError(error: MetaProviderError): boolean {
   return error.error_subcode !== undefined && META_PERMANENT_SUBCODES.has(error.error_subcode);
 }
 
-/** Reduce a Meta response to the sanitized fields worth logging. */
+/**
+ * Meta rate-limit codes. Not invented here — `_shared/threads-debug.ts:331-333` already
+ * classifies exactly these, and duplicating that knowledge incompletely is how a rate
+ * limit ends up counted as an auth failure.
+ */
+const META_RATE_LIMIT_CODES = new Set([4, 17, 32, 613]);
+
+/** HTTP statuses that mean "ask again later", not "this grant is dead". */
+const RETRYABLE_STATUSES = new Set([408, 425, 429]);
+
+/**
+ * Reduce a Meta response to the sanitized fields worth logging, and decide whether the
+ * failure is retryable.
+ *
+ * `transient` is NOT simply `status >= 500`. That naive rule is wrong in both directions:
+ *   - HTTP 429 with code 4/17/32/613 is a rate limit, but would read as non-transient and,
+ *     after three of them, latch a perfectly healthy account red.
+ *   - HTTP 500 carrying {type:"OAuthException", code:190} is definitive evidence the grant
+ *     is dead, but would read as transient and be retried forever.
+ * Structured provider evidence therefore wins over the HTTP status.
+ */
 export function parseMetaError(status: number, body: unknown): MetaProviderError {
   const raw = (body as { error?: Record<string, unknown> } | null)?.error;
+  const code = typeof raw?.code === "number" ? raw.code : undefined;
+  const subcode = typeof raw?.error_subcode === "number" ? raw.error_subcode : undefined;
+  const type = typeof raw?.type === "string" ? raw.type : undefined;
+
+  // 1. A structured permanent code outranks any status.
+  const structurallyPermanent =
+    (type === "OAuthException" && code === 190) ||
+    (subcode !== undefined && META_PERMANENT_SUBCODES.has(subcode));
+
+  // 2. A structured rate limit is retryable however the status reads.
+  const structurallyRetryable =
+    (code !== undefined && META_RATE_LIMIT_CODES.has(code)) ||
+    raw?.is_transient === true;
+
+  const transient = structurallyPermanent
+    ? false
+    : structurallyRetryable || RETRYABLE_STATUSES.has(status) || status >= 500;
+
   return {
-    type: typeof raw?.type === "string" ? raw.type : undefined,
-    code: typeof raw?.code === "number" ? raw.code : undefined,
-    error_subcode: typeof raw?.error_subcode === "number" ? raw.error_subcode : undefined,
+    type,
+    code,
+    error_subcode: subcode,
     message: typeof raw?.message === "string" ? raw.message : undefined,
-    transient: status >= 500,
+    transient,
   };
 }
 ```
@@ -158,7 +218,7 @@ export function parseMetaError(status: number, body: unknown): MetaProviderError
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `deno test --allow-env supabase/functions/_shared/metaErrors.test.ts`
-Expected: PASS (6 tests).
+Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
 
@@ -300,23 +360,36 @@ Add near the top of the file:
 import { type MetaRefreshOutcome, parseMetaError } from "./metaErrors.ts";
 
 /** Provider calls must be bounded (ARCHITECTURE.md §26). The refresh loop is sequential
- *  and the edge worker dies at 60s, so one hang strands every account after it. */
-const META_FETCH_TIMEOUT_MS = 10_000;
+ *  and the edge worker dies at 60s, so one hang strands every account after it.
+ *  8s, not 10s: with the 45s sweep budget in Task 5, five consecutive worst-case hangs
+ *  must still leave room to persist results. */
+const META_FETCH_TIMEOUT_MS = 8_000;
 ```
 
-- [ ] **Step 4: Implement the other two adapters the same way**
+- [ ] **Step 4: Implement the other two adapters — ⚠️ THEY STAY ON GET**
 
-`refreshInstagramBusinessToken` — `POST https://graph.instagram.com/refresh_access_token`, body
-`{ grant_type: "ig_refresh_token", access_token: account.access_token }`, log prefix
-`[meta-refresh] instagram`.
+🔴 Do **not** convert these to POST. Canary tests against the live API with real production tokens
+proved it breaks them:
 
-`refreshThreadsToken` — `POST https://graph.threads.net/refresh_access_token`, body
-`{ grant_type: "th_refresh_token", access_token: account.access_token }`, log prefix
-`[meta-refresh] threads`.
+| endpoint | POST with a valid token |
+|---|---|
+| `graph.instagram.com/refresh_access_token` | `Unsupported post request. Object with ID 'refresh_access_token' does not exist` |
+| `graph.threads.net/refresh_access_token` | unproven — both methods return the same `threads_basic` permission error |
 
-Both use the identical timeout, the identical `!response.ok || data.error || !data.access_token`
-check, the identical sanitized `console.error` shape, and the identical `catch` that logs only
-`error.name`.
+Migrating Instagram would fail every refresh for the 21 business-login accounts and, with the new
+code-190 classifier, latch them all red immediately.
+
+So `refreshInstagramBusinessToken` and `refreshThreadsToken` keep their existing
+**GET-with-query-string** request shape, unchanged. What they gain is only:
+
+- `signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS)` on the existing `fetch`
+- the `!response.ok || data.error || !data.access_token` check
+- `return { ok: false, error: parseMetaError(response.status, data) }` instead of `null`
+- the sanitized `console.error` shape, and a `catch` that logs **only** `error.name`
+
+⚠️ For these two the sanitized catch is **load-bearing, not defence in depth** — the credential is
+still in the URL, and Deno embeds the URL in network errors. Logging the caught error object here
+leaks a live token.
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
@@ -326,11 +399,18 @@ Expected: PASS (4 tests).
 - [ ] **Step 6: Prove no adapter puts a token in a URL**
 
 ```bash
-grep -n "access_token=\${" supabase/functions/_shared/social-auth.ts
+grep -n "access_token=\${\|fb_exchange_token=\${" supabase/functions/_shared/social-auth.ts
 ```
-Expected: no output for the three Meta adapters. (Non-Meta adapters are out of scope and may
-still appear — confirm any hit is not `refreshFacebookToken`, `refreshInstagramBusinessToken`
-or `refreshThreadsToken`.)
+Expected: **no hit inside `refreshFacebookToken`** (it now POSTs). Hits inside
+`refreshInstagramBusinessToken` and `refreshThreadsToken` are **correct and required** — those
+endpoints reject POST. Confirm each remaining Meta hit is one of those two.
+
+Then confirm no adapter logs a raw error object:
+
+```bash
+grep -n "console.error(.*, *error)" supabase/functions/_shared/social-auth.ts
+```
+Expected: no output. Every catch logs `error.name` only.
 
 - [ ] **Step 7: DO NOT COMMIT YET**
 
@@ -475,7 +555,7 @@ export function shouldEscalateToReauth(input: {
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `deno test --allow-env supabase/functions/refresh-tokens/escalation.test.ts`
-Expected: PASS (5 tests).
+Expected: PASS (6 tests).
 
 - [ ] **Step 5: Use it in `handleRefreshFailure`**
 
@@ -636,138 +716,111 @@ This single commit contains Task 2 and Task 3 in full.
 
 ---
 
-### Task 4: Atomic refresh claim
+### Task 4: Bound the whole sweep, and close the second leak
+
+The per-request timeout in Task 2 bounds one call. It does **not** bound the sweep, and it does not
+touch the other unbounded provider work on the same path.
 
 **Files:**
-- Modify: `supabase/functions/refresh-tokens/index.ts` — `markRefreshAttempt` and its three call sites
-- Create: `supabase/functions/refresh-tokens/refreshClaim.test.ts`
+- Modify: `supabase/functions/refresh-tokens/index.ts` — the bulk loop
+- Modify: `supabase/functions/_shared/avatar-cache.ts` — timeouts and sanitized logging
 
-**Interfaces:**
-- Produces: `markRefreshAttempt(supabaseAdmin, accountId): Promise<boolean>` — `true` when this worker owns the account.
+- [ ] **Step 1: Do the arithmetic that justifies this task**
 
-- [ ] **Step 1: Write the failing test**
+57 accounts × 8s = 456s against a 60s worker ceiling. Seven consecutive slow calls exhaust the
+budget. A per-request timeout cannot fix that; only a sweep-wide deadline can.
 
-Create `supabase/functions/refresh-tokens/refreshClaim.test.ts`:
+- [ ] **Step 2: Add the budget to the bulk loop**
 
 ```ts
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { buildClaimFilter } from "./refreshClaim.ts";
-
-Deno.test("the claim filter accepts a never-attempted account or a stale one", () => {
-  const cutoff = "2026-08-29T12:00:00.000Z";
-  assertEquals(
-    buildClaimFilter(cutoff),
-    "last_refresh_attempt_at.is.null,last_refresh_attempt_at.lt.2026-08-29T12:00:00.000Z",
-  );
-});
-
-Deno.test("a claim that updated no rows is not owned", () => {
-  assertEquals(claimSucceeded([]), false);
-  assertEquals(claimSucceeded(null), false);
-  assertEquals(claimSucceeded([{ id: "a1" }]), true);
-});
-
-import { claimSucceeded } from "./refreshClaim.ts";
+/** Leaves ~15s of the 60s worker ceiling to persist results and log. */
+const SWEEP_BUDGET_MS = 45_000;
+const sweepStartedAt = Date.now();
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
-
-Run: `deno test --allow-env supabase/functions/refresh-tokens/refreshClaim.test.ts`
-Expected: FAIL — module `./refreshClaim.ts` not found.
-
-- [ ] **Step 3: Implement the pure helpers**
-
-Create `supabase/functions/refresh-tokens/refreshClaim.ts`:
+At the top of the per-account loop:
 
 ```ts
-/**
- * PostgREST `.or()` filter selecting accounts nobody currently owns: never attempted,
- * or last attempted before the cooldown cutoff.
- */
-export function buildClaimFilter(cutoffIso: string): string {
-  return `last_refresh_attempt_at.is.null,last_refresh_attempt_at.lt.${cutoffIso}`;
-}
-
-/** An update that touched no rows means another worker holds the claim. */
-export function claimSucceeded(updated: { id: string }[] | null): boolean {
-  return (updated?.length ?? 0) > 0;
-}
-```
-
-- [ ] **Step 4: Run the test to verify it passes**
-
-Run: `deno test --allow-env supabase/functions/refresh-tokens/refreshClaim.test.ts`
-Expected: PASS (2 tests).
-
-- [ ] **Step 5: Turn `markRefreshAttempt` into a claim**
-
-```ts
-/**
- * Claim an account for refresh. Returns false when another worker already holds it.
- *
- * This was an unconditional write, which meant two workers could both "mark" and both
- * proceed. The optimistic guard elsewhere keys on refresh_token, which Meta rows never
- * have, so Meta refreshes had no concurrency protection at all.
- */
-async function markRefreshAttempt(
-  supabaseAdmin: AnySupabase,
-  accountId: string,
-): Promise<boolean> {
-  const cutoff = new Date(Date.now() - REFRESH_ATTEMPT_COOLDOWN_MS).toISOString();
-  const { data } = await supabaseAdmin
-    .from('social_accounts')
-    .update({ last_refresh_attempt_at: new Date().toISOString() } as Record<string, unknown>)
-    .eq('id', accountId)
-    .or(buildClaimFilter(cutoff))
-    .select('id');
-
-  return claimSucceeded(data as { id: string }[] | null);
-}
-```
-
-- [ ] **Step 6: Honour the claim at every call site**
-
-Bulk cron loop — replace the separate cooldown check and the bare call with the claim:
-
-```ts
-      if (!(await markRefreshAttempt(supabaseAdmin, account.id))) {
-        console.log(`[refresh-claim] Account ${account.id} (${account.platform}): held by another worker, skipping`);
-        results.push({ id: account.id, platform: account.platform, status: 'cooldown', error: 'Refresh already in progress' });
-        continue;
+      if (Date.now() - sweepStartedAt > SWEEP_BUDGET_MS) {
+        console.log(`[refresh-budget] budget spent; deferring ${accountsNeedingRefresh.length - processed} accounts to the next run`);
+        for (const deferred of accountsNeedingRefresh.slice(processed)) {
+          results.push({ id: deferred.id, platform: deferred.platform, status: 'skipped', error: 'Deferred: sweep budget spent' });
+        }
+        break;
       }
 ```
 
-Both force paths (single and bulk) call it the same way and skip on `false`.
+⚠️ Deferred accounts are `skipped`, never `failed`. They were never attempted, so
+`handleRefreshFailure` must not run for them — otherwise the budget itself would increment
+`failure_count` and, three sweeps later, latch healthy accounts.
 
-**The admin bypass is deliberately narrowed here.** `adminTriggered` continues to bypass the
-per-platform refresh *window* — that is the point of the hotfix ported in PR #66 — but it must
-**not** bypass the claim, or the claim protects nothing. An admin pressing Refresh twice inside five
-minutes gets `cooldown` on the second press. Remove the `!adminTriggered &&` prefix from the old
-`isWithinRefreshCooldown` check, since the claim now subsumes it; delete the now-unused
-`isWithinRefreshCooldown` if nothing else calls it.
+- [ ] **Step 3: Order the selection so the tail cannot starve**
 
-- [ ] **Step 7: Verify the old unconditional write is gone**
+Add `.order('last_refresh_attempt_at', { ascending: true, nullsFirst: true })` to the account query.
+Never-attempted accounts lead; an account just attempted sorts last. Because the sweep always stops
+at the same budget, without this the same head-of-list accounts would be refreshed every run and the
+tail never reached.
 
-```bash
-grep -n "isWithinRefreshCooldown\|last_refresh_attempt_at" supabase/functions/refresh-tokens/index.ts
+- [ ] **Step 4: Bound and sanitize the avatar path — it is the second token leak**
+
+`refreshAndCacheAvatar` runs after every successful exchange, and `_shared/avatar-cache.ts` has
+**zero** timeouts (`grep -c "AbortSignal\|signal:"` → 0) while logging raw error objects:
+
+```ts
+console.error("[avatar-cache] Error fetching Facebook avatar:", error);   // :114
+console.error("[avatar-cache] Error fetching Instagram avatar:", error);  // :127
 ```
-Expected: the only writer is `markRefreshAttempt`. No remaining unconditional
-`.update({ last_refresh_attempt_at … })`.
 
-- [ ] **Step 8: Run every gate and commit**
+Those fetchers put the access token in the URL, and Deno embeds the URL in network errors — so
+sanitizing the adapters achieves nothing if the very next call on the same execution leaks the same
+credential. Add `signal: AbortSignal.timeout(8_000)` to every `fetch` in the file, and change every
+`console.error(..., error)` to log `error instanceof Error ? error.name : "UnknownError"`.
+
+- [ ] **Step 5: Verify and commit**
 
 ```bash
+grep -c "AbortSignal.timeout" supabase/functions/_shared/avatar-cache.ts     # one per fetch
+grep -n "console.error(.*, *error)" supabase/functions/_shared/avatar-cache.ts   # expect no output
 deno test --allow-env --allow-read --allow-net supabase/functions/_shared/ supabase/functions/refresh-tokens/
 npx tsc -b --noEmit
-bun run test
-bun run build
-git add supabase/functions/refresh-tokens/
-git commit -m "fix(refresh-tokens): claim an account atomically instead of just marking it"
+git add supabase/functions/refresh-tokens/ supabase/functions/_shared/avatar-cache.ts
+git commit -m "fix(refresh-tokens): bound the whole sweep, and stop the avatar path leaking tokens"
 ```
 
 ---
 
-### Task 5: Deploy and verify against production
+### Task 5 (DEFERRED — do not implement in this batch): the concurrency claim
+
+**Status: pulled from this plan on 2026-08-29, after adversarial review round 2.**
+
+The claim was scoped as "small and self-contained: a conditional UPDATE, no new column." Two review
+rounds showed it is not. Every attempt to make it correct grew it:
+
+- **A per-caller window is not mutual exclusion.** Cron claims at 12:00:00 and stalls; the admin's
+  30s window expires at 12:00:31 and a second worker claims the same row. Both proceed, and Meta
+  rows have no `refresh_token` compare-and-set guard to stop the loser writing last. One timestamp
+  cannot express both "be fair" and "I own this" once callers read it with different expiries.
+- **Correctness needs a fencing token or an owner id** — i.e. the new column the design was
+  specifically trying to avoid.
+- **The JIT publisher makes a lost claim dangerous, not safe.** "Publish with the existing token" is
+  fine when *we* failed to refresh, but a lost claim means someone else is mid-exchange: the post
+  then publishes with a token that is expired precisely because the refresh it needed is still in
+  flight (`process-scheduled-posts:171` → `process-post:1363`).
+
+Weighed against that: the observed exposure is two admin tabs, and the cron already has a five-minute
+cooldown. **The cost/benefit no longer favours doing it now**, and bolting a half-correct lease onto
+the token path is exactly the kind of change that produced the outage this whole effort came from.
+
+If it is picked up later it needs its own spec covering: a single lease duration exceeding bounded
+per-account work, an owner/fencing token, explicit release on completion, and the JIT publisher's
+contention behaviour (wait-and-refetch, or defer the post — never publish into a race).
+
+The `markRefreshAttempt` unconditional write stays as it is for now. It is a fairness marker, and
+this plan does not pretend it is a lock.
+
+---
+
+### Task 6: Deploy and verify against production
 
 **Files:** none modified.
 
@@ -790,9 +843,9 @@ ported into the repo before deploying.
 ssh root@86.48.2.205 'mkdir -p /root/fn-backup-$(date +%Y%m%d) && cp -r /etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/{refresh-tokens,_shared} /root/fn-backup-$(date +%Y%m%d)/'
 ```
 
-Upload `refresh-tokens/{index.ts,escalation.ts,refreshClaim.ts}` and
-`_shared/{social-auth.ts,metaErrors.ts}`, then compare `sha256sum` on both sides. Every hash must
-match before restarting.
+Upload `refresh-tokens/{index.ts,escalation.ts}` and
+`_shared/{social-auth.ts,metaErrors.ts,avatar-cache.ts}`, then compare `sha256sum` on both sides.
+Every hash must match before restarting.
 
 - [ ] **Step 3: Restart and confirm the worker booted**
 
