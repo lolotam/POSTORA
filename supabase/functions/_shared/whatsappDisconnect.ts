@@ -146,6 +146,69 @@ async function unsubscribeWabaWebhook(
   }
 }
 
+/**
+ * Puts a Meta-hosted account back the way `disconnectWhatsAppAccount` found it:
+ * re-subscribe this app to the WABA, then reactivate the row.
+ *
+ * Disconnecting deletes the WABA webhook subscription, and nothing restored it.
+ * The only reconnect the product offered was Embedded Signup, which cannot help
+ * an already-onboarded number — Meta lists numbers *available to onboard*, so a
+ * number already owned by a WABA simply never appears and the operator is left
+ * staring at an empty picker with a live, healthy number and no messages.
+ *
+ * Evolution QR accounts are not reconnectable this way: their session is gone
+ * once logged out and the operator has to scan a new QR.
+ */
+export async function reconnectWhatsAppAccount(
+  input: WhatsAppDisconnectInput,
+  deps: WhatsAppDisconnectDeps,
+): Promise<WhatsAppDisconnectResult> {
+  if (input.connectionMode === "evolution_qr") {
+    throw new Error("Direct QR accounts reconnect by scanning a new QR code, not by resubscribing");
+  }
+  if (!input.wabaId || !input.accessToken) {
+    throw new Error("Reconnect needs the account's WABA id and access token");
+  }
+
+  const warnings: string[] = [];
+  let graph: WhatsAppDisconnectStep = "failed";
+  try {
+    const fetcher = deps.fetcher ?? fetch;
+    const res = await fetcher(`${GRAPH_API}/${input.wabaId}/subscribed_apps`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${input.accessToken}` },
+    });
+    if (res.ok) {
+      graph = "ok";
+    } else {
+      warnings.push(`Graph resubscribe returned status ${res.status}`);
+    }
+  } catch (e) {
+    warnings.push(`Graph resubscribe failed: ${warningText(e)}`);
+  }
+
+  // Unlike disconnect, the remote step is NOT best effort. Reactivating a row
+  // whose webhook subscription is still missing produces an account that looks
+  // connected and silently receives nothing -- the exact state this function
+  // exists to get out of.
+  if (graph !== "ok") {
+    throw new Error(
+      `Could not resubscribe to WhatsApp webhooks; account left disconnected. ${warnings.join(" ")}`,
+    );
+  }
+
+  const reactivation = input.workspaceId !== null
+    ? deps.admin.from("social_accounts").update({ is_active: true })
+      .eq("id", input.accountId)
+      .eq("workspace_id", input.workspaceId)
+    : deps.admin.from("social_accounts").update({ is_active: true })
+      .eq("id", input.accountId);
+  const { error: reactivateError } = await reactivation;
+  if (reactivateError) throw reactivateError;
+
+  return { deactivated: false, evolution: "skipped", graph, warnings };
+}
+
 export async function disconnectWhatsAppAccount(
   input: WhatsAppDisconnectInput,
   deps: WhatsAppDisconnectDeps,

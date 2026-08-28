@@ -43,8 +43,10 @@ import type { MessagingAccount } from "@/hooks/useMessaging";
 import {
   useWhatsAppConnect,
   useWhatsAppDisconnect,
+  useWhatsAppReconnect,
   useWhatsAppRequestSync,
 } from "@/hooks/useWhatsAppConnect";
+import { useReconnectableWhatsApp } from "@/hooks/useReconnectableWhatsApp";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useWhatsAppTpStatus } from "@/hooks/useWhatsAppTpStatus";
@@ -65,6 +67,8 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const hasConnected = whatsappAccounts.length > 0;
   const connect = useWhatsAppConnect();
   const disconnect = useWhatsAppDisconnect();
+  const reconnect = useWhatsAppReconnect();
+  const { data: reconnectable = [] } = useReconnectableWhatsApp();
   const requestSync = useWhatsAppRequestSync();
   const { isAdmin } = useUserRole();
   const { flags } = useFeatureFlags();
@@ -295,6 +299,45 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                 Choose how you want to connect your WhatsApp Business number. You'll need a Meta
                 Business Manager with a WhatsApp Business Account (WABA).
               </p>
+            </div>
+          )}
+          {/* A disconnected Meta number is invisible everywhere else in the app,
+              and Embedded Signup will not offer it back because it is already
+              onboarded. This is the only route back to it. */}
+          {reconnectable.length > 0 && (
+            <div className="mt-4 space-y-2 border-t pt-4">
+              <p className="text-xs font-medium text-muted-foreground">Previously connected</p>
+              {reconnectable.map((account) => (
+                <div
+                  key={account.id}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20"
+                  data-testid="reconnectable-account"
+                >
+                  <Phone className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {account.platform_username || account.platform_user_id}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Disconnected. The number is still registered with Meta — reconnect to resume messages.
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={reconnect.isPending}
+                    onClick={() => reconnect.mutate(account.id)}
+                    className="gap-1.5"
+                  >
+                    {reconnect.isPending ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5" />
+                    )}
+                    Reconnect
+                  </Button>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
