@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedJsonResponse, restrictedErrorResponse } from "../_shared/cors.ts";
+import { createEvolutionApi } from "../_shared/evolutionApi.ts";
+import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { requireWhatsAppWorkspaceAccess, roleAtLeast, WhatsAppAccessError, type WhatsAppWorkspaceAccessClient, type WorkspaceRole } from "../_shared/whatsappWorkspaceAccess.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v22.0";
@@ -126,28 +128,31 @@ Deno.serve(async (req) => {
       );
 
       const meta = (account.accountMetadata || {}) as Record<string, unknown>;
-      const wabaId = meta.waba_id as string | undefined;
-      const token = account.accessToken || undefined;
-
-      // Best-effort unsubscribe webhook from WABA
-      if (wabaId && token) {
+      // Built only for Evolution accounts, and inside its own try: a deployment
+      // without Evolution env vars must still be able to disconnect a cloud/coexistence
+      // account, and a misconfigured one must still be able to deactivate an Evolution
+      // account locally.
+      let evolution;
+      if (account.connectionMode === "evolution_qr") {
         try {
-          await fetch(`${GRAPH_API}/${wabaId}/subscribed_apps`, {
-            method: "DELETE",
-            headers: { Authorization: `Bearer ${token}` },
-          });
+          evolution = createEvolutionApi();
         } catch (e) {
-          console.warn("[whatsapp-oauth] unsubscribe failed (non-fatal):", e);
+          console.warn("[whatsapp-oauth] Evolution client unavailable for disconnect:", e);
         }
       }
 
-      await admin
-        .from("social_accounts")
-        .update({ is_active: false })
-        .eq("id", social_account_id)
-        .eq("workspace_id", account.workspaceId);
+      const teardown = await disconnectWhatsAppAccount(
+        {
+          accountId: account.accountId,
+          workspaceId: account.workspaceId,
+          connectionMode: account.connectionMode,
+          wabaId: typeof meta.waba_id === "string" ? meta.waba_id : null,
+          accessToken: account.accessToken || null,
+        },
+        { admin: admin as unknown as WhatsAppDisconnectAdmin, evolution, fetcher: fetch },
+      );
 
-      return restrictedJsonResponse(req, { success: true });
+      return restrictedJsonResponse(req, { success: true, teardown });
     }
 
     // ============ REQUEST_SYNC (coexistence chat history + contacts) ============
