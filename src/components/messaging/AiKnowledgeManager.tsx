@@ -21,6 +21,7 @@ import { useWhatsAppCatalog } from "@/hooks/useWhatsAppCatalog";
 import {
   AI_KNOWLEDGE_ACCEPT,
   AI_KNOWLEDGE_BUCKET,
+  aiKnowledgeContentType,
   aiKnowledgeObjectPath,
   aiKnowledgeStorageRef,
   getKnowledgeSourceType,
@@ -122,7 +123,7 @@ export function AiKnowledgeManager({
       const objectPath = aiKnowledgeObjectPath(user.id, file.name, crypto.randomUUID());
       const { error: uploadError } = await supabase.storage
         .from(AI_KNOWLEDGE_BUCKET)
-        .upload(objectPath, file, { contentType: file.type || undefined });
+        .upload(objectPath, file, { contentType: aiKnowledgeContentType(file.name) });
       if (uploadError) throw uploadError;
       const { data: source, error } = await (supabase as any)
         .from("ai_knowledge_sources")
