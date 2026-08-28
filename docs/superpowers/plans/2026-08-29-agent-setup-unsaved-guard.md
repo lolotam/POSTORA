@@ -492,9 +492,45 @@ Render the dialog inside the component, resetting the baseline as part of the di
 ⚠️ `setBaseline(null)` is required, not tidiness. Switching account does **not** remount this
 component — only the query key changes — so until the new account's config settles, `form` still
 holds the discarded text while `baseline` still holds the old account's values. The component would
-keep reporting itself dirty and prompt a second time on the very next transition. Setting the
-baseline to `null` makes `useDirtyForm` read clean for exactly that interval, which is what the
-"not loaded yet" rule already means. Clearing `phoneInput` discards the other half of the edit.
+keep reporting itself dirty and prompt a second time on the very next transition.
+
+🔴 **But `setBaseline(null)` alone is NOT enough, and getting this wrong re-opens the incident this
+component exists to prevent.** `configLoaded` is computed independently of the baseline
+(`AiAgentManager.tsx:81`) and is what enables Save (`:292`):
+
+```ts
+const configLoaded = config !== undefined && !error;
+```
+
+If account B's config is already in the React Query cache, then the instant the account switches,
+`config` is defined → `configLoaded === true` → **Save is enabled while `form` still holds account
+A's discarded text.** One click writes A's persona into B — exactly the 2026-08-28 incident the
+file's own comments describe.
+
+So readiness must be tied to *which* account the form actually holds, not merely to "some config
+arrived". Track the loaded account alongside the baseline:
+
+```ts
+const [loadedAccountId, setLoadedAccountId] = useState<string | null>(null);
+```
+
+Set it to `accountId` in the same effect that sets `form` and `baseline` (Step 4), clear it to `null`
+in the discard handler below, and tighten the Save gate:
+
+```ts
+const configLoaded = config !== undefined && !error && loadedAccountId === accountId;
+```
+
+Now the form is only saveable when it demonstrably holds *this* account's values. Update the
+existing disabled-Save explanation at `:299` to match.
+
+```tsx
+<UnsavedChangesDialog
+  open={pending}
+  onCancel={cancel}
+  onDiscard={() => { setBaseline(null); setLoadedAccountId(null); setPhoneInput(""); confirmDiscard(); }}
+/>
+```
 
 ⚠️ `onDirtyChange` must be memoized by the **parent** (Task 4 passes a `useState` setter, which is
 stable). Do not pass an inline arrow from the parent, or the effect loops.
@@ -580,8 +616,17 @@ describe("UnifiedAgentSetupPage unsaved guard", () => {
     expect(screen.queryByText(/you have unsaved changes/i)).not.toBeInTheDocument();
     // Assert the platform did NOT change. The mocked child renders identically before and
     // after a remount, so "the button still exists" would pass even if the switch happened.
-    // The page keeps platform in the URL (`:87-92`), so the URL is the observable truth.
-    expect(window.location.search).toContain("platform=instagram");
+    //
+    // `MemoryRouter` keeps location in memory and never touches `window.location`, so
+    // asserting on window.location.search silently passes against a stale jsdom URL.
+    // Render a probe inside the router instead:
+    //
+    //   function SearchProbe() {
+    //     const [params] = useSearchParams();
+    //     return <span data-testid="platform-param">{params.get("platform")}</span>;
+    //   }
+    //   …<MemoryRouter …><UnifiedAgentSetupPage /><SearchProbe /></MemoryRouter>
+    expect(screen.getByTestId("platform-param")).toHaveTextContent("instagram");
   });
 
   it("prompts before a surface toggle discards edits", async () => {

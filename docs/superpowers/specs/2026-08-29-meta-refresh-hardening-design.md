@@ -234,68 +234,26 @@ Sanitised operational logging (satisfying line 512) logs only `type`, `code`, `e
 
 Re-canary Threads once an account holds a token with `threads_basic`; migrate it only then.
 
-## §4 — Atomic refresh claim
+## §4 — Concurrency: deferred, deliberately
 
-Replace `markRefreshAttempt`'s unconditional write with a conditional claim. No new column, no
-migration:
+**Pulled from this spec on 2026-08-29 after review round 2.** It was scoped as a conditional UPDATE
+with no new column; review showed that is not achievable correctly.
 
-```ts
-const cutoff = new Date(Date.now() - REFRESH_ATTEMPT_COOLDOWN_MS).toISOString();
-const { data } = await supabaseAdmin
-  .from('social_accounts')
-  .update({ last_refresh_attempt_at: new Date().toISOString() })
-  .eq('id', accountId)
-  .or(`last_refresh_attempt_at.is.null,last_refresh_attempt_at.lt.${cutoff}`)
-  .select('id');
+A per-caller expiry on a single timestamp is an asymmetric lease, not mutual exclusion: a cron worker
+that claims at 12:00:00 and stalls is overtaken at 12:00:31 by an admin whose window is shorter, and
+nothing stops the first worker committing afterwards. Making it correct requires an owner or fencing
+token — the column the design existed to avoid — plus explicit release, plus a contention policy for
+the JIT publisher, where losing a claim means the token is being changed *right now* and publishing
+with the current one is the unsafe branch rather than the safe fallback.
 
-return (data?.length ?? 0) > 0;   // false = another worker owns this account
-```
+Observed exposure is two admin tabs; the cron already has a five-minute cooldown. It does not earn
+that complexity in this batch. `markRefreshAttempt` stays an unconditional fairness marker, and this
+spec does not claim it is a lock.
 
-A caller that fails to claim records `status: 'cooldown'` and moves on.
-
-**Filter semantics verified against the live API** — this is the part that would silently corrupt
-every row if it were wrong, so it was measured, not reasoned about:
-
-| request | rows |
-|---|---|
-| `?id=eq.<one id>&select=id` | 1 |
-| `?id=eq.<one id>&or=(last_refresh_attempt_at.is.null,last_refresh_attempt_at.lt.2036-01-01)` | **1** |
-| `?or=(…)` alone (no `id` filter) | **111** |
-
-PostgREST **ANDs** the `or(...)` group with the preceding `eq()`; it does not OR them together. The
-third row proves the predicate is broad enough that an OR would have been obvious. The generated
-statement is a single `UPDATE … WHERE id = $1 AND (…)`, which Postgres executes atomically under a
-row lock — a second worker blocks, re-evaluates the `WHERE` against the committed row, finds
-`last_refresh_attempt_at` fresh, and updates zero rows. That is exactly the intended outcome.
-
-**Interaction with the admin path.** The first draft made `adminTriggered` respect the full
-five-minute claim, which breaks the operator's recovery loop:
-
-> 12:00 Refresh all → transient DNS failure → operator fixes DNS at 12:01 → Refresh all returns
-> `cooldown` on every account until 12:05.
-
-That is the exact situation in which an admin presses the button, so blocking it defeats the feature
-the #66 hotfix existed to provide. Resolution: **the claim window is per-caller.**
-
-```ts
-const CLAIM_WINDOW_MS = { cron: REFRESH_ATTEMPT_COOLDOWN_MS, admin: 30_000 };
-```
-
-A cron worker will not touch an account another worker claimed in the last five minutes. An admin
-retry only has to out-wait 30 seconds — long enough to serialise a double-click or two open tabs,
-short enough that deliberate recovery is never blocked. The admin path continues to bypass the
-per-platform refresh *window* entirely, as before.
-
-**The claim is not global, and the spec must say so.** `process-scheduled-posts/index.ts:106-150`
-runs its own just-in-time refresh and updates `social_accounts` unconditionally. It bypasses this
-claim completely, so a scheduled publish can still race a cron sweep on the same row. Bringing it
-under the claim is in scope: it calls `markRefreshAttempt` first and skips its JIT refresh when the
-claim fails, publishing with the existing token — which is what it already does when a refresh
-fails, so the fallback path is unchanged.
-
-**Distinguish "not claimed" from "the claim query failed."** A PostgREST error returns no rows, which
-is indistinguishable from losing the race unless the error is checked. Silently reporting a database
-outage as `cooldown` would hide it. Inspect `error` and surface a real failure separately.
+What replaces it here is the work that *is* bounded and does earn its place: a sweep-wide budget, and
+timeouts plus sanitized logging on the avatar path, which runs after every successful exchange and
+today has neither — its fetchers put the token in the URL and log raw error objects, so the adapter
+sanitization in §3 would otherwise be undone on the very next call.
 
 ## Testing
 
