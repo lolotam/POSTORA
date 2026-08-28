@@ -60,13 +60,19 @@ interface DefaultModelSelectorProps {
    * must not show a Save button that discards what the admin typed.
    */
   onSetAdminParams?: (modelRowId: string, params: Record<string, string | number | boolean>) => void;
+  /**
+   * Per-model disable reason, or null when the model is selectable. Categories
+   * with storage constraints (embedding vector widths) use this to keep
+   * unusable models visible but never silently selectable.
+   */
+  modelNote?: (model: AIModel) => string | null;
   isSaving?: boolean;
 }
 
 export function DefaultModelSelector({
   category, capability, title, description, icon: Icon,
   providers, models, currentDefault, currentFallback, currentFallback2,
-  onSetDefault, onSetFallback, onSetFallback2, onSetAdminParams, isSaving,
+  onSetDefault, onSetFallback, onSetFallback2, onSetAdminParams, modelNote, isSaving,
 }: DefaultModelSelectorProps) {
   const primaryRow = useMemo(
     () =>
@@ -133,6 +139,7 @@ export function DefaultModelSelector({
               onSelect={onSetDefault}
               isSaving={isSaving}
               category={category}
+              modelNote={modelNote}
             />
 
             <Separator />
@@ -148,6 +155,7 @@ export function DefaultModelSelector({
               onSelect={onSetFallback}
               isSaving={isSaving}
               category={category}
+              modelNote={modelNote}
             />
 
             <Separator />
@@ -163,6 +171,7 @@ export function DefaultModelSelector({
               onSelect={onSetFallback2}
               isSaving={isSaving}
               category={category}
+              modelNote={modelNote}
             />
 
             {onSetAdminParams && primaryRow && primarySpec.parameters.length > 0 && (
@@ -225,9 +234,10 @@ interface TierSelectorProps {
   onSelect: (providerCode: string, modelId: string) => void;
   isSaving?: boolean;
   category: string;
+  modelNote?: (model: AIModel) => string | null;
 }
 
-function TierSelector({ label, icon, providers, allProviders, filteredModels, currentModel, onSelect, isSaving, category }: TierSelectorProps) {
+function TierSelector({ label, icon, providers, allProviders, filteredModels, currentModel, onSelect, isSaving, category, modelNote }: TierSelectorProps) {
   const initialProvider = useMemo(() => {
     if (!currentModel?.provider_code) return '';
     const p = providers.find(p => p.provider_code === currentModel.provider_code);
@@ -339,11 +349,15 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
               <SelectValue placeholder="Model..." />
             </SelectTrigger>
             <SelectContent>
-              {providerModels.map(m => (
-                <SelectItem key={m.id} value={m.model_id}>
-                  <span className="text-xs">{m.name}</span>
-                </SelectItem>
-              ))}
+              {providerModels.map(m => {
+                const note = modelNote ? modelNote(m) : null;
+                return (
+                  <SelectItem key={m.id} value={m.model_id} disabled={note !== null}>
+                    <span className="text-xs">{m.name}</span>
+                    {note && <span className="text-[10px] text-muted-foreground ms-1.5 truncate">{note}</span>}
+                  </SelectItem>
+                );
+              })}
             </SelectContent>
           </Select>
         ) : (
