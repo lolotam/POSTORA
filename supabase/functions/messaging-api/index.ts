@@ -339,7 +339,32 @@ Deno.serve(async (req) => {
     const supportedAiAgentPlatforms = ["whatsapp", "facebook", "instagram", "threads"];
     const supportedAiAgentModes = ["ai_first", "human_first", "human_then_ai"];
 
-    function isAiAgentPlatform(value: unknown): value is string {
+    /**
+ * The caller's own account with this id, or null when none was supplied.
+ *
+ * messaging-api runs its database work with the service role, so RLS is not
+ * checking ownership here -- an id from the request body is only ever accepted
+ * after it is matched against the caller's own accounts on the requested
+ * platform.
+ */
+async function resolveOwnedAccountId(
+  adminClient: any,
+  userId: string,
+  platform: string,
+  requested: unknown,
+): Promise<string | null> {
+  if (typeof requested !== "string" || !requested.trim()) return null;
+  const { data } = await adminClient
+    .from("social_accounts")
+    .select("id")
+    .eq("id", requested)
+    .eq("user_id", userId)
+    .eq("platform", platform)
+    .maybeSingle();
+  return data?.id ?? null;
+}
+
+function isAiAgentPlatform(value: unknown): value is string {
       return typeof value === "string" && supportedAiAgentPlatforms.includes(value);
     }
 
@@ -402,14 +427,22 @@ Deno.serve(async (req) => {
 
     // ACTION: ai_get_config
     if (action === "ai_get_config") {
-      const { platform } = body;
+      const { platform, social_account_id } = body;
       if (!isAiAgentPlatform(platform)) return jsonResponse({ error: "Invalid AI agent platform" }, 400);
-      const { data, error } = await adminClient
+      const accountId = await resolveOwnedAccountId(adminClient, user.id, platform, social_account_id);
+      if (social_account_id && !accountId) {
+        return jsonResponse({ error: "Account not found" }, 404);
+      }
+      const query = adminClient
         .from("ai_agent_configs")
         .select("*")
-        .eq("user_id", user.id)
-        .eq("platform", platform)
-        .maybeSingle();
+        .eq("user_id", user.id);
+      // A config is a brand voice. Asking for one account's config must never
+      // return another account's persona, so the account filter replaces the
+      // platform filter rather than narrowing it.
+      const { data, error } = accountId
+        ? await query.eq("social_account_id", accountId).maybeSingle()
+        : await query.eq("platform", platform).is("social_account_id", null).maybeSingle();
       if (error) throw error;
       return jsonResponse({ config: data || null });
     }
@@ -475,11 +508,32 @@ Deno.serve(async (req) => {
         }
       }
 
-      const { data, error } = await adminClient
-        .from("ai_agent_configs")
-        .upsert({ user_id: user.id, platform, ...updates }, { onConflict: "user_id,platform" })
-        .select()
-        .single();
+      const accountId = await resolveOwnedAccountId(
+        adminClient, user.id, platform, body.social_account_id,
+      );
+      if (body.social_account_id && !accountId) {
+        return jsonResponse({ error: "Account not found" }, 404);
+      }
+      // Upserting on (user_id, platform) would collapse every account of a
+      // platform onto one row -- the defect this is fixing -- and would break
+      // outright once the legacy constraint is dropped. With an account it
+      // conflicts on the account; without one it keeps writing the single
+      // unassigned row, which is what the old frontend still expects during the
+      // expansion window.
+      const { data, error } = accountId
+        ? await adminClient
+          .from("ai_agent_configs")
+          .upsert(
+            { user_id: user.id, platform, social_account_id: accountId, ...updates },
+            { onConflict: "social_account_id" },
+          )
+          .select()
+          .single()
+        : await adminClient
+          .from("ai_agent_configs")
+          .upsert({ user_id: user.id, platform, ...updates }, { onConflict: "user_id,platform" })
+          .select()
+          .single();
       if (error) throw error;
       return jsonResponse({ config: data });
     }

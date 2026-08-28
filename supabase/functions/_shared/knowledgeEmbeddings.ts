@@ -157,6 +157,14 @@ export function retrievalRpcName(config: EmbeddingConfig): string {
     : "match_ai_knowledge_chunks_bge_m3";
 }
 
+// The account-scoped twin of each matcher. Separate functions rather than an
+// overload with a defaulted parameter: a PostgREST call carrying the original
+// three arguments would match both candidates and fail to resolve, which would
+// break live callers during the expand-deploy-contract window.
+export function accountRetrievalRpcName(config: EmbeddingConfig): string {
+  return `${retrievalRpcName(config)}_for_account`;
+}
+
 // Canonical config for a provider, ignoring the primary EMBEDDING_COLUMN /
 // EMBEDDING_DIMENSIONS overrides (those describe the primary only). Used to
 // build the fallback leg of a dual configuration.
@@ -635,20 +643,37 @@ export type RetrievalRpc = (
 // production always uses the real embedKnowledge.
 export type Embedder = (texts: string[], config: EmbeddingConfig) => Promise<number[][]>;
 
+/** What to retrieve, and whose agent is asking. */
+export interface KnowledgeRetrievalRequest {
+  userId: string;
+  /**
+   * The connected account the reply is being written for. Retrieval is scoped
+   * to the sources linked to it, so one login's brands cannot read each
+   * other's knowledge base. Omitted only by callers with no account context,
+   * which fall back to the user-wide matchers.
+   */
+  socialAccountId?: string | null;
+  query: string;
+  matchCount: number;
+}
+
 async function embedAndMatch(
   rpc: RetrievalRpc,
-  userId: string,
-  query: string,
-  matchCount: number,
+  request: KnowledgeRetrievalRequest,
   config: EmbeddingConfig,
   embed: Embedder,
 ): Promise<KnowledgeChunkMatch[]> {
-  const [embedding] = await embed([query], config);
-  const { data, error } = await rpc(retrievalRpcName(config), {
-    query_embedding: embedding,
-    p_user_id: userId,
-    match_count: matchCount,
-  });
+  const [embedding] = await embed([request.query], config);
+  const scoped = !!request.socialAccountId;
+  const { data, error } = await rpc(
+    scoped ? accountRetrievalRpcName(config) : retrievalRpcName(config),
+    {
+      query_embedding: embedding,
+      p_user_id: request.userId,
+      ...(scoped ? { p_social_account_id: request.socialAccountId } : {}),
+      match_count: request.matchCount,
+    },
+  );
   if (error) throw error;
   return (data || []) as KnowledgeChunkMatch[];
 }
@@ -658,20 +683,18 @@ async function embedAndMatch(
 // are a valid answer, not a failure, so they never trigger failover.
 export async function retrieveKnowledgeChunks(
   rpc: RetrievalRpc,
-  userId: string,
-  query: string,
-  matchCount: number,
+  request: KnowledgeRetrievalRequest,
   dual: DualEmbeddingConfig,
   embed: Embedder = embedKnowledge,
 ): Promise<KnowledgeChunkMatch[]> {
   try {
-    return await embedAndMatch(rpc, userId, query, matchCount, dual.primary, embed);
+    return await embedAndMatch(rpc, request, dual.primary, embed);
   } catch (primaryError) {
     if (!dual.fallback) throw primaryError;
     console.warn(
       "[knowledge-embeddings] primary retrieval failed; using fallback provider:",
       primaryError instanceof Error ? primaryError.message : String(primaryError),
     );
-    return await embedAndMatch(rpc, userId, query, matchCount, dual.fallback, embed);
+    return await embedAndMatch(rpc, request, dual.fallback, embed);
   }
 }
