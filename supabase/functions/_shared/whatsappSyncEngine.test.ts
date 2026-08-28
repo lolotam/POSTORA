@@ -60,8 +60,9 @@ function rowsFor(admin: { writes: Write[] }, table: string): any[] {
 }
 
 Deno.test("only chats that can be replied to are imported", async () => {
-  // Group and privacy JIDs carry no phone number, so their digits would collide inside the
-  // wa_<owner>_<number> id and the conversation could not be answered.
+  // A group has no subscriber number, so its digits would collide inside the
+  // wa_<owner>_<number> id and the conversation could not be answered. A LID chat is a real
+  // one-to-one conversation that is merely unaddressable, and is counted apart from it.
   const admin = fakeAdmin();
   const outcome = await syncEvolutionHistory({
     admin,
@@ -78,8 +79,51 @@ Deno.test("only chats that can be replied to are imported", async () => {
 
   assertEquals(outcome.chatsDiscovered, 3);
   assertEquals(outcome.chatsImported, 1);
-  assertEquals(outcome.chatsSkipped, 2);
+  assertEquals(outcome.chatsSkipped, 1);
+  assertEquals(outcome.chatsUnaddressable, 1);
   assertEquals(rowsFor(admin, "import_whatsapp_conversations")[0].conversation_id, "wa_96597950350_96555683677");
+});
+
+Deno.test("a LID chat is imported under the number its own history reveals", async () => {
+  // 2026-08-28: WhatsApp's LID migration left 255 of one account's 258 one-to-one chats
+  // addressed as "<id>@lid". Evolution files their history under the LID and repeats the
+  // subscriber number on only some keys, so the chat's address has to carry the rest.
+  const admin = fakeAdmin();
+  const lidJid = "40557493641315@lid";
+  const outcome = await syncEvolutionHistory({
+    admin,
+    api: fakeApi({
+      chats: [chat(lidJid, {
+        lastMessage: {
+          key: { id: "LIVE", remoteJid: lidJid, remoteJidAlt: "96569983891@s.whatsapp.net" },
+          message: { conversation: "latest" },
+          messageTimestamp: 1787910520,
+        },
+      })],
+      messages: {
+        [lidJid]: [
+          { key: { id: "OLD", fromMe: false, remoteJid: lidJid }, message: { conversation: "older" }, messageTimestamp: 1787843630 },
+          {
+            key: { id: "LIVE", fromMe: false, remoteJid: lidJid, remoteJidAlt: "96569983891@s.whatsapp.net" },
+            message: { conversation: "latest" },
+            messageTimestamp: 1787910520,
+          },
+        ],
+      },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+
+  assertEquals(outcome.chatsImported, 1);
+  assertEquals(outcome.chatsUnaddressable, 0);
+  // Both messages land in the phone-addressed conversation the live webhook writes to --
+  // the sibling without the alternate included.
+  assertEquals(
+    rowsFor(admin, "import_whatsapp_messages").map((r) => r.conversation_id).sort(),
+    ["wa_96597950350_96569983891", "wa_96597950350_96569983891"],
+  );
+  assertEquals(rowsFor(admin, "import_whatsapp_messages").map((r) => r.from_phone)[0], "96569983891");
 });
 
 Deno.test("participant names come from the contact book, not the chat list", async () => {
