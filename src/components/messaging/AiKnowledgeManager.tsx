@@ -20,6 +20,9 @@ import { useAiKnowledge } from "@/hooks/useAiKnowledge";
 import { useWhatsAppCatalog } from "@/hooks/useWhatsAppCatalog";
 import {
   AI_KNOWLEDGE_ACCEPT,
+  AI_KNOWLEDGE_BUCKET,
+  aiKnowledgeObjectPath,
+  aiKnowledgeStorageRef,
   getKnowledgeSourceType,
 } from "@/lib/aiKnowledge";
 import { supabase } from "@/integrations/supabase/client";
@@ -111,42 +114,33 @@ export function AiKnowledgeManager({
     }
     setUploading(true);
     try {
-      // Knowledge files go to Cloudinary under the user's folder
-      // (media/{user}/ai-knowledge/) as raw assets; ai-knowledge-ingest
-      // downloads them back from the CDN URL stored in file_path.
-      const fileData = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(new Error("Failed to read file"));
-        reader.readAsDataURL(file);
-      });
-      const { data: uploadData, error: uploadError } = await supabase.functions.invoke(
-        "cloudinary-upload",
-        {
-          body: {
-            fileData,
-            fileName: file.name,
-            fileType: "raw",
-            subfolder: "ai-knowledge",
-            skipMediaFiles: true,
-          },
-        },
-      );
-      if (uploadError || !uploadData?.success) {
-        throw new Error(uploadData?.error || uploadError?.message || "Upload failed");
-      }
+      // Knowledge files are business documents — price lists, company profiles,
+      // internal templates — so they go straight into the private ai-knowledge
+      // bucket under the uploader's own folder. They used to be pushed to a
+      // public Cloudinary URL that anyone holding the link could read, and whose
+      // path spelled out the owner's email address.
+      const objectPath = aiKnowledgeObjectPath(user.id, file.name, crypto.randomUUID());
+      const { error: uploadError } = await supabase.storage
+        .from(AI_KNOWLEDGE_BUCKET)
+        .upload(objectPath, file, { contentType: file.type || undefined });
+      if (uploadError) throw uploadError;
       const { data: source, error } = await (supabase as any)
         .from("ai_knowledge_sources")
         .insert({
           user_id: user.id,
           source_type: type,
           file_name: file.name,
-          file_path: uploadData.url,
+          file_path: aiKnowledgeStorageRef(objectPath),
           status: "pending",
         })
         .select()
         .single();
-      if (error) throw error;
+      // The row is what makes the object reachable, so an object with no row is
+      // unreferenced storage nobody can see or delete from the UI.
+      if (error) {
+        await supabase.storage.from(AI_KNOWLEDGE_BUCKET).remove([objectPath]);
+        throw error;
+      }
       await run(
         "ingest_source",
         { source_id: source.id },

@@ -119,7 +119,7 @@ const source = (overrides: Record<string, unknown> = {}) => ({
   id: "source-1",
   user_id: "user-1",
   file_name: "catalog.csv",
-  file_path: "media/user/ai-knowledge/catalog.csv",
+  file_path: "supabase://ai-knowledge/user-1/sources/catalog.csv",
   source_type: "csv",
   chunk_count: 0,
   ...overrides,
@@ -234,4 +234,25 @@ Deno.test("a processing error marks the source failed with the sanitized message
   assertEquals(outcome.reason, "ollama unreachable");
   assertEquals(state.sourceUpdates.at(-1)?.status, "failed");
   assertEquals(state.sourceUpdates.at(-1)?.error, "ollama unreachable");
+});
+
+
+// file_path is owner-writable through RLS while the worker holds the service
+// role, so a source pointed at another user's object must be refused before any
+// byte is read — otherwise it is chunked into the pointing user's knowledge base
+// and answered from by their agent.
+Deno.test("a source pointed outside its owner's folder is refused, not downloaded", async () => {
+  const { admin, state } = workerHarness(tenRowCsv, []);
+  const { deps, embedCalls } = dependencies({ now: () => 0 });
+
+  const outcome = await processSource(
+    admin,
+    source({ file_path: "supabase://ai-knowledge/user-2/sources/secret.csv" }),
+    deps,
+  );
+
+  assertEquals(outcome.status, "failed");
+  assertEquals(outcome.reason, "Knowledge file location is not allowed");
+  assertEquals(embedCalls.length, 0);
+  assertEquals(state.chunkInserts.length, 0);
 });
