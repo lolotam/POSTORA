@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Bot, Loader2, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
+import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
@@ -50,12 +51,45 @@ interface AiAgentManagerProps {
 }
 
 export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, surface = "both" }: AiAgentManagerProps = {}) {
-  const { config, isLoading, upsertConfig } = useAiAgentConfig(platform);
+  const { data: socialAccounts = [] } = useSocialAccounts();
+  // Same selection pattern as AutomationHandlerCard: the first active account
+  // on the platform until the user chooses, and never an id that is not in
+  // the list (a disconnected account must deselect itself, not linger).
+  const accounts = useMemo(
+    () => socialAccounts.filter((account) => account.platform === platform && account.is_active),
+    [socialAccounts, platform],
+  );
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const accountId = selectedAccountId && accounts.some((account) => account.id === selectedAccountId)
+    ? selectedAccountId
+    : accounts[0]?.id ?? null;
+
+  const { config, isLoading, error, upsertConfig } = useAiAgentConfig(platform, accountId);
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
 
+  // The form must refuse to submit a config it never loaded. On 2026-08-28 a
+  // read that returned nothing rendered a blank form whose Save then wrote
+  // the blank defaults over a live persona. `config` is undefined until a
+  // read settles -- null means "no config yet", which is a legitimate save
+  // that creates the first one -- so while it is undefined Save stays
+  // disabled and says why.
+  // `error` is checked too: React Query keeps the previously cached data when a
+  // refetch fails, so config alone can be a stale account's config while the
+  // read for THIS one errored -- Save would then write it to the wrong account.
+  const configLoaded = config !== undefined && !error;
+
   useEffect(() => {
+    // A settled null is "this account has no config yet", and the form must
+    // show that rather than whatever the previously selected account had in
+    // it. Returning early here let account A's persona sit in the fields
+    // while account B was selected -- and since null counts as loaded, Save
+    // was enabled and would have written A's brand voice into B.
+    if (config === null) {
+      setForm(defaultConfig);
+      return;
+    }
     if (!config) return;
     setForm({
       is_enabled: config.is_enabled,
@@ -104,10 +138,10 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
     });
   };
 
-  if (isLoading) {
-    return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>;
-  }
-
+  // No loading spinner here on purpose: the blank form plus the disabled Save
+  // below IS the unloaded state ("a blank form is an unloaded form, not a
+  // save"). A spinner would also unmount the account selector mid-switch,
+  // taking away the very control the user just used.
   const selectedMode = (form.default_mode || "human_then_ai") as AiAgentMode;
 
   return (
@@ -127,8 +161,27 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
 
       <TabsContent value="settings" className="mt-0">
         <div className="space-y-4">
+          {/* One selection drives the handler card, this form and the
+              knowledge tab; AutomationHandlerCard's own selector is
+              suppressed by passing accountId down. Markup matches that
+              card's selector so the two pages read as one control. */}
+          {accounts.length > 1 && (
+            <Select value={accountId ?? ""} onValueChange={setSelectedAccountId}>
+              <SelectTrigger className="w-full max-w-xs" data-testid="agent-account">
+                <SelectValue placeholder="Select account" />
+              </SelectTrigger>
+              <SelectContent>
+                {accounts.map((account) => (
+                  <SelectItem key={account.id} value={account.id}>
+                    {account.platform_username || account.platform_user_id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+
           {/* Automation Handler selector (Incoming Messages and/or Comments based on surface) */}
-          <AutomationHandlerCard platform={platform} surface={surface} />
+          <AutomationHandlerCard platform={platform} accountId={accountId} surface={surface} />
 
           <Card>
             <CardHeader>
@@ -235,12 +288,24 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
           {/* Auto-Reply Rules */}
           <AutoReplyManager platform={platform === "whatsapp" ? undefined : platform} />
 
-          <div className="flex justify-end"><Button onClick={save} disabled={upsertConfig.isPending}>{upsertConfig.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Save settings</Button></div>
+          <div className="flex flex-col items-end gap-2">
+            <Button onClick={save} disabled={!configLoaded || upsertConfig.isPending}>
+              {(upsertConfig.isPending || isLoading) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Save settings
+            </Button>
+            {!configLoaded && (
+              <p className="text-sm text-muted-foreground" data-testid="save-blocked-reason">
+                {error
+                  ? `The agent configuration could not be loaded, so saving is disabled — a blank form must not overwrite the stored persona. (${error instanceof Error ? error.message : "read failed"})`
+                  : "Loading the agent configuration — saving is disabled until it loads."}
+              </p>
+            )}
+          </div>
         </div>
       </TabsContent>
-      <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} /></TabsContent>
+      <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} accountId={accountId} /></TabsContent>
       <TabsContent value="tools" className="mt-0"><DatabaseConnectorsManager /></TabsContent>
-      <TabsContent value="test" className="mt-0"><AiAgentTestChat platform={platform} /></TabsContent>
+      <TabsContent value="test" className="mt-0"><AiAgentTestChat platform={platform} accountId={accountId} /></TabsContent>
       <TabsContent value="logs" className="mt-0"><AiAgentLogsView platform={platform} /></TabsContent>
     </Tabs>
   );

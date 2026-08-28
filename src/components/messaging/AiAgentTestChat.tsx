@@ -19,7 +19,16 @@ interface TestTurn {
 
 // Sandbox chat against ai-agent-reply: real knowledge and tools, but nothing
 // is sent to WhatsApp and escalation/notification side effects are stubbed.
-export function AiAgentTestChat({ platform }: { platform: AiAgentPlatform }) {
+export function AiAgentTestChat({
+  platform,
+  accountId,
+}: {
+  platform: AiAgentPlatform;
+  // The account whose agent is under test. Its config and its knowledge are
+  // what the sandbox exercises, and its own sandbox thread is what it writes
+  // to -- without it every account on a platform shared one test history.
+  accountId?: string | null;
+}) {
   const [turns, setTurns] = useState<TestTurn[]>([]);
   const [input, setInput] = useState("");
   const [actAsAdmin, setActAsAdmin] = useState(false);
@@ -35,6 +44,7 @@ export function AiAgentTestChat({ platform }: { platform: AiAgentPlatform }) {
     try {
       const data = await callEdgeApi("ai-agent-reply", "test", {
         platform,
+        social_account_id: accountId ?? undefined,
         inbound_text: text,
         act_as_admin: actAsAdmin,
       });

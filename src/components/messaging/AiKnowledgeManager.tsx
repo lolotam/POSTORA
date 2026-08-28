@@ -30,10 +30,14 @@ import { supabase } from "@/integrations/supabase/client";
 
 export function AiKnowledgeManager({
   platform,
+  accountId,
 }: {
   platform: AiAgentPlatform;
+  // The business profile below belongs to the selected account's config, so
+  // the manager passes its selection down and reads/writes through it.
+  accountId?: string | null;
 }) {
-  const { config, upsertConfig } = useAiAgentConfig(platform);
+  const { config, upsertConfig } = useAiAgentConfig(platform, accountId);
   const { user, sources, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
   const isWhatsApp = platform === "whatsapp";
   const catalogHook = useWhatsAppCatalog();
@@ -45,6 +49,13 @@ export function AiKnowledgeManager({
   // or the row predates signed URLs) — the button degrades to disabled until
   // exports are regenerated, never to a broken link.
   const [unresolvable, setUnresolvable] = useState({ html: false, vault: false });
+  // Same rule as the settings form: `config` is undefined until the read
+  // settles, and an unsettled read must not be saved over. Switching account
+  // while B's config was still in flight would otherwise write A's editor
+  // contents -- or an empty string -- into B's business profile, and
+  // ingest_profile_text deletes and re-indexes the source from whatever it is
+  // given.
+  const configLoaded = config !== undefined;
   const profileText = config?.business_profile_text || "";
   useEffect(() => setProfile(profileText), [profileText]);
   const run = async (
@@ -66,7 +77,9 @@ export function AiKnowledgeManager({
       await upsertConfig.mutateAsync({ business_profile_text: profile });
       await run(
         "ingest_profile_text",
-        { platform },
+        // Naming the account keeps the re-index reading the same config the
+        // save just wrote, instead of an ambiguous (user, platform) lookup.
+        { platform, social_account_id: accountId ?? undefined },
         "Business profile indexed",
       );
     } catch (error) {
@@ -193,7 +206,7 @@ export function AiKnowledgeManager({
           />
           <Button
             onClick={saveProfile}
-            disabled={upsertConfig.isPending || invoke.isPending}
+            disabled={!configLoaded || upsertConfig.isPending || invoke.isPending}
           >
             {(upsertConfig.isPending || invoke.isPending) && (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -333,7 +346,7 @@ export function AiKnowledgeManager({
                           ? "ingest_profile_text"
                           : "ingest_source",
                         source.source_type === "profile_text"
-                          ? { platform }
+                          ? { platform, social_account_id: accountId ?? undefined }
                           : { source_id: source.id },
                         "Source indexing started",
                       )

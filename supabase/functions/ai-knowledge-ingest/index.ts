@@ -805,13 +805,46 @@ Deno.serve(async (req) => {
     }
     if (action === "ingest_profile_text") {
       const platform = String(body.platform || "whatsapp");
-      const { data: config } = await (admin as any)
+      // Scoped to the account when one is named, because the empty result of
+      // an ambiguous read is indistinguishable here from "the profile is
+      // empty" -- and that branch DELETES the indexed source. Once a platform
+      // can hold several configs, maybeSingle() over (user_id, platform)
+      // returns a multiple-rows error; discarding it wiped the business
+      // profile of every account on the platform.
+      let configQuery = (admin as any)
         .from("ai_agent_configs")
         .select("business_profile_text")
-        .eq("user_id", user.id)
-        .eq("platform", platform)
-        .maybeSingle();
-      const fileName = `Business profile (${platform})`;
+        .eq("user_id", user.id);
+      const namedAccount = typeof body.social_account_id === "string" && body.social_account_id.trim()
+        ? body.social_account_id.trim()
+        : null;
+      // Platform is applied in BOTH branches: without it, naming an owned
+      // Facebook account with platform "instagram" read the Facebook config
+      // and then wrote it into an Instagram-labelled source.
+      configQuery = namedAccount
+        ? configQuery.eq("platform", platform).eq("social_account_id", namedAccount)
+        : configQuery.eq("platform", platform);
+      const { data: config, error: configError } = await configQuery.maybeSingle();
+      // Never swallowed: an unreadable config must not be read as an empty
+      // one, or this deletes knowledge the user still has.
+      if (configError) {
+        return errorResponse(
+          `Could not read the agent config for this ${namedAccount ? "account" : "platform"}: ${message(configError)}`,
+        );
+      }
+      // The source identity carries the account, not just the platform. Two
+      // Instagram accounts saving their own profile resolved the SAME
+      // "Business profile (instagram)" source, so the second replaced the
+      // first's chunks -- and because the source is shared, the first account
+      // then answered customers out of the second's business description.
+      // A caller naming no account keeps the platform-wide name, which is the
+      // row every existing profile already lives under.
+      // The whole account id, not a prefix: file_name is the lookup key, and
+      // two accounts sharing the first eight UUID characters would resolve the
+      // same source -- one brand's profile silently replacing the other's.
+      const fileName = namedAccount
+        ? `Business profile (${platform} · ${namedAccount})`
+        : `Business profile (${platform})`;
       const { data: existing } = await (admin as any)
         .from("ai_knowledge_sources")
         .select("*")
@@ -839,10 +872,35 @@ Deno.serve(async (req) => {
               source_type: "profile_text",
               file_name: fileName,
               status: "pending",
+              // An account's own profile is not shared knowledge: restricting
+              // it is what stops one brand's description answering for
+              // another. The platform-wide row (no account named) stays
+              // shared, which is what it has always been.
+              visibility: namedAccount ? "restricted" : "shared",
             })
             .select()
             .single()
         ).data;
+      // A restricted source with no link is visible to nobody, so the link is
+      // part of creating it rather than a later step. Idempotent: re-indexing
+      // an existing profile must not duplicate the row.
+      if (namedAccount) {
+        const { error: linkError } = await (admin as any)
+          .from("ai_knowledge_source_accounts")
+          .upsert(
+            { source_id: source.id, social_account_id: namedAccount, user_id: user.id },
+            { onConflict: "source_id,social_account_id" },
+          );
+        // A restricted source with no link is readable by nobody, so indexing
+        // one would produce chunks that can never be retrieved. Stop instead.
+        if (linkError) {
+          await (admin as any)
+            .from("ai_knowledge_sources")
+            .update({ status: "failed", error: message(linkError).slice(0, 500) })
+            .eq("id", source.id);
+          return errorResponse(`Could not scope the profile to this account: ${message(linkError)}`);
+        }
+      }
       try {
         await (admin as any)
           .from("ai_knowledge_sources")

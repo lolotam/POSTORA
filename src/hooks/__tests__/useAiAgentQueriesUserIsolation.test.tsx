@@ -74,10 +74,12 @@ describe("ai agent query caches are isolated per user", () => {
     );
 
     // Both entries live in the cache, each under its own user-scoped key.
-    expect(client.getQueryData(["ai-agent-config", "user-a", "whatsapp"])).toMatchObject({
+    // The fourth key element is the account scope: null means "no account
+    // named", which is a distinct cache entry from any account id.
+    expect(client.getQueryData(["ai-agent-config", "user-a", "whatsapp", null])).toMatchObject({
       persona_instructions: "Persona of user-a",
     });
-    expect(client.getQueryData(["ai-agent-config", "user-b", "whatsapp"])).toMatchObject({
+    expect(client.getQueryData(["ai-agent-config", "user-b", "whatsapp", null])).toMatchObject({
       persona_instructions: "Persona of user-b",
     });
   });

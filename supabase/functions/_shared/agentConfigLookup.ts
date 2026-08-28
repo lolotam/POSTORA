@@ -36,19 +36,25 @@ export async function loadAgentConfigForAccount(
   scope: AgentConfigScope,
 ): Promise<Record<string, unknown> | null> {
   if (scope.accountId) {
-    const { data: owned } = await admin
+    const { data: owned, error: ownedError } = await admin
       .from("ai_agent_configs")
       .select("*")
       .eq("user_id", scope.userId)
       .eq("social_account_id", scope.accountId)
       .maybeSingle();
+    // Never swallowed. A read that FAILED and a read that found nothing are
+    // opposite facts, and collapsing them is how a statement timeout became a
+    // blank settings form whose Save then wrote defaults over a live persona.
+    // The caller must be able to tell "no config yet" from "I could not look".
+    if (ownedError) throw ownedError;
     if (owned) return owned as Record<string, unknown>;
   }
-  const { data: forPlatform } = await admin
+  const { data: forPlatform, error: platformError } = await admin
     .from("ai_agent_configs")
     .select("*")
     .eq("user_id", scope.userId)
     .eq("platform", scope.platform)
     .maybeSingle();
+  if (platformError) throw platformError;
   return (forPlatform as Record<string, unknown>) ?? null;
 }
