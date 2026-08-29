@@ -19,6 +19,9 @@ import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
 import { AiAgentTestChat } from "@/components/messaging/AiAgentTestChat";
 import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConnectorsManager";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useDirtyForm } from "@/hooks/useDirtyForm";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
   "is_enabled" | "default_mode" | "language_mode" | "daily_message_cap" | "reply_cooldown_seconds"
@@ -48,9 +51,10 @@ interface AiAgentManagerProps {
   activeTab?: AiAgentTab;
   onTabChange?: (tab: AiAgentTab) => void;
   surface?: "dms" | "comments" | "both";
+  onDirtyChange?: (isDirty: boolean) => void;
 }
 
-export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, surface = "both" }: AiAgentManagerProps = {}) {
+export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, surface = "both", onDirtyChange }: AiAgentManagerProps = {}) {
   const { data: socialAccounts = [] } = useSocialAccounts();
   // Same selection pattern as AutomationHandlerCard: the first active account
   // on the platform until the user chooses, and never an id that is not in
@@ -66,6 +70,8 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
 
   const { config, isLoading, error, upsertConfig } = useAiAgentConfig(platform, accountId);
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
+  const [baseline, setBaseline] = useState<AiAgentConfigInput | null>(null);
+  const [loadedAccountId, setLoadedAccountId] = useState<string | null>(null);
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
 
@@ -78,7 +84,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
   // `error` is checked too: React Query keeps the previously cached data when a
   // refetch fails, so config alone can be a stale account's config while the
   // read for THIS one errored -- Save would then write it to the wrong account.
-  const configLoaded = config !== undefined && !error;
+  const configLoaded = config !== undefined && !error && loadedAccountId === accountId;
 
   useEffect(() => {
     // A settled null is "this account has no config yet", and the form must
@@ -88,10 +94,12 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
     // was enabled and would have written A's brand voice into B.
     if (config === null) {
       setForm(defaultConfig);
+      setBaseline(defaultConfig);
+      setLoadedAccountId(accountId);
       return;
     }
     if (!config) return;
-    setForm({
+    const loaded = {
       is_enabled: config.is_enabled,
       default_mode: config.default_mode,
       persona_instructions: config.persona_instructions || "",
@@ -104,8 +112,19 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
       max_tool_iterations: config.max_tool_iterations,
       handoff_on_request: config.handoff_on_request,
       handoff_on_low_confidence: config.handoff_on_low_confidence,
-    });
-  }, [config]);
+    };
+    setForm(loaded);
+    setBaseline(loaded);
+    setLoadedAccountId(accountId);
+  }, [accountId, config]);
+
+  const formDirty = useDirtyForm(form, baseline);
+  const isDirty = formDirty || phoneInput.trim().length > 0;
+  const { guard, pending, confirmDiscard, cancel } = useUnsavedChangesGuard(isDirty);
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
 
   const update = <K extends keyof AiAgentConfigInput>(key: K, value: AiAgentConfigInput[K]) => {
     setForm((current) => ({ ...current, [key]: value }));
@@ -133,7 +152,10 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
       return;
     }
     upsertConfig.mutate(form, {
-      onSuccess: () => toast.success("AI agent settings saved"),
+      onSuccess: () => {
+        setBaseline(form);
+        toast.success("AI agent settings saved");
+      },
       onError: (error) => toast.error(error.message || "Could not save AI agent settings"),
     });
   };
@@ -166,7 +188,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
               suppressed by passing accountId down. Markup matches that
               card's selector so the two pages read as one control. */}
           {accounts.length > 1 && (
-            <Select value={accountId ?? ""} onValueChange={setSelectedAccountId}>
+            <Select value={accountId ?? ""} onValueChange={(next) => guard(() => setSelectedAccountId(next))}>
               <SelectTrigger className="w-full max-w-xs" data-testid="agent-account">
                 <SelectValue placeholder="Select account" />
               </SelectTrigger>
@@ -297,7 +319,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
               <p className="text-sm text-muted-foreground" data-testid="save-blocked-reason">
                 {error
                   ? `The agent configuration could not be loaded, so saving is disabled — a blank form must not overwrite the stored persona. (${error instanceof Error ? error.message : "read failed"})`
-                  : "Loading the agent configuration — saving is disabled until it loads."}
+                  : "Loading this account's agent configuration — saving is disabled until it loads."}
               </p>
             )}
           </div>
@@ -307,6 +329,16 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
       <TabsContent value="tools" className="mt-0"><DatabaseConnectorsManager /></TabsContent>
       <TabsContent value="test" className="mt-0"><AiAgentTestChat platform={platform} accountId={accountId} /></TabsContent>
       <TabsContent value="logs" className="mt-0"><AiAgentLogsView platform={platform} /></TabsContent>
+      <UnsavedChangesDialog
+        open={pending}
+        onCancel={cancel}
+        onDiscard={() => {
+          setBaseline(null);
+          setLoadedAccountId(null);
+          setPhoneInput("");
+          confirmDiscard();
+        }}
+      />
     </Tabs>
   );
 }
