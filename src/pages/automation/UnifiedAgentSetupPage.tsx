@@ -13,6 +13,8 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { cn } from "@/lib/utils";
+import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
+import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 
 interface PlatformOption {
   id: AiAgentPlatform;
@@ -44,6 +46,8 @@ const PLATFORM_FLAG: Record<AiAgentPlatform, keyof ReturnType<typeof useFeatureF
 
 export default function UnifiedAgentSetupPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const [agentDirty, setAgentDirty] = useState(false);
+  const { guard, pending, confirmDiscard, cancel } = useUnsavedChangesGuard(agentDirty);
   
   const platformParam = searchParams.get("platform") as AiAgentPlatform;
   const platform: AiAgentPlatform = PLATFORMS.some((p) => p.id === platformParam) ? platformParam : "whatsapp";
@@ -78,53 +82,67 @@ export default function UnifiedAgentSetupPage() {
   const activeTab: AiAgentTab = AI_AGENT_TABS.includes(tabParam) ? tabParam : "settings";
 
   const handlePlatformChange = (nextPlatform: AiAgentPlatform) => {
-    const targetMeta = PLATFORMS.find((p) => p.id === nextPlatform);
-    const nextCommentsActive = targetMeta?.supportsComments && commentsActive;
-    let nextSurface: AgentSurfaceSelection = "dms";
-    if (dmsActive && nextCommentsActive) nextSurface = "both";
-    else if (!dmsActive && nextCommentsActive) nextSurface = "comments";
+    // Clicking the already-active platform changes nothing, so it must not reach the
+    // guard. The dialog would open, and discarding it would clear agentDirty here while
+    // the child -- whose `key` did not change, so it never remounted -- keeps both its
+    // edits and its unchanged isDirty, meaning it never re-reports. The guard would then
+    // be silently disarmed for the next real transition, which is the data loss this
+    // whole component exists to prevent.
+    if (nextPlatform === platform) return;
 
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set("platform", nextPlatform);
-      next.set("surface", nextSurface);
-      return next;
-    }, { replace: true });
+    guard(() => {
+      const targetMeta = PLATFORMS.find((p) => p.id === nextPlatform);
+      const nextCommentsActive = targetMeta?.supportsComments && commentsActive;
+      let nextSurface: AgentSurfaceSelection = "dms";
+      if (dmsActive && nextCommentsActive) nextSurface = "both";
+      else if (!dmsActive && nextCommentsActive) nextSurface = "comments";
+
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("platform", nextPlatform);
+        next.set("surface", nextSurface);
+        return next;
+      }, { replace: true });
+    });
   };
 
   const handleToggleDms = () => {
     // Prevent unchecking if comments are disabled or not supported
     if (dmsActive && !commentsActive) return;
-    const nextDms = !dmsActive;
-    const nextComments = commentsActive;
+    guard(() => {
+      const nextDms = !dmsActive;
+      const nextComments = commentsActive;
 
-    let nextSurface: AgentSurfaceSelection = "dms";
-    if (nextDms && nextComments) nextSurface = "both";
-    else if (nextComments) nextSurface = "comments";
+      let nextSurface: AgentSurfaceSelection = "dms";
+      if (nextDms && nextComments) nextSurface = "both";
+      else if (nextComments) nextSurface = "comments";
 
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set("surface", nextSurface);
-      return next;
-    }, { replace: true });
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("surface", nextSurface);
+        return next;
+      }, { replace: true });
+    });
   };
 
   const handleToggleComments = () => {
     if (!selectedPlatformMeta.supportsComments) return;
     if (commentsActive && !dmsActive) return;
-    const nextComments = !commentsActive;
-    const nextDms = dmsActive;
+    guard(() => {
+      const nextComments = !commentsActive;
+      const nextDms = dmsActive;
 
-    let nextSurface: AgentSurfaceSelection = "dms";
-    if (nextDms && nextComments) nextSurface = "both";
-    else if (nextDms) nextSurface = "dms";
-    else nextSurface = "comments";
+      let nextSurface: AgentSurfaceSelection = "dms";
+      if (nextDms && nextComments) nextSurface = "both";
+      else if (nextDms) nextSurface = "dms";
+      else nextSurface = "comments";
 
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.set("surface", nextSurface);
-      return next;
-    }, { replace: true });
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("surface", nextSurface);
+        return next;
+      }, { replace: true });
+    });
   };
 
   const handleTabChange = (nextTab: AiAgentTab) => {
@@ -317,11 +335,20 @@ export default function UnifiedAgentSetupPage() {
                 platform={platform}
                 activeTab={activeTab}
                 onTabChange={handleTabChange}
+                onDirtyChange={setAgentDirty}
                 surface={dmsActive && commentsActive ? "both" : dmsActive ? "dms" : "comments"}
               />
             </GradientRingCard>
           </div>
         </Reveal>
+        <UnsavedChangesDialog
+          open={pending}
+          onCancel={cancel}
+          onDiscard={() => {
+            setAgentDirty(false);
+            confirmDiscard();
+          }}
+        />
       </div>
     </DashboardLayout>
   );
