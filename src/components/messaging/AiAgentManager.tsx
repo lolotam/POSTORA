@@ -205,6 +205,14 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
           {/* Automation Handler selector (Incoming Messages and/or Comments based on surface) */}
           <AutomationHandlerCard platform={platform} accountId={accountId} surface={surface} />
 
+          {/* Until THIS account's config has arrived, the fields still show the previous
+              account's values and Save is already disabled. Leaving them editable let a
+              user type into a form they could not save, whose contents the arriving config
+              would then silently replace -- and because the baseline is null during that
+              window, useDirtyForm read those edits as clean, so neither the transition
+              guard nor beforeunload protected them. `contents` keeps the fieldset out of
+              the layout; the disabled state still propagates down the DOM tree. */}
+          <fieldset disabled={!configLoaded} className="contents" data-testid="agent-form-fields">
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2"><Bot className="h-5 w-5" /> AI agent settings</CardTitle>
@@ -306,6 +314,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
               </div>
             </CardContent>
           </Card>
+          </fieldset>
 
           {/* Auto-Reply Rules */}
           <AutoReplyManager platform={platform === "whatsapp" ? undefined : platform} />
