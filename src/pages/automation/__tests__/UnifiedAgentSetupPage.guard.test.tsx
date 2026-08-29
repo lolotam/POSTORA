@@ -86,6 +86,22 @@ describe("UnifiedAgentSetupPage unsaved guard", () => {
     expect(screen.getByTestId("platform-param")).toHaveTextContent("threads");
   });
 
+  it("clicking the already-active platform never reaches the guard", async () => {
+    // Regression guard (Codex review, PR #69). A no-op click used to open the dialog;
+    // discarding it cleared the parent's flag while the child never remounted and so
+    // never re-reported, leaving the guard disarmed for the next real switch.
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /make dirty/i }));
+    fireEvent.click(await screen.findByRole("tab", { name: /instagram/i }));
+
+    expect(screen.queryByText(/you have unsaved changes/i)).not.toBeInTheDocument();
+
+    // and the guard is still armed for a transition that does remount the child
+    fireEvent.click(await screen.findByRole("tab", { name: /threads/i }));
+    expect(await screen.findByText(/you have unsaved changes/i)).toBeInTheDocument();
+    expect(screen.getByTestId("platform-param")).toHaveTextContent("instagram");
+  });
+
   it("prompts before a surface toggle discards edits", async () => {
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: /make dirty/i }));

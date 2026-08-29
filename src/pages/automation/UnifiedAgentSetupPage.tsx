@@ -82,6 +82,14 @@ export default function UnifiedAgentSetupPage() {
   const activeTab: AiAgentTab = AI_AGENT_TABS.includes(tabParam) ? tabParam : "settings";
 
   const handlePlatformChange = (nextPlatform: AiAgentPlatform) => {
+    // Clicking the already-active platform changes nothing, so it must not reach the
+    // guard. The dialog would open, and discarding it would clear agentDirty here while
+    // the child -- whose `key` did not change, so it never remounted -- keeps both its
+    // edits and its unchanged isDirty, meaning it never re-reports. The guard would then
+    // be silently disarmed for the next real transition, which is the data loss this
+    // whole component exists to prevent.
+    if (nextPlatform === platform) return;
+
     guard(() => {
       const targetMeta = PLATFORMS.find((p) => p.id === nextPlatform);
       const nextCommentsActive = targetMeta?.supportsComments && commentsActive;
