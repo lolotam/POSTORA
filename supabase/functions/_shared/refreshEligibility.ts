@@ -1,7 +1,7 @@
 import {
   PLATFORM_REFRESH_CONFIG,
   platformUsesRefreshToken,
-} from "../_shared/tokenExpiryConstants.ts";
+} from "./tokenExpiryConstants.ts";
 
 /** Meta will not refresh an Instagram/Threads long-lived token younger than 24 hours. */
 const MIN_META_TOKEN_AGE_MS = 24 * 60 * 60 * 1000;

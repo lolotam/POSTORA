@@ -80,6 +80,7 @@ export async function cacheAvatarToCloudinary(
     const uploadResponse = await fetch(uploadUrl, {
       method: "POST",
       body: formData,
+      signal: AbortSignal.timeout(8_000),
     });
 
     if (!uploadResponse.ok) {
@@ -93,7 +94,9 @@ export async function cacheAvatarToCloudinary(
     
     return result.secure_url;
   } catch (error) {
-    console.error(`[avatar-cache] Error caching avatar:`, error);
+    // Log error.name only: Deno embeds full request URLs in network error messages, and
+    // the fetchers below carry live access tokens in those URLs.
+    console.error(`[avatar-cache] Error caching avatar:`, error instanceof Error ? error.name : "UnknownError");
     return sourceUrl; // Return original URL as fallback
   }
 }
@@ -106,12 +109,14 @@ export async function cacheAvatarToCloudinary(
 export async function fetchFacebookAvatarUrl(accessToken: string, pageId: string): Promise<string | null> {
   try {
     const response = await fetch(
-      `https://graph.facebook.com/v18.0/${pageId}/picture?redirect=false&type=large&access_token=${accessToken}`
+      `https://graph.facebook.com/v18.0/${pageId}/picture?redirect=false&type=large&access_token=${accessToken}`,
+      { signal: AbortSignal.timeout(8_000) }
     );
     const data = await response.json();
     return data.data?.url || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching Facebook avatar:", error);
+    // The token is in the URL and Deno embeds the URL in network errors — name only.
+    console.error("[avatar-cache] Error fetching Facebook avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -119,12 +124,14 @@ export async function fetchFacebookAvatarUrl(accessToken: string, pageId: string
 export async function fetchInstagramAvatarUrl(accessToken: string, igUserId: string): Promise<string | null> {
   try {
     const response = await fetch(
-      `https://graph.facebook.com/v18.0/${igUserId}?fields=profile_picture_url&access_token=${accessToken}`
+      `https://graph.facebook.com/v18.0/${igUserId}?fields=profile_picture_url&access_token=${accessToken}`,
+      { signal: AbortSignal.timeout(8_000) }
     );
     const data = await response.json();
     return data.profile_picture_url || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching Instagram avatar:", error);
+    // The token is in the URL and Deno embeds the URL in network errors — name only.
+    console.error("[avatar-cache] Error fetching Instagram avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -135,12 +142,13 @@ export async function fetchTikTokAvatarUrl(accessToken: string): Promise<string 
       "https://open.tiktokapis.com/v2/user/info/?fields=avatar_url",
       {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
     return data.data?.user?.avatar_url || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching TikTok avatar:", error);
+    console.error("[avatar-cache] Error fetching TikTok avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -151,6 +159,7 @@ export async function fetchTwitterAvatarUrl(accessToken: string): Promise<string
       "https://api.twitter.com/2/users/me?user.fields=profile_image_url",
       {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
@@ -158,7 +167,7 @@ export async function fetchTwitterAvatarUrl(accessToken: string): Promise<string
     const url = data.data?.profile_image_url;
     return url ? url.replace("_normal", "") : null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching Twitter avatar:", error);
+    console.error("[avatar-cache] Error fetching Twitter avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -169,12 +178,13 @@ export async function fetchLinkedInAvatarUrl(accessToken: string): Promise<strin
       "https://api.linkedin.com/v2/userinfo",
       {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
     return data.picture || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching LinkedIn avatar:", error);
+    console.error("[avatar-cache] Error fetching LinkedIn avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -185,12 +195,13 @@ export async function fetchPinterestAvatarUrl(accessToken: string): Promise<stri
       "https://api.pinterest.com/v5/user_account",
       {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
     return data.profile_image || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching Pinterest avatar:", error);
+    console.error("[avatar-cache] Error fetching Pinterest avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -201,13 +212,14 @@ export async function fetchYouTubeAvatarUrl(accessToken: string): Promise<string
       "https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true",
       {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
     const thumbnails = data.items?.[0]?.snippet?.thumbnails;
     return thumbnails?.high?.url || thumbnails?.medium?.url || thumbnails?.default?.url || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching YouTube avatar:", error);
+    console.error("[avatar-cache] Error fetching YouTube avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -215,12 +227,14 @@ export async function fetchYouTubeAvatarUrl(accessToken: string): Promise<string
 export async function fetchThreadsAvatarUrl(accessToken: string, userId: string): Promise<string | null> {
   try {
     const response = await fetch(
-      `https://graph.threads.net/v1.0/${userId}?fields=threads_profile_picture_url&access_token=${accessToken}`
+      `https://graph.threads.net/v1.0/${userId}?fields=threads_profile_picture_url&access_token=${accessToken}`,
+      { signal: AbortSignal.timeout(8_000) }
     );
     const data = await response.json();
     return data.threads_profile_picture_url || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching Threads avatar:", error);
+    // The token is in the URL and Deno embeds the URL in network errors — name only.
+    console.error("[avatar-cache] Error fetching Threads avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -231,12 +245,13 @@ export async function fetchBlueskyAvatarUrl(accessToken: string, handle: string)
       `https://bsky.social/xrpc/app.bsky.actor.getProfile?actor=${encodeURIComponent(handle)}`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
     return data.avatar || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching Bluesky avatar:", error);
+    console.error("[avatar-cache] Error fetching Bluesky avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }
@@ -246,16 +261,17 @@ export async function fetchRedditAvatarUrl(accessToken: string): Promise<string 
     const response = await fetch(
       "https://oauth.reddit.com/api/v1/me",
       {
-        headers: { 
+        headers: {
           Authorization: `Bearer ${accessToken}`,
           "User-Agent": "Postora/1.0",
         },
+        signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
     return data.icon_img?.split("?")[0] || data.snoovatar_img || null;
   } catch (error) {
-    console.error("[avatar-cache] Error fetching Reddit avatar:", error);
+    console.error("[avatar-cache] Error fetching Reddit avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;
   }
 }

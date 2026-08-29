@@ -3,7 +3,9 @@ import {
   accountCanAttemptRefresh,
   metaRefreshStrategy,
   metaTokenTooYoungToRefresh,
-} from "./refreshEligibility.ts";
+} from "../_shared/refreshEligibility.ts";
+import { shouldEscalateToReauth } from "./escalation.ts";
+import { type MetaProviderError } from "../_shared/metaErrors.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import {
@@ -84,6 +86,9 @@ let lastHealthAlertSentAt: Date | null = null;
 // Max failures before marking as needs_reauth
 const MAX_FAILURES_BEFORE_REAUTH = 3;
 
+/** Leaves ~15s of the 60s worker ceiling to persist results and log. */
+const SWEEP_BUDGET_MS = 45_000;
+
 // Errors that indicate permanent auth failure (user needs to reconnect)
 // These trigger immediate needs_reauth without waiting for MAX_FAILURES
 const PERMANENT_AUTH_ERRORS = [
@@ -101,6 +106,9 @@ const PERMANENT_AUTH_ERRORS = [
   'The refresh token is invalid',
   'Refresh token has expired',
   'refresh token expired',
+  // Meta's revoked-grant phrase. Codes and subcodes are handled by isPermanentMetaError —
+  // never put a bare number in this list, it is matched as a substring.
+  'Error validating access token',
 ];
 
 function isPermanentAuthError(error: string | undefined): boolean {
@@ -303,16 +311,18 @@ async function handleRefreshSuccess(
 async function handleRefreshFailure(
   supabaseAdmin: AnySupabase,
   account: SocialAccountWithDetails,
-  errorMessage: string
+  errorMessage: string,
+  providerError?: MetaProviderError,
 ): Promise<{ needsReauth: boolean; shouldAlert: boolean }> {
   const currentFailureCount = (account.failure_count || 0) + 1;
   const isPermanentError = isPermanentAuthError(errorMessage) || errorMessage.includes('Token limit exceeded');
-  // A missing refresh token only makes a failure permanent on platforms that actually
-  // use refresh tokens. On Meta's exchange-only platforms it is the normal state, and
-  // treating it as permanent turned every transient hiccup into an instant needs_reauth.
-  const needsReauth = isPermanentError
-    || currentFailureCount >= MAX_FAILURES_BEFORE_REAUTH
-    || !accountCanAttemptRefresh(account);
+  const needsReauth = shouldEscalateToReauth({
+    failureCount: currentFailureCount,
+    maxFailures: MAX_FAILURES_BEFORE_REAUTH,
+    isPermanentMessage: isPermanentError,
+    canAttemptRefresh: accountCanAttemptRefresh(account),
+    providerError,
+  });
   
   // Log detailed info for debugging
   console.log(`[refresh-failure] Account ${account.id} (${account.platform}):`, {
@@ -381,69 +391,46 @@ async function refreshSingleAccount(
 
   try {
     switch (account.platform) {
-      case 'facebook':
-        refreshResult = await refreshFacebookToken(account);
-        if (refreshResult) {
+      case 'facebook': {
+        const outcome = await refreshFacebookToken(account);
+        if (outcome.ok) {
           const expiresAt = new Date();
-          expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
-          const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
+          expiresAt.setSeconds(expiresAt.getSeconds() + outcome.expires_in);
+          const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, outcome.access_token, expiresAt.toISOString());
           if (updated) {
-            const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
+            const avatarRefreshed = await refreshAndCacheAvatar(account, outcome.access_token, supabaseAdmin);
             return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
           } else {
             return { id: account.id, platform: account.platform, status: 'already_refreshed' };
           }
         } else {
-          await handleRefreshFailure(supabaseAdmin, account, 'Could not refresh token');
-          return { id: account.id, platform: account.platform, status: 'failed', error: 'Could not refresh token' };
+          const message = outcome.error.message || 'Could not refresh token';
+          await handleRefreshFailure(supabaseAdmin, account, message, outcome.error);
+          return { id: account.id, platform: account.platform, status: 'failed', error: message };
         }
+      }
 
       case 'instagram': {
         // Business Login accounts hold Instagram-scoped tokens; Page-backed ones hold
         // Facebook Page tokens. The flavour lives in the ig_auth_type column.
-        const isBusinessLogin = metaRefreshStrategy(account) === 'ig_refresh';
+        const outcome = metaRefreshStrategy(account) === 'ig_refresh'
+          ? await refreshInstagramBusinessToken(account)
+          : await refreshFacebookToken(account);
 
-        if (isBusinessLogin) {
-          try {
-            refreshResult = await refreshInstagramBusinessToken(account);
-
-            if (refreshResult) {
-              const expiresAt = new Date();
-              expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
-              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
-              if (updated) {
-                const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
-                return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
-              } else {
-                return { id: account.id, platform: account.platform, status: 'already_refreshed' };
-              }
-            } else {
-              const errorMsg = 'Could not refresh Instagram Business Login token';
-              await handleRefreshFailure(supabaseAdmin, account, errorMsg);
-              return { id: account.id, platform: account.platform, status: 'failed', error: errorMsg };
-            }
-          } catch (igError) {
-            const errorMessage = igError instanceof Error ? igError.message : 'Could not refresh token';
-            await handleRefreshFailure(supabaseAdmin, account, errorMessage);
-            return { id: account.id, platform: account.platform, status: 'failed', error: errorMessage };
+        if (outcome.ok) {
+          const expiresAt = new Date();
+          expiresAt.setSeconds(expiresAt.getSeconds() + outcome.expires_in);
+          const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, outcome.access_token, expiresAt.toISOString());
+          if (updated) {
+            const avatarRefreshed = await refreshAndCacheAvatar(account, outcome.access_token, supabaseAdmin);
+            return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
+          } else {
+            return { id: account.id, platform: account.platform, status: 'already_refreshed' };
           }
         } else {
-          // Facebook-page-based Instagram: use existing Facebook refresh
-          refreshResult = await refreshFacebookToken(account);
-          if (refreshResult) {
-            const expiresAt = new Date();
-            expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
-            const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
-            if (updated) {
-              const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
-              return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
-            } else {
-              return { id: account.id, platform: account.platform, status: 'already_refreshed' };
-            }
-          } else {
-            await handleRefreshFailure(supabaseAdmin, account, 'Could not refresh token');
-            return { id: account.id, platform: account.platform, status: 'failed', error: 'Could not refresh token' };
-          }
+          const message = outcome.error.message || 'Could not refresh Instagram token';
+          await handleRefreshFailure(supabaseAdmin, account, message, outcome.error);
+          return { id: account.id, platform: account.platform, status: 'failed', error: message };
         }
       }
 
@@ -553,22 +540,24 @@ async function refreshSingleAccount(
           return { id: account.id, platform: account.platform, status: 'failed', error: 'Could not refresh token' };
         }
 
-      case 'threads':
-        refreshResult = await refreshThreadsToken(account);
-        if (refreshResult) {
+      case 'threads': {
+        const outcome = await refreshThreadsToken(account);
+        if (outcome.ok) {
           const expiresAt = new Date();
-          expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
-          const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
+          expiresAt.setSeconds(expiresAt.getSeconds() + outcome.expires_in);
+          const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, outcome.access_token, expiresAt.toISOString());
           if (updated) {
-            const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
+            const avatarRefreshed = await refreshAndCacheAvatar(account, outcome.access_token, supabaseAdmin);
             return { id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed };
           } else {
             return { id: account.id, platform: account.platform, status: 'already_refreshed' };
           }
         } else {
-          await handleRefreshFailure(supabaseAdmin, account, 'Could not refresh token');
-          return { id: account.id, platform: account.platform, status: 'failed', error: 'Could not refresh token' };
+          const message = outcome.error.message || 'Could not refresh token';
+          await handleRefreshFailure(supabaseAdmin, account, message, outcome.error);
+          return { id: account.id, platform: account.platform, status: 'failed', error: message };
         }
+      }
 
       case 'bluesky':
         refreshResult = await refreshBlueskyToken(account);
@@ -813,7 +802,11 @@ Deno.serve(async (req) => {
       .select('*')
       .eq('is_active', true)
       .or('needs_reauth.is.null,needs_reauth.eq.false') // Skip accounts marked as needs_reauth
-      .not('token_expires_at', 'is', null);
+      .not('token_expires_at', 'is', null)
+      // Oldest attempt first, never-attempted before everything. The sweep always stops
+      // at the same budget, so without this rotation the same head-of-list accounts
+      // would be refreshed every run and the tail would starve forever.
+      .order('last_refresh_attempt_at', { ascending: true, nullsFirst: true });
 
     // Filter by platforms if specified
     if (platforms.length > 0) {
@@ -866,7 +859,23 @@ Deno.serve(async (req) => {
     const results: RefreshResult[] = [];
     const accountsToAlert: SocialAccountWithDetails[] = [];
 
+    // 57 accounts × 8s worst case is 456s against a 60s worker ceiling — a per-request
+    // timeout cannot bound the sweep, only a sweep-wide deadline can.
+    const sweepStartedAt = Date.now();
+    let processed = 0;
+
     for (const account of accountsNeedingRefresh as SocialAccountWithDetails[]) {
+      if (Date.now() - sweepStartedAt > SWEEP_BUDGET_MS) {
+        console.log(`[refresh-budget] budget spent; deferring ${accountsNeedingRefresh.length - processed} accounts to the next run`);
+        for (const deferred of accountsNeedingRefresh.slice(processed)) {
+          // Deferred accounts are skipped, NEVER failed: they were never attempted, so
+          // handleRefreshFailure must not run for them — otherwise the budget itself
+          // would increment failure_count and, three sweeps later, latch healthy accounts.
+          results.push({ id: deferred.id, platform: deferred.platform, status: 'skipped', error: 'Deferred: sweep budget spent' });
+        }
+        break;
+      }
+      processed++;
       const platformConfig = PLATFORM_REFRESH_CONFIG[account.platform.toLowerCase()];
       
       // Enhanced logging with more context
@@ -920,29 +929,32 @@ Deno.serve(async (req) => {
       try {
         switch (account.platform) {
           case 'facebook':
-          case 'instagram':
+          case 'instagram': {
             // Instagram Business Login accounts hold Instagram-scoped tokens and must
             // exchange at graph.instagram.com; Facebook Pages and Page-backed Instagram
             // accounts use fb_exchange_token.
-            refreshResult = metaRefreshStrategy(account) === 'ig_refresh'
+            const outcome = metaRefreshStrategy(account) === 'ig_refresh'
               ? await refreshInstagramBusinessToken(account)
               : await refreshFacebookToken(account);
-            if (refreshResult) {
+
+            if (outcome.ok) {
               const expiresAt = new Date();
-              expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
-              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
+              expiresAt.setSeconds(expiresAt.getSeconds() + outcome.expires_in);
+              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, outcome.access_token, expiresAt.toISOString());
               if (updated) {
-                const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
+                const avatarRefreshed = await refreshAndCacheAvatar(account, outcome.access_token, supabaseAdmin);
                 results.push({ id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed });
               } else {
                 results.push({ id: account.id, platform: account.platform, status: 'already_refreshed' });
               }
             } else {
-              const { needsReauth, shouldAlert } = await handleRefreshFailure(supabaseAdmin, account, 'Could not refresh token');
-              results.push({ id: account.id, platform: account.platform, status: needsReauth ? 'needs_reauth' : 'failed', error: 'Could not refresh token' });
+              const message = outcome.error.message || 'Could not refresh token';
+              const { needsReauth, shouldAlert } = await handleRefreshFailure(supabaseAdmin, account, message, outcome.error);
+              results.push({ id: account.id, platform: account.platform, status: needsReauth ? 'needs_reauth' : 'failed', error: message });
               if (shouldAlert) accountsToAlert.push(account);
             }
             break;
+          }
 
           case 'tiktok':
             try {
@@ -1060,24 +1072,26 @@ Deno.serve(async (req) => {
             }
             break;
 
-          case 'threads':
-            refreshResult = await refreshThreadsToken(account);
-            if (refreshResult) {
+          case 'threads': {
+            const outcome = await refreshThreadsToken(account);
+            if (outcome.ok) {
               const expiresAt = new Date();
-              expiresAt.setSeconds(expiresAt.getSeconds() + refreshResult.expires_in);
-              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, refreshResult.access_token, expiresAt.toISOString());
+              expiresAt.setSeconds(expiresAt.getSeconds() + outcome.expires_in);
+              const { updated } = await handleRefreshSuccess(supabaseAdmin, account.id, oldRefreshToken, outcome.access_token, expiresAt.toISOString());
               if (updated) {
-                const avatarRefreshed = await refreshAndCacheAvatar(account, refreshResult.access_token, supabaseAdmin);
+                const avatarRefreshed = await refreshAndCacheAvatar(account, outcome.access_token, supabaseAdmin);
                 results.push({ id: account.id, platform: account.platform, status: 'refreshed', avatarRefreshed });
               } else {
                 results.push({ id: account.id, platform: account.platform, status: 'already_refreshed' });
               }
             } else {
-              const { needsReauth, shouldAlert } = await handleRefreshFailure(supabaseAdmin, account, 'Could not refresh token');
-              results.push({ id: account.id, platform: account.platform, status: needsReauth ? 'needs_reauth' : 'failed', error: 'Could not refresh token' });
+              const message = outcome.error.message || 'Could not refresh token';
+              const { needsReauth, shouldAlert } = await handleRefreshFailure(supabaseAdmin, account, message, outcome.error);
+              results.push({ id: account.id, platform: account.platform, status: needsReauth ? 'needs_reauth' : 'failed', error: message });
               if (shouldAlert) accountsToAlert.push(account);
             }
             break;
+          }
 
           case 'bluesky':
             refreshResult = await refreshBlueskyToken(account);

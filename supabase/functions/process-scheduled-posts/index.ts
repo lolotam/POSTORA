@@ -9,10 +9,12 @@ const corsHeaders = {
 import {
   SocialAccount,
   refreshFacebookToken,
+  refreshInstagramBusinessToken,
   refreshTikTokToken,
   refreshYouTubeToken,
   refreshPinterestToken
 } from '../_shared/social-auth.ts';
+import { metaRefreshStrategy } from '../_shared/refreshEligibility.ts';
 
 // Returns true if token expires in less than N minutes or is already expired
 function isTokenExpiring(expiresAt: string | null, platform?: string): boolean {
@@ -108,9 +110,25 @@ Deno.serve(async (req) => {
                 try {
                   switch (account.platform) {
                     case 'facebook':
-                    case 'instagram':
-                      refreshResult = await refreshFacebookToken(account);
+                    case 'instagram': {
+                      // Route by ig_auth_type, exactly as refresh-tokens does. This file
+                      // used to send every Instagram account to the Facebook exchange —
+                      // the same defect PR #66 fixed on the other path but never here, so
+                      // Business Login accounts hit the wrong endpoint.
+                      // The Meta adapters return a discriminated outcome; adapt back to
+                      // the nullable shape at this boundary so the surrounding
+                      // `if (refreshResult)` block (and the non-Meta adapters below)
+                      // keep working unchanged. A failed refresh MUST land here as null:
+                      // {ok:false} is truthy, and writing its undefined access_token
+                      // over a working credential would destroy it right before publish.
+                      const outcome = metaRefreshStrategy(account) === 'ig_refresh'
+                        ? await refreshInstagramBusinessToken(account)
+                        : await refreshFacebookToken(account);
+                      refreshResult = outcome.ok
+                        ? { access_token: outcome.access_token, expires_in: outcome.expires_in }
+                        : null;
                       break;
+                    }
                     case 'tiktok':
                       refreshResult = await refreshTikTokToken(account);
                       break;

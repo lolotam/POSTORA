@@ -1,3 +1,11 @@
+import { type MetaRefreshOutcome, parseMetaError } from "./metaErrors.ts";
+
+/** Provider calls must be bounded (ARCHITECTURE.md §26). The refresh loop is sequential
+ *  and the edge worker dies at 60s, so one hang strands every account after it.
+ *  8s, not 10s: with the 45s sweep budget in refresh-tokens, five consecutive worst-case
+ *  hangs must still leave room to persist results. */
+const META_FETCH_TIMEOUT_MS = 8_000;
+
 export interface SocialAccount {
     id: string;
     platform: string;
@@ -8,59 +16,71 @@ export interface SocialAccount {
     user_id: string;
 }
 
-export async function refreshFacebookToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number } | null> {
-    // Facebook long-lived tokens last 60 days and can be refreshed
-    // Exchange for a new long-lived token
+export async function refreshFacebookToken(account: SocialAccount): Promise<MetaRefreshOutcome> {
+    // POST, not a query string: Meta accepts the credential in the body, and keeping it
+    // out of the URL means no logger, proxy or fetch error can ever capture it.
     try {
-        const response = await fetch(
-            `https://graph.facebook.com/v18.0/oauth/access_token?` +
-            `grant_type=fb_exchange_token&` +
-            `client_id=${Deno.env.get('FACEBOOK_APP_ID')}&` +
-            `client_secret=${Deno.env.get('FACEBOOK_APP_SECRET')}&` +
-            `fb_exchange_token=${account.access_token}`
-        );
+        const response = await fetch("https://graph.facebook.com/v18.0/oauth/access_token", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+                grant_type: "fb_exchange_token",
+                client_id: Deno.env.get("FACEBOOK_APP_ID") ?? "",
+                client_secret: Deno.env.get("FACEBOOK_APP_SECRET") ?? "",
+                fb_exchange_token: account.access_token,
+            }),
+            signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS),
+        });
 
         const data = await response.json();
 
-    if (!response.ok || data.error || !data.access_token) {
-            const errorMsg = data.error?.message || data.error?.error_user_msg || 'Facebook token refresh failed';
-            console.error('Facebook token refresh failed:', errorMsg);
-            return null;
+        if (!response.ok || data.error || !data.access_token) {
+            const error = parseMetaError(response.status, data);
+            console.error("[meta-refresh] facebook exchange failed", {
+                type: error.type, code: error.code, error_subcode: error.error_subcode, message: error.message,
+            });
+            return { ok: false, error };
         }
 
-        return {
-            access_token: data.access_token,
-            expires_in: data.expires_in || 5184000 // 60 days default
-        };
+        return { ok: true, access_token: data.access_token, expires_in: data.expires_in || 5184000 };
     } catch (error) {
-        console.error('Error refreshing Facebook token:', error);
-        return null;
+        // Never log the error object: Deno puts the full request URL in network error
+        // messages, and that URL would carry the token if it were ever moved back.
+        const name = error instanceof Error ? error.name : "UnknownError";
+        console.error(`[meta-refresh] facebook exchange threw: ${name}`);
+        return { ok: false, error: { type: name, message: "network or timeout failure", transient: true } };
     }
 }
 
-export async function refreshInstagramBusinessToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number } | null> {
+export async function refreshInstagramBusinessToken(account: SocialAccount): Promise<MetaRefreshOutcome> {
     // Instagram Business Login tokens are Instagram-scoped: they refresh against
     // graph.instagram.com using the access token itself, not fb_exchange_token.
+    // ⚠️ This endpoint REJECTS POST ("Unsupported post request") — verified with a real
+    // token on 2026-08-29 — so it stays on GET and the credential stays in the URL.
+    // The sanitized catch below is therefore load-bearing, not defence in depth.
     try {
         const response = await fetch(
-            `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${account.access_token}`
+            `https://graph.instagram.com/refresh_access_token?grant_type=ig_refresh_token&access_token=${account.access_token}`,
+            { signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS) }
         );
 
         const data = await response.json();
 
         if (!response.ok || data.error || !data.access_token) {
-            const errorMsg = data.error?.message || data.error?.error_user_msg || 'Instagram token refresh failed';
-            console.error('Instagram Business token refresh failed:', errorMsg);
-            return null;
+            const error = parseMetaError(response.status, data);
+            console.error("[meta-refresh] instagram exchange failed", {
+                type: error.type, code: error.code, error_subcode: error.error_subcode, message: error.message,
+            });
+            return { ok: false, error };
         }
 
-        return {
-            access_token: data.access_token,
-            expires_in: data.expires_in || 5184000 // 60 days default
-        };
+        return { ok: true, access_token: data.access_token, expires_in: data.expires_in || 5184000 };
     } catch (error) {
-        console.error('Error refreshing Instagram Business token:', error);
-        return null;
+        // Deno embeds the full URL — access token included — in network error messages.
+        // Log error.name only; logging the object leaks a live credential.
+        const name = error instanceof Error ? error.name : "UnknownError";
+        console.error(`[meta-refresh] instagram exchange threw: ${name}`);
+        return { ok: false, error: { type: name, message: "network or timeout failure", transient: true } };
     }
 }
 
@@ -265,28 +285,33 @@ export async function refreshTwitterToken(account: SocialAccount): Promise<{ acc
     }
 }
 
-export async function refreshThreadsToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number } | null> {
-    // Threads uses long-lived tokens that can be refreshed
+export async function refreshThreadsToken(account: SocialAccount): Promise<MetaRefreshOutcome> {
+    // Threads uses long-lived tokens that can be refreshed. ⚠️ Stays on GET: POST support
+    // is unproven (both methods answer the same threads_basic permission error), and a
+    // blind migration would fail every refresh. The sanitized catch is load-bearing.
     try {
         const response = await fetch(
-            `https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token&access_token=${account.access_token}`
+            `https://graph.threads.net/refresh_access_token?grant_type=th_refresh_token&access_token=${account.access_token}`,
+            { signal: AbortSignal.timeout(META_FETCH_TIMEOUT_MS) }
         );
 
         const data = await response.json();
 
-        if (data.error || !response.ok || !data.access_token) {
-            const errorMsg = data.error?.message || data.error?.error_user_msg || data.error || 'Threads token refresh failed';
-            console.error('Threads token refresh failed:', errorMsg);
-            return null;
+        if (!response.ok || data.error || !data.access_token) {
+            const error = parseMetaError(response.status, data);
+            console.error("[meta-refresh] threads exchange failed", {
+                type: error.type, code: error.code, error_subcode: error.error_subcode, message: error.message,
+            });
+            return { ok: false, error };
         }
 
-        return {
-            access_token: data.access_token,
-            expires_in: data.expires_in || 5184000 // 60 days default
-        };
+        return { ok: true, access_token: data.access_token, expires_in: data.expires_in || 5184000 };
     } catch (error) {
-        console.error('Error refreshing Threads token:', error);
-        return null;
+        // Deno embeds the full URL — access token included — in network error messages.
+        // Log error.name only; logging the object leaks a live credential.
+        const name = error instanceof Error ? error.name : "UnknownError";
+        console.error(`[meta-refresh] threads exchange threw: ${name}`);
+        return { ok: false, error: { type: name, message: "network or timeout failure", transient: true } };
     }
 }
 
