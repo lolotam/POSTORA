@@ -681,9 +681,15 @@ Adapting at the boundary keeps the surrounding `if (refreshResult)` block — an
 adapters that still return the old shape — working unchanged. That is deliberately the smaller
 change: this file publishes posts, and is not where a broader refactor belongs.
 
-⚠️ It must also claim the account before refreshing (Task 4), or a scheduled publish can race a cron
-sweep on the same row. On a failed claim, skip the JIT refresh and publish with the existing token —
-which is already what this file does when a refresh fails, so no new failure path is introduced.
+⚠️ **Do NOT add a claim here.** An earlier revision of this step told you to claim the account
+before refreshing and cited Task 4. That cross-reference is stale: the concurrency claim was moved
+into Task 5 and then deferred out of this batch entirely. Implement no part of it.
+
+The reasoning that made it look safe was also wrong, and is recorded here so it is not re-derived.
+"On a failed claim, publish with the existing token" reads like the conservative fallback, but a lost
+claim means the token is being rewritten *at that moment* — so the existing token is the value most
+likely to be stale. That branch is the unsafe one, which is a large part of why the claim needs a
+proper design rather than a bolt-on.
 
 - [ ] **Step 9: Prove no call site still uses the old shape**
 
@@ -843,9 +849,16 @@ ported into the repo before deploying.
 ssh root@86.48.2.205 'mkdir -p /root/fn-backup-$(date +%Y%m%d) && cp -r /etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/{refresh-tokens,_shared} /root/fn-backup-$(date +%Y%m%d)/'
 ```
 
-Upload `refresh-tokens/{index.ts,escalation.ts}` and
-`_shared/{social-auth.ts,metaErrors.ts,avatar-cache.ts}`, then compare `sha256sum` on both sides.
-Every hash must match before restarting.
+Upload `refresh-tokens/{index.ts,escalation.ts}`,
+`_shared/{social-auth.ts,metaErrors.ts,refreshEligibility.ts,avatar-cache.ts}` and
+`process-scheduled-posts/index.ts`, then compare `sha256sum` on both sides. Every hash must match
+before restarting.
+
+⚠️ `_shared/refreshEligibility.ts` is **new to this path** — the module moved out of
+`refresh-tokens/` — and `process-scheduled-posts/index.ts` now imports it. Omitting either file
+boot-crashes the functions container on an unresolved import, which takes down every Edge Function,
+not just these two. Remove the old `refresh-tokens/refreshEligibility.ts` from the volume only
+*after* the restart is confirmed healthy.
 
 - [ ] **Step 3: Restart and confirm the worker booted**
 
