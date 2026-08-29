@@ -849,13 +849,14 @@ ported into the repo before deploying.
 ssh root@86.48.2.205 'mkdir -p /root/fn-backup-$(date +%Y%m%d) && cp -r /etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/{refresh-tokens,_shared} /root/fn-backup-$(date +%Y%m%d)/'
 ```
 
-Upload `refresh-tokens/{index.ts,escalation.ts}`,
+Upload `refresh-tokens/{index.ts,escalation.ts,sweepBudget.ts}`,
 `_shared/{social-auth.ts,metaErrors.ts,refreshEligibility.ts,avatar-cache.ts}` and
 `process-scheduled-posts/index.ts`, then compare `sha256sum` on both sides. Every hash must match
 before restarting.
 
-⚠️ `_shared/refreshEligibility.ts` is **new to this path** — the module moved out of
-`refresh-tokens/` — and `process-scheduled-posts/index.ts` now imports it. Omitting either file
+⚠️ `refresh-tokens/sweepBudget.ts` and `_shared/refreshEligibility.ts` are both **new to this path**  — `sweepBudget.ts` did not exist before,
+and `refreshEligibility.ts` moved out of `refresh-tokens/` and is now imported by
+`process-scheduled-posts/index.ts` too. Omitting any of these files
 boot-crashes the functions container on an unresolved import, which takes down every Edge Function,
 not just these two. Remove the old `refresh-tokens/refreshEligibility.ts` from the volume only
 *after* the restart is confirmed healthy.
