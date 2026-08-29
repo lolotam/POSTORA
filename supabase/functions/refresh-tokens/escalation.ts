@@ -25,3 +25,16 @@ export function shouldEscalateToReauth(input: {
 
   return input.failureCount >= input.maxFailures;
 }
+
+/**
+ * The failure count after this failure.
+ *
+ * A transient failure leaves it untouched. The count is evidence against the grant, and
+ * an unreachable provider is not evidence -- shouldEscalateToReauth already refuses to
+ * latch ON a transient failure, but letting the count rise anyway only deferred the bug:
+ * two timeouts plus one unclassified failure still reached the ceiling and set the
+ * one-way flag on the strength of a single real failure.
+ */
+export function nextFailureCount(current: number, providerError?: MetaProviderError): number {
+  return providerError?.transient === true ? current : current + 1;
+}

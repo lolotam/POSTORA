@@ -4,7 +4,8 @@ import {
   metaRefreshStrategy,
   metaTokenTooYoungToRefresh,
 } from "../_shared/refreshEligibility.ts";
-import { shouldEscalateToReauth } from "./escalation.ts";
+import { nextFailureCount, shouldEscalateToReauth } from "./escalation.ts";
+import { mayStartAnotherAccount } from "./sweepBudget.ts";
 import { type MetaProviderError } from "../_shared/metaErrors.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
@@ -85,9 +86,6 @@ let lastHealthAlertSentAt: Date | null = null;
 
 // Max failures before marking as needs_reauth
 const MAX_FAILURES_BEFORE_REAUTH = 3;
-
-/** Leaves ~15s of the 60s worker ceiling to persist results and log. */
-const SWEEP_BUDGET_MS = 45_000;
 
 // Errors that indicate permanent auth failure (user needs to reconnect)
 // These trigger immediate needs_reauth without waiting for MAX_FAILURES
@@ -314,7 +312,8 @@ async function handleRefreshFailure(
   errorMessage: string,
   providerError?: MetaProviderError,
 ): Promise<{ needsReauth: boolean; shouldAlert: boolean }> {
-  const currentFailureCount = (account.failure_count || 0) + 1;
+  const failureIsTransient = providerError?.transient === true;
+  const currentFailureCount = nextFailureCount(account.failure_count || 0, providerError);
   const isPermanentError = isPermanentAuthError(errorMessage) || errorMessage.includes('Token limit exceeded');
   const needsReauth = shouldEscalateToReauth({
     failureCount: currentFailureCount,
@@ -347,6 +346,10 @@ async function handleRefreshFailure(
     last_refresh_error: errorMessage,
     updated_at: new Date().toISOString(),
   };
+  if (failureIsTransient) {
+    // Recorded so the error is visible, but the count is deliberately left where it was.
+    console.log(`[refresh-failure] transient failure for ${account.id}; failure_count held at ${currentFailureCount}`);
+  }
 
   if (needsReauth) {
     updateData.needs_reauth = true;
@@ -865,7 +868,12 @@ Deno.serve(async (req) => {
     let processed = 0;
 
     for (const account of accountsNeedingRefresh as SocialAccountWithDetails[]) {
-      if (Date.now() - sweepStartedAt > SWEEP_BUDGET_MS) {
+      // The test is whether the WORST CASE for one more account still fits, not whether
+      // the budget is already spent. Checking elapsed alone let the sweep start an
+      // account at 44.9s that could then spend 8s on the exchange plus 8s fetching and
+      // 8s uploading the avatar — 68.9s against a 60s ceiling, killed mid-write. A bound
+      // that can be exceeded by 24s is not a bound.
+      if (!mayStartAnotherAccount(Date.now() - sweepStartedAt)) {
         console.log(`[refresh-budget] budget spent; deferring ${accountsNeedingRefresh.length - processed} accounts to the next run`);
         for (const deferred of accountsNeedingRefresh.slice(processed)) {
           // Deferred accounts are skipped, NEVER failed: they were never attempted, so

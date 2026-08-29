@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Bot, Loader2, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -118,6 +118,11 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
     setLoadedAccountId(accountId);
   }, [accountId, config]);
 
+  // Read inside the save callback, which closes over the account that started the
+  // mutation rather than the one selected when it resolves.
+  const accountIdRef = useRef(accountId);
+  useEffect(() => { accountIdRef.current = accountId; }, [accountId]);
+
   const formDirty = useDirtyForm(form, baseline);
   const isDirty = formDirty || phoneInput.trim().length > 0;
   const { guard, pending, confirmDiscard, cancel } = useUnsavedChangesGuard(isDirty);
@@ -151,9 +156,14 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
       setPhoneError(`Invalid phone number: ${invalid[0]}`);
       return;
     }
+    // Both are captured now, because the callback runs later and the user may have moved
+    // on. A save for account A that lands after a switch to B must not write A's values
+    // into B's baseline -- B's untouched fields would then read as dirty and prompt.
+    const savedAccountId = accountId;
+    const savedForm = form;
     upsertConfig.mutate(form, {
       onSuccess: () => {
-        setBaseline(form);
+        if (accountIdRef.current === savedAccountId) setBaseline(savedForm);
         toast.success("AI agent settings saved");
       },
       onError: (error) => toast.error(error.message || "Could not save AI agent settings"),
