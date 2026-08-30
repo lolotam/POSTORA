@@ -1,10 +1,16 @@
 -- ============================================================================
 -- partner_api_tenancy_negative.sql
 --
--- Negative-tenancy proof for the Partner API v1 Phase 1 tables:
+-- Negative-tenancy proof for the Partner API v1 tables:
 --
 --   public.partner_api_key_accounts  (20260830120000_partner_api_key_accounts.sql)
 --   public.partner_audit_logs        (20260830120100_partner_audit_logs.sql)
+--   public.partner_api_keys          (20260813120000_partner_api_foundation.sql;
+--                                     grant surface narrowed by
+--                                     20260830120300_partner_api_least_privilege_grants.sql)
+--   public.partner_api_usage         (same two migrations)
+--   public.partner_api_idempotency   (same two migrations)
+--   public.partner_api_rate_buckets  (same two migrations)
 --
 -- Lives beside supabase/tests/partner_api_test.sql, the existing partner API
 -- database suite. It does NOT use that file's assert_eq helper, which can only
@@ -429,6 +435,153 @@ BEGIN
   END;
 END
 $grants_anon$;
+RESET ROLE;
+
+-- ---------------------------------------------------------------------------
+-- Negative 5 (least-privilege grants on the four foundation tables,
+-- 20260830120300_partner_api_least_privilege_grants.sql): the grant surface,
+-- not RLS, is the only layer standing between service_role (BYPASSRLS) and
+-- the billing ledger. DELETE and TRUNCATE on partner_api_usage must be
+-- refused even for service_role, and anon must hold nothing at all on any of
+-- the four foundation tables. Same SET ROLE-at-statement-level convention as
+-- Negative 4, because role changes are not allowed inside a DO block.
+-- ---------------------------------------------------------------------------
+
+\echo '--- partner_api_usage DELETE/TRUNCATE as service_role ---'
+SET ROLE service_role;
+DO $usage_grants_service$
+BEGIN
+  BEGIN
+    DELETE FROM public.partner_api_usage;
+    RAISE EXCEPTION 'FAIL: service_role DELETE on partner_api_usage was ACCEPTED -- the billing ledger is erasable by any service-role code path';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: DELETE on partner_api_usage refused for service_role';
+  END;
+  BEGIN
+    TRUNCATE public.partner_api_usage;
+    RAISE EXCEPTION 'FAIL: service_role TRUNCATE on partner_api_usage was ACCEPTED -- the billing ledger is erasable by any service-role code path';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: TRUNCATE on partner_api_usage refused for service_role';
+  END;
+END
+$usage_grants_service$;
+RESET ROLE;
+
+-- anon holds nothing on any of the four foundation tables. Privilege checks
+-- fire before RLS is even consulted, so a refused statement raises
+-- insufficient_privilege regardless of what any policy would have allowed.
+-- INSERT ... DEFAULT VALUES avoids depending on column values: the refusal
+-- happens at the privilege check, before constraints are evaluated, so the
+-- statement needs no valid payload to prove the grant is absent.
+\echo '--- foundation tables: all DML as anon must be refused ---'
+SET ROLE anon;
+DO $foundation_grants_anon$
+BEGIN
+  -- partner_api_keys: the credential records.
+  BEGIN
+    PERFORM 1 FROM public.partner_api_keys;
+    RAISE EXCEPTION 'FAIL: anon SELECT on partner_api_keys was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: SELECT on partner_api_keys refused for anon';
+  END;
+  BEGIN
+    INSERT INTO public.partner_api_keys DEFAULT VALUES;
+    RAISE EXCEPTION 'FAIL: anon INSERT on partner_api_keys was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: INSERT on partner_api_keys refused for anon';
+  END;
+  BEGIN
+    UPDATE public.partner_api_keys SET name = 'tamper';
+    RAISE EXCEPTION 'FAIL: anon UPDATE on partner_api_keys was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: UPDATE on partner_api_keys refused for anon';
+  END;
+  BEGIN
+    DELETE FROM public.partner_api_keys;
+    RAISE EXCEPTION 'FAIL: anon DELETE on partner_api_keys was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: DELETE on partner_api_keys refused for anon';
+  END;
+
+  -- partner_api_usage: the billing ledger.
+  BEGIN
+    PERFORM 1 FROM public.partner_api_usage;
+    RAISE EXCEPTION 'FAIL: anon SELECT on partner_api_usage was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: SELECT on partner_api_usage refused for anon';
+  END;
+  BEGIN
+    INSERT INTO public.partner_api_usage DEFAULT VALUES;
+    RAISE EXCEPTION 'FAIL: anon INSERT on partner_api_usage was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: INSERT on partner_api_usage refused for anon';
+  END;
+  BEGIN
+    UPDATE public.partner_api_usage SET action = 'tamper';
+    RAISE EXCEPTION 'FAIL: anon UPDATE on partner_api_usage was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: UPDATE on partner_api_usage refused for anon';
+  END;
+  BEGIN
+    DELETE FROM public.partner_api_usage;
+    RAISE EXCEPTION 'FAIL: anon DELETE on partner_api_usage was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: DELETE on partner_api_usage refused for anon';
+  END;
+
+  -- partner_api_idempotency: the send-claim state.
+  BEGIN
+    PERFORM 1 FROM public.partner_api_idempotency;
+    RAISE EXCEPTION 'FAIL: anon SELECT on partner_api_idempotency was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: SELECT on partner_api_idempotency refused for anon';
+  END;
+  BEGIN
+    INSERT INTO public.partner_api_idempotency DEFAULT VALUES;
+    RAISE EXCEPTION 'FAIL: anon INSERT on partner_api_idempotency was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: INSERT on partner_api_idempotency refused for anon';
+  END;
+  BEGIN
+    UPDATE public.partner_api_idempotency SET state = 'completed';
+    RAISE EXCEPTION 'FAIL: anon UPDATE on partner_api_idempotency was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: UPDATE on partner_api_idempotency refused for anon';
+  END;
+  BEGIN
+    DELETE FROM public.partner_api_idempotency;
+    RAISE EXCEPTION 'FAIL: anon DELETE on partner_api_idempotency was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: DELETE on partner_api_idempotency refused for anon';
+  END;
+
+  -- partner_api_rate_buckets: nobody holds a direct grant at all.
+  BEGIN
+    PERFORM 1 FROM public.partner_api_rate_buckets;
+    RAISE EXCEPTION 'FAIL: anon SELECT on partner_api_rate_buckets was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: SELECT on partner_api_rate_buckets refused for anon';
+  END;
+  BEGIN
+    INSERT INTO public.partner_api_rate_buckets DEFAULT VALUES;
+    RAISE EXCEPTION 'FAIL: anon INSERT on partner_api_rate_buckets was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: INSERT on partner_api_rate_buckets refused for anon';
+  END;
+  BEGIN
+    UPDATE public.partner_api_rate_buckets SET request_count = 0;
+    RAISE EXCEPTION 'FAIL: anon UPDATE on partner_api_rate_buckets was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: UPDATE on partner_api_rate_buckets refused for anon';
+  END;
+  BEGIN
+    DELETE FROM public.partner_api_rate_buckets;
+    RAISE EXCEPTION 'FAIL: anon DELETE on partner_api_rate_buckets was ACCEPTED';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS: DELETE on partner_api_rate_buckets refused for anon';
+  END;
+END
+$foundation_grants_anon$;
 RESET ROLE;
 
 -- ---------------------------------------------------------------------------

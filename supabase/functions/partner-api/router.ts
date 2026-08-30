@@ -25,6 +25,41 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   send_template: "C",
 };
 
+/**
+ * ── 0A SAFETY SUSPENSION SWITCH ──────────────────────────────────────────
+ *
+ * `send_template` is DELIBERATELY suspended as a safety measure (decision
+ * record: docs/decisions/2026-08-30-suspend-send-template.md).
+ *
+ * Why: the D13 duplicate-send window is real and unfixed. A process death
+ * between the Meta call and the durable idempotency settle can deliver the
+ * same WhatsApp message twice, and nothing in the current build closes that
+ * window. The action is therefore refused in code rather than relying on the
+ * three unrelated accidents that happen to block it today.
+ *
+ * ⚠️ RESTORATION IS GATED, NOT CASUAL. This may be flipped back to `false`
+ * ONLY when the Phase 3 D13 pre-call dispatch boundary has been implemented
+ * AND its gate has passed — a durable dispatch intent written BEFORE the
+ * provider call, with a reconciler that makes "process died mid-send"
+ * distinguishable from "never sent". Until that exists, restoring this is
+ * re-arming a known duplicate-send defect against real customers.
+ *
+ * Flipping this one value is the ENTIRE restoration: nothing else needs to be
+ * deleted. The action keeps its scope requirement, its risk class, and its
+ * send-action treatment in ACTION_SCOPES / ACTION_RISK_CLASSES / isSendAction
+ * precisely so the suspension is a policy state, not an amnesia about the
+ * action's existence — a suspended action must answer
+ * `temporarily_unavailable`, never `unknown_action`.
+ */
+export const SEND_TEMPLATE_SUSPENDED = true;
+
+/** Whether an action is currently withdrawn by the 0A safety suspension.
+ *  Kept per-action in the router, beside the scope and risk-class policies,
+ *  so every policy an action carries is visible in this one file. */
+export function isActionSuspended(action: string): boolean {
+  return action === "send_template" && SEND_TEMPLATE_SUSPENDED;
+}
+
 export function requiredScopeFor(action: string): PartnerScope | null | undefined {
   // Object.hasOwn, not `in`: `in` walks the prototype chain, so an action
   // named "toString" or "constructor" would resolve as a known action.
