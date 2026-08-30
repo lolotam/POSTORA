@@ -21,8 +21,18 @@ import {
 import { useAiKnowledge } from "@/hooks/useAiKnowledge";
 import { useWhatsAppCatalog } from "@/hooks/useWhatsAppCatalog";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
+import { Checkbox } from "@/components/ui/checkbox";
+import type { Platform } from "@/lib/types";
+import { PlatformIcon } from "@/components/PlatformIcon";
 import { displaySourceTitle } from "@/lib/knowledgeSourceDisplay";
 import { visibleToAccount } from "@/lib/knowledgeVisibility";
+import {
+  accountLabel,
+  agentAccounts,
+  effectiveAccountIds,
+  nextSharing,
+  type SharingAccount,
+} from "@/lib/knowledgeSharing";
 import {
   AI_KNOWLEDGE_ACCEPT,
   AI_KNOWLEDGE_BUCKET,
@@ -44,7 +54,15 @@ export function AiKnowledgeManager({
 }) {
   const { config, error, upsertConfig } = useAiAgentConfig(platform, accountId);
   const { user, sources, links, linksReady, linksError, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
-  const { data: socialAccounts = [] } = useSocialAccounts();
+  // `error` and `isSuccess`, not just `data`. A failed read leaves data
+  // undefined, and the `= []` default would then be indistinguishable from "this
+  // user has no connected accounts" -- which would silently remove the sharing
+  // strip and make every restricted source claim it reaches 0 accounts.
+  const {
+    data: socialAccounts = [],
+    isSuccess: accountsReady,
+    error: accountsError,
+  } = useSocialAccounts();
   const isWhatsApp = platform === "whatsapp";
   const catalogHook = useWhatsAppCatalog();
   const waAccount = isWhatsApp ? catalogHook.waAccount : null;
@@ -112,6 +130,82 @@ export function AiKnowledgeManager({
         error instanceof Error ? error.message : "Knowledge action failed",
       );
     }
+  };
+  // Every connected account that can actually run an agent. This is the
+  // checkbox strip on each source: ticking one shares the ALREADY-INDEXED
+  // chunks with that account's agent, so a price list uploaded under Facebook
+  // answers Instagram customers without a second upload or a second embedding
+  // bill.
+  const shareAccounts = useMemo(
+    () => agentAccounts(socialAccounts),
+    [socialAccounts],
+  );
+  // One pass over the link table for the whole list, so each checkbox is a
+  // lookup instead of a scan. A shared source has no link rows at all, which is
+  // why this goes through effectiveAccountIds rather than reading `links`
+  // directly -- otherwise every box on a shared source would render unchecked.
+  const sharedBySource = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const source of sources) {
+      map.set(source.id, effectiveAccountIds(source, shareAccounts, links));
+    }
+    return map;
+  }, [sources, shareAccounts, links]);
+  // Which sources are mid-write, so only their own strips go disabled -- a
+  // single `invoke.isPending` would freeze every row on the page.
+  //
+  // A SET, not one id (Codex P1). Toggling source B while A was still writing
+  // overwrote A's id, re-enabling A's boxes mid-flight; a click there would then
+  // compute its full replacement set from pre-refetch links and silently discard
+  // the change A was in the middle of making. Every update below is functional,
+  // because two toggles can land in the same render batch.
+  const [sharingSourceIds, setSharingSourceIds] = useState<readonly string[]>([]);
+  const toggleShare = async (
+    source: { id: string; visibility: "shared" | "restricted" },
+    target: SharingAccount,
+    checked: boolean,
+  ) => {
+    const next = nextSharing({
+      source,
+      accounts: shareAccounts,
+      links,
+      accountId: target.id,
+      checked,
+    });
+    // Restricted with zero links is a source no agent can read AND no account
+    // can list -- it would vanish from this page with no way back, since the
+    // strip that could restore it is only drawn on rows the account can see.
+    // The database allows that state on purpose; the UI must not be the thing
+    // that strands a file in it.
+    if (next.social_account_ids.length === 0) {
+      toast.error(
+        "At least one account has to keep this source. Delete it instead if no agent should read it.",
+      );
+      return;
+    }
+    setSharingSourceIds((current) => [...current, source.id]);
+    // Through `run` like every other action here, so the failure toast stays
+    // identical. It reports rather than rethrows, which is why clearing the
+    // pending flag needs no try/finally.
+    await run(
+      "set_source_visibility",
+      {
+        source_id: source.id,
+        visibility: next.visibility,
+        // The RPC REPLACES the link set, so the full desired list goes every
+        // time -- a delta would strip the source from every other agent.
+        social_account_ids: next.social_account_ids,
+      },
+      checked
+        ? `Shared with ${accountLabel(target)}`
+        : `Removed from ${accountLabel(target)}`,
+    );
+    // Fresh links are already in cache by here: mutateAsync resolves only after
+    // the mutation's onSuccess refresh has invalidated and refetched them. That
+    // is what keeps a fast second click from computing its full set out of
+    // stale links and dropping the account the first click just added -- so if
+    // `refresh` ever becomes fire-and-forget, this race reopens silently.
+    setSharingSourceIds((current) => current.filter((id) => id !== source.id));
   };
   const saveProfile = async () => {
     try {
@@ -385,11 +479,24 @@ export function AiKnowledgeManager({
                   </p>
                   <div className="mt-1 flex gap-2">
                     <Badge variant="secondary">{source.source_type}</Badge>
-                    {/* Shared vs restricted is what decides whether OTHER accounts
-                        can read this, so it is stated rather than inferred from
-                        the fact that it appears in this account's list. */}
+                    {/* How many OTHER accounts can read this, stated rather than
+                        inferred from the fact that it appears in this account's
+                        list. Counted from the effective set, not from
+                        `visibility` alone: once a source is shared with three of
+                        five accounts it is neither "all accounts" nor "this
+                        account", and calling it either would be a lie the
+                        checkbox strip below immediately contradicts. */}
                     <Badge variant={source.visibility === "shared" ? "outline" : "secondary"}>
-                      {source.visibility === "shared" ? "All accounts" : "This account"}
+                      {source.visibility === "shared"
+                        ? "All accounts"
+                        : accountsReady
+                          ? `${(sharedBySource.get(source.id) ?? []).length} account${
+                              (sharedBySource.get(source.id) ?? []).length === 1 ? "" : "s"
+                            }`
+                          : // The count is derived from the accounts list; without
+                            // it, "0 accounts" would be a claim rather than a
+                            // reading. Say only what is still known.
+                            "Some accounts"}
                     </Badge>
                     <Badge
                       variant={
@@ -458,6 +565,58 @@ export function AiKnowledgeManager({
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
+                {/* Which agents can read this file. Ticking a box links the
+                    ALREADY-INDEXED chunks to that account, so a price list
+                    uploaded under Facebook answers Instagram customers with no
+                    second upload and no second embedding bill; unticking hides
+                    it from that agent again without touching the chunks.
+
+                    `w-full` inside the flex-wrap row above puts the strip on
+                    its own line. Drawn only once the links have loaded: an
+                    unsettled read renders every box unchecked, and a click on
+                    that would write the wrong state back as if it were chosen. */}
+                {accountsError ? (
+                  // Named, not hidden. Silently dropping the strip on a failed
+                  // account read tells the user sharing is unavailable, when in
+                  // fact the page simply does not know who to offer.
+                  <p className="mt-3 w-full border-t pt-3 text-xs text-destructive">
+                    Could not load your connected accounts, so sharing cannot be
+                    changed here. Refresh to try again.
+                  </p>
+                ) : (
+                  linksReady && accountsReady && shareAccounts.length > 1 && (
+                  <div className="mt-3 w-full border-t pt-3">
+                    <p className="mb-2 text-xs font-medium text-muted-foreground">
+                      Agents that can read this
+                    </p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-2">
+                      {shareAccounts.map((account) => (
+                        <label
+                          key={account.id}
+                          className="flex cursor-pointer items-center gap-2 text-sm"
+                        >
+                          <Checkbox
+                            checked={(sharedBySource.get(source.id) ?? []).includes(account.id)}
+                            disabled={sharingSourceIds.includes(source.id)}
+                            onCheckedChange={(value) =>
+                              toggleShare(source, account, value === true)
+                            }
+                            aria-label={`Share ${displaySourceTitle(source.file_name, socialAccounts)} with ${accountLabel(account)}`}
+                          />
+                          {/* Safe narrowing: agentAccounts already filtered to
+                              the four agent platforms, all of which are members
+                              of Platform. */}
+                          <PlatformIcon
+                            platform={account.platform as Platform}
+                            size="xs"
+                          />
+                          <span>{accountLabel(account)}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  )
+                )}
               </div>
             ))
           )}
