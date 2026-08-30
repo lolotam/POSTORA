@@ -162,3 +162,11 @@ SELECT assert_eq((SELECT outcome FROM claim_partner_idempotency(
                  'claimed', 'an expired row is pruned, not replayed');
 
 ROLLBACK;
+
+-- TERMINAL SENTINEL. The harness requires this exact line from any suite that
+-- emits no TAP plan, because without it a suite truncated after its first
+-- passing assertion is indistinguishable from one that ran to the end: it
+-- exits 0, emits an `ok -`, and every generic "did something pass?" check is
+-- satisfied. Only a line that can appear at the END proves completion.
+-- Keep it last, and keep the wording; supabase/tests/README.md documents it.
+\echo '=== partner_api_test: ALL CHECKS PASSED ==='
