@@ -4,16 +4,20 @@ import { callMessagingApi } from "@/lib/messagingApi";
 
 export type MessageAutomationHandler = "internal" | "n8n" | "off";
 export type CommentAutomationHandler = "off" | "internal" | "n8n";
+/** What the agent does with inbound audio, images and documents. Mirrors
+ *  MEDIA_UNDERSTANDING_MODES in supabase/functions/_shared/mediaUnderstandingMode.ts. */
+export type MediaUnderstandingMode = "off" | "audio" | "audio+image" | "audio+image+document";
 
 export interface AutomationHandlers {
   social_account_id: string;
   platform: string;
   automation_handler: MessageAutomationHandler;
   comment_automation_handler: CommentAutomationHandler;
+  media_understanding: MediaUnderstandingMode;
 }
 
 export type AutomationHandlersPatch = Partial<
-  Pick<AutomationHandlers, "automation_handler" | "comment_automation_handler">
+  Pick<AutomationHandlers, "automation_handler" | "comment_automation_handler" | "media_understanding">
 >;
 
 // Which agent answers this account: the Postora AI agent ("internal"), an n8n workflow

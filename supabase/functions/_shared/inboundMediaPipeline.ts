@@ -28,25 +28,18 @@ import {
   type MediaRef,
 } from "./inboundMediaFetchers.ts";
 
-export const MEDIA_UNDERSTANDING_MODES = [
-  "off",
-  "audio",
-  "audio+image",
-  "audio+image+document",
-] as const;
-export type MediaUnderstandingMode = (typeof MEDIA_UNDERSTANDING_MODES)[number];
-
-/**
- * Default "off", matching resolveCommentAutomationHandler: this spends money per inbound
- * message and reaches customers, so it is opted into deliberately rather than inherited.
- */
-export function resolveMediaUnderstandingMode(metadata: unknown): MediaUnderstandingMode {
-  if (!metadata || typeof metadata !== "object") return "off";
-  const value = (metadata as Record<string, unknown>).media_understanding;
-  return (MEDIA_UNDERSTANDING_MODES as readonly unknown[]).includes(value)
-    ? value as MediaUnderstandingMode
-    : "off";
-}
+// Re-exported so existing importers keep working; the rule itself lives in a
+// dependency-free module that messaging-api can import to validate a write.
+export {
+  MEDIA_UNDERSTANDING_MODES,
+  type MediaUnderstandingMode,
+  resolveMediaUnderstandingMode,
+} from "./mediaUnderstandingMode.ts";
+import {
+  MEDIA_UNDERSTANDING_MODES,
+  type MediaUnderstandingMode,
+  resolveMediaUnderstandingMode,
+} from "./mediaUnderstandingMode.ts";
 
 /**
  * Which kinds each mode admits. A table rather than a chain of comparisons: a future mode

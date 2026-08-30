@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as XLSX from "npm:xlsx@0.18.5";
 import { chunkRows, rowToText, type KnowledgeChunk } from "../ai-knowledge-ingest/chunking.ts";
+import { parseSourceFile } from "../ai-knowledge-ingest/parsing.ts";
 import { EMBED_BATCH_SIZE } from "../_shared/ollamaEmbeddings.ts";
 import {
   claimEmbeddingColumnOwnership,
@@ -132,11 +133,15 @@ export async function processSource(
   const resumedFrom = source.chunk_count ?? 0;
   try {
     const file = await downloadSource(admin, source);
-    const bytes = await file.arrayBuffer();
-    const chunks = source.source_type === "csv"
-      ? parseCsvChunks(bytes)
-      : parseExcelChunks(bytes);
-    if (!chunks.length) throw new Error("The workbook contains no indexable rows");
+    // Every source type the inline path understands, not just the tabular two.
+    // A large markdown or PDF used to have no queue at all: it ran inline and
+    // was killed by the 60s edge ceiling with its row stranded in `processing`.
+    const chunks = await parseSourceFile(
+      source.source_type || "doc",
+      source.file_name || source.file_path,
+      file,
+    );
+    if (!chunks.length) throw new Error("This file contains no indexable content");
     const embeddingConfig = await deps.resolveConfig(admin);
 
     // A source whose file shrank below its checkpoint cannot be resumed — the

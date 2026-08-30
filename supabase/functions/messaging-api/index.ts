@@ -13,6 +13,10 @@ import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
 import { blankedFields } from "./configBlanking.ts";
 import {
+  MEDIA_UNDERSTANDING_MODES,
+  resolveMediaUnderstandingMode,
+} from "../_shared/mediaUnderstandingMode.ts";
+import {
   conversationIdsForFilter,
   keysetOrFilter,
   MalformedMessageCursorError,
@@ -365,6 +369,7 @@ function isAiAgentPlatform(value: unknown): value is string {
         platform: account.platform,
         automation_handler: resolveAutomationHandler(account.account_metadata),
         comment_automation_handler: resolveCommentAutomationHandler(account.account_metadata),
+        media_understanding: resolveMediaUnderstandingMode(account.account_metadata),
       });
     }
 
@@ -387,6 +392,15 @@ function isAiAgentPlatform(value: unknown): value is string {
           return jsonResponse({ error: "comment_automation_handler must be off, internal or n8n" }, 400);
         }
         patch.comment_automation_handler = body.comment_automation_handler;
+      }
+
+      if (body.media_understanding !== undefined) {
+        if (!(MEDIA_UNDERSTANDING_MODES as readonly unknown[]).includes(body.media_understanding)) {
+          return jsonResponse({
+            error: `media_understanding must be one of ${MEDIA_UNDERSTANDING_MODES.join(", ")}`,
+          }, 400);
+        }
+        patch.media_understanding = body.media_understanding;
       }
 
       if (Object.keys(patch).length === 0) return jsonResponse({ error: "Nothing to update" }, 400);
