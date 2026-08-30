@@ -97,62 +97,78 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Started with `docker run` instead of a `services:` block on purpose:
-      # the harness must be able to test migrations that schedule pg_cron
-      # jobs, and pg_cron refuses CREATE EXTENSION in any database except
-      # the one named by cron.database_name — a postmaster-level setting
-      # that can only be set on the server command line at start. GitHub
-      # Actions service containers cannot pass a container command, so
-      # these flags are impossible to express there. The pinned image is
-      # the one this harness was validated against (pg_cron, pg_net,
-      # vector, pgcrypto and pgTAP binaries all present).
+      # The repo is mounted into the container because the harness RUNS
+      # INSIDE it. That is not a convenience: this image's pg_hba closes
+      # connections from privileged roles arriving over the Docker bridge, so
+      # `psql -h localhost` from the runner to the published port fails with
+      # "server closed the connection unexpectedly", while the identical
+      # connection from inside the container succeeds. Verified both ways on
+      # 2026-08-30. Running in-container also means the runner needs no psql.
+      #
+      # `docker run` rather than a services: block because the harness must be
+      # able to test migrations that schedule pg_cron jobs, and pg_cron refuses
+      # CREATE EXTENSION in any database except the one named by
+      # cron.database_name -- a postmaster-level setting that can only be given
+      # on the server command line. Service containers cannot pass one.
       - name: Start supabase/postgres container
         run: >-
-          docker run -d --name pg-harness -p 5432:5432
+          docker run -d --name pg-harness
+          -v "$GITHUB_WORKSPACE":/repo
           -e POSTGRES_PASSWORD=postgres
           supabase/postgres:17.6.1.158
           -c cron.database_name=partner_api_harness
           -c shared_preload_libraries=pg_cron,pg_net
 
-      - name: Install psql client
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
-
-      # Two things this loop learned the hard way on a real runner:
+      # Wait on the container HEALTHCHECK, not on a query.
       #
-      #   * 120s was not enough. This image runs its own init migrations on
-      #     first boot, and on a cold runner (image pull + initdb + those
-      #     migrations) it ran past the old 60x2s budget -- the failing job's
-      #     log ended on "PostgreSQL init process complete; ready for start
-      #     up", i.e. it became ready moments after we gave up. 5 minutes.
+      # Neither pg_isready nor "can I run select 1" works here, and both were
+      # tried. The entrypoint runs a TEMPORARY server while it applies the
+      # image's own init migrations, and that server answers on the unix
+      # socket -- so an in-container probe reports ready in ~4s, the harness
+      # starts against a server that is then shut down, and it dies with
+      # "cannot connect". The image's own healthcheck is the only signal that
+      # tracks the FINAL postmaster.
       #
-      #   * pg_isready is the wrong probe. The entrypoint runs a TEMPORARY
-      #     server during init, so a readiness check can pass against a
-      #     server that is about to be shut down and restarted. Probing with
-      #     a real query over TCP, as the harness itself connects, is what
-      #     actually indicates the final server is up.
+      # On a cold runner (image pull + initdb + those migrations) this
+      # legitimately takes minutes: the first version of this job died at a
+      # 120s budget with the log ending on "PostgreSQL init process complete;
+      # ready for start up".
       - name: Wait for Postgres
         run: |
           for _ in $(seq 1 150); do
-            if psql "postgres://supabase_admin@localhost:5432/postgres"                  -Atqc 'select 1' >/dev/null 2>&1; then
-              echo "postgres accepted a real query"
-              exit 0
-            fi
+            status="$(docker inspect -f '{{.State.Health.Status}}' pg-harness 2>/dev/null || echo missing)"
+            case "$status" in
+              healthy)
+                echo "container healthy"
+                exit 0 ;;
+              unhealthy|missing)
+                echo "container is $status" >&2
+                docker logs --tail 50 pg-harness
+                exit 1 ;;
+            esac
             sleep 2
           done
-          echo "postgres never became ready within 300s" >&2
-          docker logs pg-harness
+          echo "postgres never became healthy within 300s" >&2
+          docker logs --tail 50 pg-harness
           exit 1
 
-      # Connect as supabase_admin, not `postgres`: in this image `postgres`
-      # is deliberately not a superuser and gets "permission denied for
-      # schema auth" the moment the suites touch auth.users. supabase_admin
-      # is the bootstrap superuser and owns the platform schemas.
+      # Connect as supabase_admin, not `postgres`: in this image `postgres` is
+      # deliberately not a superuser and gets "permission denied for schema
+      # auth" the moment the suites touch auth.users. supabase_admin is the
+      # bootstrap superuser and owns the platform schemas.
+      #
+      # No password in the URL: from inside the container this is a local
+      # connection, which the image trusts. Nothing credential-bearing is
+      # printed either way -- the harness redacts its own URLs.
       - name: Run database harness
         run: >-
-          bash scripts/db-harness.sh
-          'postgres://supabase_admin:postgres@localhost:5432/postgres'
-        env:
-          HARNESS_DB_NAME: partner_api_harness
+          docker exec -e HARNESS_DB_NAME=partner_api_harness pg-harness
+          bash /repo/scripts/db-harness.sh
+          'postgres://supabase_admin@localhost:5432/postgres'
+
+      - name: Postgres logs on failure
+        if: failure()
+        run: docker logs --tail 100 pg-harness
 
   build:
     runs-on: ubuntu-latest
