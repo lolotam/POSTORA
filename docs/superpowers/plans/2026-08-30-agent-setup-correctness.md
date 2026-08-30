@@ -426,10 +426,94 @@ Expected: PASS — the new test plus `AiAgentManager.test.tsx`,
 If `loadingLock` fails, the fieldset now unlocks too early or too late — re-read
 `configLoaded` at line 87 and fix the interaction rather than weakening either test.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Give the user a way to clear a persona on purpose**
+
+Task 1's guard refuses any write that empties a stored field unless the payload carries
+`confirm_clear`. Nothing sends it yet, so **without this step a user could never clear a
+persona again** — a shipped dead end, and the guard would read as a bug.
+
+The client can tell the two cases apart honestly, and the distinction is exactly the one that
+matters:
+
+| Case | `baseline` | `form` | Meaning |
+|---|---|---|---|
+| The outage | `""` | `""` | The form was **reset**; the user cleared nothing |
+| Deliberate | `"Brand voice…"` | `""` | The user **loaded** a persona and emptied the box |
+
+A reset sets `form` **and** `baseline` to `defaultConfig` together, so a reset can never
+look deliberate. That is what makes this signal trustworthy rather than a rubber stamp.
+
+In `src/components/messaging/AiAgentManager.tsx`, add above `upsertConfig.mutate(...)` inside
+`save`:
+
+```ts
+    // The server refuses a write that empties a stored field unless the clear is
+    // declared. A reset form cannot reach here saying yes: a reset sets form AND
+    // baseline to defaultConfig together, so `baseline` is blank too and the
+    // comparison below is false. Only a user who saw a value and deleted it
+    // produces a non-empty baseline against an empty form.
+    const clearedAField = (["persona_instructions", "business_profile_text"] as const).some(
+      (field) =>
+        String(form[field] ?? "").trim() === "" &&
+        String(baseline?.[field] ?? "").trim() !== "",
+    );
+```
+
+and pass it through the mutation. Change the call to:
+
+```ts
+    upsertConfig.mutate({ ...form, confirm_clear: clearedAField || undefined }, {
+```
+
+Then in `src/hooks/useAiAgentConfig.ts`, carry the flag to the server. In `upsertConfig`'s
+`mutationFn`, change the body to:
+
+```ts
+      const data = await callMessagingApi("ai_upsert_config", {
+        platform,
+        social_account_id: socialAccountId ?? undefined,
+        confirm_clear: (input as { confirm_clear?: boolean }).confirm_clear,
+        config: buildAiAgentConfigPayload(input),
+      });
+```
+
+`buildAiAgentConfigPayload` already filters to `CONFIG_FIELDS`, so `confirm_clear` cannot
+leak into the column payload — it travels beside `config`, which is where the server reads it
+(`body.confirm_clear`).
+
+- [ ] **Step 6: Test the deliberate-clear path**
+
+Add to `src/components/messaging/__tests__/AiAgentManager.blankSave.test.tsx`:
+
+```tsx
+  it("marks a user-initiated clear as deliberate, and a reset as not", () => {
+    configIdentity = { value: { persona_instructions: "Loaded brand voice", is_enabled: true } };
+    render(<AiAgentManager platform="facebook" />);
+
+    fireEvent.change(screen.getByLabelText(/persona/i), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(upsertConfig.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ persona_instructions: "", confirm_clear: true }),
+      expect.anything(),
+    );
+  });
+```
+
+Run it:
+
+```bash
+bun run test -- AiAgentManager.blankSave
+```
+
+Expected: PASS, 2 tests. If `confirm_clear` comes through as `undefined`, `baseline` is not
+being set from the loaded config — re-read Task 2 Step 3.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/components/messaging/AiAgentManager.tsx \
+        src/hooks/useAiAgentConfig.ts \
         src/components/messaging/__tests__/AiAgentManager.blankSave.test.tsx
 git commit -m "fix(agent-setup): stop a repeat read of the same account discarding typed edits"
 ```
@@ -541,7 +625,7 @@ git commit -m "fix(agent-setup): invalidate the written account's config, not th
 Create `src/components/messaging/__tests__/AiKnowledgeManager.guards.test.tsx`:
 
 ```tsx
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 // AiKnowledgeManager is the second writer of ai_agent_configs and shipped with
@@ -592,13 +676,17 @@ describe("AiKnowledgeManager write guards", () => {
   });
 
   it("refuses to write an empty profile over a stored one", () => {
-    configValue = { business_profile_text: "" };
-    configError = null;
-    const { rerender } = render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
     configValue = { business_profile_text: "We sell day-old chicks." };
-    rerender(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    configError = null;
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+
     const box = screen.getByPlaceholderText(/describe your business/i);
-    (box as HTMLTextAreaElement).value = "";
+    expect(saveButton()).not.toBeDisabled();
+
+    // fireEvent.change, NOT `box.value = ""`. Assigning to .value mutates the
+    // DOM node without notifying React, so `profile` state would keep the stored
+    // text and the assertion below would pass for entirely the wrong reason.
+    fireEvent.change(box, { target: { value: "" } });
     expect(saveButton()).toBeDisabled();
   });
 
@@ -922,6 +1010,22 @@ export function visibleToAccount(
   );
 }
 ```
+
+**Why this is equivalent to the SQL, and what that equivalence depends on.** The RPC in
+`20260828180000` does two things this function does not: it gates on the caller owning
+`p_social_account_id`, and it joins `social_accounts` to confirm each link's account belongs
+to the user. Both are redundant *here* and only here, because:
+
+- `ai_knowledge_source_accounts` has RLS enabled with
+  `Users manage their own knowledge source links` (`auth.uid() = user_id`), so the `links`
+  query cannot return another user's rows — **verified against production**.
+- `accountId` originates from `useSocialAccounts`, which is already scoped to the user.
+
+The RPC needs its checks because Edge Functions call it under the **service role**, where RLS
+is not evaluated. This function is only ever called from the browser under the user's own
+JWT. **If anyone later moves this predicate server-side or fetches `links` with the service
+key, the ownership checks must be added back** — otherwise one user's link row would make
+another user's source visible.
 
 - [ ] **Step 4: Run the test**
 
