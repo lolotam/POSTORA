@@ -1,8 +1,9 @@
 # Postora Partner API — Implementation Plan
 
-**Status:** Draft, revised after review rounds 1-2 · **Version:** 1.2 · **Date:** 2026-08-25
+**Status:** Execution started 2026-08-30 · **Version:** 1.3 · **Date:** 2026-08-25, progress log 2026-08-30
 **Specification:** `docs/postora future feathers/POSTORA-PARTNER-API-SPEC-v1.md` (v1.3)
 **Source PRD:** `docs/postora future feathers/POSTORA_PARTNER_API_PRD_v1.0.md`
+**Progress:** see §0 below — deliverables are marked there, not inline in the phase tables.
 
 > **No code is written by this document.** It orders work, states what blocks what, and defines
 > when each phase is done. Contracts and rationale live in the spec; this plan references decision
@@ -10,6 +11,91 @@
 >
 > **Every implementer of every phase must read `ARCHITECTURE.md` first.** Nothing auto-loads it,
 > and a delegation brief that omits it produces work nothing catches until human review.
+
+---
+
+## 0. Progress log
+
+Execution began 2026-08-30. This section is the single place a deliverable's status is recorded —
+the phase tables below are left as written so the plan and its progress do not drift into two
+versions of the same claim.
+
+**A deliverable is only marked done here if it has evidence.** "Rehearsed" means applied to a
+throwaway clone of the production schema, never to production. "Live" means applied to production
+and verified by querying the catalog afterwards.
+
+### Landed
+
+| # | Deliverable | Evidence |
+|---|---|---|
+| 0.4 | CI job running `deno test` over `supabase/functions/**` | **Already done before this plan was written.** PR #67 added the `edge-functions` job to `.github/workflows/test.yml`. The plan was stale in its own favour |
+| 0.12 | Danat credential inventory | Done 2026-08-30 — see "What the inventory found" below |
+| 1.1 | `partner_api_key_accounts`, both composite FKs, `UNIQUE (key_id, social_account_id)`, backfill | PR #70. **Live** — both FKs confirmed in `pg_constraint`, backfill mirrors the one existing key |
+| 1.2 | `partner_audit_logs`, append-only | PR #70. **Live** — `anon` holds nothing, `authenticated` SELECT, `service_role` INSERT+SELECT |
+| 1.4 | Risk-class enforcement: A fails open, B and C fail closed with `503 limiter_unavailable` + `Retry-After` | PR #70. **Merged, NOT deployed** — `partner-api` still runs the old fail-open code |
+| 1.5 | `X-RateLimit-*` with defined response classes | PR #70. **Merged, NOT deployed.** Values now come from `consume_partner_rate_v2` (new, added alongside v1), not the edge function's clock |
+
+### Partially landed
+
+| # | Deliverable | What is done, what is not |
+|---|---|---|
+| 1.7 | Tenancy constraint matrix, each table with a negative database test | Done for the two tables that now exist (`partner_api_key_accounts`, `partner_audit_logs`), proven by `supabase/tests/partner_api_tenancy_negative.sql` — 14 assertions. The matrix's other rows (dispatch intents, webhooks, deliveries, media association) name tables no phase has built yet |
+| 0.3 | Postgres integration harness | **No harness exists.** What exists is a repeatable manual rehearsal: dump the production schema, restore into a throwaway database, apply, run the proof. That is enough to have caught real defects but it is not CI, so nothing re-runs it on a future change |
+
+### Not started
+
+Everything else in Phase 0 (0.1, 0.2, 0.5, 0.6, 0.7–0.11) and Phase 1 (1.3 credential lifecycle,
+1.6 legacy scope pinning), and all of Phases 2–10.
+
+**1.3 is larger than its one line suggests:** `partner_api_keys` has no rotation fields
+(`successor key id`, overlap expiry). Spec §8 requires them; the foundation migration never added
+them. So credential lifecycle needs its own migration before any UI work.
+
+### What the Danat inventory (0.12) found
+
+The plan assumed Danat's side was unbuilt and that an unreachable partner might block Phase 1. Both
+assumptions were wrong, and the correction matters more than the phase ordering it was meant to
+inform:
+
+- **Deployed client code exists.** On the Danat host — a *different server* from Postora's, reached
+  with `ssh-danatfuture-mcp`, not `ssh-contabo-mcp` — under
+  `/etc/dokploy/applications/danatfuture-danatfuture-vk5hnn/code/`:
+  `src/lib/providers/postora.ts` with its tests, plus `configValidation.ts` and
+  `whatsappTemplateBinding.ts` in that same directory; `src/fns/notificationDrainJob.ts`; and the
+  applied migrations `db/migrations/134_postora_provider_config.sql` and
+  `136_postora_api_key_env.sql`.
+- **It is switched off.** `provider_configs.postora.is_enabled = false`, and
+  `POSTORA_WHATSAPP_API_KEY` is unset in the running container. The key literal appears nowhere in
+  the code — it is resolved from an environment variable name.
+- **Postora's side is also shut**: the key's pinned account is `is_active = false`, and
+  `partner-api/index.ts` refuses a non-active account with `409` before any provider call.
+
+So the D13 duplicate-send window described in 0A is **unreachable today, closed by three
+independent accidents, none of which is a fix.** Any one of them being undone re-arms it. 0A
+therefore remains open work, but its trigger is "before anyone touches that binding", not "this
+week".
+
+- **Both sides are the same owner.** Danat is `ssh-danatfuture-mcp`; Postora is `ssh-contabo-mcp`.
+  The P0 fallback machinery for an unreachable partner, and 0A's "notify Danat's named owner", are
+  both self-coordination.
+- **A prerequisite nobody wrote down:** the key cannot simply be re-pinned to Danat's active
+  WhatsApp account, which is `evolution_qr`. `partner-api` is a Cloud-API template door needing
+  `phone_number_id` and an access token, so Danat go-live needs a real WABA connection first. That
+  belongs in §7 as an open item.
+
+### Deployment state
+
+The three migrations are **live in production**. `partner-api` is **not redeployed**, which is the
+correct order and not an oversight: the new edge code calls `consume_partner_rate_v2`, which did
+not exist until the migration landed. Until the redeploy, production runs old code against the new
+schema — old code keeps calling the untouched `consume_partner_rate`, and the new tables sit
+unused.
+
+### One thing found while working, outside this programme's scope
+
+`partner_api_usage` — the billing ledger created by the foundation migration — grants `anon`,
+`authenticated` and `service_role` **full privileges including `DELETE` and `TRUNCATE`**, relying
+on RLS alone. It is not touched by this work and is recorded here only so it is not lost.
 
 ---
 
@@ -132,6 +218,7 @@ to either deploy straight to production or go unvalidated as a real release. P10
 staging-to-production separation rather than creating staging for the first time.
 
 0.4 is nearly free — the 30 existing partner-api tests pass locally in 728ms; it is a wiring gap.
+*(Superseded: 0.4 was already closed by PR #67 before execution began. See §0.)*
 0.3 is not free, and it is the more important of the two: **the tests that matter most are the
 ones that cannot be written without it.** A CI job that runs only stubbed unit tests turns green
 while every consequential database guarantee stays unproven.
@@ -658,6 +745,12 @@ No `process-post` refactor beyond the narrow P7 extraction.
 | 3 | `ecommerce-whatsapp-api`: deprecate with a sunset, or maintain? | Post-GA | §11.3 |
 | 4 | Webhook delivery volume — worker cadence and concurrency sizing | 5.3, 5.4 | §11.4 |
 | 5 | D13 mechanism against what WhatsApp Cloud exposes | 3.1, and therefore Phase 3 | §11.5 |
+| 6 | **Danat has no WABA.** Its active WhatsApp account is `evolution_qr`; `partner-api` is a Cloud-API template door needing `phone_number_id` and an access token, so the key cannot simply be re-pinned to it | Danat go-live, and therefore any end-to-end certification (10.8) | *found by 0.12, 2026-08-30* |
+| 7 | Whether audit history must survive tenant deletion. `partner_audit_logs.workspace_id` cascades, and referential actions run outside RLS and grants, so a workspace owner erases their own credential trail without holding `DELETE`. `CASCADE` was chosen because `RESTRICT` blocks tenant deletion; if compliance needs retention it is soft-delete-plus-archive | Nothing today. Cheaper to decide before the table has rows | *raised 2026-08-30* |
+
+**Item 1 is closed** — the inventory was done on 2026-08-30; see §0. It found the opposite of what
+the plan assumed: Danat's client code is deployed but switched off, and both sides are the same
+owner. Item 6 replaces it as the real external blocker.
 
 Item 1 is external and worth chasing immediately, but the P0 fallback means it no longer blocks
 Phase 1. Item 5 is the one that can genuinely stop a phase.
@@ -665,6 +758,30 @@ Phase 1. Item 5 is the one that can genuinely stop a phase.
 ---
 
 ## 8. Correction log
+
+### v1.3 — 2026-08-30 — execution began; the plan met the system
+
+Added §0, a progress log, so status lives in exactly one place rather than being edited into the
+phase tables. Four corrections the work itself forced:
+
+- **0.4 was already done.** PR #67 had wired the Deno tests into CI before this plan was written.
+  The plan asserted a gap that no longer existed — the first thing checking reality turned up.
+- **0.12's premise was wrong in both directions.** The plan treated Danat as unbuilt and possibly
+  unreachable, and built fallback machinery for that. In fact Danat's client code is deployed (and
+  switched off), and both sides have the same owner. The inventory is closed; §7 item 1 with it.
+- **0A's urgency is different from what §1 says.** The duplicate-send window is real and unfixed,
+  but unreachable today behind three independent accidents. §1's "reachable today" is true of the
+  code and false of the system. The work stays; the trigger changes to "before anyone touches that
+  binding".
+- **Two open items added** (§7 items 6 and 7): Danat has no WABA, so the key cannot be re-pinned to
+  its `evolution_qr` account; and whether audit history must survive tenant deletion, which is
+  cheapest to decide before the table has rows.
+
+Phase 1 partially landed: 1.1, 1.2, 1.4 and 1.5 merged in PR #70, migrations live in production,
+`partner-api` deliberately not yet redeployed. 1.7 is done only for the two tables that exist. 0.3
+is not done — the rehearsal that caught the defects is manual, not a harness, so nothing re-runs it.
+
+---
 
 ### v1.0 — 2026-08-25 — initial draft
 
