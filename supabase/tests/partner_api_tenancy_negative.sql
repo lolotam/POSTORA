@@ -323,6 +323,39 @@ END
 $pos2$;
 
 -- ---------------------------------------------------------------------------
+-- Negative 3c: a partner key cannot change workspace.
+--
+-- This is the half of the audit tenancy control that the INSERT-time check
+-- cannot provide. Locking the key while writing an audit row stops a
+-- concurrent move; nothing there stops a move that happens a week LATER, which
+-- would silently orphan every audit row already attributed to the old
+-- workspace. A composite FK would have refused that update -- since this table
+-- deliberately has no FK on key_id, partner_api_keys_workspace_is_immutable
+-- has to.
+--
+-- The concurrent half of the same control was proven separately with two live
+-- psql sessions (the second blocked on FOR KEY SHARE, then was refused here);
+-- that cannot be expressed in a single-session script, so this asserts the
+-- durable half that can.
+-- ---------------------------------------------------------------------------
+DO $neg3c$
+DECLARE
+  v_ws_b  uuid := (SELECT id FROM tenancy_test_ids WHERE k = 'ws_b');
+  v_key_a uuid := (SELECT id FROM tenancy_test_ids WHERE k = 'key_a');
+BEGIN
+  BEGIN
+    UPDATE public.partner_api_keys SET workspace_id = v_ws_b WHERE id = v_key_a;
+    RAISE EXCEPTION 'FAIL: a partner key was moved between workspaces -- every audit row already written against its old workspace is now orphaned';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE '%partner_api_keys_workspace_is_immutable%' THEN
+      RAISE;
+    END IF;
+    RAISE NOTICE 'PASS: partner key workspace is immutable (audit rows cannot be orphaned by a later move)';
+  END;
+END
+$neg3c$;
+
+-- ---------------------------------------------------------------------------
 -- Negative 4 (partner_audit_logs grants): append-only is a GRANT-level
 -- property. UPDATE and DELETE must be refused for every non-owner role,
 -- including service_role (which bypasses RLS but NOT privilege checks).

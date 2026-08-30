@@ -254,6 +254,37 @@ Deno.test("checkRateLimit: a multi-row result is drift, not an allow", async () 
   assertEquals(error.status, 503);
 });
 
+Deno.test("checkRateLimit: remaining EQUAL to the limit is impossible, so it is drift", async () => {
+  // The boundary, tested because a `> limit` bound looks right and is not.
+  // remaining is GREATEST(limit - count, 0) and the row this call just
+  // consumed makes count >= 1, so limit - 1 is the largest value the real
+  // function can produce. remaining === limit describes a window nothing was
+  // charged to. RECORD's limit is 60.
+  const error = await assertRejects(
+    () =>
+      checkRateLimit(
+        limiterClient({ allowed: true, remaining: 60, reset_seconds: 42 }),
+        RECORD,
+        "C",
+      ),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+  assertEquals(error.status, 503);
+});
+
+Deno.test("checkRateLimit: remaining of limit - 1 is the real maximum and still resolves", async () => {
+  // The other side of the same boundary: tightening the bound must not start
+  // rejecting the largest value the function legitimately returns, which is
+  // what a fencepost fix gets wrong in the opposite direction.
+  const decision = await checkRateLimit(
+    limiterClient({ allowed: true, remaining: 59, reset_seconds: 42 }),
+    RECORD,
+    "C",
+  );
+  assertEquals(decision.status, "resolved");
+});
+
 Deno.test("checkRateLimit: remaining above the key's own limit is impossible, so it is drift", async () => {
   // remaining is GREATEST(limit - count, 0) with count >= 1, so the real
   // function can never return more than limit - 1. A larger number cannot have

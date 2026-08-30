@@ -212,15 +212,18 @@ export async function checkRateLimit(
     // response would have to invent Remaining or Reset, which is precisely
     // what this rework removed the need for.
     //
-    // The upper bound matters as much as the lower one. remaining is
-    // GREATEST(limit - count, 0) with count >= 1, so the real function can
-    // never return more than limit - 1, let alone more than limit. A value
-    // above the limit is arithmetically impossible and therefore evidence the
-    // answer did not come from the function this code thinks it called --
-    // publishing it would tell a partner they have more budget than exists.
+    // The upper bound is EXCLUSIVE, and that is not a nicety. remaining is
+    // GREATEST(limit - count, 0) and the row this call just consumed makes
+    // count >= 1, so the largest value the real function can return is
+    // limit - 1. `remaining === limit` therefore describes a window nothing
+    // was charged to: it is arithmetically impossible from
+    // consume_partner_rate_v2 and is evidence the answer came from somewhere
+    // else. An earlier version of this check used `> limit` and accepted that
+    // exact value -- publishing it hands a partner one request of budget that
+    // does not exist.
     if (
       remainingN === null || resetN === null ||
-      remainingN < 0 || remainingN > record.rateLimitPerMin
+      remainingN < 0 || remainingN >= record.rateLimitPerMin
     ) {
       return unexpected();
     }
