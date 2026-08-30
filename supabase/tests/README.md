@@ -153,6 +153,27 @@ green harness that has never been seen to fail is not evidence of anything —
 if you change the harness substantially, break something on purpose and
 confirm it still fails.
 
+## What a suite must emit
+
+The harness proves **completion**, not merely that something passed. An
+intermediate `ok` shows only that a suite reached its first assertion — a suite
+truncated after test one exits 0 and emits one, which is exactly what a passing
+run looks like. So each suite must prove it reached the end, one of two ways:
+
+| Suite kind | Completion proof |
+|---|---|
+| pgTAP (`whatsapp_workspace_crm.sql`, `import_whatsapp_contacts_to_workspace.sql`) | a `1..N` plan, with exactly N numbered test points observed |
+| NOTICE-based (`partner_api_test.sql`, `partner_api_tenancy_negative.sql`) | a terminal line containing **`ALL CHECKS PASSED`** |
+
+**If you add a suite with no TAP plan, end it with `ALL CHECKS PASSED`** or the
+harness will refuse it — deliberately, because there would otherwise be no way
+to distinguish a complete run from a truncated one.
+
+The plan check also rejects: more points than planned, a second `1..N` line
+(pgTAP itself refuses a second `plan()` call, so two means the output is not one
+TAP stream), and `Bail out!` regardless of preceding passes. `1..0` is a valid
+empty plan and counts as complete.
+
 ## Known limitations
 
 Recorded rather than fixed, because each is a deliberate trade:

@@ -622,9 +622,12 @@ for s in "${SUITES[@]}"; do
 
     low ~ /^[[:space:]]*bail out!/ { bailed = 1 }
 
-    low ~ /^[[:space:]]*1\.\.[0-9]+/ {
-      if (!planseen) {
-        planseen = 1
+    # END-ANCHORED, so `1..2garbage` in ordinary query output is not mistaken
+    # for a plan. A TAP plan may carry a trailing directive (`1..0 # SKIP ...`)
+    # and nothing else.
+    low ~ /^[[:space:]]*1\.\.[0-9]+[[:space:]]*(#.*)?$/ {
+      planseen++
+      if (planseen == 1) {
         s = line; sub(/^[[:space:]]*1\.\./, "", s); sub(/[^0-9].*$/, "", s)
         planned = s + 0
       }
@@ -644,8 +647,14 @@ for s in "${SUITES[@]}"; do
     END {
       if (bailed)                        { print "bailed";     exit }
       if (failed > excused)              { print "failed";     exit }
+      # More than one plan is malformed TAP; pgTAP itself refuses a second
+      # plan() call, so this means the output is not what it claims to be.
+      if (planseen > 1)                  { print "multiplan " planseen; exit }
       if (planseen && points != planned) { print "incomplete " points " " planned; exit }
-      print "ok"
+      # A plan that was seen and matched IS the completion proof; say so, so
+      # the caller does not then demand a sentinel as well.
+      if (planseen)                      { print "planned-complete"; exit }
+      print "no-plan"
     }
   ' "$BOTH")"
 
@@ -668,6 +677,12 @@ for s in "${SUITES[@]}"; do
         | { grep -viE '#[[:space:]]*(TODO|SKIP)' || true; } \
         | { head -20 || true; } | sed 's/^/  /' >&2 || true
       exit 1 ;;
+    multiplan*)
+      echo "" >&2
+      echo "db-harness: SUITE EMITTED ${VERDICT#multiplan } TAP PLANS: $s" >&2
+      echo "  More than one 1..N line means the output is not the single TAP" >&2
+      echo "  stream it claims to be -- pgTAP itself refuses a second plan()." >&2
+      exit 1 ;;
     incomplete*)
       echo "" >&2
       echo "db-harness: SUITE INCOMPLETE: $s" >&2
@@ -686,25 +701,28 @@ for s in "${SUITES[@]}"; do
     exit 1
   fi
 
-  # Positive evidence. Without this a suite that silently did nothing -- an
-  # empty file, a file whose body was commented out, a transaction that rolled
-  # back before any assertion -- is indistinguishable from one that passed.
-  # BOTH streams. pgTAP writes its TAP to stdout, but the NOTICE-based suites
-  # report through RAISE NOTICE, which psql sends to STDERR -- so a check that
-  # reads only stdout sees no evidence from them and fails a passing suite.
-  # (It did, the first time: partner_api_test.sql emits `ok - <label>` as a
-  # NOTICE and was reported as PROVED NOTHING.)
+  # COMPLETION, not merely "something passed".
   #
-  # The NOTICE form is NOT anchored to the start of the line, because psql
-  # prefixes it: `psql:/path/suite.sql:42: NOTICE:  ok - <label>`. Anchoring
-  # it found nothing and failed a passing suite. TAP's own `ok` IS anchored,
-  # so a test whose description contains the word stays harmless.
-  if ! grep -qE '^[[:space:]]*ok([[:space:]]|$)|NOTICE:[[:space:]]*ok[[:space:]-]|PASS:|ALL CHECKS PASSED' "$BOTH"; then
+  # A plan that was seen and matched already proves the suite ran to the end,
+  # so `planned-complete` needs nothing further. For a suite with NO plan --
+  # the NOTICE-based ones -- an intermediate `ok` proves only that the suite
+  # got as far as its first assertion. partner_api_test.sql truncated after
+  # test one exits 0, emits `ok - ...`, and satisfies any generic
+  # "did something pass?" check. Only a line that can appear at the END proves
+  # completion, so those suites must emit an explicit terminal sentinel.
+  #
+  # Both streams are searched: pgTAP writes TAP to stdout, but RAISE NOTICE
+  # goes to STDERR, so a stdout-only check sees nothing from the NOTICE suites
+  # and fails a passing one. (It did, the first time.)
+  if [ "$VERDICT" = "no-plan" ] \
+     && ! grep -qE 'ALL CHECKS PASSED' "$BOTH"; then
     echo "" >&2
-    echo "db-harness: SUITE PROVED NOTHING: $s" >&2
-    echo "  It exited 0 but emitted no passing assertion and no completion" >&2
-    echo "  sentinel. An empty or fully-commented suite looks identical to a" >&2
-    echo "  passing one unless this is checked." >&2
+    echo "db-harness: SUITE INCOMPLETE (no plan, no sentinel): $s" >&2
+    echo "  It exited 0 and emitted no TAP plan, so the only proof it ran to" >&2
+    echo "  the end is its terminal sentinel -- and there isn't one." >&2
+    echo "  A suite truncated after its first passing assertion looks exactly" >&2
+    echo "  like this. Every no-plan suite must end with a line containing" >&2
+    echo "  ALL CHECKS PASSED; see supabase/tests/README.md." >&2
     exit 1
   fi
 done
