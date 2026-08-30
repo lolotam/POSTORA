@@ -287,6 +287,13 @@ git commit -m "fix(agent-setup): refuse a config write that silently empties a s
 
 - [ ] **Step 1: Write the failing regression test**
 
+**The transition that must be simulated is `null → object`, not `null → null`.** A test that
+leaves the mocked config `null` across the rerender proves nothing: `null` is a primitive, its
+identity is stable, the effect's deps never change, and the typed persona survives **even with
+the bug present**. The real sequence from §1.2 of the spec is: the Knowledge tab's save creates
+a config row, the invalidation refetch settles with that row, and the populate branch
+overwrites the persona the user typed while it was still `null`.
+
 Create `src/components/messaging/__tests__/AiAgentManager.blankSave.test.tsx`:
 
 ```tsx
@@ -294,20 +301,21 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // Regression guard for the 2026-08-30 outage. The user typed a persona for an
-// account with no config, another tab's save invalidated the shared cache entry,
-// the settling read re-ran the reset effect, and Save then wrote blank defaults
-// over what they had typed -- with every existing guard satisfied.
+// account with no config yet; the Knowledge tab's save created the row and
+// invalidated the shared cache entry; the settling read handed the effect a real
+// config object, which overwrote what they had typed. Save then wrote blanks --
+// with every existing guard satisfied.
 
 const upsertConfig = { mutate: vi.fn(), isPending: false };
 
-/** Flipped by the test to simulate the post-invalidation re-read settling again. */
-let configIdentity = { value: null as null | Record<string, unknown> };
+/** Mutated by each test to drive the read's settled value across a rerender. */
+let configValue: null | Record<string, unknown> = null;
 
 vi.mock("@/hooks/useAiAgentConfig", () => ({
   useAiAgentConfig: () => ({
-    // A NEW object identity each render when the value is non-null, exactly as
-    // React Query yields after an invalidation.
-    config: configIdentity.value === null ? null : { ...configIdentity.value },
+    // A NEW object identity each render when non-null, exactly as React Query
+    // yields after an invalidation.
+    config: configValue === null ? null : { ...configValue },
     isLoading: false,
     error: null,
     upsertConfig,
@@ -336,25 +344,26 @@ import { AiAgentManager } from "@/components/messaging/AiAgentManager";
 describe("AiAgentManager blank-save regression", () => {
   beforeEach(() => {
     upsertConfig.mutate.mockClear();
-    configIdentity = { value: null };
+    configValue = null;
   });
 
-  it("keeps typed edits when the same account's config re-reads", () => {
+  it("keeps typed edits when the same account's config arrives from another tab's save", () => {
     const { rerender } = render(<AiAgentManager platform="facebook" />);
 
-    const persona = screen.getByLabelText(/persona/i);
+    const persona = screen.getByLabelText("Persona and instructions");
     fireEvent.change(persona, { target: { value: "Eltamlawy brand voice" } });
-    expect((persona as HTMLTextAreaElement).value).toBe("Eltamlawy brand voice");
 
-    // Another tab saved; the shared cache entry was invalidated and this query
-    // settled again on the same account. The account did NOT change.
+    // The Knowledge tab saved a business profile. That created the config row and
+    // invalidated the shared cache entry, so this query now settles with a real
+    // object where it previously held null. The ACCOUNT did not change.
+    configValue = { persona_instructions: "", business_profile_text: "Saved from the other tab" };
     rerender(<AiAgentManager platform="facebook" />);
 
-    expect((screen.getByLabelText(/persona/i) as HTMLTextAreaElement).value).toBe(
-      "Eltamlawy brand voice",
-    );
+    expect(
+      (screen.getByLabelText("Persona and instructions") as HTMLTextAreaElement).value,
+    ).toBe("Eltamlawy brand voice");
 
-    fireEvent.click(screen.getByRole("button", { name: /save/i }));
+    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
     expect(upsertConfig.mutate).toHaveBeenCalledWith(
       expect.objectContaining({ persona_instructions: "Eltamlawy brand voice" }),
       expect.anything(),
@@ -362,6 +371,9 @@ describe("AiAgentManager blank-save regression", () => {
   });
 });
 ```
+
+The label is matched exactly (`"Persona and instructions"`) and the button by
+`/save settings/i`, both copied from the existing suites rather than guessed.
 
 - [ ] **Step 2: Run it and confirm it fails**
 
@@ -375,7 +387,29 @@ Expected: FAIL — the persona reads `""` after the rerender, and `mutate` is ca
 
 - [ ] **Step 3: Make the reset conditional on a real account change**
 
-In `src/components/messaging/AiAgentManager.tsx`, the effect currently opens:
+**`loadedAccountId` needs a third state first.** It is currently
+`useState<string | null>(null)` (line 74), and `accountId` is legitimately `null` whenever the
+platform has no active account — including the whole accounts-query loading window, and in
+several existing tests. A naive `if (loadedAccountId === accountId) return;` therefore fires
+`null === null` on the **first** render and the form never populates at all.
+
+Change the declaration at line 74 from:
+
+```ts
+  const [loadedAccountId, setLoadedAccountId] = useState<string | null>(null);
+```
+
+to:
+
+```ts
+  // undefined = nothing loaded yet; null = loaded for "no account". These must be
+  // distinguishable: accountId is legitimately null while the accounts query is in
+  // flight, and collapsing the two would make the guard below fire on first render
+  // and leave the form permanently empty.
+  const [loadedAccountId, setLoadedAccountId] = useState<string | null | undefined>(undefined);
+```
+
+Then the effect currently opens:
 
 ```ts
   useEffect(() => {
@@ -397,7 +431,7 @@ Replace that opening with:
     // invalidated the shared cache entry -- is not a reason to discard what the
     // user has typed since. Resetting on every config identity change is how a
     // typed persona became a blank save on 2026-08-30.
-    if (loadedAccountId === accountId) return;
+    if (loadedAccountId !== undefined && loadedAccountId === accountId) return;
     if (config === null) {
       setForm(defaultConfig);
       setBaseline(defaultConfig);
@@ -412,6 +446,10 @@ Then add `loadedAccountId` to the dependency array:
 ```ts
   }, [accountId, config, loadedAccountId]);
 ```
+
+**Check `configLoaded` at line 87.** It compares `loadedAccountId === accountId`; with the
+sentinel, `undefined === null` is `false`, so an unloaded form still reads as not-loaded and
+Save stays disabled. That is the behaviour you want — verify it rather than assuming.
 
 - [ ] **Step 4: Run the new test and the existing suite**
 
@@ -465,21 +503,38 @@ and pass it through the mutation. Change the call to:
     upsertConfig.mutate({ ...form, confirm_clear: clearedAField || undefined }, {
 ```
 
-Then in `src/hooks/useAiAgentConfig.ts`, carry the flag to the server. In `upsertConfig`'s
-`mutationFn`, change the body to:
+Then in `src/hooks/useAiAgentConfig.ts`, carry the flag to the server. **Widen the mutation's
+input type first** — `mutate` currently accepts `AiAgentConfigInput`, and passing a fresh
+object literal with a property absent from that type is rejected by TypeScript's
+excess-property check (which applies regardless of `strict: false`), so `npx tsc -b --noEmit`
+would fail. Change the mutation signature to:
 
 ```ts
+  const upsertConfig = useMutation({
+    mutationFn: async (input: AiAgentConfigInput & { confirm_clear?: boolean }) => {
       const data = await callMessagingApi("ai_upsert_config", {
         platform,
         social_account_id: socialAccountId ?? undefined,
-        confirm_clear: (input as { confirm_clear?: boolean }).confirm_clear,
+        confirm_clear: input.confirm_clear,
         config: buildAiAgentConfigPayload(input),
       });
 ```
 
-`buildAiAgentConfigPayload` already filters to `CONFIG_FIELDS`, so `confirm_clear` cannot
-leak into the column payload — it travels beside `config`, which is where the server reads it
-(`body.confirm_clear`).
+With the type widened, no cast is needed. `buildAiAgentConfigPayload` already filters to
+`CONFIG_FIELDS`, so `confirm_clear` cannot leak into the column payload — it travels beside
+`config`, which is where the server reads it (`body.confirm_clear`).
+
+**Map the server's refusal to human copy.** The 409 message names database columns and the
+existing `toast.error(error.message)` would show it verbatim. In `AiAgentManager.save`'s
+`onError`, translate it:
+
+```ts
+      onError: (error) => toast.error(
+        error.message?.includes("Refusing to clear")
+          ? "That would erase the saved persona or business profile. Clear the field and save again to confirm."
+          : error.message || "Could not save AI agent settings",
+      ),
+```
 
 - [ ] **Step 6: Test the deliberate-clear path**
 
@@ -520,53 +575,25 @@ git commit -m "fix(agent-setup): stop a repeat read of the same account discardi
 
 ---
 
-## Task 3: Stop `accountId` flapping at its source
+## Task 3: Dropped — deliberately, and here is why
 
-`accountId` is derived, so it can change with no user action if `accounts` transiently
-empties during a refetch. Keeping previous data removes that possibility.
+An earlier draft added `placeholderData: (previous) => previous` to `useSocialAccounts`, to
+stop `accounts` transiently emptying and making the derived `accountId` round-trip through
+`null`. **Do not implement it.** The reasoning was wrong in both directions:
 
-**Files:**
-- Modify: `src/hooks/useSocialAccounts.tsx`
+- React Query v5 already keeps `data` during a **same-key** refetch, so the window it was
+  defending against does not exist. Refocus cannot empty the list.
+- `placeholderData` only changes behaviour when the **key** changes — which here means the
+  user id changing, i.e. a login switch. It would then briefly render the *previous login's*
+  account list. That is exactly the cross-login leak `useAiAgentConfig`'s key comment was
+  written to prevent.
+- It does nothing in the one case where the list genuinely empties: a refetch that really
+  returns `[]` because the account was deactivated.
 
-- [ ] **Step 1: Add `placeholderData`**
+Task 2's sentinel already handles the loading window correctly, which is what made this
+unnecessary. Recorded rather than deleted so the same idea is not re-proposed.
 
-In `src/hooks/useSocialAccounts.tsx`, add to the `useQuery` options object (alongside
-`queryKey` and `queryFn`):
-
-```ts
-    // AiAgentManager derives the selected account from this list
-    // (`accounts[0]?.id` when nothing is chosen). If a refetch let the list
-    // empty for one render, that derived id would round-trip through null and
-    // remount the settings form around whatever the user was typing. Keeping
-    // the previous page means the list never transiently empties.
-    placeholderData: (previous) => previous,
-```
-
-- [ ] **Step 2: Typecheck**
-
-```bash
-npx tsc -b --noEmit
-```
-
-Expected: clean. If `previous` is implicitly `any`, import and annotate with
-`SocialAccount[] | undefined`.
-
-- [ ] **Step 3: Run the full suite**
-
-```bash
-bun run test
-```
-
-Expected: PASS. Any test asserting a loading state for this hook may now see stale data
-instead of `undefined` — if one fails, the test's assumption changed and the assertion should
-move to `isFetching`, not be deleted.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add src/hooks/useSocialAccounts.tsx
-git commit -m "fix(accounts): keep the previous account list so a derived selection cannot flap"
-```
+Renumbering note: subsequent tasks keep their numbers. There is no Task 3.
 
 ---
 
@@ -675,19 +702,35 @@ describe("AiKnowledgeManager write guards", () => {
     expect(saveButton()).toBeDisabled();
   });
 
-  it("refuses to write an empty profile over a stored one", () => {
+  it("declares an empty profile over a stored one as a deliberate clear", () => {
     configValue = { business_profile_text: "We sell day-old chicks." };
     configError = null;
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
 
-    const box = screen.getByPlaceholderText(/describe your business/i);
-    expect(saveButton()).not.toBeDisabled();
-
     // fireEvent.change, NOT `box.value = ""`. Assigning to .value mutates the
     // DOM node without notifying React, so `profile` state would keep the stored
-    // text and the assertion below would pass for entirely the wrong reason.
-    fireEvent.change(box, { target: { value: "" } });
-    expect(saveButton()).toBeDisabled();
+    // text and this test would pass whatever the implementation did.
+    fireEvent.change(screen.getByPlaceholderText(/describe your business/i), {
+      target: { value: "" },
+    });
+    fireEvent.click(saveButton());
+
+    expect(upsertConfig.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ business_profile_text: "", confirm_clear: true }),
+    );
+  });
+
+  it("does not declare a clear when nothing was stored", () => {
+    // A first save with an empty box is not a deletion, and marking it as one
+    // would train the guard to be ignored.
+    configValue = { business_profile_text: "" };
+    configError = null;
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    fireEvent.click(saveButton());
+
+    expect(upsertConfig.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ confirm_clear: undefined }),
+    );
   });
 
   it("allows a first save when nothing is stored yet", () => {
@@ -730,14 +773,43 @@ Replace the `configLoaded` line:
   const wouldBlankStoredProfile = profile.trim() === "" && profileText.trim() !== "";
 ```
 
-And the Save button's `disabled`:
+**Do not disable Save on `wouldBlankStoredProfile`.** That was the first draft and it creates
+a new dead end: `AiAgentManager`'s form has no business-profile field, so if the Knowledge tab
+also refuses, **a business profile becomes unclearable from anywhere** — and the
+`ingest_profile_text` delete branch (`ai-knowledge-ingest/index.ts:856-863`) becomes
+unreachable code. Fixing one dead end by creating another is not a fix.
+
+Instead, mirror the settings form: an empty box over a stored value is a **deliberate clear**,
+declared to the server. In `saveProfile`:
 
 ```ts
-            disabled={!configLoaded || wouldBlankStoredProfile || upsertConfig.isPending || invoke.isPending}
+  const saveProfile = async () => {
+    try {
+      // The loaded config IS the baseline here, so an empty box over a stored
+      // value is the user having deleted it -- the same asymmetry the settings
+      // form relies on. Declared, not silently refused: refusing would leave the
+      // profile unclearable, since no other surface edits this field.
+      await upsertConfig.mutateAsync({
+        business_profile_text: profile,
+        confirm_clear: wouldBlankStoredProfile || undefined,
+      });
+```
+
+And the Save button's `disabled` keeps only the load guards:
+
+```ts
+            disabled={!configLoaded || upsertConfig.isPending || invoke.isPending}
 ```
 
 **Declaration order matters:** `wouldBlankStoredProfile` reads `profile`, so it must come
 after the `useState` that declares it. Move it below if the file's order differs.
+
+**Why `!error` is enough here without `loadedAccountId === accountId`.** The settings form
+needs the account comparison because its `form` state is edited by the user and can outlive a
+switch. Here `profile` is re-derived from `profileText` whenever the config changes, and the
+query key already contains the account, so `config !== undefined && !error` implies this
+account's settled read. Stated because omitting half of the spec's §8 item 4 should be a
+decision, not an oversight.
 
 - [ ] **Step 4: Run the tests**
 
@@ -984,8 +1056,15 @@ Create `src/lib/knowledgeVisibility.ts`:
 // Whether a knowledge source is visible to one connected account.
 //
 // This MUST stay identical to the predicate in match_ai_knowledge_*_for_account
-// (migration 20260828180000). A list that shows a document the agent cannot
-// retrieve, or hides one it can, makes the user confident about the wrong thing.
+// (migration 20260828180000) FOR A NAMED ACCOUNT. A list that shows a document
+// the agent cannot retrieve, or hides one it can, makes the user confident about
+// the wrong thing.
+//
+// One deliberate divergence: the RPCs gate on
+// EXISTS (owned.id = p_social_account_id), so a NULL account retrieves NOTHING.
+// Here a null account returns everything, because "no account selected" is the
+// management view of the user's own library, not a retrieval call. Named rather
+// than left implicit, so nobody "fixes" one side to match the other.
 
 export interface VisibilityScopedSource {
   id: string;
@@ -1139,12 +1218,24 @@ way, the test is wrong, not the fix.
 Run `clean-code-guard` on the changed production files and `test-guard` on the new tests,
 per the repo's mandatory workflow.
 
-- [ ] **Step 4: Deploy the edge function**
+- [ ] **Step 4: Deploy — frontend FIRST, then the edge function**
 
-`messaging-api` changed, so it needs deploying — the frontend auto-deploys from `main` but
-Edge Functions do not. Follow `docs/runbooks/deploy-edge-function.md`: copy into the
-functions volume, verify SHA256, then restart. **Do not run `npx supabase functions deploy`**
-— it targets Supabase Cloud and fails against this self-hosted stack.
+**The order is load-bearing and only one direction is safe.**
+
+The guard rejects any blanking write that does not carry `confirm_clear`, and only the
+frontend from Tasks 2 and 5 ever sends it. Deploying `messaging-api` first would put the
+guard live against a deployed frontend that cannot satisfy it: every deliberate clear would
+hard-409 with no way for the user to proceed — the dead end this plan exists to prevent,
+inflicted during the window.
+
+The reverse is harmless: the old server simply ignores an unknown body key.
+
+So: merge to `main`, **wait for the frontend deploy to complete**, then deploy the function.
+Tasks 1, 2 and 5 are one contract and must not straddle that boundary.
+
+Follow `docs/runbooks/deploy-edge-function.md`: copy into the functions volume, verify
+SHA256, then restart. **Do not run `npx supabase functions deploy`** — it targets Supabase
+Cloud and fails against this self-hosted stack.
 
 Files to copy: `messaging-api/index.ts`, `messaging-api/configBlanking.ts`.
 
@@ -1156,8 +1247,12 @@ SELECT a.platform_username,
        c.is_enabled
 FROM ai_agent_configs c
 JOIN social_accounts a ON a.id = c.social_account_id
-WHERE c.platform = 'facebook';
+WHERE c.user_id = (SELECT id FROM auth.users WHERE email = 'dr.vet.waleedtam@gmail.com')
+  AND c.platform = 'facebook';
 ```
+
+The `user_id` filter is not optional — without it this lists every Facebook config on the
+platform, including other users'.
 
 Then, in the UI: select a Facebook page with a persona, open the Knowledge tab, save a
 business profile, return to Settings, and confirm the persona is still there.
