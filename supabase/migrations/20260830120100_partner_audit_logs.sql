@@ -11,11 +11,16 @@ CREATE TABLE public.partner_audit_logs (
   -- workspace that no longer exists goes with it (same semantics as
   -- partner_api_usage). It is the only path by which audit rows disappear.
   workspace_id UUID NOT NULL REFERENCES public.workspaces(id) ON DELETE CASCADE,
-  -- Nullable: rows may describe workspace-level events with no specific key.
-  -- A NULL key_id is not FK-checked (MATCH SIMPLE), so those rows are pinned
-  -- to their workspace only by workspace_id; whenever key_id IS set, the
-  -- composite FK below makes misattribution unrepresentable.
-  key_id       UUID,
+  -- NOT NULL is load-bearing, not a completeness preference. A composite FK
+  -- is MATCH SIMPLE: when any referencing column is NULL the constraint is
+  -- not checked at all. A nullable key_id would therefore let this row be
+  -- written against ANY workspace while naming another workspace's key in
+  -- metadata -- defeating the exact invariant this table's FK exists to
+  -- create (spec section 9.1). Every action below is a key-lifecycle event,
+  -- so a targetless row has no meaning anyway. If workspace-level events are
+  -- ever needed, model them with an explicit target type and a conditional
+  -- constraint; do not weaken this column.
+  key_id       UUID NOT NULL,
   actor_id     UUID REFERENCES auth.users(id) ON DELETE SET NULL,
   -- The credential lifecycle D12 requires today: creation, rotation,
   -- revocation, and broadening a key's scope/account grant. Widening this
@@ -28,15 +33,25 @@ CREATE TABLE public.partner_audit_logs (
   -- Same tenancy control as partner_api_usage: an audit row cannot name a
   -- key from another workspace, so it can never be attributed to a
   -- workspace other than its target's (spec section 9.1).
-  -- RESTRICT, not CASCADE, matching partner_api_usage: audit rows are
-  -- history and must outlive key churn. Keys are meant to be REVOKED, not
-  -- deleted -- revocation is itself an event this table exists to record --
-  -- so a hard delete of an audited key is refused rather than silently
-  -- rewriting the trail. A key with no audit history and no usage history
-  -- can still be deleted; those rows cascade nothing.
+  --
+  -- CASCADE, and deliberately NOT the RESTRICT that partner_api_usage uses.
+  -- RESTRICT was tried first and breaks an ordinary user action: the
+  -- foundation migration cascades a social_accounts delete into
+  -- partner_api_keys (20260813120000, the partner_api_keys_account_in_workspace
+  -- constraint), so a RESTRICT here makes disconnecting a WhatsApp account
+  -- fail for every key that has ever been audited -- which, once the
+  -- lifecycle writes a 'create' row, is every key. Verified against a clone
+  -- of the production schema. Mixed cascade/restrict graphs also make
+  -- workspace deletion order-dependent and unreliable.
+  --
+  -- The cost is stated plainly: audit history is bound to the existence of
+  -- its key, so a hard-deleted key takes its trail with it. Keeping history
+  -- past that point is a lifecycle policy -- keys must be REVOKED, never
+  -- deleted -- and belongs to the credential-lifecycle work, not to a
+  -- foreign-key action that silently breaks account disconnection.
   CONSTRAINT partner_audit_logs_key_in_workspace
     FOREIGN KEY (key_id, workspace_id)
-    REFERENCES public.partner_api_keys (id, workspace_id) ON DELETE RESTRICT
+    REFERENCES public.partner_api_keys (id, workspace_id) ON DELETE CASCADE
 );
 
 CREATE INDEX partner_audit_logs_ws_time_idx
@@ -67,6 +82,15 @@ USING (EXISTS (
 -- is the table owner (the migration role), which no application authenticates
 -- as -- the compensating control is that owner-role credentials are never
 -- issued to services, a property of the deployment, not of this file.
+--
+-- SCOPE OF THE CLAIM, stated precisely so nobody relies on more than it gives:
+-- "append-only" here means NO ROLE CAN ISSUE UPDATE OR DELETE DML. It does
+-- NOT mean rows are retained forever. Referential actions run outside RLS and
+-- outside these grants, so a workspace owner deleting their workspace -- an
+-- action authenticated users are granted -- cascades this table's rows away
+-- without ever holding DELETE on it. Retention across tenant deletion is a
+-- product and compliance decision (soft deletion, or an archive-then-purge
+-- workflow), not something a grant can express.
 REVOKE ALL ON public.partner_audit_logs FROM PUBLIC;
 REVOKE ALL ON public.partner_audit_logs FROM anon;
 REVOKE ALL ON public.partner_audit_logs FROM authenticated;

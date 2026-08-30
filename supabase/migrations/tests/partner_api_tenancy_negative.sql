@@ -54,7 +54,8 @@ INSERT INTO tenancy_test_ids VALUES
 -- ---------------------------------------------------------------------------
 -- Cleanup (runs BEFORE seeding so a crashed earlier run cannot wedge this
 -- one, and again at the end so the database is left clean).
--- Order matters: audit rows RESTRICT key deletion, so they go first.
+-- Children are deleted before parents explicitly rather than leaning on the
+-- cascade, so this cleanup keeps working if a deletion action ever changes.
 -- ---------------------------------------------------------------------------
 DO $cleanup$
 BEGIN
@@ -234,6 +235,35 @@ BEGIN
   END;
 END
 $neg3$;
+
+-- ---------------------------------------------------------------------------
+-- Negative 3b (partner_audit_logs): the NULL-key_id escape hatch.
+--
+-- A composite FK is MATCH SIMPLE: with ANY referencing column NULL, the
+-- constraint is not checked. So a nullable key_id would let this row be
+-- written against ANY workspace while naming another workspace's key in
+-- metadata, walking straight past the FK that Negative 3 just proved works.
+-- Negative 3 cannot catch this -- it only ever supplies a non-null key_id,
+-- which is exactly how the hole survived the first review of this file.
+--
+-- key_id NOT NULL is what closes it. If this block ever reports FAIL, the
+-- column has been made nullable again and the tenancy invariant is void for
+-- every audit row that omits its target.
+-- ---------------------------------------------------------------------------
+DO $neg3b$
+DECLARE
+  v_ws_b  uuid := (SELECT id FROM tenancy_test_ids WHERE k = 'ws_b');
+  v_key_a uuid := (SELECT id FROM tenancy_test_ids WHERE k = 'key_a');
+BEGIN
+  BEGIN
+    INSERT INTO public.partner_audit_logs (workspace_id, key_id, action, metadata)
+    VALUES (v_ws_b, NULL, 'rotate', jsonb_build_object('key_id', v_key_a));
+    RAISE EXCEPTION 'FAIL: partner_audit_logs accepted a NULL key_id -- MATCH SIMPLE skips the composite FK, so this row names workspace A''s key while attributed to workspace B';
+  EXCEPTION WHEN not_null_violation THEN
+    RAISE NOTICE 'PASS: NULL key_id refused (the MATCH SIMPLE FK bypass is closed)';
+  END;
+END
+$neg3b$;
 
 -- ---------------------------------------------------------------------------
 -- Negative 4 (partner_audit_logs grants): append-only is a GRANT-level

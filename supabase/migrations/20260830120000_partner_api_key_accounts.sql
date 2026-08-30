@@ -47,17 +47,23 @@ CREATE INDEX partner_api_key_accounts_account_idx
 -- partner_api_keys_account_in_workspace, so the mirrored rows always satisfy
 -- both composite FKs here.
 --
--- The NOT EXISTS guard is what makes a re-run safe: it seeds only keys that
--- have no binding at all yet, so re-running never adds a second seeding row
--- for a key (even if its primary account changed) and never fights bindings
--- a lifecycle path may have created in the meantime.
+-- ON CONFLICT alone is what makes a re-run safe, and it is deliberately the
+-- ONLY guard. An earlier draft also carried a key-wide
+-- `NOT EXISTS (... WHERE b.key_id = k.id)`, which is not merely redundant but
+-- harmful: if a lifecycle writer adds some OTHER account binding for a key
+-- first, that guard sees the key as "already seeded" and permanently skips
+-- its primary-account binding. Matching on the exact (key, account) pair
+-- cannot make that mistake.
+--
+-- This is a one-time seed, not a continuously-correct statement: a key
+-- committed after this statement's snapshot stays unbound. That is acceptable
+-- only because the credential-lifecycle path that creates keys will write
+-- this binding itself, and because exactly one key exists today. Re-run the
+-- statement after deploying that path, or verify with an anti-join, if any
+-- key is created in the window between.
 INSERT INTO public.partner_api_key_accounts (key_id, social_account_id, workspace_id)
 SELECT k.id, k.social_account_id, k.workspace_id
 FROM public.partner_api_keys k
-WHERE NOT EXISTS (
-  SELECT 1 FROM public.partner_api_key_accounts b
-   WHERE b.key_id = k.id
-)
 ON CONFLICT (key_id, social_account_id) DO NOTHING;
 
 ALTER TABLE public.partner_api_key_accounts ENABLE ROW LEVEL SECURITY;
