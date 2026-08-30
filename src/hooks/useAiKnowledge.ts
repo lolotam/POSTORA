@@ -41,9 +41,25 @@ export function useAiKnowledge() {
         ? 5000
         : false,
   });
+  // Which accounts each source is explicitly linked to. Read under the user's own
+  // JWT against a table whose RLS is `auth.uid() = user_id`, so it can only ever
+  // return this user's links -- which is what lets visibleToAccount skip the
+  // ownership checks the retrieval RPCs need under the service role.
+  const links = useQuery({
+    queryKey: ["ai-knowledge-source-accounts", user?.id],
+    enabled: !!user,
+    queryFn: async () => {
+      const { data, error } = await (supabase as any)
+        .from("ai_knowledge_source_accounts")
+        .select("source_id, social_account_id");
+      if (error) throw error;
+      return data as { source_id: string; social_account_id: string }[];
+    },
+  });
   const refresh = () =>
     Promise.all([
       client.invalidateQueries({ queryKey: ["ai-knowledge-sources", user?.id] }),
+      client.invalidateQueries({ queryKey: ["ai-knowledge-source-accounts", user?.id] }),
       client.invalidateQueries({ queryKey: ["ai-knowledge-graph-export", user?.id] }),
     ]);
   const graphExport = useQuery({
@@ -84,7 +100,14 @@ export function useAiKnowledge() {
   return {
     user,
     sources: sources.data || [],
-    isLoading: sources.isLoading,
+    links: links.data || [],
+    // The links query gates which sources are visible, so an unsettled or failed
+    // link read must never look like "this account has no links". Substituting []
+    // would hide every restricted source and tell the user none are available --
+    // confidently, and wrongly. Callers wait for linksReady before filtering.
+    linksReady: links.isSuccess,
+    linksError: links.error,
+    isLoading: sources.isLoading || links.isLoading,
     error: sources.error,
     graphExport: graphExport.data || null,
     refetch: sources.refetch,

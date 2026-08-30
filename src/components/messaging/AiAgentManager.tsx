@@ -42,6 +42,53 @@ const modeDescriptions: Record<AiAgentMode, string> = {
   human_then_ai: "A team member gets the first chance, then AI handles the fallback.",
 };
 
+/** The stored config as the form holds it. One definition, so a first load and a
+ *  refresh can never disagree about a field's shape. */
+function toFormValues(config: NonNullable<ReturnType<typeof useAiAgentConfig>["config"]>): AiAgentConfigInput {
+  return {
+    is_enabled: config.is_enabled,
+    default_mode: config.default_mode,
+    persona_instructions: config.persona_instructions || "",
+    business_profile_text: config.business_profile_text || "",
+    language_mode: config.language_mode,
+    temperature: config.temperature,
+    admin_phone_numbers: config.admin_phone_numbers || [],
+    daily_message_cap: config.daily_message_cap,
+    reply_cooldown_seconds: config.reply_cooldown_seconds,
+    max_tool_iterations: config.max_tool_iterations,
+    handoff_on_request: config.handoff_on_request,
+    handoff_on_low_confidence: config.handoff_on_low_confidence,
+  };
+}
+
+/**
+ * `current`, with every field the user has NOT edited replaced by the server's
+ * latest value.
+ *
+ * A field is "edited" when it differs from the baseline it was loaded with, so
+ * the user's own changes survive a refresh and everything else follows the
+ * server. Both extremes are lossy: replacing the whole form discards what they
+ * typed (the 2026-08-30 outage), and keeping the whole form carries a stale
+ * business_profile_text that the next save would write back over the value the
+ * knowledge tab had just stored.
+ *
+ * Compared with JSON.stringify to match useDirtyForm exactly -- admin_phone_numbers
+ * is an array, and two definitions of "changed" in one component would eventually
+ * disagree.
+ */
+function mergeUntouchedFields(
+  current: AiAgentConfigInput,
+  baseline: AiAgentConfigInput,
+  refreshed: AiAgentConfigInput,
+): AiAgentConfigInput {
+  const merged: Record<string, unknown> = { ...current };
+  for (const key of Object.keys(refreshed) as (keyof AiAgentConfigInput)[]) {
+    const untouched = JSON.stringify(current[key]) === JSON.stringify(baseline[key]);
+    if (untouched) merged[key] = refreshed[key];
+  }
+  return merged as AiAgentConfigInput;
+}
+
 export const AI_AGENT_TABS = ["settings", "knowledge", "tools", "test", "logs"] as const;
 export type AiAgentTab = (typeof AI_AGENT_TABS)[number];
 
@@ -71,9 +118,17 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
   const { config, isLoading, error, upsertConfig } = useAiAgentConfig(platform, accountId);
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
   const [baseline, setBaseline] = useState<AiAgentConfigInput | null>(null);
-  const [loadedAccountId, setLoadedAccountId] = useState<string | null>(null);
+  // undefined = nothing loaded yet; null = loaded for "no account". These must stay
+  // distinguishable: accountId is legitimately null while the accounts query is in
+  // flight and whenever the platform has no active account, so collapsing the two
+  // would make the guard in the effect below fire on the very first render and
+  // leave the form permanently empty.
+  const [loadedAccountId, setLoadedAccountId] = useState<string | null | undefined>(undefined);
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  // Read by the populate effect without being depended on -- see the comment there.
+  const baselineRef = useRef<AiAgentConfigInput | null>(null);
+  baselineRef.current = baseline;
 
   // The form must refuse to submit a config it never loaded. On 2026-08-28 a
   // read that returned nothing rendered a blank form whose Save then wrote
@@ -87,6 +142,36 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
   const configLoaded = config !== undefined && !error && loadedAccountId === accountId;
 
   useEffect(() => {
+    // A repeat read of the SAME account refreshes untouched fields and leaves
+    // edited ones alone. Resetting everything is how a typed persona became a
+    // blank save on 2026-08-30; freezing everything is the opposite mistake, and
+    // just as lossy -- the knowledge tab's save refreshes this same query, so a
+    // frozen form would carry a stale business_profile_text and the next Settings
+    // save would silently revert the profile that was just written.
+    //
+    // A field counts as edited when it has diverged from the baseline, so the
+    // user's own changes always win and everything else takes the server's value.
+    // The undefined check is load-bearing: without it `null === null` matches on
+    // the first render and the form never populates at all.
+    if (loadedAccountId !== undefined && loadedAccountId === accountId) {
+      // Through a ref, not the dependency array. toFormValues builds a fresh
+      // object every call, so depending on `baseline` would re-run this effect
+      // on the state it just set, forever.
+      const previous = baselineRef.current;
+      if (!config || !previous) return;
+      const refreshed = toFormValues(config);
+      // A read that brought nothing new must do NOTHING. Both setters below
+      // produce fresh objects, so an unconditional merge re-renders, and any
+      // caller whose `config` identity changes per render then re-enters this
+      // effect forever. React Query's structural sharing happens to keep that
+      // identity stable for equal data, but termination must not depend on an
+      // upstream optimisation -- it hung a CI run for two hours before this
+      // guard existed.
+      if (JSON.stringify(refreshed) === JSON.stringify(previous)) return;
+      setForm((current) => mergeUntouchedFields(current, previous, refreshed));
+      setBaseline(refreshed);
+      return;
+    }
     // A settled null is "this account has no config yet", and the form must
     // show that rather than whatever the previously selected account had in
     // it. Returning early here let account A's persona sit in the fields
@@ -99,24 +184,11 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
       return;
     }
     if (!config) return;
-    const loaded = {
-      is_enabled: config.is_enabled,
-      default_mode: config.default_mode,
-      persona_instructions: config.persona_instructions || "",
-      business_profile_text: config.business_profile_text || "",
-      language_mode: config.language_mode,
-      temperature: config.temperature,
-      admin_phone_numbers: config.admin_phone_numbers || [],
-      daily_message_cap: config.daily_message_cap,
-      reply_cooldown_seconds: config.reply_cooldown_seconds,
-      max_tool_iterations: config.max_tool_iterations,
-      handoff_on_request: config.handoff_on_request,
-      handoff_on_low_confidence: config.handoff_on_low_confidence,
-    };
+    const loaded = toFormValues(config);
     setForm(loaded);
     setBaseline(loaded);
     setLoadedAccountId(accountId);
-  }, [accountId, config]);
+  }, [accountId, config, loadedAccountId]);
 
   // Read inside the save callback, which closes over the account that started the
   // mutation rather than the one selected when it resolves.
@@ -161,12 +233,29 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
     // into B's baseline -- B's untouched fields would then read as dirty and prompt.
     const savedAccountId = accountId;
     const savedForm = form;
-    upsertConfig.mutate(form, {
+    // The server refuses a write that empties a stored persona or business profile
+    // unless the clear is declared. A reset form cannot reach here saying yes: a
+    // reset sets form AND baseline to defaultConfig together, so the baseline is
+    // blank too and this comparison is false. Only a user who saw a value and
+    // deleted it produces a non-empty baseline against an empty form -- which is
+    // what makes the flag a real signal rather than a rubber stamp.
+    const clearedAField = (["persona_instructions", "business_profile_text"] as const).some(
+      (field) =>
+        String(form[field] ?? "").trim() === "" &&
+        String(baseline?.[field] ?? "").trim() !== "",
+    );
+    upsertConfig.mutate({ ...form, confirm_clear: clearedAField || undefined }, {
       onSuccess: () => {
         if (accountIdRef.current === savedAccountId) setBaseline(savedForm);
         toast.success("AI agent settings saved");
       },
-      onError: (error) => toast.error(error.message || "Could not save AI agent settings"),
+      onError: (error) =>
+        toast.error(
+          // The 409 names database columns; users get a sentence instead.
+          error.message?.includes("Refusing to clear")
+            ? "That would erase the saved persona or business profile. Clear the field and save again to confirm."
+            : error.message || "Could not save AI agent settings",
+        ),
     });
   };
 

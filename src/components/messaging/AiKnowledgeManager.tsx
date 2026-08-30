@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ExternalLink, FileArchive, Loader2, RefreshCw, Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,9 @@ import {
 } from "@/hooks/useAiAgentConfig";
 import { useAiKnowledge } from "@/hooks/useAiKnowledge";
 import { useWhatsAppCatalog } from "@/hooks/useWhatsAppCatalog";
+import { useSocialAccounts } from "@/hooks/useSocialAccounts";
+import { displaySourceTitle } from "@/lib/knowledgeSourceDisplay";
+import { visibleToAccount } from "@/lib/knowledgeVisibility";
 import {
   AI_KNOWLEDGE_ACCEPT,
   AI_KNOWLEDGE_BUCKET,
@@ -37,8 +40,9 @@ export function AiKnowledgeManager({
   // the manager passes its selection down and reads/writes through it.
   accountId?: string | null;
 }) {
-  const { config, upsertConfig } = useAiAgentConfig(platform, accountId);
-  const { user, sources, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
+  const { config, error, upsertConfig } = useAiAgentConfig(platform, accountId);
+  const { user, sources, links, linksReady, linksError, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
+  const { data: socialAccounts = [] } = useSocialAccounts();
   const isWhatsApp = platform === "whatsapp";
   const catalogHook = useWhatsAppCatalog();
   const waAccount = isWhatsApp ? catalogHook.waAccount : null;
@@ -55,9 +59,37 @@ export function AiKnowledgeManager({
   // contents -- or an empty string -- into B's business profile, and
   // ingest_profile_text deletes and re-indexes the source from whatever it is
   // given.
-  const configLoaded = config !== undefined;
+  // `error` matters as much as `config`: React Query keeps the previously cached
+  // data through a failed refetch, so a config that is present can still belong
+  // to another account while THIS read errored -- and saving would then write
+  // that account's profile here. The settings form learned this on 2026-08-28;
+  // this surface never did, which is why it was still the weaker of the two.
+  //
+  // `loadedAccountId === accountId` is deliberately NOT needed here: `profile` is
+  // re-derived from `profileText` whenever the config changes, and the query key
+  // already contains the account, so a settled non-error read is this account's.
+  const configLoaded = config !== undefined && !error;
   const profileText = config?.business_profile_text || "";
   useEffect(() => setProfile(profileText), [profileText]);
+  // An empty box over a stored value is the user having deleted it -- the same
+  // asymmetry the settings form relies on, since the loaded config IS the
+  // baseline here. Declared to the server rather than refused: refusing would
+  // leave a business profile unclearable, because no other surface edits this
+  // field, and would make the ingest delete branch unreachable.
+  const wouldBlankStoredProfile = profile.trim() === "" && profileText.trim() !== "";
+  // The same predicate the retrieval RPCs use, so the list cannot promise the
+  // agent a document it will not read, or hide one it will.
+  // Filtering only once the links have actually arrived. An empty link set from
+  // an unsettled or failed read is indistinguishable from "linked to nothing",
+  // and acting on it would hide every restricted source behind a confident
+  // "nothing available here".
+  const visibleSources = useMemo(
+    () =>
+      linksReady
+        ? sources.filter((source) => visibleToAccount(source, accountId ?? null, links))
+        : sources,
+    [sources, accountId, links, linksReady],
+  );
   const run = async (
     action: string,
     body: Record<string, unknown>,
@@ -74,7 +106,10 @@ export function AiKnowledgeManager({
   };
   const saveProfile = async () => {
     try {
-      await upsertConfig.mutateAsync({ business_profile_text: profile });
+      await upsertConfig.mutateAsync({
+        business_profile_text: profile,
+        confirm_clear: wouldBlankStoredProfile || undefined,
+      });
       await run(
         "ingest_profile_text",
         // Naming the account keeps the re-index reading the same config the
@@ -289,20 +324,36 @@ export function AiKnowledgeManager({
         <CardContent className="space-y-3">
           {isLoading ? (
             <Loader2 className="h-5 w-5 animate-spin" />
-          ) : sources.length === 0 ? (
+          ) : linksError ? (
+            // Say the list is unreliable rather than render an unfiltered or
+            // over-filtered one, either of which reads as fact.
+            <p className="text-sm text-destructive">
+              Could not check which sources this account can use. Refresh to try again.
+            </p>
+          ) : visibleSources.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No knowledge sources yet.
+              {sources.length === 0
+                ? "No knowledge sources yet."
+                : "No sources are available to this account yet."}
             </p>
           ) : (
-            sources.map((source) => (
+            visibleSources.map((source) => (
               <div
                 key={source.id}
                 className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
               >
                 <div>
-                  <p className="font-medium">{source.file_name}</p>
+                  <p className="font-medium">
+                    {displaySourceTitle(source.file_name, socialAccounts)}
+                  </p>
                   <div className="mt-1 flex gap-2">
                     <Badge variant="secondary">{source.source_type}</Badge>
+                    {/* Shared vs restricted is what decides whether OTHER accounts
+                        can read this, so it is stated rather than inferred from
+                        the fact that it appears in this account's list. */}
+                    <Badge variant={source.visibility === "shared" ? "outline" : "secondary"}>
+                      {source.visibility === "shared" ? "All accounts" : "This account"}
+                    </Badge>
                     <Badge
                       variant={
                         source.status === "failed"
