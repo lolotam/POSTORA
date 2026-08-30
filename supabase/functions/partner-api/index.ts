@@ -12,10 +12,12 @@ import {
 } from "../_shared/partnerApiKeys.ts";
 import {
   checkRateLimit,
+  RateLimitedError,
   recordUsage,
   releaseQuota,
   reserveQuota,
   touchKey,
+  type RateLimitBudget,
 } from "../_shared/partnerApiMetering.ts";
 import {
   claimIdempotency,
@@ -72,13 +74,44 @@ function withRequestId<T extends Record<string, unknown>>(
  * resolved. Emitted ONLY there: fabricating budget numbers for a response
  * where no limit was resolved would leak whether a key exists.
  *
- * consume_partner_rate returns a bare boolean, so Remaining is emitted only
- * on the 429, where the count is provably over the limit and "0" is exact —
- * on the passing path any number would be invented, so the header is omitted
- * until the RPC learns to return the count. Reset is real: the bucket is
- * keyed on date_trunc('minute', now()), so the window always ends at the
- * next minute boundary.
+ * Every number comes from consume_partner_rate_v2: Remaining is the count the
+ * bucket reported after this request, and Reset is the seconds-until-window-
+ * end Postgres computed from the same date_trunc('minute', now()) bucket it
+ * incremented — never a local clock, which can disagree with the clock that
+ * picked the bucket. The values describe the window that was consumed; by the
+ * time the client reads them that window may already have rolled over, which
+ * is inherent to any per-minute budget header.
  */
+function rateLimitHeadersFor(budget: RateLimitBudget): Record<string, string> {
+  return {
+    "X-RateLimit-Limit": String(budget.limit),
+    "X-RateLimit-Remaining": String(budget.remaining),
+    "X-RateLimit-Reset": String(budget.resetSeconds),
+  };
+}
+
+/**
+ * Headers for the 429 the limiter itself issued. Remaining 0 needs no RPC
+ * number: the refusal proves no requests are left in the window. Reset and
+ * Retry-After both carry the same database-provided seconds-until-window-end
+ * — one derived value, not a second computation — and are omitted, never
+ * guessed, if the limiter's answer drifted and brought no number.
+ */
+function rateLimitedHeadersFor(
+  record: PartnerKeyRecord,
+  resetSeconds: number | null,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    "X-RateLimit-Limit": String(record.rateLimitPerMin),
+    "X-RateLimit-Remaining": "0",
+  };
+  if (resetSeconds !== null) {
+    headers["X-RateLimit-Reset"] = String(resetSeconds);
+    headers["Retry-After"] = String(resetSeconds);
+  }
+  return headers;
+}
+
 /**
  * How long a class-B/C caller is told to wait out a limiter outage.
  *
@@ -91,14 +124,6 @@ function withRequestId<T extends Record<string, unknown>>(
  * partner barely notices.
  */
 const LIMITER_OUTAGE_RETRY_AFTER_SECONDS = "5";
-
-function rateLimitHeadersFor(record: PartnerKeyRecord, remainingZero = false): Record<string, string> {
-  return {
-    "X-RateLimit-Limit": String(record.rateLimitPerMin),
-    ...(remainingZero ? { "X-RateLimit-Remaining": "0" } : {}),
-    "X-RateLimit-Reset": String(60 - new Date().getSeconds()),
-  };
-}
 
 /**
  * The request handler, exported so tests exercise the real production path
@@ -169,10 +194,11 @@ export async function handleRequest(
     // fails CLOSED on limiter failure — never fail-open by omission (D7).
     const limiter = await checkRateLimit(admin, record, limiterRiskClassFor(action));
     // X-RateLimit-* only when the limiter actually resolved this key's
-    // budget: a class-A request that proceeded through a limiter outage
-    // resolved nothing, so it must report no budget rather than an invented
-    // one. Fail-closed requests threw above and never reach here.
-    if (limiter === "resolved") rateHeaders = rateLimitHeadersFor(record);
+    // budget, with the numbers it reported: a class-A request that proceeded
+    // through a limiter outage resolved nothing, so it must report no budget
+    // rather than an invented one. Fail-closed requests threw above and never
+    // reach here.
+    if (limiter.status === "resolved") rateHeaders = rateLimitHeadersFor(limiter);
 
     // Resolve the key's pinned account. The composite FK already guarantees it
     // belongs to this workspace, so this read cannot cross a tenant boundary.
@@ -413,13 +439,18 @@ export async function handleRequest(
       const retryable = err.code === "rate_limited" || err.code === "limiter_unavailable";
       const body = errorBody(err.code, err.message, retryable);
       if (record) {
-        // rate_limited: the limiter DID run, and the refusal proves the count
-        // is over the limit, so Remaining 0 is exact (any other value on the
-        // passing path would be invented). limiter_unavailable: no budget was
+        // rate_limited: the limiter DID run and refused, so the budget is
+        // real — Remaining 0 is proven by the refusal itself, and Reset and
+        // Retry-After carry the database-provided seconds until the window
+        // that refused this call ends (omitted, not invented, if the RPC
+        // drifted and brought no number). limiter_unavailable: no budget was
         // resolved, so all three are omitted and Retry-After points at the
         // retry instead.
         const headers = err.code === "rate_limited"
-          ? rateLimitHeadersFor(record, true)
+          ? rateLimitedHeadersFor(
+              record,
+              err instanceof RateLimitedError ? err.resetSeconds : null,
+            )
           : err.code === "limiter_unavailable"
           ? { "Retry-After": LIMITER_OUTAGE_RETRY_AFTER_SECONDS }
           : {};

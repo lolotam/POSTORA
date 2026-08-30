@@ -213,7 +213,7 @@ $neg2$;
 
 -- ---------------------------------------------------------------------------
 -- Negative 3 (partner_audit_logs): workspace_id is B's, key_id is A's. Must
--- be rejected by partner_audit_logs_key_in_workspace -- an audit row must
+-- be rejected by partner_audit_logs_assert_tenancy -- an audit row must
 -- not be attributable to a workspace other than its target key's (spec
 -- section 9.1). A build with a plain single-column FK key_id ->
 -- partner_api_keys(id) would ACCEPT this insert.
@@ -228,7 +228,7 @@ BEGIN
     VALUES (v_ws_b, v_key_a, 'rotate');
     RAISE EXCEPTION 'FAIL: partner_audit_logs accepted an audit row attributed to workspace B for workspace A''s key';
   EXCEPTION WHEN foreign_key_violation THEN
-    IF SQLERRM NOT LIKE '%partner_audit_logs_key_in_workspace%' THEN
+    IF SQLERRM NOT LIKE '%partner_audit_logs_assert_tenancy%' THEN
       RAISE EXCEPTION 'FAIL: rejected by the wrong constraint: %', SQLERRM;
     END IF;
     RAISE NOTICE 'PASS: cross-workspace audit attribution rejected by key_in_workspace FK';
@@ -258,12 +258,61 @@ BEGIN
   BEGIN
     INSERT INTO public.partner_audit_logs (workspace_id, key_id, action, metadata)
     VALUES (v_ws_b, NULL, 'rotate', jsonb_build_object('key_id', v_key_a));
-    RAISE EXCEPTION 'FAIL: partner_audit_logs accepted a NULL key_id -- MATCH SIMPLE skips the composite FK, so this row names workspace A''s key while attributed to workspace B';
-  EXCEPTION WHEN not_null_violation THEN
-    RAISE NOTICE 'PASS: NULL key_id refused (the MATCH SIMPLE FK bypass is closed)';
+    RAISE EXCEPTION 'FAIL: partner_audit_logs accepted a NULL key_id -- this row names workspace A''s key while being attributed to workspace B';
+  -- Either rejection is correct, and which one fires is an implementation
+  -- detail rather than the property under test. The column is NOT NULL, but a
+  -- BEFORE INSERT trigger runs ahead of constraint evaluation, so in the
+  -- current design the tenancy trigger sees the NULL first and raises
+  -- foreign_key_violation. The security property -- a targetless audit row
+  -- cannot be written -- holds either way, so both are accepted here rather
+  -- than pinning the test to whichever check happens to win the race today.
+  EXCEPTION WHEN not_null_violation OR foreign_key_violation THEN
+    RAISE NOTICE 'PASS: NULL key_id refused (a targetless audit row cannot be written)';
   END;
 END
 $neg3b$;
+
+-- ---------------------------------------------------------------------------
+-- Positive 2 (partner_audit_logs): THE TRAIL MUST SURVIVE ITS KEY.
+--
+-- This is the property the whole no-FK-plus-trigger design exists to create,
+-- and it is the one an FK cannot give. Both FK options were tried and both
+-- failed here: RESTRICT made disconnecting a WhatsApp account impossible for
+-- any audited key, and CASCADE deleted the trail during that same ordinary
+-- disconnect. An audit log erased by routine product operation is not an
+-- audit log.
+--
+-- Deleting the key's social account cascades into partner_api_keys
+-- (foundation: partner_api_keys_account_in_workspace). The audit row must
+-- still be there afterwards. If this block reports FAIL, someone has put a
+-- foreign key back on key_id and the trail is deletable again.
+-- ---------------------------------------------------------------------------
+DO $pos2$
+DECLARE
+  v_ws_b   uuid := (SELECT id FROM tenancy_test_ids WHERE k = 'ws_b');
+  v_acct_b uuid := (SELECT id FROM tenancy_test_ids WHERE k = 'acct_b');
+  v_key_b  uuid := (SELECT id FROM tenancy_test_ids WHERE k = 'key_b');
+  v_count  integer;
+BEGIN
+  INSERT INTO public.partner_audit_logs (workspace_id, key_id, action, key_prefix)
+  VALUES (v_ws_b, v_key_b, 'create', 'ttk_b');
+
+  -- The ordinary disconnect path: delete the social account. This must
+  -- succeed, and must take the key with it.
+  DELETE FROM public.social_accounts WHERE id = v_acct_b;
+
+  IF EXISTS (SELECT 1 FROM public.partner_api_keys WHERE id = v_key_b) THEN
+    RAISE EXCEPTION 'FAIL: deleting the social account did not remove its key -- this test is no longer exercising what it claims';
+  END IF;
+
+  SELECT count(*) INTO v_count
+    FROM public.partner_audit_logs WHERE key_id = v_key_b;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'FAIL: the audit trail did not survive deletion of its key (found % rows, expected 1) -- a foreign key on key_id has been reintroduced', v_count;
+  END IF;
+  RAISE NOTICE 'PASS: audit trail survived deletion of its key and social account (disconnect no longer erases history)';
+END
+$pos2$;
 
 -- ---------------------------------------------------------------------------
 -- Negative 4 (partner_audit_logs grants): append-only is a GRANT-level

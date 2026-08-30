@@ -4,7 +4,13 @@ import {
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { PartnerAuthError } from "./partnerApiKeys.ts";
-import { checkRateLimit, recordUsage, releaseQuota, reserveQuota } from "./partnerApiMetering.ts";
+import {
+  checkRateLimit,
+  RateLimitedError,
+  recordUsage,
+  releaseQuota,
+  reserveQuota,
+} from "./partnerApiMetering.ts";
 
 const RECORD = {
   id: "key-1", workspaceId: "ws-1", socialAccountId: "acct-1",
@@ -77,11 +83,19 @@ function limiterUnavailableClient() {
   } as any;
 }
 
+/** A client whose RPC answers successfully with the given v2 row. */
+function limiterClient(data: unknown) {
+  return {
+    rpc() { return Promise.resolve({ data, error: null }); },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+}
+
 Deno.test("checkRateLimit: class A proceeds when the limiter RPC errors (fail open)", async () => {
   // Must resolve, not throw — a bounded local read survives a limiter
   // outage — and must report "unavailable" so the caller emits no budget
   // headers for a budget that was never resolved.
-  assertEquals(await checkRateLimit(limiterUnavailableClient(), RECORD, "A"), "unavailable");
+  assertEquals(await checkRateLimit(limiterUnavailableClient(), RECORD, "A"), { status: "unavailable" });
 });
 
 Deno.test("checkRateLimit: class B fails closed with 503 limiter_unavailable", async () => {
@@ -113,23 +127,107 @@ Deno.test("checkRateLimit: an unclassified action fails closed, never fail-open 
   assertEquals(error.status, 503);
 });
 
-Deno.test("checkRateLimit: a working limiter still refuses with 429 rate_limited", async () => {
-  const client = {
-    rpc() { return Promise.resolve({ data: false, error: null }); },
-  // deno-lint-ignore no-explicit-any
-  } as any;
-  const error = await assertRejects(
-    () => checkRateLimit(client, RECORD, "C"),
-    PartnerAuthError,
+// ---- the v2 verdict: what counts as "the limiter answered" -----------------
+
+Deno.test("checkRateLimit: an allowed v2 row resolves with the numbers the RPC reported", async () => {
+  assertEquals(
+    await checkRateLimit(limiterClient({ allowed: true, remaining: 59, reset_seconds: 42 }), RECORD, "A"),
+    { status: "resolved", limit: 60, remaining: 59, resetSeconds: 42 },
   );
-  assertEquals(error.code, "rate_limited");
-  assertEquals(error.status, 429);
 });
 
-Deno.test("checkRateLimit: a working limiter reports the budget as resolved", async () => {
-  const client = {
-    rpc() { return Promise.resolve({ data: true, error: null }); },
-  // deno-lint-ignore no-explicit-any
-  } as any;
-  assertEquals(await checkRateLimit(client, RECORD, "A"), "resolved");
+Deno.test("checkRateLimit: a one-element-array row (older PostgREST shape) still resolves", async () => {
+  assertEquals(
+    await checkRateLimit(limiterClient([{ allowed: true, remaining: 3, reset_seconds: 60 }]), RECORD, "A"),
+    { status: "resolved", limit: 60, remaining: 3, resetSeconds: 60 },
+  );
+});
+
+Deno.test("checkRateLimit: a refused v2 row throws rate_limited carrying the database reset", async () => {
+  const error = await assertRejects(
+    () => checkRateLimit(limiterClient({ allowed: false, remaining: 0, reset_seconds: 30 }), RECORD, "C"),
+    PartnerAuthError,
+  );
+  assertEquals(error instanceof RateLimitedError, true);
+  assertEquals(error.code, "rate_limited");
+  assertEquals(error.status, 429);
+  assertEquals((error as RateLimitedError).resetSeconds, 30);
+});
+
+Deno.test("checkRateLimit: a refusal without a usable reset still refuses, publishing no number", async () => {
+  // A drifted shape must not weaken the refusal itself: it is still a 429,
+  // but with no reset to hand the caller the error carries null so the
+  // handler omits Reset/Retry-After instead of inventing them.
+  const error = await assertRejects(
+    () => checkRateLimit(limiterClient({ allowed: false, remaining: 0, reset_seconds: 0 }), RECORD, "C"),
+    RateLimitedError,
+  );
+  assertEquals(error.code, "rate_limited");
+  assertEquals(error.resetSeconds, null);
+});
+
+// ---- the hardening: anything but the exact v2 shape is "unavailable" ------
+// These are the regression tests for the literal-`true`/literal-`false` rule
+// carried from the v1 boolean into the v2 record: a null, a bare boolean, or
+// a drifted record must be indistinguishable from the limiter being down —
+// never an allow.
+
+Deno.test("checkRateLimit: data null with no error fails closed for class C", async () => {
+  const error = await assertRejects(
+    () => checkRateLimit(limiterClient(null), RECORD, "C"),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+  assertEquals(error.status, 503);
+});
+
+Deno.test("checkRateLimit: data null with no error fails open for class A only", async () => {
+  assertEquals(await checkRateLimit(limiterClient(null), RECORD, "A"), { status: "unavailable" });
+});
+
+Deno.test("checkRateLimit: a v1-shaped bare boolean is not a budget — class C fails closed", async () => {
+  // The old consume_partner_rate shape. Deployed edge code must never treat
+  // it as "allowed with numbers", because it carries no numbers.
+  const error = await assertRejects(
+    () => checkRateLimit(limiterClient(true), RECORD, "C"),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+});
+
+Deno.test("checkRateLimit: an object without a boolean allowed fails closed for class C", async () => {
+  const error = await assertRejects(
+    () => checkRateLimit(limiterClient({ remaining: 59, reset_seconds: 42 }), RECORD, "C"),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+});
+
+Deno.test("checkRateLimit: an allowed row with missing numbers is not a resolution", async () => {
+  // `allowed: true` without real remaining/reset would force the response to
+  // invent a budget — the exact thing this rework removed.
+  const error = await assertRejects(
+    () => checkRateLimit(limiterClient({ allowed: true }), RECORD, "C"),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+});
+
+Deno.test("checkRateLimit: an allowed row with out-of-range numbers is not a resolution", async () => {
+  // The real function mathematically returns remaining >= 0 and reset in
+  // 1..60. 0, 61 and a fraction are values it cannot produce, so they must
+  // not be published as if it had.
+  for (const bad of [
+    { allowed: true, remaining: -1, reset_seconds: 42 },
+    { allowed: true, remaining: 59, reset_seconds: 0 },
+    { allowed: true, remaining: 59, reset_seconds: 61 },
+    { allowed: true, remaining: 59, reset_seconds: 1.5 },
+  ]) {
+    const error = await assertRejects(
+      () => checkRateLimit(limiterClient(bad), RECORD, "C"),
+      PartnerAuthError,
+    );
+    assertEquals(error.code, "limiter_unavailable");
+    assertEquals(error.status, 503);
+  }
 });
