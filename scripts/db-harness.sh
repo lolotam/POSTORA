@@ -128,6 +128,17 @@ if [ -z "$DB_URL" ]; then
   DB_URL='postgres://user:pass@host:5432/postgres' bash scripts/db-harness.sh
   or:  bash scripts/db-harness.sh 'postgres://user:pass@host:5432/postgres'"
 fi
+# HARNESS_DB_NAME is interpolated into DROP DATABASE / CREATE DATABASE. It is
+# an environment variable, so it is untrusted input to a destructive statement:
+# without this it accepts quotes and semicolons and becomes SQL injection with
+# DROP privileges. A plain lowercase identifier is all a throwaway database
+# ever needs.
+case "$HARNESS_DB_NAME" in
+  *[!a-z0-9_]*|"" )
+    fail 2 "REFUSING: HARNESS_DB_NAME='$HARNESS_DB_NAME' is not a plain identifier.
+  Allowed: lowercase letters, digits and underscore. This value is
+  interpolated into DROP DATABASE." ;;
+esac
 if prod_like "$HARNESS_DB_NAME"; then
   fail 2 "REFUSING: harness database name '$HARNESS_DB_NAME' looks production-like.
   This script drops and creates databases. Point it at a throwaway server."
@@ -143,6 +154,15 @@ case "$MAINT_DB" in
     fail 2 "REFUSING: could not parse a database name out of '$DB_URL'
   (got '$MAINT_DB', which still looks like host/user fragments). Name a
   maintenance database explicitly, e.g. .../postgres." ;;
+esac
+# Checked BEFORE libpq decodes it, so '/pr%6fduction' would slip past the
+# prod_like test below and connect to `production`. Rather than reimplement
+# percent-decoding in bash, refuse to reason about an encoded name at all.
+case "$MAINT_DB" in
+  *%*)
+    fail 2 "REFUSING: the database name in the connection string is
+  percent-encoded ('$MAINT_DB'). This script cannot safely tell what it
+  decodes to before connecting. Pass a plain database name." ;;
 esac
 if prod_like "$MAINT_DB"; then
   fail 2 "REFUSING: the connection string targets database '$MAINT_DB', which looks production-like."
@@ -174,7 +194,9 @@ if [ ! -f "$BASELINE" ]; then
   It is generated from production and committed — see supabase/tests/README.md,
   'Regenerating the baseline'. Nothing runs without it."
 fi
-MARKER="$(sed -n '1s/^-- BASELINE_MIGRATION: \(.*\.sql\)[[:space:]]*$/\1/p' "$BASELINE")"
+# The marker line carries two fields; the count is parsed separately below.
+#   -- BASELINE_MIGRATION: <file>.sql  BASELINE_COUNT: <n>
+MARKER="$(sed -n '1s/^-- BASELINE_MIGRATION: \([^ ]*\.sql\).*$/\1/p' "$BASELINE")"
 if [ -z "$MARKER" ]; then
   fail 2 "baseline $BASELINE is missing its marker: the FIRST line must be
   -- BASELINE_MIGRATION: <newest migration filename included in the dump>.sql
@@ -204,8 +226,16 @@ STEP="create harness database"
 psql "${PSQL_COMMON[@]}" "$DB_URL" -q -c "drop database if exists \"$HARNESS_DB_NAME\" with (force)"
 psql "${PSQL_COMMON[@]}" "$DB_URL" -q -c "create database \"$HARNESS_DB_NAME\""
 HARNESS_URL="$(harness_url)"
+# HARNESS_URL carries whatever credentials DB_URL carried. It must never be
+# echoed: CI logs are retained and frequently public, and the documented local
+# interface takes an arbitrary connection string. Everything user-facing uses
+# this redacted form instead.
+redacted_url() {
+  # strip any user[:password]@ between the scheme and the host
+  printf '%s' "$HARNESS_URL" | sed -E 's#(://)[^/@]*@#\1***@#'
+}
 GOT_DB="$(psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -Atqc "select current_database()" 2>/dev/null)" \
-  || fail 2 "could not connect to the harness database via '$HARNESS_URL'
+  || fail 2 "could not connect to the harness database via '$(redacted_url)'
   (check the URL rewrite if your connection string is unusual)"
 [ "$GOT_DB" = "$HARNESS_DB_NAME" ] || fail 2 "REFUSING: after rewriting the URL for the harness database, psql reports current_database() = '$GOT_DB', expected '$HARNESS_DB_NAME'. The connection string shape is not understood — refusing rather than running further steps against the wrong database."
 
@@ -371,12 +401,46 @@ for f in "${ALL_MIGRATIONS[@]}"; do
     NEW_MIGRATIONS+=("$f")
   fi
 done
+# THE SILENT-SKIP GUARD.
+#
+# "Strictly newer than the marker" is only safe if the set of migrations at or
+# below the marker is exactly the set the dump was taken from. Two ways that
+# stops being true, both of which skip a migration WITHOUT failing:
+#
+#   * someone adds a migration with a timestamp at or below the marker -- a
+#     backdated file, a rebased branch, a hand-edited name. It sorts into the
+#     "already in the dump" bucket and is never applied here, and never proven
+#     anywhere.
+#   * someone regenerates the baseline and forgets to move the marker (or
+#     moves the marker and forgets to regenerate), so the counts drift apart.
+#
+# The marker line therefore also carries the COUNT of migrations the dump
+# contains, and that count is asserted against what is on disk. A mismatch is
+# a loud failure naming both numbers. This is the difference between a harness
+# that skips work and one that says so.
+BASELINE_COUNT="$(sed -n '1s/.*BASELINE_COUNT: \([0-9][0-9]*\).*/\1/p' "$BASELINE")"
+IN_BASELINE=$((TOTAL - ${#NEW_MIGRATIONS[@]}))
+if [ -z "$BASELINE_COUNT" ]; then
+  fail 2 "the baseline's first line carries no BASELINE_COUNT.
+  Expected:  -- BASELINE_MIGRATION: <file>.sql  BASELINE_COUNT: <n>
+  Without the count, a migration added at or below the marker would be
+  silently skipped. Regenerate per supabase/tests/README.md."
+fi
+if [ "$IN_BASELINE" != "$BASELINE_COUNT" ]; then
+  fail 2 "BASELINE DRIFT: the dump says it contains $BASELINE_COUNT migrations,
+  but $IN_BASELINE files on disk sort at or below the marker '$MARKER'.
+  Something was added at or below the marker, or the baseline and its marker
+  were regenerated out of step. Refusing to run, because the difference would
+  otherwise be migrations nobody tests. See supabase/tests/README.md."
+fi
+
 echo "db-harness: baseline marker        : $MARKER"
-echo "db-harness: migrations in baseline : $((TOTAL - ${#NEW_MIGRATIONS[@]})) (skipped — already in the dump)"
+echo "db-harness: migrations in baseline : $IN_BASELINE (skipped — already in the dump, count verified)"
 echo "db-harness: migrations to apply    : ${#NEW_MIGRATIONS[@]}"
 
 ERR="$(mktemp)"
-trap 'rm -f "$ERR"' EXIT
+OUT="$(mktemp)"   # suite stdout: the TAP stream is parsed, not just discarded
+trap 'rm -f "$ERR" "$OUT"' EXIT
 n=0
 for f in "${NEW_MIGRATIONS[@]}"; do
   n=$((n + 1))
@@ -405,17 +469,47 @@ psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c \
   "insert into auth.users (id, email) values ('$SEED_USER_ID', '$SEED_USER_EMAIL') on conflict do nothing"
 
 # --- 7. suites ----------------------------------------------------------------
+#
+# TWO SEPARATE FAILURE SIGNALS, and psql only reports one of them.
+#
+#   * A SQL error aborts psql and exits non-zero. That is what `if ! psql`
+#     catches, and it is all it catches.
+#   * A pgTAP assertion failure is not an error. `select is(1, 2, '...')`
+#     succeeds as a query and prints `not ok 3 - ...`. psql exits 0.
+#
+# So the exit status alone gates the SQL-error signal and is blind to the
+# assertion signal. Verified by mutation on 2026-08-30: injecting a failing
+# assertion into whatsapp_workspace_crm.sql produced HARNESS_EXIT=0 and the
+# message "4 suites passed". Both pgTAP suites were gating nothing.
+#
+# The TAP stream is therefore parsed as well. Three things fail a suite:
+#   `not ok`                    an assertion failed
+#   `# Looks like you failed`   pgTAP's own summary
+#   `# Looks like you planned`  the count ran short - a suite that dies
+#                               half-way through still exits 0 otherwise
+#
+# stdout is captured rather than streamed so it can be inspected. It is
+# echoed back on failure, so a red run still shows its output.
 for s in "${SUITES[@]}"; do
   STEP="suite $s"
   echo "db-harness: running suite $s"
-  if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -f "$TESTS_DIR/$s" 2>"$ERR"; then
+  if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -f "$TESTS_DIR/$s" >"$OUT" 2>"$ERR"; then
     echo "" >&2
-    echo "db-harness: SUITE FAILED: $s" >&2
+    echo "db-harness: SUITE FAILED (sql error): $s" >&2
     sed 's/^/  /' "$ERR" >&2
+    exit 1
+  fi
+
+  if grep -qE '^[[:space:]]*not ok|# Looks like you (failed|planned)' "$OUT"; then
+    echo "" >&2
+    echo "db-harness: SUITE FAILED (assertion): $s" >&2
+    echo "  psql exited 0 - a pgTAP assertion failure is not a SQL error." >&2
+    grep -nE '^[[:space:]]*not ok|# Looks like you (failed|planned)' "$OUT" \
+      | sed 's/^/  /' >&2
     exit 1
   fi
 done
 
 echo "db-harness: race fixture partner_api_race_fixture.sql intentionally NOT applied (manual concurrency rehearsal; see supabase/tests/README.md)"
 echo "db-harness: OK — baseline ($MARKER) + ${#NEW_MIGRATIONS[@]} newer migrations + ${#SUITES[@]} suites passed"
-echo "db-harness: harness database left in place for inspection: $HARNESS_URL"
+echo "db-harness: harness database left in place for inspection: $(redacted_url)"

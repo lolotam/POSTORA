@@ -117,13 +117,29 @@ jobs:
       - name: Install psql client
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
 
+      # Two things this loop learned the hard way on a real runner:
+      #
+      #   * 120s was not enough. This image runs its own init migrations on
+      #     first boot, and on a cold runner (image pull + initdb + those
+      #     migrations) it ran past the old 60x2s budget -- the failing job's
+      #     log ended on "PostgreSQL init process complete; ready for start
+      #     up", i.e. it became ready moments after we gave up. 5 minutes.
+      #
+      #   * pg_isready is the wrong probe. The entrypoint runs a TEMPORARY
+      #     server during init, so a readiness check can pass against a
+      #     server that is about to be shut down and restarted. Probing with
+      #     a real query over TCP, as the harness itself connects, is what
+      #     actually indicates the final server is up.
       - name: Wait for Postgres
         run: |
-          for _ in $(seq 1 60); do
-            pg_isready -h localhost -p 5432 -U supabase_admin && exit 0
+          for _ in $(seq 1 150); do
+            if psql "postgres://supabase_admin@localhost:5432/postgres"                  -Atqc 'select 1' >/dev/null 2>&1; then
+              echo "postgres accepted a real query"
+              exit 0
+            fi
             sleep 2
           done
-          echo "postgres never became ready" >&2
+          echo "postgres never became ready within 300s" >&2
           docker logs pg-harness
           exit 1
 
