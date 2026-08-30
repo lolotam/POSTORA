@@ -7,6 +7,7 @@ import {
   useAutomationHandlers,
   type CommentAutomationHandler,
   type MessageAutomationHandler,
+  type MediaUnderstandingMode,
 } from "@/hooks/useAutomationHandlers";
 
 interface AutomationHandlerCardProps {
@@ -28,6 +29,17 @@ const MESSAGE_OPTIONS: HandlerOption[] = [
   { value: "off", label: "Off (Disabled)" },
   { value: "internal", label: "Postora AI Agent" },
   { value: "n8n", label: "n8n Workflow" },
+];
+
+// Voice notes, photos and PDFs a customer sends are only read when this is on. It
+// costs money per inbound item, so "off" is the default and the labels say what
+// each level actually spends on. Until this existed the mode could only be set by
+// editing account_metadata by hand, and a QR re-pair silently lost it.
+const MEDIA_UNDERSTANDING_OPTIONS: HandlerOption[] = [
+  { value: "off", label: "Off — media is not read" },
+  { value: "audio", label: "Voice notes only" },
+  { value: "audio+image", label: "Voice notes and images" },
+  { value: "audio+image+document", label: "Voice notes, images and documents" },
 ];
 
 const COMMENT_OPTIONS: HandlerOption[] = [
@@ -121,6 +133,15 @@ export function AutomationHandlerCard({
             onChange={(value) => saveHandlers({ comment_automation_handler: value as CommentAutomationHandler })}
           />
         )}
+
+        <HandlerRow
+          label="Understand media"
+          testId="media-understanding"
+          value={handlers?.media_understanding ?? "off"}
+          options={MEDIA_UNDERSTANDING_OPTIONS}
+          disabled={busy}
+          onChange={(value) => saveHandlers({ media_understanding: value as MediaUnderstandingMode })}
+        />
 
         {platform === "whatsapp" ? (
           // WhatsApp routes each inbound message to exactly one handler: on "Postora AI Agent"
