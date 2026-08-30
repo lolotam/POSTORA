@@ -6,12 +6,20 @@
 --   public.partner_api_key_accounts  (20260830120000_partner_api_key_accounts.sql)
 --   public.partner_audit_logs        (20260830120100_partner_audit_logs.sql)
 --
+-- Lives beside supabase/tests/partner_api_test.sql, the existing partner API
+-- database suite. It does NOT use that file's assert_eq helper or its outer
+-- BEGIN/ROLLBACK: assert_eq cannot express "this write must be REFUSED", and a
+-- single enclosing transaction would abort at the first expected failure. Each
+-- assertion therefore carries its own BEGIN/EXCEPTION block and the script
+-- cleans up explicitly instead of rolling back -- the same reason
+-- partner_api_race_fixture.sql is kept separate from the rolling-back suite.
+--
 -- Run with psql AS A SUPERUSER (supabase_admin / postgres) against a
 -- THROWAWAY database that already has every migration applied. NEVER run it
 -- against production: it writes rows.
 --
 --   psql "$THROWAWAY_URL" -v ON_ERROR_STOP=1 \
---     -f supabase/migrations/tests/partner_api_tenancy_negative.sql
+--     -f supabase/tests/partner_api_tenancy_negative.sql
 --
 -- How it proves things:
 --   * Seeds two workspaces (A and B), each with its own auth user, social
