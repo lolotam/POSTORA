@@ -11,6 +11,7 @@ import {
 } from "./aiConfigScope.ts";
 import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
+import { blankedFields } from "./configBlanking.ts";
 import {
   conversationIdsForFilter,
   keysetOrFilter,
@@ -534,6 +535,31 @@ function isAiAgentPlatform(value: unknown): value is string {
         : await resolveConfigWriteAccount(adminClient, user.id, platform);
       if ("error" in writeScope) {
         return jsonResponse({ error: writeScope.error }, 400);
+      }
+      // A write that empties a stored persona or business profile must say it
+      // means to. On 2026-08-30 the settings form submitted its blank defaults
+      // over a live persona twice, four minutes apart, with every client-side
+      // guard satisfied -- so this refusal cannot depend on the client being
+      // correct. It sits after writeScope because it reads THAT account's stored
+      // config; earlier it would compare against the wrong row or against
+      // nothing. loadAgentConfigForAccount throws rather than returning null on a
+      // read error, which is the right failure here: a save that cannot read what
+      // is stored cannot know whether it destroys it.
+      if (body.confirm_clear !== true) {
+        const existing = await loadAgentConfigForAccount(adminClient, {
+          userId: user.id,
+          platform,
+          accountId: writeScope.accountId,
+        });
+        const blanked = blankedFields(updates, existing);
+        if (blanked.length > 0) {
+          return jsonResponse({
+            error:
+              `Refusing to clear ${blanked.join(" and ")} for this account. ` +
+              `Re-send with confirm_clear to erase it deliberately.`,
+            blanked_fields: blanked,
+          }, 409);
+        }
       }
       // The row decision lives in aiConfigScope so the row it writes can be
       // asserted directly: while UNIQUE (user_id, platform) stands it updates
