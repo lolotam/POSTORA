@@ -89,6 +89,55 @@ jobs:
           --no-check --node-modules-dir=auto
           supabase/functions/
 
+  db-harness:
+    name: Postgres integration harness
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Started with `docker run` instead of a `services:` block on purpose:
+      # the harness must be able to test migrations that schedule pg_cron
+      # jobs, and pg_cron refuses CREATE EXTENSION in any database except
+      # the one named by cron.database_name — a postmaster-level setting
+      # that can only be set on the server command line at start. GitHub
+      # Actions service containers cannot pass a container command, so
+      # these flags are impossible to express there. The pinned image is
+      # the one this harness was validated against (pg_cron, pg_net,
+      # vector, pgcrypto and pgTAP binaries all present).
+      - name: Start supabase/postgres container
+        run: >-
+          docker run -d --name pg-harness -p 5432:5432
+          -e POSTGRES_PASSWORD=postgres
+          supabase/postgres:17.6.1.158
+          -c cron.database_name=partner_api_harness
+          -c shared_preload_libraries=pg_cron,pg_net
+
+      - name: Install psql client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Wait for Postgres
+        run: |
+          for _ in $(seq 1 60); do
+            pg_isready -h localhost -p 5432 -U supabase_admin && exit 0
+            sleep 2
+          done
+          echo "postgres never became ready" >&2
+          docker logs pg-harness
+          exit 1
+
+      # Connect as supabase_admin, not `postgres`: in this image `postgres`
+      # is deliberately not a superuser and gets "permission denied for
+      # schema auth" the moment the suites touch auth.users. supabase_admin
+      # is the bootstrap superuser and owns the platform schemas.
+      - name: Run database harness
+        run: >-
+          bash scripts/db-harness.sh
+          'postgres://supabase_admin:postgres@localhost:5432/postgres'
+        env:
+          HARNESS_DB_NAME: partner_api_harness
+
   build:
     runs-on: ubuntu-latest
     needs: test
