@@ -160,6 +160,14 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
       const previous = baselineRef.current;
       if (!config || !previous) return;
       const refreshed = toFormValues(config);
+      // A read that brought nothing new must do NOTHING. Both setters below
+      // produce fresh objects, so an unconditional merge re-renders, and any
+      // caller whose `config` identity changes per render then re-enters this
+      // effect forever. React Query's structural sharing happens to keep that
+      // identity stable for equal data, but termination must not depend on an
+      // upstream optimisation -- it hung a CI run for two hours before this
+      // guard existed.
+      if (JSON.stringify(refreshed) === JSON.stringify(previous)) return;
       setForm((current) => mergeUntouchedFields(current, previous, refreshed));
       setBaseline(refreshed);
       return;

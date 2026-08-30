@@ -133,4 +133,25 @@ describe("AiAgentManager blank-save regression", () => {
       expect.anything(),
     );
   });
+  it("does nothing when a repeat read brings no new values", () => {
+    // Idempotence, and it is not cosmetic. Both setters build fresh objects, so
+    // an unconditional merge re-renders; the mock above spreads `config` on every
+    // render, so without the equality guard this effect re-enters itself forever.
+    // That loop hung a CI job for two hours. The mock deliberately keeps the
+    // per-render identity change rather than hiding it.
+    configValue = { persona_instructions: "Stable", business_profile_text: "Stable profile" };
+    const { rerender } = render(<AiAgentManager platform="facebook" />);
+
+    for (let i = 0; i < 5; i += 1) rerender(<AiAgentManager platform="facebook" />);
+
+    expect(persona().value).toBe("Stable");
+    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    expect(upsertConfig.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        persona_instructions: "Stable",
+        business_profile_text: "Stable profile",
+      }),
+      expect.anything(),
+    );
+  });
 });
