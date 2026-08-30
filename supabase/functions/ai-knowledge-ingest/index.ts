@@ -9,6 +9,7 @@ import {
   rowToText,
   type KnowledgeChunk,
 } from "./chunking.ts";
+import { extractImageText, parseSourceFile } from "./parsing.ts";
 import {
   normalizeGraphExtraction,
   type GraphEntity,
@@ -207,6 +208,14 @@ async function storeChunkGraph(
 // and run a small worker pool. Without this a large source fires dozens of
 // sequential 25s calls and the edge isolate is killed mid-request (opaque 500)
 // even though the source was already marked "ready".
+// How many chunks the inline path will embed before handing the source to the
+// queue worker instead. Bounded by chunk count rather than bytes because chunks
+// are what the embedding calls are billed and timed by: a 14KB markdown made 10
+// chunks and finished, a 65KB one exceeded the ~60s edge ceiling and was killed
+// with its row stranded in `processing`. Small files keep the fast inline path
+// and immediate feedback; anything larger goes somewhere it can be resumed.
+const MAX_INLINE_CHUNKS = 25;
+
 const MAX_GRAPH_CHUNKS = 50;
 const GRAPH_CONCURRENCY = 3;
 
@@ -489,111 +498,6 @@ async function logKnowledgeEvent(
   if (error) console.error("[ai-knowledge-ingest] Failed to write system log:", error.message);
 }
 
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const step = 0x8000;
-  for (let index = 0; index < bytes.length; index += step) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + step));
-  }
-  return btoa(binary);
-}
-
-const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-};
-
-// Images become text via a vision model: menus, price lists, and product
-// photos get described/transcribed so they are searchable like any document.
-// Image OCR runs on Gemini (OpenAI billing is exhausted). Uses the same
-// OpenAI-compatible chat endpoint as ai-agent-reply, with a multimodal model.
-const VISION_ENDPOINT =
-  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const VISION_MODEL = "gemini-2.5-flash";
-
-async function extractImageText(bytes: Uint8Array, fileName: string): Promise<string> {
-  const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
-  if (!key)
-    throw new Error("GOOGLE_AI_STUDIO_KEY is not configured; knowledge cannot be indexed.");
-  const extension = fileName.split(".").pop()?.toLowerCase() || "";
-  const mime = IMAGE_MIME_BY_EXTENSION[extension];
-  if (!mime) throw new Error(`Unsupported image type: .${extension}`);
-  const response = await fetch(VISION_ENDPOINT, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: VISION_MODEL,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Extract ALL business-relevant information from this image (product names, prices, descriptions, policies, contact details, menu items). Transcribe visible text verbatim. Output plain text only.",
-            },
-            {
-              type: "image_url",
-              image_url: { url: `data:${mime};base64,${toBase64(bytes)}` },
-            },
-          ],
-        },
-      ],
-      max_tokens: 1500,
-    }),
-  });
-  const data = await response.json();
-  if (!response.ok)
-    throw new Error(data?.error?.message || "Image extraction failed");
-  const text = (data.choices?.[0]?.message?.content || "").trim();
-  if (!text) throw new Error("No text could be extracted from the image");
-  return text;
-}
-
-async function parseSourceFile(
-  sourceType: string,
-  fileName: string,
-  file: Blob,
-): Promise<KnowledgeChunk[]> {
-  if (sourceType === "csv" || sourceType === "excel") {
-    const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-    const rows: Array<{ text: string; sheet: string; row: number }> = [];
-    for (const sheet of workbook.SheetNames) {
-      XLSX.utils
-        .sheet_to_json<Record<string, unknown>>(workbook.Sheets[sheet], {
-          defval: "",
-        })
-        .forEach((row, index) =>
-          rows.push({ text: rowToText(row), sheet, row: index + 2 }),
-        );
-    }
-    return chunkRows(rows);
-  }
-  if (sourceType === "pdf") {
-    const pdf = await getDocumentProxy(new Uint8Array(await file.arrayBuffer()));
-    const { text } = await extractText(pdf, { mergePages: true });
-    if (!text?.trim())
-      throw new Error("No extractable text found in the PDF (scanned PDFs are not supported yet)");
-    return chunkProfileText(text);
-  }
-  if (sourceType === "doc") {
-    const text = (await file.text()).trim();
-    if (!text) throw new Error("The document is empty");
-    return chunkProfileText(text);
-  }
-  if (sourceType === "image") {
-    const text = await extractImageText(
-      new Uint8Array(await file.arrayBuffer()),
-      fileName,
-    );
-    return chunkProfileText(text);
-  }
-  throw new Error(`Source type not supported: ${sourceType}`);
-}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return handleCorsOptions();
@@ -774,6 +678,24 @@ Deno.serve(async (req) => {
           source.file_name || source.file_path,
           file,
         );
+        // Parsing is cheap; embedding is what runs out of time. Once the chunk
+        // count says this cannot finish inline, hand it to the queue worker
+        // rather than starting work that will be killed halfway. chunk_count is
+        // zeroed so the worker starts from a clean checkpoint.
+        if (chunks.length > MAX_INLINE_CHUNKS) {
+          const { error: queueError } = await (admin as any)
+            .from("ai_knowledge_sources")
+            .update({ status: "pending", chunk_count: 0, error: null })
+            .eq("id", source.id);
+          if (queueError) throw queueError;
+          await logKnowledgeEvent(admin, user.id, "queue_large_source", true, {
+            source_id: source.id,
+            source_type: source.source_type,
+            file_name: source.file_name,
+            chunk_count: chunks.length,
+          });
+          return jsonResponse({ ok: true, queued: true, chunks: chunks.length }, 202);
+        }
         const storedChunks = await replaceChunks(admin, source.id, user.id, chunks);
         await (admin as any)
           .from("ai_knowledge_sources")
