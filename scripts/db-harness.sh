@@ -116,9 +116,21 @@ fail() {  # fail <exit-code> <message-lines...>
 }
 
 # --- 0. safety: never touch anything that smells like production -----------
+
+# Defined here, above the first failure path, because two early exits used to
+# interpolate the raw DB_URL and leaked its password. A redactor that only
+# exists further down protects only the exits below it.
+redact() {  # redact <url>  -> strips user[:password]@ between scheme and host
+  printf '%s' "$1" | sed -E 's#(://)[^/@]*@#\1***@#'
+}
+
 prod_like() {
+  # Lowercased first: '/Production' and '/LIVE' are the same danger as
+  # '/production', and a case-sensitive guard waves them through.
+  local n
+  n="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   # '*production*' needs no case of its own: '*prod*' already covers it.
-  case "$1" in
+  case "$n" in
     *prod*|*live*|*primary*) return 0 ;;
     *) return 1 ;;
   esac
@@ -145,13 +157,13 @@ if prod_like "$HARNESS_DB_NAME"; then
 fi
 MAINT_DB="$(printf '%s' "$DB_URL" | sed -nE 's#.*/([^/?]+)(\?.*)?$#\1#p')"
 if [ -z "$MAINT_DB" ]; then
-  fail 2 "REFUSING: the connection string names no database (got '$DB_URL').
+  fail 2 "REFUSING: the connection string names no database (got '$(redact "$DB_URL")').
   Name a maintenance database explicitly, e.g. .../postgres — the harness
   creates '$HARNESS_DB_NAME' itself."
 fi
 case "$MAINT_DB" in
   *[@:]*)
-    fail 2 "REFUSING: could not parse a database name out of '$DB_URL'
+    fail 2 "REFUSING: could not parse a database name out of '$(redact "$DB_URL")'
   (got '$MAINT_DB', which still looks like host/user fragments). Name a
   maintenance database explicitly, e.g. .../postgres." ;;
 esac
@@ -418,13 +430,38 @@ done
 # contains, and that count is asserted against what is on disk. A mismatch is
 # a loud failure naming both numbers. This is the difference between a harness
 # that skips work and one that says so.
-BASELINE_COUNT="$(sed -n '1s/.*BASELINE_COUNT: \([0-9][0-9]*\).*/\1/p' "$BASELINE")"
+# Anchored, whole-field: `BASELINE_COUNT: 253junk` must not read as 253.
+BASELINE_COUNT="$(sed -n '1s/.*BASELINE_COUNT: \([0-9][0-9]*\)\([^0-9].*\)\{0,1\}$/\1/p' "$BASELINE")"
+BASELINE_SUM="$(sed -n '1s/.*BASELINE_SUM: \([0-9a-f]\{64\}\).*/\1/p' "$BASELINE")"
 IN_BASELINE=$((TOTAL - ${#NEW_MIGRATIONS[@]}))
 if [ -z "$BASELINE_COUNT" ]; then
   fail 2 "the baseline's first line carries no BASELINE_COUNT.
   Expected:  -- BASELINE_MIGRATION: <file>.sql  BASELINE_COUNT: <n>
   Without the count, a migration added at or below the marker would be
   silently skipped. Regenerate per supabase/tests/README.md."
+fi
+# The count binds the marker to a NUMBER of files, which a swap defeats:
+# delete one historical migration, add another below the marker, and the count
+# is unchanged. The checksum binds it to the exact SET of filenames the dump was
+# taken from, so a rename, a swap or a deletion all fail here.
+#
+# What neither catches: regenerating the dump against a newer database while
+# keeping the old marker -- nothing inside a schema dump names the last
+# migration applied to it. That is why regeneration is a script
+# (scripts/regenerate-baseline.sh) that writes dump, marker, count and checksum
+# in one step: drift then needs a deliberate hand-edit, not a forgotten step.
+if [ -n "$BASELINE_SUM" ]; then
+  ACTUAL_SUM="$(printf '%s\n' "${ALL_MIGRATIONS[@]}" \
+    | awk -v m="$MARKER" '$0 <= m' | sha256sum | cut -d' ' -f1)"
+  if [ "$ACTUAL_SUM" != "$BASELINE_SUM" ]; then
+    fail 2 "BASELINE DRIFT: the migrations at or below the marker are not the
+  set the dump was taken from.
+    expected $BASELINE_SUM
+    actual   $ACTUAL_SUM
+  Something was renamed, replaced or removed at or below '$MARKER'. A swap
+  leaves the count identical, which is why this checksum exists. Regenerate
+  with scripts/regenerate-baseline.sh (see supabase/tests/README.md)."
+  fi
 fi
 if [ "$IN_BASELINE" != "$BASELINE_COUNT" ]; then
   fail 2 "BASELINE DRIFT: the dump says it contains $BASELINE_COUNT migrations,
@@ -440,7 +477,8 @@ echo "db-harness: migrations to apply    : ${#NEW_MIGRATIONS[@]}"
 
 ERR="$(mktemp)"
 OUT="$(mktemp)"   # suite stdout: the TAP stream is parsed, not just discarded
-trap 'rm -f "$ERR" "$OUT"' EXIT
+BOTH="$(mktemp)"  # stdout+stderr: NOTICE-based suites report on stderr
+trap 'rm -f "$ERR" "$OUT" "$BOTH"' EXIT
 n=0
 for f in "${NEW_MIGRATIONS[@]}"; do
   n=$((n + 1))
@@ -500,12 +538,50 @@ for s in "${SUITES[@]}"; do
     exit 1
   fi
 
-  if grep -qE '^[[:space:]]*not ok|# Looks like you (failed|planned)' "$OUT"; then
+  # THREE WAYS TO READ THIS OUTPUT WRONG, all of them tried:
+  #
+  #   false green - an empty or comments-only suite emits nothing, matches no
+  #     failure pattern, and gets counted among "4 suites passed". So a suite
+  #     must produce POSITIVE evidence it ran: at least one `ok` line (TAP) or
+  #     the non-TAP suites' own PASS/ALL CHECKS sentinel.
+  #   false red - `not ok ... # TODO` is valid TAP for an expected failure and
+  #     a real TAP consumer treats it as passing. Excluded.
+  #   false red - the "Looks like you ..." diagnostics were matched
+  #     unanchored, so a test whose NAME contains that phrase failed the run.
+  #     Anchored to the start of the line, where TAP puts diagnostics.
+  #
+  # A `not ok` whose test NAME merely contains "not ok" is fine either way:
+  # the anchor means only a real result line at column 0 counts.
+  cat "$OUT" "$ERR" > "$BOTH"
+  if grep -qE '^[[:space:]]*not ok' "$BOTH"      && ! grep -E '^[[:space:]]*not ok' "$BOTH" | grep -qvE '#[[:space:]]*TODO'; then
+    : # every failing assertion is an expected (TODO) failure - not a failure
+  elif grep -qE '^[[:space:]]*not ok' "$BOTH"        || grep -qE '^# Looks like you (failed|planned)' "$BOTH"; then
     echo "" >&2
     echo "db-harness: SUITE FAILED (assertion): $s" >&2
     echo "  psql exited 0 - a pgTAP assertion failure is not a SQL error." >&2
-    grep -nE '^[[:space:]]*not ok|# Looks like you (failed|planned)' "$OUT" \
-      | sed 's/^/  /' >&2
+    grep -nE '^[[:space:]]*not ok|^# Looks like you (failed|planned)' "$OUT"       | sed 's/^/  /' >&2
+    exit 1
+  fi
+
+  # Positive evidence. Without this a suite that silently did nothing -- an
+  # empty file, a file whose body was commented out, a transaction that rolled
+  # back before any assertion -- is indistinguishable from one that passed.
+  # BOTH streams. pgTAP writes its TAP to stdout, but the NOTICE-based suites
+  # report through RAISE NOTICE, which psql sends to STDERR -- so a check that
+  # reads only stdout sees no evidence from them and fails a passing suite.
+  # (It did, the first time: partner_api_test.sql emits `ok - <label>` as a
+  # NOTICE and was reported as PROVED NOTHING.)
+  #
+  # The NOTICE form is NOT anchored to the start of the line, because psql
+  # prefixes it: `psql:/path/suite.sql:42: NOTICE:  ok - <label>`. Anchoring
+  # it found nothing and failed a passing suite. TAP's own `ok` IS anchored,
+  # so a test whose description contains the word stays harmless.
+  if ! grep -qE '^[[:space:]]*ok([[:space:]]|$)|NOTICE:[[:space:]]*ok[[:space:]-]|PASS:|ALL CHECKS PASSED' "$BOTH"; then
+    echo "" >&2
+    echo "db-harness: SUITE PROVED NOTHING: $s" >&2
+    echo "  It exited 0 but emitted no passing assertion and no completion" >&2
+    echo "  sentinel. An empty or fully-commented suite looks identical to a" >&2
+    echo "  passing one unless this is checked." >&2
     exit 1
   fi
 done

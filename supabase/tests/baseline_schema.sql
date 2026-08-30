@@ -1,4 +1,4 @@
--- BASELINE_MIGRATION: 20260830120300_partner_api_least_privilege_grants.sql  BASELINE_COUNT: 253
+-- BASELINE_MIGRATION: 20260830120300_partner_api_least_privilege_grants.sql  BASELINE_COUNT: 253  BASELINE_SUM: ea89a29a869cbbf071eafda114845ee79312d224eabb20c4609560c91ef78faf
 --
 -- PostgreSQL database dump
 --

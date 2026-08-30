@@ -70,24 +70,34 @@ above the marker is silently considered part of the baseline.
 
 ### Regenerating the baseline
 
-When you want future runs to stop re-proving old migrations (do this
-whenever you like — after a batch of migrations has settled):
+Run the script. Do not hand-write the header.
 
 ```bash
-{ printf -- '-- BASELINE_MIGRATION: <newest migration filename>\n'
-  pg_dump --schema-only --no-owner \
-    --schema=public --schema=auth --schema=storage --schema=realtime \
-    "$PRODUCTION_URL"
-} > supabase/tests/baseline_schema.sql
+PRODUCTION_URL='postgres://user:pass@host:5432/postgres'   bash scripts/regenerate-baseline.sh
 ```
 
-Then commit the new baseline **together with** its new marker line — a
-marker left behind while the dump moves forward would re-apply old
-migrations onto an already-updated schema. Do not add `--no-privileges`
-(the tenancy suite asserts the production GRANT surface) and do not include
-the `extensions` schema (the harness creates extensions itself; a
-schema-filtered dump recreates every schema it carries, which would
-collide).
+Then commit the new baseline **together with the migrations it now includes**.
+
+The first line binds three facts: which migration the dump goes up to
+(`BASELINE_MIGRATION`), how many migrations that is (`BASELINE_COUNT`), and a
+checksum of their exact filenames (`BASELINE_SUM`). The harness verifies the
+last two on every run — a rename, a swap or a deletion at or below the marker
+fails loudly, and so does a backdated migration, which the count alone would
+miss and the checksum catches.
+
+It cannot verify the first, and that is the reason this is a script rather
+than a documented `pg_dump` line: **nothing inside a schema dump records the
+last migration applied to the database it came from.** A dump regenerated
+against a newer database while keeping an older marker would silently re-apply
+migrations already in it. Writing all three fields from the same inputs, in one
+step, makes that require a deliberate hand-edit rather than a forgotten one.
+
+The script also refuses to overwrite the baseline with a truncated dump, and
+re-scans for credentials before writing.
+
+You do **not** need to regenerate merely because you added a migration — the
+harness applies anything newer than the marker on top. Regenerate when you want
+future runs to stop re-proving a settled batch.
 
 ## The limitation — read this
 
