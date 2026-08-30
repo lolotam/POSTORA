@@ -69,9 +69,23 @@ const accountId = selectedAccountId && accounts.some((a) => a.id === selectedAcc
 ```
 
 so it can change without any user action — `useSocialAccounts` refetching on window focus
-is enough to re-run the effect if the selected id transiently drops out of the list. The
-user pasted the same 1402-character persona into four platforms in eleven minutes, which
-means repeated window switching, which means repeated focus refetches.
+is enough to re-run the effect if the selected id transiently drops out of the list.
+
+**What is proven, and what is not.** The writer and the blank payload are proven (§1.1).
+The *trigger* that emptied the form is not. Two candidates:
+
+- **Cross-tab cache invalidation — provable from code alone**, see §1.3. A Knowledge-tab
+  save invalidates the whole platform prefix, the Settings query refetches, `config`'s
+  identity changes, and the reset effect runs over the user's unsaved edits.
+- **`accountId` flipping under a focus refetch** — plausible but *unreproduced*. React
+  Query's structural sharing keeps `data` reference-stable when a refetch returns identical
+  content, so this needs the selected id to transiently leave the list, which I have not
+  demonstrated.
+
+The fix in §8 therefore defends the **class** — any path that resets the form without the
+user asking — rather than one confirmed trigger. Tests in §8.1 simulate both. Saying which
+is which matters: a fix aimed at an unproven trigger is how you ship a patch that leaves the
+bug live.
 
 ### 1.3 `AiKnowledgeManager` is a second writer with weaker guards
 
@@ -202,7 +216,34 @@ checking them.
 ### 4.2 Uniqueness must move — and it is an expand/contract
 
 `UNIQUE (user_id, name)` prevents two accounts from each having a `woocommerce_store`.
-It becomes `UNIQUE (user_id, social_account_id, name)`.
+It becomes `UNIQUE (user_id, social_account_id, name) NULLS NOT DISTINCT`.
+
+**`NULLS NOT DISTINCT` is load-bearing, not decoration.** Postgres treats NULLs as distinct
+in a unique index by default, and `scope='all_accounts'` rows carry a NULL
+`social_account_id`. Verified on the production server (PostgreSQL 17.6):
+
+```
+CREATE UNIQUE INDEX t_u ON t (user_id, social_account_id, name);
+INSERT … (user, NULL, 'woo');  -- ×3
+→ duplicate_legacy_rows_allowed=3
+```
+
+Three identical legacy rows accepted. With `NULLS NOT DISTINCT` the second insert is
+rejected. Without it, PR-6 dropping `user_id,name` would leave legacy connectors with **no
+uniqueness at all**. `NULLS NOT DISTINCT` requires PG15+; this server is 17.6.
+
+**No `ON CONFLICT` against this index.** Even with `NULLS NOT DISTINCT`, `ON CONFLICT`
+inference over a nullable column is a trap worth refusing outright. `ai_upsert_tool` adopts
+the read-then-update-or-insert shape `writeAccountScopedConfig` already uses for configs —
+read the account's tools as a **list**, update the matching row or insert. That function
+exists because `maybeSingle()` turns the second row into an error the moment a platform has
+two; the same reasoning applies here the moment an account has two connectors.
+
+**The composite FK does not constrain legacy rows.** Foreign keys are `MATCH SIMPLE`: a row
+with a NULL `social_account_id` satisfies the constraint vacuously. So "structural on
+purpose" holds for `scope='account'` rows and *not* for `scope='all_accounts'` ones. Those
+are the two pre-existing production rows and no new ones are created, but the limit is real
+and is why `scope` is checked in the dispatcher too, not only in the schema.
 
 The old constraint is the `ON CONFLICT` target of the deployed `ai_upsert_tool`. Dropping
 it in the same migration that adds the columns breaks every connector save in the window
@@ -244,6 +285,36 @@ The split is the point:
 The existing `secret TEXT` column stays for `custom_rest`'s webhook secret and is migrated
 into Vault in PR-6. It is not dropped in this spec.
 
+#### Vault has no delete function — the lifecycle must supply one
+
+The installed API is `create_secret`, `update_secret`, and the `decrypted_secrets` view.
+**There is no `vault.delete_secret`.** Nothing reclaims a secret on its own, which produces
+two leaks the schema will not catch:
+
+1. **Connector delete.** `ai_delete_tool` must `DELETE FROM vault.secrets WHERE id = …`
+   under the service role, in the same transaction as the row, and must run *before* the row
+   is gone — once the row is deleted the secret id is unrecoverable and the secret is
+   orphaned forever.
+2. **Cascade delete.** `social_accounts … ON DELETE CASCADE` and the user-delete cascade
+   both remove `ai_agent_tools` rows *without* going through `ai_delete_tool`. A statement
+   trigger `AFTER DELETE ON ai_agent_tools` that deletes the corresponding
+   `vault.secrets` row is the only thing that covers this path. Disconnecting an account
+   would otherwise leave that store's live credentials encrypted-at-rest but undeleted, with
+   no row pointing at them.
+
+A trigger, not application code, because the cascade never calls application code.
+
+**Partial update.** `update_secret` replaces the whole secret. A form that submits only
+`consumer_secret` must therefore decrypt, merge, and re-encrypt — never write the single
+submitted field, which would silently drop `consumer_key`. This merge is the one place a
+credential is decrypted outside a vendor call, and it happens server-side inside the same
+request.
+
+**Never in a log or an error.** No adapter may include a credential in a thrown message, a
+`console.log`, an `ai_agent_logs` row, or a response body. Vendor errors are re-wrapped
+before they propagate: a WooCommerce 401 body can echo the request, and a 200-with-error
+body can too.
+
 **`ai_list_tools` must never return a decrypted value.** It returns `settings`,
 `configured_secret_fields`, and the existing `has_secret`. This is the same rule
 `ARCHITECTURE.md` §13 already states; it is restated because the temptation to round-trip a
@@ -280,9 +351,27 @@ They **must** be the same object.
 > required deliverable of PR-2 — not an optional extra.
 
 The registry lives at `supabase/functions/_shared/connectors/registry.ts` as pure data with
-no Deno APIs, and the frontend imports it through a path alias. If the alias proves
-impractical under Vite, the fallback is a generated file plus the contract test; the test is
-what makes either arrangement safe.
+**zero imports** — no Deno globals, no `https://` specifiers, no `Deno.env`. The frontend
+imports it directly.
+
+**This is verified, not assumed.** `tsconfig.app.json` sets `moduleResolution: "bundler"`
+and `allowImportingTsExtensions: true`, so Deno's mandatory `./x.ts` extensions resolve
+under Vite unchanged. `include: ["src"]` does not block a file reached by import, and there
+is a working precedent: `src/lib/__tests__/backupCodes.test.ts:6` already imports
+`../../../supabase/functions/_shared/backup-codes`. No alias and no build step are needed.
+
+**The pattern to avoid is the one this repo currently uses.** Four files —
+`src/hooks/ai-config/embeddingDimensions.ts`, `src/lib/higgsfieldJobPayload.ts`,
+`src/lib/higgsfieldModelSpecs.ts`, `src/lib/openinary.ts` — each duplicate a `_shared`
+twin and point at it in a comment. **Not one has a test asserting the two agree.** That is
+precisely the seam that let the MCP↔n8n-api field names drift until `upload_media` had never
+worked. The registry is imported, not mirrored.
+
+The contract test remains, because "imported today" is not "imported forever". It asserts,
+per connector id: the field-name set the UI renders equals the field-name set the server
+validates; every `secret: true` field is absent from `settings`; and every id in the DB
+CHECK constraint exists in the registry. That last assertion is what would have caught the
+four silently-downgraded types in §1.6.
 
 ### 5.2 Adapters
 
@@ -436,9 +525,19 @@ Three changes; the first is the one that matters.
 ### 8.2 Data repair
 
 The Facebook page `الطملاوي…` has `is_enabled=false` and an empty persona. **No migration
-will restore it — the text was never transmitted and does not exist anywhere.** The user
-re-enters it after the fix ships. Stated plainly because a spec that implies recovery is
-worse than one that admits the loss.
+will restore it — the text was never transmitted and does not exist anywhere.** Stated
+plainly because a spec that implies recovery is worse than one that admits the loss.
+
+The user does **not** have to wait for PR-1 to fix it. Three of the four saves that morning
+landed correctly, so the workflow works; re-enter the persona, enable the agent, and confirm
+the row. What PR-1 buys is that the next one cannot silently fail the same way. A repair
+check afterwards:
+
+```sql
+SELECT a.platform_username, length(c.persona_instructions), c.is_enabled
+FROM ai_agent_configs c JOIN social_accounts a ON a.id = c.social_account_id
+WHERE c.user_id = :uid AND c.platform = 'facebook';
+```
 
 ---
 
