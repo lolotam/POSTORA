@@ -89,17 +89,29 @@ export function useAiAgentConfig(platform: AiAgentPlatform = "whatsapp", socialA
   });
 
   const upsertConfig = useMutation({
-    mutationFn: async (input: AiAgentConfigInput) => {
+    // confirm_clear widens the input rather than being cast at the call site: an
+    // object literal carrying a property absent from AiAgentConfigInput trips
+    // TypeScript's excess-property check whatever `strict` says.
+    mutationFn: async (input: AiAgentConfigInput & { confirm_clear?: boolean }) => {
       const data = await callMessagingApi("ai_upsert_config", {
         platform,
         social_account_id: socialAccountId ?? undefined,
+        // Travels beside `config`, which is where the server reads it.
+        // buildAiAgentConfigPayload filters to CONFIG_FIELDS, so the flag can
+        // never reach the column payload.
+        confirm_clear: input.confirm_clear,
         config: buildAiAgentConfigPayload(input),
       });
       return data.config as AiAgentConfig;
     },
-    // Prefix invalidation: refreshes this account's entry and every other
-    // cached account entry under the same user and platform.
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["ai-agent-config", user?.id, platform] }),
+    // The written account's exact key, not the platform prefix. Both the settings
+    // form and the knowledge tab read this same entry, so a prefix invalidation
+    // made a write from one tab refetch -- and reset -- the other. Every other
+    // account's cached entry is still accurate after an account-scoped write.
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: ["ai-agent-config", user?.id, platform, socialAccountId ?? null],
+      }),
   });
 
   return { config: query.data, isLoading: query.isLoading, error: query.error, upsertConfig };

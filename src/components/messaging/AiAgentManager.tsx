@@ -71,7 +71,12 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
   const { config, isLoading, error, upsertConfig } = useAiAgentConfig(platform, accountId);
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
   const [baseline, setBaseline] = useState<AiAgentConfigInput | null>(null);
-  const [loadedAccountId, setLoadedAccountId] = useState<string | null>(null);
+  // undefined = nothing loaded yet; null = loaded for "no account". These must stay
+  // distinguishable: accountId is legitimately null while the accounts query is in
+  // flight and whenever the platform has no active account, so collapsing the two
+  // would make the guard in the effect below fire on the very first render and
+  // leave the form permanently empty.
+  const [loadedAccountId, setLoadedAccountId] = useState<string | null | undefined>(undefined);
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneError, setPhoneError] = useState<string | null>(null);
 
@@ -87,6 +92,14 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
   const configLoaded = config !== undefined && !error && loadedAccountId === accountId;
 
   useEffect(() => {
+    // Populate only when this account's values have not been loaded yet. The same
+    // account settling a SECOND time -- after the knowledge tab's save invalidated
+    // the entry both tabs share -- is not a reason to discard what the user has
+    // typed since. Resetting on every config identity change is how a typed
+    // persona became a blank save on 2026-08-30, twice, four minutes apart.
+    // The undefined check is load-bearing: without it `null === null` returns on
+    // the first render and the form never populates at all.
+    if (loadedAccountId !== undefined && loadedAccountId === accountId) return;
     // A settled null is "this account has no config yet", and the form must
     // show that rather than whatever the previously selected account had in
     // it. Returning early here let account A's persona sit in the fields
@@ -116,7 +129,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
     setForm(loaded);
     setBaseline(loaded);
     setLoadedAccountId(accountId);
-  }, [accountId, config]);
+  }, [accountId, config, loadedAccountId]);
 
   // Read inside the save callback, which closes over the account that started the
   // mutation rather than the one selected when it resolves.
@@ -161,12 +174,29 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
     // into B's baseline -- B's untouched fields would then read as dirty and prompt.
     const savedAccountId = accountId;
     const savedForm = form;
-    upsertConfig.mutate(form, {
+    // The server refuses a write that empties a stored persona or business profile
+    // unless the clear is declared. A reset form cannot reach here saying yes: a
+    // reset sets form AND baseline to defaultConfig together, so the baseline is
+    // blank too and this comparison is false. Only a user who saw a value and
+    // deleted it produces a non-empty baseline against an empty form -- which is
+    // what makes the flag a real signal rather than a rubber stamp.
+    const clearedAField = (["persona_instructions", "business_profile_text"] as const).some(
+      (field) =>
+        String(form[field] ?? "").trim() === "" &&
+        String(baseline?.[field] ?? "").trim() !== "",
+    );
+    upsertConfig.mutate({ ...form, confirm_clear: clearedAField || undefined }, {
       onSuccess: () => {
         if (accountIdRef.current === savedAccountId) setBaseline(savedForm);
         toast.success("AI agent settings saved");
       },
-      onError: (error) => toast.error(error.message || "Could not save AI agent settings"),
+      onError: (error) =>
+        toast.error(
+          // The 409 names database columns; users get a sentence instead.
+          error.message?.includes("Refusing to clear")
+            ? "That would erase the saved persona or business profile. Clear the field and save again to confirm."
+            : error.message || "Could not save AI agent settings",
+        ),
     });
   };
 
