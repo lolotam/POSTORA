@@ -4,7 +4,7 @@ import {
   assertRejects,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { PartnerAuthError } from "./partnerApiKeys.ts";
-import { recordUsage, releaseQuota, reserveQuota } from "./partnerApiMetering.ts";
+import { checkRateLimit, recordUsage, releaseQuota, reserveQuota } from "./partnerApiMetering.ts";
 
 const RECORD = {
   id: "key-1", workspaceId: "ws-1", socialAccountId: "acct-1",
@@ -64,4 +64,72 @@ Deno.test("recordUsage never throws — metering must not fail a real send", asy
     keyId: "key-1", workspaceId: "ws-1", action: "send_template",
     billable: true, httpStatus: 200,
   });
+});
+
+// ---- D7 limiter-failure policy -------------------------------------------
+// The RPC erroring is the limiter being UNAVAILABLE — a different path from
+// the limit being exceeded, which must keep refusing with 429 rate_limited.
+
+function limiterUnavailableClient() {
+  return {
+    rpc() { return Promise.resolve({ data: null, error: { message: "connection refused" } }); },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+}
+
+Deno.test("checkRateLimit: class A proceeds when the limiter RPC errors (fail open)", async () => {
+  // Must resolve, not throw — a bounded local read survives a limiter
+  // outage — and must report "unavailable" so the caller emits no budget
+  // headers for a budget that was never resolved.
+  assertEquals(await checkRateLimit(limiterUnavailableClient(), RECORD, "A"), "unavailable");
+});
+
+Deno.test("checkRateLimit: class B fails closed with 503 limiter_unavailable", async () => {
+  const error = await assertRejects(
+    () => checkRateLimit(limiterUnavailableClient(), RECORD, "B"),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+  assertEquals(error.status, 503);
+});
+
+Deno.test("checkRateLimit: class C fails closed with 503 limiter_unavailable", async () => {
+  const error = await assertRejects(
+    () => checkRateLimit(limiterUnavailableClient(), RECORD, "C"),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+  assertEquals(error.status, 503);
+});
+
+Deno.test("checkRateLimit: an unclassified action fails closed, never fail-open by default", async () => {
+  // undefined = nobody chose a class for this action. Assuming the worst is
+  // the only safe default: failing open here would recreate the bug D7 fixes.
+  const error = await assertRejects(
+    () => checkRateLimit(limiterUnavailableClient(), RECORD, undefined),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+  assertEquals(error.status, 503);
+});
+
+Deno.test("checkRateLimit: a working limiter still refuses with 429 rate_limited", async () => {
+  const client = {
+    rpc() { return Promise.resolve({ data: false, error: null }); },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+  const error = await assertRejects(
+    () => checkRateLimit(client, RECORD, "C"),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "rate_limited");
+  assertEquals(error.status, 429);
+});
+
+Deno.test("checkRateLimit: a working limiter reports the budget as resolved", async () => {
+  const client = {
+    rpc() { return Promise.resolve({ data: true, error: null }); },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+  assertEquals(await checkRateLimit(client, RECORD, "A"), "resolved");
 });

@@ -65,26 +65,63 @@ export async function touchKey(
 }
 
 /**
+ * D7 limiter-failure risk classes (POSTORA-PARTNER-API-SPEC-v1 §D7).
+ *
+ * A — bounded local read:    fail OPEN, the limiter outage costs nothing.
+ * B — external or unbounded: fail CLOSED.
+ * C — mutation or amplifier: fail CLOSED.
+ *
+ * The classes live here so the failure policy stays with the limiter; the
+ * action→class assignment lives with the action registry in
+ * partner-api/router.ts so no action can be added without choosing a class.
+ */
+export type LimiterRiskClass = "A" | "B" | "C";
+
+/**
+ * Whether the limiter answered for this key. Callers use this ONLY to decide
+ * X-RateLimit-* header emission: "unavailable" means no budget was resolved,
+ * so no budget numbers may be reported. The D7 fail-open/fail-closed
+ * enforcement happens inside checkRateLimit and cannot be bypassed by
+ * ignoring the return value.
+ */
+export type RateLimitResolution = "resolved" | "unavailable";
+
+/**
  * Per-minute rate limit via an atomic bucket.
  *
  * Counting rows in the usage ledger and inserting afterwards would be the
  * same count-then-insert race the spec rejects — concurrent requests all read
  * the same stale count and all pass. consume_partner_rate does the increment
  * and the read in one statement.
+ *
+ * On RPC error this does NOT silently proceed (D7): a limiter outage plus a
+ * partner retry loop is exactly what rate limiting exists to prevent. Only a
+ * class-A bounded local read may continue unthrottled; everything else —
+ * including an action nobody assigned a class to — fails closed with a
+ * retryable 503. A refused request is harmless; an unthrottled send is not.
  */
 export async function checkRateLimit(
   // deno-lint-ignore no-explicit-any
   client: any,
   record: PartnerKeyRecord,
-): Promise<void> {
+  riskClass: LimiterRiskClass | undefined,
+): Promise<RateLimitResolution> {
   const { data, error } = await client.rpc("consume_partner_rate", {
     p_key_id: record.id,
     p_limit: record.rateLimitPerMin,
   });
-  if (error) return; // Never fail a send because the limiter is unavailable.
+  if (error) {
+    if (riskClass === "A") {
+      console.error("[partner-api] rate limiter unavailable; class A proceeding unthrottled:", error.message);
+      return "unavailable";
+    }
+    console.error(`[partner-api] rate limiter unavailable (class ${riskClass ?? "unclassified"}); failing closed:`, error.message);
+    throw new PartnerAuthError("Rate limiter is unavailable; retry shortly", "limiter_unavailable", 503);
+  }
   if (data === false) {
     throw new PartnerAuthError("Rate limit exceeded", "rate_limited", 429);
   }
+  return "resolved";
 }
 
 /**
