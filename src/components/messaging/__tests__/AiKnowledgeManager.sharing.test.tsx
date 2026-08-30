@@ -49,8 +49,13 @@ const ACCOUNTS = [
   // promise retrieval that can never happen.
   { id: "tt-1", platform: "tiktok", platform_username: "xsellpoint_on_tiktok", platform_user_id: null },
 ];
+let accounts = {
+  data: ACCOUNTS as Record<string, unknown>[] | undefined,
+  isSuccess: true,
+  error: null as unknown,
+};
 vi.mock("@/hooks/useSocialAccounts", () => ({
-  useSocialAccounts: () => ({ data: ACCOUNTS }),
+  useSocialAccounts: () => accounts,
 }));
 
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
@@ -74,6 +79,7 @@ describe("AiKnowledgeManager cross-account sharing", () => {
   beforeEach(() => {
     invoke.mutateAsync.mockClear();
     knowledge = { sources: [], links: [], linksReady: true, linksError: null };
+    accounts = { data: ACCOUNTS, isSuccess: true, error: null };
   });
 
   it("offers only the platforms an agent actually runs on", () => {
@@ -145,5 +151,50 @@ describe("AiKnowledgeManager cross-account sharing", () => {
     render(<AiKnowledgeManager platform="facebook" accountId="fb-1" />);
 
     expect(screen.queryByRole("checkbox", { name: /with xsellpoint_kw/i })).toBeNull();
+  });
+
+  it("says the accounts read failed instead of showing no one to share with", () => {
+    // A failed read leaves `data` undefined, and the component's `= []` default
+    // makes that indistinguishable from "no connected accounts" -- which would
+    // remove the strip silently and report sharing as unavailable rather than
+    // as unknown.
+    knowledge.sources = [source("restricted")];
+    knowledge.links = [{ source_id: "s1", social_account_id: "fb-1" }];
+    accounts = { data: undefined, isSuccess: false, error: new Error("network") };
+    render(<AiKnowledgeManager platform="facebook" accountId="fb-1" />);
+
+    expect(screen.getByText(/could not load your connected accounts/i)).toBeTruthy();
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    // And the badge must not turn the missing list into a count of zero.
+    expect(screen.getByText("Some accounts")).toBeTruthy();
+  });
+
+  it("keeps one source's boxes disabled while a different source is written", async () => {
+    // Codex P1. A single in-flight id was overwritten by the second toggle,
+    // re-enabling the first source's boxes mid-write; a click there would then
+    // compute its full replacement set from pre-refetch links and discard the
+    // change still in flight.
+    let releaseFirst: () => void = () => {};
+    invoke.mutateAsync.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (releaseFirst = resolve)),
+    );
+    knowledge.sources = [source("restricted"), { ...source("restricted"), id: "s2" }];
+    knowledge.links = [
+      { source_id: "s1", social_account_id: "fb-1" },
+      { source_id: "s2", social_account_id: "fb-1" },
+    ];
+    render(<AiKnowledgeManager platform="facebook" accountId="fb-1" />);
+
+    const [firstIg, secondIg] = screen.getAllByRole("checkbox", {
+      name: /with xsellpoint_kw$/i,
+    });
+    fireEvent.click(firstIg);
+    fireEvent.click(secondIg);
+
+    // s1 is still writing, so its boxes stay disabled even though s2 started after.
+    expect(firstIg).toBeDisabled();
+
+    releaseFirst();
+    await vi.waitFor(() => expect(firstIg).not.toBeDisabled());
   });
 });

@@ -54,7 +54,15 @@ export function AiKnowledgeManager({
 }) {
   const { config, error, upsertConfig } = useAiAgentConfig(platform, accountId);
   const { user, sources, links, linksReady, linksError, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
-  const { data: socialAccounts = [] } = useSocialAccounts();
+  // `error` and `isSuccess`, not just `data`. A failed read leaves data
+  // undefined, and the `= []` default would then be indistinguishable from "this
+  // user has no connected accounts" -- which would silently remove the sharing
+  // strip and make every restricted source claim it reaches 0 accounts.
+  const {
+    data: socialAccounts = [],
+    isSuccess: accountsReady,
+    error: accountsError,
+  } = useSocialAccounts();
   const isWhatsApp = platform === "whatsapp";
   const catalogHook = useWhatsAppCatalog();
   const waAccount = isWhatsApp ? catalogHook.waAccount : null;
@@ -143,9 +151,15 @@ export function AiKnowledgeManager({
     }
     return map;
   }, [sources, shareAccounts, links]);
-  // Which source is mid-write, so only its own strip goes disabled. A single
-  // `invoke.isPending` would freeze every row on the page.
-  const [sharingSourceId, setSharingSourceId] = useState<string | null>(null);
+  // Which sources are mid-write, so only their own strips go disabled -- a
+  // single `invoke.isPending` would freeze every row on the page.
+  //
+  // A SET, not one id (Codex P1). Toggling source B while A was still writing
+  // overwrote A's id, re-enabling A's boxes mid-flight; a click there would then
+  // compute its full replacement set from pre-refetch links and silently discard
+  // the change A was in the middle of making. Every update below is functional,
+  // because two toggles can land in the same render batch.
+  const [sharingSourceIds, setSharingSourceIds] = useState<readonly string[]>([]);
   const toggleShare = async (
     source: { id: string; visibility: "shared" | "restricted" },
     target: SharingAccount,
@@ -169,7 +183,7 @@ export function AiKnowledgeManager({
       );
       return;
     }
-    setSharingSourceId(source.id);
+    setSharingSourceIds((current) => [...current, source.id]);
     // Through `run` like every other action here, so the failure toast stays
     // identical. It reports rather than rethrows, which is why clearing the
     // pending flag needs no try/finally.
@@ -191,7 +205,7 @@ export function AiKnowledgeManager({
     // is what keeps a fast second click from computing its full set out of
     // stale links and dropping the account the first click just added -- so if
     // `refresh` ever becomes fire-and-forget, this race reopens silently.
-    setSharingSourceId(null);
+    setSharingSourceIds((current) => current.filter((id) => id !== source.id));
   };
   const saveProfile = async () => {
     try {
@@ -475,9 +489,14 @@ export function AiKnowledgeManager({
                     <Badge variant={source.visibility === "shared" ? "outline" : "secondary"}>
                       {source.visibility === "shared"
                         ? "All accounts"
-                        : `${(sharedBySource.get(source.id) ?? []).length} account${
-                            (sharedBySource.get(source.id) ?? []).length === 1 ? "" : "s"
-                          }`}
+                        : accountsReady
+                          ? `${(sharedBySource.get(source.id) ?? []).length} account${
+                              (sharedBySource.get(source.id) ?? []).length === 1 ? "" : "s"
+                            }`
+                          : // The count is derived from the accounts list; without
+                            // it, "0 accounts" would be a claim rather than a
+                            // reading. Say only what is still known.
+                            "Some accounts"}
                     </Badge>
                     <Badge
                       variant={
@@ -556,7 +575,16 @@ export function AiKnowledgeManager({
                     its own line. Drawn only once the links have loaded: an
                     unsettled read renders every box unchecked, and a click on
                     that would write the wrong state back as if it were chosen. */}
-                {linksReady && shareAccounts.length > 1 && (
+                {accountsError ? (
+                  // Named, not hidden. Silently dropping the strip on a failed
+                  // account read tells the user sharing is unavailable, when in
+                  // fact the page simply does not know who to offer.
+                  <p className="mt-3 w-full border-t pt-3 text-xs text-destructive">
+                    Could not load your connected accounts, so sharing cannot be
+                    changed here. Refresh to try again.
+                  </p>
+                ) : (
+                  linksReady && accountsReady && shareAccounts.length > 1 && (
                   <div className="mt-3 w-full border-t pt-3">
                     <p className="mb-2 text-xs font-medium text-muted-foreground">
                       Agents that can read this
@@ -569,7 +597,7 @@ export function AiKnowledgeManager({
                         >
                           <Checkbox
                             checked={(sharedBySource.get(source.id) ?? []).includes(account.id)}
-                            disabled={sharingSourceId === source.id}
+                            disabled={sharingSourceIds.includes(source.id)}
                             onCheckedChange={(value) =>
                               toggleShare(source, account, value === true)
                             }
@@ -587,6 +615,7 @@ export function AiKnowledgeManager({
                       ))}
                     </div>
                   </div>
+                  )
                 )}
               </div>
             ))
