@@ -592,45 +592,97 @@ for s in "${SUITES[@]}"; do
   # A `not ok` whose test NAME merely contains "not ok" is fine either way:
   # the anchor means only a real result line at column 0 counts.
   cat "$OUT" "$ERR" > "$BOTH"
-  # ONE PASS, NO PIPELINE. The previous form was:
+  # ONE PASS, NO PIPELINE, AND THE WHOLE TAP CONTRACT -- not just "did an
+  # assertion fail".
   #
-  #   ! grep -E '^not ok' "$BOTH" | grep -qviE '#[[:space:]]*(TODO|SKIP)'
+  # The pipeline this replaced produced a FALSE GREEN: `grep -q` exits on its
+  # first match, the upstream grep takes SIGPIPE, `pipefail` calls that a
+  # failed pipeline, and the leading `!` read it as "no unexpected failures".
+  # One pass followed by thousands of `not ok` exited 0.
   #
-  # and it produced a FALSE GREEN. Under `pipefail`, `grep -q` exits as soon as
-  # it matches, the upstream grep takes SIGPIPE, the pipeline reports non-zero,
-  # and the leading `!` turns that into "no unexpected failures". Mutated: one
-  # passing assertion followed by thousands of `not ok` results exited 0 and
-  # reported every suite passed. Counting both classes in a single awk pass has
-  # no pipeline to misread.
+  # Counting failures alone is still not enough, because it only answers "did
+  # any assertion I SAW fail?". Two ways a suite fails without a single
+  # `not ok`:
   #
-  # TODO and SKIP are excused failures: valid TAP, and a real consumer treats
-  # them as passing. Matched case-insensitively, per the spec.
-  if ! awk '
-       tolower($0) ~ /^[[:space:]]*not ok/ {
-         total++
-         if (tolower($0) ~ /#[[:space:]]*(todo|skip)/) excused++
-       }
-       END { exit(total > excused ? 1 : 0) }
-     ' "$BOTH"; then
-    echo "" >&2
-    echo "db-harness: SUITE FAILED (assertion): $s" >&2
-    echo "  psql exited 0 - a pgTAP assertion failure is not a SQL error." >&2
-    # `|| true` on every stage. Under pipefail a `head` that closes early
-    # SIGPIPEs its upstream, and with `set -e` that killed the script before it
-    # reached its own `exit 1` -- turning a clean failure into exit 141. The
-    # reporting path must never be able to change the verdict it reports.
-    { grep -nE '^[[:space:]]*not ok' "$BOTH" || true; } \
-      | { grep -viE '#[[:space:]]*(TODO|SKIP)' || true; } \
-      | { head -20 || true; } | sed 's/^/  /' >&2 || true
-    exit 1
-  fi
+  #   incomplete plan  `1..52` then the connection dies after 6 tests. pgTAP
+  #                    reports the discrepancy from finish(), so a suite that
+  #                    dies BEFORE finish() emits no diagnostic at all.
+  #   Bail out!        TAP's "stop immediately". Everything before it may have
+  #                    passed; the run still did not complete.
+  #
+  # So the plan is parsed and compared against the test points actually seen.
+  # `1..0` is a legitimate empty plan (TAP's skip-everything form) and passes.
+  # Suites with no plan line at all -- the NOTICE-based ones -- are unaffected;
+  # their completeness is covered by the positive-evidence check below.
+  #
+  # TODO and SKIP directives mark expected failures: valid TAP, and a real
+  # consumer counts them as passing. Matched case-insensitively.
+  VERDICT="$(awk '
+    { line = $0; sub(/\r$/, "", line); low = tolower(line) }
 
-  # A suite that died half way still exits 0; pgTAP says so in a diagnostic.
+    low ~ /^[[:space:]]*bail out!/ { bailed = 1 }
+
+    low ~ /^[[:space:]]*1\.\.[0-9]+/ {
+      if (!planseen) {
+        planseen = 1
+        s = line; sub(/^[[:space:]]*1\.\./, "", s); sub(/[^0-9].*$/, "", s)
+        planned = s + 0
+      }
+    }
+
+    # A NUMBER is required. psql renders each result in a bordered table, and
+    # `select ok(...)` produces a column header that is literally the word
+    # `ok` -- which a lenient pattern counts as a 53rd test point against a
+    # plan of 52. TAP test points are numbered; headers are not.
+    low ~ /^[[:space:]]*(not )?ok[[:space:]]+[0-9]+/ { points++ }
+
+    low ~ /^[[:space:]]*not ok/ {
+      failed++
+      if (low ~ /#[[:space:]]*(todo|skip)/) excused++
+    }
+
+    END {
+      if (bailed)                        { print "bailed";     exit }
+      if (failed > excused)              { print "failed";     exit }
+      if (planseen && points != planned) { print "incomplete " points " " planned; exit }
+      print "ok"
+    }
+  ' "$BOTH")"
+
+  case "$VERDICT" in
+    bailed)
+      echo "" >&2
+      echo "db-harness: SUITE BAILED OUT: $s" >&2
+      echo "  TAP 'Bail out!' means the run stopped; earlier passes do not count." >&2
+      { grep -inE '^[[:space:]]*bail out!' "$BOTH" || true; } | sed 's/^/  /' >&2 || true
+      exit 1 ;;
+    failed)
+      echo "" >&2
+      echo "db-harness: SUITE FAILED (assertion): $s" >&2
+      echo "  psql exited 0 - a pgTAP assertion failure is not a SQL error." >&2
+      # `|| true` at every stage: under pipefail a `head` that closes early
+      # SIGPIPEs its upstream, and with `set -e` that killed the script before
+      # its own `exit 1`, turning a clean failure into exit 141. A reporting
+      # path must never be able to change the verdict it reports.
+      { grep -nE '^[[:space:]]*not ok' "$BOTH" || true; } \
+        | { grep -viE '#[[:space:]]*(TODO|SKIP)' || true; } \
+        | { head -20 || true; } | sed 's/^/  /' >&2 || true
+      exit 1 ;;
+    incomplete*)
+      echo "" >&2
+      echo "db-harness: SUITE INCOMPLETE: $s" >&2
+      echo "  ran ${VERDICT#incomplete } (points planned) - the suite stopped" >&2
+      echo "  before finishing its plan. pgTAP only reports this from finish()," >&2
+      echo "  so a suite that dies earlier says nothing at all." >&2
+      exit 1 ;;
+  esac
+
+  # pgTAP's own diagnostics, when it did reach finish().
   if grep -qE '^[[:space:]]*# Looks like you (failed|planned)' "$BOTH"; then
     echo "" >&2
     echo "db-harness: SUITE FAILED (plan): $s" >&2
-    grep -nE '^[[:space:]]*# Looks like you (failed|planned)' "$BOTH" \
-      | sed 's/^/  /' >&2
+    { grep -nE '^[[:space:]]*# Looks like you (failed|planned)' "$BOTH" || true; } \
+      | sed 's/^/  /' >&2 || true
     exit 1
   fi
 
