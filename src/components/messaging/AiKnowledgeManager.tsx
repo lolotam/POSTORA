@@ -41,7 +41,7 @@ export function AiKnowledgeManager({
   accountId?: string | null;
 }) {
   const { config, error, upsertConfig } = useAiAgentConfig(platform, accountId);
-  const { user, sources, links, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
+  const { user, sources, links, linksReady, linksError, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
   const { data: socialAccounts = [] } = useSocialAccounts();
   const isWhatsApp = platform === "whatsapp";
   const catalogHook = useWhatsAppCatalog();
@@ -79,9 +79,16 @@ export function AiKnowledgeManager({
   const wouldBlankStoredProfile = profile.trim() === "" && profileText.trim() !== "";
   // The same predicate the retrieval RPCs use, so the list cannot promise the
   // agent a document it will not read, or hide one it will.
+  // Filtering only once the links have actually arrived. An empty link set from
+  // an unsettled or failed read is indistinguishable from "linked to nothing",
+  // and acting on it would hide every restricted source behind a confident
+  // "nothing available here".
   const visibleSources = useMemo(
-    () => sources.filter((source) => visibleToAccount(source, accountId ?? null, links)),
-    [sources, accountId, links],
+    () =>
+      linksReady
+        ? sources.filter((source) => visibleToAccount(source, accountId ?? null, links))
+        : sources,
+    [sources, accountId, links, linksReady],
   );
   const run = async (
     action: string,
@@ -317,6 +324,12 @@ export function AiKnowledgeManager({
         <CardContent className="space-y-3">
           {isLoading ? (
             <Loader2 className="h-5 w-5 animate-spin" />
+          ) : linksError ? (
+            // Say the list is unreliable rather than render an unfiltered or
+            // over-filtered one, either of which reads as fact.
+            <p className="text-sm text-destructive">
+              Could not check which sources this account can use. Refresh to try again.
+            </p>
           ) : visibleSources.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               {sources.length === 0

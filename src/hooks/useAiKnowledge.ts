@@ -101,7 +101,13 @@ export function useAiKnowledge() {
     user,
     sources: sources.data || [],
     links: links.data || [],
-    isLoading: sources.isLoading,
+    // The links query gates which sources are visible, so an unsettled or failed
+    // link read must never look like "this account has no links". Substituting []
+    // would hide every restricted source and tell the user none are available --
+    // confidently, and wrongly. Callers wait for linksReady before filtering.
+    linksReady: links.isSuccess,
+    linksError: links.error,
+    isLoading: sources.isLoading || links.isLoading,
     error: sources.error,
     graphExport: graphExport.data || null,
     refetch: sources.refetch,

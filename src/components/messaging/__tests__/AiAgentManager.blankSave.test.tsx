@@ -110,4 +110,27 @@ describe("AiAgentManager blank-save regression", () => {
       expect.anything(),
     );
   });
+  it("picks up a field refreshed by the other tab while keeping edited ones", () => {
+    // Codex P1. Freezing the whole form on a repeat read is the opposite mistake
+    // to resetting it, and just as lossy: the knowledge tab's save refreshes this
+    // same query, so a frozen form would carry a stale business_profile_text and
+    // the next Settings save would write it back over what was just stored.
+    configValue = { persona_instructions: "Original", business_profile_text: "Old profile" };
+    const { rerender } = render(<AiAgentManager platform="facebook" />);
+
+    fireEvent.change(persona(), { target: { value: "Edited persona" } });
+
+    // The knowledge tab saved a new profile; this query refetched.
+    configValue = { persona_instructions: "Original", business_profile_text: "NEW profile" };
+    rerender(<AiAgentManager platform="facebook" />);
+
+    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+    expect(upsertConfig.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        persona_instructions: "Edited persona",   // the user's edit survives
+        business_profile_text: "NEW profile",     // the untouched field follows the server
+      }),
+      expect.anything(),
+    );
+  });
 });

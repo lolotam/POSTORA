@@ -14,11 +14,20 @@ let configError: unknown = null;
 vi.mock("@/hooks/useAiAgentConfig", () => ({
   useAiAgentConfig: () => ({ config: configValue, error: configError, upsertConfig }),
 }));
+let knowledge = {
+  sources: [] as Record<string, unknown>[],
+  links: [] as Record<string, unknown>[],
+  linksReady: true,
+  linksError: null as unknown,
+};
+
 vi.mock("@/hooks/useAiKnowledge", () => ({
   useAiKnowledge: () => ({
     user: { id: "u1" },
-    sources: [],
-    links: [],
+    sources: knowledge.sources,
+    links: knowledge.links,
+    linksReady: knowledge.linksReady,
+    linksError: knowledge.linksError,
     isLoading: false,
     graphExport: { data: null },
     invoke,
@@ -40,6 +49,7 @@ describe("AiKnowledgeManager write guards", () => {
     upsertConfig.mutateAsync.mockClear();
     configValue = null;
     configError = null;
+    knowledge = { sources: [], links: [], linksReady: true, linksError: null };
   });
 
   it("refuses to save while the read is unsettled", () => {
@@ -88,5 +98,33 @@ describe("AiKnowledgeManager write guards", () => {
     configValue = null;
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
     expect(saveButton()).not.toBeDisabled();
+  });
+  it("does not hide restricted sources before the links have arrived", () => {
+    // Codex P2. An empty link set from an unsettled read is indistinguishable
+    // from "linked to nothing", so filtering on it would hide every restricted
+    // source and claim, confidently, that none are available.
+    knowledge = {
+      sources: [
+        { id: "s1", file_name: "price-list.csv", source_type: "doc", status: "ready", visibility: "restricted", chunk_count: 3 },
+      ],
+      links: [],
+      linksReady: false,
+      linksError: null,
+    };
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    expect(screen.getByText("price-list.csv")).toBeTruthy();
+  });
+
+  it("says the list is unreliable when the links query fails", () => {
+    knowledge = {
+      sources: [
+        { id: "s1", file_name: "price-list.csv", source_type: "doc", status: "ready", visibility: "restricted", chunk_count: 3 },
+      ],
+      links: [],
+      linksReady: false,
+      linksError: new Error("network"),
+    };
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    expect(screen.getByText(/could not check which sources/i)).toBeTruthy();
   });
 });
