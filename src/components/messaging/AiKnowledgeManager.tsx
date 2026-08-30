@@ -186,6 +186,11 @@ export function AiKnowledgeManager({
         ? `Shared with ${accountLabel(target)}`
         : `Removed from ${accountLabel(target)}`,
     );
+    // Fresh links are already in cache by here: mutateAsync resolves only after
+    // the mutation's onSuccess refresh has invalidated and refetched them. That
+    // is what keeps a fast second click from computing its full set out of
+    // stale links and dropping the account the first click just added -- so if
+    // `refresh` ever becomes fire-and-forget, this race reopens silently.
     setSharingSourceId(null);
   };
   const saveProfile = async () => {
