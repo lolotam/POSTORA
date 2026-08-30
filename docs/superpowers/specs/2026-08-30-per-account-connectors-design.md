@@ -1,6 +1,10 @@
 # Spec — per-account connectors, scoped knowledge, and real credentials
 
-Status: revision 1, 2026-08-30. Branch `feat/per-account-connectors`.
+Status: revision 2, 2026-08-30. Branch `feat/per-account-connectors`.
+
+Revision 1 was reviewed by GLM 5.3 (read-only, adversarial) and returned sixteen findings,
+two of them blocking. This rewrite adopts every one that survived verification against the
+code and the production server, including the finding that a citation in §6.1 was wrong.
 
 Supersedes nothing. Continues the work of `docs/plans/per-account-agent-configuration.md`,
 which gave each connected account its own agent config and knowledge scope. That plan's
@@ -183,17 +187,46 @@ For one Postora login owning many accounts on a platform:
 ALTER TABLE public.ai_agent_tools
   ADD COLUMN social_account_id UUID REFERENCES public.social_accounts(id) ON DELETE CASCADE,
   ADD COLUMN platform TEXT,
-  ADD COLUMN scope TEXT NOT NULL DEFAULT 'account'
-    CHECK (scope IN ('account', 'all_accounts'));
+  ADD COLUMN scope TEXT NOT NULL DEFAULT 'all_accounts'
+    CHECK (scope IN ('account', 'all_accounts')),
+  ADD CONSTRAINT ai_agent_tools_scope_matches_account
+    CHECK ((scope = 'account') = (social_account_id IS NOT NULL));
 ```
 
-`scope` is deliberate and mirrors the `visibility` column PR #61 added to
-`ai_knowledge_sources`. The lesson recorded there applies unchanged: **a NULL that means
-"applies to everything" is non-monotonic** — detaching a connector's last account would
-silently grant it to every account. An explicit enum cannot do that.
+**The default is `'all_accounts'`, and that is the whole point.** `'account'` looks like the
+right default and is the 2026-08-28 defect wearing a new hat. Between the PR-3 migration and
+the PR-4 deploy, the *deployed* `ai_upsert_tool` still inserts rows with neither scope nor
+account. Under a `'account'` default those rows land as `scope='account',
+social_account_id=NULL` — a connector no account can ever resolve, saved successfully, with
+no error anywhere. That is the 52-account outage in its silent-corruption form.
 
-Existing rows backfill to `scope='all_accounts'`, `social_account_id=NULL`. They keep
-working. Every *new* connector is `scope='account'` and must name one.
+Defaulting to `'all_accounts'` makes the old writer's rows mean exactly what they already
+meant, so the window is harmless. PR-4's code writes `scope` explicitly; a later migration
+flips the default once no old writer exists.
+
+The `CHECK` pairing scope with account presence is not optional either. Without it the two
+columns are free to disagree, and every reader has to decide what
+`scope='account', social_account_id=NULL` means. Note the ordering consequence: the CHECK
+must land **in the same transaction as the corrected default**, never before it, or the same
+window becomes a hard 500 on every new-connector save instead of a silent one — the `SET NOT
+NULL` failure exactly.
+
+`scope` mirrors the `visibility` column PR #61 added to `ai_knowledge_sources`, but the
+reasoning transfers only partly and the spec previously overstated it. In the knowledge case
+NULL arose from an ordinary user action — removing the last link — so non-monotonicity was
+*emergent*. Here `social_account_id` can only become NULL by an explicit write, and the FK's
+`ON DELETE CASCADE` deletes a connector with its account rather than orphaning it. The
+honest arguments for the enum are narrower: it makes sharing an **explicit, auditable state**
+rather than an inference from a NULL, and it gives the write path something to branch on.
+Those are sufficient; the borrowed one was not.
+
+Existing rows are already `scope='all_accounts'`, `social_account_id=NULL` by the default, so
+no backfill statement is needed. Every *new* connector is `scope='account'` and must name one.
+
+**Known expressiveness gap, deliberately not solved now.** `all_accounts` spans every
+platform, so a merchant with one product catalogue shared across seven Facebook pages but not
+their Instagram cannot say that. The `platform` column added here would support a third value
+(`'platform'`) later. Recorded as an option, not designed.
 
 The composite foreign key that keeps a connector from pointing at an account on another
 platform reuses the unique index `20260828190000` already added:
@@ -256,8 +289,10 @@ Therefore:
 - **PR-1 code** stops using `onConflict: "user_id,name"`.
 - **PR-6 migration** drops `ai_agent_tools_user_id_name_key`, after PR-1's code is serving.
 
-Both unique constraints coexist in between. That is legal: a per-account name is also
-unique per user while only one account exists, so no in-flight save can violate either.
+Both unique constraints coexist in between. That is legal for a simpler reason than the one
+first given here: `UNIQUE (user_id, name)` is strictly *stronger* than the new index, so
+anything the old constraint admits the new one admits too. No in-flight save can violate
+either.
 
 ### 4.3 Credentials
 
@@ -282,8 +317,19 @@ The split is the point:
   UI render "Consumer secret ✓ set" without decrypting anything, and it is why
   `ai_list_tools` never needs to touch Vault at all.
 
-The existing `secret TEXT` column stays for `custom_rest`'s webhook secret and is migrated
-into Vault in PR-6. It is not dropped in this spec.
+#### The `secret` column must be dual-read before it is migrated
+
+The live reader of `secret` is `executeCustomTool`, which sets `X-Webhook-Secret`
+(`ai-agent-reply/tools.ts:409`). If PR-6 moves the value into Vault before a deployed reader
+knows to look there, the header simply stops being sent. **That is a silent auth failure on
+every n8n webhook call** — no exception, no log line, just a vendor rejecting requests.
+
+So the sequence is: PR-4 writes new secrets to Vault **and keeps writing the column**; the
+reader in `ai-agent-reply` dual-reads (column first, else Vault); PR-6 migrates the stored
+values; a later cleanup removes the column path. The column is not dropped in this spec.
+
+This also means **`ai-agent-reply` is a deliverable**, which the first PR table never said.
+See §9.
 
 #### Vault has no delete function — the lifecycle must supply one
 
@@ -304,16 +350,49 @@ two leaks the schema will not catch:
 
 A trigger, not application code, because the cascade never calls application code.
 
+3. **Restore from backup.** A dump of the `public` schema does not carry the `vault` schema.
+   After such a restore every `credentials_secret_id` dangles, and **nothing fails at rest** —
+   the breakage appears only at the next vendor call. The deploy runbook must state that
+   `vault` is backed up with `public` or not at all.
+
 **Partial update.** `update_secret` replaces the whole secret. A form that submits only
 `consumer_secret` must therefore decrypt, merge, and re-encrypt — never write the single
 submitted field, which would silently drop `consumer_key`. This merge is the one place a
 credential is decrypted outside a vendor call, and it happens server-side inside the same
 request.
 
+**Ordering, because the two writes are not one transaction.** `vault.create_secret` /
+`update_secret` and the `ai_agent_tools` write are separate statements. The rule is **vault
+first, row second**. A failure between them then leaves an *orphan* secret — wasteful and
+swept later — rather than a row pointing at a secret that no longer matches, which would
+send the wrong credentials to a vendor. Orphan is tolerable; dangling never is.
+
+`configured_secret_fields` is a **cache of the blob's keys and must be derived from it on
+every write**, never accepted from the client and never set independently. A drifted cache
+tells the UI a field is configured when it is not.
+
+Concurrent saves are last-write-wins on the whole blob. Acceptable for a settings form; said
+out loud so nobody assumes field-level merging across requests.
+
+**The blob is the right grain.** One vault row per connector means one decrypt per vendor
+call. Per-field secrets would multiply rows and bookkeeping for no gain, and the read-modify-
+write above is a bounded cost paid only when a human edits a form.
+
 **Never in a log or an error.** No adapter may include a credential in a thrown message, a
 `console.log`, an `ai_agent_logs` row, or a response body. Vendor errors are re-wrapped
 before they propagate: a WooCommerce 401 body can echo the request, and a 200-with-error
 body can too.
+
+Two leak surfaces this design creates and must therefore close:
+
+- **`last_test_error`** stores a vendor error body and `ai_list_tools` returns it to the UI.
+- **Adapter output reaches the customer.** `result.output` is pushed into the model's message
+  list verbatim (`ai-agent-reply/index.ts:942-946`), so anything an adapter returns can be
+  spoken into a DM.
+
+Every vendor body therefore passes the existing `redactSensitive`
+(`supabase/functions/_shared/logging.ts:33`) before it touches `last_test_error`, a log, or a
+tool result. Reusing the tested redactor rather than writing a new one is the point.
 
 **`ai_list_tools` must never return a decrypted value.** It returns `settings`,
 `configured_secret_fields`, and the existing `has_secret`. This is the same rule
@@ -412,11 +491,11 @@ Auth shapes below are cited. Anything not cited is not in this spec.
 | Connector | Real fields | Auth |
 |---|---|---|
 | **WooCommerce** | store URL, consumer key, consumer secret | HTTP Basic — key as username, secret as password ([docs](https://developer.woocommerce.com/docs/apis/rest-api/authentication/)) |
-| **Shopify** | shop domain, client ID, client secret, API version | Client-credentials grant → `X-Shopify-Access-Token`. Admin-created custom apps were **deprecated 1 January**; the old copy-a-token flow is gone ([docs](https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/generate-app-access-tokens-admin)) |
+| **Shopify** | shop domain, API version, **either** (client ID + client secret) **or** an existing admin-app access token | `X-Shopify-Access-Token`. Shopify says "You can no longer create **new** admin-created custom apps. **Existing apps are unaffected and continue to work**" — no date given ([docs](https://shopify.dev/docs/apps/build/authentication-authorization/access-tokens/generate-app-access-tokens-admin)) |
 | **Salla** | client ID, client secret, access token, refresh token, expiry | OAuth 2.0 `Bearer`. **Access token expires in 14 days**, refresh within 1 month; parallel refreshes fail the whole grant ([docs](https://docs.salla.dev/421118m0)) |
 | **Zid** | client ID, client secret, authorization token, **X-Manager-Token** | OAuth 2.0 authorization-code. Needs **two** headers, not one. Manager token lasts 1 year ([docs](https://docs.zid.sa/authorization)) |
-| **Supabase** | project URL, anon key, optional service-role key, schema, table allow-list | `apikey` + `Authorization: Bearer` against PostgREST |
-| **MySQL/Postgres** | host, port, database, user, password, SSL mode, table allow-list | Direct driver connection |
+| **Supabase** | project URL, **anon key only**, schema, table allow-list | `apikey` + `Authorization: Bearer` against PostgREST |
+| **PostgreSQL / MySQL** | gateway URL, auth header, table/resource | https REST gateway — Prisma, Hasura, Directus or PostgREST. **Not** a raw driver |
 | **Stripe** | restricted API key (`rk_live_…`/`rk_test_…`) | `Bearer`. Restricted keys carry per-resource Read/Write/None ([docs](https://docs.stripe.com/keys/restricted-api-keys)) |
 | **custom_rest** | URL, header name, secret | Unchanged. The escape hatch. |
 | **formula** | — | Local computation, no credentials. |
@@ -426,11 +505,53 @@ whose token silently dies is worse than no connector: the agent fails mid-conver
 a customer. `refresh-tokens` already runs a bounded sweep for social accounts and is the
 natural home, with the per-account worst-case budgeting `sweepBudget.ts` already enforces.
 
-**Supabase carries a specific hazard.** A service-role key gives the agent the entire
-database — RLS is not evaluated for it. The anon key is the default and is RLS-enforced. A
-service-role key is accepted **only** with a non-empty table allow-list, and the UI says why.
-This is the same trap as the `ai-knowledge` bucket that had drifted public: a credential that
-bypasses the policy engine makes every policy behind it decorative.
+**Salla's refresh is harsher than "the grant fails", and this changes the design.** Reusing a
+refresh token invalidates every token and the merchant must **reinstall the app**. So two
+overlapping refreshes — a cron run racing another cron run, or racing a user clicking Test
+Connection — do not merely fail: they brick the connection in a way only the merchant can
+repair. `sweepBudget.ts` bounds *work*, not *concurrency per connector*.
+
+**Per-connector serialization is therefore a hard requirement**, via `FOR UPDATE SKIP LOCKED`
+or an advisory lock keyed on the connector id. The existing `pending_agent_replies` work
+already established that `SKIP LOCKED` alone is not a lease; the same care applies here.
+
+**Open question PR-8 must answer before it starts: whose OAuth client is this?** The field
+list above implies the *merchant* supplies client ID and secret. In the normal Salla and Zid
+flows those belong to a **Postora-registered partner app**, and the merchant only authorizes
+it. If that is the intended shape, PR-8 is an app-registration and redirect-URI project, not
+a field-schema change, and it is much larger than the table suggests. This is not decided
+here.
+
+**The `mysql_postgres` entry was wrong in revision 1 and is corrected above.** It described
+host/port/user/password and a "direct driver connection". The existing directory entry is an
+**https REST gateway** — "through Prisma, Hasura, Directus, or PostgREST", `defaultUrl:
+https://api.yourdomain.com/sql/products`. A raw TCP driver would also have contradicted §5.3
+rule 1 (`assertPublicHttpsUrl` on every user-supplied host) and probably cannot open a socket
+from the functions container at all. Redefining a shipped connector as a side effect of a
+field-schema change was the actual error.
+
+**Supabase: service-role keys are refused in v1.** Revision 1 accepted one alongside a table
+allow-list. That allow-list is security theatre, and the reason is specific to PostgREST:
+
+- `/rest/v1/rpc/<fn>` reaches any exposed function, bypassing table names entirely.
+- **Resource embedding** — `?select=*,orders(*)` — reads tables that were never on the list.
+- Functions can be invoked from inside `select=`.
+- A view can shadow an allow-listed table name.
+
+An allow-list checked against a table *name* does not survive any of these. And the
+consequence is worse than reading an extra table: adapter output is pushed verbatim into the
+model's message list (`ai-agent-reply/index.ts:942-946`), so another tenant's rows would be
+**spoken to a customer in a DM**.
+
+So: **anon key only**. The target project's own RLS is the boundary, which is the one
+enforcement point that cannot be talked around. This is the same lesson as the `ai-knowledge`
+bucket that had drifted public — a credential that bypasses the policy engine makes every
+policy behind it decorative.
+
+If service-role support is ever added, the allow-list cannot be the mechanism. The adapter
+must build the **entire URL** from `settings`, with the agent choosing only which
+allow-listed table and which search terms, so `/rpc/` and embedded relations are structurally
+unreachable rather than filtered — and PR-5's tests must assert that property directly.
 
 ### 6.2 Types the UI offers but the server rejects
 
@@ -451,6 +572,7 @@ customers actually ask about in a DM.
 | **Notion** | internal integration token, database ID | Static token for internal connections ([docs](https://developers.notion.com/guides/get-started/authorization)) | FAQ and policy source |
 | **Cal.com / Calendly** | API key, event type | `Bearer` | Booking is the top DM intent after price |
 | **MyFatoorah** | API token, environment | `Bearer` | Already in the UI list, Kuwait-relevant, currently downgraded |
+| **Courier tracking** | carrier, account number, API key | Per-carrier | **"Where is my order" is the top post-purchase DM intent in this market.** One read-only connector covering SMSA, Aramex and DHL by-reference lookup |
 | **Generic MCP** | server URL, auth header | Per-server | One connector that reaches every MCP server without Postora writing an adapter |
 
 Google Sheets service-account JSON is a **multi-line secret containing a private key**. It
@@ -497,19 +619,40 @@ them right afterwards.
 
 Three changes; the first is the one that matters.
 
-1. **A reset to defaults is not a load.** Track the *reason* the form holds its current
-   values, not just which account they came from. `configLoaded` becomes true only when the
-   values were populated from a settled read for the currently selected account — a reset
-   caused by `accountId` changing under the user does not re-satisfy it.
+Revision 1 proposed tracking "the reason the form holds its values" — a state machine. That
+is over-modelled for a problem with three one-line fixes, and the client is the layer that
+already failed once. The server guard is the actual safety net; the client fixes stop the
+form being wrong in the first place.
 
-2. **Both writers get the same guard.** `AiKnowledgeManager` adopts
-   `!error && loadedAccountId === accountId` and refuses to submit an empty profile over a
-   non-empty stored one without confirmation. Being the quieter surface is not a reason to
-   have the weaker check — it is the reason the weaker check went unnoticed.
+1. **Server-side, and first: a blanking write must be deliberate.** `ai_upsert_config`
+   rejects a payload whose `persona_instructions` **or** `business_profile_text` is empty
+   while the stored value is not, unless the client marks the clear explicitly. This one
+   change closes every variant, including ones nobody has thought of, and it closes them for
+   the Knowledge tab too — which revision 1 missed by naming only the persona field, despite
+   its own §1.3 identifying that tab as the second writer.
 
-3. **Stop the two tabs fighting over one cache entry.** `upsertConfig.onSuccess` invalidates
-   the whole platform prefix, so a Knowledge-tab save discards unsaved Settings-tab edits.
-   Invalidate the written account's key, and refetch siblings only when they are not dirty.
+2. **Reset only on a real account change.** The defaults-reset should fire when
+   `loadedAccountId !== accountId`, not on every `config` identity transition. The same
+   account re-reading `null` after an invalidation is not a reason to wipe a dirty form —
+   and that re-read is the provable trigger from §1.2.
+
+3. **Stop `accountId` flapping at the source.** `useSocialAccounts` keeps previous data
+   across refetches, so `accounts` never transiently empties and the derived `accountId`
+   (`AiAgentManager.tsx:67-69`) never round-trips through `null`. This removes the
+   unproven-but-plausible trigger rather than defending against it downstream.
+
+4. **Both writers get the same guard.** `AiKnowledgeManager` adopts
+   `!error && loadedAccountId === accountId` and disables Save on an empty profile over a
+   non-empty stored one. Being the quieter surface is not a reason to have the weaker check —
+   it is the reason the weaker check went unnoticed.
+
+5. **Narrow the invalidation key.** `useAiAgentConfig.ts:102` invalidates the whole platform
+   prefix; both tabs already share the exact key
+   `["ai-agent-config", user, platform, accountId]`, so the prefix form is a relic of the
+   pre-scoping shape. Revision 1 said "refetch siblings only when they are not dirty" — that
+   is **not implementable where it was specified**: the hook cannot see component dirty
+   state. With an exact key there are no siblings needing a refetch after an account-scoped
+   write, so the problem dissolves instead of needing a mechanism.
 
 ### 8.1 Tests, written to fail first
 
@@ -524,9 +667,22 @@ Three changes; the first is the one that matters.
 
 ### 8.2 Data repair
 
-The Facebook page `الطملاوي…` has `is_enabled=false` and an empty persona. **No migration
-will restore it — the text was never transmitted and does not exist anywhere.** Stated
-plainly because a spec that implies recovery is worse than one that admits the loss.
+The Facebook page `الطملاوي…` has `is_enabled=false` and an empty persona.
+
+**The text is not lost, and revision 1 was wrong to say it did not exist anywhere.** The user
+pasted the same persona into four platforms in eleven minutes, and three of those saves
+landed. `CareerFlow` (facebook), `careerflowkw` (instagram) and `postora.cloud` (threads) all
+hold **1402 characters of persona and 2249 of business profile** — byte-identical lengths, so
+almost certainly the same text. It is recoverable from the user's own UI in seconds by
+opening a sibling account's Settings tab and copying.
+
+What *is* unrecoverable is the row's own prior content, and the avenue that sounds most
+promising is genuinely closed: `persistDelivery` (`ai-agent-reply/index.ts:648-657`) writes
+only `user` and `assistant` turns, so the system prompt carrying the persona is never stored.
+
+The correction matters beyond this incident. "Unrecoverable" was asserted from the affected
+row alone, without looking at the rows beside it — the same narrow-query mistake that made
+`NULL` vs `''` decisive in §1.1, arrived at from the other direction.
 
 The user does **not** have to wait for PR-1 to fix it. Three of the four saves that morning
 landed correctly, so the workflow works; re-enter the persona, enable the agent, and confirm
@@ -548,14 +704,43 @@ the frontend auto-deploys on `main` while Edge Functions are copied separately.
 
 | PR | Contents | Gate |
 |---|---|---|
-| **PR-1** | Blank-save fix, `AiKnowledgeManager` guard, cache-invalidation split | Regression tests fail without the fix |
-| **PR-2** | Connector registry + field schemas + **frontend/backend contract test**. No behaviour change | Contract test passes for all types |
-| **PR-3** | Migration: scope + credential columns, new unique index. **No drops** | Rehearsed with `ROLLBACK` against production |
-| **PR-4** | `ai_upsert_tool`/`ai_list_tools` write scoped rows and Vault credentials; account dropdown on the Tools tab; unknown type → 400 | Deployed before PR-6 |
-| **PR-5** | Adapters + `test_connection` + `read_only_mode` enforcement, WooCommerce and Supabase first | Live test against a real store |
-| **PR-6** | Contract migration: drop `ai_agent_tools_user_id_name_key`, migrate `secret` into Vault | Forward-only; say so in the runbook |
-| **PR-7** | Knowledge list filtering + account-named source titles | Predicate matches the retrieval RPCs |
-| **PR-8** | OAuth flows (Salla, Zid, Shopify) + token refresh in the bounded sweep | Expiry simulated, not assumed |
+| **PR-1** | Blank-save fix, `AiKnowledgeManager` guard, invalidation key narrowed | Regression tests fail without the fix |
+| **PR-2** | Connector registry + field schemas + **four-way contract test**. No behaviour change | Contract test passes for all types |
+| **PR-3** | Migration: scope (`DEFAULT 'all_accounts'`) + scope/account CHECK + credential columns + `NULLS NOT DISTINCT` index + **DB CHECK rebuilt for the four missing types**. **No drops** | Rehearsed with `ROLLBACK` against production |
+| **PR-4** | `ai_upsert_tool` / `ai_list_tools` write scoped rows and Vault credentials; account dropdown on the Tools tab; unknown type → **400, not a downgrade**; `ai_delete_tool` deletes the Vault secret; cascade trigger | Deployed before PR-6 |
+| **PR-5** | **`ai-agent-reply` loads tools scoped to the account** + dual-read of `secret` | Account A's connector must not appear in account B's conversation |
+| **PR-6** | Adapters + `test_connection` + `read_only_mode` enforcement + redaction, WooCommerce and Supabase first | Live test against a real store |
+| **PR-7** | Contract migration: drop `ai_agent_tools_user_id_name_key`, migrate `secret` into Vault | Forward-only; say so in the runbook |
+| **PR-8** | Knowledge list filtering + account-named source titles | Predicate matches the retrieval RPCs |
+| **PR-9** | OAuth flows (Salla, Zid, Shopify) + refresh with **per-connector serialization** | Expiry simulated, not assumed |
+
+### 9.1 Work the first revision's table silently assumed
+
+Four items belonged to no PR at all. Three of them mean the feature does not work.
+
+1. **`ai-agent-reply` loads tools by `user_id` alone** (`index.ts:837-841`):
+   ```ts
+   .from("ai_agent_tools").select(…).eq("user_id", request.user_id).eq("is_enabled", true)
+   ```
+   No account, no platform. **Scoping the table changes nothing until this query changes** —
+   account A's connectors keep running in account B's conversations. Now PR-5, and the gate
+   is stated as a behaviour, not a diff.
+
+2. **The DB `CHECK` cannot be altered, only dropped and recreated.** Adding `myfatoorah`,
+   `stripe`, `higgsfield` and `mcp_custom` is a `DROP CONSTRAINT` / `ADD CONSTRAINT`
+   migration, and it must land **before** PR-4 starts accepting those types — otherwise the
+   400 that replaces the silent downgrade becomes a constraint violation instead. Now PR-3.
+
+3. **`DatabaseConnectorsManager` keys its configured-state map by `connector_type`**
+   (`:620-626`). Once one account can have two WooCommerce connectors, the card shows one
+   arbitrary tool's state. The directory's whole "Connected" model needs rework in PR-4.
+
+4. **The component is mounted twice.** Inside the agent tabs (`AiAgentManager.tsx:348`, no
+   props) *and* at `Settings.tsx:174` with **no platform and no account at all**. "Add the
+   account dropdown to the Tools tab" says nothing about what the Settings surface should
+   show. PR-4 must decide: either it becomes a read-only overview of every account's
+   connectors, or it is removed. Leaving an account-less write surface against an
+   account-scoped table is how the legacy rows in §4.1 keep being created.
 
 **PR-6 is forward-only.** Once two accounts share a connector name, `UNIQUE (user_id, name)`
 cannot be restored. The runbook must say so, as it does for the agent-config contract.
@@ -578,9 +763,26 @@ applies them for real, and a virgin database hides exactly the replay defects th
 
 ---
 
-## 11. Open question for the debate
+## 11. Resolved: adapters get their own function
 
-Whether PR-5's adapters should run in `ai-agent-reply` or in a separate function. The
-worker has a **60-second ceiling** that kills a request with no log row, and a three-model
-chain already competes for it. Adding a vendor round-trip inside the same budget may need
-the adapter to move behind its own function with its own budget.
+Adapters run in a dedicated `ai-connector-call`, **and it does not buy the reply loop more
+wall-clock.** That caveat is the honest part: an in-conversation tool call still blocks the
+reply, whose `WORKER_BUDGET_MS = 60_000` kill (`ai-agent-reply/logic.ts:263-267`) is
+unchanged by moving code elsewhere. Anyone selling the split as "more budget" is wrong.
+
+The reply-side protection is the pattern already in the file: `CUSTOM_TOOL_TIMEOUT_MS =
+10_000` (`tools.ts:350`), with failure **returned as tool output rather than thrown**, so the
+model degrades gracefully instead of the worker dying.
+
+The split earns its keep for four other reasons:
+
+1. **`test_connection` needs an executor anyway.** It is called from the Tools UI through
+   `messaging-api`. One shared function beats duplicating every adapter in two places.
+2. **Deploys are by-hand file copies.** Isolating frequently-changing adapter code means
+   connector work never redeploys `ai-agent-reply` — the most failure-sensitive function
+   here, where the 60s kill leaves no log row and regressions are near-invisible.
+3. **Credential custody.** Confining `vault.decrypted_secrets` reads to one function keeps
+   them out of the reply worker entirely, so a prompt-injected model response can never reach
+   credential-handling code.
+4. **It can log its own early exit**, which is the actual complaint behind the original
+   question.
