@@ -173,7 +173,20 @@ case "$MAINT_DB" in
 esac
 # Checked BEFORE libpq decodes it, so '/pr%6fduction' would slip past the
 # prod_like test below and connect to `production`. Rather than reimplement
-# percent-decoding in bash, refuse to reason about an encoded name at all.
+# libpq PERCENT-DECODES query keywords before matching them against connection
+# options, so `%64bname=production` is `dbname=production` and `%70assword=` is
+# `password=`. Both walked straight past an earlier version of this guard and
+# past the redactor. Rather than reimplement libpq's decoding in bash, refuse a
+# query string containing any percent-encoding at all: the harness has no
+# legitimate use for one, and "cannot tell what this decodes to" is not a state
+# a guard on a destructive script should proceed from.
+case "$DB_URL" in
+  *\?*%*)
+    fail 2 "REFUSING: the connection string's query contains percent-encoding.
+  libpq decodes query keywords before matching them, so an encoded key such as
+  %64bname= is dbname= by the time it reaches the server, while these checks
+  would still be reading it as literal text. Pass unencoded parameters." ;;
+esac
 # libpq accepts connection parameters in the URI query string, and dbname=
 # there OVERRIDES the path. A guard that only inspects the path can be walked
 # straight past with `.../scratch?dbname=production`. Rather than reimplement
@@ -579,13 +592,45 @@ for s in "${SUITES[@]}"; do
   # A `not ok` whose test NAME merely contains "not ok" is fine either way:
   # the anchor means only a real result line at column 0 counts.
   cat "$OUT" "$ERR" > "$BOTH"
-  if grep -qE '^[[:space:]]*not ok' "$BOTH"      && ! grep -E '^[[:space:]]*not ok' "$BOTH" | grep -qviE '#[[:space:]]*(TODO|SKIP)'; then
-    : # every failing assertion is an expected (TODO) failure - not a failure
-  elif grep -qE '^[[:space:]]*not ok' "$BOTH"        || grep -qE '^[[:space:]]*# Looks like you (failed|planned)' "$BOTH"; then
+  # ONE PASS, NO PIPELINE. The previous form was:
+  #
+  #   ! grep -E '^not ok' "$BOTH" | grep -qviE '#[[:space:]]*(TODO|SKIP)'
+  #
+  # and it produced a FALSE GREEN. Under `pipefail`, `grep -q` exits as soon as
+  # it matches, the upstream grep takes SIGPIPE, the pipeline reports non-zero,
+  # and the leading `!` turns that into "no unexpected failures". Mutated: one
+  # passing assertion followed by thousands of `not ok` results exited 0 and
+  # reported every suite passed. Counting both classes in a single awk pass has
+  # no pipeline to misread.
+  #
+  # TODO and SKIP are excused failures: valid TAP, and a real consumer treats
+  # them as passing. Matched case-insensitively, per the spec.
+  if ! awk '
+       tolower($0) ~ /^[[:space:]]*not ok/ {
+         total++
+         if (tolower($0) ~ /#[[:space:]]*(todo|skip)/) excused++
+       }
+       END { exit(total > excused ? 1 : 0) }
+     ' "$BOTH"; then
     echo "" >&2
     echo "db-harness: SUITE FAILED (assertion): $s" >&2
     echo "  psql exited 0 - a pgTAP assertion failure is not a SQL error." >&2
-    grep -nE '^[[:space:]]*not ok|^# Looks like you (failed|planned)' "$OUT"       | sed 's/^/  /' >&2
+    # `|| true` on every stage. Under pipefail a `head` that closes early
+    # SIGPIPEs its upstream, and with `set -e` that killed the script before it
+    # reached its own `exit 1` -- turning a clean failure into exit 141. The
+    # reporting path must never be able to change the verdict it reports.
+    { grep -nE '^[[:space:]]*not ok' "$BOTH" || true; } \
+      | { grep -viE '#[[:space:]]*(TODO|SKIP)' || true; } \
+      | { head -20 || true; } | sed 's/^/  /' >&2 || true
+    exit 1
+  fi
+
+  # A suite that died half way still exits 0; pgTAP says so in a diagnostic.
+  if grep -qE '^[[:space:]]*# Looks like you (failed|planned)' "$BOTH"; then
+    echo "" >&2
+    echo "db-harness: SUITE FAILED (plan): $s" >&2
+    grep -nE '^[[:space:]]*# Looks like you (failed|planned)' "$BOTH" \
+      | sed 's/^/  /' >&2
     exit 1
   fi
 

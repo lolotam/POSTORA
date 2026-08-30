@@ -67,6 +67,37 @@ would quietly restore the count-only guard that a swap defeats.
 It cannot verify the marker itself. See "Regenerating the baseline" below for
 why, and what is done about it instead.
 
+### Regenerating the baseline
+
+Run the script. Do not hand-write the header.
+
+```bash
+I_CONFIRM_ALL_MIGRATIONS_APPLIED=yes \
+  PRODUCTION_URL='postgres://user:pass@host:5432/postgres' \
+  bash scripts/regenerate-baseline.sh
+```
+
+Commit the new baseline **together with the migrations it now includes**.
+
+**The confirmation flag is not ceremony.** The script writes a marker claiming
+the dump contains every migration in `supabase/migrations/`, and nothing can
+verify that: this project has **no migration ledger** — no
+`supabase_migrations.schema_migrations`, only Supabase's own service tables for
+auth, storage and realtime. Migrations are applied by hand. If a local
+migration is not applied to the database being dumped, the harness skips it
+permanently and can pass having never tested it. The flag turns a silent
+assumption into a stated one.
+
+The script also refuses to overwrite the baseline with a truncated dump, and
+runs a credential pattern scan — which is a **tripwire, not a clearance**. A
+schema-only dump still carries function bodies, defaults and comments; no
+pattern list certifies it clean, and the file is about to enter a git history.
+Read the diff before pushing.
+
+You do **not** need to regenerate merely because you added a migration — the
+harness applies anything newer than the marker on top. Regenerate when you want
+future runs to stop re-proving a settled batch.
+
 ## The limitation — read this
 
 The baseline is a **snapshot**. The harness proves that *new* migrations
@@ -121,3 +152,24 @@ newer than the baseline marker makes the run exit 1 and name the file. A
 green harness that has never been seen to fail is not evidence of anything —
 if you change the harness substantially, break something on purpose and
 confirm it still fails.
+
+## Known limitations
+
+Recorded rather than fixed, because each is a deliberate trade:
+
+- **`host=` in a URI query is refused**, which also rejects the legitimate
+  Unix-socket form `postgresql:///db?host=/var/lib/postgresql`. The harness
+  has no need for it, and the alternative — reimplementing libpq's parameter
+  precedence in bash — is worse than a narrower interface.
+- **Percent-encoding in the query string is refused outright** rather than
+  decoded. libpq decodes query keywords before matching them, so `%64bname=`
+  arrives as `dbname=`; a guard that reads the raw text is looking at a
+  different string than the server will. Refusing beats guessing.
+- **The marker cannot be verified**, only asserted — see above.
+- **The baseline is a snapshot.** It proves new migrations apply to today's
+  production shape. It proves nothing about whether history replays; it
+  demonstrably does not.
+- **Schema-only means no rows.** A migration whose success depends on existing
+  data — a new `NOT NULL`, a uniqueness constraint, a backfill — can pass here
+  against empty tables and still fail in production. Representative data is
+  out of scope for this deliverable and is the obvious next improvement.
