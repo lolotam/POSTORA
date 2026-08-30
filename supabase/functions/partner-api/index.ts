@@ -12,10 +12,12 @@ import {
 } from "../_shared/partnerApiKeys.ts";
 import {
   checkRateLimit,
+  RateLimitedError,
   recordUsage,
   releaseQuota,
   reserveQuota,
   touchKey,
+  type RateLimitBudget,
 } from "../_shared/partnerApiMetering.ts";
 import {
   claimIdempotency,
@@ -28,15 +30,16 @@ import {
   sendTemplate,
   WhatsAppOpError,
 } from "../_shared/whatsappPartnerOps.ts";
-import { isSendAction, requiredScopeFor } from "./router.ts";
+import { isSendAction, limiterRiskClassFor, requiredScopeFor } from "./router.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "content-type, x-postora-key, idempotency-key",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   // Without this a browser caller cannot read the correlation handle the API
-  // documents, nor tell a replay from a fresh send.
-  "Access-Control-Expose-Headers": "x-postora-request-id, idempotency-replayed, retry-after",
+  // documents, nor tell a replay from a fresh send, nor see the rate budget
+  // the limiter resolved for the key.
+  "Access-Control-Expose-Headers": "x-postora-request-id, idempotency-replayed, retry-after, x-ratelimit-limit, x-ratelimit-remaining, x-ratelimit-reset",
 };
 
 function json(body: unknown, status = 200, extra: Record<string, string> = {}) {
@@ -66,7 +69,79 @@ function withRequestId<T extends Record<string, unknown>>(
   return { ...body, request_id: requestId };
 }
 
-Deno.serve(async (req) => {
+/**
+ * X-RateLimit-* headers for responses whose rate budget the limiter actually
+ * resolved. Emitted ONLY there: fabricating budget numbers for a response
+ * where no limit was resolved would leak whether a key exists.
+ *
+ * Every number comes from consume_partner_rate_v2: Remaining is the count the
+ * bucket reported after this request, and Reset is the seconds-until-window-
+ * end Postgres computed from the same date_trunc('minute', now()) bucket it
+ * incremented — never a local clock, which can disagree with the clock that
+ * picked the bucket. The values describe the window that was consumed; by the
+ * time the client reads them that window may already have rolled over, which
+ * is inherent to any per-minute budget header.
+ */
+function rateLimitHeadersFor(budget: RateLimitBudget): Record<string, string> {
+  return {
+    "X-RateLimit-Limit": String(budget.limit),
+    "X-RateLimit-Remaining": String(budget.remaining),
+    "X-RateLimit-Reset": String(budget.resetSeconds),
+  };
+}
+
+/**
+ * Headers for the 429 the limiter itself issued. Remaining 0 needs no RPC
+ * number: the refusal proves no requests are left in the window. Reset and
+ * Retry-After both carry the same database-provided seconds-until-window-end
+ * — one derived value, not a second computation — and are omitted, never
+ * guessed, if the limiter's answer drifted and brought no number.
+ */
+function rateLimitedHeadersFor(
+  record: PartnerKeyRecord,
+  resetSeconds: number | null,
+): Record<string, string> {
+  const headers: Record<string, string> = {
+    "X-RateLimit-Limit": String(record.rateLimitPerMin),
+    "X-RateLimit-Remaining": "0",
+  };
+  if (resetSeconds !== null) {
+    headers["X-RateLimit-Reset"] = String(resetSeconds);
+    headers["Retry-After"] = String(resetSeconds);
+  }
+  return headers;
+}
+
+/**
+ * How long a class-B/C caller is told to wait out a limiter outage.
+ *
+ * Not 1 second. A limiter outage means the database backing the bucket is
+ * already struggling, and every refused partner is a client in a retry loop:
+ * telling all of them to come back in one second turns one outage into a
+ * thundering herd against the thing that is down. This codebase has already
+ * paid for that lesson once, when a mark-read loop reached ~100 req/s per open
+ * tab. Long enough to let the limiter recover, short enough that a healthy
+ * partner barely notices.
+ */
+const LIMITER_OUTAGE_RETRY_AFTER_SECONDS = "5";
+
+/**
+ * The request handler, exported so tests exercise the real production path
+ * (index.ts binds its port via Deno.serve only when run as the main module,
+ * keeping this import side-effect free — the n8n-api pattern).
+ *
+ * The admin client is a parameter so tests can stub the Supabase boundary —
+ * the only thing stubbed — without env vars or a live database.
+ */
+export async function handleRequest(
+  req: Request,
+  // deno-lint-ignore no-explicit-any
+  createAdminClient: () => any = () =>
+    createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    ),
+): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   // Declared first: every exit path below stamps it, including the ones that
@@ -80,14 +155,15 @@ Deno.serve(async (req) => {
                 405, { "X-Postora-Request-Id": requestId });
   }
 
-  const admin = createClient(
-    Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-  );
+  const admin = createAdminClient();
 
   let record: PartnerKeyRecord | null = null;
   let action = "unknown";
   let idempotencyKey: string | null = null;
+  // Empty until the limiter resolves this key's budget; finish() stamps it on
+  // every response after that point. Responses before the limiter ran, and
+  // responses where the limiter was unavailable, must carry no budget numbers.
+  let rateHeaders: Record<string, string> = {};
 
   // Bound once so every exit path stamps the request id automatically. The
   // alternative - adding a trailing argument at each call site - is how
@@ -98,8 +174,8 @@ Deno.serve(async (req) => {
     body: unknown,
     extraHeaders: Record<string, string> = {},
     errorCode?: string,
-  ) => respond(admin, record!, action, status, billable, body, extraHeaders,
-               errorCode, requestId);
+  ) => respond(admin, record!, action, status, billable, body,
+               { ...extraHeaders, ...rateHeaders }, errorCode, requestId);
 
   try {
     record = await authenticatePartnerKey(admin, req.headers.get("x-postora-key") ?? "");
@@ -114,7 +190,15 @@ Deno.serve(async (req) => {
     }
     if (scope !== null) assertScope(record, scope);
 
-    await checkRateLimit(admin, record);
+    // An action missing from ACTION_RISK_CLASSES resolves undefined here and
+    // fails CLOSED on limiter failure — never fail-open by omission (D7).
+    const limiter = await checkRateLimit(admin, record, limiterRiskClassFor(action));
+    // X-RateLimit-* only when the limiter actually resolved this key's
+    // budget, with the numbers it reported: a class-A request that proceeded
+    // through a limiter outage resolved nothing, so it must report no budget
+    // rather than an invented one. Fail-closed requests threw above and never
+    // reach here.
+    if (limiter.status === "resolved") rateHeaders = rateLimitHeadersFor(limiter);
 
     // Resolve the key's pinned account. The composite FK already guarantees it
     // belongs to this workspace, so this read cannot cross a tenant boundary.
@@ -351,10 +435,26 @@ Deno.serve(async (req) => {
                   { "X-Postora-Request-Id": requestId });
     }
     if (err instanceof PartnerAuthError) {
-      const retryable = err.code === "rate_limited";
+      // The two limiter verdicts are the only retryable auth-path errors.
+      const retryable = err.code === "rate_limited" || err.code === "limiter_unavailable";
       const body = errorBody(err.code, err.message, retryable);
       if (record) {
-        return await finish(err.status, false, body, {}, err.code);
+        // rate_limited: the limiter DID run and refused, so the budget is
+        // real — Remaining 0 is proven by the refusal itself, and Reset and
+        // Retry-After carry the database-provided seconds until the window
+        // that refused this call ends (omitted, not invented, if the RPC
+        // drifted and brought no number). limiter_unavailable: no budget was
+        // resolved, so all three are omitted and Retry-After points at the
+        // retry instead.
+        const headers = err.code === "rate_limited"
+          ? rateLimitedHeadersFor(
+              record,
+              err instanceof RateLimitedError ? err.resetSeconds : null,
+            )
+          : err.code === "limiter_unavailable"
+          ? { "Retry-After": LIMITER_OUTAGE_RETRY_AFTER_SECONDS }
+          : {};
+        return await finish(err.status, false, body, headers, err.code);
       }
       // No key resolved yet, so there is no ledger row to write - but the
       // caller still gets a correlatable id.
@@ -367,7 +467,13 @@ Deno.serve(async (req) => {
     return json(withRequestId(body, requestId), 500,
                 { "X-Postora-Request-Id": requestId });
   }
-});
+}
+
+if (import.meta.main) {
+  // Wrapped so Deno.serve's connection-info second argument can never be
+  // mistaken for handleRequest's client-factory parameter.
+  Deno.serve((req) => handleRequest(req));
+}
 
 /** Emit the response, stamp it with the request id, and append exactly one
  *  usage-ledger row for it. */
