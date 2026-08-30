@@ -12,6 +12,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   useAiAgentConfig,
   type AiAgentPlatform,
@@ -49,6 +51,13 @@ export function AiKnowledgeManager({
   const catalog = isWhatsApp ? catalogHook.catalog : null;
   const [profile, setProfile] = useState("");
   const [uploading, setUploading] = useState(false);
+  // Where a NEW upload lands. Defaults to the selected account, because a file
+  // added while looking at one page is almost always that page's -- and until
+  // this existed every upload was hardcoded shared, so a WhatsApp price list
+  // answered Instagram customers too. "All accounts" stays one click away.
+  const [uploadScope, setUploadScope] = useState<"account" | "all">("account");
+  const selectedAccountLabel = socialAccounts.find((account) => account.id === accountId)
+    ?.platform_username ?? null;
   // Set when a stored export link cannot be resolved (e.g. the object is gone
   // or the row predates signed URLs) — the button degrades to disabled until
   // exports are regenerated, never to a broken link.
@@ -161,6 +170,7 @@ export function AiKnowledgeManager({
       toast.error("Supported files: CSV, XLSX, XLS, PDF, TXT, MD, PNG, JPG, WEBP.");
       return;
     }
+    const scopeToAccount = uploadScope === "account" && !!accountId;
     setUploading(true);
     // Set once the upload succeeds and cleared once the source row exists:
     // only on that stretch is the object unreferenced storage nobody can see
@@ -192,8 +202,12 @@ export function AiKnowledgeManager({
           p_source_type: type,
           p_file_name: file.name,
           p_file_path: aiKnowledgeStorageRef(objectPath),
-          p_social_account_ids: [],
-          p_visibility: "shared",
+          // A restricted source MUST name at least one account (the RPC refuses
+          // otherwise), so with no account selected the only honest choice is
+          // shared -- silently narrowing to an account we do not have would
+          // create a source nothing can retrieve.
+          p_social_account_ids: scopeToAccount ? [accountId] : [],
+          p_visibility: scopeToAccount ? "restricted" : "shared",
         },
       );
       if (error) throw error;
@@ -258,7 +272,30 @@ export function AiKnowledgeManager({
             (PNG/JPG/WEBP — text is extracted automatically).
           </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
+          {accountId && (
+            <div className="space-y-1.5">
+              <Label htmlFor="upload-scope">Available to</Label>
+              <Select
+                value={uploadScope}
+                onValueChange={(value) => setUploadScope(value as "account" | "all")}
+              >
+                <SelectTrigger id="upload-scope" className="w-full max-w-xs" data-testid="upload-scope">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="account">
+                    {selectedAccountLabel ? `Only ${selectedAccountLabel}` : "Only this account"}
+                  </SelectItem>
+                  <SelectItem value="all">All accounts</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Applies to the next file you upload. Existing files keep the scope they were
+                given.
+              </p>
+            </div>
+          )}
           <label className="flex cursor-pointer items-center gap-2">
             <Button
               type="button"
