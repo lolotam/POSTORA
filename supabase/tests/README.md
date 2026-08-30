@@ -163,11 +163,19 @@ run looks like. So each suite must prove it reached the end, one of two ways:
 | Suite kind | Completion proof |
 |---|---|
 | pgTAP (`whatsapp_workspace_crm.sql`, `import_whatsapp_contacts_to_workspace.sql`) | a `1..N` plan, with exactly N numbered test points observed |
-| NOTICE-based (`partner_api_test.sql`, `partner_api_tenancy_negative.sql`) | a terminal line containing **`ALL CHECKS PASSED`** |
+| NOTICE-based (`partner_api_test.sql`, `partner_api_tenancy_negative.sql`) | **`ALL CHECKS PASSED` as the last non-blank line of stdout** |
 
-**If you add a suite with no TAP plan, end it with `ALL CHECKS PASSED`** or the
-harness will refuse it — deliberately, because there would otherwise be no way
-to distinguish a complete run from a truncated one.
+**If you add a suite with no TAP plan, end it with an `\echo` line containing
+`ALL CHECKS PASSED`** or the harness will refuse it — deliberately, because
+there would otherwise be no way to distinguish a complete run from a truncated
+one.
+
+It must be the **last** line, not merely present. Searching for the phrase
+anywhere was itself a false green: `assert_eq` prints its label as a NOTICE, so
+a test described as "… ALL CHECKS PASSED …" satisfied a substring search and the
+suite could then be truncated and still pass. Only stdout is checked — `$BOTH`
+is stdout and stderr concatenated, not interleaved in time, so its last line is
+whatever stderr happened to print last and proves nothing about ordering.
 
 The plan check also rejects: more points than planned, a second `1..N` line
 (pgTAP itself refuses a second `plan()` call, so two means the output is not one

@@ -701,29 +701,39 @@ for s in "${SUITES[@]}"; do
     exit 1
   fi
 
-  # COMPLETION, not merely "something passed".
+  # COMPLETION, not merely "something passed", and the sentinel must be the
+  # LAST LINE -- not merely present somewhere.
   #
   # A plan that was seen and matched already proves the suite ran to the end,
-  # so `planned-complete` needs nothing further. For a suite with NO plan --
-  # the NOTICE-based ones -- an intermediate `ok` proves only that the suite
-  # got as far as its first assertion. partner_api_test.sql truncated after
-  # test one exits 0, emits `ok - ...`, and satisfies any generic
-  # "did something pass?" check. Only a line that can appear at the END proves
-  # completion, so those suites must emit an explicit terminal sentinel.
+  # so `planned-complete` needs nothing further. A suite with NO plan must
+  # prove completion with a terminal sentinel, because an intermediate `ok`
+  # only proves it reached its first assertion.
   #
-  # Both streams are searched: pgTAP writes TAP to stdout, but RAISE NOTICE
-  # goes to STDERR, so a stdout-only check sees nothing from the NOTICE suites
-  # and fails a passing one. (It did, the first time.)
-  if [ "$VERDICT" = "no-plan" ] \
-     && ! grep -qE 'ALL CHECKS PASSED' "$BOTH"; then
-    echo "" >&2
-    echo "db-harness: SUITE INCOMPLETE (no plan, no sentinel): $s" >&2
-    echo "  It exited 0 and emitted no TAP plan, so the only proof it ran to" >&2
-    echo "  the end is its terminal sentinel -- and there isn't one." >&2
-    echo "  A suite truncated after its first passing assertion looks exactly" >&2
-    echo "  like this. Every no-plan suite must end with a line containing" >&2
-    echo "  ALL CHECKS PASSED; see supabase/tests/README.md." >&2
-    exit 1
+  # Searching for the phrase ANYWHERE was itself a false green: this repo's
+  # assert_eq helper prints its label as a NOTICE, so a test described as
+  # "... ALL CHECKS PASSED ..." satisfies a substring search, and the suite can
+  # then be truncated and still pass. Requiring it to be the last non-blank
+  # line means only a line that actually ran last can satisfy it.
+  #
+  # STDOUT only, deliberately. $BOTH is stdout and stderr CONCATENATED, not
+  # interleaved in time, so "last line of $BOTH" is whatever stderr happened to
+  # print last and says nothing about ordering. The sentinels are \echo, which
+  # psql writes to stdout.
+  if [ "$VERDICT" = "no-plan" ]; then
+    LAST_OUT="$(awk 'NF { last = $0 } END { print last }' "$OUT")"
+    case "$LAST_OUT" in
+      *"ALL CHECKS PASSED"*) : ;;
+      *)
+        echo "" >&2
+        echo "db-harness: SUITE INCOMPLETE (no plan, no terminal sentinel): $s" >&2
+        echo "  It exited 0 and emitted no TAP plan, so the only proof it ran" >&2
+        echo "  to the end is a sentinel as its LAST line of stdout." >&2
+        echo "  last stdout line was: ${LAST_OUT:-<no output>}" >&2
+        echo "  A suite truncated after its first passing assertion looks" >&2
+        echo "  exactly like this. End no-plan suites with an \echo line" >&2
+        echo "  containing ALL CHECKS PASSED; see supabase/tests/README.md." >&2
+        exit 1 ;;
+    esac
   fi
 done
 
