@@ -1,6 +1,13 @@
 # Spec — per-account connectors, scoped knowledge, and real credentials
 
-Status: revision 2, 2026-08-30. Branch `feat/per-account-connectors`.
+Status: revision 3, 2026-08-31. Branch `feat/per-account-connectors-tools`.
+
+**Revision 3 records what shipped and adds three decisions revision 2 did not make.**
+PR-1 and PR-8 shipped as #73; knowledge sharing across accounts shipped as #78 and is the
+model §12 now reuses. The new material is §12 (a connector shared with other accounts),
+§13 (the usage guide that teaches the agent to call it), §14 (the second, account-less
+Tools surface), and §15 (what only the account owner can supply). The PR table in §9 is
+rewritten accordingly.
 
 Revision 1 was reviewed by GLM 5.3 (read-only, adversarial) and returned sixteen findings,
 two of them blocking. This rewrite adopts every one that survived verification against the
@@ -582,6 +589,8 @@ goes to Vault like any other, and the field renders as a textarea with no echo-b
 
 ## 7. Knowledge tab scoping
 
+> **SHIPPED in #73, and extended by #78.** Kept for the reasoning; nothing here is left to build.
+
 ### 7.1 Filter the list to the account
 
 `ai_knowledge_sources` already has `visibility` (`shared` / `restricted`) and
@@ -616,6 +625,8 @@ them right afterwards.
 ---
 
 ## 8. The blank-save fix
+
+> **SHIPPED in #73.** Kept for the reasoning; nothing here is left to build.
 
 Three changes; the first is the one that matters.
 
@@ -704,15 +715,20 @@ the frontend auto-deploys on `main` while Edge Functions are copied separately.
 
 | PR | Contents | Gate |
 |---|---|---|
-| **PR-1** | Blank-save fix, `AiKnowledgeManager` guard, invalidation key narrowed | Regression tests fail without the fix |
-| **PR-2** | Connector registry + field schemas + **four-way contract test**. No behaviour change | Contract test passes for all types |
-| **PR-3** | Migration: scope (`DEFAULT 'all_accounts'`) + scope/account CHECK + credential columns + `NULLS NOT DISTINCT` index + **DB CHECK rebuilt for the four missing types**. **No drops** | Rehearsed with `ROLLBACK` against production |
-| **PR-4** | `ai_upsert_tool` / `ai_list_tools` write scoped rows and Vault credentials; account dropdown on the Tools tab; unknown type → **400, not a downgrade**; `ai_delete_tool` deletes the Vault secret; cascade trigger | Deployed before PR-6 |
-| **PR-5** | **`ai-agent-reply` loads tools scoped to the account** + dual-read of `secret` | Account A's connector must not appear in account B's conversation |
-| **PR-6** | Adapters + `test_connection` + `read_only_mode` enforcement + redaction, WooCommerce and Supabase first | Live test against a real store |
-| **PR-7** | Contract migration: drop `ai_agent_tools_user_id_name_key`, migrate `secret` into Vault | Forward-only; say so in the runbook |
-| **PR-8** | Knowledge list filtering + account-named source titles | Predicate matches the retrieval RPCs |
-| **PR-9** | OAuth flows (Salla, Zid, Shopify) + refresh with **per-connector serialization** | Expiry simulated, not assumed |
+| ~~PR-1~~ | ~~Blank-save fix, `AiKnowledgeManager` guard~~ | **SHIPPED — #73** |
+| ~~PR-8~~ | ~~Knowledge list filtering + account-named source titles~~ | **SHIPPED — #73** |
+| — | Knowledge shared across accounts (`ai_knowledge_source_accounts` link editing) | **SHIPPED — #78.** The model §12 reuses |
+| **PR-2** | Connector registry: field schemas, **usage guides (§13)**, four-way contract test. No behaviour change | Contract test passes for all twelve types |
+| **PR-3** | **Migration A** — scope (`DEFAULT 'all_accounts'`) + scope/account CHECK + credential columns + `NULLS NOT DISTINCT` index + DB CHECK rebuilt for the four missing types + `ai_agent_tool_accounts` + `set_ai_agent_tool_accounts`. **No drops** | Rehearsed with `ROLLBACK` against production. **Owner applies manually** |
+| **PR-4** | `ai_upsert_tool` / `ai_list_tools` write scoped rows and Vault credentials; account dropdown; **sharing strip (§12)**; unknown type → **400, not a downgrade**; `ai_delete_tool` deletes the Vault secret; **Settings becomes read-only (§14)** | Deployed before PR-7 |
+| **PR-5** | **`ai-agent-reply` resolves tools for the account** (own OR `all_accounts` OR linked) + the **name-collision rule (§12.3)** + usage guides in the tool descriptions + dual-read of `secret` | Account A's connector must not appear in account B's conversation |
+| **PR-6** | Adapters + `test_connection` + `read_only_mode` enforcement + redaction, WooCommerce and Supabase first | Live test against a real store (**§15**) |
+| **PR-7** | **Migration B (contract)** — drop `ai_agent_tools_user_id_name_key`, migrate `secret` into Vault | Forward-only; say so in the runbook. **Owner applies manually** |
+| **PR-9** | OAuth flows (Salla, Zid, Shopify) + refresh with **per-connector serialization** | Expiry simulated, not assumed (**§15**) |
+
+Two migrations need the owner to run them by hand: **PR-3** and **PR-7**. Four PRs change
+`supabase/functions/**` and need the `ssh-contabo-mcp` copy-and-verify deploy: **PR-4, PR-5,
+PR-6, PR-9**.
 
 ### 9.1 Work the first revision's table silently assumed
 
@@ -786,3 +802,214 @@ The split earns its keep for four other reasons:
    credential-handling code.
 4. **It can log its own early exit**, which is the actual complaint behind the original
    question.
+
+
+---
+
+## 12. A connector shared with other accounts
+
+Revision 2 named this as a gap and declined it: *"a merchant with one product catalogue
+shared across seven Facebook pages but not their Instagram cannot say that. Recorded as an
+option, not designed."* It is now the requirement, and #78 has already built and shipped
+the model for the same problem on knowledge sources. This section reuses it rather than
+inventing a second vocabulary for the same idea.
+
+### 12.1 Owning account, plus explicit shares
+
+Knowledge sources have no owning account: a source is `shared`, or it is `restricted` to a
+list. Connectors are not the same shape and must not be forced into it. §4.1 and §4.2 both
+hang off `social_account_id` — the uniqueness key, the scope CHECK, and the composite FK
+that stops a connector pointing at an account on another platform. `ON DELETE CASCADE`
+only means something because an owning account exists.
+
+So the owning account stays, and sharing is **additive**:
+
+```sql
+CREATE TABLE public.ai_agent_tool_accounts (
+  tool_id UUID NOT NULL REFERENCES public.ai_agent_tools(id) ON DELETE CASCADE,
+  social_account_id UUID NOT NULL REFERENCES public.social_accounts(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (tool_id, social_account_id)
+);
+```
+
+`user_id` is denormalised onto the link for the same reason
+`ai_knowledge_source_accounts` carries it: RLS is `auth.uid() = user_id`, and without the
+column every policy evaluation needs a join.
+
+An account resolves a connector when **any** of three things is true:
+
+```
+scope = 'all_accounts'
+  OR social_account_id = :account          -- it owns it
+  OR EXISTS (link for (tool, :account))    -- it was shared it
+```
+
+This is deliberately a superset of §4.1's predicate, not a replacement. `all_accounts`
+keeps meaning "every account, including ones connected later"; the link table means "these
+named accounts, and no others". Both are needed — revision 2's two production rows are
+`all_accounts` and must not silently narrow.
+
+### 12.2 Editing the shares
+
+`set_ai_agent_tool_accounts(p_user_id, p_tool_id, p_social_account_ids uuid[])` mirrors
+`set_ai_knowledge_source_visibility` exactly, and for the reasons that function already
+documents: it **replaces** the whole link set inside one transaction, takes `FOR UPDATE` on
+the tool row first, verifies the tool and every named account belong to `p_user_id`, and is
+granted to `service_role` only, because messaging-api authenticates the bearer itself and
+then runs under the service role.
+
+The owning account is **never** written as a link row. It resolves through
+`social_account_id`, so a link would be a second, silently divergent source of one fact.
+
+The UI is the strip #78 shipped, with one difference stated in the control itself: the
+owning account's box renders **checked and disabled**, because unticking it is not a
+sharing change — it is a change of owner, which uniqueness and the composite FK make a
+different operation. The title attribute says so.
+
+**Reuse the pure helpers, do not re-derive them.** `src/lib/knowledgeSharing.ts` already
+holds `agentAccounts`, `effectiveAccountIds` and `nextSharing`, with tests. PR-4
+generalises that module (or extracts the shared part) rather than writing a second copy
+that drifts from it. The one behavioural difference — an always-on owning account — is a
+parameter, not a fork.
+
+### 12.3 Two tools, one function name — decide it here
+
+This edge is created by this feature and does not exist today. §4.2 moves uniqueness to
+`(user_id, social_account_id, name)`, so account B may have its own `woocommerce_store` at
+the same time as account A shares *its* `woocommerce_store` with B. Both then resolve for
+one conversation, and today's assembly is:
+
+```ts
+const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
+```
+
+A `Map` keyed by name silently keeps the last writer, and the model is handed a tools array
+containing two functions with the same name — behaviour no provider defines. Left
+undecided, this is a coin flip over which store the agent queries.
+
+**The rule, at two layers:**
+
+1. **Write time.** `set_ai_agent_tool_accounts` refuses a link that would give an account
+   two enabled tools of the same name, naming both. The error says what to rename.
+2. **Dispatch time.** A collision that appears *later* — B renames a tool into an existing
+   shared name — resolves in favour of **the account's own tool**. The shared duplicate is
+   dropped and one line is written to `ai_agent_logs`.
+
+Both are needed. The first alone cannot hold, because renames happen after the link exists.
+The second alone is a silent surprise at the moment of sharing. Own-tool-wins is the choice
+because the more specific configuration should beat the inherited one, which is the same
+rule `scope='account'` already encodes against `all_accounts`.
+
+### 12.4 What sharing does **not** do
+
+It does not copy credentials between vendors, and it does not re-scope the connector's
+`read_only_mode` or `permissions`. A shared connector runs with the owner's stored
+credentials and the owner's capability flags, so any account it is shared with can read
+whatever those credentials can read. That is what the request asks for; it is stated here
+so it is a decision rather than a discovery.
+
+---
+
+## 13. The connector usage guide
+
+The request asked for "a specific skill file in the code to guide the agent how to use the
+tools during the chat". A markdown file under `docs/` would satisfy the letter of that and
+none of the intent: the runtime never reads `docs/`. The guide has to reach the model.
+
+### 13.1 What the model is given today
+
+`customToolDefinitions` (`ai-agent-reply/tools.ts:330`) builds one function per connector:
+
+```ts
+description: tool.description,          // whatever the user typed in a text box
+parameters: { request: { type: "string",
+  description: "The request to send to this connector, in plain language …" } }
+```
+
+One free-text parameter and a user-written sentence. The model is told a connector exists
+and nothing about **when** to reach for it, what it can answer, or what a good `request`
+looks like. That is a real reason connectors underperform, and per-account scoping does not
+touch it.
+
+### 13.2 Where the guide lives
+
+In the **connector registry** PR-2 already creates under `supabase/functions/_shared/`, as
+a field on each connector type beside its credential schema:
+
+```ts
+{
+  type: "woocommerce",
+  label: "WooCommerce",
+  credentials: [ /* … */ ],
+  usageGuide: {
+    whenToUse:
+      "Live product, stock and order data for this store. Prefer it over indexed knowledge for price and availability, which change.",
+    requestExamples: ["stock level for SKU ABC-12", "status of order 10432"],
+    limits: "Reads only. Cannot place, refund or modify an order.",
+  },
+}
+```
+
+One definition, two consumers — the rule §5.1 already sets for credential schemas, and the
+reason both live in `_shared/` rather than inside either function.
+
+### 13.3 How it reaches the model
+
+A pure `composeToolDescription(tool, guide)` in `_shared/`, composed into the function
+description at assembly time, under a **hard character budget** (600 characters per tool,
+truncated at a sentence boundary, guide first and the user's own text last). The budget is
+not cosmetic: every tool description is resent on every turn of every conversation, and this
+worker has a 60-second ceiling the repo has already hit once.
+
+Testable with no server and no model: given a tool and a guide, assert the composed string
+contains the guide, respects the budget, and **degrades to today's behaviour when a
+connector type has no guide**. That last case must not throw — `custom_rest` has no vendor
+semantics to describe.
+
+### 13.4 The user's own description still wins on specifics
+
+The registry guide describes the **type**; the user's `description` field describes **their
+instance** ("our Kuwait store, prices in KWD"). Both are sent, guide first. Replacing the
+user's text with a generic guide would be a regression for every connector already
+configured.
+
+---
+
+## 14. The second Tools surface
+
+§9.1 item 4 recorded that `DatabaseConnectorsManager` is mounted twice — inside the agent
+tabs (`AiAgentManager.tsx:348`) and at `Settings.tsx:174` **with no platform and no
+account** — and said "PR-4 must decide". It is decided:
+
+**Settings becomes a read-only overview.** It lists every connector across every account
+with its type, scope, and the accounts that can use it, and links through to that account's
+agent tab to edit. It performs no writes.
+
+The reason is the one this spec keeps running into: an account-less **write** surface
+against an account-scoped table is how unscoped rows get created, and unscoped rows are the
+defect. Removing the page outright was the alternative; a read-only overview costs little
+and keeps an entry point people already use.
+
+`DatabaseConnectorsManager` keys its configured-state map by `connector_type`
+(`:620-626`), which breaks the moment one account has two WooCommerce connectors — PR-4
+rekeys it by tool id. That is required for the agent tab regardless of what Settings does.
+
+---
+
+## 15. What only the account owner can supply
+
+Every PR including adapters and OAuth is in scope. Three gates cannot be met by an
+implementer, and are named here with the PR that blocks on them, so the pause is planned
+rather than discovered:
+
+| PR | Needs | Why nobody else can produce it |
+|---|---|---|
+| **PR-3, PR-7** | The migrations run against production | Postora migrations self-commit, so they are applied by hand after review — as the owner has done for every recent migration |
+| **PR-6** | A real WooCommerce store URL + consumer key/secret, and a Supabase project URL + anon key | The gate is "live test against a real store". Read-only credentials are enough, and are what `read_only_mode` assumes |
+| **PR-9** | Salla, Zid and Shopify **app registrations** — client id, client secret, and a redirect URI pointing at the deployed function | OAuth apps are created in each vendor's partner dashboard against the owner's merchant account. Without them PR-9 can be written and unit-tested but never verified |
+
+PR-9 is therefore the natural place to stop if those registrations are not ready. PR-2
+through PR-7 deliver per-account connectors, cross-account sharing, the usage guide, and
+working WooCommerce and Supabase adapters with no vendor dashboard step at all.
