@@ -685,14 +685,33 @@ Deno.serve(async (req) => {
         if (chunks.length > MAX_INLINE_CHUNKS) {
           const { error: queueError } = await (admin as any)
             .from("ai_knowledge_sources")
-            .update({ status: "pending", chunk_count: 0, error: null })
+            // queued_at is the handoff, not the status. Every source is created
+            // `pending`, so status alone cannot tell "not started" from "given
+            // to the worker" -- and the worker's 15s poll would otherwise claim
+            // an ordinary small upload while this path was still processing it.
+            .update({
+              status: "pending",
+              chunk_count: 0,
+              error: null,
+              queued_at: new Date().toISOString(),
+            })
             .eq("id", source.id);
           if (queueError) throw queueError;
+          // KNOWN GAP, recorded rather than hidden: the inline path runs graph
+          // extraction after storing chunks, and the queue worker does not. So
+          // a document contributes entities and relations when it is small and
+          // none when it is large, which would silently thin the graph exports
+          // and graph-expanded answers. Retrieval itself is unaffected -- the
+          // chunks are embedded and searchable either way.
+          //
+          // Logged as a field so the affected sources are queryable when the
+          // worker learns to do graph extraction within its deadline budget.
           await logKnowledgeEvent(admin, user.id, "queue_large_source", true, {
             source_id: source.id,
             source_type: source.source_type,
             file_name: source.file_name,
             chunk_count: chunks.length,
+            graph_extraction: "deferred",
           });
           return jsonResponse({ ok: true, queued: true, chunks: chunks.length }, 202);
         }

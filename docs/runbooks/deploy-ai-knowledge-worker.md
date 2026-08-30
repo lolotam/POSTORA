@@ -44,13 +44,23 @@ mkdir -p "$VOL/ai-knowledge-excel-worker"
 git show "origin/main:supabase/functions/ai-knowledge-excel-worker/index.ts" > "$VOL/ai-knowledge-excel-worker/index.ts"
 
 # Also refresh the shared modules the worker imports, if they changed:
-for f in knowledgeEmbeddings.ts ollamaEmbeddings.ts cors.ts cron-auth.ts; do
+for f in knowledgeEmbeddings.ts ollamaEmbeddings.ts cors.ts cron-auth.ts knowledgeSourceFiles.ts; do
   git show "origin/main:supabase/functions/_shared/$f" > "$VOL/_shared/$f"
 done
-git show "origin/main:supabase/functions/ai-knowledge-ingest/chunking.ts" > "$VOL/ai-knowledge-ingest/chunking.ts"
 
-# Verify — the two hashes on the line must match:
-sha256sum <(git show "origin/main:supabase/functions/ai-knowledge-excel-worker/index.ts") "$VOL/ai-knowledge-excel-worker/index.ts"
+# The worker imports these from the ingest function's directory. parsing.ts is
+# what lets it handle doc/pdf/image rather than workbooks only; without it the
+# worker cannot resolve its import and dies on restart, and the queue-widening
+# migration then strands every queued source.
+for f in chunking.ts parsing.ts; do
+  git show "origin/main:supabase/functions/ai-knowledge-ingest/$f" > "$VOL/ai-knowledge-ingest/$f"
+done
+
+# Verify — each pair of hashes on a line must match. parsing.ts is included
+# deliberately: a missing dependency fails at runtime, not at copy time.
+for f in ai-knowledge-excel-worker/index.ts ai-knowledge-ingest/chunking.ts ai-knowledge-ingest/parsing.ts; do
+  sha256sum <(git show "origin/main:supabase/functions/$f") "$VOL/$f"
+done
 ```
 
 ## 2. Add the compose service
