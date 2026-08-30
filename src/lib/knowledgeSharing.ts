@@ -18,7 +18,7 @@ import type { SourceAccountLink, VisibilityScopedSource } from "./knowledgeVisib
 // The platforms that actually run an agent -- the same list as AiAgentPlatform
 // in useAiAgentConfig. A TikTok or Pinterest account has no inbox and no agent,
 // so a checkbox for it would promise retrieval that can never happen.
-export const AGENT_SHARING_PLATFORMS = [
+const AGENT_SHARING_PLATFORMS = [
   "whatsapp",
   "facebook",
   "instagram",

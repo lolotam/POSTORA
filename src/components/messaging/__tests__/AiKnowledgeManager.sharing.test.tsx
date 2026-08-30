@@ -47,7 +47,7 @@ const ACCOUNTS = [
   { id: "th-1", platform: "threads", platform_username: "Xsellpoint", platform_user_id: null },
   // No agent runs on TikTok, so it must not get a checkbox -- the box would
   // promise retrieval that can never happen.
-  { id: "tt-1", platform: "tiktok", platform_username: "xsellpoint", platform_user_id: null },
+  { id: "tt-1", platform: "tiktok", platform_username: "xsellpoint_on_tiktok", platform_user_id: null },
 ];
 vi.mock("@/hooks/useSocialAccounts", () => ({
   useSocialAccounts: () => ({ data: ACCOUNTS }),
@@ -64,8 +64,11 @@ const source = (visibility: "shared" | "restricted") => ({
   chunk_count: 12,
 });
 
+// Anchored to the end of the accessible name ("Share <file> with <account>").
+// Unanchored, "Xsellpoint" also matches "xsellpoint_kw" and the query resolves
+// to two boxes -- so a real handle and a prefix of it could never be told apart.
 const shareBox = (name: string) =>
-  screen.getByRole("checkbox", { name: new RegExp(`with ${name}`, "i") });
+  screen.getByRole("checkbox", { name: new RegExp(`with ${name}$`, "i") });
 
 describe("AiKnowledgeManager cross-account sharing", () => {
   beforeEach(() => {
@@ -78,8 +81,12 @@ describe("AiKnowledgeManager cross-account sharing", () => {
     knowledge.links = [{ source_id: "s1", social_account_id: "fb-1" }];
     render(<AiKnowledgeManager platform="facebook" accountId="fb-1" />);
 
-    expect(screen.getByText("xsellpoint_kw")).toBeTruthy();
-    expect(screen.queryByText("xsellpoint")).toBeNull();
+    // By role, not by rendered text. The three handles here overlap by prefix
+    // and by case on purpose: a getByText("xsellpoint") would have "proved"
+    // TikTok's absence while actually just missing on capitalisation.
+    expect(shareBox("xsellpoint_kw")).toBeTruthy();
+    expect(shareBox("Xsellpoint")).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: /with xsellpoint_on_tiktok$/i })).toBeNull();
   });
 
   it("shares an already-indexed file with another platform without re-uploading", () => {

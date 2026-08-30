@@ -129,7 +129,7 @@ export function AiKnowledgeManager({
   // answers Instagram customers without a second upload or a second embedding
   // bill.
   const shareAccounts = useMemo(
-    () => agentAccounts(socialAccounts as SharingAccount[]),
+    () => agentAccounts(socialAccounts),
     [socialAccounts],
   );
   // One pass over the link table for the whole list, so each checkbox is a
@@ -147,7 +147,7 @@ export function AiKnowledgeManager({
   // `invoke.isPending` would freeze every row on the page.
   const [sharingSourceId, setSharingSourceId] = useState<string | null>(null);
   const toggleShare = async (
-    source: { id: string; visibility: "shared" | "restricted"; file_name: string | null },
+    source: { id: string; visibility: "shared" | "restricted" },
     target: SharingAccount,
     checked: boolean,
   ) => {
@@ -170,27 +170,23 @@ export function AiKnowledgeManager({
       return;
     }
     setSharingSourceId(source.id);
-    try {
-      // The RPC REPLACES the link set, so the full desired list is sent every
-      // time -- a delta would strip the source from every other agent.
-      await invoke.mutateAsync({
-        action: "set_source_visibility",
+    // Through `run` like every other action here, so the failure toast stays
+    // identical. It reports rather than rethrows, which is why clearing the
+    // pending flag needs no try/finally.
+    await run(
+      "set_source_visibility",
+      {
         source_id: source.id,
         visibility: next.visibility,
+        // The RPC REPLACES the link set, so the full desired list goes every
+        // time -- a delta would strip the source from every other agent.
         social_account_ids: next.social_account_ids,
-      });
-      toast.success(
-        checked
-          ? `Shared with ${accountLabel(target)}`
-          : `Removed from ${accountLabel(target)}`,
-      );
-    } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not update sharing",
-      );
-    } finally {
-      setSharingSourceId(null);
-    }
+      },
+      checked
+        ? `Shared with ${accountLabel(target)}`
+        : `Removed from ${accountLabel(target)}`,
+    );
+    setSharingSourceId(null);
   };
   const saveProfile = async () => {
     try {
