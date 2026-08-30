@@ -184,6 +184,33 @@ empty plan and counts as complete.
 
 ## Known limitations
 
+### What the TAP parsing does not do
+
+The harness reads TAP with awk, not a full TAP consumer. Eight adversarial
+review rounds established that no *reachable* false green remains with the four
+suites and the CI invocation in this repository. These remain theoretically
+possible and were judged not worth a full parser — each needs hand-crafted
+output that pgTAP does not emit:
+
+- Point numbers are **counted, not validated**. Duplicated, reused or gapped
+  numbers could be crafted to match the plan count.
+- The point pattern is loose: `ok 1garbage` is accepted as a point.
+- Ordinary query output deliberately shaped like a plan and points could
+  fabricate a complete-looking stream.
+- No-plan completion is a **source convention**. A future suite could emit the
+  sentinel early and then do work that prints nothing to stdout.
+- For pgTAP suites, "complete" means all N planned points were *observed* — not
+  that `finish()` literally executed. Truncating after the final point cannot
+  hide an unexecuted assertion, and the open transaction rolls back when psql
+  exits, so this is a naming precision rather than a gap.
+
+If a future suite is not pgTAP and not NOTICE-based, revisit this rather than
+assuming the conventions above still hold.
+
+### Other deliberate trades
+
+
+
 Recorded rather than fixed, because each is a deliberate trade:
 
 - **`host=` in a URI query is refused**, which also rejects the legitimate
