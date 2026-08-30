@@ -7,12 +7,21 @@
 --   public.partner_audit_logs        (20260830120100_partner_audit_logs.sql)
 --
 -- Lives beside supabase/tests/partner_api_test.sql, the existing partner API
--- database suite. It does NOT use that file's assert_eq helper or its outer
--- BEGIN/ROLLBACK: assert_eq cannot express "this write must be REFUSED", and a
--- single enclosing transaction would abort at the first expected failure. Each
--- assertion therefore carries its own BEGIN/EXCEPTION block and the script
--- cleans up explicitly instead of rolling back -- the same reason
--- partner_api_race_fixture.sql is kept separate from the rolling-back suite.
+-- database suite. It does NOT use that file's assert_eq helper, which can only
+-- express "this value equals that one" and cannot express "this write must be
+-- REFUSED" -- the entire point of every assertion here. Each check therefore
+-- carries its own BEGIN/EXCEPTION block, which is also what keeps one expected
+-- failure from aborting the rest.
+--
+-- It also does not wrap itself in that suite's outer BEGIN/ROLLBACK, but the
+-- reason is narrower than an earlier draft of this comment claimed: a handled
+-- PL/pgSQL exception does NOT abort an enclosing transaction, so an outer
+-- ROLLBACK would in fact work for most of this file and would clean up for
+-- free. The real reason is Positive 2, which deletes a social account and
+-- asserts the audit trail survives the resulting cascade -- a committed,
+-- cross-statement effect. That is the same reason partner_api_race_fixture.sql
+-- is kept apart from the rolling-back suite. Explicit cleanup runs before and
+-- after so the script stays re-runnable.
 --
 -- Run with psql AS A SUPERUSER (supabase_admin / postgres) against a
 -- THROWAWAY database that already has every migration applied. NEVER run it
