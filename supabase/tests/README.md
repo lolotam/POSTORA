@@ -53,51 +53,19 @@ creates a database: point it only at servers you are willing to lose.
 
 ## The baseline contract
 
-`baseline_schema.sql`'s **first line** must be exactly:
+The first line of `baseline_schema.sql` is a three-field header, all required:
 
 ```
--- BASELINE_MIGRATION: <filename>.sql
+-- BASELINE_MIGRATION: <newest migration in the dump>.sql  BASELINE_COUNT: <n>  BASELINE_SUM: <sha256>
 ```
 
-naming the newest `supabase/migrations/*.sql` file the dump contains. The
-harness refuses to run on a missing baseline, a missing/corrupt marker, or a
-marker naming a migration that does not exist. Everything at or below the
-marker is treated as already applied and skipped; everything above it is
-applied in filename order.
+The harness verifies `BASELINE_COUNT` (how many migrations sort at or below
+the marker) and `BASELINE_SUM` (a sha256 of their exact filenames). Both are
+mandatory — an optional checksum is no checksum, since deleting the field
+would quietly restore the count-only guard that a swap defeats.
 
-Never backdate a migration filename: anything that does not sort strictly
-above the marker is silently considered part of the baseline.
-
-### Regenerating the baseline
-
-Run the script. Do not hand-write the header.
-
-```bash
-PRODUCTION_URL='postgres://user:pass@host:5432/postgres'   bash scripts/regenerate-baseline.sh
-```
-
-Then commit the new baseline **together with the migrations it now includes**.
-
-The first line binds three facts: which migration the dump goes up to
-(`BASELINE_MIGRATION`), how many migrations that is (`BASELINE_COUNT`), and a
-checksum of their exact filenames (`BASELINE_SUM`). The harness verifies the
-last two on every run — a rename, a swap or a deletion at or below the marker
-fails loudly, and so does a backdated migration, which the count alone would
-miss and the checksum catches.
-
-It cannot verify the first, and that is the reason this is a script rather
-than a documented `pg_dump` line: **nothing inside a schema dump records the
-last migration applied to the database it came from.** A dump regenerated
-against a newer database while keeping an older marker would silently re-apply
-migrations already in it. Writing all three fields from the same inputs, in one
-step, makes that require a deliberate hand-edit rather than a forgotten one.
-
-The script also refuses to overwrite the baseline with a truncated dump, and
-re-scans for credentials before writing.
-
-You do **not** need to regenerate merely because you added a migration — the
-harness applies anything newer than the marker on top. Regenerate when you want
-future runs to stop re-proving a settled batch.
+It cannot verify the marker itself. See "Regenerating the baseline" below for
+why, and what is done about it instead.
 
 ## The limitation — read this
 

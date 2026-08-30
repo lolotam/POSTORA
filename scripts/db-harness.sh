@@ -85,6 +85,7 @@
 # lose.
 # ============================================================================
 set -euo pipefail
+set +x            # never trace: DB_URL carries a password and xtrace prints it
 export LC_ALL=C   # deterministic filename ordering everywhere in this script
 
 DB_URL="${1:-${DB_URL:-}}"
@@ -120,10 +121,13 @@ fail() {  # fail <exit-code> <message-lines...>
 # Defined here, above the first failure path, because two early exits used to
 # interpolate the raw DB_URL and leaked its password. A redactor that only
 # exists further down protects only the exits below it.
-redact() {  # redact <url>  -> strips user[:password]@ between scheme and host
-  printf '%s' "$1" | sed -E 's#(://)[^/@]*@#\1***@#'
+redact() {  # redact <url> -> mask credentials wherever a URI can carry them
+  # TWO places, not one. An authority-only redactor leaves
+  # `?password=...` in plain sight, and libpq accepts credentials there.
+  printf '%s' "$1" \
+    | sed -E 's#(://)[^/@]*@#\1***@#' \
+    | sed -E 's#([?&](password|passfile|sslpassword|sslkey)=)[^&]*#\1***#g'
 }
-
 prod_like() {
   # Lowercased first: '/Production' and '/LIVE' are the same danger as
   # '/production', and a case-sensitive guard waves them through.
@@ -170,6 +174,19 @@ esac
 # Checked BEFORE libpq decodes it, so '/pr%6fduction' would slip past the
 # prod_like test below and connect to `production`. Rather than reimplement
 # percent-decoding in bash, refuse to reason about an encoded name at all.
+# libpq accepts connection parameters in the URI query string, and dbname=
+# there OVERRIDES the path. A guard that only inspects the path can be walked
+# straight past with `.../scratch?dbname=production`. Rather than reimplement
+# libpq's precedence rules in bash, refuse a URL that carries any query
+# parameter capable of redirecting the connection.
+case "$DB_URL" in
+  *[?\&]dbname=*|*[?\&]host=*|*[?\&]hostaddr=*|*[?\&]service=*|*[?\&]port=*)
+    fail 2 "REFUSING: the connection string carries a query parameter that can
+  redirect the connection (dbname=, host=, hostaddr=, service= or port=).
+  libpq lets those override the URL's own path, so the safety checks below
+  would be inspecting one target while psql connects to another. Put the
+  database in the path instead." ;;
+esac
 case "$MAINT_DB" in
   *%*)
     fail 2 "REFUSING: the database name in the connection string is
@@ -431,7 +448,7 @@ done
 # a loud failure naming both numbers. This is the difference between a harness
 # that skips work and one that says so.
 # Anchored, whole-field: `BASELINE_COUNT: 253junk` must not read as 253.
-BASELINE_COUNT="$(sed -n '1s/.*BASELINE_COUNT: \([0-9][0-9]*\)\([^0-9].*\)\{0,1\}$/\1/p' "$BASELINE")"
+BASELINE_COUNT="$(sed -n '1s/.*BASELINE_COUNT: \([0-9][0-9]*\)\([[:space:]].*\)\{0,1\}$/\1/p' "$BASELINE")"
 BASELINE_SUM="$(sed -n '1s/.*BASELINE_SUM: \([0-9a-f]\{64\}\).*/\1/p' "$BASELINE")"
 IN_BASELINE=$((TOTAL - ${#NEW_MIGRATIONS[@]}))
 if [ -z "$BASELINE_COUNT" ]; then
@@ -450,7 +467,16 @@ fi
 # migration applied to it. That is why regeneration is a script
 # (scripts/regenerate-baseline.sh) that writes dump, marker, count and checksum
 # in one step: drift then needs a deliberate hand-edit, not a forgotten step.
-if [ -n "$BASELINE_SUM" ]; then
+# REQUIRED, not optional. An optional checksum is no checksum: deleting the
+# field from the header would silently downgrade this back to the count-only
+# guard that a swap defeats.
+if [ -z "$BASELINE_SUM" ]; then
+  fail 2 "the baseline's header carries no BASELINE_SUM.
+  Expected:  -- BASELINE_MIGRATION: <file>.sql  BASELINE_COUNT: <n>  BASELINE_SUM: <sha256>
+  Without it a renamed or swapped migration below the marker is undetectable.
+  Regenerate with scripts/regenerate-baseline.sh."
+fi
+if true; then
   ACTUAL_SUM="$(printf '%s\n' "${ALL_MIGRATIONS[@]}" \
     | awk -v m="$MARKER" '$0 <= m' | sha256sum | cut -d' ' -f1)"
   if [ "$ACTUAL_SUM" != "$BASELINE_SUM" ]; then
@@ -553,9 +579,9 @@ for s in "${SUITES[@]}"; do
   # A `not ok` whose test NAME merely contains "not ok" is fine either way:
   # the anchor means only a real result line at column 0 counts.
   cat "$OUT" "$ERR" > "$BOTH"
-  if grep -qE '^[[:space:]]*not ok' "$BOTH"      && ! grep -E '^[[:space:]]*not ok' "$BOTH" | grep -qvE '#[[:space:]]*TODO'; then
+  if grep -qE '^[[:space:]]*not ok' "$BOTH"      && ! grep -E '^[[:space:]]*not ok' "$BOTH" | grep -qviE '#[[:space:]]*(TODO|SKIP)'; then
     : # every failing assertion is an expected (TODO) failure - not a failure
-  elif grep -qE '^[[:space:]]*not ok' "$BOTH"        || grep -qE '^# Looks like you (failed|planned)' "$BOTH"; then
+  elif grep -qE '^[[:space:]]*not ok' "$BOTH"        || grep -qE '^[[:space:]]*# Looks like you (failed|planned)' "$BOTH"; then
     echo "" >&2
     echo "db-harness: SUITE FAILED (assertion): $s" >&2
     echo "  psql exited 0 - a pgTAP assertion failure is not a SQL error." >&2

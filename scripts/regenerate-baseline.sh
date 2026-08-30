@@ -25,6 +25,7 @@
 # harness applies anything newer than the marker on top.
 # ============================================================================
 set -euo pipefail
+set +x            # never trace: PRODUCTION_URL carries a password
 export LC_ALL=C
 
 PRODUCTION_URL="${1:-${PRODUCTION_URL:-}}"
@@ -45,8 +46,34 @@ for f in "$MIGRATIONS_DIR"/*.sql; do MIGRATIONS+=("${f##*/}"); done
 shopt -u nullglob
 [ "${#MIGRATIONS[@]}" -gt 0 ] || { echo "regenerate-baseline: no migrations found" >&2; exit 2; }
 
-# The newest migration by filename order is what the dump will include up to,
-# because it is being taken from a database that has all of them applied.
+# THE ONE THING THIS SCRIPT CANNOT VERIFY.
+#
+# The marker is taken as the newest migration in the local directory, on the
+# assumption that the database being dumped has all of them applied. Nothing
+# checks that, and nothing can: this project has NO migration ledger. There is
+# no supabase_migrations.schema_migrations here -- only Supabase's own service
+# tables for auth, storage and realtime. Migrations are applied by hand.
+#
+# If a local migration has NOT been applied to the target, this script dumps
+# the older schema and marks that migration as included. The harness then skips
+# it forever, and can pass while never having tested it.
+#
+# So the assertion is demanded from the operator explicitly rather than assumed
+# silently. Converting a wrong assumption into a stated one is the only control
+# available.
+if [ "${I_CONFIRM_ALL_MIGRATIONS_APPLIED:-}" != "yes" ]; then
+  echo "regenerate-baseline: REFUSING without an explicit confirmation." >&2
+  echo "" >&2
+  echo "  This writes a marker claiming the dump includes every migration in" >&2
+  echo "  supabase/migrations/. Nothing can verify that -- this project has no" >&2
+  echo "  migration ledger. If any local migration is NOT applied to the" >&2
+  echo "  database you are dumping, the harness will skip it permanently." >&2
+  echo "" >&2
+  echo "  Check, then re-run with:" >&2
+  echo "    I_CONFIRM_ALL_MIGRATIONS_APPLIED=yes PRODUCTION_URL=... bash \$0" >&2
+  exit 2
+fi
+
 MARKER="${MIGRATIONS[-1]}"
 COUNT="${#MIGRATIONS[@]}"
 SUM="$(printf '%s\n' "${MIGRATIONS[@]}" | sha256sum | cut -d' ' -f1)"
@@ -77,13 +104,18 @@ if ! grep -q 'PostgreSQL database dump complete' "$TMP"; then
   exit 1
 fi
 
-# Secrets: a schema-only dump should carry none, and the committed one was
-# checked. Check again rather than trusting that it stays true.
-if grep -qE 'eyJ[A-Za-z0-9_-]{20}|sk-[a-zA-Z0-9]{20}|BEGIN (RSA |EC |)PRIVATE KEY' "$TMP"; then
+# A TRIPWIRE, NOT A CLEARANCE. A schema-only dump still carries function
+# bodies, column defaults and comments, any of which can embed a credential.
+# This catches the shapes that are cheap to pattern-match; it cannot certify
+# that the dump is clean, and must not be read as doing so. The file is about
+# to be committed to a git history -- read the diff before you push it.
+if grep -qiE 'eyJ[A-Za-z0-9_-]{20}|sk-[a-zA-Z0-9]{20}|BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY|xox[baprs]-|gh[pousr]_[A-Za-z0-9]{20}|AKIA[0-9A-Z]{16}|EAA[A-Za-z0-9]{20}|(password|passwd|secret|api[_-]?key|token)[[:space:]]*(=|:=|=>)[[:space:]]*'"'"'[^'"'"']{8,}' "$TMP"; then
   echo "regenerate-baseline: the dump appears to contain a credential." >&2
   echo "  Refusing to write it. Investigate before committing anything." >&2
   exit 1
 fi
+echo "regenerate-baseline: pattern scan found nothing -- this is a tripwire," >&2
+echo "  not a clearance. Read the diff before pushing." >&2
 
 mv "$TMP" "$BASELINE"
 trap - EXIT
