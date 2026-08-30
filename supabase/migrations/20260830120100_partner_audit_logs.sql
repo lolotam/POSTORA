@@ -56,13 +56,28 @@ CREATE TABLE public.partner_audit_logs (
   -- describes. So key_id is durable data, not a reference, and tenancy is
   -- asserted at write time by the trigger below.
   --
-  -- COMPENSATING CONTROL (spec 9.1): partner_audit_logs_assert_tenancy, a
-  -- BEFORE INSERT trigger that refuses any row whose key does not belong to
-  -- the stated workspace. At insert time the key necessarily exists -- the
-  -- row is describing an action being taken on it -- so this is exactly the
-  -- guarantee the composite FK would have given, minus the deletion
-  -- behaviour that made the FK unusable. Triggers fire for every role and
-  -- every code path, including service_role, which RLS does not.
+  -- COMPENSATING CONTROL (spec 9.1), and it takes TWO triggers, not one,
+  -- because a foreign key does two jobs and a single INSERT check only does
+  -- the first:
+  --
+  --   partner_audit_logs_assert_tenancy (BEFORE INSERT here) refuses a row
+  --     whose key does not belong to the stated workspace, taking FOR KEY
+  --     SHARE on the key so a concurrent workspace move cannot slip between
+  --     the check and the insert.
+  --   partner_api_keys_workspace_is_immutable (BEFORE UPDATE on the parent)
+  --     refuses to move a key between workspaces at all, which is what keeps
+  --     already-written rows correct afterwards.
+  --
+  -- Stated precisely, because an earlier draft of this comment overclaimed:
+  -- this is NOT identical to a composite FK. It is equivalent for writes and
+  -- for parent updates, and deliberately different for deletes -- that
+  -- difference is the entire reason the FK could not be used. It is also
+  -- weaker in one respect worth naming: the table owner can disable a user
+  -- trigger more easily than Postgres's internal FK triggers, and
+  -- session_replication_role = 'replica' skips it. Both require privileges
+  -- (owner, superuser) that are already a trusted administrative boundary
+  -- here. Triggers do fire for service_role and inside COPY, which RLS does
+  -- not.
   key_prefix   TEXT
 );
 
@@ -79,12 +94,29 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  v_found BOOLEAN;
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM public.partner_api_keys k
-     WHERE k.id = NEW.key_id
-       AND k.workspace_id = NEW.workspace_id
-  ) THEN
+  -- FOR KEY SHARE, not a bare EXISTS. A plain read leaves a race a foreign
+  -- key does not have: one transaction checks that the key is in workspace A
+  -- and inserts the audit row, while a concurrent transaction moves that key
+  -- to workspace B; both commit, and the row is left attributed to a
+  -- workspace its target no longer belongs to. A real FK coordinates with
+  -- updates to the referenced row; this has to ask for that coordination
+  -- explicitly.
+  --
+  -- KEY SHARE is the right strength: workspace_id is part of
+  -- partner_api_keys_id_workspace_key, so it IS a key column, and KEY SHARE
+  -- blocks exactly the updates that would change it while permitting ordinary
+  -- non-key updates such as last_used_at -- which the send path touches on
+  -- every request and must not be made to queue behind an audit write.
+  SELECT TRUE INTO v_found
+    FROM public.partner_api_keys k
+   WHERE k.id = NEW.key_id
+     AND k.workspace_id = NEW.workspace_id
+     FOR KEY SHARE;
+
+  IF v_found IS NULL THEN
     -- The constraint name is repeated in the message text on purpose:
     -- SQLERRM carries only the message, not the CONSTRAINT field, so a caller
     -- or test that wants to prove the rejection came from THIS check rather
@@ -107,6 +139,36 @@ REVOKE ALL ON FUNCTION public.partner_audit_logs_assert_tenancy() FROM PUBLIC, a
 CREATE TRIGGER partner_audit_logs_assert_tenancy_trg
 BEFORE INSERT ON public.partner_audit_logs
 FOR EACH ROW EXECUTE FUNCTION public.partner_audit_logs_assert_tenancy();
+
+-- The other half of the control. Locking the key at insert time stops an audit
+-- row being written against a workspace the key is concurrently leaving, but
+-- it says nothing about a move that happens LATER: without this, a key could
+-- be reassigned to another workspace a week after the fact and silently
+-- orphan every audit row already attributed to the old one. A composite FK
+-- would have refused that update; nothing else here does.
+--
+-- A partner key belongs to the workspace it was minted for, permanently.
+-- There is no product operation that moves one, and D12's answer to a key in
+-- the wrong place is to revoke it and mint another -- which leaves both
+-- events in this table, exactly as an audit trail should.
+CREATE OR REPLACE FUNCTION public.partner_api_keys_workspace_is_immutable()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.workspace_id IS DISTINCT FROM OLD.workspace_id THEN
+    RAISE EXCEPTION
+      'partner_api_keys_workspace_is_immutable: a partner key cannot change workspace (% -> %); revoke it and mint a new one',
+      OLD.workspace_id, NEW.workspace_id
+      USING ERRCODE = 'raise_exception';
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER partner_api_keys_workspace_is_immutable_trg
+BEFORE UPDATE OF workspace_id ON public.partner_api_keys
+FOR EACH ROW EXECUTE FUNCTION public.partner_api_keys_workspace_is_immutable();
 
 CREATE INDEX partner_audit_logs_ws_time_idx
   ON public.partner_audit_logs (workspace_id, created_at DESC);

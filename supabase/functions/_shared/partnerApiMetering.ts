@@ -170,7 +170,13 @@ export async function checkRateLimit(
   // PostgREST returns a bare object for a RETURNS TABLE rpc on the current
   // self-hosted build but has returned a one-element array on others; accept
   // both so the verdict never depends on the gateway version.
-  const row = Array.isArray(data) ? data[0] : data;
+  //
+  // EXACTLY one element, though. Taking data[0] from an array of any length
+  // silently discards the rest, so a two-row result whose first row happens to
+  // say allowed:true would be read as an allow. consume_partner_rate_v2
+  // returns a single row by construction, so more than one is drift, and drift
+  // must be indistinguishable from the limiter being down.
+  const row = Array.isArray(data) ? (data.length === 1 ? data[0] : undefined) : data;
 
   // The limiter's verdict is real ONLY when it arrives in the exact shape the
   // v2 function produces: an object whose `allowed` is a literal boolean and
@@ -205,7 +211,17 @@ export async function checkRateLimit(
     // An "allowed" verdict without real numbers is not a resolution: the
     // response would have to invent Remaining or Reset, which is precisely
     // what this rework removed the need for.
-    if (remainingN === null || remainingN < 0 || resetN === null) {
+    //
+    // The upper bound matters as much as the lower one. remaining is
+    // GREATEST(limit - count, 0) with count >= 1, so the real function can
+    // never return more than limit - 1, let alone more than limit. A value
+    // above the limit is arithmetically impossible and therefore evidence the
+    // answer did not come from the function this code thinks it called --
+    // publishing it would tell a partner they have more budget than exists.
+    if (
+      remainingN === null || resetN === null ||
+      remainingN < 0 || remainingN > record.rateLimitPerMin
+    ) {
       return unexpected();
     }
     return {

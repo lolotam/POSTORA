@@ -231,3 +231,43 @@ Deno.test("checkRateLimit: an allowed row with out-of-range numbers is not a res
     assertEquals(error.status, 503);
   }
 });
+
+Deno.test("checkRateLimit: a multi-row result is drift, not an allow", async () => {
+  // Reading data[0] out of an array of any length silently discards the rest,
+  // so a two-row answer whose FIRST row says allowed:true would be read as an
+  // allow -- and a class C send would proceed on a limiter result that is not
+  // the v2 contract. consume_partner_rate_v2 returns exactly one row, so more
+  // than one is evidence the answer came from something else.
+  const error = await assertRejects(
+    () =>
+      checkRateLimit(
+        limiterClient([
+          { allowed: true, remaining: 59, reset_seconds: 42 },
+          { allowed: false, remaining: 0, reset_seconds: 42 },
+        ]),
+        RECORD,
+        "C",
+      ),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+  assertEquals(error.status, 503);
+});
+
+Deno.test("checkRateLimit: remaining above the key's own limit is impossible, so it is drift", async () => {
+  // remaining is GREATEST(limit - count, 0) with count >= 1, so the real
+  // function can never return more than limit - 1. A larger number cannot have
+  // come from it, and publishing it would tell a partner they have more budget
+  // than exists. RECORD's limit is 60.
+  const error = await assertRejects(
+    () =>
+      checkRateLimit(
+        limiterClient({ allowed: true, remaining: 999, reset_seconds: 42, extra: "drift" }),
+        RECORD,
+        "C",
+      ),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "limiter_unavailable");
+  assertEquals(error.status, 503);
+});
