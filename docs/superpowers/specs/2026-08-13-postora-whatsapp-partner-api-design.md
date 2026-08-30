@@ -412,7 +412,15 @@ against a bucket table. Keep `api_logs` for auditing only.
 ```
 
 Codes — this list is **exhaustive** and every entry must have a test pinning its
-code, HTTP status, and `retryable` value:
+code, HTTP status, and `retryable` value. It had already drifted once: two codes
+shipped without being added here, which is exactly how a table that calls itself
+exhaustive stops being true. Add the row in the same change as the code.
+
+Note the two 503s differ in `retryable`, and the difference is the point.
+`limiter_unavailable` is a transient dependency failure, so retrying is the right
+thing to do. `temporarily_unavailable` is a capability deliberately withdrawn until
+an engineering gate passes, so retrying cannot help and must not be encouraged —
+which is also why it carries no `Retry-After`: no honest duration exists.
 
 | Code | Status | Retryable |
 |---|---|---|
@@ -435,6 +443,8 @@ code, HTTP status, and `retryable` value:
 | `invalid_recipient` | 422 | no |
 | `meta_error` | 422 or 502 | 502 only |
 | `internal_error` | 500 | yes |
+| `limiter_unavailable` | 503 | **yes** — the limiter is down, not the caller's fault (D7) |
+| `temporarily_unavailable` | 503 | no — the action is withdrawn until an engineering gate passes, so retrying cannot help |
 
 Responses distinguish **`accepted_by_meta`** from **`delivered`**. Meta accepting a
 send is not delivery, and some policy failures arrive later via status webhooks.
