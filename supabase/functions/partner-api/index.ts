@@ -30,7 +30,7 @@ import {
   sendTemplate,
   WhatsAppOpError,
 } from "../_shared/whatsappPartnerOps.ts";
-import { isSendAction, limiterRiskClassFor, requiredScopeFor } from "./router.ts";
+import { isActionSuspended, isSendAction, limiterRiskClassFor, requiredScopeFor } from "./router.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -189,6 +189,37 @@ export async function handleRequest(
         errorBody("unknown_action", `Unknown action: ${action}`, false), {}, "unknown_action");
     }
     if (scope !== null) assertScope(record, scope);
+
+    // ---- 0A safety suspension (send_template) ----
+    // Deliberately AFTER the scope check: a key lacking whatsapp:template.send
+    // must still get insufficient_scope — the suspension withdraws a
+    // capability, it is not an authorization bypass. And deliberately BEFORE
+    // the rate limiter, the account lookup, the idempotency claim, the quota
+    // reservation, and any provider work: an action that can never succeed
+    // must consume no rate budget, no monthly quota, no idempotency key, and
+    // must poison nothing. Restoration gate: see SEND_TEMPLATE_SUSPENDED in
+    // router.ts.
+    //
+    // Status 503, chosen deliberately: this is a temporarily withdrawn
+    // server-side capability — not the caller's fault (so not a 4xx), not a
+    // missing route (404 would claim the action does not exist — a contract
+    // break), and not a bug (a bare 500 would invite blind retries). 503
+    // normally implies "retry later", so the body's retryable:false carries
+    // the binding verdict — same pairing as quota_exceeded (429,
+    // retryable:false): the typed flag, not the status family, is what a
+    // partner's retry logic must obey. No Retry-After is sent because
+    // restoration is gated on an engineering milestone (the Phase 3 D13 gate),
+    // not on a duration — any number here would promise a schedule nobody
+    // can state.
+    if (isActionSuspended(action)) {
+      return await finish(
+        503, false,
+        errorBody("temporarily_unavailable",
+          "This action is temporarily suspended; see the Partner API changelog. Retrying will not succeed until it is re-enabled",
+          false),
+        {}, "temporarily_unavailable",
+      );
+    }
 
     // An action missing from ACTION_RISK_CLASSES resolves undefined here and
     // fails CLOSED on limiter failure — never fail-open by omission (D7).

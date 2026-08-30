@@ -27,9 +27,12 @@ const ACCOUNT_ROW = {
  *  immediately before a provider call. */
 function stubClient(limiter: { data: unknown; error: { message: string } | null }, keyRow: unknown = KEY_ROW) {
   const tableReads: string[] = [];
+  const rpcCalls: string[] = [];
   return {
     tableReads,
+    rpcCalls,
     rpc(name: string) {
+      rpcCalls.push(name);
       if (name === "consume_partner_rate_v2") return Promise.resolve(limiter);
       // touch_partner_key / release_partner_quota: bookkeeping, error-free.
       return Promise.resolve({ error: null });
@@ -87,17 +90,36 @@ Deno.test("class B (list_templates) fails closed: 503 limiter_unavailable + Retr
   assertEquals(noRateHeaders(res), [null, null, null]);
 });
 
-Deno.test("class C (send_template) fails closed: 503 limiter_unavailable + Retry-After", async () => {
-  // No Idempotency-Key needed: the limiter verdict fires before the
-  // idempotency checks, so the 503 is reachable exactly as a partner retry
-  // loop during an outage would see it.
-  const res = await handleRequest(partnerRequest("send_template"), () => stubClient(LIMITER_DOWN));
+Deno.test("while send_template is suspended (0A), the limiter is never consulted for it", async () => {
+  // send_template is the only class-C action, and the 0A safety suspension
+  // refuses it BEFORE the limiter — an action that can never succeed must
+  // consume no rate budget. A limiter outage therefore no longer shapes what
+  // a suspended send returns: the typed suspension error answers instead.
+  // Handler-level class-C fail-closed is unreachable while the suspension
+  // stands; the fail-closed branch itself stays proven here through class B
+  // (which shares it) and at the module level for class C in
+  // partnerApiMetering.test.ts.
+  //
+  // No Idempotency-Key needed: the refusal fires before the idempotency
+  // checks — exactly as a partner retry loop during an outage would see it.
+  const client = stubClient(LIMITER_DOWN);
+  const res = await handleRequest(partnerRequest("send_template"), () => client);
   assertEquals(res.status, 503);
   const body = await res.json();
-  assertEquals(body.error.code, "limiter_unavailable");
-  assertEquals(body.error.retryable, true);
-  assertEquals(res.headers.get("retry-after"), "5");
+  assertEquals(body.error.code, "temporarily_unavailable");
+  // 503 usually invites retries; retryable:false is the binding verdict, and
+  // no Retry-After may promise a schedule for an engineering-gated
+  // restoration.
+  assertEquals(body.error.retryable, false);
+  assertEquals(res.headers.get("retry-after"), null);
   assertEquals(noRateHeaders(res), [null, null, null]);
+  // The limiter was never consulted — no budget of any kind was consumed.
+  assertEquals(client.rpcCalls.includes("consume_partner_rate_v2"), false);
+  // The account lookup is the last step before a provider call. It never
+  // happened, so no provider call could have either — and the ledger row for
+  // the refused request was still written (record is set by then).
+  assertEquals(client.tableReads.includes("social_accounts"), false);
+  assertEquals(client.tableReads.includes("partner_api_usage"), true);
 });
 
 Deno.test("a pre-auth 401 omits all X-RateLimit-* headers", async () => {
@@ -186,9 +208,13 @@ Deno.test("a 429 rate_limited carries Limit, Remaining, Reset AND Retry-After �
   assertEquals(res.headers.get("retry-after"), "37");
 });
 
-Deno.test("a malformed limiter result (data null) fails CLOSED for class C and never reaches the account", async () => {
+Deno.test("a malformed limiter result (data null) fails CLOSED for class B and never reaches the account", async () => {
+  // list_templates stands in for the fail-closed classes now that
+  // send_template (the only class C) is suspended before the limiter (0A).
+  // The fail-closed branch this exercises is shared by B and C; class C's
+  // policy stays proven at the module level in partnerApiMetering.test.ts.
   const client = stubClient({ data: null, error: null });
-  const res = await handleRequest(partnerRequest("send_template"), () => client);
+  const res = await handleRequest(partnerRequest("list_templates"), () => client);
   assertEquals(res.status, 503);
   assertEquals((await res.json()).error.code, "limiter_unavailable");
   assertEquals(res.headers.get("retry-after"), "5");
@@ -200,14 +226,16 @@ Deno.test("a malformed limiter result (data null) fails CLOSED for class C and n
   assertEquals(client.tableReads.includes("partner_api_usage"), true);
 });
 
-Deno.test("a malformed limiter result (unexpected object) fails CLOSED for class C and never reaches the account", async () => {
+Deno.test("a malformed limiter result (unexpected object) fails CLOSED for class B and never reaches the account", async () => {
   // Not a literal boolean `allowed`: a truthy string is exactly the kind of
   // drifted-RPC value that must not sail through as "the limiter allowed it".
+  // Class B proxies the fail-closed classes while send_template is suspended
+  // (see the data-null test above for why).
   const client = stubClient({
     data: { allowed: "yes", remaining: 59, reset_seconds: 42 },
     error: null,
   });
-  const res = await handleRequest(partnerRequest("send_template"), () => client);
+  const res = await handleRequest(partnerRequest("list_templates"), () => client);
   assertEquals(res.status, 503);
   assertEquals((await res.json()).error.code, "limiter_unavailable");
   assertEquals(noRateHeaders(res), [null, null, null]);
