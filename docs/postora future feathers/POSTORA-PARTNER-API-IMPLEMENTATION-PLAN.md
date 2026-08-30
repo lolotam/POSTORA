@@ -33,6 +33,9 @@ and verified by querying the catalog afterwards.
 | 1.1 | `partner_api_key_accounts`, both composite FKs, `UNIQUE (key_id, social_account_id)`, backfill | PR #70. **Live** — both FKs confirmed in `pg_constraint`, backfill mirrors the one existing key |
 | 1.2 | `partner_audit_logs`, append-only | PR #70. **Live** — `anon` holds nothing, `authenticated` SELECT, `service_role` INSERT+SELECT |
 | 1.4 | Risk-class enforcement: A fails open, B and C fail closed with `503 limiter_unavailable` + `Retry-After` | PR #70. **Merged, NOT deployed** — `partner-api` still runs the old fail-open code |
+| 0.1, 0.2 | **0A safety suspension.** `send_template` returns a typed `temporarily_unavailable`; the key `pk_live_urCb` is revoked | PR #72. **Live** — refusal verified in the deployed volume, ordering confirmed (scope → suspension → account) |
+| 0.3 | Postgres integration harness | PR #74. **Live in CI** — see "0.3, and what it found" below |
+| — | Least-privilege grants on the four foundation tables | PR #72. **Live** — `anon` now holds zero grants on any partner table; every production access path re-verified as `service_role` |
 | 1.5 | `X-RateLimit-*` with defined response classes | PR #70. **Merged, NOT deployed.** Values now come from `consume_partner_rate_v2` (new, added alongside v1), not the edge function's clock |
 
 ### Partially landed
@@ -40,12 +43,47 @@ and verified by querying the catalog afterwards.
 | # | Deliverable | What is done, what is not |
 |---|---|---|
 | 1.7 | Tenancy constraint matrix, each table with a negative database test | Done for the two tables that now exist (`partner_api_key_accounts`, `partner_audit_logs`), proven by `supabase/tests/partner_api_tenancy_negative.sql` — 14 assertions. The matrix's other rows (dispatch intents, webhooks, deliveries, media association) name tables no phase has built yet |
-| 0.3 | Postgres integration harness | **No harness exists.** What exists is a repeatable manual rehearsal: dump the production schema, restore into a throwaway database, apply, run the proof. That is enough to have caught real defects but it is not CI, so nothing re-runs it on a future change |
+| ~~0.3~~ | ~~Postgres integration harness~~ | **Done — moved to Landed.** Previously: **No harness exists.** What exists is a repeatable manual rehearsal: dump the production schema, restore into a throwaway database, apply, run the proof. That is enough to have caught real defects but it is not CI, so nothing re-runs it on a future change |
+
+### 0.3, and what it found
+
+`scripts/db-harness.sh` gates every push and PR: it restores a committed schema
+baseline, applies only migrations newer than its marker, and runs the four SQL
+suites. `supabase/tests/README.md` carries the contract and the limitations.
+
+**It is a baseline-and-delta harness, not a replay, because a replay is
+impossible.** Replaying all 253 migrations onto a blank database applies 113 and
+then fails on 12. These are not environment problems:
+
+- `20260323202049` inserts `ai_models` rows with a **hardcoded `provider_id`**
+  (`44bee76d-…`). `ai_providers.id` defaults to `gen_random_uuid()`, and no
+  migration ever creates a "Z AI" provider — that row was made by hand in
+  production. The migration can only ever succeed against the one database
+  where that UUID happened to be generated. Its same-day sibling
+  `20260323201022` does it correctly, looking the provider up by
+  `provider_code`.
+- Three migrations insert seed rows referencing production users and posts no
+  migration creates; one calls a function no migration defines; six more fail on
+  relations and columns that never got created.
+
+**This is a hard constraint on 0.6 (staging), which the plan assumes away.** A
+fresh Postora database cannot be built from its own migrations. Staging must be
+created by restoring a schema dump, and disaster recovery depends on a backup
+rather than on version control. Migrations are immutable, so this cannot be
+fixed by editing history.
+
+A second finding, recorded because it will bite the same work: **this project
+has no migration ledger.** There is no `supabase_migrations.schema_migrations` —
+only Supabase's own service tables. Nothing records which of the 253 migrations
+are applied to production, which is why `scripts/regenerate-baseline.sh` demands
+an explicit operator confirmation rather than assuming.
 
 ### Not started
 
-Everything else in Phase 0 (0.1, 0.2, 0.5, 0.6, 0.7–0.11) and Phase 1 (1.3 credential lifecycle,
-1.6 legacy scope pinning), and all of Phases 2–10.
+Phase 0: **0.5** (contract tests), **0.6** (staging — see the constraint above),
+**0.7–0.11** (OpenAPI skeleton, drift gate, threat review, CORS decision, D8
+containment check). Phase 1: **1.3** credential lifecycle, **1.6** legacy scope
+pinning. All of Phases 2–10.
 
 **1.3 is larger than its one line suggests:** `partner_api_keys` has no rotation fields
 (`successor key id`, overlap expiry). Spec §8 requires them; the foundation migration never added
@@ -758,6 +796,32 @@ Phase 1. Item 5 is the one that can genuinely stop a phase.
 ---
 
 ## 8. Correction log
+
+### v1.4 — 2026-08-30 — Phase 0 closed out; two assumptions in it were false
+
+0.1/0.2 (the 0A suspension), 0.3 (the integration harness) and a
+least-privilege grant reduction landed in PRs #72 and #74. Two of this plan's
+assumptions did not survive contact:
+
+- **0.6 (staging) is blocked in a way this plan does not acknowledge.** It
+  assumes a staging environment can be created; building one from migrations is
+  impossible, because 12 of the 253 only succeed against the one production
+  database. Staging must be a schema restore. Details in §0.
+- **0.3 could not be built as specified.** "Replay the migrations" was the
+  design, and it cannot be made green. What shipped is a baseline-and-delta
+  harness, which gates future migrations — the actual point — while proving
+  nothing about history. That limitation is documented rather than hidden.
+
+Also worth recording for whoever picks up 1.3: there is no migration ledger in
+this project, so no tooling can determine which migrations production has
+applied. Anything that needs to know must ask a human.
+
+The harness went through eight adversarial review rounds and 18 blocking
+defects, every one a variant of accepting evidence that something *started* as
+evidence that it *finished*. A gate is not ordinary code: it is judged by
+whether it can be wrong in the reassuring direction.
+
+---
 
 ### v1.3 — 2026-08-30 — execution began; the plan met the system
 
