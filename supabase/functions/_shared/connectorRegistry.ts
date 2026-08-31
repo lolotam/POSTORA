@@ -29,16 +29,21 @@ export const CONNECTOR_TYPES = [
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 
-const PENDING_DB_CONNECTOR_TYPES: readonly ConnectorType[] = [
-  "myfatoorah",
-  "stripe",
-  "higgsfield",
-  "mcp_custom",
-];
+// Emptied by PR-3's Migration A (20260831130000_connector_scope_and_sharing.sql),
+// which rebuilt the DB connector_type CHECK with all twelve registry types.
+// Until that migration was applied, the four types listed here existed in the
+// registry and the browser picker while the CHECK rejected them, so the write
+// path held them back and messaging-api silently rewrote saves of them to
+// custom_rest. Kept as a staging seam rather than deleted: a future type that
+// lands in the registry before its own migration is applied is listed here
+// again, and the contract test re-arms itself the same way it did for these.
+const PENDING_DB_CONNECTOR_TYPES: readonly ConnectorType[] = [];
 
-// PR-2 must preserve the current write contract until PR-3 expands the DB
-// CHECK. Keeping this compatibility list beside the registry removes the
-// messaging-api's hand-maintained copy without accepting new types early.
+// The write allow-list ai_upsert_tool validates against. Equal to the full
+// registry since Migration A; derived (not inlined) so the staging seam above
+// stays the single place a pending type is held back. Order matters if this
+// ever becomes non-empty again: the widened list must not reach a deployed
+// messaging-api before the migration that admits the types is live.
 export const SERVER_CONNECTOR_TYPES = CONNECTOR_TYPES.filter(
   (type) => !PENDING_DB_CONNECTOR_TYPES.includes(type),
 );
