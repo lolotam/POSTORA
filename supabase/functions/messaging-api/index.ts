@@ -12,6 +12,7 @@ import {
 import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
 import { blankedFields } from "./configBlanking.ts";
+import { parseCredentialUpsertResult } from "./credentialVaultRpc.ts";
 import {
   type CredentialVault,
   deleteAccountScopedTool,
@@ -682,11 +683,10 @@ function isAiAgentPlatform(value: unknown): value is string {
           p_secret: blob,
         });
         if (error) throw wrapRpcError(error, "Failed to store connector credentials");
-        const result = data as { secret_id?: string; configured_fields?: string[] } | null;
-        if (!result?.secret_id || !Array.isArray(result.configured_fields)) {
-          throw new Error("Malformed response storing connector credentials");
-        }
-        return { secretId: result.secret_id, configuredFields: result.configured_fields };
+        // The wrapper is RETURNS TABLE, so PostgREST sends an array; parsing
+        // lives in credentialVaultRpc.ts because that is the only shape here a
+        // test can reach. See that file's header for the failure it fixes.
+        return parseCredentialUpsertResult(data);
       },
       async deleteCredentials(secretId) {
         const { error } = await adminClient.rpc("delete_connector_credential_secret", {
