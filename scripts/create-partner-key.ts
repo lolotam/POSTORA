@@ -109,8 +109,24 @@ if (bindError) {
   // Loud, and explicitly NOT a partial success: a key with no binding is worse
   // than no key, because it authenticates and then resolves to nothing.
   console.error("Account binding failed:", bindError.message);
-  console.error("The key row was created but has NO account binding. Revoke it:");
-  console.error(`  UPDATE partner_api_keys SET revoked_at = now() WHERE id = '${inserted.id}';`);
+  console.error("The key row was created but has NO account binding.");
+  console.error("");
+  console.error("The plaintext was NOT printed, so nobody can use this key --");
+  console.error("but it is still an active row and must be revoked.");
+  console.error("");
+  console.error("Run this AS THE DATABASE OWNER (supabase_admin), not through");
+  console.error("this script's service_role client: the least-privilege grants in");
+  console.error("20260830120300 deliberately leave service_role no UPDATE on");
+  console.error("partner_api_keys, and revoke_partner_key() is auth.uid()-scoped,");
+  console.error("so neither path here can revoke it:");
+  console.error("");
+  console.error(`  UPDATE partner_api_keys SET revoked_at = now(),`);
+  console.error(`         revoked_reason = 'created without an account binding'`);
+  console.error(`   WHERE id = '${inserted.id}';`);
+  console.error("");
+  console.error("Creating both rows atomically needs a SECURITY DEFINER RPC. That");
+  console.error("belongs to the credential lifecycle (deliverable 1.3), which");
+  console.error("replaces this script; building it here would be thrown away.");
   Deno.exit(1);
 }
 

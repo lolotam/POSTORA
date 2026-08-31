@@ -89,3 +89,23 @@ obliges a re-review when `/v1` lands; this decision is part of that re-run's
 checklist. Copying these headers into any *unauthenticated-user* function (the
 OAuth doors, for example) is not covered by this record and remains governed by
 ARCHITECTURE.md §25 unchanged.
+
+
+## Corrections from adversarial review (2026-08-31)
+
+Two points in the reasoning above were imprecise, and precision is the whole
+value of a recorded decision:
+
+1. **`Authorization: Bearer` is not ambient authority.** Browser JavaScript has
+   to set it explicitly, exactly like `x-postora-key`. The genuinely ambient
+   cases are **cookies** and browser-managed HTTP authentication, neither of
+   which this function uses. The conclusion is unchanged; the argument for it
+   is narrower than first written.
+
+2. **This decision covers the frozen alias only.** It does not pre-adopt `*`
+   for `/v1`, which does not exist yet. `/v1` will have its own authentication
+   and response surface, and must make its own CORS decision when it is built
+   rather than inheriting one taken before there was anything to inherit it
+   for. Recording a decision about code that does not exist is the same
+   copy-paste-by-default that ARCHITECTURE.md §25 forbids, just performed in
+   advance.

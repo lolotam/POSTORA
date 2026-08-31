@@ -1,4 +1,27 @@
-// D8 containment check (Partner API programme, Phase 0 deliverable 0.11).
+// D8 regression detector (Partner API programme, Phase 0 deliverable 0.11).
+//
+// DETECTION BOUNDARY, STATED FIRST BECAUSE IT IS THE MOST IMPORTANT THING HERE.
+//
+// This is a REGEX HEURISTIC over source text, not containment. It catches the
+// canonical spelling of legacy-key authentication and nothing more. An
+// adversarial review enumerated what evades it, and the list is not short:
+// a table name held in a constant, `.filter()` or `.match()` instead of
+// `.eq()`, the query moved into a helper, a wrapper split across more than the
+// window it scans, an RPC or raw SQL path, or a migration-defined function.
+// It also has false positives: a comment mentioning both terms, or two
+// unrelated builders close together.
+//
+// So: a NEW surface written in the obvious way is caught. A new surface
+// written any other way is not. Calling that "containment" would create an
+// assurance stronger than the code -- which is worse than having no check,
+// because it invites people to stop looking. It is a tripwire on the most
+// likely mistake, and it is worth having on exactly those terms.
+//
+// Real containment needs the legacy path centralised behind one deprecated
+// module with AST-level checks on imports and calls, plus a separate scan of
+// SQL migrations and RPCs. That is a larger piece of work; it belongs with the
+// credential lifecycle (1.3) or later, and is recorded here so nobody mistakes
+// this file for it.
 //
 // WHAT THIS PROTECTS. Postora has two unrelated API-key systems (spec
 // POSTORA-PARTNER-API-SPEC-v1.md, decision D8):
