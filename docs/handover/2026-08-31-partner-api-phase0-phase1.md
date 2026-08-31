@@ -35,9 +35,16 @@ the repository**, and one of them invalidates a deliverable the plan has not sta
 
 ### Not started
 
-- **Phase 0:** 0.5, 0.7, 0.8 (contract — *was in progress, see §4*), **0.6 (blocked — see §2)**
-- **Phase 1:** 1.3 credential lifecycle, 1.6 legacy scope pinning; 1.7 partial (only the two tables
-  that exist)
+> **Superseded on 2026-08-31 PM.** This section described the state when this file was written,
+> that morning. **`POSTORA-PARTNER-API-IMPLEMENTATION-PLAN.md` §0 is the current record** — 0.5,
+> 0.7, 0.8, 1.6 and 1.3 all landed the same day in PRs #91, #93 and #94.
+>
+> Kept rather than rewritten because §2 below is still true and is what this file exists for. This
+> project's recurring failure is two documents disagreeing about the same fact, so there is exactly
+> one authority for status and it is not here.
+
+- **Phase 0:** **0.6 (blocked — see §2)**
+- **Phase 1:** 1.7 partial (only the two tables that exist)
 - **Phases 2–10:** untouched
 
 ---
