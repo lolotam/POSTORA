@@ -80,8 +80,10 @@ jobs:
             echo "--- SHA256 verification (first 20 files) ---"
             # Files written via git archive are always LF, no CRLF normalisation needed.
             # Compare volume against the archive content via git show hash.
+            # `find | head` triggers SIGPIPE (141) under `set -o pipefail` — suppress it.
             FAILED=0
-            for f in $(find "$VOL" -type f | head -n 20); do
+            set +o pipefail
+            for f in $(find "$VOL" -type f | head -n 20 || true); do
               rel="${f#$VOL/}"
               # git show prints LF; volume file is also LF after this deploy. Direct hash compare.
               git_hash="$(git show "refs/remotes/origin/main:supabase/functions/$rel" 2>/dev/null | sha256sum | cut -d' ' -f1 || echo MISSING_IN_GIT)"
@@ -93,6 +95,7 @@ jobs:
                 echo "OK $rel  $vol_hash"
               fi
             done
+            set -o pipefail
             if [ "$FAILED" -eq 1 ]; then
               echo "::warning::One or more hash checks failed — see warnings above (continuing to restart)"
             fi
