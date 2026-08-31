@@ -51,6 +51,7 @@ import {
   resolveAutomationHandler,
   resolveCommentAutomationHandler,
 } from "../_shared/automationHandler.ts";
+import { SERVER_CONNECTOR_TYPES } from "../_shared/connectorRegistry.ts";
 
 // Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
 // before that window closes rather than serving a dead link from messaging_cache.
@@ -705,11 +706,7 @@ function isAiAgentPlatform(value: unknown): value is string {
       }
       // Connector metadata must match the ai_agent_tools CHECK constraints;
       // anything unrecognized degrades to the neutral defaults.
-      const connectorTypeAllowlist = [
-        "supabase", "mysql_postgres", "woocommerce", "shopify",
-        "salla", "zid", "formula", "custom_rest",
-      ];
-      const connectorType = connectorTypeAllowlist.includes(tool.connector_type)
+      const connectorType = SERVER_CONNECTOR_TYPES.includes(tool.connector_type)
         ? tool.connector_type
         : "custom_rest";
       const rawPermissions =
