@@ -57,9 +57,24 @@ Issuable scopes: ${GENERIC_SCOPES.join(", ")}`);
   Deno.exit(2);
 }
 
+// A USER's JWT, not the service-role key. D12 puts credential lifecycle in the
+// Developer area, user-JWT authenticated -- and create_partner_key() enforces
+// that by authorising through auth.uid(), which is NULL for a service-role
+// client. A service-role call is refused, deliberately: "who created this key"
+// must be a person, or the audit trail records nobody.
+const userJwt = arg("token") ?? Deno.env.get("SUPABASE_USER_JWT");
+if (!userJwt) {
+  console.error("Missing --token (or SUPABASE_USER_JWT): the access token of a");
+  console.error("workspace owner or admin. The service-role key will NOT work --");
+  console.error("create_partner_key() authorises via auth.uid() and stamps the");
+  console.error("actor from it, so a keyless call has no actor to record.");
+  Deno.exit(2);
+}
+
 const admin = createClient(
   Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  Deno.env.get("SUPABASE_ANON_KEY") ?? Deno.env.get("SUPABASE_PUBLISHABLE_KEY")!,
+  { global: { headers: { Authorization: `Bearer ${userJwt}` } } },
 );
 
 // Refuse to pin a non-WhatsApp or unhealthy account. The composite FK proves
@@ -84,63 +99,39 @@ if (!account.is_active || account.needs_reauth) {
 
 const { key, prefix, hash } = await generatePartnerKey();
 
-const { data: inserted, error: insertError } = await admin
-  .from("partner_api_keys")
-  .insert({
-    workspace_id: workspaceId,
-    social_account_id: accountId,
-    name,
-    key_prefix: prefix,
-    key_hash: hash,
-    scopes,
-    monthly_quota: quota,
-  })
-  .select("id")
-  .single();
-
-if (insertError) { console.error("Insert failed:", insertError.message); Deno.exit(1); }
-
-// The binding row, without which this key can reach nothing once account
-// selection (D11) lands: that reads partner_api_key_accounts, not the pinned
-// social_account_id column. The join table arrived in
-// 20260830120000_partner_api_key_accounts.sql, which backfilled one row per
-// key that EXISTED THEN -- and nothing taught this script to write one for
-// keys minted after. A key minted between that migration and this fix would
-// have looked fine and silently resolved to no accounts.
+// ONE atomic call: the key row, its account binding and the `create` audit row
+// share create_partner_key()'s single transaction. The previous two-insert flow
+// could leave a key with no binding if the second insert failed, and this
+// script could not clean up after itself -- least-privilege leaves service_role
+// no UPDATE on partner_api_keys and revoke_partner_key() is auth.uid()-scoped.
+// That was threat-review finding F3; it is now unrepresentable rather than
+// merely unlikely.
 //
-// Found by the 0.9 threat review (finding F3). Fixed here rather than deferred
-// to the credential lifecycle (1.3) because there are currently zero partner
-// keys, which makes this the cheapest it will ever be to correct.
-const { error: bindError } = await admin.from("partner_api_key_accounts").insert({
-  key_id: inserted.id,
-  social_account_id: accountId,
-  workspace_id: workspaceId,
+// The plaintext never leaves this process: only the prefix and the SHA-256
+// digest are sent.
+const { data: newKeyId, error: rpcError } = await admin.rpc("create_partner_key", {
+  p_workspace_id: workspaceId,
+  p_social_account_id: accountId,
+  p_name: name,
+  p_key_prefix: prefix,
+  p_key_hash: hash,
+  p_scopes: scopes,
+  p_monthly_quota: quota,
 });
 
-if (bindError) {
-  // Loud, and explicitly NOT a partial success: a key with no binding is worse
-  // than no key, because it authenticates and then resolves to nothing.
-  console.error("Account binding failed:", bindError.message);
-  console.error("The key row was created but has NO account binding.");
+if (rpcError) {
+  console.error("Key creation failed:", rpcError.message);
   console.error("");
-  console.error("The plaintext was NOT printed, so nobody can use this key --");
-  console.error("but it is still an active row and must be revoked.");
-  console.error("");
-  console.error("Run this AS THE DATABASE OWNER (supabase_admin), not through");
-  console.error("this script's service_role client: the least-privilege grants in");
-  console.error("20260830120300 deliberately leave service_role no UPDATE on");
-  console.error("partner_api_keys, and revoke_partner_key() is auth.uid()-scoped,");
-  console.error("so neither path here can revoke it:");
-  console.error("");
-  console.error(`  UPDATE partner_api_keys SET revoked_at = now(),`);
-  console.error(`         revoked_reason = 'created without an account binding'`);
-  console.error(`   WHERE id = '${inserted.id}';`);
-  console.error("");
-  console.error("Creating both rows atomically needs a SECURITY DEFINER RPC. That");
-  console.error("belongs to the credential lifecycle (deliverable 1.3), which");
-  console.error("replaces this script; building it here would be thrown away.");
+  console.error("Nothing was created: the key row, the account binding and the");
+  console.error("audit row are one transaction, so a failure leaves no partial key.");
+  if (/insufficient_privilege|not authorized/i.test(rpcError.message)) {
+    console.error("");
+    console.error("This token's user must be an owner or admin of that workspace.");
+  }
   Deno.exit(1);
 }
+
+const inserted = { id: newKeyId as string };
 
 console.log("");
 console.log("Key created. Copy it now - it is never shown again:");
