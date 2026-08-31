@@ -29,13 +29,13 @@ import {
 import {
   customToolDefinitions,
   type EscalationTarget,
-  executeCustomTool,
   executeTool,
   toolDefinitions,
   type CustomTool,
   type ToolContext,
   type ToolResult,
 } from "./tools.ts";
+import { executeRoutedCustomTool } from "./connectorExecution.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
 import { resolveAgentAccountId } from "./accountScope.ts";
 import {
@@ -1029,7 +1029,7 @@ Deno.serve(async (req) => {
         sideEffectsHappened = true;
         const customTool = customToolByName.get(toolCall.function.name);
         const result: ToolResult = customTool
-          ? await executeCustomTool(toolContext, customTool, args)
+          ? await executeRoutedCustomTool(toolContext, customTool, args)
           : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
             (await executeTool(toolContext, toolCall.function.name, args));
         if (result.escalated) {

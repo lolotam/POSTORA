@@ -1,12 +1,12 @@
-import type { ConnectorType } from "../_shared/connectorRegistry.ts";
+import {
+  CONNECTOR_CAPABILITY_NAMES,
+  type ConnectorCapability,
+  type ConnectorType,
+} from "../_shared/connectorRegistry.ts";
 
-export const CAPABILITIES = [
-  "search_products",
-  "check_stock",
-  "lookup_orders",
-] as const;
+export const CAPABILITIES = CONNECTOR_CAPABILITY_NAMES;
 
-export type Capability = (typeof CAPABILITIES)[number];
+export type Capability = ConnectorCapability;
 export type ConnectorAction = "execute" | "test_connection";
 export type ConnectorMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 

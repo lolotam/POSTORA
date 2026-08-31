@@ -10,6 +10,7 @@ import { TOOL_DESCRIPTION_BUDGET } from "../_shared/composeToolDescription.ts";
 // reach for the connector or what it cannot do.
 
 const tool = (over: Partial<CustomTool> & { name: string }): CustomTool => ({
+  id: "11111111-1111-4111-8111-111111111111",
   description: "Our Kuwait store, prices in KWD.",
   url: "https://example.test/hook",
   secret: null,
@@ -54,7 +55,14 @@ Deno.test("a connector_type the registry does not know cannot kill the reply", (
 
 Deno.test("a missing connector_type behaves like a legacy tool", () => {
   const rows = customToolDefinitions([
-    { name: "old", description: "Legacy row.", url: "https://x.test", secret: null, admin_only: false },
+    {
+      id: "22222222-2222-4222-8222-222222222222",
+      name: "old",
+      description: "Legacy row.",
+      url: "https://x.test",
+      secret: null,
+      admin_only: false,
+    },
   ]);
   assertEquals(rows[0].function.description, "Legacy row.");
 });
