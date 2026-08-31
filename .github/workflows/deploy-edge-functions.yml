@@ -74,8 +74,8 @@ jobs:
             git archive "refs/remotes/origin/main" supabase/functions | tar -x -C "$TMP_SYNC"
 
             # --delete keeps volume in sync (removes functions deleted from git).
-            # Exclude deno.lock if present at repo root inside archive (not under functions) — harmless but explicit.
-            rsync -av --delete "$TMP_SYNC/supabase/functions/" "$VOL/"
+            # Keep the untracked `main` service (supabase/edge-runtime --main-service) — not in git, but required for boot.
+            rsync -av --delete --exclude "main" "$TMP_SYNC/supabase/functions/" "$VOL/"
 
             echo "--- SHA256 verification (first 20 files, best-effort) ---"
             # Files written via git archive are always LF, no CRLF normalisation needed.
