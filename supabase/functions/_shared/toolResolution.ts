@@ -73,7 +73,14 @@ export function resolveToolsForAccount(
   tools: ResolvableTool[],
   links: ToolAccountLink[],
   accountId: string | null,
+  options: { includeAdminOnly?: boolean } = {},
 ): ToolResolution {
+  // Permissions narrow the candidate set BEFORE the collision is decided, never
+  // after (Codex P2). Filtering afterwards let an account's admin_only "woo"
+  // out-rank the public all_accounts "woo", drop it, and then be removed itself
+  // -- leaving a customer with NEITHER connector where they previously had one.
+  // Default false: an omitted option must never widen what a customer reaches.
+  const includeAdminOnly = options.includeAdminOnly === true;
   const linkedToolIds = new Set(
     links
       .filter((link) => accountId !== null && link.social_account_id === accountId)
@@ -82,6 +89,7 @@ export function resolveToolsForAccount(
 
   const visible: Array<{ tool: ResolvableTool; rank: number }> = [];
   for (const tool of tools) {
+    if (tool.admin_only && !includeAdminOnly) continue;
     const rank = specificity(tool, linkedToolIds, accountId);
     if (rank !== null) visible.push({ tool, rank });
   }

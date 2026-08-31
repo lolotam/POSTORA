@@ -121,3 +121,32 @@ Deno.test("ordering is stable so two identical calls send the same tools array",
     resolveToolsForAccount([...tools].reverse(), [], ACCOUNT).tools.map((t) => t.name),
   );
 });
+
+Deno.test("an admin-only winner does not take a public tool's slot with it", () => {
+  // Codex P2. admin_only was filtered AFTER collision resolution, so an
+  // account owning an admin_only "woo" beat the public all_accounts "woo" on
+  // specificity, and the later filter then removed the winner -- leaving a
+  // customer with NEITHER connector where they previously had one. Permissions
+  // have to narrow the candidate set BEFORE the collision is decided.
+  const adminOwned = tool({ id: "adm", name: "woo", social_account_id: ACCOUNT, admin_only: true });
+  const publicShared = tool({ id: "pub", name: "woo", scope: "all_accounts" });
+
+  const forCustomer = resolveToolsForAccount([adminOwned, publicShared], [], ACCOUNT, {
+    includeAdminOnly: false,
+  });
+  assertEquals(forCustomer.tools.map((t) => t.id), ["pub"]);
+  // Nothing was dropped: the admin tool was never a candidate for this caller.
+  assertEquals(forCustomer.droppedDuplicates, []);
+
+  const forAdmin = resolveToolsForAccount([adminOwned, publicShared], [], ACCOUNT, {
+    includeAdminOnly: true,
+  });
+  assertEquals(forAdmin.tools.map((t) => t.id), ["adm"]);
+});
+
+Deno.test("admin-only tools are excluded by default", () => {
+  // The default must be the safe one: a customer-facing reply is the common
+  // path, and an omitted option must never widen what a customer can reach.
+  const adminTool = tool({ id: "adm", name: "internal", scope: "all_accounts", admin_only: true });
+  assertEquals(resolveToolsForAccount([adminTool], [], ACCOUNT).tools, []);
+});

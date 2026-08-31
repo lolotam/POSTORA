@@ -866,27 +866,43 @@ Deno.serve(async (req) => {
       : null;
 
     let toolLinks: ToolAccountLink[] = [];
+    let toolLinksDegraded = false;
     if (scopedAccountId) {
       // Scoped by user_id as well as account: this runs under the service role,
       // so RLS is not evaluated and tenancy has to be structural (ARCHITECTURE
       // §24). Without it another tenant's link row would grant access here.
-      const { data: linkRows } = await admin
+      const { data: linkRows, error: linkError } = await admin
         .from("ai_agent_tool_accounts")
         .select("tool_id, social_account_id")
         .eq("user_id", request.user_id)
         .eq("social_account_id", scopedAccountId);
+      if (linkError) {
+        // Codex P1. PostgREST returns { data: null, error } on a timeout, and
+        // `linkRows || []` turned that into "this account was shared nothing" --
+        // so every explicitly shared connector silently vanished from the prompt
+        // and the customer got an answer as if it had never been configured.
+        // The reply still proceeds on owned + all_accounts, because failing a
+        // customer over a degraded read is worse; but it is now SAID, not
+        // silently assumed.
+        toolLinksDegraded = true;
+        console.error(
+          "[ai-agent-reply] connector link read failed; shared connectors omitted:",
+          linkError.message,
+        );
+      }
       toolLinks = (linkRows || []) as ToolAccountLink[];
     }
 
+    // admin_only is passed IN rather than filtered out afterwards: narrowing
+    // after collision resolution let an admin-only tool win a name and then be
+    // removed, leaving a customer with neither connector (Codex P2).
     const toolResolution = resolveToolsForAccount(
       (customToolRows || []) as ResolvableTool[],
       toolLinks,
       scopedAccountId,
+      { includeAdminOnly: isAdmin },
     );
-    // admin_only stays hidden from customers, exactly as before.
-    const customTools: CustomTool[] = toolResolution.tools.filter(
-      (tool) => isAdmin || !tool.admin_only,
-    );
+    const customTools: CustomTool[] = toolResolution.tools;
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
 
     if (toolResolution.droppedDuplicates.length > 0) {
@@ -898,8 +914,14 @@ Deno.serve(async (req) => {
         "[ai-agent-reply] dropped duplicate connector names:",
         JSON.stringify(toolResolution.droppedDuplicates),
       );
+      // The insert result is INSPECTED, not just awaited (Codex P2). PostgREST
+      // reports a constraint violation in the returned `error` rather than
+      // throwing, so a try/catch alone would have made a rejected diagnostic
+      // indistinguishable from a written one. `ai` and `warn` are both in the
+      // live CHECK constraints, verified on the server -- the checked-in
+      // migrations list fewer categories than production actually allows.
       try {
-        await admin.from("system_logs").insert({
+        const { error: logError } = await admin.from("system_logs").insert({
           source: "ai-agent-reply",
           category: "ai",
           level: "warn",
@@ -908,9 +930,13 @@ Deno.serve(async (req) => {
           metadata: {
             platform: request.platform,
             social_account_id: scopedAccountId,
+            links_degraded: toolLinksDegraded,
             dropped: toolResolution.droppedDuplicates,
           },
         });
+        if (logError) {
+          console.error("[ai-agent-reply] Duplicate-connector log rejected:", logError.message);
+        }
       } catch (logError) {
         console.error("[ai-agent-reply] Failed to log dropped duplicates:", logError);
       }
