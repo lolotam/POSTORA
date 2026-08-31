@@ -77,32 +77,33 @@ jobs:
             # Exclude deno.lock if present at repo root inside archive (not under functions) — harmless but explicit.
             rsync -av --delete "$TMP_SYNC/supabase/functions/" "$VOL/"
 
-            echo "--- SHA256 verification (first 20 files) ---"
+            echo "--- SHA256 verification (first 20 files, best-effort) ---"
             # Files written via git archive are always LF, no CRLF normalisation needed.
-            # Verification is best-effort — never fail the deploy on hash check.
-            set +e
-            set +o pipefail
-            FAILED=0
-            VERIFY_LIST="$(find "$VOL" -type f 2>/dev/null | head -n 20 || true)"
-            for f in $VERIFY_LIST; do
-              [ -z "$f" ] && continue
-              rel="${f#$VOL/}"
-              git_hash="$(git show "refs/remotes/origin/main:supabase/functions/$rel" 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1 || echo MISSING_IN_GIT)"
-              vol_hash="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1 || echo MISSING_VOL)"
-              if [ "$git_hash" != "$vol_hash" ] && [ "$git_hash" != "MISSING_IN_GIT" ] && [ "$vol_hash" != "MISSING_VOL" ]; then
-                echo "::warning::Hash mismatch for $rel  git=$git_hash  vol=$vol_hash"
-                FAILED=1
-              else
-                echo "OK $rel  $vol_hash"
+            # Verification is best-effort — never fail the deploy.
+            (
+              set +e
+              set +o pipefail
+              FAILED=0
+              VERIFY_LIST="$(find "$VOL" -type f 2>/dev/null | head -n 20 || true)"
+              for f in $VERIFY_LIST; do
+                [ -z "$f" ] && continue
+                # handle paths with spaces by using proper quoting
+                rel="${f#$VOL/}"
+                git_hash="$(git show "refs/remotes/origin/main:supabase/functions/$rel" 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1 || echo MISSING_IN_GIT)"
+                vol_hash="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1 || echo MISSING_VOL)"
+                if [ "$git_hash" != "$vol_hash" ] && [ "$git_hash" != "MISSING_IN_GIT" ] && [ "$vol_hash" != "MISSING_VOL" ]; then
+                  echo "::warning::Hash mismatch for $rel  git=$git_hash  vol=$vol_hash"
+                  FAILED=1
+                else
+                  echo "OK $rel  $vol_hash"
+                fi
+              done
+              if [ "$FAILED" -eq 1 ]; then
+                echo "::warning::One or more hash checks failed — see warnings above (continuing to restart)"
               fi
-            done
-            set -o pipefail
-            set -e
-            if [ "$FAILED" -eq 1 ]; then
-              echo "::warning::One or more hash checks failed — see warnings above (continuing to restart)"
-            fi
-            echo "Total files in volume: $(find "$VOL" -type f 2>/dev/null | wc -l || echo 0)"
-            echo "Total files in git (supabase/functions): $(find "$TMP_SYNC/supabase/functions" -type f 2>/dev/null | wc -l || echo 0)"
+              echo "Total files in volume: $(find "$VOL" -type f 2>/dev/null | wc -l || echo 0)"
+              echo "Total files in git (supabase/functions): $(find "$TMP_SYNC/supabase/functions" -type f 2>/dev/null | wc -l || echo 0)"
+            ) || true
 
             echo "--- Restarting functions service (bind-mount reload) ---"
             # Per docs/runbooks/deploy-edge-function.md: `restart` reloads the bind mount.
