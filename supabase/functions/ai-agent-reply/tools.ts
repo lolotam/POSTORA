@@ -351,9 +351,9 @@ function describeParameterKeys(parameters: ConnectorParameterSchema): string {
 /**
  * Every capability's argument in one object, for providers that read only
  * `properties`. A key shared by two capabilities (woocommerce's `query`) keeps
- * the first definition — the descriptions agree, and the authoritative
- * per-capability contract is still carried by `oneOf` and enforced by the
- * adapter, which validates the arguments it was actually given.
+ * the first definition — the descriptions agree, and the per-capability
+ * contract is enforced by the adapter, which validates the arguments it was
+ * actually given.
  */
 function mergeCapabilityParameters(
   capabilities: readonly ConnectorCapabilityDefinition[],
@@ -382,20 +382,34 @@ export function customToolDefinitions(tools: CustomTool[]) {
     };
     const typedParameters = capabilities?.length
       ? {
+        // One flat object, deliberately: a `capability` enum plus the merged
+        // arguments, and NO schema-level polymorphism at the root.
+        //
+        // Two providers, two hard constraints, and only this shape satisfies
+        // both. Google's OpenAI-compatible endpoint drops `oneOf` and reads
+        // only `properties`, so a oneOf-only schema reached the model with no
+        // argument fields at all and a live WooCommerce store went unqueried.
+        // OpenAI refuses such a schema outright:
+        //
+        //   Invalid schema for function '...': schema must have type 'object'
+        //   and not have 'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the
+        //   top level.
+        //
+        // OpenAI is the LAST model in the agent chain, so keeping `oneOf` for
+        // "providers that honour it" cost a real customer their answer: a
+        // Gemini blip fell through to it, the schema was refused, the chain was
+        // exhausted, and the outage message went out instead (2026-08-31 20:57
+        // UTC). Per-capability precision now lives in the enum description
+        // below, and is enforced by the adapter, which validates the arguments
+        // it is actually given.
         type: "object",
-        // Google's OpenAI-compatible endpoint -- the live model for every reply
-        // -- drops `oneOf` and reads only `properties`. With `oneOf` alone it
-        // saw a function whose arguments had no fields, so it either skipped
-        // the connector or called it with `{}`, which connectorExecution.ts
-        // then refuses for a missing capability. A real WooCommerce store went
-        // unqueried that way (2026-08-31). These two keys are what such a
-        // provider reads; `oneOf` below stays for the ones that honour it.
         properties: {
           capability: {
             type: "string",
             enum: capabilities.map((capability) => capability.name),
-            // Which argument each capability takes has to be said here, because
-            // a provider that ignores oneOf has no other place to learn it.
+            // Which argument each capability takes is said here because the
+            // schema no longer binds them: this description is the only place
+            // the model can learn that check_stock wants a sku.
             description: capabilities
               .map((capability) =>
                 `${capability.name}: ${capability.description} Takes ${
@@ -411,19 +425,6 @@ export function customToolDefinitions(tools: CustomTool[]) {
           },
         },
         required: ["capability", "parameters"],
-        oneOf: capabilities.map((capability) => ({
-          type: "object",
-          properties: {
-            capability: {
-              type: "string",
-              enum: [capability.name],
-              description: capability.description,
-            },
-            parameters: capability.parameters,
-          },
-          required: ["capability", "parameters"],
-          additionalProperties: false,
-        })),
       }
       : legacyParameters;
 
