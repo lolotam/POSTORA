@@ -113,11 +113,14 @@ jobs:
 
             # ai-knowledge-excel-worker is a second long-lived service that also mounts _shared.
             # Restart it only when the worker or a shared module it imports changed.
-            # Conservative: always restart if _shared changed; otherwise leave it.
+            # Use pipefail-safe check: grep -q closes pipe early (SIGPIPE 141) under pipefail.
+            set +o pipefail
             if git -C "$RUNTIME" diff --name-only "HEAD~1..refs/remotes/origin/main" 2>/dev/null | grep -qE "supabase/functions/_shared/|supabase/functions/ai-knowledge-excel-worker/"; then
+              set -o pipefail
               echo "Detected _shared or ai-knowledge-excel-worker change — restarting ai-knowledge-excel-worker as well"
               docker compose restart ai-knowledge-excel-worker || echo "::warning::ai-knowledge-excel-worker restart failed or service not present"
             else
+              set -o pipefail
               echo "No _shared/worker change detected — skipping ai-knowledge-excel-worker restart"
             fi
 
@@ -125,7 +128,9 @@ jobs:
             sleep 4
             docker compose ps functions || true
             echo "--- Recent functions logs (tail 60) ---"
+            set +o pipefail
             docker compose logs --tail=60 functions | tail -n 60 || true
+            set -o pipefail
 
             echo "--- Healthcheck: get-public-config (expect 200) ---"
             # Public endpoint, no auth needed. Use --max-time 15 and retry 3x.
