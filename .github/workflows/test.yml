@@ -89,6 +89,41 @@ jobs:
           --no-check --node-modules-dir=auto
           supabase/functions/
 
+  contract-drift:
+    name: Partner API contract drift
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # docs/api/openapi.yaml is the published Partner API contract. This job
+      # compares it against the committed baseline beside it and fails on a
+      # field removal, a type narrowing, an enum removal or a required-field
+      # addition -- the four changes that break a partner's integration at
+      # runtime rather than at build time.
+      #
+      # It is NOT a schema validator, and validity is not what it checks. A
+      # well-formed document can still be a different contract than it was
+      # yesterday. Bumping `info.version` deliberately does not satisfy it
+      # either: the gate never reads that field, because a version bump is a
+      # keystroke and this gate exists to require a decision.
+      #
+      # A breaking change lands by adding its finding id to
+      # docs/api/accepted-breaking-changes.txt, which authorises that one
+      # change and nothing else. Additive changes -- a new optional field, a
+      # new enum value -- pass silently and on purpose; a gate that fires on
+      # safe changes is a gate someone deletes.
+      #
+      # Only --allow-read: this gate reads two files and needs nothing else.
+      - name: Check contract drift
+        run: deno run --allow-read scripts/check-openapi-drift.ts
+
   db-harness:
     name: Postgres integration harness
     runs-on: ubuntu-latest

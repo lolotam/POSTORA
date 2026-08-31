@@ -190,7 +190,7 @@ Ship together; none is testable alone. A brief exists at
   Prove with six mutations, including that last one.
 - **0.5** Runtime contract tests asserting the document describes real behaviour.
 
-**Ground truth already established** — 16 codes the code can emit, verified against source:
+**Ground truth already established** — 23 codes the code can emit, verified against source:
 
 ```
 account_needs_reauth  account_not_connected  idempotency_conflict
@@ -199,8 +199,14 @@ internal_error  invalid_key  invalid_request  key_expired  key_revoked
 limiter_unavailable  method_not_allowed  missing_idempotency_key
 quota_exceeded  rate_limited  temporarily_unavailable  unknown_action
 ```
-plus `invalid_recipient`, `meta_error`, `outside_session_window`, `template_not_approved` from
-`_shared/whatsappPartnerOps.ts` (behind the suspended send path).
+plus `invalid_recipient`, `meta_error`, `outside_session_window`, `template_not_approved` and
+`unsupported_direct_qr` from `_shared/whatsappPartnerOps.ts` (behind the suspended send path).
+
+`unsupported_direct_qr` was the **fourth** undocumented drift (§2.5) — missing from the
+"exhaustive" table *and* from this file's own first draft. It is emitted when a partner key is
+pinned to an `evolution_qr` account and a template send is attempted
+(`_shared/whatsappPartnerOps.ts:221`). The authoritative list now lives in
+`docs/api/openapi.yaml` under `components.schemas.V1ErrorCode`.
 
 **The alias and `/v1` have different error envelopes on purpose (D2).** Do not unify them.
 
