@@ -28,7 +28,18 @@ AS $function$
     AND t.user_id = p_user_id;
 $function$;
 
-REVOKE ALL ON FUNCTION public.get_connector_credential(uuid, uuid) FROM PUBLIC;
+-- anon and authenticated are named EXPLICITLY. This stack carries
+-- ALTER DEFAULT PRIVILEGES ... GRANT EXECUTE ON FUNCTIONS TO anon, authenticated,
+-- so both receive EXECUTE at CREATE time and "REVOKE ... FROM PUBLIC" -- which
+-- touches only the PUBLIC pseudo-role -- leaves them holding it. Omitting them
+-- here left this function, which returns a decrypted credential blob for any
+-- (user_id, tool_id) passed as parameters, callable with nothing but the anon
+-- key. Verified against production: HTTP 200 before the revoke, 401 after.
+--
+-- Apply as supabase_admin: it owns these functions, postgres is not a superuser
+-- on this stack, and a REVOKE by a non-owner is a WARNING that changes nothing.
+REVOKE EXECUTE ON FUNCTION public.get_connector_credential(uuid, uuid)
+  FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_connector_credential(uuid, uuid) TO service_role;
 
 COMMIT;
