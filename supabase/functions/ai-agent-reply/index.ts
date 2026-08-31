@@ -26,6 +26,7 @@ import {
   shouldAiReply,
   waRecipient,
 } from "./logic.ts";
+import { flattenChatLinks } from "./chatLinks.ts";
 import {
   customToolDefinitions,
   type EscalationTarget,
@@ -1013,7 +1014,9 @@ Deno.serve(async (req) => {
       const choice = completion.choices[0].message;
 
       if (!choice.tool_calls?.length) {
-        replyText = (choice.content || "").trim();
+        // Flattened here, at the single place a reply is born, so the repair
+        // covers the send, the stored transcript and the sandbox alike.
+        replyText = flattenChatLinks((choice.content || "").trim());
         break;
       }
 

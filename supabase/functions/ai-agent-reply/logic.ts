@@ -174,6 +174,24 @@ const SURFACE_INSTRUCTIONS: Record<ReplySurface, { intro: string; rules: string[
   },
 };
 
+/**
+ * How to write a link into a chat message, and where a link may come from.
+ *
+ * Shared by every surface: none of WhatsApp, Messenger, Instagram or Threads
+ * renders markdown, and all of them autolink bare URLs themselves.
+ *
+ * The first rule is a production fix (2026-08-31). The agent wrote
+ * `[https://shop.example/](https://shop.example/)`; WhatsApp showed the literal
+ * text and its autolinker ran from `https://` straight through the `](`,
+ * merging the pair into one address that 404s. Separate lines do not help --
+ * the two URLs being joined are the two halves of one markdown link.
+ */
+const LINK_RULES = [
+  "- Write every link as a bare URL on its own line, with nothing before or after it on that line. Never use markdown link syntax like [text](url), never wrap a URL in brackets, parentheses or angle brackets, and never put a full stop or comma straight after it. Chat apps do not render markdown: they show it literally and then merge the two halves into one broken address.",
+  "- Never invent a link. Only send a URL that a tool result or the business knowledge actually gave you. If a customer asks for a link you do not have, call the store connector to fetch it rather than guessing a URL from a product name.",
+  "- A product being out of stock is not a reason to withhold its link. Send the link the customer asked for and say plainly that it is currently unavailable.",
+];
+
 export function buildSystemPrompt(params: SystemPromptParams): string {
   const surface = params.surface ?? "dm";
   const languageName = params.language === "ar" ? "Arabic (العربية)" : "English";
@@ -210,6 +228,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool.",
     "- If the customer asks for a person/human/agent, use the escalate_to_human tool and tell them someone will follow up.",
     "- Use the search_knowledge tool to look up product or policy details before saying something is unavailable.",
+    ...LINK_RULES,
     ...surfaceInstructions.rules,
     "Business knowledge:",
     knowledge,

@@ -154,3 +154,66 @@ Deno.test("escalateConversation notifies every configured admin number", async (
   assertEquals(notified, ["96500000001", "96500000002"]);
   assertEquals(outcome.adminsNotified, 2);
 });
+
+/**
+ * Production regression, 2026-08-31 20:19 UTC.
+ *
+ * The agent sent a WhatsApp customer two links written as markdown:
+ *
+ *   [https://xsellpoint.com/](https://xsellpoint.com/)
+ *
+ * WhatsApp renders no markdown. Its own autolinker then ran from `https://`
+ * straight through the `](`, merging both halves of the pair into one address
+ * that 404s. The customer reported "two links connected together". Putting them
+ * on separate lines does not help -- that message already had them on separate
+ * lines and both were broken -- because the two URLs being merged are the two
+ * halves of a single markdown link.
+ */
+Deno.test("a DM is told to write bare URLs, never markdown links", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    languageForced: false,
+    knowledgeBlocks: [],
+    nowIso: "2026-08-31T20:19:00Z",
+  });
+  assertEquals(prompt.includes("[text](url)"), true);
+  assertEquals(prompt.includes("on its own line"), true);
+});
+
+Deno.test("a public comment gets the same link rule", async () => {
+  // The comment surface has its own rule list; a fix applied to one surface
+  // only would leave the other still breaking links.
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "en",
+    languageForced: false,
+    knowledgeBlocks: [],
+    nowIso: "2026-08-31T20:19:00Z",
+    surface: "comment",
+  });
+  assertEquals(prompt.includes("[text](url)"), true);
+});
+
+/**
+ * Same session, 20:21 UTC. Asked for the link to the most expensive perfume,
+ * the agent called search_knowledge -- the static index, which holds no
+ * permalinks -- got nothing, and then invented a reason: "they are out of
+ * stock, so I cannot send you a direct link". The store had the permalink; it
+ * was never asked. And at 20:19 it produced a /product-category/best-sellers/
+ * URL with no tool call at all.
+ */
+Deno.test("links must come from a tool, and stock status is not a reason to withhold one", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    languageForced: false,
+    knowledgeBlocks: [],
+    nowIso: "2026-08-31T20:21:00Z",
+  });
+  assertEquals(prompt.includes("Never invent a link"), true);
+  assertEquals(prompt.includes("out of stock is not a reason"), true);
+});
