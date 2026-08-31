@@ -13,6 +13,21 @@ import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
 import { blankedFields } from "./configBlanking.ts";
 import {
+  type CredentialVault,
+  deleteAccountScopedTool,
+  listToolsForUser,
+  parseUpsertToolInput,
+  type ToolAdminClient,
+  ToolWriteError,
+  upsertAccountScopedTool,
+} from "./toolWrites.ts";
+import {
+  parseSetToolAccountsInput,
+  type SharingAdminClient,
+  setToolAccounts,
+  ToolSharingError,
+} from "./toolSharing.ts";
+import {
   MEDIA_UNDERSTANDING_MODES,
   resolveMediaUnderstandingMode,
 } from "../_shared/mediaUnderstandingMode.ts";
@@ -51,7 +66,6 @@ import {
   resolveAutomationHandler,
   resolveCommentAutomationHandler,
 } from "../_shared/automationHandler.ts";
-import { SERVER_CONNECTOR_TYPES } from "../_shared/connectorRegistry.ts";
 
 // Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
 // before that window closes rather than serving a dead link from messaging_cache.
@@ -651,116 +665,93 @@ function isAiAgentPlatform(value: unknown): value is string {
       return jsonResponse({ modes: data || [] });
     }
 
+    // The Vault seam for the tool actions. PostgREST on this stack exposes
+    // only public/storage/graphql_public, so the vault schema is reached
+    // through the service-role-only wrappers this PR's migration adds
+    // (upsert_connector_credential_secret does the §4.3 decrypt-merge-
+    // re-encrypt inside the database; a decrypted credential never enters
+    // this function's process).
+    function wrapRpcError(error: unknown, fallback: string): Error {
+      const message = (error as { message?: unknown })?.message;
+      return new Error(typeof message === "string" ? message : fallback);
+    }
+    const credentialVault: CredentialVault = {
+      async upsertCredentials(secretId, blob) {
+        const { data, error } = await adminClient.rpc("upsert_connector_credential_secret", {
+          p_secret_id: secretId,
+          p_secret: blob,
+        });
+        if (error) throw wrapRpcError(error, "Failed to store connector credentials");
+        const result = data as { secret_id?: string; configured_fields?: string[] } | null;
+        if (!result?.secret_id || !Array.isArray(result.configured_fields)) {
+          throw new Error("Malformed response storing connector credentials");
+        }
+        return { secretId: result.secret_id, configuredFields: result.configured_fields };
+      },
+      async deleteCredentials(secretId) {
+        const { error } = await adminClient.rpc("delete_connector_credential_secret", {
+          p_secret_id: secretId,
+        });
+        if (error) throw wrapRpcError(error, "Failed to delete connector credentials");
+      },
+    };
+
+    // The tool/sharing modules declare the exact client surface they use
+    // (see toolWrites.ts); the esm.sh client here is untyped, so the seam is
+    // crossed with one explicit cast rather than four drifting `any`s.
+    const toolAdmin = adminClient as unknown as ToolAdminClient;
+    const sharingAdmin = adminClient as unknown as SharingAdminClient;
+
     // ACTION: ai_list_tools
     if (action === "ai_list_tools") {
-      const { data, error } = await adminClient
-        .from("ai_agent_tools")
-        .select("*")
-        .eq("user_id", user.id)
-        .order("name");
-      if (error) throw error;
-      // Stored secrets never leave the server; the client only learns whether
-      // one exists (ARCHITECTURE.md §13: no raw credentials in responses).
-      const tools = (data || []).map(({ secret, ...tool }) => ({ ...tool, has_secret: !!secret }));
+      // Stored secrets and vault ids never leave the server; the client only
+      // learns whether a secret exists (ARCHITECTURE.md §13) and which
+      // credential fields are configured -- configured_secret_fields exists
+      // precisely so this list never touches Vault (spec §4.3).
+      const tools = await listToolsForUser(toolAdmin, user.id);
       return jsonResponse({ tools });
     }
 
     // ACTION: ai_upsert_tool
+    // Writes one account-scoped connector row (scope, account, platform
+    // derived from the account) with its credentials split by the registry:
+    // non-secret fields into `settings`, secret fields into one Vault secret
+    // per connector, vault FIRST and row SECOND. All validation and refusal
+    // semantics live in toolWrites.ts, testable without an Edge Runtime.
     if (action === "ai_upsert_tool") {
-      const { tool } = body;
-      if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
-        return jsonResponse({ error: "tool must be an object" }, 400);
-      }
-      const name = String(tool.name || "").trim();
-      const description = String(tool.description || "").trim();
-      const toolUrl = String(tool.url || "").trim();
-      // Reserved names are the builtin tools the AI agent already exposes.
-      const reservedToolNames = [
-        "search_knowledge", "escalate_to_human", "notify_admin",
-        "list_connected_accounts", "search_posts", "get_posting_summary", "create_scheduled_post",
-      ];
-      if (!/^[a-z][a-z0-9_]{2,40}$/.test(name)) {
-        return jsonResponse({ error: "Tool name must be snake_case (3-41 chars, letters/digits/underscores)" }, 400);
-      }
-      if (reservedToolNames.includes(name)) {
-        return jsonResponse({ error: `"${name}" is a reserved builtin tool name` }, 400);
-      }
-      if (!description) return jsonResponse({ error: "Tool description is required" }, 400);
-      if (!/^https:\/\//.test(toolUrl)) {
-        return jsonResponse({ error: "Tool URL must start with https://" }, 400);
-      }
-      // SSRF defense in depth: refuse obviously internal targets at save time.
-      // ai-agent-reply re-validates (with DNS resolution) on every call.
-      try {
-        const parsedUrl = new URL(toolUrl);
-        const host = parsedUrl.hostname.toLowerCase();
-        const privateIpLiteral = /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
-        if (
-          host === "localhost" || host.endsWith(".local") || host.endsWith(".internal") ||
-          !host.includes(".") || privateIpLiteral.test(host) || host.includes(":")
-        ) {
-          return jsonResponse({ error: "Tool URL must point to a public host" }, 400);
-        }
-      } catch {
-        return jsonResponse({ error: "Tool URL is not a valid URL" }, 400);
-      }
-      // Connector metadata must match the ai_agent_tools CHECK constraints;
-      // anything unrecognized degrades to the neutral defaults.
-      const connectorType = SERVER_CONNECTOR_TYPES.includes(tool.connector_type)
-        ? tool.connector_type
-        : "custom_rest";
-      const rawPermissions =
-        tool.permissions && typeof tool.permissions === "object" && !Array.isArray(tool.permissions)
-          ? tool.permissions as Record<string, unknown>
-          : {};
-      const permissions = {
-        search_products: rawPermissions.search_products === true,
-        check_stock: rawPermissions.check_stock === true,
-        lookup_orders: rawPermissions.lookup_orders === true,
-      };
-      const row: Record<string, unknown> = {
-        user_id: user.id,
-        name,
-        description: description.slice(0, 500),
-        tool_type: "n8n_webhook",
-        url: toolUrl,
-        is_enabled: tool.is_enabled !== false,
-        admin_only: tool.admin_only === true,
-        connector_type: connectorType,
-        permissions,
-        read_only_mode: tool.read_only_mode !== false,
-        enable_cache: tool.enable_cache !== false,
-      };
-      // PostgREST upserts only the columns present in the payload, so an edit
-      // that omits `secret` keeps the stored value instead of wiping it. A
-      // non-empty string replaces it; clear_secret explicitly removes it.
-      if (typeof tool.secret === "string" && tool.secret.trim() !== "") {
-        row.secret = tool.secret.trim();
-      } else if (tool.clear_secret === true) {
-        row.secret = null;
-      }
-      const { data, error } = await adminClient
-        .from("ai_agent_tools")
-        .upsert(row, { onConflict: "user_id,name" })
-        .select()
-        .single();
-      if (error) throw error;
-      const { secret: savedSecret, ...safeTool } = data as Record<string, unknown>;
-      return jsonResponse({ tool: { ...safeTool, has_secret: !!savedSecret } });
+      const input = parseUpsertToolInput(body);
+      const tool = await upsertAccountScopedTool(toolAdmin, credentialVault, {
+        userId: user.id,
+        input,
+      });
+      return jsonResponse({ tool });
     }
 
     // ACTION: ai_delete_tool
+    // The Vault secret is reclaimed BEFORE the row is gone: once the row is
+    // deleted the secret id is unrecoverable and the secret is orphaned
+    // forever (spec §4.3 -- vault has no delete function of its own).
     if (action === "ai_delete_tool") {
       const { tool_id } = body;
-      if (!tool_id || typeof tool_id !== "string") {
+      if (typeof tool_id !== "string" || !tool_id.trim()) {
         return jsonResponse({ error: "tool_id is required" }, 400);
       }
-      const { error } = await adminClient
-        .from("ai_agent_tools")
-        .delete()
-        .eq("id", tool_id)
-        .eq("user_id", user.id);
-      if (error) throw error;
+      await deleteAccountScopedTool(toolAdmin, credentialVault, {
+        userId: user.id,
+        toolId: tool_id.trim(),
+      });
+      return jsonResponse({ ok: true });
+    }
+
+    // ACTION: set_tool_accounts
+    // Replaces a connector's whole explicit share set by delegating to the
+    // set_ai_agent_tool_accounts RPC (migration 20260831130000, §12.2).
+    // Parsing and ownership pre-checks live in toolSharing.ts so a caller
+    // gets a clean 400/403/404 instead of a raw database error string; the
+    // RPC is the authority and re-verifies everything.
+    if (action === "set_tool_accounts") {
+      const input = parseSetToolAccountsInput(body);
+      await setToolAccounts(sharingAdmin, { userId: user.id, input });
       return jsonResponse({ ok: true });
     }
 
@@ -1869,6 +1860,10 @@ function isAiAgentPlatform(value: unknown): value is string {
   } catch (err: any) {
     console.error("messaging-api error:", err);
     const message = err.message || "Internal error";
+
+    if (err instanceof ToolWriteError || err instanceof ToolSharingError) {
+      return jsonResponse({ error: err.message }, err.status);
+    }
 
     if (err instanceof WhatsAppAccessError) {
       return jsonResponse({ error: err.message }, err.status);

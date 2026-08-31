@@ -94,6 +94,9 @@ export type AiAgentTab = (typeof AI_AGENT_TABS)[number];
 
 interface AiAgentManagerProps {
   platform?: AiAgentPlatform;
+  /** Account selected by an overview deep link. It is still validated against
+   *  the active accounts before any account-scoped read or write uses it. */
+  initialAccountId?: string | null;
   /** When provided (with onTabChange), the tab bar is URL-controlled for deep links. */
   activeTab?: AiAgentTab;
   onTabChange?: (tab: AiAgentTab) => void;
@@ -101,7 +104,7 @@ interface AiAgentManagerProps {
   onDirtyChange?: (isDirty: boolean) => void;
 }
 
-export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, surface = "both", onDirtyChange }: AiAgentManagerProps = {}) {
+export function AiAgentManager({ platform = "whatsapp", initialAccountId = null, activeTab, onTabChange, surface = "both", onDirtyChange }: AiAgentManagerProps = {}) {
   const { data: socialAccounts = [] } = useSocialAccounts();
   // Same selection pattern as AutomationHandlerCard: the first active account
   // on the platform until the user chooses, and never an id that is not in
@@ -110,7 +113,7 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
     () => socialAccounts.filter((account) => account.platform === platform && account.is_active),
     [socialAccounts, platform],
   );
-  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(initialAccountId);
   const accountId = selectedAccountId && accounts.some((account) => account.id === selectedAccountId)
     ? selectedAccountId
     : accounts[0]?.id ?? null;
@@ -434,7 +437,13 @@ export function AiAgentManager({ platform = "whatsapp", activeTab, onTabChange, 
         </div>
       </TabsContent>
       <TabsContent value="knowledge" className="mt-0"><AiKnowledgeManager platform={platform} accountId={accountId} /></TabsContent>
-      <TabsContent value="tools" className="mt-0"><DatabaseConnectorsManager /></TabsContent>
+      <TabsContent value="tools" className="mt-0">
+        <DatabaseConnectorsManager
+          platform={platform}
+          accountId={accountId}
+          onAccountIdChange={(nextAccountId) => guard(() => setSelectedAccountId(nextAccountId))}
+        />
+      </TabsContent>
       <TabsContent value="test" className="mt-0"><AiAgentTestChat platform={platform} accountId={accountId} /></TabsContent>
       <TabsContent value="logs" className="mt-0"><AiAgentLogsView platform={platform} /></TabsContent>
       <UnsavedChangesDialog

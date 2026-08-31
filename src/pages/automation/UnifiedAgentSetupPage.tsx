@@ -80,6 +80,7 @@ export default function UnifiedAgentSetupPage() {
 
   const tabParam = searchParams.get("tab") as AiAgentTab;
   const activeTab: AiAgentTab = AI_AGENT_TABS.includes(tabParam) ? tabParam : "settings";
+  const initialAccountId = searchParams.get("account");
 
   const handlePlatformChange = (nextPlatform: AiAgentPlatform) => {
     // Clicking the already-active platform changes nothing, so it must not reach the
@@ -331,8 +332,9 @@ export default function UnifiedAgentSetupPage() {
               innerClassName="p-4 md:p-6"
             >
               <AiAgentManager
-                key={`${platform}-${dmsActive ? "dms" : ""}-${commentsActive ? "comments" : ""}`}
+                key={`${platform}-${initialAccountId ?? "default"}-${dmsActive ? "dms" : ""}-${commentsActive ? "comments" : ""}`}
                 platform={platform}
+                initialAccountId={initialAccountId}
                 activeTab={activeTab}
                 onTabChange={handleTabChange}
                 onDirtyChange={setAgentDirty}
