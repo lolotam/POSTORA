@@ -3,10 +3,16 @@ import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { CONNECTOR_TYPES as PICKER_CONNECTOR_TYPES } from "../../hooks/useAiAgentTools";
-import { CONNECTOR_TYPES as BROWSER_CONNECTOR_TYPES } from "../connectorRegistry";
+import {
+  CONNECTOR_TYPES as BROWSER_CONNECTOR_TYPES,
+  connectorDefinition as browserConnectorDefinition,
+  shouldUseAdapter as browserShouldUseAdapter,
+} from "../connectorRegistry";
 import {
   CONNECTOR_TYPES as SHARED_CONNECTOR_TYPES,
+  connectorDefinition as sharedConnectorDefinition,
   SERVER_CONNECTOR_TYPES,
+  shouldUseAdapter as sharedShouldUseAdapter,
 } from "../../../supabase/functions/_shared/connectorRegistry.ts";
 
 const EXPECTED_CONNECTOR_TYPES = [
@@ -107,5 +113,26 @@ describe("connector type contract", () => {
     // This assertion is what made the derivation safe, and it is what goes
     // green again whenever a future pending type re-populates the constant.
     expect(sorted(SERVER_CONNECTOR_TYPES)).toEqual(sorted(connectorTypesFromMigration()));
+  });
+});
+
+describe("browser mirror parity", () => {
+  // The mirror is hand-maintained by design (Deno and the browser cannot
+  // share the runtime module), so every fact the UI derives from it must be
+  // pinned against the shared registry or it drifts silently: the credential
+  // form renders from the mirror's fields and the Test-connection button is
+  // derived from the mirror's capabilities, so a mirror that lags a new
+  // registry entry ships a form that cannot configure the new connector.
+  it("defines every connector identically to the shared registry", () => {
+    for (const type of SHARED_CONNECTOR_TYPES) {
+      expect(browserConnectorDefinition(type)).toEqual(sharedConnectorDefinition(type));
+    }
+  });
+
+  it("agrees with the shared registry on which types have a live adapter", () => {
+    for (const type of SHARED_CONNECTOR_TYPES) {
+      expect(browserShouldUseAdapter({ connector_type: type }))
+        .toBe(sharedShouldUseAdapter({ connector_type: type }));
+    }
   });
 });

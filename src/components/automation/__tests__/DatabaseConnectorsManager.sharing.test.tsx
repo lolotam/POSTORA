@@ -77,6 +77,9 @@ const tool = (overrides: Partial<AiAgentTool> & { id: string }): AiAgentTool => 
   platform: "whatsapp",
   settings: {},
   configured_secret_fields: [],
+  last_test_at: null,
+  last_test_ok: null,
+  last_test_error: null,
   created_at: "2026-08-01T00:00:00Z",
   ...overrides,
 });
@@ -183,6 +186,11 @@ describe("DatabaseConnectorsManager account scoping", () => {
     renderManager({ platform: "facebook", accountId: "fb-1" });
 
     fireEvent.click(screen.getByText("Stripe Payments"));
+    // The registry marks Stripe's key required: satisfy it so this test keeps
+    // proving what it exists to prove (the 400's own message surfacing and
+    // the owning account being sent), not the required-field block, which the
+    // credentials suite covers.
+    fireEvent.change(screen.getByLabelText("Restricted API key"), { target: { value: "rk_test_fill" } });
     fireEvent.click(screen.getByRole("button", { name: /save & connect/i }));
 
     const payload = upsertTool.mutate.mock.calls[0]?.[0] as Record<string, unknown>;

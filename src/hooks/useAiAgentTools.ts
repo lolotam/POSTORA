@@ -60,6 +60,11 @@ export interface AiAgentTool {
   settings: Record<string, unknown> | null;
   /** The secret field NAMES that have values — never the values themselves. */
   configured_secret_fields: string[];
+  /** Last test_connection probe, written by the ai-agent-adapters service —
+   *  never by the browser. Null means the connector has never been tested. */
+  last_test_at: string | null;
+  last_test_ok: boolean | null;
+  last_test_error: string | null;
   created_at: string;
 }
 
@@ -70,6 +75,10 @@ export interface AiAgentToolInput {
   /** Owning account. The server refuses a save without it — an account-less
    *  write against an account-scoped table is how unscoped rows get created. */
   social_account_id: string;
+  /** Registry-partitioned credential values keyed by registry field name:
+   *  secret fields route to the Vault blob, non-secret fields to `settings`.
+   *  An omitted or blank value keeps whatever is stored ("keep existing"). */
+  credentials?: Record<string, string>;
   /** Provide a non-empty string to set/replace; omit to keep the stored secret. */
   secret?: string | null;
   /** Explicitly remove the stored secret. */

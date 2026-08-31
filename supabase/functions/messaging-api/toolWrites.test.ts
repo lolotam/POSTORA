@@ -457,6 +457,35 @@ Deno.test("ai_list_tools never returns a decrypted credential, a secret value, o
   assertEquals(tool.configured_secret_fields, ["consumer_key", "consumer_secret"]);
 });
 
+Deno.test("ai_list_tools returns the last-connection-test columns so a card can show stored state", async () => {
+  // last_test_at / last_test_ok / last_test_error are written by the
+  // ai-agent-adapters test_connection path, not the browser. The list must
+  // carry them back (they are not secrets) or every card renders blank until
+  // someone clicks Test — a future column allow-list that drops them is
+  // exactly the regression this pins.
+  const rows: Row[] = [
+    {
+      __table: "ai_agent_tools",
+      id: "tool-1",
+      user_id: OWNER,
+      social_account_id: ACCOUNT,
+      name: "store_lookup",
+      secret: null,
+      credentials_secret_id: null,
+      configured_secret_fields: [],
+      settings: {},
+      last_test_at: "2026-08-31T10:00:00Z",
+      last_test_ok: false,
+      last_test_error: "woocommerce_http_error: WooCommerce rejected the request.",
+    },
+  ];
+  const tools = await listToolsForUser(fakeAdmin(rows), OWNER);
+  const tool = tools[0] as Record<string, unknown>;
+  assertEquals(tool.last_test_at, "2026-08-31T10:00:00Z");
+  assertEquals(tool.last_test_ok, false);
+  assertEquals(tool.last_test_error, "woocommerce_http_error: WooCommerce rejected the request.");
+});
+
 Deno.test("deleting a tool reclaims the vault secret before the row is gone", async (t) => {
   await t.step("secret deleted first, row second", async () => {
     const rows: Row[] = [

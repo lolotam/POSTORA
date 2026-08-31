@@ -6,6 +6,7 @@ import {
   restrictedErrorResponse,
   restrictedJsonResponse,
 } from "../_shared/cors.ts";
+import { persistConnectionTestOutcome } from "./connectionTestOutcome.ts";
 import { createAdapterDependencies } from "./dependencies.ts";
 import { executeConnector } from "./dispatcher.ts";
 import { CAPABILITIES, type ConnectorTool } from "./types.ts";
@@ -158,6 +159,17 @@ async function executeAdapterRequest(
     },
     createAdapterDependencies(),
   );
+
+  // The adapter — not the browser — records the probe on the row (see
+  // connectionTestOutcome.ts). Deliberately after the outcome exists and
+  // before the response, and deliberately non-fatal: the probe's own result
+  // is the answer, bookkeeping is not allowed to change it. Early refusals
+  // above (not found / disabled / unconfigured) never made a probe, so they
+  // leave any previous last_test_* state untouched.
+  if (parsedRequest.data.action === "test_connection") {
+    await persistConnectionTestOutcome(admin, toolId, connectorOutcome);
+  }
+
   return restrictedJsonResponse(req, connectorOutcome);
 }
 
