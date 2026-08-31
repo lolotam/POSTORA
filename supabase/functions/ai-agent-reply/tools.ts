@@ -3,7 +3,10 @@
 import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { composeToolDescription } from "../_shared/composeToolDescription.ts";
-import { connectorUsageGuide } from "../_shared/connectorRegistry.ts";
+import {
+  connectorCapabilities,
+  connectorUsageGuide,
+} from "../_shared/connectorRegistry.ts";
 
 export interface ToolContext {
   admin: any;
@@ -322,6 +325,7 @@ export async function executeTool(
 // external webhook — typically an n8n workflow holding the real credentials
 // (Gmail, Calendar, CRM, ...) so Postora never stores them.
 export interface CustomTool {
+  id: string;
   name: string;
   description: string;
   url: string;
@@ -333,30 +337,56 @@ export interface CustomTool {
 }
 
 export function customToolDefinitions(tools: CustomTool[]) {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      // The registry guide describes the connector TYPE (when to reach for it,
-      // what it cannot do); tool.description describes the user's own instance.
-      // Both are sent, guide first, inside a hard character budget -- these are
-      // resent on every turn of every conversation.
-      description: composeToolDescription(
-        tool.description,
-        connectorUsageGuide(tool.connector_type),
-      ),
-      parameters: {
-        type: "object",
-        properties: {
-          input: {
-            type: "string",
-            description: "The request to send to this connector, in plain language with all needed details",
-          },
+  return tools.map((tool) => {
+    const capabilities = connectorCapabilities(tool.connector_type);
+    const legacyParameters = {
+      type: "object",
+      properties: {
+        input: {
+          type: "string",
+          description: "The request to send to this connector, in plain language with all needed details",
         },
-        required: ["input"],
       },
-    },
-  }));
+      required: ["input"],
+    };
+    const typedParameters = capabilities?.length
+      ? {
+        type: "object",
+        oneOf: capabilities.map((capability) => ({
+          type: "object",
+          properties: {
+            capability: {
+              type: "string",
+              enum: [capability.name],
+              description: capability.description,
+            },
+            parameters: capability.parameters,
+          },
+          required: ["capability", "parameters"],
+          additionalProperties: false,
+        })),
+      }
+      : legacyParameters;
+
+    return {
+      type: "function",
+      function: {
+        name: tool.name,
+        // The registry guide describes the connector TYPE (when to reach for it,
+        // what it cannot do); tool.description describes the user's own instance.
+        // Both are sent, guide first, inside a hard character budget -- these are
+        // resent on every turn of every conversation.
+        description: composeToolDescription(
+          tool.description,
+          connectorUsageGuide(tool.connector_type),
+        ),
+        // custom_rest and unknown historical types take the exact legacy branch.
+        // Typed connectors derive this schema from the same registry metadata
+        // that opts them into adapter routing.
+        parameters: typedParameters,
+      },
+    };
+  });
 }
 
 const CUSTOM_TOOL_TIMEOUT_MS = 10_000;

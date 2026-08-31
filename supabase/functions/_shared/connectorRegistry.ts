@@ -12,6 +12,31 @@ export interface UsageGuide {
   limits: string;
 }
 
+export const CONNECTOR_CAPABILITY_NAMES = [
+  "search_products",
+  "check_stock",
+  "lookup_orders",
+] as const;
+
+export type ConnectorCapability = (typeof CONNECTOR_CAPABILITY_NAMES)[number];
+
+export interface ConnectorParameterSchema {
+  type: "object";
+  properties: Record<string, {
+    type: "string" | "object";
+    description: string;
+    additionalProperties?: { type: readonly ("string" | "number" | "boolean")[] };
+  }>;
+  required?: string[];
+  additionalProperties: boolean;
+}
+
+export interface ConnectorCapabilityDefinition {
+  name: ConnectorCapability;
+  description: string;
+  parameters: ConnectorParameterSchema;
+}
+
 export const CONNECTOR_TYPES = [
   "supabase",
   "mysql_postgres",
@@ -53,7 +78,29 @@ export interface ConnectorDefinition {
   label: string;
   credentials: Field[];
   usageGuide?: UsageGuide;
+  /** Present only when a live ai-agent-adapters implementation exists. */
+  capabilities?: readonly ConnectorCapabilityDefinition[];
 }
+
+const SUPABASE_PARAMETERS: ConnectorParameterSchema = {
+  type: "object",
+  properties: {
+    table: {
+      type: "string",
+      description: "Allowed PostgREST table to query. Omit to use the connector's first allowed table.",
+    },
+    select: {
+      type: "string",
+      description: "Comma-separated columns to return. Omit to return all allowed columns.",
+    },
+    filters: {
+      type: "object",
+      description: "Exact-match column filters using string, number, or boolean values.",
+      additionalProperties: { type: ["string", "number", "boolean"] },
+    },
+  },
+  additionalProperties: false,
+};
 
 const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   supabase: {
@@ -94,6 +141,15 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
       requestExamples: ["find the current booking for this phone number", "look up this product's availability"],
       limits: "Anon-key access only. The target project's RLS and configured schema and table allow-list constrain results.",
     },
+    capabilities: CONNECTOR_CAPABILITY_NAMES.map((name) => ({
+      name,
+      description: name === "search_products"
+        ? "Search current rows relevant to a product request."
+        : name === "check_stock"
+          ? "Check current stock data in an allowed table."
+          : "Look up current order data in an allowed table.",
+      parameters: SUPABASE_PARAMETERS,
+    })),
   },
   mysql_postgres: {
     type: "mysql_postgres",
@@ -158,6 +214,44 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
       requestExamples: ["stock level for SKU ABC-12", "status of order 10432"],
       limits: "Reads only. Cannot place, refund or modify an order.",
     },
+    capabilities: [
+      {
+        name: "search_products",
+        description: "Search WooCommerce products by customer-provided words.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Product name, description, or search phrase." },
+          },
+          required: ["query"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "check_stock",
+        description: "Check live WooCommerce stock by SKU.",
+        parameters: {
+          type: "object",
+          properties: {
+            sku: { type: "string", description: "Exact product SKU." },
+          },
+          required: ["sku"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "lookup_orders",
+        description: "Look up a WooCommerce order by id or search phrase.",
+        parameters: {
+          type: "object",
+          properties: {
+            order_id: { type: "string", description: "Exact WooCommerce order id, when known." },
+            query: { type: "string", description: "Order search phrase when the exact id is unknown." },
+          },
+          additionalProperties: false,
+        },
+      },
+    ],
   },
   shopify: {
     type: "shopify",
@@ -429,4 +523,19 @@ export function connectorUsageGuide(type: string | null | undefined): UsageGuide
   return Object.prototype.hasOwnProperty.call(CONNECTOR_DEFINITIONS, type)
     ? CONNECTOR_DEFINITIONS[type as ConnectorType].usageGuide
     : undefined;
+}
+
+/** The typed capabilities backed by a live adapter, or undefined for legacy rows. */
+export function connectorCapabilities(
+  type: string | null | undefined,
+): readonly ConnectorCapabilityDefinition[] | undefined {
+  if (!type || !Object.prototype.hasOwnProperty.call(CONNECTOR_DEFINITIONS, type)) return undefined;
+  return CONNECTOR_DEFINITIONS[type as ConnectorType].capabilities;
+}
+
+/** Pure routing decision shared by the prompt schema and reply dispatch. */
+export function shouldUseAdapter(
+  tool: { connector_type?: string | null },
+): boolean {
+  return (connectorCapabilities(tool.connector_type)?.length ?? 0) > 0;
 }

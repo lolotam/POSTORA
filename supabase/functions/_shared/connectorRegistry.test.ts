@@ -4,7 +4,11 @@ import {
   assertThrows,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-import { CONNECTOR_TYPES, connectorDefinition } from "./connectorRegistry.ts";
+import {
+  CONNECTOR_TYPES,
+  connectorDefinition,
+  shouldUseAdapter,
+} from "./connectorRegistry.ts";
 
 Deno.test("every declared connector type has credentials and a usage guide", () => {
   for (const type of CONNECTOR_TYPES) {
@@ -29,7 +33,21 @@ Deno.test("every declared connector type has credentials and a usage guide", () 
       assert(Array.isArray(definition.usageGuide?.requestExamples));
       assertEquals(typeof definition.usageGuide?.limits, "string");
     }
+
+    if (type === "woocommerce" || type === "supabase") {
+      assert((definition.capabilities?.length ?? 0) > 0);
+    } else {
+      assertEquals(definition.capabilities, undefined);
+    }
   }
+});
+
+Deno.test("only connector types with live capability adapters opt into adapter routing", () => {
+  assertEquals(shouldUseAdapter({ connector_type: "woocommerce" }), true);
+  assertEquals(shouldUseAdapter({ connector_type: "supabase" }), true);
+  assertEquals(shouldUseAdapter({ connector_type: "custom_rest" }), false);
+  assertEquals(shouldUseAdapter({ connector_type: "shopify" }), false);
+  assertEquals(shouldUseAdapter({ connector_type: "historical_unknown" }), false);
 });
 
 Deno.test("an unknown connector type throws and names itself", () => {
