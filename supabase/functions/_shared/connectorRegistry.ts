@@ -217,13 +217,32 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
     capabilities: [
       {
         name: "search_products",
-        description: "Search WooCommerce products by customer-provided words.",
+        description:
+          "Search or browse WooCommerce products. Sort by price to answer superlatives such as the most expensive or cheapest item.",
         parameters: {
           type: "object",
           properties: {
-            query: { type: "string", description: "Product name, description, or search phrase." },
+            query: {
+              type: "string",
+              description: "Product name, description, or search phrase. Omit it to browse the whole catalogue.",
+            },
+            category: {
+              type: "string",
+              description: "Product category NAME to restrict the search to, e.g. men's perfumes. Omit for all categories.",
+            },
+            sort_by: {
+              type: "string",
+              description: "One of price, date, popularity, rating. Omit for the store's own relevance order.",
+            },
+            order: {
+              type: "string",
+              description: "asc or desc. Defaults to desc, so sort_by=price returns the most expensive first.",
+            },
+            limit: {
+              type: "string",
+              description: "How many products to return, 1 to 20. Defaults to 5.",
+            },
           },
-          required: ["query"],
           additionalProperties: false,
         },
       },

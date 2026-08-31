@@ -419,3 +419,149 @@ Deno.test("a disabled connector is refused before any vendor call", async () => 
   assertEquals(fetched, false);
   assertEquals([401, 409].includes(response.status), true);
 });
+
+// ---------------------------------------------------------------------------
+// Answering a superlative: sorting, category filtering, and a payload that
+// survives the model's output budget.
+//
+// A customer asked a connected store for its most expensive perfume
+// (2026-08-31) and got "I have no direct information". search_products was a
+// bare `?search=&per_page=20` -- no ordering, so "most expensive" was not
+// expressible -- and the raw vendor payload was truncated at 2000 characters
+// by connectorExecution.ts, which is less than one WooCommerce product.
+// ---------------------------------------------------------------------------
+
+function wooUrlFor(parameters: Record<string, unknown>, pages: unknown[] = [[]]): Promise<string[]> {
+  const seen: string[] = [];
+  const queue = [...pages];
+  return executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request({ parameters }),
+    },
+    dependencies((url) => {
+      seen.push(String(url));
+      return Promise.resolve(jsonResponse(queue.shift() ?? []));
+    }),
+  ).then(() => seen);
+}
+
+Deno.test("sort_by=price asks WooCommerce for the most expensive first", async () => {
+  const [url] = await wooUrlFor({ query: "عطر", sort_by: "price" });
+  assertStringIncludes(url, "orderby=price");
+  assertStringIncludes(url, "order=desc");
+});
+
+Deno.test("order=asc is honoured, so the cheapest is answerable too", async () => {
+  const [url] = await wooUrlFor({ query: "عطر", sort_by: "price", order: "asc" });
+  assertStringIncludes(url, "order=asc");
+});
+
+Deno.test("an unrecognised sort word is dropped, never forwarded to the store", async () => {
+  // The model supplies this value; it must not reach the query string unchecked.
+  const [url] = await wooUrlFor({ query: "عطر", sort_by: "price); DROP" });
+  assertEquals(url.includes("orderby="), false);
+  assertEquals(url.includes("DROP"), false);
+});
+
+Deno.test("the catalogue can be browsed with no search phrase", async () => {
+  // "The most expensive product in the store" names no product to search for.
+  const [url] = await wooUrlFor({ sort_by: "price" });
+  assertEquals(url.includes("search="), false);
+  assertStringIncludes(url, "orderby=price");
+});
+
+Deno.test("limit defaults to five and is clamped, so results are not truncated away", async () => {
+  const [defaulted] = await wooUrlFor({ query: "عطر" });
+  assertStringIncludes(defaulted, "per_page=5");
+  const [clamped] = await wooUrlFor({ query: "عطر", limit: "500" });
+  assertStringIncludes(clamped, "per_page=20");
+  const [chosen] = await wooUrlFor({ query: "عطر", limit: "3" });
+  assertStringIncludes(chosen, "per_page=3");
+});
+
+Deno.test("a named category is resolved to its id before the product search", async () => {
+  const urls = await wooUrlFor(
+    { query: "عطر", category: "Men's perfumes" },
+    [[{ id: 77, name: "Men's perfumes" }], []],
+  );
+  assertStringIncludes(urls[0], "/products/categories?search=Men");
+  assertStringIncludes(urls[1], "category=77");
+});
+
+Deno.test("an exact category name beats WooCommerce's first substring hit", async () => {
+  const urls = await wooUrlFor(
+    { query: "عطر", category: "Perfume" },
+    [[{ id: 12, name: "Perfume Samples" }, { id: 34, name: "Perfume" }], []],
+  );
+  assertStringIncludes(urls[1], "category=34");
+});
+
+Deno.test("an unknown category is a named failure, not a silent whole-store search", async () => {
+  const result = await executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request({ parameters: { query: "عطر", category: "Nonexistent" } }),
+    },
+    dependencies(() => Promise.resolve(jsonResponse([]))),
+  );
+
+  assertEquals(result.ok, false);
+  assertEquals(result.ok === false && result.error.code, "woocommerce_category_not_found");
+});
+
+Deno.test("a product is trimmed to the fields an answer is built from", async () => {
+  const bulky = {
+    id: 9,
+    name: "Zimaya Grandeur",
+    sku: "ZG-1",
+    price: "45.00",
+    regular_price: "50.00",
+    sale_price: "45.00",
+    on_sale: true,
+    stock_status: "instock",
+    stock_quantity: 4,
+    permalink: "https://store.example.com/p/9",
+    categories: [{ id: 3, name: "Perfume", slug: "perfume" }],
+    description: "x".repeat(6000),
+    images: Array.from({ length: 12 }, (_, i) => ({ id: i, src: "https://img.example.com/a.jpg" })),
+    meta_data: Array.from({ length: 40 }, (_, i) => ({ id: i, key: `k${i}`, value: "v" })),
+  };
+
+  const result = await executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request(),
+    },
+    dependencies(() => Promise.resolve(jsonResponse([bulky, bulky, bulky, bulky, bulky]))),
+  );
+
+  assertEquals(result.ok, true);
+  const body = serialized(result.ok === true && result.action === "execute" ? result.data : null);
+  assertEquals(body.includes("meta_data"), false);
+  assertEquals(body.includes("xxxxx"), false);
+  assertStringIncludes(body, "Zimaya Grandeur");
+  assertStringIncludes(body, '"price":"45.00"');
+  assertStringIncludes(body, '"categories":["Perfume"]');
+  // Five products must fit the 2000-character budget connectorExecution.ts
+  // applies, or the model reads a fraction of one of them.
+  assertEquals(body.length < 2000, true, `projected payload is ${body.length} chars`);
+});
+
+Deno.test("an unrecognised payload shape is passed through, not emptied", () => {
+  // An empty projection would read to the model as "the store has no results".
+  return executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request(),
+    },
+    dependencies(() => Promise.resolve(jsonResponse(["a plain string", 7]))),
+  ).then((result) => {
+    assertEquals(result.ok, true);
+    assertEquals(serialized(result.ok === true && result.action === "execute" ? result.data : null), '["a plain string",7]');
+  });
+});
