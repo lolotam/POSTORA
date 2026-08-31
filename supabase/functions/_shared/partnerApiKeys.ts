@@ -7,10 +7,10 @@
 const KEY_PREFIX = "pk_live_";
 const BASE62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-export type PartnerScope =
-  | "whatsapp:template.send"
-  | "whatsapp:templates.read"
-  | "whatsapp:webhooks.manage";
+// The scope vocabularies live in partnerScopes.ts, which owns decision D3's
+// legacy allowlist. Re-exported here so existing importers keep one import.
+export type { PartnerScope } from "./partnerScopes.ts";
+import type { PartnerScope } from "./partnerScopes.ts";
 
 export interface PartnerKeyRecord {
   id: string;
@@ -104,13 +104,34 @@ export async function authenticatePartnerKey(
   };
 }
 
-export function assertScope(
+/**
+ * Authorise an ACTION, never a bare scope.
+ *
+ * The action is the unit of authorisation because two scope vocabularies
+ * coexist (decision D3) and an action may be satisfied by either. Taking the
+ * satisfying set rather than one scope keeps that rule in ACTION_SCOPES alone,
+ * where it is reviewable — a caller cannot weaken it by passing a different
+ * scope constant, because there is no single constant to pass.
+ *
+ * `satisfying` being empty means the scope grants nothing and the action is
+ * unreachable. That is a real state, not a bug: `whatsapp:webhooks.manage`
+ * authorises nothing at all, and an empty set must REFUSE rather than fall
+ * through to a permissive default — `Array.prototype.some` on an empty array
+ * returns false, which is the behaviour we want and the reason it is written
+ * this way rather than as a negated `every`.
+ */
+export function assertActionAuthorized(
   record: PartnerKeyRecord,
-  scope: PartnerScope,
+  action: string,
+  satisfying: readonly PartnerScope[],
 ): void {
-  if (!record.scopes.includes(scope)) {
+  const held = new Set(record.scopes);
+  if (!satisfying.some((scope) => held.has(scope))) {
     throw new PartnerAuthError(
-      `This key lacks the ${scope} scope`,
+      // The message names the action, not the scopes: listing which scopes
+      // would have worked tells an attacker holding a stolen key what to ask
+      // the victim to add.
+      `This key is not authorized for ${action}`,
       "insufficient_scope",
       403,
     );

@@ -5,7 +5,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import {
-  assertScope,
+  assertActionAuthorized,
   authenticatePartnerKey,
   PartnerAuthError,
   type PartnerKeyRecord,
@@ -30,7 +30,7 @@ import {
   sendTemplate,
   WhatsAppOpError,
 } from "../_shared/whatsappPartnerOps.ts";
-import { isActionSuspended, isSendAction, limiterRiskClassFor, requiredScopeFor } from "./router.ts";
+import { isActionSuspended, isSendAction, limiterRiskClassFor, satisfyingScopesFor } from "./router.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -183,12 +183,12 @@ export async function handleRequest(
     const body = await req.json().catch(() => ({}));
     action = String(body.action ?? "");
 
-    const scope = requiredScopeFor(action);
-    if (scope === undefined) {
+    const satisfying = satisfyingScopesFor(action);
+    if (satisfying === undefined) {
       return await finish(400, false,
         errorBody("unknown_action", `Unknown action: ${action}`, false), {}, "unknown_action");
     }
-    if (scope !== null) assertScope(record, scope);
+    if (satisfying !== null) assertActionAuthorized(record, action, satisfying);
 
     // ---- 0A safety suspension (send_template) ----
     // Deliberately AFTER the scope check: a key lacking whatsapp:template.send
