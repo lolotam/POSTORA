@@ -1,0 +1,16 @@
+# Accepted breaking changes to docs/api/openapi.yaml.
+#
+# One finding id per line, as printed by scripts/check-openapi-drift.ts. Each
+# line authorises exactly ONE change -- an id names the rule, the path, and
+# where relevant the specific value, so an acknowledgement can never be broad
+# enough to pre-approve the next break.
+#
+# Add a comment above each id saying who decided and why. A breaking change to
+# a published contract is a decision someone owns, not a diff someone waved
+# through.
+#
+# An id here that matches no current finding FAILS the gate. That is deliberate:
+# a leftover ack silently pre-approves an identical future break.
+# scripts/regenerate-openapi-baseline.sh clears them when it moves the baseline.
+#
+# Empty today. The contract has never had a breaking change.
