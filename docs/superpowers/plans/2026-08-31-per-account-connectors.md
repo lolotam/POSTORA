@@ -122,10 +122,33 @@ git commit -m "feat(connectors): one definition per connector type, with credent
 
 **Files:** Create `src/lib/connectorRegistry.ts`, `src/lib/__tests__/connectorRegistry.test.ts`.
 
-- [ ] **Step 1 — write the failing test** asserting the browser list, the server allow-list
-      constant, and the registry all contain the same twelve type ids, sorted. Import the
-      server allow-list from a named export (extract it from `messaging-api/index.ts` into
-      the shared registry if it is still an inline array — that extraction is the point).
+- [ ] **Step 1 — write the failing test.** Three of the four sources are asserted **equal**
+      (browser picker, browser mirror, shared registry — twelve ids, sorted). The fourth,
+      the DB CHECK, cannot be twelve yet: Migration A adds the four missing types and PR-2
+      is forbidden to write a migration. Codex caught this contradiction in the first
+      revision of this plan; asserting four-way equality here would have been a test that
+      could not pass.
+
+      So the DB assertion is a **subset with a named, dated gap**:
+
+      ```ts
+      // Emptied by PR-3's Migration A. While it is non-empty, these four types
+      // exist in the registry and the picker but the CHECK constraint would
+      // reject them -- which is exactly why PR-4 must not start returning them
+      // before that migration is applied.
+      const PENDING_DB_TYPES = ["higgsfield", "mcp_custom", "myfatoorah", "stripe"];
+      ```
+
+      Assert `dbTypes ⊆ registryTypes` (catches a type in the database that nothing
+      declares) **and** `registryTypes \ dbTypes === PENDING_DB_TYPES` (catches a
+      thirteenth type added to the registry without the database). When PR-3 lands, the
+      difference becomes empty and this constant must be emptied with it — the test is the
+      tripwire that makes PR-3 finish the job.
+
+      Read the DB list from the migration file text, so the two cannot drift silently.
+      Import the server allow-list from a named export — extract it from
+      `messaging-api/index.ts` into the shared registry if it is still an inline array;
+      that extraction is the point of this task.
 - [ ] **Step 2 — run it, confirm it fails** naming the four missing types.
 - [ ] **Step 3 — implement** the mirror. Deno cannot import from `src/`, and the browser
       cannot import from `supabase/functions/`, so this is a deliberate duplicate whose
