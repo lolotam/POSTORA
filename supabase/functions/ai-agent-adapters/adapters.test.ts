@@ -3,6 +3,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { executeConnector } from "./dispatcher.ts";
+import { handleAdapterRequest, type AdminClientFactory } from "./handler.ts";
 import {
   type AdapterDependencies,
   type ConnectorTool,
@@ -356,4 +357,65 @@ Deno.test("test_connection failure returns vendor status and safe credential-fre
     },
   });
   assertEquals(serialized(result).includes(SUPABASE_ANON_KEY), false);
+});
+
+Deno.test("a disabled connector is refused before any vendor call", async () => {
+  // Codex P2. The agent prompt happens to exclude disabled tools, so this
+  // endpoint looked safe -- but it is reachable on its own, and without the
+  // check, turning a connector off in the UI kept sending its credentials to
+  // the vendor. A side effect of another component's filter is not a
+  // permission boundary.
+  // A real spy, not a flag nobody sets: the guard must return before anything
+  // reaches the network, and this is what proves it.
+  const realFetch = globalThis.fetch;
+  let fetched = false;
+  globalThis.fetch = ((...args: Parameters<typeof fetch>) => {
+    fetched = true;
+    return realFetch(...args);
+  }) as typeof fetch;
+  const previousUrl = Deno.env.get("SUPABASE_URL");
+  const previousKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  Deno.env.set("SUPABASE_URL", "https://example.test");
+  Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "service-key");
+
+  const adminStub = () => ({
+    from: () => ({
+      select: () => ({
+        eq: () => ({
+          eq: () => ({
+            maybeSingle: () =>
+              Promise.resolve({
+                data: {
+                  id: "tool-1",
+                  connector_type: "woocommerce",
+                  settings: {},
+                  permissions: {},
+                  read_only_mode: true,
+                  is_enabled: false,
+                },
+                error: null,
+              }),
+          }),
+        }),
+      }),
+    }),
+  });
+
+  const response = await handleAdapterRequest(
+    new Request("https://edge.test/ai-agent-adapters", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: "Bearer test" },
+      body: JSON.stringify({ tool_id: "tool-1", action: "test_connection" }),
+    }),
+    adminStub as unknown as AdminClientFactory,
+  );
+
+  if (previousUrl === undefined) Deno.env.delete("SUPABASE_URL");
+  else Deno.env.set("SUPABASE_URL", previousUrl);
+  if (previousKey === undefined) Deno.env.delete("SUPABASE_SERVICE_ROLE_KEY");
+  else Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", previousKey);
+
+  globalThis.fetch = realFetch;
+  assertEquals(fetched, false);
+  assertEquals([401, 409].includes(response.status), true);
 });

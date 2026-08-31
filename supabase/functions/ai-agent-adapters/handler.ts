@@ -41,9 +41,24 @@ function untrustedBodyUserId(requestBody: unknown): string | undefined {
   return typeof candidate === "string" ? candidate : undefined;
 }
 
-export async function handleAdapterRequest(req: Request): Promise<Response> {
+// The admin client is injectable so the refusal table above it can be tested
+// without a database (ARCHITECTURE §12: construct dependencies, then invoke).
+// Defaulted, so index.ts stays a one-liner and production behaviour is unchanged.
+// The seam exists so the refusal table above the database can be tested without
+// one (ARCHITECTURE §12: construct dependencies, then invoke). Typed loosely on
+// purpose: a structural type narrow enough to be useful here would have to
+// restate supabase-js's builder AND its rpc surface, and would then drift from
+// it. The stub in the test is checked by the assertions it drives, not by this
+// signature.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type AdminClientFactory = (url: string, key: string) => any;
+
+export async function handleAdapterRequest(
+  req: Request,
+  createAdminClient: AdminClientFactory = createClient,
+): Promise<Response> {
   try {
-    return await executeAdapterRequest(req);
+    return await executeAdapterRequest(req, createAdminClient);
   } catch {
     // Transport/runtime stacks can capture credential-bearing request headers.
     boundaryLog("connector_failure", "unexpected_boundary_failure");
@@ -51,7 +66,10 @@ export async function handleAdapterRequest(req: Request): Promise<Response> {
   }
 }
 
-async function executeAdapterRequest(req: Request): Promise<Response> {
+async function executeAdapterRequest(
+  req: Request,
+  createAdminClient: AdminClientFactory,
+): Promise<Response> {
   if (req.method === "OPTIONS") return handleRestrictedCorsOptions(req);
   if (req.method !== "POST") {
     boundaryLog("connector_refused", "method_not_allowed");
@@ -87,11 +105,11 @@ async function executeAdapterRequest(req: Request): Promise<Response> {
     return restrictedErrorResponse(req, "Connector service is unavailable.", 503);
   }
 
-  const admin = createClient(supabaseUrl, serviceRoleKey);
+  const admin = createAdminClient(supabaseUrl, serviceRoleKey);
   const toolId = parsedRequest.data.tool_id;
   const { data: toolRecord, error: toolError } = await admin
     .from("ai_agent_tools")
-    .select("id, connector_type, settings, permissions, read_only_mode")
+    .select("id, connector_type, settings, permissions, read_only_mode, is_enabled")
     .eq("id", toolId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -102,6 +120,16 @@ async function executeAdapterRequest(req: Request): Promise<Response> {
   if (!toolRecord) {
     boundaryLog("connector_refused", "connector_not_found", { user_id: userId, tool_id: toolId });
     return restrictedErrorResponse(req, "Connector not found.", 404);
+  }
+  // Codex P2. The agent prompt happens to exclude disabled tools, but this
+  // endpoint is reachable on its own -- so without this check, turning a
+  // connector off in the UI kept sending its credentials to the vendor. The
+  // prompt's filter is a side effect, not a permission boundary.
+  // `is_enabled` is nullable (20260712000000 gives it DEFAULT true and no
+  // NOT NULL), so this tests for an explicit false rather than falsiness.
+  if (toolRecord.is_enabled === false) {
+    boundaryLog("connector_refused", "connector_disabled", { user_id: userId, tool_id: toolId });
+    return restrictedErrorResponse(req, "Connector is disabled.", 409);
   }
 
   const { data: credentialBlob, error: credentialError } = await admin.rpc(

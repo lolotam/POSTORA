@@ -15,17 +15,30 @@ CREATE OR REPLACE FUNCTION public.get_connector_credential(
   p_tool_id uuid
 )
 RETURNS jsonb
-LANGUAGE sql
+LANGUAGE plpgsql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $function$
+-- plpgsql, not sql, and the reason is the CI harness rather than taste. A
+-- LANGUAGE sql body is parsed and validated when the function is CREATED, so it
+-- fails with "relation vault.decrypted_secrets does not exist" on a database
+-- without the supabase_vault extension -- which the integration harness's
+-- baseline is. A plpgsql body is not resolved until it runs. That is exactly why
+-- the sibling wrappers in 20260831140000 are plpgsql and apply cleanly there.
+DECLARE
+  v_secret jsonb;
+BEGIN
   SELECT decrypted.decrypted_secret::jsonb
+    INTO v_secret
   FROM public.ai_agent_tools AS t
   JOIN vault.decrypted_secrets AS decrypted
     ON decrypted.id = t.credentials_secret_id
   WHERE t.id = p_tool_id
     AND t.user_id = p_user_id;
+
+  RETURN v_secret;
+END;
 $function$;
 
 -- anon and authenticated are named EXPLICITLY. This stack carries

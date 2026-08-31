@@ -61,24 +61,36 @@ GRANT EXECUTE ON FUNCTION public.set_ai_knowledge_source_visibility(uuid, uuid, 
 -- original hole survived review.
 DO $verify$
 DECLARE
-  v_leaked text;
+  v_fn text;
+  v_role text;
+  v_leaked text := '';
 BEGIN
-  SELECT string_agg(routine_name || ' -> ' || grantee, ', ' ORDER BY routine_name)
-    INTO v_leaked
-  FROM information_schema.role_routine_grants
-  WHERE privilege_type = 'EXECUTE'
-    AND grantee IN ('anon', 'authenticated', 'PUBLIC')
-    AND routine_name IN (
-      'get_connector_credential',
-      'upsert_connector_credential_secret',
-      'delete_connector_credential_secret',
-      'set_ai_agent_tool_accounts',
-      'set_ai_knowledge_source_visibility'
-    );
+  -- has_function_privilege against pg_proc.proacl, NOT
+  -- information_schema.role_routine_grants (Codex P1). That view only exposes
+  -- grants involving roles enabled for the CURRENT session and does not report
+  -- access inherited through PUBLIC, so run as a non-owner it can show a clean
+  -- result while the grants are still in place -- the same false reassurance
+  -- that let the original hole ship. has_function_privilege answers the real
+  -- question: can this role execute this function, by any path.
+  FOREACH v_fn IN ARRAY ARRAY[
+    'public.get_connector_credential(uuid, uuid)',
+    'public.upsert_connector_credential_secret(uuid, jsonb)',
+    'public.delete_connector_credential_secret(uuid)',
+    'public.set_ai_agent_tool_accounts(uuid, uuid, uuid[])',
+    'public.set_ai_knowledge_source_visibility(uuid, uuid, text, uuid[])'
+  ]
+  LOOP
+    FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated', 'public']
+    LOOP
+      IF has_function_privilege(v_role, v_fn, 'EXECUTE') THEN
+        v_leaked := v_leaked || format('%s can EXECUTE %s; ', v_role, v_fn);
+      END IF;
+    END LOOP;
+  END LOOP;
 
-  IF v_leaked IS NOT NULL THEN
+  IF v_leaked <> '' THEN
     RAISE EXCEPTION
-      'Grants survived the REVOKE (%). Re-run this migration as the function owner (supabase_admin); postgres is not a superuser here and its REVOKE is a no-op warning.',
+      'Grants survived the REVOKE: %Re-run as the function owner (supabase_admin); postgres is not a superuser here and its REVOKE is a no-op WARNING.',
       v_leaked;
   END IF;
 END
