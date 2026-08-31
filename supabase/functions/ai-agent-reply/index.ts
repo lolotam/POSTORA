@@ -3,6 +3,11 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestResponse } from "../_shared/cors.ts";
+import {
+  resolveToolsForAccount,
+  type ResolvableTool,
+  type ToolAccountLink,
+} from "../_shared/toolResolution.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
 import {
   buildSystemPrompt,
@@ -220,6 +225,12 @@ const ERROR_LOG_STATUSES = new Set([
 // Every outcome is written twice: to ai_agent_logs (user-facing Logs tab,
 // RLS-scoped) and mirrored into system_logs so the /admin/logs page can
 // track all AI agent chats and calls under the "ai" category.
+// social_account_id reaches this function as a plain string and the sandbox
+// substitutes the literal "test" when no account is named. Postgres raises
+// 22P02 for a non-uuid compared against a uuid column, so the shape is checked
+// here rather than discovered as a failed reply.
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 async function logOutcome(
   admin: any,
   entry: Record<string, unknown>,
@@ -833,16 +844,77 @@ Deno.serve(async (req) => {
     };
     escalationTarget = toolContext;
 
-    // User-defined connector tools; admin_only ones stay hidden from customers.
+    // User-defined connector tools, narrowed to THIS account.
+    //
+    // Loading by user_id alone -- which is what this did until PR-5 -- offered
+    // every tool the login owned to every account's agent, so one Facebook
+    // page answered customers out of another page's store. Migration A scoped
+    // the table; this query and resolveToolsForAccount are what make that
+    // scoping real.
     const { data: customToolRows } = await admin
       .from("ai_agent_tools")
-      .select("name, description, url, secret, admin_only")
+      .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type")
       .eq("user_id", request.user_id)
       .eq("is_enabled", true);
-    const customTools: CustomTool[] = (customToolRows || []).filter(
-      (tool: CustomTool) => isAdmin || !tool.admin_only,
+
+    // The sandbox passes the literal "test" when a caller names no account, and
+    // .eq() against a uuid column with a non-uuid raises 22P02 -- which would
+    // kill a reply over a tool list. Anything unusable degrades to the
+    // all_accounts corpus instead.
+    const scopedAccountId = UUID_PATTERN.test(request.social_account_id)
+      ? request.social_account_id
+      : null;
+
+    let toolLinks: ToolAccountLink[] = [];
+    if (scopedAccountId) {
+      // Scoped by user_id as well as account: this runs under the service role,
+      // so RLS is not evaluated and tenancy has to be structural (ARCHITECTURE
+      // §24). Without it another tenant's link row would grant access here.
+      const { data: linkRows } = await admin
+        .from("ai_agent_tool_accounts")
+        .select("tool_id, social_account_id")
+        .eq("user_id", request.user_id)
+        .eq("social_account_id", scopedAccountId);
+      toolLinks = (linkRows || []) as ToolAccountLink[];
+    }
+
+    const toolResolution = resolveToolsForAccount(
+      (customToolRows || []) as ResolvableTool[],
+      toolLinks,
+      scopedAccountId,
+    );
+    // admin_only stays hidden from customers, exactly as before.
+    const customTools: CustomTool[] = toolResolution.tools.filter(
+      (tool) => isAdmin || !tool.admin_only,
     );
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
+
+    if (toolResolution.droppedDuplicates.length > 0) {
+      // Recorded in system_logs rather than ai_agent_logs: the latter is the
+      // user's Logs tab, one row per reply, and a diagnostic row there would
+      // read as a reply that never happened. Awaited but never allowed to
+      // throw -- a failed log must not cost a customer their answer.
+      console.warn(
+        "[ai-agent-reply] dropped duplicate connector names:",
+        JSON.stringify(toolResolution.droppedDuplicates),
+      );
+      try {
+        await admin.from("system_logs").insert({
+          source: "ai-agent-reply",
+          category: "ai",
+          level: "warn",
+          message: `Dropped ${toolResolution.droppedDuplicates.length} duplicate connector name(s) for this account`,
+          user_id: request.user_id,
+          metadata: {
+            platform: request.platform,
+            social_account_id: scopedAccountId,
+            dropped: toolResolution.droppedDuplicates,
+          },
+        });
+      } catch (logError) {
+        console.error("[ai-agent-reply] Failed to log dropped duplicates:", logError);
+      }
+    }
 
     const messages: any[] = [
       { role: "system", content: systemPrompt },
