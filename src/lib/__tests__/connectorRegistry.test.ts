@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { CONNECTOR_TYPES as PICKER_CONNECTOR_TYPES } from "../../hooks/useAiAgentTools";
@@ -24,31 +24,47 @@ const EXPECTED_CONNECTOR_TYPES = [
   "zid",
 ];
 
-// Emptied by PR-3's Migration A. While it is non-empty, these four types
-// exist in the registry and the picker but the CHECK constraint would
-// reject them -- which is exactly why PR-4 must not start returning them
-// before that migration is applied.
-const PENDING_DB_TYPES = ["higgsfield", "mcp_custom", "myfatoorah", "stripe"];
+// Emptied by PR-3's Migration A (20260831130000_connector_scope_and_sharing.sql),
+// which rebuilt the DB connector_type CHECK with all twelve registry types.
+// While it was non-empty, those four types existed in the registry and the
+// picker but the CHECK rejected them -- which was exactly why PR-4 had to
+// wait for the migration before returning them. The gap is history: registry,
+// picker, allow-list and CHECK now name the same twelve. Kept so a future
+// type can be staged here again while its migration is pending.
+const PENDING_DB_TYPES: string[] = [];
 
 function sorted(types: readonly string[]): string[] {
   return [...types].sort();
 }
 
 function connectorTypesFromMigration(): string[] {
-  // This is currently the only migration that defines the connector_type
-  // CHECK. If a later migration rewrites it, this fixture must read the last
-  // such migration so the assertion describes the effective DB contract.
-  const migration = readFileSync(
-    resolve(
-      process.cwd(),
-      "supabase/migrations/20260825120000_ai_agent_tools_connector_fields.sql",
-    ),
-    "utf8",
-  );
-  const check = migration.match(/CHECK\s*\(connector_type\s+IN\s*\(\s*([\s\S]*?)\s*\)\)/i);
+  // A CHECK cannot be altered in place, so every widening of the
+  // connector_type list is a new migration that drops and recreates it. The
+  // effective DB contract is therefore defined by the LAST migration that
+  // writes it -- reading any earlier one would describe a contract that no
+  // longer exists (20260825120000 held eight types until PR-3's Migration A
+  // replaced them with twelve).
+  const migrationsDir = resolve(process.cwd(), "supabase/migrations");
+  const checkPattern = /CHECK\s*\(connector_type\s+IN\s*\(\s*([\s\S]*?)\s*\)\)/i;
+
+  const lastDefining = readdirSync(migrationsDir)
+    .filter((name) => name.endsWith(".sql"))
+    .sort()
+    .map((name) => ({
+      name,
+      content: readFileSync(resolve(migrationsDir, name), "utf8"),
+    }))
+    .filter((file) => checkPattern.test(file.content))
+    .pop();
+
+  if (!lastDefining) {
+    throw new Error("no migration defines the connector_type CHECK");
+  }
+
+  const check = lastDefining.content.match(checkPattern);
 
   if (!check) {
-    throw new Error("connector_type CHECK list not found in migration");
+    throw new Error(`connector_type CHECK list not found in ${lastDefining.name}`);
   }
 
   return [...check[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
@@ -73,10 +89,10 @@ describe("connector type contract", () => {
     // SERVER_CONNECTOR_TYPES is derived by subtracting the registry's own
     // PENDING_DB_CONNECTOR_TYPES, and nothing above ties that constant to the
     // migration. Without this, a wrong entry there would widen the allow-list
-    // in ai_upsert_tool and turn today's silent downgrade into a constraint
-    // violation on save -- a 500 where there is currently a wrong-but-working
-    // row. This is the assertion that makes the derivation safe, and it is
-    // what must go green again when PR-3 empties the constant.
+    // in ai_upsert_tool and turn the old silent downgrade into a constraint
+    // violation on save -- a 500 where there was a wrong-but-working row.
+    // This assertion is what made the derivation safe, and it is what goes
+    // green again whenever a future pending type re-populates the constant.
     expect(sorted(SERVER_CONNECTOR_TYPES)).toEqual(sorted(connectorTypesFromMigration()));
   });
 });
