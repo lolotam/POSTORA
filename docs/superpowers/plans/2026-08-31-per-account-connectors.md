@@ -22,6 +22,110 @@ React 18 + TypeScript + Vite, vitest (frontend) and `deno test` (functions).
 
 ---
 
+## Status — 2026-08-31, end of implementation
+
+`main` is at `bdb0089e`. Everything below was verified against **production**, not inferred
+from a green CI run.
+
+### Shipped and deployed
+
+| PR | What landed | Merged as |
+|---|---|---|
+| PR-2 | Connector registry, usage guides, `composeToolDescription`, four-way contract test | **#79** |
+| — | Fix: the contract test was missing its `vitest` imports and broke `main` | **#81** |
+| PR-3 | **Migration A** — scope columns, credential columns, `NULLS NOT DISTINCT` index, twelve-type CHECK, `ai_agent_tool_accounts`, `set_ai_agent_tool_accounts` | **#80** — applied |
+| — | Fix: the contract test timed out under a full suite run | **#83** |
+| PR-4 | Account-scoped `ai_upsert_tool`, Vault credentials, account dropdown, sharing strip, read-only Settings, **Migration `20260831140000`** (Vault wrappers + reclaim trigger) | **#82** — applied |
+| PR-5 | `ai-agent-reply` resolves tools for the account, name-collision rule, usage guides reach the model | **#84** |
+| PR-6 | `ai-agent-adapters`: WooCommerce + Supabase, `test_connection`, `read_only_mode`, redaction, **Migrations `20260831150000` + `20260831150100`** | **#86** — applied |
+| **PR-6b** | **Not in the original plan.** Routes typed connectors through the adapter; without it the adapter layer was inert | **#89** |
+| PR-7 | **Migration B** — drops `UNIQUE (user_id, name)`, copies remaining `secret` into Vault | **#87** — applied as `supabase_admin` |
+
+### Verified on production
+
+- 6/6 scope and credential columns; `ai_agent_tool_accounts` present; 5/5 connector RPCs.
+- Old `UNIQUE (user_id, name)` dropped; the new index proven both ways — two accounts of one
+  login can hold the same connector name, and a duplicate **within** one account is still
+  refused.
+- One plaintext `secret` copied into Vault with the column **still populated**.
+- `anon` / `authenticated` hold EXECUTE on **zero** of the five service-role RPCs.
+- All 355 deployed function files SHA256-match `main`.
+
+### PR-6b was missing from this plan, and that mattered
+
+The plan scoped PR-6 as "build the adapters" and PR-5 as "resolve tools per account", and
+neither said **anything** connects the two. The adapters shipped in #86 and nothing called
+them: every custom-tool call still went to `executeCustomTool`'s single POST. A Codex review
+caught it. Recorded here because the gap was in the plan, not in the implementation.
+
+It also turned out not to be a transport swap: the model was given one free-text
+`input: string` while the adapter expects `{tool_id, action, capability, typed params}`, so
+the emitted function schema had to change too.
+
+---
+
+## Remaining
+
+### PR-9 — OAuth connectors
+
+> **WRITTEN BUT NOT DEPLOYABLE — draft #88.** Two distributed-correctness
+> blockers and the vendor app registrations are listed in the status section above.: written, **not deployable**, draft **#88**
+
+Two properties hold in tests and fail across Edge Function isolates:
+
+- [ ] **Database-backed OAuth state.** The current store is an in-process `Map`; state minted
+      in one isolate is invisible to the isolate handling the callback. Needs a
+      `connector_oauth_states` table consumed with
+      `DELETE ... WHERE state = $1 AND expires_at > now() RETURNING *` — single-use has to be
+      the `DELETE ... RETURNING`, not read-then-delete.
+- [ ] **Distributed refresh lease.** The current serialization is per-isolate singleflight.
+      §6.1: reusing a Salla refresh token invalidates every token and forces the merchant to
+      reinstall the app, so two isolates racing does not degrade — it bricks a live
+      connection. Model it on `pending_agent_replies` / `claim_agent_replies`. Note that
+      `supabase-js` over PostgREST cannot hold `FOR UPDATE` across an HTTP round trip, and
+      that `SKIP LOCKED` alone is not a lease.
+- [ ] Any new function must `REVOKE ... FROM PUBLIC, anon, authenticated` — see the security
+      note below.
+- [ ] **Owner-supplied:** Salla, Zid and Shopify app registrations (client id, secret,
+      redirect URI). §15. No implementer can produce these.
+
+### Also open
+
+- [ ] **PR-6's live gate** — a read against a real WooCommerce store and a real Supabase
+      project. Adapters are unit-tested against mocked vendors only; §15 names this as
+      owner-supplied.
+- [ ] **Clear the plaintext `secret` column.** Migration B deliberately left it populated:
+      `executeCustomTool` still reads it for `X-Webhook-Secret` and no deployed reader looks
+      in Vault. A later migration may clear it **only after** a Vault-reading path is deployed
+      and verified.
+- [ ] Adapters exist for WooCommerce and Supabase only. Shopify, Salla, Zid, Stripe,
+      MyFatoorah, Higgsfield and `mcp_custom` are catalogued with credential schemas but have
+      no adapter, and `shouldUseAdapter` correctly leaves them on the legacy path.
+
+---
+
+## Three defects worth carrying forward
+
+**`REVOKE ALL ... FROM PUBLIC` does not revoke `anon` and `authenticated`.** This stack
+carries `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon,
+authenticated`, so both hold EXECUTE from CREATE time and `PUBLIC` is a different role. Five
+RPCs shipped callable with the anon key — one of them returned decrypted vendor credentials
+over HTTP 200. Repaired in `20260831150100`, which also verifies with
+`has_function_privilege()` rather than `information_schema.role_routine_grants`: that view
+only exposes grants involving currently enabled roles and can report clean while the grants
+survive.
+
+**The `vault` schema is unreachable from an Edge Function.** PostgREST exposes only
+`public,storage,graphql_public`, so §4.3's "write with `vault.create_secret`" was
+unimplementable. Wrappers in `public` are the only path, and they do decrypt-merge-encrypt
+inside Postgres so plaintext never enters Deno.
+
+**Apply migrations as `supabase_admin`, not `postgres`.** `postgres` is not a superuser here.
+A REVOKE it issues is a `WARNING` that changes nothing, and Migration B aborts outright with
+"must be owner of function upsert_connector_credential_secret".
+
+---
+
 ## Ground rules for every task
 
 - **Gates.** `npx tsc -b --noEmit` (**build mode, as CI runs it** — plain `tsc --noEmit`
@@ -65,6 +169,8 @@ React 18 + TypeScript + Vite, vitest (frontend) and `deno test` (functions).
 ---
 
 # PR-2 — the connector registry
+
+> **SHIPPED — #79.** Kept for the reasoning; nothing here is left to build.
 
 **Spec:** §5.1, §6, §13.2. **No behaviour change.** Nothing imports the registry yet.
 
@@ -188,6 +294,8 @@ registry yet, so `git diff --stat` shows only new files plus the allow-list extr
 
 # PR-3 — Migration A (owner applies by hand)
 
+> **SHIPPED — #80, applied.** Kept for the reasoning; nothing here is left to build.
+
 **Spec:** §4.1, §4.2, §4.3, §12.1, §12.2. **Adds only. Drops nothing.**
 
 ### Task 3.1: write the migration
@@ -220,6 +328,8 @@ registry yet, so `git diff --stat` shows only new files plus the allow-list extr
 ---
 
 # PR-4 — writes become account-scoped
+
+> **SHIPPED — #82, applied.** Kept for the reasoning; nothing here is left to build.
 
 **Spec:** §4.1, §4.3, §12.2, §14, §9.1 items 3 and 4. **Needs Migration A applied.**
 
@@ -285,6 +395,8 @@ registry yet, so `git diff --stat` shows only new files plus the allow-list extr
 
 # PR-5 — the agent resolves tools for the account
 
+> **SHIPPED — #84.** Kept for the reasoning; nothing here is left to build.
+
 **Spec:** §12, §13.3, §9.1 item 1. **This is the PR that makes scoping real.**
 
 ### Task 5.1: the resolution predicate
@@ -323,6 +435,8 @@ registry yet, so `git diff --stat` shows only new files plus the allow-list extr
 ---
 
 # PR-6 — real adapters
+
+> **SHIPPED — #86, applied.** Kept for the reasoning; nothing here is left to build.
 
 **Spec:** §5.2, §5.3, §6, §11. **Needs the owner's WooCommerce and Supabase credentials.**
 
@@ -366,6 +480,8 @@ credentials redacted.
 ---
 
 # PR-7 — Migration B, the contract (owner applies by hand)
+
+> **SHIPPED — #87, applied.** Kept for the reasoning; nothing here is left to build.
 
 **Spec:** §4.2, §9. **Forward-only.**
 
