@@ -24,7 +24,9 @@ React 18 + TypeScript + Vite, vitest (frontend) and `deno test` (functions).
 
 ## Ground rules for every task
 
-- **Gates.** `npx tsc --noEmit`, `npx eslint <changed files>`, `npx vitest run`,
+- **Gates.** `npx tsc -b --noEmit` (**build mode, as CI runs it** — plain `tsc --noEmit`
+  does not type-check the test project and let a file missing its `vitest` imports through),
+  `npx eslint <changed files>`, `npx vitest run`,
   `npm run build`, and for `supabase/functions/**`:
   `deno test --allow-all supabase/functions/<dir>` — **run Deno first, then
   `rm -rf node_modules/.deno && bun install`**, because `--node-modules-dir=auto` installs a
