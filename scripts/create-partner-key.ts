@@ -1,10 +1,15 @@
 // Mint a partner API key. Operator-only: run with the service-role key.
 //
-//   deno run --allow-env --allow-net scripts/create-partner-key.ts //     --workspace <uuid> --account <uuid> --name "Danat backend" //     --scopes whatsapp:template.send,whatsapp:webhooks.manage //     --quota 5000
+//   deno run --allow-env --allow-net scripts/create-partner-key.ts //     --workspace <uuid> --account <uuid> --name "Danat backend" //     --scopes messages:send,templates:read //     --quota 5000
 //
 // The plaintext key is printed ONCE and never stored.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { generatePartnerKey } from "../supabase/functions/_shared/partnerApiKeys.ts";
+import {
+  describeScopeRejection,
+  GENERIC_SCOPES,
+  scopeIsMintable,
+} from "../supabase/functions/_shared/partnerScopes.ts";
 
 function arg(name: string): string | undefined {
   const i = Deno.args.indexOf(`--${name}`);
@@ -27,21 +32,28 @@ if (rawQuota !== undefined) {
   }
 }
 
-const ALLOWED_SCOPES = [
-  "whatsapp:template.send",
-  "whatsapp:templates.read",
-  "whatsapp:webhooks.manage",
-];
+
 
 if (!workspaceId || !accountId || !name || scopes.length === 0) {
   console.error("Missing --workspace, --account, --name, or --scopes");
   Deno.exit(2);
 }
 
-const badScopes = scopes.filter((sc) => !ALLOWED_SCOPES.includes(sc));
+// A new key may hold ONLY generic v1 scopes (decision D3 step 3). Two
+// different refusals, for two different reasons:
+//
+//   - a LEGACY provider-prefixed string is frozen at its current capability
+//     and not issuable any more. D3's step 2 -- reissuing the one existing key
+//     with generic scopes -- has no subject, since pk_live_urCb is revoked and
+//     no active keys remain, so this refusal is unconditional.
+//   - an UNRECOGNISED string would sit in the scopes array looking
+//     authoritative while satisfying nothing, and mean whatever the next
+//     person assumes it means.
+const badScopes = scopes.filter((sc) => !scopeIsMintable(sc));
 if (badScopes.length > 0) {
-  console.error(`Unknown scope(s): ${badScopes.join(", ")}`);
-  console.error(`Allowed: ${ALLOWED_SCOPES.join(", ")}`);
+  for (const sc of badScopes) console.error(describeScopeRejection(sc));
+  console.error(`
+Issuable scopes: ${GENERIC_SCOPES.join(", ")}`);
   Deno.exit(2);
 }
 

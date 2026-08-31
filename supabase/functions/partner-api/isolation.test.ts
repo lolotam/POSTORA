@@ -5,11 +5,11 @@ import {
   assertThrows,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
-  assertScope,
+  assertActionAuthorized,
   authenticatePartnerKey,
   PartnerAuthError,
 } from "../_shared/partnerApiKeys.ts";
-import { requiredScopeFor } from "./router.ts";
+import { satisfyingScopesFor } from "./router.ts";
 
 const WS_A_KEY = {
   id: "key-a", workspace_id: "ws-a", social_account_id: "acct-a",
@@ -47,7 +47,7 @@ Deno.test("a send-only key cannot read templates", () => {
     rateLimitPerMin: 60, monthlyQuota: null, expiresAt: null, revokedAt: null,
   };
   const error = assertThrows(
-    () => assertScope(record, requiredScopeFor("list_templates")!),
+    () => assertActionAuthorized(record, "list_templates", satisfyingScopesFor("list_templates")!),
     PartnerAuthError,
   );
   assertEquals(error.code, "insufficient_scope");
@@ -61,7 +61,7 @@ Deno.test("a read-only key cannot send", () => {
     rateLimitPerMin: 60, monthlyQuota: null, expiresAt: null, revokedAt: null,
   };
   const error = assertThrows(
-    () => assertScope(record, requiredScopeFor("send_template")!),
+    () => assertActionAuthorized(record, "send_template", satisfyingScopesFor("send_template")!),
     PartnerAuthError,
   );
   assertEquals(error.code, "insufficient_scope");

@@ -6,7 +6,7 @@ import {
   assertThrows,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
-  assertScope,
+  assertActionAuthorized,
   authenticatePartnerKey,
   generatePartnerKey,
   hashPartnerKey,
@@ -116,17 +116,39 @@ Deno.test("authenticatePartnerKey rejects an expired key", async () => {
   assertEquals(error.code, "key_expired");
 });
 
-Deno.test("assertScope allows a granted scope and rejects a missing one", () => {
+Deno.test("assertActionAuthorized accepts any satisfying scope and rejects a key holding none", () => {
   const record = {
     id: "key-1", workspaceId: "ws-1", socialAccountId: "acct-1",
     keyPrefix: "pk_live_abcd", scopes: ["whatsapp:template.send"],
     rateLimitPerMin: 60, monthlyQuota: null, expiresAt: null, revokedAt: null,
   };
-  assertScope(record, "whatsapp:template.send");
+  // Either vocabulary satisfies the action (D3): the key holds the legacy
+  // string, and a key holding messages:send would pass the same check.
+  assertActionAuthorized(record, "send_template", ["whatsapp:template.send", "messages:send"]);
+
   const error = assertThrows(
-    () => assertScope(record, "whatsapp:templates.read"),
+    () => assertActionAuthorized(record, "list_templates", ["whatsapp:templates.read", "templates:read"]),
     PartnerAuthError,
   );
   assertEquals(error.code, "insufficient_scope");
   assertEquals(error.status, 403);
+  // The refusal names the action, not the scopes that would have worked:
+  // listing those tells a stolen-key holder what to ask the victim to add.
+  assertEquals(error.message.includes("templates:read"), false);
+});
+
+Deno.test("an empty satisfying set refuses every key, however scoped", () => {
+  // whatsapp:webhooks.manage authorises nothing (D3 R3), so any action whose
+  // satisfying set is empty must REFUSE rather than fall through to a
+  // permissive default.
+  const record = {
+    id: "key-2", workspaceId: "ws-1", socialAccountId: "acct-1",
+    keyPrefix: "pk_live_abcd", scopes: ["whatsapp:webhooks.manage", "messages:send"],
+    rateLimitPerMin: 60, monthlyQuota: null, expiresAt: null, revokedAt: null,
+  };
+  const error = assertThrows(
+    () => assertActionAuthorized(record, "nothing_grants_this", []),
+    PartnerAuthError,
+  );
+  assertEquals(error.code, "insufficient_scope");
 });

@@ -5,20 +5,24 @@ import {
   ACTION_SCOPES,
   isSendAction,
   limiterRiskClassFor,
-  requiredScopeFor,
+  satisfyingScopesFor,
 } from "./router.ts";
 
-Deno.test("each action maps to its required scope", () => {
-  assertEquals(requiredScopeFor("send_template"), "whatsapp:template.send");
-  assertEquals(requiredScopeFor("list_templates"), "whatsapp:templates.read");
-  assertEquals(requiredScopeFor("get_status"), null);
+Deno.test("each action declares the set of scopes that satisfies it", () => {
+  // A SET, because two vocabularies coexist (D3): a key reissued with generic
+  // scopes must still reach the frozen alias. This is not a translation table
+  // -- neither string converts into the other, they merely both satisfy this
+  // one action. See _shared/partnerScopes.ts.
+  assertEquals(satisfyingScopesFor("send_template"), ["whatsapp:template.send", "messages:send"]);
+  assertEquals(satisfyingScopesFor("list_templates"), ["whatsapp:templates.read", "templates:read"]);
+  assertEquals(satisfyingScopesFor("get_status"), null);
 });
 
 Deno.test("unknown actions have no scope and are rejected upstream", () => {
-  assertEquals(requiredScopeFor("drop_database"), undefined);
+  assertEquals(satisfyingScopesFor("drop_database"), undefined);
   // Inherited Object properties must not be mistaken for actions.
-  assertEquals(requiredScopeFor("toString"), undefined);
-  assertEquals(requiredScopeFor("constructor"), undefined);
+  assertEquals(satisfyingScopesFor("toString"), undefined);
+  assertEquals(satisfyingScopesFor("constructor"), undefined);
 });
 
 Deno.test("only send actions require an idempotency key", () => {

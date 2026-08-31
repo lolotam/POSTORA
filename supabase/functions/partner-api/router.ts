@@ -1,13 +1,29 @@
-import type { PartnerScope } from "../_shared/partnerApiKeys.ts";
+import type { PartnerScope } from "../_shared/partnerScopes.ts";
 import type { LimiterRiskClass } from "../_shared/partnerApiMetering.ts";
 
-/** null = no scope required; undefined = unknown action. Exported so
- *  router.test.ts can prove this map and ACTION_RISK_CLASSES never drift
- *  apart — an action missing from either would be a silent policy gap. */
-export const ACTION_SCOPES: Record<string, PartnerScope | null> = {
+/**
+ * The set of scopes that SATISFIES each action. null = no scope required;
+ * undefined = unknown action.
+ *
+ * A SET, not a single scope, because two vocabularies coexist (decision D3):
+ * the frozen provider-prefixed strings and the generic v1 ones. A key reissued
+ * with generic scopes must still be able to call the frozen alias, so the
+ * alias's actions accept either.
+ *
+ * This is deliberately NOT a mapping between the vocabularies. Nothing here
+ * converts `whatsapp:template.send` into `messages:send`; the two merely both
+ * satisfy this one action. The difference matters: when /v1 lands and
+ * something requires `messages:send` for free-form messaging, a legacy-scoped
+ * key is refused, because the legacy string appears in no set but this one.
+ * See _shared/partnerScopes.ts for why that containment is the whole point.
+ *
+ * Exported so router.test.ts can prove this map and ACTION_RISK_CLASSES never
+ * drift apart — an action missing from either would be a silent policy gap.
+ */
+export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   get_status: null,
-  send_template: "whatsapp:template.send",
-  list_templates: "whatsapp:templates.read",
+  send_template: ["whatsapp:template.send", "messages:send"],
+  list_templates: ["whatsapp:templates.read", "templates:read"],
 };
 
 /** D7 limiter-failure risk class per action, next to ACTION_SCOPES so an
@@ -60,14 +76,18 @@ export function isActionSuspended(action: string): boolean {
   return action === "send_template" && SEND_TEMPLATE_SUSPENDED;
 }
 
-export function requiredScopeFor(action: string): PartnerScope | null | undefined {
+/** The scopes that satisfy `action`: null if it needs none, undefined if the
+ *  action is unknown. */
+export function satisfyingScopesFor(
+  action: string,
+): readonly PartnerScope[] | null | undefined {
   // Object.hasOwn, not `in`: `in` walks the prototype chain, so an action
   // named "toString" or "constructor" would resolve as a known action.
   return Object.hasOwn(ACTION_SCOPES, action) ? ACTION_SCOPES[action] : undefined;
 }
 
 export function limiterRiskClassFor(action: string): LimiterRiskClass | undefined {
-  // Same prototype-chain guard as requiredScopeFor. undefined reaches
+  // Same prototype-chain guard as satisfyingScopesFor. undefined reaches
   // checkRateLimit, which fails unclassified actions CLOSED on limiter
   // failure — never fail-open by omission.
   return Object.hasOwn(ACTION_RISK_CLASSES, action) ? ACTION_RISK_CLASSES[action] : undefined;
