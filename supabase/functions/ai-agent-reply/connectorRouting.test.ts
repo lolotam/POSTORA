@@ -232,3 +232,61 @@ Deno.test("adapter ToolResult never exposes connector or service-role secrets", 
   assertEquals(result.output.includes(serviceRoleKey), false);
   assertEquals(result.output.includes(wooTool.secret!), false);
 });
+
+/**
+ * Production regression, 2026-08-31 19:29 UTC (conversation wa_96597950350_*).
+ *
+ * A customer asked for the most expensive perfume in a live WooCommerce store.
+ * The connector was configured, enabled, account-scoped and `last_test_ok`, and
+ * the agent still answered "I have no direct information" — it called
+ * `search_knowledge` and never the store.
+ *
+ * Cause: `typedParameters` was `{type:"object", oneOf:[…]}` with NO top-level
+ * `properties`. Google's OpenAI-compatible endpoint — the live model for every
+ * recent reply — drops `oneOf`, so the model saw a function whose arguments
+ * object had no fields at all. Reproduced against
+ * generativelanguage.googleapis.com/v1beta/openai/chat/completions with
+ * gemini-2.5-flash:
+ *
+ *   oneOf only          -> woocommerce_store({})
+ *   top-level properties-> woocommerce_store({"capability":"search_products",
+ *                                             "parameters":{"query":"عطر"}})
+ *
+ * And `{}` can never succeed: connectorExecution.ts refuses a call whose
+ * `capability` is not a string ("the requested capability is missing").
+ *
+ * `oneOf` stays for providers that honour it — it is the precise contract — but
+ * the schema must ALSO be readable by a provider that understands only
+ * `properties`. Asserting on the serialised blob is what let this ship: every
+ * capability name was present, just nowhere the model could reach.
+ */
+Deno.test("a typed connector's capabilities are reachable without oneOf support", () => {
+  const parameters = customToolDefinitions([wooTool])[0].function.parameters as unknown as {
+    properties?: Record<string, { type?: string; enum?: string[] }>;
+    required?: string[];
+    oneOf?: unknown[];
+  };
+
+  assertEquals(parameters.properties?.capability?.enum, [
+    "search_products",
+    "check_stock",
+    "lookup_orders",
+  ]);
+  assertEquals(parameters.properties?.parameters?.type, "object");
+  assertEquals(parameters.required, ["capability", "parameters"]);
+  // The precise per-capability contract is not given up to gain the flat one.
+  assertEquals(Array.isArray(parameters.oneOf), true);
+});
+
+Deno.test("every capability's arguments are nameable in the flat schema", () => {
+  // Without this a provider that reads only `properties` can pick
+  // capability="check_stock" and then have nowhere to put the SKU.
+  const parameters = customToolDefinitions([wooTool])[0].function.parameters as unknown as {
+    properties: { parameters: { properties: Record<string, unknown> } };
+  };
+  const flat = parameters.properties.parameters.properties;
+
+  for (const key of ["query", "sku", "order_id"]) {
+    assertEquals(Object.hasOwn(flat, key), true, `flat schema is missing ${key}`);
+  }
+});

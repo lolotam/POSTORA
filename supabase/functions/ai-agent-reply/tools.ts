@@ -5,6 +5,8 @@ import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { composeToolDescription } from "../_shared/composeToolDescription.ts";
 import {
   connectorCapabilities,
+  type ConnectorCapabilityDefinition,
+  type ConnectorParameterSchema,
   connectorUsageGuide,
 } from "../_shared/connectorRegistry.ts";
 
@@ -336,6 +338,35 @@ export interface CustomTool {
   connector_type?: string | null;
 }
 
+/** "query (required), sku" — what one capability accepts, for the flat schema. */
+function describeParameterKeys(parameters: ConnectorParameterSchema): string {
+  const required = new Set(parameters.required ?? []);
+  const keys = Object.keys(parameters.properties);
+  if (keys.length === 0) return "no arguments";
+  return keys
+    .map((key) => (required.has(key) ? `${key} (required)` : key))
+    .join(", ");
+}
+
+/**
+ * Every capability's argument in one object, for providers that read only
+ * `properties`. A key shared by two capabilities (woocommerce's `query`) keeps
+ * the first definition — the descriptions agree, and the authoritative
+ * per-capability contract is still carried by `oneOf` and enforced by the
+ * adapter, which validates the arguments it was actually given.
+ */
+function mergeCapabilityParameters(
+  capabilities: readonly ConnectorCapabilityDefinition[],
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = {};
+  for (const capability of capabilities) {
+    for (const [key, schema] of Object.entries(capability.parameters.properties)) {
+      if (!(key in merged)) merged[key] = schema;
+    }
+  }
+  return merged;
+}
+
 export function customToolDefinitions(tools: CustomTool[]) {
   return tools.map((tool) => {
     const capabilities = connectorCapabilities(tool.connector_type);
@@ -352,6 +383,34 @@ export function customToolDefinitions(tools: CustomTool[]) {
     const typedParameters = capabilities?.length
       ? {
         type: "object",
+        // Google's OpenAI-compatible endpoint -- the live model for every reply
+        // -- drops `oneOf` and reads only `properties`. With `oneOf` alone it
+        // saw a function whose arguments had no fields, so it either skipped
+        // the connector or called it with `{}`, which connectorExecution.ts
+        // then refuses for a missing capability. A real WooCommerce store went
+        // unqueried that way (2026-08-31). These two keys are what such a
+        // provider reads; `oneOf` below stays for the ones that honour it.
+        properties: {
+          capability: {
+            type: "string",
+            enum: capabilities.map((capability) => capability.name),
+            // Which argument each capability takes has to be said here, because
+            // a provider that ignores oneOf has no other place to learn it.
+            description: capabilities
+              .map((capability) =>
+                `${capability.name}: ${capability.description} Takes ${
+                  describeParameterKeys(capability.parameters)
+                }.`
+              )
+              .join(" "),
+          },
+          parameters: {
+            type: "object",
+            description: "Arguments for the chosen capability.",
+            properties: mergeCapabilityParameters(capabilities),
+          },
+        },
+        required: ["capability", "parameters"],
         oneOf: capabilities.map((capability) => ({
           type: "object",
           properties: {
