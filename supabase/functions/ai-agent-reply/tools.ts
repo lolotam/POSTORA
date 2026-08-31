@@ -2,6 +2,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
+import { composeToolDescription } from "../_shared/composeToolDescription.ts";
+import { connectorUsageGuide } from "../_shared/connectorRegistry.ts";
 
 export interface ToolContext {
   admin: any;
@@ -325,6 +327,9 @@ export interface CustomTool {
   url: string;
   secret: string | null;
   admin_only: boolean;
+  // Optional so a row written before the registry existed still type-checks.
+  // Absent behaves exactly like custom_rest: no guide, description unchanged.
+  connector_type?: string | null;
 }
 
 export function customToolDefinitions(tools: CustomTool[]) {
@@ -332,7 +337,14 @@ export function customToolDefinitions(tools: CustomTool[]) {
     type: "function",
     function: {
       name: tool.name,
-      description: tool.description,
+      // The registry guide describes the connector TYPE (when to reach for it,
+      // what it cannot do); tool.description describes the user's own instance.
+      // Both are sent, guide first, inside a hard character budget -- these are
+      // resent on every turn of every conversation.
+      description: composeToolDescription(
+        tool.description,
+        connectorUsageGuide(tool.connector_type),
+      ),
       parameters: {
         type: "object",
         properties: {

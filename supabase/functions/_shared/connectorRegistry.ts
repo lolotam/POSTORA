@@ -414,3 +414,19 @@ export function connectorDefinition(type: string): ConnectorDefinition {
 
   return CONNECTOR_DEFINITIONS[type as ConnectorType];
 }
+
+/**
+ * The usage guide for a connector type, or undefined when there is none.
+ *
+ * Deliberately non-throwing, unlike connectorDefinition. This is called while
+ * assembling a reply to a customer, and a description is decoration: failing a
+ * live conversation over a lookup that only prettifies a prompt would be a far
+ * worse outcome than an unadorned tool. custom_rest legitimately has no guide,
+ * and so does any row whose type predates the registry.
+ */
+export function connectorUsageGuide(type: string | null | undefined): UsageGuide | undefined {
+  if (!type) return undefined;
+  return Object.prototype.hasOwnProperty.call(CONNECTOR_DEFINITIONS, type)
+    ? CONNECTOR_DEFINITIONS[type as ConnectorType].usageGuide
+    : undefined;
+}
