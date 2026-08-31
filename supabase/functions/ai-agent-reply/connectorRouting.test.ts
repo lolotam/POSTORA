@@ -3,6 +3,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
+import { CONNECTOR_TYPES } from "../_shared/connectorRegistry.ts";
 import {
   customToolDefinitions,
   type CustomTool,
@@ -255,9 +256,21 @@ Deno.test("adapter ToolResult never exposes connector or service-role secrets", 
  * And `{}` can never succeed: connectorExecution.ts refuses a call whose
  * `capability` is not a string ("the requested capability is missing").
  *
- * `oneOf` stays for providers that honour it — it is the precise contract — but
- * the schema must ALSO be readable by a provider that understands only
- * `properties`. Asserting on the serialised blob is what let this ship: every
+ * The first fix kept `oneOf` alongside the new `properties`, on the theory that
+ * providers honouring it would get a more precise contract. That was wrong, and
+ * production said so within the hour (2026-08-31 20:57 UTC):
+ *
+ *   Invalid schema for function 'woocommerce_store': schema must have type
+ *   'object' and not have 'oneOf'/'anyOf'/'allOf'/'enum'/'const'/'not' at the
+ *   top level.                                      -- openai/gpt-4.1-mini
+ *
+ * OpenAI is the LAST model in the agent chain, so a Gemini blip fell through to
+ * it, the schema was refused, the chain was exhausted, and the customer got the
+ * outage message instead of an answer. `oneOf` is gone: the flat `properties`
+ * pair is the whole contract, and per-capability arguments are described in the
+ * capability enum's own description.
+ *
+ * Asserting on the serialised blob is what let the original defect ship: every
  * capability name was present, just nowhere the model could reach.
  */
 Deno.test("a typed connector's capabilities are reachable without oneOf support", () => {
@@ -274,8 +287,33 @@ Deno.test("a typed connector's capabilities are reachable without oneOf support"
   ]);
   assertEquals(parameters.properties?.parameters?.type, "object");
   assertEquals(parameters.required, ["capability", "parameters"]);
-  // The precise per-capability contract is not given up to gain the flat one.
-  assertEquals(Array.isArray(parameters.oneOf), true);
+});
+
+Deno.test("no emitted tool schema carries a keyword OpenAI refuses at the top level", () => {
+  // OpenAI validates the function schema itself and names these exactly. The
+  // check runs over EVERY connector type the registry declares, not just
+  // woocommerce, because the schema is generated from shared code: a second
+  // type gaining one of these would fail the same way, on the same fallback
+  // model, and again only when the primary model happened to be down.
+  const forbidden = ["oneOf", "anyOf", "allOf", "enum", "const", "not"];
+  const tools = CONNECTOR_TYPES.map((connector_type, index) => ({
+    ...legacyTool,
+    id: `0000000${index}-0000-4000-8000-000000000000`,
+    name: `tool_${connector_type}`,
+    connector_type,
+  }));
+
+  for (const definition of customToolDefinitions(tools)) {
+    const parameters = definition.function.parameters as unknown as Record<string, unknown>;
+    assertEquals(parameters.type, "object", `${definition.function.name} is not an object schema`);
+    for (const keyword of forbidden) {
+      assertEquals(
+        Object.hasOwn(parameters, keyword),
+        false,
+        `${definition.function.name} has top-level "${keyword}"`,
+      );
+    }
+  }
 });
 
 Deno.test("every capability's arguments are nameable in the flat schema", () => {
