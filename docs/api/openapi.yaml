@@ -1,0 +1,493 @@
+openapi: 3.1.0
+info:
+  title: Postora Partner API
+  version: 1.0.0
+  description: |
+    Partner API v1 — OpenAPI 3.1 skeleton (deliverable 0.7).
+
+    This document is a MACHINE-PARSEABLE CONTRACT SKELETON. It defines
+    cross-cutting conventions only — security, scopes, error envelope,
+    pagination, and rate-limit headers. `/v1` does NOT exist yet and this
+    document deliberately defines NO paths.
+
+    What exists today is the frozen action-based alias `POST /functions/v1/partner-api`
+    with three actions (`get_status`, `list_templates`, `send_template` — the last
+    SUSPENDED and returning `temporarily_unavailable`). The alias and `/v1` have
+    DIFFERENT error envelopes on purpose (spec D2); do not unify them.
+
+    Future deliverables:
+    - 0.8 drift gate — diffs this baseline and classifies breaking changes.
+    - 0.5 runtime contract tests — proves this document describes real behaviour.
+
+    Every component is named and every enum is enumerated explicitly so a
+    structural diff is meaningful. Descriptions carry provenance, not contract.
+    Contract lives in `type`, `enum`, `required`, and `properties`.
+
+    Sources (verify before editing):
+    - Security header: `supabase/functions/partner-api/index.ts:181`
+      (`req.headers.get("x-postora-key")`) and `supabase/functions/_shared/partnerApiKeys.ts`.
+    - Scopes: spec D3 (generic `messages:send` style) and spec §7 (full list);
+      legacy provider-prefixed strings are historical and pinned, not part of v1.
+    - Error envelope + codes: spec D2 (v1 shape) and the running code —
+      `partnerApiKeys.ts`, `partnerApiMetering.ts`, `partnerApiIdempotency.ts` via
+      `partner-api/index.ts`, and `whatsappPartnerOps.ts` via the same index.
+    - Rate-limit headers + omission: `partner-api/index.ts:74-113,145,155,232,465-493`
+      and `partnerApiMetering.ts:84-243` / `router.ts:22-26` (D7 risk classes A/B/C).
+    - Pagination: spec §7.1 (opaque cursors only, no offset/page-number).
+    - CORS: `docs/decisions/2026-08-30-partner-api-cors.md` — covers the alias only
+      and deliberately does not pre-adopt anything for `/v1`; see that file for
+      the `*` rationale and the four conditions that invalidate it.
+
+    Known verbatim drift: `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md`
+    §6.3 declares its code table exhaustive and has drifted three times.
+servers:
+  - url: https://api.postora.cloud
+    description: Self-hosted Supabase (Kong gateway) — `VITE_SUPABASE_URL` / `SUPABASE_URL` at runtime.
+
+# No endpoints yet — /v1 does not exist. This skeleton exists so the 0.8
+# drift gate has a baseline to diff against. Adding a path is a separate
+# deliverable and must update the gate's baseline document.
+paths: {}
+
+components:
+  securitySchemes:
+    PartnerApiKey:
+      type: apiKey
+      in: header
+      name: x-postora-key
+      description: |
+        Machine credential for partner callers. Verified in
+        `partner-api/index.ts:181` and `partnerApiKeys.ts:63-105` (SHA-256
+        `key_hash` lookup, non-enumerable 401 on unknown/malformed key).
+
+        Wire: `x-postora-key: pk_live_…` (prefix `pk_live_`, base62 body,
+        hashed at rest). NOT `Authorization: Bearer` — that header is never
+        read by the alias and does not exist as a key transport. Adding it
+        later requires updating `Access-Control-Allow-Headers` and re-checking
+        `docs/decisions/2026-08-30-partner-api-cors.md` §"What would change
+        the answer" item 4.
+
+        CORS preflight (`OPTIONS`) carries no credential and no rate-limit
+        headers; pre-auth failures (invalid/unknown/revoked/expired key)
+        deliberately omit rate-limit headers to avoid leaking key existence
+        (`index.ts:74-76, 493`).
+
+  schemas:
+    # ---- Error envelope (v1) — spec D2 ----
+    V1ErrorEnvelope:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/V1ErrorObject'
+      description: |
+        v1 error envelope (spec D2). Differs deliberately from the alias.
+
+        Alias (frozen, still served): `{success:false, error:{code,message,retryable,details?}, request_id}`
+        v1 (this document):           `{error:{code,message,retryable,request_id,details?}}`
+
+        Both carry `X-Postora-Request-Id` on every application response.
+        Verify shapes against `partner-api/index.ts:52-70,509-540`.
+
+    V1ErrorObject:
+      type: object
+      required:
+        - code
+        - message
+        - retryable
+        - request_id
+      properties:
+        code:
+          $ref: '#/components/schemas/V1ErrorCode'
+        message:
+          type: string
+          description: Human-readable summary. Not stable for branching — branch on `code`.
+        retryable:
+          type: boolean
+          description: |
+            Whether the caller should retry with backoff. The typed flag,
+            not the HTTP status family, is the retry verdict. Example:
+            `temporarily_unavailable` is 503 with `retryable:false`; `limiter_unavailable`
+            is 503 with `retryable:true` (`index.ts:202-213,468-470`).
+        request_id:
+          type: string
+          description: |
+            Correlation handle — same value as `X-Postora-Request-Id` header.
+            Format `req_…` / UUID in current alias; treat as opaque string.
+          example: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+        details:
+          type: object
+          description: Optional machine-readable context (e.g. `meta_code` from Meta Graph API).
+          additionalProperties: true
+          example:
+            meta_code: 131047
+
+    V1ErrorCode:
+      type: string
+      description: |
+        Complete set of `code` values the partner surface can emit TODAY,
+        derived from the CODE — not from any document that claims to be
+        exhaustive.
+
+        "Today" is load-bearing: /v1 has no endpoints, so this enumerates what
+        the frozen alias can return. Two further codes are specified but not
+        yet reachable, because the surface that emits them does not exist:
+        `resource_not_found` and `resource_forbidden` (D11 — a resource outside
+        the key's binding returns the former, never the latter, so the binding
+        is non-enumerable). They are named in `parameters.AccountIdFilter` and
+        are deliberately ABSENT from this enum. Add them when the first
+        account-scoped /v1 route lands; adding an enum value is additive, so
+        the 0.8 gate will not object.
+
+        Provenance (grep `supabase/functions/partner-api` + `_shared`):
+        - `partnerApiKeys.ts`: `invalid_key`, `key_revoked`, `key_expired`,
+          `insufficient_scope`, `internal_error`
+        - `partnerApiMetering.ts`: `rate_limited` (`RateLimitedError`), `limiter_unavailable`,
+          `internal_error` (quota check)
+        - `partner-api/index.ts`: `method_not_allowed`, `unknown_action`,
+          `temporarily_unavailable` (0A suspension), `account_not_connected`,
+          `account_needs_reauth`, `missing_idempotency_key`, `invalid_request`,
+          `idempotency_conflict`, `idempotency_in_progress`, `idempotency_indeterminate`,
+          `quota_exceeded`, plus the above via the `PartnerAuthError`/`WhatsAppOpError` catch
+        - `whatsappPartnerOps.ts` (via `index.ts:458-467` and the send path):
+          `outside_session_window` (131047), `template_not_approved` (132000/132001/132005/132007),
+          `invalid_recipient` (131026), `meta_error` (5xx / unparseable / missing message id),
+          `account_needs_reauth` (190), `account_not_connected` (phone registration failure),
+          `unsupported_direct_qr` (evolution_qr mode — `whatsappPartnerOps.ts:221`)
+
+        The handover `docs/handover/2026-08-31-partner-api-phase0-phase1.md:193-204`
+        lists 18 + 4 = 22 codes and omits `unsupported_direct_qr`; the
+        "exhaustive" table in `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md:433-456`
+        lists 22 and also omits it. The disagreement is recorded in the
+        deliverable report and is itself a finding.
+
+        Every code below is an explicit enum value so the 0.8 gate can
+        classify `enum removal` as breaking.
+      enum:
+        - account_needs_reauth
+        - account_not_connected
+        - idempotency_conflict
+        - idempotency_in_progress
+        - idempotency_indeterminate
+        - insufficient_scope
+        - internal_error
+        - invalid_key
+        - invalid_recipient
+        - invalid_request
+        - key_expired
+        - key_revoked
+        - limiter_unavailable
+        - meta_error
+        - method_not_allowed
+        - missing_idempotency_key
+        - outside_session_window
+        - quota_exceeded
+        - rate_limited
+        - template_not_approved
+        - temporarily_unavailable
+        - unknown_action
+        - unsupported_direct_qr
+
+    AliasErrorEnvelope:
+      type: object
+      required:
+        - success
+        - error
+        - request_id
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          $ref: '#/components/schemas/AliasErrorObject'
+        request_id:
+          type: string
+          description: Correlation handle — same value as `X-Postora-Request-Id` response header.
+      description: |
+        Frozen alias error envelope (NOT v1). Current shape at `partner-api/index.ts:52-70`.
+        Documented here only so the two envelopes are not conflated.
+
+    AliasErrorObject:
+      type: object
+      required:
+        - code
+        - message
+        - retryable
+      properties:
+        code:
+          $ref: '#/components/schemas/V1ErrorCode'
+        message:
+          type: string
+        retryable:
+          type: boolean
+        details:
+          type: object
+          additionalProperties: true
+
+    # ---- Scopes — spec D3 + §7 ----
+    GenericScope:
+      type: string
+      description: |
+        v1 scope vocabulary (spec D3: generic `messages:send` style; values
+        from spec §7 "Target v1 surface"). A request is permitted only if
+        the scope allows the operation AND the account binding allows the
+        resource AND the platform capability allows the subtype (D3).
+
+        Legacy provider-prefixed strings (`whatsapp:template.send`,
+        `whatsapp:templates.read`, `whatsapp:webhooks.manage`) are pinned at
+        current capability and rejected for new keys per D3(R1-R3). They are
+        NOT part of this enum. If D3's text alone is read, the vocabulary
+        looks incomplete (it names only the style and the three legacy
+        strings); the enumeration below comes from §7.
+
+        Adding a scope is a capability grant and must be reviewed per the
+        D3 escalation warning (mapping `whatsapp:webhooks.manage` → `webhooks:manage`
+        would turn zero capability into full webhook CRUD + SSRF amplifier).
+      enum:
+        - accounts:read
+        - conversations:read
+        - media:read
+        - media:write
+        - messages:read
+        - messages:send
+        - posts:publish
+        - posts:read
+        - posts:schedule
+        - posts:write
+        - templates:read
+        - usage:read
+        - webhooks:manage
+        - webhooks:read
+
+    LegacyScope:
+      type: string
+      description: |
+        Historical alias scopes, frozen at current capability (spec D3 R3).
+        `whatsapp:webhooks.manage` authorises NOTHING today — no action
+        exists behind it — and must never alias to `webhooks:manage`.
+        New keys must be rejected if they request a legacy scope.
+      enum:
+        - whatsapp:template.send
+        - whatsapp:templates.read
+        - whatsapp:webhooks.manage
+
+    # ---- Identifiers — spec §7.1 ----
+    PrefixedId:
+      type: string
+      description: |
+        Opaque, prefixed resource identifier (spec §7.1). Provider IDs appear
+        as separate fields, never as the primary ID. Unknown fields must be
+        ignored by clients.
+      pattern: '^(acc|conv|msg|post|media|evt|wh)_[A-Za-z0-9_-]+$'
+      example: msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1
+
+    # ---- Pagination helpers ----
+    LimitParameter:
+      type: integer
+      minimum: 1
+      maximum: 100
+      default: 20
+      example: 20
+      description: Page size. Bounded; server may clamp.
+
+    CursorParameter:
+      type: string
+      description: |
+        Opaque cursor returned by a previous paginated response (spec §7.1).
+        Must be treated as opaque — not parsed, not constructed. A malformed
+        cursor is rejected, not silently reset.
+      example: eyJpZCI6Im1zZ18wMUgifQ
+
+  parameters:
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/CursorParameter'
+      description: |
+        Opaque pagination cursor (spec §7.1). Absent on the first page;
+        server returns `next_cursor` (or `nextCursor`) when more pages exist.
+        No offset or page-number parameters exist — they are unstable under
+        concurrent writes and are deliberately omitted.
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/LimitParameter'
+      description: Maximum number of items to return in this page.
+
+    AccountIdFilter:
+      name: account_id
+      in: query
+      required: false
+      schema:
+        $ref: '#/components/schemas/PrefixedId'
+      description: |
+        Optional account selector for collection reads (spec D11). Default is
+        all accounts bound to the key, with each row labelled by `account_id`.
+        An unbound `account_id` returns `resource_not_found`, never
+        `resource_forbidden` (non-enumerable). Mutations require an explicit
+        `account_id` even when only one account is bound.
+
+  headers:
+    X-Postora-Request-Id:
+      description: |
+        Correlation handle present on EVERY application response — success,
+        4xx, and 5xx (`partner-api/index.ts:65-70,509-540`). Mirrors `error.request_id`
+        / `request_id` in the body. Omitted only on CORS preflight (`OPTIONS`),
+        which returns before the id is generated (`index.ts:145,155`).
+      schema:
+        type: string
+        example: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+      required: false
+
+    X-RateLimit-Limit:
+      description: |
+        Per-minute limit for this key (from `partner_api_keys.rate_limit_per_min`).
+        Emitted ONLY when the limiter resolved the key's budget — see response
+        classes below. Never fabricated.
+      schema:
+        type: integer
+        minimum: 1
+        example: 60
+      required: false
+
+    X-RateLimit-Remaining:
+      description: |
+        Requests remaining in the current window, as reported by
+        `consume_partner_rate_v2` after incrementing (`partnerApiMetering.ts:137-235`).
+        `0` on a 429 refusal is proven by the refusal itself; otherwise taken
+        verbatim from the RPC. Omitted when no budget was resolved.
+      schema:
+        type: integer
+        minimum: 0
+        example: 42
+      required: false
+
+    X-RateLimit-Reset:
+      description: |
+        Seconds until the current rate-limit window ends, computed by Postgres
+        as `CEIL(window_end - now())` in the same statement that consumed the
+        bucket (`partnerApiMetering.ts:87-90,130-133`). Valid range 1..60;
+        omitted if the RPC drifted and returned no valid value (`validResetSeconds`).
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 60
+        example: 17
+      required: false
+
+    Retry-After:
+      description: |
+        Seconds to wait before retrying. Two sources:
+        - 429 `rate_limited`: same DB-provided window-reset value as `X-RateLimit-Reset`.
+        - 503 `limiter_unavailable` (class B/C, D7 fail-closed): fixed `5` seconds
+          (`partner-api/index.ts:126`) — long enough to avoid a thundering herd
+          against the struggling limiter, short enough for a healthy caller.
+        Omitted on `temporarily_unavailable` (503, `retryable:false`) — no
+        honest duration exists (restoration is milestone-gated, not time-gated).
+      schema:
+        type: integer
+        minimum: 1
+        example: 5
+      required: false
+
+    Idempotency-Key:
+      description: |
+        Caller-supplied idempotency key, required on send/mutation routes
+        marked `Idempotency-Key` in spec §7 (`partner-api/index.ts:312-324`).
+        Replayed responses carry `Idempotency-Replayed: true`.
+      schema:
+        type: string
+        format: uuid
+        example: 550e8400-e29b-41d4-a716-446655440000
+      required: false
+
+    Idempotency-Replayed:
+      description: Whether this response is a replay of a previous `completed` request.
+      schema:
+        type: string
+        enum: ["true"]
+      required: false
+
+  responses:
+    V1Error:
+      description: v1 error response — always carries `X-Postora-Request-Id`.
+      headers:
+        X-Postora-Request-Id:
+          $ref: '#/components/headers/X-Postora-Request-Id'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/X-RateLimit-Limit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/X-RateLimit-Remaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/X-RateLimit-Reset'
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/V1ErrorEnvelope'
+          examples:
+            rateLimited:
+              summary: 429 rate_limited (retryable)
+              value:
+                error:
+                  code: rate_limited
+                  message: Rate limit exceeded
+                  retryable: true
+                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+            limiterUnavailable:
+              summary: 503 limiter_unavailable (retryable, B/C fail-closed)
+              value:
+                error:
+                  code: limiter_unavailable
+                  message: Rate limiter is unavailable; retry shortly
+                  retryable: true
+                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+            suspended:
+              summary: 503 temporarily_unavailable (NOT retryable, no Retry-After)
+              value:
+                error:
+                  code: temporarily_unavailable
+                  message: This action is temporarily suspended; see the Partner API changelog. Retrying will not succeed until it is re-enabled
+                  retryable: false
+                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+
+    # Explicit rate-limit response-class documentation (plan §1.5, index.ts comments).
+    # This is not a separate schema — it is the contract for when the headers
+    # above are present vs deliberately omitted.
+    RateLimitResponseClasses:
+      description: |
+        Response classes for `X-RateLimit-*` / `Retry-After` (plan §1.5, D7).
+
+        | Response class | Headers | Provenance |
+        |---|---|---|
+        | Authenticated, limiter consumed and resolved (`status:"resolved"`) | `X-RateLimit-Limit` + `X-RateLimit-Remaining` + `X-RateLimit-Reset` with real DB values | `partnerApiMetering.ts:206-235`, `index.ts:85-91,226-232` |
+        | Authenticated, limiter refused (429 `rate_limited`) | `X-RateLimit-Limit` + `X-RateLimit-Remaining:0` + `X-RateLimit-Reset`/`Retry-After` (when DB provided a valid 1..60) | `index.ts:100-113,479-484` |
+        | Authenticated, limiter unavailable — class B/C (503 `limiter_unavailable`) | NO `X-RateLimit-*`; `Retry-After:5` only | `partnerApiMetering.ts:165-167,199-200`, `index.ts:126,485-486` |
+        | Authenticated, limiter unavailable — class A (fail-open) | Omitted — no budget was resolved (`status:"unavailable"`) | `partnerApiMetering.ts:162-164`, `index.ts:228-232` |
+        | Pre-auth failures: 401 `invalid_key`, `key_revoked`, `key_expired` | **Omitted** — no key resolved, fabricating a budget leaks key existence | `index.ts:74-76,490-493` |
+        | CORS preflight `OPTIONS` | **Omitted** — returns before id/headers generated | `index.ts:145` |
+        | `temporarily_unavailable` (0A suspension, 503, `retryable:false`) | **Omitted** + no `Retry-After` — restoration is milestone-gated | `index.ts:193-222` |
+        | Method-not-allowed / unknown-action before auth? | `method_not_allowed` (405) and `unknown_action` (400) are AFTER auth in the alias, so they DO carry headers when limiter resolved; pre-auth 405 carries none. |
+
+security:
+  - PartnerApiKey: []
+
+x-postora-cross-cutting:
+  pagination: |
+    Opaque cursors only (spec §7.1). No `offset`, `page`, or `page_number`
+    parameters exist. Cursor stable across an interleaved write; malformed
+    cursor is rejected.
+  ids: |
+    Prefixed opaque IDs (`acc_`, `conv_`, `msg_`, `post_`, `media_`, `evt_`, `wh_`)
+    per spec §7.1. Provider IDs appear as separate fields.
+  unknownFields: Clients must ignore unknown fields; additive optional fields are non-breaking.
+  cors:
+    alias: "`Access-Control-Allow-Origin: *` on the alias is the reviewed default per `docs/decisions/2026-08-30-partner-api-cors.md` (covers alias only)."
+    v1: "No pre-adoption. `/v1` makes its own decision when it exists (see that decision's § 'What would change the answer' and ARCHITECTURE.md §25)."
