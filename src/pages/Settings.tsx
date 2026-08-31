@@ -52,7 +52,7 @@ export default function Settings() {
     }
   }, [rawTab, navigate]);
 
-  const activeTab = rawTab && SETTINGS_TABS.includes(rawTab as any)
+  const activeTab = rawTab && SETTINGS_TABS.includes(rawTab as (typeof SETTINGS_TABS)[number])
     ? (rawTab === "connectors" ? "integrations" : rawTab)
     : "profile";
 
@@ -171,7 +171,7 @@ export default function Settings() {
 
           {/* Unified Integrations & Connectors Tab */}
           <TabsContent value="integrations" className="mt-6 space-y-8">
-            <DatabaseConnectorsManager />
+            <DatabaseConnectorsManager readOnly />
           </TabsContent>
 
           {/* Appearance Tab */}

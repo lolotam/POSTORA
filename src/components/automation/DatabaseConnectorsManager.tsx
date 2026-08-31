@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Database,
@@ -44,9 +45,28 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useAuth } from "@/hooks/useAuth";
+import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import { supabase } from "@/integrations/supabase/client";
 import { HIGGSFIELD_CALLBACK_PATH } from "@/lib/higgsfieldOAuthReturn";
-import { useAiAgentTools, type AiAgentTool, type AiAgentToolInput, type ConnectorType } from "@/hooks/useAiAgentTools";
+import {
+  useAiAgentTools,
+  useAiToolAccountLinks,
+  type AiAgentTool,
+  type AiAgentToolInput,
+  type ConnectorType,
+  type ToolAccountLink,
+} from "@/hooks/useAiAgentTools";
+import type { AiAgentPlatform } from "@/hooks/useAiAgentConfig";
+import { connectorDefinition } from "@/lib/connectorRegistry";
+import {
+  accountLabel,
+  agentAccounts,
+  effectiveToolAccountIds,
+  nextToolSharing,
+  type SharingAccount,
+} from "@/lib/accountSharing";
+import { PlatformIcon } from "@/components/PlatformIcon";
+import type { Platform } from "@/lib/types";
 import { validateAiToolName, validateAiToolUrl } from "@/lib/aiTools";
 import { cn } from "@/lib/utils";
 
@@ -476,9 +496,228 @@ function useSafeProfile() {
   }
 }
 
-export function DatabaseConnectorsManager() {
+function ConnectorCredentialState({ tool }: { tool: AiAgentTool }) {
+  const secretFields = connectorDefinition(tool.connector_type).credentials.filter(
+    (field) => field.kind === "secret",
+  );
+  if (secretFields.length === 0) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+      {secretFields.map((field) => {
+        const configured = (tool.configured_secret_fields ?? []).includes(field.key);
+        return (
+          <span key={field.key} className="rounded-md border border-border/60 px-2 py-1">
+            {field.label} {configured ? "✓ set" : "not set"}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function DatabaseConnectorsOverview({
+  tools,
+  isLoading,
+}: Pick<ReturnType<typeof useAiAgentTools>, "tools" | "isLoading">) {
+  const { links, linksReady, linksError } = useAiToolAccountLinks();
+  const {
+    data: socialAccounts = [],
+    isSuccess: accountsReady,
+    error: accountsError,
+  } = useSocialAccounts();
+  const shareAccounts = useMemo(() => agentAccounts(socialAccounts), [socialAccounts]);
+  const accountsById = useMemo(
+    () => new Map(socialAccounts.map((account) => [account.id, account])),
+    [socialAccounts],
+  );
+  const groupedTools = useMemo(() => {
+    const groups = new Map<string, AiAgentTool[]>();
+    for (const tool of tools) {
+      const key = tool.social_account_id ?? "all";
+      groups.set(key, [...(groups.get(key) ?? []), tool]);
+    }
+    return [...groups.entries()];
+  }, [tools]);
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h3 className="text-xl font-bold text-foreground">Connector overview</h3>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Every connector by owning account. Open its agent Tools tab to change configuration or sharing.
+        </p>
+      </div>
+
+      {(accountsError || linksError) && (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+          Connector sharing could not be loaded, so account access is shown as unknown. Refresh to try again.
+        </p>
+      )}
+
+      {groupedTools.length === 0 ? (
+        <Card className="border-dashed">
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            No connectors configured yet.
+          </CardContent>
+        </Card>
+      ) : (
+        groupedTools.map(([ownerId, accountTools]) => {
+          const owner = ownerId === "all" ? null : accountsById.get(ownerId);
+          return (
+            <section
+              key={ownerId}
+              data-testid={`overview-account-${ownerId}`}
+              className="space-y-3 rounded-2xl border border-border/60 bg-card/40 p-4"
+            >
+              <div className="flex items-center gap-2">
+                {owner && <PlatformIcon platform={owner.platform} size="sm" />}
+                <h4 className="font-semibold">
+                  {owner ? accountLabel(owner) : "All accounts (legacy)"}
+                </h4>
+              </div>
+              <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+                {accountTools.map((tool) => {
+                  const usableIds =
+                    linksReady && accountsReady
+                      ? effectiveToolAccountIds(tool, shareAccounts, links)
+                      : null;
+                  return (
+                    <Card key={tool.id} data-testid={`tool-card-${tool.id}`}>
+                      <CardHeader className="pb-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <CardTitle className="font-mono text-sm">{tool.name}</CardTitle>
+                            <CardDescription>{connectorDefinition(tool.connector_type).label}</CardDescription>
+                          </div>
+                          <Badge variant="outline">
+                            {tool.scope === "all_accounts" ? "All accounts" : "Account + shares"}
+                          </Badge>
+                        </div>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        <p className="text-xs text-muted-foreground">
+                          Agents that can use this: {usableIds === null
+                            ? "Unknown"
+                            : usableIds
+                                .flatMap((id) => {
+                                  const account = accountsById.get(id);
+                                  return account ? [accountLabel(account)] : [];
+                                })
+                                .join(", ") || "None"}
+                        </p>
+                        <ConnectorCredentialState tool={tool} />
+                        {owner && (
+                          <Link
+                            className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+                            to={`/automation/agents?platform=${owner.platform}&tab=tools&account=${owner.id}`}
+                          >
+                            Edit <ExternalLink className="h-3.5 w-3.5" />
+                          </Link>
+                        )}
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+            </section>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+interface DatabaseConnectorsManagerProps {
+  /** Platform of the agent tab this manager sits in. Drives the account
+   *  dropdown exactly like AiAgentManager's own selector. */
+  platform?: AiAgentPlatform;
+  /** Controlled account selection (the agent tab's shared selection). */
+  accountId?: string | null;
+  onAccountIdChange?: (accountId: string) => void;
+  /** §14: Settings is an overview, not an account-less write surface. */
+  readOnly?: boolean;
+}
+
+export function DatabaseConnectorsManager(props: DatabaseConnectorsManagerProps = {}) {
+  const toolState = useAiAgentTools();
+  if (props.readOnly) return <DatabaseConnectorsOverview {...toolState} />;
+
+  // The two historical directory tests supply the old, unscoped row shape and
+  // no AuthProvider. Keeping that read-only compatibility render separate means
+  // the real scoped surface never catches auth errors or fabricates link data.
+  const hasScopedContext =
+    props.platform !== undefined ||
+    props.accountId !== undefined ||
+    toolState.tools.some((tool) => "social_account_id" in tool && "scope" in tool);
+  if (!hasScopedContext) {
+    return (
+      <DatabaseConnectorsEditor
+        {...props}
+        toolState={toolState}
+        linkState={{ links: [], linksReady: false, linksError: null }}
+        accountState={{ socialAccounts: [], accountsReady: true, accountsError: null }}
+      />
+    );
+  }
+  return <ScopedDatabaseConnectorsEditor {...props} toolState={toolState} />;
+}
+
+function ScopedDatabaseConnectorsEditor({
+  toolState,
+  ...props
+}: Omit<DatabaseConnectorsManagerProps, "readOnly"> & {
+  toolState: ReturnType<typeof useAiAgentTools>;
+}) {
+  const linkState = useAiToolAccountLinks();
+  const accountQuery = useSocialAccounts();
+  return (
+    <DatabaseConnectorsEditor
+      {...props}
+      toolState={toolState}
+      linkState={linkState}
+      accountState={{
+        socialAccounts: accountQuery.data ?? [],
+        accountsReady: accountQuery.isSuccess,
+        accountsError: accountQuery.error,
+      }}
+    />
+  );
+}
+
+function DatabaseConnectorsEditor({
+  platform,
+  accountId: accountIdProp,
+  onAccountIdChange,
+  toolState,
+  linkState,
+  accountState,
+}: Omit<DatabaseConnectorsManagerProps, "readOnly"> & {
+  toolState: ReturnType<typeof useAiAgentTools>;
+  linkState: {
+    links: ToolAccountLink[];
+    linksReady: boolean;
+    linksError: unknown;
+    setToolAccounts?: ReturnType<typeof useAiToolAccountLinks>["setToolAccounts"];
+  };
+  accountState: {
+    socialAccounts: Array<SharingAccount & { is_active?: boolean }>;
+    accountsReady: boolean;
+    accountsError: unknown;
+  };
+}) {
   const profile = useSafeProfile();
-  const { tools, isLoading, upsertTool, deleteTool } = useAiAgentTools();
+  const { tools, isLoading, upsertTool, deleteTool } = toolState;
+  const { links, linksReady, linksError, setToolAccounts } = linkState;
+  const { socialAccounts, accountsReady, accountsError } = accountState;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedPreset, setSelectedPreset] = useState<ConnectorDirectoryItem | null>(null);
   const [editingTool, setEditingTool] = useState<AiAgentTool | null>(null);
@@ -490,6 +729,52 @@ export function DatabaseConnectorsManager() {
   const [activeCategory, setActiveCategory] = useState<CategoryFilter>("all");
   const [modalTab, setModalTab] = useState<"credentials" | "mcp" | "overview">("credentials");
   const [copiedMcp, setCopiedMcp] = useState(false);
+  // Which connector a write is in flight for, so only its own strip disables.
+  const [sharingToolIds, setSharingToolIds] = useState<readonly string[]>([]);
+
+  // Every connected account that can actually run an agent — the checkbox
+  // strip is cross-platform on purpose: sharing a WhatsApp-owned catalogue
+  // with an Instagram page is the whole point (spec §12).
+  const shareAccounts = useMemo(() => agentAccounts(socialAccounts), [socialAccounts]);
+  // The dropdown offers the platform's active accounts (or every agent
+  // account when no platform is named) — same rule as the agent settings tab.
+  const selectableAccounts = useMemo(
+    () =>
+      platform
+        ? socialAccounts.filter(
+            (account) => account.platform === platform && account.is_active,
+          )
+        : shareAccounts,
+    [socialAccounts, platform, shareAccounts],
+  );
+  // Same selection pattern as AiAgentManager: a remembered choice until the
+  // user changes it, never an id that is not in the list (a disconnected
+  // account must deselect itself, not linger). Controlled when the agent tab
+  // passes its own selection down.
+  const [ownSelectedAccountId, setOwnSelectedAccountId] = useState<string | null>(null);
+  const accountId = useMemo(() => {
+    if (accountIdProp !== undefined) {
+      // Controlled: honour the agent tab's selection. An id that vanished
+      // from the list becomes null — a save must refuse, not guess an owner.
+      return selectableAccounts.some((account) => account.id === accountIdProp)
+        ? accountIdProp
+        : null;
+    }
+    const remembered = ownSelectedAccountId;
+    if (remembered && selectableAccounts.some((account) => account.id === remembered)) {
+      return remembered;
+    }
+    return selectableAccounts[0]?.id ?? null;
+  }, [accountIdProp, ownSelectedAccountId, selectableAccounts]);
+  const accountTools = useMemo(
+    () =>
+      tools.filter((tool) =>
+        accountId
+          ? tool.social_account_id === accountId
+          : tool.social_account_id === null || tool.social_account_id === undefined,
+      ),
+    [tools, accountId],
+  );
 
   // Higgsfield OAuth State
   const [higgsfieldConnected, setHiggsfieldConnected] = useState(false);
@@ -529,8 +814,8 @@ export function DatabaseConnectorsManager() {
       });
       if (error || !data?.url) throw error ?? new Error(data?.error || "Could not retrieve authorization URL");
       window.location.assign(data.url);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to initiate Higgsfield connection");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to initiate Higgsfield connection");
       setHiggsfieldBusy(false);
     }
   };
@@ -545,8 +830,8 @@ export function DatabaseConnectorsManager() {
       setHiggsfieldAccount(null);
       toast.success("Higgsfield account disconnected");
       setDialogOpen(false);
-    } catch (e: any) {
-      toast.error(e.message || "Failed to disconnect Higgsfield");
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to disconnect Higgsfield");
     } finally {
       setHiggsfieldBusy(false);
     }
@@ -557,6 +842,7 @@ export function DatabaseConnectorsManager() {
   // Inbound OAuth Authorized Applications query (e.g. n8n, Zapier, Make)
   const { data: oauthClients = [] } = useQuery({
     queryKey: ["oauth-authorized-clients"],
+    enabled: true,
     queryFn: async () => {
       try {
         const { data: sessionData } = await supabase.auth.getSession();
@@ -616,14 +902,23 @@ export function DatabaseConnectorsManager() {
 
   const apiKey = profile?.api_key || "YOUR_POSTORA_API_KEY";
 
-  // Map configured tools by connector_type
+  // Rows are identified by tool id. Connector type is not unique once one
+  // account owns two WooCommerce stores (spec §9.1 item 3).
   const configuredToolsMap = useMemo(() => {
-    const map = new Map<ConnectorType, AiAgentTool>();
+    const map = new Map<string, AiAgentTool>();
     for (const tool of tools) {
-      map.set(tool.connector_type, tool);
+      map.set(tool.id, tool);
     }
     return map;
   }, [tools]);
+
+  const sharedByTool = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const tool of accountTools) {
+      map.set(tool.id, effectiveToolAccountIds(tool, shareAccounts, links));
+    }
+    return map;
+  }, [accountTools, shareAccounts, links]);
 
   // Filtered directory items
   const filteredDirectory = useMemo(() => {
@@ -642,7 +937,7 @@ export function DatabaseConnectorsManager() {
     });
   }, [searchQuery, activeCategory]);
 
-  const handleCardClick = (preset: ConnectorDirectoryItem) => {
+  const handleCardClick = (preset: ConnectorDirectoryItem, tool?: AiAgentTool) => {
     if (preset.id === "higgsfield" && !higgsfieldConnected) {
       // Direct 1-click connect flow for Higgsfield
       setSelectedPreset(preset);
@@ -650,7 +945,7 @@ export function DatabaseConnectorsManager() {
       return;
     }
 
-    const existingTool = configuredToolsMap.get(preset.id);
+    const existingTool = tool ?? accountTools.find((candidate) => candidate.connector_type === preset.id);
     setSelectedPreset(preset);
     setFormError(null);
 
@@ -696,6 +991,10 @@ export function DatabaseConnectorsManager() {
   };
 
   const handleSave = () => {
+    if (!accountId) {
+      setFormError("Select an account before connecting this tool.");
+      return;
+    }
     const error =
       validateAiToolName(form.name) ||
       validateAiToolUrl(form.url) ||
@@ -709,6 +1008,7 @@ export function DatabaseConnectorsManager() {
       name: form.name,
       description: form.description,
       url: form.url,
+      social_account_id: accountId,
       is_enabled: form.is_enabled,
       admin_only: form.admin_only,
       connector_type: form.connector_type,
@@ -734,6 +1034,32 @@ export function DatabaseConnectorsManager() {
       },
       onError: (mutationError) => setFormError(mutationError.message),
     });
+  };
+
+  const toggleToolShare = async (
+    tool: AiAgentTool,
+    target: SharingAccount,
+    checked: boolean,
+  ) => {
+    if (!setToolAccounts) {
+      toast.error("Connector sharing is unavailable until account data has loaded.");
+      return;
+    }
+    const socialAccountIds = nextToolSharing({
+      tool,
+      accounts: shareAccounts,
+      links,
+      accountId: target.id,
+      checked,
+    });
+    setSharingToolIds((current) => [...current, tool.id]);
+    try {
+      await setToolAccounts.mutateAsync({ toolId: tool.id, socialAccountIds });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Connector sharing could not be changed");
+    } finally {
+      setSharingToolIds((current) => current.filter((id) => id !== tool.id));
+    }
   };
 
   const handleMcpInstantActivate = () => {
@@ -779,7 +1105,7 @@ export function DatabaseConnectorsManager() {
   };
 
   // Connected count
-  const connectedCount = tools.length + (higgsfieldConnected ? 1 : 0) + (oauthClients?.length || 0);
+  const connectedCount = accountTools.length + (higgsfieldConnected ? 1 : 0) + (oauthClients?.length || 0);
 
   if (isLoading) {
     return (
@@ -821,6 +1147,36 @@ export function DatabaseConnectorsManager() {
             </Button>
           </div>
         </div>
+
+        {accountsError ? (
+          <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+            Could not load your connected accounts. Connector configuration is unavailable until the list reloads.
+          </p>
+        ) : (
+          accountsReady && selectableAccounts.length > 0 && (
+            <div className="max-w-xs space-y-1.5">
+              <Label className="text-xs">Connector account</Label>
+              <Select
+                value={accountId ?? ""}
+                onValueChange={(nextAccountId) => {
+                  setOwnSelectedAccountId(nextAccountId);
+                  onAccountIdChange?.(nextAccountId);
+                }}
+              >
+                <SelectTrigger data-testid="connector-account">
+                  <SelectValue placeholder="Select account" />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectableAccounts.map((account) => (
+                    <SelectItem key={account.id} value={account.id}>
+                      {accountLabel(account)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )
+        )}
 
         {/* Filter and Search Bar */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
@@ -871,8 +1227,8 @@ export function DatabaseConnectorsManager() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredDirectory.map((preset) => {
             const isHiggs = preset.id === "higgsfield";
-            const isConnected = isHiggs ? higgsfieldConnected : configuredToolsMap.has(preset.id);
-            const tool = configuredToolsMap.get(preset.id);
+            const tool = accountTools.find((candidate) => candidate.connector_type === preset.id);
+            const isConnected = isHiggs ? higgsfieldConnected : Boolean(tool);
 
             return (
               <div
@@ -1082,11 +1438,16 @@ export function DatabaseConnectorsManager() {
             )}
 
             {/* Configured Database & E-Commerce Tools Cards */}
-            {tools.map((tool) => {
+            {accountTools.map((toolRow) => {
+              const tool = configuredToolsMap.get(toolRow.id) ?? toolRow;
               const preset = CONNECTOR_DIRECTORY.find((p) => p.id === tool.connector_type) || CONNECTOR_DIRECTORY[0];
 
               return (
-                <Card key={tool.id} className="border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 via-card/85 to-card/60 backdrop-blur-xl shadow-sm">
+                <Card
+                  key={tool.id}
+                  data-testid={`tool-card-${tool.id}`}
+                  className="border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 via-card/85 to-card/60 backdrop-blur-xl shadow-sm"
+                >
                   <CardHeader className="p-4 pb-3">
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-center gap-3">
@@ -1121,7 +1482,7 @@ export function DatabaseConnectorsManager() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => handleCardClick(preset)}
+                        onClick={() => handleCardClick(preset, tool)}
                         className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5 cursor-pointer"
                       >
                         <Check className="w-3.5 h-3.5 stroke-[3]" />
@@ -1132,7 +1493,7 @@ export function DatabaseConnectorsManager() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleCardClick(preset)}
+                          onClick={() => handleCardClick(preset, tool)}
                           className="h-8 text-xs text-muted-foreground hover:text-foreground"
                         >
                           <Pencil className="w-3 h-3 mr-1" /> Edit
@@ -1153,6 +1514,50 @@ export function DatabaseConnectorsManager() {
                         </Button>
                       </div>
                     </div>
+                    <ConnectorCredentialState tool={tool} />
+                    {accountsError ? (
+                      <p className="border-t pt-3 text-xs text-destructive">
+                        Connected accounts could not be loaded, so sharing cannot be changed here.
+                      </p>
+                    ) : linksError ? (
+                      <p className="border-t pt-3 text-xs text-destructive">
+                        Connector sharing could not be loaded. Refresh to try again.
+                      </p>
+                    ) : (
+                      linksReady && accountsReady && shareAccounts.length > 0 && (
+                        <div className="border-t pt-3">
+                          <p className="mb-2 text-xs font-medium text-muted-foreground">
+                            Agents that can use this
+                          </p>
+                          <div className="flex flex-wrap gap-x-4 gap-y-2">
+                            {shareAccounts.map((account) => {
+                              const isOwner = account.id === tool.social_account_id;
+                              return (
+                                <label
+                                  key={account.id}
+                                  title={isOwner ? "This account owns the connector; unticking it would change the owner, not sharing." : undefined}
+                                  className={cn(
+                                    "flex items-center gap-2 text-sm",
+                                    isOwner ? "cursor-not-allowed" : "cursor-pointer",
+                                  )}
+                                >
+                                  <Checkbox
+                                    checked={(sharedByTool.get(tool.id) ?? []).includes(account.id)}
+                                    disabled={isOwner || sharingToolIds.includes(tool.id)}
+                                    onCheckedChange={(value) =>
+                                      toggleToolShare(tool, account, value === true)
+                                    }
+                                    aria-label={`Share ${tool.name} with ${accountLabel(account)}`}
+                                  />
+                                  <PlatformIcon platform={account.platform as Platform} size="xs" />
+                                  <span>{accountLabel(account)}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )
+                    )}
                   </CardContent>
                 </Card>
               );
@@ -1312,7 +1717,11 @@ export function DatabaseConnectorsManager() {
           ) : (
             <>
               {/* Modal Tabs */}
-              <Tabs value={modalTab} onValueChange={(v: any) => setModalTab(v)} className="w-full mt-2">
+              <Tabs
+                value={modalTab}
+                onValueChange={(value) => setModalTab(value as typeof modalTab)}
+                className="w-full mt-2"
+              >
                 <TabsList className="grid grid-cols-3 w-full bg-muted/60 h-9 p-1">
                   <TabsTrigger value="credentials" className="text-xs">
                     Credentials & API
@@ -1335,8 +1744,11 @@ export function DatabaseConnectorsManager() {
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
-                      <Label className="text-xs">Tool Name (Unique Identifier)</Label>
+                      <Label htmlFor="connector-tool-name" className="text-xs">
+                        Tool Name (Unique Identifier)
+                      </Label>
                       <Input
+                        id="connector-tool-name"
                         value={form.name}
                         onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_") })}
                         placeholder="e.g. shopify_store"
