@@ -74,12 +74,26 @@ const FUNCTIONS_DIR = fromFileUrl(new URL("../", import.meta.url));
 
 /** The only surfaces permitted to authenticate with profiles.api_key.
  * See the file header before adding anything to this list. */
-const LEGACY_PROFILES_KEY_USERS = new Set([
-  "ecommerce-whatsapp-api/index.ts",
-  "n8n-api/index.ts",
-  "remove-background/index.ts",
-  "upscale-image/index.ts",
-  "upscale-image-atlas/index.ts",
+/** COUNTS, not a bare exemption -- and the difference is the whole point.
+ *
+ * An earlier version exempted these files entirely, which meant a NEW
+ * legacy-key authentication path added INSIDE one of them was skipped along
+ * with the pre-existing one, and CI stayed green while D8 was violated. That is
+ * most plausible exactly where it is least visible: `n8n-api/index.ts` is a
+ * large handler that gains actions over time.
+ *
+ * Pinning the count keeps the grandfathered site allowed and fails a SECOND one
+ * in the same file. Each of these is 1 today, verified by counting.
+ *
+ * A count may go DOWN freely -- a surface migrating off the legacy key is
+ * progress; lower the number, or delete the entry at zero. It may only go UP
+ * after a recorded decision, never to silence a new violation. */
+const LEGACY_PROFILES_KEY_USERS = new Map<string, number>([
+  ["ecommerce-whatsapp-api/index.ts", 1],
+  ["n8n-api/index.ts", 1],
+  ["remove-background/index.ts", 1],
+  ["upscale-image/index.ts", 1],
+  ["upscale-image-atlas/index.ts", 1],
 ]);
 
 /** The authenticate-by-legacy-key shape: a query on `profiles` whose filter is
@@ -110,10 +124,23 @@ Deno.test("D8 regression detector: no new surface authenticates with profiles.ap
     if (!match) continue;
 
     const rel = toPosix(relative(FUNCTIONS_DIR, entry.path));
-    if (LEGACY_PROFILES_KEY_USERS.has(rel)) continue;
+    const allowed = LEGACY_PROFILES_KEY_USERS.get(rel) ?? 0;
 
-    const line = text.slice(0, match.index).split("\n").length;
-    violations.push(`${rel}:${line}`);
+    // Count EVERY occurrence in the file, not just the first. A grandfathered
+    // file keeps its allowed number of sites; anything beyond that is a new
+    // surface and is reported with its line.
+    const all = [...text.matchAll(
+      new RegExp(PROFILES_API_KEY_AUTH.source, PROFILES_API_KEY_AUTH.flags + "g"),
+    )];
+    if (all.length <= allowed) continue;
+
+    for (const extra of all.slice(allowed)) {
+      const line = text.slice(0, extra.index).split("\n").length;
+      violations.push(
+        rel + ":" + line +
+          (allowed > 0 ? " (file allows " + allowed + ", found " + all.length + ")" : ""),
+      );
+    }
   }
 
   assertEquals(
@@ -132,7 +159,7 @@ Deno.test("D8 regression detector: no new surface authenticates with profiles.ap
 
 Deno.test("D8 regression detector: the legacy allowlist names only files that exist", () => {
   const stale: string[] = [];
-  for (const rel of LEGACY_PROFILES_KEY_USERS) {
+  for (const rel of LEGACY_PROFILES_KEY_USERS.keys()) {
     try {
       Deno.statSync(join(FUNCTIONS_DIR, rel));
     } catch {
