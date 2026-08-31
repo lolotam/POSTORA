@@ -37,7 +37,10 @@ function sorted(types: readonly string[]): string[] {
   return [...types].sort();
 }
 
+let migrationTypesCache: string[] | undefined;
+
 function connectorTypesFromMigration(): string[] {
+  if (migrationTypesCache) return migrationTypesCache;
   // A CHECK cannot be altered in place, so every widening of the
   // connector_type list is a new migration that drops and recreates it. The
   // effective DB contract is therefore defined by the LAST migration that
@@ -47,15 +50,24 @@ function connectorTypesFromMigration(): string[] {
   const migrationsDir = resolve(process.cwd(), "supabase/migrations");
   const checkPattern = /CHECK\s*\(connector_type\s+IN\s*\(\s*([\s\S]*?)\s*\)\)/i;
 
-  const lastDefining = readdirSync(migrationsDir)
+  // Newest first, stopping at the first match. The eager .map() this replaces
+  // read EVERY migration into memory before filtering, twice -- once per test.
+  // Alone that costs milliseconds; running beside 157 other test files it blew
+  // vitest's 5s limit and failed the suite intermittently while passing in
+  // isolation, which is the worst shape a test can have.
+  const names = readdirSync(migrationsDir)
     .filter((name) => name.endsWith(".sql"))
     .sort()
-    .map((name) => ({
-      name,
-      content: readFileSync(resolve(migrationsDir, name), "utf8"),
-    }))
-    .filter((file) => checkPattern.test(file.content))
-    .pop();
+    .reverse();
+
+  let lastDefining: { name: string; content: string } | undefined;
+  for (const name of names) {
+    const content = readFileSync(resolve(migrationsDir, name), "utf8");
+    if (checkPattern.test(content)) {
+      lastDefining = { name, content };
+      break;
+    }
+  }
 
   if (!lastDefining) {
     throw new Error("no migration defines the connector_type CHECK");
@@ -67,7 +79,8 @@ function connectorTypesFromMigration(): string[] {
     throw new Error(`connector_type CHECK list not found in ${lastDefining.name}`);
   }
 
-  return [...check[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+  migrationTypesCache = [...check[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+  return migrationTypesCache;
 }
 
 describe("connector type contract", () => {
