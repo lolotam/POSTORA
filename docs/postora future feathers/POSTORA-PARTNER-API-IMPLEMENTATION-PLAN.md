@@ -37,6 +37,11 @@ and verified by querying the catalog afterwards.
 | 0.3 | Postgres integration harness | PR #74. **Live in CI** — see "0.3, and what it found" below |
 | — | Least-privilege grants on the four foundation tables | PR #72. **Live** — `anon` now holds zero grants on any partner table; every production access path re-verified as `service_role` |
 | 1.5 | `X-RateLimit-*` with defined response classes | PR #70. **Merged, NOT deployed.** Values now come from `consume_partner_rate_v2` (new, added alongside v1), not the edge function's clock |
+| 0.7 | OpenAPI 3.1 skeleton — `docs/api/openapi.yaml` | PR #91. Servers, `x-postora-key` security scheme, 14 generic + 3 legacy scopes, 23 error codes, cursor pagination, rate-limit headers. No endpoints (`/v1` has none). **Found a FOURTH drift**: `unsupported_direct_qr` was emitted by `whatsappPartnerOps.ts:221` and listed nowhere |
+| 0.8 | Contract-drift gate | PR #91. `scripts/check-openapi-drift.ts` + committed baseline + `contract-drift` CI job. R1 field removal / R2 type narrowing / R3 enum removal / R4 required-field addition; acknowledgement file with per-finding ids; stale acks also fail. **`info.version` is never read** — verified by mutation M6 (break + version bump still fails) |
+| 0.5 | Runtime contract tests | PR #91. Six tests reading the document and checking it against the real handler. Ten codes reached by test, thirteen explained as unreachable behind the 0A suspension, the two sets asserted to be exact complements. Mutation-tested against the source |
+| 1.6 | Legacy scope pinning | PR #93. `_shared/partnerScopes.ts`; per-ACTION satisfying sets, never a vocabulary mapping. `whatsapp:webhooks.manage` is an explicit EMPTY capability. New keys may hold only generic scopes — **no migration needed**, since D3 step 2's reissue has no subject with zero active keys |
+| 1.3 | Credential lifecycle (D12), closing F11 and the F3 residual | PR #94. **Contains a migration the owner must apply.** One nullable column (`superseded_by_key_id`) + three `SECURITY DEFINER` RPCs; rotation reuses `expires_at` rather than adding a second validity rule. **Rehearsed** against `supabase/postgres:17.6.1.158` from the production baseline: harness exit 0, P1–P11 pass, suite mutation-tested |
 
 ### Partially landed
 
