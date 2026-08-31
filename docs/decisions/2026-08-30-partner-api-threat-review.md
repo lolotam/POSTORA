@@ -65,6 +65,13 @@ every future key is minted). Disposition: accepted** — brute force remains a
 ~2^190 search against a hash, and the prefix format makes offline guessing the only
 avenue, which the entropy comfortably defeats.
 
+*Corrected 2026-08-31 after review.* An earlier version of this finding cited
+`partner_api_keys_hash_active_idx` (foundation:54-55) as the uniqueness control.
+That is a plain `CREATE INDEX`, not unique — it exists for lookup speed on
+non-revoked keys. The actual control is `key_hash TEXT NOT NULL UNIQUE`
+(foundation:33). The conclusion is unchanged; the evidence cited for it was
+wrong, which in a threat review is its own defect.
+
 **Revocation and expiry.** `revoked_at` and `expires_at` are checked on every
 request (`partnerApiKeys.ts:87-92`) with distinct typed errors. Revocation is a
 one-way door: `revoke_partner_key()` (foundation:340-361) refuses to act on an
@@ -132,18 +139,28 @@ the alias: the body's only fields are `action`, `recipient_phone`, `template_nam
 `template_language`, `template_components` (spec §9.2 satisfied by construction —
 the surface accepts no resource IDs at all).
 
-**F3, Medium, reachable: no (no keys exist; nothing reads the table yet).
-Disposition: deferred-with-condition.** `scripts/create-partner-key.ts` inserts
-into `partner_api_keys` but does **not** write the `partner_api_key_accounts`
-binding row (script:75-83; the migration's own comment at key_accounts:60-63
-deferred that to "the credential-lifecycle path that creates keys" — which is this
-script today, and it does not). A key minted by the script currently has its
-primary account reachable only via the legacy `social_account_id` column. Nothing
-reads the join table yet (the alias uses the pinned column, `index.ts:242`), so
-there is no live impact — but any future D11 account-selection consumer would see
-a key with zero bound accounts. Condition: Phase 1's 1.3 lifecycle writer must
-write the binding, and the script should be fixed or retired in the same change.
-Found while reviewing, written up rather than fixed, per the 0C brief.
+**F3, Medium — FIXED, with a named residual. Disposition: partially closed;
+residual deferred-with-condition to 1.3.**
+
+*As originally found:* `scripts/create-partner-key.ts` inserted into
+`partner_api_keys` but never wrote the `partner_api_key_accounts` binding row,
+so a key minted after that migration would authenticate and then resolve to zero
+bound accounts once D11 selection reads the join table.
+
+*Fixed in this branch:* the script now writes the binding
+(`create-partner-key.ts`, the insert after the key row).
+
+*Residual, which is why this finding stays open:* the two inserts are **not
+atomic**. If the binding fails, an active key row exists with no binding. The
+plaintext is deliberately not printed on that path, so nobody can use the
+orphan — but it is still wrong, and the script cannot clean up after itself:
+the least-privilege grants (20260830120300) leave `service_role` no `UPDATE` on
+`partner_api_keys`, and `revoke_partner_key()` is `auth.uid()`-scoped. The
+failure message therefore directs the operator to a database-owner session.
+
+**Condition:** atomic creation via a `SECURITY DEFINER` RPC that inserts both
+rows in one transaction, landing with deliverable 1.3 — which replaces this
+script. Not built here because it would be thrown away.
 
 ---
 
@@ -193,11 +210,35 @@ is deliberately not relied upon as the fix for anything else. Condition: the Pha
 only because a threat review that omitted its programme's largest known defect
 would be dishonest.
 
-**F5, Informational, reachable: yes (once keys exist). Disposition: accepted.**
-`partner_api_idempotency` rows expire after 7 days but are pruned only
-opportunistically, per key, on that key's next claim (foundation:228-230). Rows
-belonging to keys that never send again linger indefinitely. Bounded by
-sends-per-key; an operational housekeeping item, not an attack.
+**F5, MEDIUM — reachable once sends resume. Disposition:
+deferred-with-condition, gating the restoration of sends.**
+
+*Corrected 2026-08-31.* This was first written as an Informational housekeeping
+note about rows lingering. That understated it, and the understatement mattered.
+
+The opportunistic prune (foundation:228-230) deletes **every** row for the key
+whose `expires_at` has passed — not just abandoned ones. It deletes `completed`
+rows and, critically, `indeterminate` rows. So after seven days, an idempotency
+key that previously settled as terminal-indeterminate becomes claimable again
+and **can dispatch a second time**.
+
+That directly contradicts the spec's promise that `indeterminate` is terminal
+(D13). The guarantee is not "this key will never send twice"; it is "this key
+will never send twice **within the retention window**", and the window is
+currently an implementation detail rather than a stated contract.
+
+A second correction: an earlier claim that idempotency-conflict poisoning
+"self-heals within 300 seconds" is misleading. The 300s lease governs takeover of
+a *processing* row. A settled row with a different `request_hash` keeps returning
+`idempotency_conflict` until the row EXPIRES — seven days, not five minutes.
+
+**Conditions, both gating the restoration of `send_template`:**
+1. Retention and post-expiry behaviour become an explicit part of the partner
+   contract, not an inherited default — including what a partner should do with
+   a key whose terminal state has aged out.
+2. Terminal states are either retained beyond the replay-risk horizon, or the
+   restored send path treats a *missing* row for a previously-seen key as
+   something other than a fresh claim.
 
 ---
 
@@ -261,13 +302,21 @@ schema definitions). Not a security defect and not exploitable beyond ordinary
 use, but it is unbounded growth in a security-adjacent table; a pruning job or
 TTL belongs in a later phase's operational work.
 
-**F8, Low, reachable: yes. Disposition: accepted.** The request body is parsed
-with an unbounded `req.json().catch(() => ({}))` (`index.ts:183`). No size limit
-is enforced in code; whatever the Kong/edge-runtime body cap is, is what applies
-(that cap is outside this repo and could not be verified from it). A huge body
-costs CPU before failing closed at `unknown_action`. Consistent with every other
-function in this codebase; noted so the reliance on the gateway cap is explicit
-rather than silent.
+**F8, Low, reachable: yes but ONLY WITH A VALID ACTIVE KEY. Disposition:
+accepted, conditionally.** The request body is parsed with an unbounded
+`req.json().catch(() => ({}))` (`index.ts:183`). No size limit is enforced in
+code; whatever the Kong/edge-runtime body cap is, is what applies.
+
+*Corrected 2026-08-31.* An earlier version implied this was reachable by anyone.
+It is not: `authenticatePartnerKey` runs at `index.ts:181`, **before** the parse
+at 183, so an unauthenticated caller never reaches it. The cost of a huge body is
+borne only on behalf of a holder of a valid, active, non-revoked key — which
+today is nobody, since the only key is revoked.
+
+**Condition on the acceptance:** it rests on a gateway body cap that has NOT been
+verified from this repository. Accepting an unbounded parse because "something
+upstream probably limits it" is faith, not a control. Verify the actual Kong and
+edge-runtime caps before the first usable key is issued, and record the numbers.
 
 ---
 
@@ -337,6 +386,92 @@ Stated explicitly, so nothing above implies coverage:
   intersections (D11 account selection among bound accounts) that the
   single-pinned-account alias never exercises, and this review must be re-run
   against them, not inherited by them.
+
+
+---
+
+## 8. Threats this review missed on its first pass
+
+Added 2026-08-31 after an adversarial read. Each was reachable or contract-relevant
+and absent from the original ten. They are recorded here rather than folded into
+F1-F10 so the omission itself stays visible.
+
+**F11, HIGH -- the audit trail is inert. Reachable: yes, structurally.
+Disposition: deferred-with-condition, gating the first usable key.**
+`partner_audit_logs` was built in PR #70 with append-only grants, a tenancy
+trigger, and 32 assertions proving it cannot be written across workspaces. It has
+**zero writers.** `scripts/create-partner-key.ts` writes no audit row and does not
+set `created_by`; `revoke_partner_key()` appends no revocation event. So the
+credential lifecycle is currently unauditable: nothing records who minted or
+revoked a key, and D12 requires exactly that.
+
+The shape is worth naming: a table can be perfectly constrained, thoroughly
+tested, and completely unused. The tenancy tests prove what *cannot* be written;
+none of them notice that nothing *is* written.
+
+**Condition:** lifecycle auditability lands with 1.3, before the first usable key
+is issued -- not "before GA".
+
+**F12, MEDIUM -- the usage ledger amplifies pre-limiter work. Reachable: yes,
+with any valid key. Disposition: deferred-with-condition.** Requests refused
+before the limiter runs -- unknown action, insufficient scope, the suspension --
+still write a `partner_api_usage` row. A holder of one valid key can therefore
+drive unbounded ledger inserts the rate limiter never sees, because the refusal
+happens first. Bounded per key, not per request.
+**Condition:** bound the authenticated refusal paths before the first usable key.
+
+**F13, MEDIUM -- quota reservations are not attempt-scoped. Reachable: yes once
+sends resume. Disposition: deferred-with-condition, gating restoration.**
+`attempt_token` fences idempotency *settlement*; it does not fence quota. A
+process death after `reserveQuota` but before provider acceptance, or a
+`releaseQuota` that fails and is swallowed, permanently inflates
+`current_usage_count`. An earlier statement in section 3 that hostile clients
+cannot drive usage upward with rejected sends is **too absolute** and is
+withdrawn.
+**Condition:** attempt-aware quota reconciliation lands with the D13 work.
+
+**F14, MEDIUM -- a settlement failure can produce a second dispatch. Reachable:
+no today (sends suspended). Disposition: deferred-with-condition, gating
+restoration.** F4 described process death as the opening. It is not the only one:
+if completion fails AND `markIndeterminate` also fails, the row stays
+`processing` and becomes dispatchable again after the lease expires. Some
+branches swallow that second failure and answer as though the outcome were
+terminal.
+**Condition:** durable pre-call intent plus takeover-never-redispatch, per D13.
+
+**F15, MEDIUM -- disconnecting an account can wedge or strand key history.
+Reachable: yes. Disposition: deferred-with-condition.** The foundation migration
+cascades a `social_accounts` delete into `partner_api_keys`, and the app really
+does hard-delete accounts. `partner_api_usage` RESTRICTs, so a used key blocks
+the disconnect entirely; `partner_audit_logs` deliberately carries no FK, so its
+rows survive. The result is inconsistent: billing history can wedge an ordinary
+user action, while audit history is unaffected by the same action.
+**Condition:** disconnect-safe key and history semantics before the first usable
+key.
+
+**F16, MEDIUM -- the alias and /v1 will authorize from different grant sources.
+Reachable: not yet. Disposition: deferred-with-condition, gating /v1.** The alias
+authorizes through `partner_api_keys.social_account_id`; /v1 account selection
+will authorize through `partner_api_key_accounts`. If lifecycle code ever narrows
+a binding while leaving the legacy column, /v1 will deny an account the alias
+still reaches -- two answers to the same authorization question.
+**Condition:** before /v1, one authoritative grant model, either shared with the
+alias or explicitly constraining it.
+
+**F17, LOW -- the metering ledger is best-effort, not authoritative. Reachable:
+yes. Disposition: accepted, with the limit stated.** `recordUsage` swallows its
+own failures by design, so a lost row never turns a delivered message into a
+reported failure. Combined with indeterminate sends consuming quota while being
+recorded `billable:false`, the ledger alone cannot reconstruct billing truth
+until P10's reserved/confirmed/indeterminate split lands.
+
+**F18, INFORMATIONAL -- class A is not read-only.** `get_status` is classified as
+a bounded local read and fails OPEN on limiter outage, but it calls `touchKey`
+and writes a usage row. Its fail-open path therefore still mutates the same
+database whose limiter is unavailable. The classification is defensible -- the
+writes are small and bounded -- but "bounded local read" overstates it.
+
+---
 
 ## Could not verify
 

@@ -31,7 +31,8 @@
 //   partner_api_keys   — SHA-256 hash at rest, scoped, workspace-pinned,
 //                        revocable, rate-limited, quota'd.
 //
-// D8's containment rule is binding on v1: NO NEW SURFACE may authenticate with
+// D8's rule is binding on v1 (the RULE is containment; this FILE is a partial
+// detector of one violation shape, per the boundary above): NO NEW SURFACE may authenticate with
 // `profiles.api_key`; every new integration point uses Partner API keys.
 // Until this file existed that rule lived only in the risk register, so nothing
 // could fail because of it — a rule with no enforcement hook is how the weaker
@@ -92,7 +93,7 @@ function toPosix(path: string): string {
   return path.replaceAll("\\", "/");
 }
 
-Deno.test("D8 containment: no new surface authenticates with profiles.api_key", () => {
+Deno.test("D8 regression detector: no new surface authenticates with profiles.api_key in the canonical shape", () => {
   const violations: string[] = [];
 
   for (
@@ -129,7 +130,7 @@ Deno.test("D8 containment: no new surface authenticates with profiles.api_key", 
   );
 });
 
-Deno.test("D8 containment: the legacy allowlist names only files that exist", () => {
+Deno.test("D8 regression detector: the legacy allowlist names only files that exist", () => {
   const stale: string[] = [];
   for (const rel of LEGACY_PROFILES_KEY_USERS) {
     try {
