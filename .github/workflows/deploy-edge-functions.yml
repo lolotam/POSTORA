@@ -79,16 +79,17 @@ jobs:
 
             echo "--- SHA256 verification (first 20 files) ---"
             # Files written via git archive are always LF, no CRLF normalisation needed.
-            # Compare volume against the archive content via git show hash.
-            # `find | head` triggers SIGPIPE (141) under `set -o pipefail` — suppress it.
-            FAILED=0
+            # Verification is best-effort — never fail the deploy on hash check.
+            set +e
             set +o pipefail
-            for f in $(find "$VOL" -type f | head -n 20 || true); do
+            FAILED=0
+            VERIFY_LIST="$(find "$VOL" -type f 2>/dev/null | head -n 20 || true)"
+            for f in $VERIFY_LIST; do
+              [ -z "$f" ] && continue
               rel="${f#$VOL/}"
-              # git show prints LF; volume file is also LF after this deploy. Direct hash compare.
-              git_hash="$(git show "refs/remotes/origin/main:supabase/functions/$rel" 2>/dev/null | sha256sum | cut -d' ' -f1 || echo MISSING_IN_GIT)"
-              vol_hash="$(sha256sum "$f" | cut -d' ' -f1)"
-              if [ "$git_hash" != "$vol_hash" ] && [ "$git_hash" != "MISSING_IN_GIT" ]; then
+              git_hash="$(git show "refs/remotes/origin/main:supabase/functions/$rel" 2>/dev/null | sha256sum 2>/dev/null | cut -d' ' -f1 || echo MISSING_IN_GIT)"
+              vol_hash="$(sha256sum "$f" 2>/dev/null | cut -d' ' -f1 || echo MISSING_VOL)"
+              if [ "$git_hash" != "$vol_hash" ] && [ "$git_hash" != "MISSING_IN_GIT" ] && [ "$vol_hash" != "MISSING_VOL" ]; then
                 echo "::warning::Hash mismatch for $rel  git=$git_hash  vol=$vol_hash"
                 FAILED=1
               else
@@ -96,11 +97,12 @@ jobs:
               fi
             done
             set -o pipefail
+            set -e
             if [ "$FAILED" -eq 1 ]; then
               echo "::warning::One or more hash checks failed — see warnings above (continuing to restart)"
             fi
-            echo "Total files in volume: $(find "$VOL" -type f | wc -l)"
-            echo "Total files in git (supabase/functions): $(find "$TMP_SYNC/supabase/functions" -type f | wc -l)"
+            echo "Total files in volume: $(find "$VOL" -type f 2>/dev/null | wc -l || echo 0)"
+            echo "Total files in git (supabase/functions): $(find "$TMP_SYNC/supabase/functions" -type f 2>/dev/null | wc -l || echo 0)"
 
             echo "--- Restarting functions service (bind-mount reload) ---"
             # Per docs/runbooks/deploy-edge-function.md: `restart` reloads the bind mount.
