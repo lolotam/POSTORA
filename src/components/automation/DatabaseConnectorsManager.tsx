@@ -57,7 +57,8 @@ import {
   type ToolAccountLink,
 } from "@/hooks/useAiAgentTools";
 import type { AiAgentPlatform } from "@/hooks/useAiAgentConfig";
-import { connectorDefinition } from "@/lib/connectorRegistry";
+import { callEdgeApi } from "@/lib/messagingApi";
+import { connectorDefinition, shouldUseAdapter, type Field } from "@/lib/connectorRegistry";
 import {
   accountLabel,
   agentAccounts,
@@ -474,7 +475,10 @@ const emptyForm = {
   name: "",
   description: "",
   url: "",
-  secret: "",
+  // Registry-driven credential values keyed by registry field name. Secret
+  // fields only ever hold freshly typed text — a stored secret value never
+  // enters this state, which is what keeps "blank = keep existing" honest.
+  credentials: {} as Record<string, string>,
   is_enabled: true,
   admin_only: false,
   connector_type: "shopify" as ConnectorType,
@@ -486,6 +490,103 @@ const emptyForm = {
 };
 
 type CategoryFilter = "all" | "ecommerce" | "payments" | "database" | "automation" | "formula" | "mcp";
+
+/** The registry's credential fields for a type, or [] should a row predate
+ *  the registry — a legacy row must not crash the form, it must simply show
+ *  the generic endpoint input like before. */
+function safeCredentialFields(type: ConnectorType): Field[] {
+  try {
+    return connectorDefinition(type).credentials;
+  } catch {
+    return [];
+  }
+}
+
+function safeConnectorLabel(type: ConnectorType): string {
+  try {
+    return connectorDefinition(type).label;
+  } catch {
+    return type;
+  }
+}
+
+/** The registry url field whose value also becomes the tool row's url column
+ *  (the server still requires one); undefined means the form keeps the
+ *  generic "API Endpoint / Webhook URL" input. No type has two url fields
+ *  today; the first wins if one ever does. */
+function urlCredentialField(type: ConnectorType): Field | undefined {
+  return safeCredentialFields(type).find((field) => field.kind === "url");
+}
+
+/** Repopulates a non-secret field from `settings`. Arrays (a
+ *  table_allow_list can be stored either way) render joined; a url field on a
+ *  legacy row falls back to the row url column, which held it before the
+ *  settings split existed. */
+function settingsValueFor(field: Field, tool: AiAgentTool): string {
+  const value = tool.settings?.[field.key];
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === "string").join(", ");
+  }
+  if (field.kind === "url" && tool.url) return tool.url;
+  return "";
+}
+
+/** The first required field with no value, or null. A required secret that is
+ *  already stored never counts as missing: blank means "keep existing" on an
+ *  existing connector, exactly like the old single-secret form. */
+function missingRequiredCredentialField(
+  fields: readonly Field[],
+  values: Record<string, string>,
+  editingTool: AiAgentTool | null,
+): Field | null {
+  const configuredSecretFields = new Set(editingTool?.configured_secret_fields ?? []);
+  for (const field of fields) {
+    if (!field.required) continue;
+    if ((values[field.key] ?? "").trim() !== "") continue;
+    if (field.kind === "secret" && editingTool && configuredSecretFields.has(field.key)) continue;
+    return field;
+  }
+  return null;
+}
+
+/** One rendered test-connection outcome: either just probed (live) or the
+ *  row's stored last_test_* state. Never carries a credential value. */
+interface ConnectionTestView {
+  ok: boolean;
+  live: boolean;
+  text: string;
+}
+
+function liveTestView(result: unknown): ConnectionTestView {
+  const record = (result ?? {}) as Record<string, unknown>;
+  if (record.ok === true) {
+    const capabilities = Array.isArray(record.capabilities) ? record.capabilities.map(String) : [];
+    const readOnly = record.read_only !== false;
+    return {
+      ok: true,
+      live: true,
+      text: `Connection OK — ${readOnly ? "read-only" : "write enabled"}${
+        capabilities.length > 0 ? `; capabilities: ${capabilities.join(", ")}` : ""
+      }`,
+    };
+  }
+  const error = record.error as { message?: unknown; vendor_status?: unknown } | undefined;
+  const message = typeof error?.message === "string" ? error.message : "The connection test failed.";
+  const vendorStatus = typeof error?.vendor_status === "number" ? ` (vendor status ${error.vendor_status})` : "";
+  return { ok: false, live: true, text: `Test failed — ${message}${vendorStatus}` };
+}
+
+function storedTestView(tool: AiAgentTool): ConnectionTestView | null {
+  if (tool.last_test_ok === null || tool.last_test_ok === undefined) return null;
+  return tool.last_test_ok
+    ? { ok: true, live: false, text: "Last test passed" }
+    : {
+        ok: false,
+        live: false,
+        text: `Last test failed — ${tool.last_test_error ?? "unknown error"}`,
+      };
+}
 
 function useSafeProfile() {
   try {
@@ -512,6 +613,58 @@ function ConnectorCredentialState({ tool }: { tool: AiAgentTool }) {
           </span>
         );
       })}
+    </div>
+  );
+}
+
+/** Per-card Test connection control. The button exists only for types with a
+ *  live adapter (derived from the registry, never a hardcoded type list);
+ *  types without one get a calm indicator instead of a dead button. In-flight
+ *  state is per tool id, so testing one connector never freezes another. */
+function ConnectorTestState({
+  tool,
+  testing,
+  view,
+  onTest,
+}: {
+  tool: AiAgentTool;
+  testing: boolean;
+  view: ConnectionTestView | null;
+  onTest: () => void;
+}) {
+  const hasAdapter = shouldUseAdapter(tool);
+  return (
+    <div className="space-y-2 border-t border-border/40 pt-3">
+      {hasAdapter ? (
+        <Button
+          size="sm"
+          variant="outline"
+          data-testid={`test-connection-${tool.id}`}
+          onClick={onTest}
+          disabled={testing}
+          className="h-8 text-xs gap-1.5 cursor-pointer"
+        >
+          {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Radio className="w-3.5 h-3.5" />}
+          Test connection
+        </Button>
+      ) : (
+        <p className="text-[11px] text-muted-foreground" data-testid={`no-adapter-${tool.id}`}>
+          {safeConnectorLabel(tool.connector_type)} — no adapter yet
+        </p>
+      )}
+      {view && (
+        <div
+          data-testid={`test-result-${view.ok ? "ok" : "error"}-${tool.id}`}
+          className={cn(
+            "rounded-lg border px-2.5 py-2 text-[11px]",
+            view.ok
+              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
+              : "border-destructive/30 bg-destructive/10 text-destructive",
+          )}
+        >
+          {view.text}
+        </div>
+      )}
     </div>
   );
 }
@@ -731,6 +884,11 @@ function DatabaseConnectorsEditor({
   const [copiedMcp, setCopiedMcp] = useState(false);
   // Which connector a write is in flight for, so only its own strip disables.
   const [sharingToolIds, setSharingToolIds] = useState<readonly string[]>([]);
+  // Per-connector test_connection state: in-flight ids and the latest probe
+  // outcome shown on the card. Stored last_test_* covers cards before their
+  // first click; these cover everything after.
+  const [testingToolIds, setTestingToolIds] = useState<readonly string[]>([]);
+  const [testResultViews, setTestResultViews] = useState<Record<string, ConnectionTestView>>({});
 
   // Every connected account that can actually run an agent — the checkbox
   // strip is cross-platform on purpose: sharing a WhatsApp-owned catalogue
@@ -951,11 +1109,21 @@ function DatabaseConnectorsEditor({
 
     if (existingTool) {
       setEditingTool(existingTool);
+      const fields = safeCredentialFields(existingTool.connector_type);
+      const credentials: Record<string, string> = {};
+      for (const field of fields) {
+        // Secret inputs start blank: the server never returns a stored value,
+        // and blank means "keep existing". Non-secret values repopulate from
+        // settings (with the legacy url fallback).
+        if (field.kind !== "secret") {
+          credentials[field.key] = settingsValueFor(field, existingTool);
+        }
+      }
       setForm({
         name: existingTool.name,
         description: existingTool.description,
         url: existingTool.url || "",
-        secret: "",
+        credentials,
         is_enabled: existingTool.is_enabled,
         admin_only: existingTool.admin_only,
         connector_type: existingTool.connector_type,
@@ -972,7 +1140,7 @@ function DatabaseConnectorsEditor({
         name: preset.name,
         description: preset.suggestedPrompt,
         url: preset.defaultUrl,
-        secret: "",
+        credentials: {},
         is_enabled: true,
         admin_only: false,
         connector_type: preset.id,
@@ -995,23 +1163,52 @@ function DatabaseConnectorsEditor({
       setFormError("Select an account before connecting this tool.");
       return;
     }
+    const fields = safeCredentialFields(form.connector_type);
+    // The row's url column is still required by the server. When the registry
+    // declares a url credential field it IS the endpoint (one source of
+    // truth); otherwise the generic endpoint input supplies it.
+    const rowUrlField = urlCredentialField(form.connector_type);
+    const rowUrl = (rowUrlField ? form.credentials[rowUrlField.key] ?? "" : form.url).trim();
+
+    // Required-field check first, so a blank registry field names itself
+    // ("Store URL is required.") instead of the derived url failing a generic
+    // format check.
+    const missingField = missingRequiredCredentialField(
+      safeCredentialFields(form.connector_type),
+      form.credentials,
+      editingTool,
+    );
+    if (missingField) {
+      setFormError(`${missingField.label} is required.`);
+      return;
+    }
+
     const error =
       validateAiToolName(form.name) ||
-      validateAiToolUrl(form.url) ||
+      validateAiToolUrl(rowUrl) ||
       (form.description.trim() ? null : "Description is required — the AI uses it to decide when to call the tool.");
     if (error) {
       setFormError(error);
       return;
     }
 
+    // Only non-blank values are submitted: an omitted key keeps whatever the
+    // server already holds, for both the settings merge and the Vault merge.
+    const credentials: Record<string, string> = {};
+    for (const field of fields) {
+      const value = (form.credentials[field.key] ?? "").trim();
+      if (value !== "") credentials[field.key] = value;
+    }
+
     const payload: AiAgentToolInput = {
       name: form.name,
       description: form.description,
-      url: form.url,
+      url: rowUrl,
       social_account_id: accountId,
       is_enabled: form.is_enabled,
       admin_only: form.admin_only,
       connector_type: form.connector_type,
+      credentials,
       permissions: {
         search_products: form.permission_search_products,
         check_stock: form.permission_check_stock,
@@ -1021,9 +1218,10 @@ function DatabaseConnectorsEditor({
       enable_cache: form.enable_cache,
     };
 
-    if (form.secret.trim() !== "") {
-      payload.secret = form.secret.trim();
-    } else if (editingTool && editingHasSecret && clearSecret) {
+    // Only the legacy-column removal remains of the old secret path: setting
+    // and replacing secrets now travels inside `credentials`, and the server
+    // dual-writes the custom_rest secret column itself.
+    if (editingTool && editingHasSecret && clearSecret) {
       payload.clear_secret = true;
     }
 
@@ -1034,6 +1232,31 @@ function DatabaseConnectorsEditor({
       },
       onError: (mutationError) => setFormError(mutationError.message),
     });
+  };
+
+  const runConnectionTest = async (tool: AiAgentTool) => {
+    if (testingToolIds.includes(tool.id)) return;
+    setTestingToolIds((current) => [...current, tool.id]);
+    try {
+      const result = await callEdgeApi("ai-agent-adapters", "test_connection", {
+        tool_id: tool.id,
+      });
+      setTestResultViews((current) => ({ ...current, [tool.id]: liveTestView(result) }));
+      // The adapter persists last_test_* on the row; a refetch keeps every
+      // other surface (the Settings overview included) agreeing with the card.
+      void queryClient.invalidateQueries({ queryKey: ["ai-agent-tools"] });
+    } catch (error) {
+      setTestResultViews((current) => ({
+        ...current,
+        [tool.id]: {
+          ok: false,
+          live: true,
+          text: `Test failed — ${error instanceof Error ? error.message : "The connection test failed."}`,
+        },
+      }));
+    } finally {
+      setTestingToolIds((current) => current.filter((id) => id !== tool.id));
+    }
   };
 
   const toggleToolShare = async (
@@ -1064,6 +1287,7 @@ function DatabaseConnectorsEditor({
 
   const handleMcpInstantActivate = () => {
     if (!selectedPreset) return;
+    const urlField = urlCredentialField(selectedPreset.id);
     setForm((prev) => ({
       ...prev,
       name: selectedPreset.name,
@@ -1071,6 +1295,12 @@ function DatabaseConnectorsEditor({
       url: selectedPreset.defaultUrl,
       is_enabled: true,
       connector_type: selectedPreset.id,
+      // Prefill the registry's url field so the form shows the endpoint the
+      // old single-url flow used to seed; required secrets still block the
+      // save until they are provided.
+      credentials: urlField && (prev.credentials[urlField.key] ?? "").trim() === ""
+        ? { ...prev.credentials, [urlField.key]: selectedPreset.defaultUrl }
+        : prev.credentials,
     }));
 
     handleSave();
@@ -1515,6 +1745,12 @@ function DatabaseConnectorsEditor({
                       </div>
                     </div>
                     <ConnectorCredentialState tool={tool} />
+                    <ConnectorTestState
+                      tool={tool}
+                      testing={testingToolIds.includes(tool.id)}
+                      view={testResultViews[tool.id] ?? storedTestView(tool)}
+                      onTest={() => void runConnectionTest(tool)}
+                    />
                     {accountsError ? (
                       <p className="border-t pt-3 text-xs text-destructive">
                         Connected accounts could not be loaded, so sharing cannot be changed here.
@@ -1777,43 +2013,83 @@ function DatabaseConnectorsEditor({
                     </div>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">API Endpoint / Webhook URL</Label>
-                    <Input
-                      value={form.url}
-                      onChange={(e) => setForm({ ...form, url: e.target.value })}
-                      placeholder="https://your-store.com/api/..."
-                      className="font-mono text-xs h-9"
-                    />
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-xs">
-                      API Key / Secret Token {editingHasSecret && "(Stored securely)"}
-                    </Label>
-                    <Input
-                      type="password"
-                      value={form.secret}
-                      onChange={(e) => {
-                        setForm({ ...form, secret: e.target.value });
-                        if (clearSecret) setClearSecret(false);
-                      }}
-                      placeholder={editingHasSecret ? "•••••••••••••••• (Leave blank to keep existing secret)" : "Enter API Key or Secret"}
-                      className="text-xs h-9"
-                    />
-                    {editingHasSecret && (
-                      <div className="flex items-center gap-2 pt-1">
-                        <Checkbox
-                          id="clear-secret-chk"
-                          checked={clearSecret}
-                          onCheckedChange={(c) => setClearSecret(Boolean(c))}
+                  {/* Registry-driven credential fields: exactly what
+                      connectorDefinition(type).credentials declares, so a new
+                      registry type is configurable here with no form change. */}
+                  {safeCredentialFields(form.connector_type).map((field) => {
+                    const inputId = `connector-credential-${field.key}`;
+                    const isStoredSecret =
+                      field.kind === "secret" &&
+                      editingTool !== null &&
+                      (editingTool.configured_secret_fields ?? []).includes(field.key);
+                    return (
+                      <div className="space-y-1.5" key={field.key}>
+                        <div className="flex items-center justify-between gap-2">
+                          <Label htmlFor={inputId} className="text-xs">
+                            {field.label}
+                          </Label>
+                          <span className="text-[10px] text-muted-foreground">
+                            {isStoredSecret ? "Stored — leave blank to keep" : field.required ? "Required" : null}
+                          </span>
+                        </div>
+                        <Input
+                          id={inputId}
+                          name={field.key}
+                          type={field.kind === "secret" ? "password" : field.kind === "url" ? "url" : "text"}
+                          value={form.credentials[field.key] ?? ""}
+                          onChange={(e) => {
+                            setForm((prev) => ({
+                              ...prev,
+                              credentials: { ...prev.credentials, [field.key]: e.target.value },
+                            }));
+                            if (field.kind === "secret" && clearSecret) setClearSecret(false);
+                          }}
+                          placeholder={
+                            field.kind === "secret"
+                              ? isStoredSecret
+                                ? "••••••••••••••••"
+                                : `Enter ${field.label}`
+                              : field.help
+                          }
+                          className={cn("h-9", field.kind === "url" && "font-mono text-xs")}
                         />
-                        <Label htmlFor="clear-secret-chk" className="text-xs text-muted-foreground cursor-pointer">
-                          Remove stored secret from database
-                        </Label>
+                        <p className="text-[10px] text-muted-foreground">{field.help}</p>
                       </div>
-                    )}
-                  </div>
+                    );
+                  })}
+
+                  {/* Generic endpoint input only for types whose registry
+                      declares no url credential field. */}
+                  {!urlCredentialField(form.connector_type) && (
+                    <div className="space-y-1.5">
+                      <Label htmlFor="connector-endpoint-url" className="text-xs">
+                        API Endpoint / Webhook URL
+                      </Label>
+                      <Input
+                        id="connector-endpoint-url"
+                        value={form.url}
+                        onChange={(e) => setForm({ ...form, url: e.target.value })}
+                        placeholder="https://your-store.com/api/..."
+                        className="font-mono text-xs h-9"
+                      />
+                    </div>
+                  )}
+
+                  {/* Removal of the legacy webhook-secret column, unchanged
+                      from the old form: setting/replacing secrets now travels
+                      inside `credentials`; this only clears the stored column. */}
+                  {editingHasSecret && (
+                    <div className="flex items-center gap-2">
+                      <Checkbox
+                        id="clear-secret-chk"
+                        checked={clearSecret}
+                        onCheckedChange={(c) => setClearSecret(Boolean(c))}
+                      />
+                      <Label htmlFor="clear-secret-chk" className="text-xs text-muted-foreground cursor-pointer">
+                        Remove stored secret from database
+                      </Label>
+                    </div>
+                  )}
 
                   <div className="space-y-1.5">
                     <Label className="text-xs">AI Tool Prompt & Trigger Instructions</Label>
