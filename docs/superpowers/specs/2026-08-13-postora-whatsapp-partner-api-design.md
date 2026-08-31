@@ -412,9 +412,17 @@ against a bucket table. Keep `api_logs` for auditing only.
 ```
 
 Codes — this list is **exhaustive** and every entry must have a test pinning its
-code, HTTP status, and `retryable` value. It had already drifted once: two codes
-shipped without being added here, which is exactly how a table that calls itself
-exhaustive stops being true. Add the row in the same change as the code.
+code, HTTP status, and `retryable` value.
+
+It has now drifted THREE times: `limiter_unavailable` and `temporarily_unavailable`
+shipped without being added, and `method_not_allowed` had been emitted since the
+function was written and was never listed at all. Three drifts is no longer an
+oversight, it is evidence that a table maintained by intention does not stay
+true. Deliverable 0.5's contract tests exist to make this mechanical — they
+compare the codes the code can emit against the codes the contract declares, so
+the next drift fails a test instead of waiting for someone to notice.
+
+Add the row in the same change as the code.
 
 Note the two 503s differ in `retryable`, and the difference is the point.
 `limiter_unavailable` is a transient dependency failure, so retrying is the right
@@ -429,6 +437,7 @@ which is also why it carries no `Retry-After`: no honest duration exists.
 | `key_expired` | 401 | no |
 | `insufficient_scope` | 403 | no |
 | `unknown_action` | 400 | no |
+| `method_not_allowed` | 405 | no — the alias is POST-only |
 | `invalid_request` | 400 | no |
 | `missing_idempotency_key` | 400 | no |
 | `rate_limited` | 429 | **yes** |
