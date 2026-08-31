@@ -114,7 +114,7 @@ jobs:
             # ai-knowledge-excel-worker is a second long-lived service that also mounts _shared.
             # Restart it only when the worker or a shared module it imports changed.
             # Conservative: always restart if _shared changed; otherwise leave it.
-            if git diff --name-only "HEAD~1..refs/remotes/origin/main" 2>/dev/null | grep -qE "supabase/functions/_shared/|supabase/functions/ai-knowledge-excel-worker/"; then
+            if git -C "$RUNTIME" diff --name-only "HEAD~1..refs/remotes/origin/main" 2>/dev/null | grep -qE "supabase/functions/_shared/|supabase/functions/ai-knowledge-excel-worker/"; then
               echo "Detected _shared or ai-knowledge-excel-worker change — restarting ai-knowledge-excel-worker as well"
               docker compose restart ai-knowledge-excel-worker || echo "::warning::ai-knowledge-excel-worker restart failed or service not present"
             else
