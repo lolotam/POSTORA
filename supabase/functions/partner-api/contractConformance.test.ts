@@ -202,6 +202,70 @@ Deno.test("every error code the handler actually emits is documented in the Open
   );
 });
 
+/**
+ * Source-side sweep. THE TEST ABOVE SAMPLES; THIS ONE ENUMERATES.
+ *
+ * Driving the handler proves the codes it was driven to. A new code on a
+ * branch no test exercises -- a new provider failure inside list_templates,
+ * say -- changes neither `reached` nor the document, and the sampled check
+ * passes while the runtime emits something undocumented. Reported as P1 by the
+ * Codex reviewer on #91, and correct: "every code the handler emits" is a
+ * claim about the source, so it has to be checked against the source.
+ */
+const PARTNER_SURFACE = [
+  "./index.ts",
+  "./router.ts",
+  "../_shared/partnerApiKeys.ts",
+  "../_shared/partnerApiMetering.ts",
+  "../_shared/partnerApiIdempotency.ts",
+  "../_shared/whatsappPartnerOps.ts",
+];
+
+/** Every shape by which this surface emits a typed code. If a new mechanism is
+ *  introduced, the guard below fails rather than silently matching nothing. */
+const EMIT_PATTERNS: RegExp[] = [
+  // errorBody(<code>, <message>, <retryable>) -- the code is the FIRST argument.
+  /\berrorBody\(\s*"([a-z][a-z0-9_]*)"/g,
+  // new PartnerAuthError(<message>, <code>, <status>), and the WhatsAppOpError
+  // variant -- the code is the SECOND argument, after a message that may itself
+  // contain parentheses.
+  /\bnew\s+(?:PartnerAuthError|WhatsAppOpError)\(\s*(?:[^,()]|\([^()]*\))*,\s*"([a-z][a-z0-9_]*)"/g,
+  // super(<message>, <code>, <status>) -- RateLimitedError extends
+  // PartnerAuthError and passes its code straight through.
+  /\bsuper\(\s*"[^"]*"\s*,\s*"([a-z][a-z0-9_]*)"/g,
+];
+
+Deno.test("every error code PRESENT IN THE SOURCE is documented, not merely the ones a test reaches", async () => {
+  const found = new Set<string>();
+  for (const rel of PARTNER_SURFACE) {
+    const src = await Deno.readTextFile(new URL(rel, import.meta.url));
+    for (const re of EMIT_PATTERNS) {
+      for (const m of src.matchAll(re)) found.add(m[1]);
+    }
+  }
+
+  // Anti-false-green guard. A regex that stops matching finds nothing and
+  // reports success, which is indistinguishable from a clean sweep -- the
+  // exact failure this whole programme keeps rediscovering. If the emit shapes
+  // are refactored, this fails and someone updates EMIT_PATTERNS.
+  assertEquals(
+    found.size >= 15,
+    true,
+    `The source sweep found only ${found.size} codes (${[...found].sort().join(", ")}). ` +
+      "The emit shapes in EMIT_PATTERNS have probably drifted from the code. A sweep " +
+      "that matches nothing looks exactly like a sweep that found no problems.",
+  );
+
+  const documented = new Set(DOCUMENTED_CODES);
+  const undocumented = [...found].filter((c) => !documented.has(c)).sort();
+  assertEquals(
+    undocumented,
+    [],
+    `These codes exist in the partner surface but not in docs/api/openapi.yaml: ` +
+      `${undocumented.join(", ")}. Add them to components.schemas.V1ErrorCode.`,
+  );
+});
+
 // ---------------------------------------------------------------------------
 // 2. The documented security scheme names the header the code actually reads.
 // ---------------------------------------------------------------------------

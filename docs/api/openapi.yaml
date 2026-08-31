@@ -156,11 +156,12 @@ components:
           `account_needs_reauth` (190), `account_not_connected` (phone registration failure),
           `unsupported_direct_qr` (evolution_qr mode — `whatsappPartnerOps.ts:221`)
 
-        The handover `docs/handover/2026-08-31-partner-api-phase0-phase1.md:193-204`
-        lists 18 + 4 = 22 codes and omits `unsupported_direct_qr`; the
-        "exhaustive" table in `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md:433-456`
-        lists 22 and also omits it. The disagreement is recorded in the
-        deliverable report and is itself a finding.
+        THIS ENUM IS THE AUTHORITATIVE LIST. Other documents describe the
+        error surface in prose; where any of them disagrees with this enum,
+        this enum is right and the other is stale. The "exhaustive" table in
+        `docs/superpowers/specs/2026-08-13-postora-whatsapp-partner-api-design.md`
+        has drifted four times, which is why the list lives here, beside a
+        gate and a runtime contract test, instead of in prose.
 
         Every code below is an explicit enum value so the 0.8 gate can
         classify `enum removal` as breaking.

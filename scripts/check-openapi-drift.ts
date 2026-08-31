@@ -31,10 +31,11 @@
 // deletes in a month. Breaking changes fail unless their finding id appears in
 // docs/api/accepted-breaking-changes.txt.
 //
-// A finding id names the exact change, e.g.
-//     R3:components.schemas.V1ErrorCode.enum:unsupported_direct_qr
-// so an acknowledgement cannot be written broadly enough to pre-approve the
-// NEXT break. It authorises one specific change and nothing else.
+// A finding id names the exact change INCLUDING THE TRANSITION, e.g.
+//     R2:components.schemas.LimitParameter.maximum:100->50
+// so acknowledging `string -> integer` does not also authorise a later
+// `string -> boolean` at the same path. An ack authorises one specific change
+// and nothing else.
 //
 // THE STALE-ACK RULE
 // ------------------
@@ -69,8 +70,43 @@ const RULE_NAMES: Record<Finding["rule"], string> = {
   R4: "required-field addition",
 };
 
+/** HTTP methods an OpenAPI Path Item may carry. Anything else on a path item
+ *  (summary, parameters, servers) is not an operation. */
+const HTTP_METHODS = [
+  "get", "put", "post", "delete", "options", "head", "patch", "trace",
+] as const;
+
 function isObj(v: unknown): v is Json {
   return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+/**
+ * Follow a local `$ref` to the node it names.
+ *
+ * Without this the gate is blind through the document's most-used construct:
+ * `V1ErrorObject.code` is `$ref: V1ErrorCode`, and repointing that ref at a
+ * narrower schema changes the contract while both nodes look identical here --
+ * neither carries a local `type`, `enum` or `properties` to compare. Reported
+ * by the Codex reviewer on #93.
+ *
+ * Only local refs (`#/...`) are resolved; an external ref is left as-is, and
+ * the ref STRING is compared by the caller so a change to one is still visible.
+ */
+function deref(doc: Json, node: unknown, seen = new Set<string>()): Json | undefined {
+  if (!isObj(node)) return undefined;
+  const ref = node.$ref;
+  if (typeof ref !== "string") return node;
+  if (!ref.startsWith("#/")) return node;
+  if (seen.has(ref)) return node; // cycle: stop rather than recurse forever
+  seen.add(ref);
+
+  let cur: unknown = doc;
+  for (const rawSeg of ref.slice(2).split("/")) {
+    const seg = rawSeg.replace(/~1/g, "/").replace(/~0/g, "~");
+    if (!isObj(cur)) return undefined;
+    cur = cur[seg];
+  }
+  return deref(doc, cur, seen);
 }
 
 /** A node's declared types, normalised. OpenAPI 3.1 allows `type` to be a list
@@ -86,6 +122,12 @@ function num(v: unknown): number | undefined {
   return typeof v === "number" ? v : undefined;
 }
 
+interface Ctx {
+  baseDoc: Json;
+  curDoc: Json;
+  out: Finding[];
+}
+
 /**
  * Compare one schema node against its baseline counterpart.
  *
@@ -93,32 +135,45 @@ function num(v: unknown): number | undefined {
  * narrowing buried three levels inside a nested object is caught with the same
  * rule as one at the top.
  */
-function compareSchema(path: string, base: Json, cur: Json | undefined, out: Finding[]): void {
-  if (cur === undefined) {
-    out.push({ id: `R1:${path}`, rule: "R1", detail: `${path} was removed` });
+function compareSchema(path: string, rawBase: unknown, rawCur: unknown, ctx: Ctx): void {
+  if (rawCur === undefined || rawCur === null) {
+    ctx.out.push({ id: `R1:${path}`, rule: "R1", detail: `${path} was removed` });
     return;
   }
+  if (!isObj(rawBase) || !isObj(rawCur)) return;
+
+  // A changed `$ref` is itself worth reporting: the target may be compatible,
+  // but the reader cannot tell from the path alone, so name it and let the
+  // resolved comparison below decide whether it also narrows.
+  if (typeof rawBase.$ref === "string" && rawBase.$ref !== rawCur.$ref) {
+    ctx.out.push({
+      id: `R2:${path}.$ref:${rawBase.$ref}->${rawCur.$ref ?? "(none)"}`,
+      rule: "R2",
+      detail: `${path}: $ref ${rawBase.$ref} -> ${rawCur.$ref ?? "(inlined)"}`,
+    });
+  }
+
+  const base = deref(ctx.baseDoc, rawBase) ?? rawBase;
+  const cur = deref(ctx.curDoc, rawCur) ?? rawCur;
 
   // ---- R2: the accepted value set shrinks -------------------------------
   const bt = typesOf(base);
   const ct = typesOf(cur);
   if (bt && ct && bt.join("|") !== ct.join("|")) {
-    // A union losing a member, or an outright type change, both narrow.
     const lost = bt.filter((t) => !ct.includes(t));
     if (lost.length > 0 || bt.length >= ct.length) {
-      out.push({
-        id: `R2:${path}.type`,
+      // The transition is part of the id: acknowledging string -> integer must
+      // not also authorise a later string -> boolean at the same path.
+      ctx.out.push({
+        id: `R2:${path}.type:${bt.join("|")}->${ct.join("|")}`,
         rule: "R2",
         detail: `${path}: type ${bt.join("|")} -> ${ct.join("|")}`,
       });
     }
   }
-  if (bt && !ct) {
-    // Losing the declaration entirely is not narrowing; ignore.
-  }
   if (!bt && ct) {
-    out.push({
-      id: `R2:${path}.type`,
+    ctx.out.push({
+      id: `R2:${path}.type:(unconstrained)->${ct.join("|")}`,
       rule: "R2",
       detail: `${path}: was unconstrained, now typed ${ct.join("|")}`,
     });
@@ -127,8 +182,8 @@ function compareSchema(path: string, base: Json, cur: Json | undefined, out: Fin
   // A previously unconstrained field gaining an enum is a narrowing, even
   // though no enum VALUE was removed -- R3 would miss this entirely.
   if (!Array.isArray(base.enum) && Array.isArray(cur.enum)) {
-    out.push({
-      id: `R2:${path}.enum`,
+    ctx.out.push({
+      id: `R2:${path}.enum:(unconstrained)->${cur.enum.length}-values`,
       rule: "R2",
       detail: `${path}: gained an enum constraint (${cur.enum.length} values) where it had none`,
     });
@@ -150,11 +205,18 @@ function compareSchema(path: string, base: Json, cur: Json | undefined, out: Fin
     const b = num(base[kw]);
     const c = num(cur[kw]);
     if (b !== undefined && c !== undefined && tighter(b, c)) {
-      out.push({ id: `R2:${path}.${kw}`, rule: "R2", detail: `${path}: ${kw} ${b} -> ${c}` });
+      ctx.out.push({
+        id: `R2:${path}.${kw}:${b}->${c}`,
+        rule: "R2",
+        detail: `${path}: ${kw} ${b} -> ${c}`,
+      });
     }
-    // Introducing a bound where none existed is also a narrowing.
     if (b === undefined && c !== undefined) {
-      out.push({ id: `R2:${path}.${kw}`, rule: "R2", detail: `${path}: gained ${kw} ${c}` });
+      ctx.out.push({
+        id: `R2:${path}.${kw}:(none)->${c}`,
+        rule: "R2",
+        detail: `${path}: gained ${kw} ${c}`,
+      });
     }
   }
 
@@ -162,16 +224,16 @@ function compareSchema(path: string, base: Json, cur: Json | undefined, out: Fin
   // input the old one accepted, and proving otherwise is undecidable in
   // general. Treated as narrowing, which errs toward asking a human.
   if (base.pattern !== cur.pattern && cur.pattern !== undefined) {
-    out.push({
-      id: `R2:${path}.pattern`,
+    ctx.out.push({
+      id: `R2:${path}.pattern:${base.pattern ?? "(none)"}->${cur.pattern}`,
       rule: "R2",
       detail: `${path}: pattern ${base.pattern ?? "(none)"} -> ${cur.pattern}`,
     });
   }
 
   if (base.additionalProperties !== false && cur.additionalProperties === false) {
-    out.push({
-      id: `R2:${path}.additionalProperties`,
+    ctx.out.push({
+      id: `R2:${path}.additionalProperties:open->false`,
       rule: "R2",
       detail: `${path}: additionalProperties closed to false`,
     });
@@ -183,7 +245,7 @@ function compareSchema(path: string, base: Json, cur: Json | undefined, out: Fin
     for (const v of base.enum) {
       const s = String(v);
       if (!curSet.has(s)) {
-        out.push({
+        ctx.out.push({
           id: `R3:${path}.enum:${s}`,
           rule: "R3",
           detail: `${path}: enum value "${s}" was removed`,
@@ -197,7 +259,7 @@ function compareSchema(path: string, base: Json, cur: Json | undefined, out: Fin
   if (Array.isArray(cur.required)) {
     for (const r of cur.required.map(String)) {
       if (!baseReq.has(r)) {
-        out.push({
+        ctx.out.push({
           id: `R4:${path}.required:${r}`,
           rule: "R4",
           detail: `${path}: "${r}" is now required and was not before`,
@@ -210,103 +272,266 @@ function compareSchema(path: string, base: Json, cur: Json | undefined, out: Fin
   if (isObj(base.properties)) {
     const curProps = isObj(cur.properties) ? cur.properties : {};
     for (const [name, sub] of Object.entries(base.properties)) {
-      if (!isObj(sub)) continue;
-      const child = curProps[name];
-      compareSchema(`${path}.properties.${name}`, sub, isObj(child) ? child : undefined, out);
+      compareSchema(`${path}.properties.${name}`, sub, curProps[name], ctx);
     }
   }
   if (isObj(base.items)) {
-    const child = cur.items;
-    compareSchema(`${path}.items`, base.items, isObj(child) ? child : undefined, out);
+    compareSchema(`${path}.items`, base.items, cur.items, ctx);
   }
   for (const kw of ["allOf", "anyOf", "oneOf"] as const) {
     if (Array.isArray(base[kw])) {
       const curArr = Array.isArray(cur[kw]) ? (cur[kw] as unknown[]) : [];
-      // A composition losing a member changes what validates; index-wise
-      // comparison is crude but never misses a shrink.
-      if (curArr.length < (base[kw] as unknown[]).length) {
-        out.push({
-          id: `R2:${path}.${kw}`,
+      const baseArr = base[kw] as unknown[];
+      if (curArr.length < baseArr.length) {
+        ctx.out.push({
+          id: `R2:${path}.${kw}:${baseArr.length}->${curArr.length}-members`,
           rule: "R2",
-          detail: `${path}: ${kw} lost ${(base[kw] as unknown[]).length - curArr.length} member(s)`,
+          detail: `${path}: ${kw} lost ${baseArr.length - curArr.length} member(s)`,
         });
       }
-      (base[kw] as unknown[]).forEach((sub, i) => {
-        if (!isObj(sub)) return;
-        const child = curArr[i];
-        compareSchema(`${path}.${kw}[${i}]`, sub, isObj(child) ? child : undefined, out);
-      });
+      baseArr.forEach((sub, i) => compareSchema(`${path}.${kw}[${i}]`, sub, curArr[i], ctx));
+    }
+  }
+}
+
+/**
+ * Compare an OpenAPI PARAMETER object (or a header object, which has the same
+ * shape).
+ *
+ * `required` here is a BOOLEAN, not the array a Schema Object uses, so
+ * compareSchema's R4 check does not see it: flipping `Cursor` from
+ * `required: false` to `required: true` is a breaking requirement addition
+ * that produced no finding. Reported by the Codex reviewer on #91.
+ */
+function compareParameterLike(path: string, base: Json, cur: Json | undefined, ctx: Ctx): void {
+  if (cur === undefined) {
+    ctx.out.push({ id: `R1:${path}`, rule: "R1", detail: `${path} was removed` });
+    return;
+  }
+  if (base.required !== true && cur.required === true) {
+    ctx.out.push({
+      id: `R4:${path}.required:false->true`,
+      rule: "R4",
+      detail: `${path}: became a required parameter`,
+    });
+  }
+  compareSchema(path, base, cur, ctx);
+  if (isObj(base.schema) || isObj(cur?.schema)) {
+    compareSchema(`${path}.schema`, base.schema, cur.schema, ctx);
+  }
+  compareContent(`${path}.content`, base.content, cur.content, ctx);
+}
+
+/** Compare a `content: {<media-type>: {schema}}` map. A removed media type is
+ *  a removal; each surviving one's schema is compared. */
+function compareContent(path: string, base: unknown, cur: unknown, ctx: Ctx): void {
+  if (!isObj(base)) return;
+  const curMap = isObj(cur) ? cur : {};
+  for (const [mt, node] of Object.entries(base)) {
+    const child = curMap[mt];
+    if (!isObj(child)) {
+      ctx.out.push({ id: `R1:${path}.${mt}`, rule: "R1", detail: `${path}: media type ${mt} was removed` });
+      continue;
+    }
+    compareSchema(`${path}.${mt}.schema`, (node as Json).schema, child.schema, ctx);
+  }
+}
+
+/**
+ * Compare one operation: its parameters, request body, and every response with
+ * that response's headers and content.
+ *
+ * Without this the gate only checked that the path and method KEYS still
+ * existed, so once the first /v1 endpoint lands a PR could remove a response
+ * field, narrow a request type or add a required field and the job would still
+ * be green -- defeating the protection this gate advertises. Reported as P1 by
+ * the Codex reviewer on both #91 and #93. Written now, while `paths` is still
+ * empty, so the gate does not have to be revisited on the day it first matters.
+ */
+function compareOperation(path: string, base: Json, cur: Json, ctx: Ctx): void {
+  // Parameters are an ARRAY keyed by (name, in), not a map.
+  if (Array.isArray(base.parameters)) {
+    const curParams = Array.isArray(cur.parameters) ? cur.parameters : [];
+    const keyOf = (p: unknown) =>
+      isObj(p) ? `${p.name ?? "?"}:${p.in ?? "?"}` : JSON.stringify(p);
+    const curByKey = new Map(curParams.map((p) => [keyOf(p), p]));
+    for (const p of base.parameters) {
+      if (!isObj(p)) continue;
+      const match = curByKey.get(keyOf(p));
+      compareParameterLike(
+        `${path}.parameters[${keyOf(p)}]`,
+        p,
+        isObj(match) ? match : undefined,
+        ctx,
+      );
+    }
+    // A parameter that is NEW and required is a required-field addition.
+    const baseKeys = new Set(base.parameters.filter(isObj).map(keyOf));
+    for (const p of curParams) {
+      if (!isObj(p) || baseKeys.has(keyOf(p))) continue;
+      if (p.required === true) {
+        ctx.out.push({
+          id: `R4:${path}.parameters[${keyOf(p)}]:new-required`,
+          rule: "R4",
+          detail: `${path}: new required parameter ${keyOf(p)}`,
+        });
+      }
+    }
+  }
+
+  if (isObj(base.requestBody)) {
+    const curBody = isObj(cur.requestBody) ? cur.requestBody : undefined;
+    if (!curBody) {
+      ctx.out.push({ id: `R1:${path}.requestBody`, rule: "R1", detail: `${path}: requestBody was removed` });
+    } else {
+      if (base.requestBody.required !== true && curBody.required === true) {
+        ctx.out.push({
+          id: `R4:${path}.requestBody.required:false->true`,
+          rule: "R4",
+          detail: `${path}: requestBody became required`,
+        });
+      }
+      compareContent(`${path}.requestBody.content`, base.requestBody.content, curBody.content, ctx);
+    }
+  }
+
+  if (isObj(base.responses)) {
+    const curResponses = isObj(cur.responses) ? cur.responses : {};
+    for (const [code, node] of Object.entries(base.responses)) {
+      const child = curResponses[code];
+      if (!isObj(child)) {
+        ctx.out.push({ id: `R1:${path}.responses.${code}`, rule: "R1", detail: `${path}: response ${code} was removed` });
+        continue;
+      }
+      if (!isObj(node)) continue;
+      compareContent(`${path}.responses.${code}.content`, node.content, child.content, ctx);
+      if (isObj(node.headers)) {
+        const curHeaders = isObj(child.headers) ? child.headers : {};
+        for (const [h, hnode] of Object.entries(node.headers)) {
+          if (!isObj(hnode)) continue;
+          compareParameterLike(
+            `${path}.responses.${code}.headers.${h}`,
+            hnode,
+            isObj(curHeaders[h]) ? (curHeaders[h] as Json) : undefined,
+            ctx,
+          );
+        }
+      }
     }
   }
 }
 
 /** Named component maps are compared by key, so deleting a whole schema,
  *  parameter, header, response or security scheme is caught as R1. */
-const COMPONENT_GROUPS = [
-  "schemas",
-  "parameters",
-  "headers",
-  "responses",
-  "securitySchemes",
-  "requestBodies",
-] as const;
+const SCHEMA_GROUPS = ["schemas"] as const;
+const PARAMETER_LIKE_GROUPS = ["parameters", "headers"] as const;
+const CARRIER_GROUPS = ["responses", "requestBodies"] as const;
+const OTHER_GROUPS = ["securitySchemes"] as const;
 
 function compare(base: Json, cur: Json): Finding[] {
-  const out: Finding[] = [];
+  const ctx: Ctx = { baseDoc: base, curDoc: cur, out: [] };
 
   const baseComponents = isObj(base.components) ? base.components : {};
   const curComponents = isObj(cur.components) ? cur.components : {};
 
-  for (const group of COMPONENT_GROUPS) {
-    const bg = isObj(baseComponents[group]) ? (baseComponents[group] as Json) : {};
-    const cg = isObj(curComponents[group]) ? (curComponents[group] as Json) : {};
+  const group = (c: Json, name: string): Json => (isObj(c[name]) ? c[name] as Json : {});
+
+  for (const g of SCHEMA_GROUPS) {
+    const bg = group(baseComponents, g), cg = group(curComponents, g);
+    for (const [name, node] of Object.entries(bg)) {
+      compareSchema(`components.${g}.${name}`, node, cg[name], ctx);
+    }
+  }
+
+  for (const g of PARAMETER_LIKE_GROUPS) {
+    const bg = group(baseComponents, g), cg = group(curComponents, g);
+    for (const [name, node] of Object.entries(bg)) {
+      if (!isObj(node)) continue;
+      compareParameterLike(
+        `components.${g}.${name}`,
+        node,
+        isObj(cg[name]) ? cg[name] as Json : undefined,
+        ctx,
+      );
+    }
+  }
+
+  for (const g of CARRIER_GROUPS) {
+    const bg = group(baseComponents, g), cg = group(curComponents, g);
     for (const [name, node] of Object.entries(bg)) {
       if (!isObj(node)) continue;
       const child = cg[name];
-      const path = `components.${group}.${name}`;
+      const path = `components.${g}.${name}`;
       if (!isObj(child)) {
-        out.push({ id: `R1:${path}`, rule: "R1", detail: `${path} was removed` });
+        ctx.out.push({ id: `R1:${path}`, rule: "R1", detail: `${path} was removed` });
         continue;
       }
-      // A parameter/header wraps its schema; compare both the wrapper (for
-      // `required`) and the schema it carries.
-      compareSchema(path, node, child, out);
-      if (isObj(node.schema)) {
-        compareSchema(
-          `${path}.schema`,
-          node.schema,
-          isObj(child.schema) ? child.schema : undefined,
-          out,
-        );
+      compareContent(`${path}.content`, node.content, child.content, ctx);
+      if (isObj(node.headers)) {
+        const curHeaders = isObj(child.headers) ? child.headers : {};
+        for (const [h, hnode] of Object.entries(node.headers)) {
+          if (!isObj(hnode)) continue;
+          compareParameterLike(
+            `${path}.headers.${h}`,
+            hnode,
+            isObj(curHeaders[h]) ? curHeaders[h] as Json : undefined,
+            ctx,
+          );
+        }
       }
     }
   }
 
-  // `paths` is empty today, but a removed path or operation is the most
-  // obvious break there is, and this gate should not have to be revisited on
-  // the day the first endpoint lands.
-  const basePaths = isObj(base.paths) ? base.paths : {};
-  const curPaths = isObj(cur.paths) ? cur.paths : {};
-  for (const [p, ops] of Object.entries(basePaths)) {
-    const cp = curPaths[p];
-    if (!isObj(cp)) {
-      out.push({ id: `R1:paths.${p}`, rule: "R1", detail: `path ${p} was removed` });
-      continue;
-    }
-    if (isObj(ops)) {
-      for (const method of Object.keys(ops)) {
-        if (!(method in cp)) {
-          out.push({
-            id: `R1:paths.${p}.${method}`,
-            rule: "R1",
-            detail: `operation ${method.toUpperCase()} ${p} was removed`,
+  for (const g of OTHER_GROUPS) {
+    const bg = group(baseComponents, g), cg = group(curComponents, g);
+    for (const [name, node] of Object.entries(bg)) {
+      if (!isObj(node)) continue;
+      const child = cg[name];
+      const path = `components.${g}.${name}`;
+      if (!isObj(child)) {
+        ctx.out.push({ id: `R1:${path}`, rule: "R1", detail: `${path} was removed` });
+        continue;
+      }
+      // A security scheme that changes how a credential is presented breaks
+      // every existing client just as surely as a removed field.
+      for (const kw of ["type", "in", "name", "scheme"] as const) {
+        if (node[kw] !== undefined && node[kw] !== child[kw]) {
+          ctx.out.push({
+            id: `R2:${path}.${kw}:${String(node[kw])}->${String(child[kw] ?? "(none)")}`,
+            rule: "R2",
+            detail: `${path}: ${kw} ${String(node[kw])} -> ${String(child[kw] ?? "(none)")}`,
           });
         }
       }
     }
   }
 
-  return out;
+  const basePaths = isObj(base.paths) ? base.paths : {};
+  const curPaths = isObj(cur.paths) ? cur.paths : {};
+  for (const [p, ops] of Object.entries(basePaths)) {
+    const cp = curPaths[p];
+    if (!isObj(cp)) {
+      ctx.out.push({ id: `R1:paths.${p}`, rule: "R1", detail: `path ${p} was removed` });
+      continue;
+    }
+    if (!isObj(ops)) continue;
+    for (const method of HTTP_METHODS) {
+      const baseOp = ops[method];
+      if (!isObj(baseOp)) continue;
+      const curOp = cp[method];
+      if (!isObj(curOp)) {
+        ctx.out.push({
+          id: `R1:paths.${p}.${method}`,
+          rule: "R1",
+          detail: `operation ${method.toUpperCase()} ${p} was removed`,
+        });
+        continue;
+      }
+      compareOperation(`paths.${p}.${method}`, baseOp, curOp, ctx);
+    }
+  }
+
+  return ctx.out;
 }
 
 async function readYaml(path: string): Promise<Json> {

@@ -35,9 +35,15 @@ done
 
 # A dirty document would bake uncommitted, unreviewed edits into the baseline,
 # which is exactly the state the gate exists to catch.
-if ! git diff --quiet -- "$DOC"; then
-  echo "refusing to run: $DOC has uncommitted changes." >&2
-  echo "Commit or stash the contract change first; the baseline records what was REVIEWED." >&2
+# BOTH the working tree AND the index. `git diff` alone compares the tree with
+# the INDEX, so a staged-but-uncommitted contract edit -- an ordinary
+# pre-commit state -- reported clean, the edit was copied into the baseline,
+# and committing both files together bypassed the gate entirely. Reported by
+# the Codex reviewer on #91 and #93.
+if ! git diff --quiet -- "$DOC" || ! git diff --quiet --cached -- "$DOC"; then
+  echo "refusing to run: $DOC has uncommitted changes (working tree or index)." >&2
+  echo "Commit or stash the contract change first; the baseline records what was REVIEWED," >&2
+  echo "and a baseline taken from an unreviewed document is a gate defending nothing." >&2
   exit 3
 fi
 
