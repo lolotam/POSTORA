@@ -72,11 +72,17 @@ export function validateSupabaseAnonKey(key: string): void {
   }
 }
 
-const ROW_LIMIT = 5;
-// Derived, not picked: connectorExecution.ts allows 2000 characters for the
-// whole payload and ROW_LIMIT rows share it, so a row gets ~400 and no single
-// cell may take most of one. A real product permalink fits comfortably; a
-// signed storage token does not, which is the point.
+// 25, not 5. Five was chosen when rows went out untrimmed and one signed
+// storage URL ate the whole budget; with per-cell trimming below, a real row
+// is ~250 characters and a small catalog table fits WHOLE. Five arbitrary rows
+// was worse than too little: a customer asking "today's prices" got two chick
+// types plus ducks and turkeys, and the model filled the missing chicks from
+// the stale knowledge base -- confidently, and wrong (2026-09-01 08:08 UTC).
+const ROW_LIMIT = 25;
+// Derived, not picked: connectorExecution.ts allows 8000 characters for the
+// whole payload and ROW_LIMIT rows share it, so no single cell may take most
+// of a row's share. A real product permalink fits comfortably; a signed
+// storage token does not, which is the point.
 const MAX_VALUE_CHARS = 160;
 
 /**
@@ -156,16 +162,18 @@ function buildUrl(invocation: ConnectorInvocation): { url: string; schema: strin
 
   const parameters = invocation.request.parameters;
   const table = requiredString(parameters, "table") ?? allowList[0];
-  const select = requiredString(parameters, "select") ?? "*";
+  // An operator-configured column list OVERRIDES whatever the model asked for,
+  // not merely defaults it: the setting exists so the agent reads only these
+  // columns, and the model has a record of inventing column names that 400 the
+  // whole query. Normalised to comma-separated, since PostgREST takes no spaces.
+  const configuredColumns = requiredString(invocation.tool.settings, "select_columns");
+  const select = configuredColumns
+    ? configuredColumns.split(/[,\n]/).map((column) => column.trim()).filter(Boolean).join(",")
+    : requiredString(parameters, "select") ?? "*";
   validateResource(table, select, allowList);
 
   const url = new URL(`${projectUrl.replace(/\/+$/, "")}/rest/v1/${encodeURIComponent(table)}`);
   url.searchParams.set("select", select);
-  // Five, not twenty. The caller serialises this payload into the model's
-  // message list under a 2000-character budget (connectorExecution.ts), and a
-  // real price table's rows carry signed storage URLs hundreds of characters
-  // long -- twenty of those means the model reads three rows and half of a
-  // fourth, cut mid-JSON.
   url.searchParams.set("limit", invocation.request.action === "test_connection" ? "1" : String(ROW_LIMIT));
 
   const filters = parameters.filters;

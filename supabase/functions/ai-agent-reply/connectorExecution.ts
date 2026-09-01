@@ -11,7 +11,13 @@ import {
 // other half for model calls and final logging. It wraps the full internal call,
 // so the reply and vendor deadlines are not additive.
 const ADAPTER_CALL_TIMEOUT_MS = 6_000;
-const ADAPTER_OUTPUT_LIMIT = 2000;
+// 8000 characters (~2000 tokens). 2000 was tuned for one-product answers and
+// silently cut a whole-catalog result mid-JSON: the Supabase adapter returns
+// per-cell-trimmed rows at up to ~290 characters each, so a 25-row table needs the
+// larger allowance, and a truncated table is answered by the model FILLING THE
+// GAPS from stale indexed knowledge -- confidently, and wrong (2026-09-01).
+// The prompt already runs 4-13k tokens; this is a bounded, deliberate spend.
+const ADAPTER_OUTPUT_LIMIT = 8000;
 
 interface AdapterCallDependencies {
   fetch?: typeof fetch;
