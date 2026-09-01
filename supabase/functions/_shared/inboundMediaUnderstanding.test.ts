@@ -38,12 +38,75 @@ Deno.test("PDFs classify as documents; other office formats stay unsupported", (
   assertEquals(classifyMime("application/zip"), null);
 });
 
-Deno.test("only documents get the widened model deadline", () => {
+Deno.test("documents and images get the widened model deadline; audio keeps the base", () => {
   assertEquals(timeoutFor("document", DEFAULT_LIMITS), 20_000);
   assertEquals(timeoutFor("audio", DEFAULT_LIMITS), 10_000);
-  assertEquals(timeoutFor("image", DEFAULT_LIMITS), 10_000);
+  // 2026-09-01: WhatsApp photos timed out at 10s (gemini-2.5-flash thinking pass).
+  assertEquals(timeoutFor("image", DEFAULT_LIMITS), 20_000);
   // Falls back rather than throwing when a caller supplies limits without the field.
   assertEquals(timeoutFor("document", { maxBytes: 1, timeoutMs: 7 }), 7);
+  assertEquals(timeoutFor("image", { maxBytes: 1, timeoutMs: 7 }), 7);
+});
+
+/**
+ * The request BODY is asserted structurally, never by substring: a substring check is
+ * exactly what let the oneOf tool-schema bug ship (see gemini-drops-oneof memory).
+ */
+function capturedGenerationConfig(captured: { body?: string }): Record<string, unknown> {
+  const parsed = JSON.parse(captured.body ?? "{}");
+  return parsed.generationConfig ?? {};
+}
+
+Deno.test("an image on a flash model disables thinking — the pass that ate the 10s deadline", async () => {
+  const captured: { body?: string } = {};
+  await understandInboundMedia(new Uint8Array([9]), "image", "image/jpeg", {
+    limits: LIMITS,
+    geminiKey: "k",
+    fetcher: (_url, init) => {
+      captured.body = init?.body as string;
+      return Promise.resolve(geminiResponse("a door"));
+    },
+  });
+  assertEquals(capturedGenerationConfig(captured).thinkingConfig, { thinkingBudget: 0 });
+});
+
+Deno.test("a non-flash tier model keeps the default request — pro rejects thinkingBudget 0", async () => {
+  const captured: { body?: string } = {};
+  await understandInboundMedia(new Uint8Array([9]), "image", "image/jpeg", {
+    limits: LIMITS,
+    tiers: [{ provider: "gemini", model: "gemini-2.5-pro", apiKey: "k" }],
+    fetcher: (_url, init) => {
+      captured.body = init?.body as string;
+      return Promise.resolve(geminiResponse("a door"));
+    },
+  });
+  assertEquals(capturedGenerationConfig(captured).thinkingConfig, undefined);
+});
+
+Deno.test("audio through Gemini keeps the default request — only the broken image path changed", async () => {
+  const captured: { body?: string } = {};
+  await understandInboundMedia(AUDIO, "audio", "audio/ogg; codecs=opus", {
+    limits: LIMITS,
+    geminiKey: "k",
+    fetcher: (_url, init) => {
+      captured.body = init?.body as string;
+      return Promise.resolve(geminiResponse("transcript"));
+    },
+  });
+  assertEquals(capturedGenerationConfig(captured).thinkingConfig, undefined);
+});
+
+Deno.test("the flash gate applies on the admin-ladder path too — the path production took", async () => {
+  const captured: { body?: string } = {};
+  await understandInboundMedia(new Uint8Array([9]), "image", "image/jpeg", {
+    limits: LIMITS,
+    tiers: [{ provider: "gemini", model: "gemini-2.5-flash", apiKey: "k" }],
+    fetcher: (_url, init) => {
+      captured.body = init?.body as string;
+      return Promise.resolve(geminiResponse("a door"));
+    },
+  });
+  assertEquals(capturedGenerationConfig(captured).thinkingConfig, { thinkingBudget: 0 });
 });
 
 Deno.test("audio transcribes through Gemini and returns the text verbatim", async () => {
