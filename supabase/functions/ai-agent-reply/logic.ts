@@ -206,9 +206,19 @@ const LINK_RULES = [
  */
 function connectorReminder(connectorNames?: string[]): string {
   if (!connectorNames?.length) return "";
-  return `REMINDER: for current prices, stock, availability or orders you must call ${
-    connectorNames.join(" or ")
-  } first, even if the business knowledge appears to list the product already — that list can be stale or hold unfilled placeholders, and the connector holds today's real values.`;
+  const names = connectorNames.join(" or ");
+  return [
+    `REMINDER: for current prices, stock, availability or orders you must call ${names} first,`,
+    "even if the business knowledge appears to list the product already — that list can be stale",
+    "or hold unfilled placeholders, and the connector holds today's real values.",
+    // Without this the agent never recovers inside a conversation it has
+    // already failed in: it reads its own "I cannot reach the system" from the
+    // history as settled fact and repeats it, long after the cause is fixed
+    // (2026-09-01, conversation wa_201000689201_*).
+    `If an earlier reply in this conversation said you could not reach the system or had no live`,
+    `prices, ignore it — it may be out of date. Always try the connector again for the message you`,
+    "are answering now, and only say you cannot reach it after this attempt has actually failed.",
+  ].join(" ");
 }
 
 /**
