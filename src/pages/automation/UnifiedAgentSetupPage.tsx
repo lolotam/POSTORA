@@ -7,6 +7,7 @@ import { AI_AGENT_TABS, AiAgentManager, type AiAgentTab } from "@/components/mes
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
+import { resolveAgentSurface, type AgentSurfaceSelection } from "@/lib/agentSurface";
 import { GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
 import { MessageSquare, MessageCircle, CheckCircle2, Bot, ShieldCheck, Zap } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +36,9 @@ const PLATFORMS: PlatformOption[] = [
   { id: "threads", label: "Threads", supportsComments: true, colorPreset: "violet", description: "Mentions, conversation threads and public replies", dmsLabel: "Mentions", commentsLabel: "Replies" },
 ];
 
-export type AgentSurfaceSelection = "dms" | "comments" | "both";
+// Re-exported so existing importers of this page keep compiling; the type
+// itself now lives with the rule that produces it.
+export type { AgentSurfaceSelection };
 
 const PLATFORM_FLAG: Record<AiAgentPlatform, keyof ReturnType<typeof useFeatureFlags>["flags"]> = {
   whatsapp: "msgWhatsapp",
@@ -59,24 +62,13 @@ export default function UnifiedAgentSetupPage() {
 
   const selectedPlatformMeta = PLATFORMS.find((p) => p.id === platform) || PLATFORMS[0];
 
+  // The query parameter is the PREFERENCE; what is shown is that preference
+  // narrowed to what the platform can serve. See src/lib/agentSurface.ts.
   const surfaceParam = searchParams.get("surface");
-  let dmsActive = true;
-  let commentsActive = selectedPlatformMeta.supportsComments;
-
-  if (surfaceParam === "dms") {
-    dmsActive = true;
-    commentsActive = false;
-  } else if (surfaceParam === "comments" && selectedPlatformMeta.supportsComments) {
-    dmsActive = false;
-    commentsActive = true;
-  } else if (surfaceParam === "both" && selectedPlatformMeta.supportsComments) {
-    dmsActive = true;
-    commentsActive = true;
-  } else {
-    // Default: DMs active for all; comments active if supported
-    dmsActive = true;
-    commentsActive = selectedPlatformMeta.supportsComments;
-  }
+  const { dmsActive, commentsActive, surface: effectiveSurface } = resolveAgentSurface(
+    surfaceParam,
+    selectedPlatformMeta.supportsComments,
+  );
 
   const tabParam = searchParams.get("tab") as AiAgentTab;
   const activeTab: AiAgentTab = AI_AGENT_TABS.includes(tabParam) ? tabParam : "settings";
@@ -92,16 +84,15 @@ export default function UnifiedAgentSetupPage() {
     if (nextPlatform === platform) return;
 
     guard(() => {
-      const targetMeta = PLATFORMS.find((p) => p.id === nextPlatform);
-      const nextCommentsActive = targetMeta?.supportsComments && commentsActive;
-      let nextSurface: AgentSurfaceSelection = "dms";
-      if (dmsActive && nextCommentsActive) nextSurface = "both";
-      else if (!dmsActive && nextCommentsActive) nextSurface = "comments";
-
+      // `surface` is deliberately left alone. Narrowing it to the target
+      // platform's capability is what lost the user's choice: WhatsApp has no
+      // comments, so a hop through it rewrote the parameter to "dms" and coming
+      // back to Facebook showed Comments off. The preference is not
+      // inapplicable-forever, only inapplicable-here, and resolveAgentSurface
+      // already narrows the rendering.
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.set("platform", nextPlatform);
-        next.set("surface", nextSurface);
         return next;
       }, { replace: true });
     });
@@ -338,7 +329,7 @@ export default function UnifiedAgentSetupPage() {
                 activeTab={activeTab}
                 onTabChange={handleTabChange}
                 onDirtyChange={setAgentDirty}
-                surface={dmsActive && commentsActive ? "both" : dmsActive ? "dms" : "comments"}
+                surface={effectiveSurface}
               />
             </GradientRingCard>
           </div>
