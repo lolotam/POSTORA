@@ -320,3 +320,91 @@ Deno.test("sendTemplate reports persisted=false when Meta accepted but the DB wr
   assertEquals(result.messageId, "wamid.ABC");
   assertEquals(result.persisted, false);
 });
+
+Deno.test("sendTemplate stamps callbackData into biz_opaque_callback_data when provided", async () => {
+  const captured = { rows: [] as unknown[] };
+  let requestBody: Record<string, unknown> = {};
+
+  const fetcher = (_url: string | URL | Request, init?: RequestInit) => {
+    requestBody = JSON.parse(String(init?.body));
+    return Promise.resolve(
+      new Response(JSON.stringify({ messages: [{ id: "wamid.ABC" }] }), { status: 200 }),
+    );
+  };
+
+  await sendTemplate(ctx(captured), {
+    recipientPhone: "96512345678",
+    templateName: "invoice_due_v1",
+    templateLanguage: "ar",
+    callbackData: "33333333-3333-4333-8333-333333333333",
+  }, fetcher);
+
+  // The D13 reconciliation channel (3.4): this is the value a status webhook
+  // must echo back for a dispatch intent to resolve.
+  assertEquals(
+    requestBody.biz_opaque_callback_data,
+    "33333333-3333-4333-8333-333333333333",
+  );
+});
+
+Deno.test("sendTemplate omits biz_opaque_callback_data entirely when no callbackData is given", async () => {
+  const captured = { rows: [] as unknown[] };
+  let requestBody: Record<string, unknown> = {};
+
+  const fetcher = (_url: string | URL | Request, init?: RequestInit) => {
+    requestBody = JSON.parse(String(init?.body));
+    return Promise.resolve(
+      new Response(JSON.stringify({ messages: [{ id: "wamid.ABC" }] }), { status: 200 }),
+    );
+  };
+
+  await sendTemplate(ctx(captured), {
+    recipientPhone: "96512345678",
+    templateName: "invoice_due_v1",
+    templateLanguage: "ar",
+  }, fetcher);
+
+  // The JWT door sends without an intent: its payload must be byte-identical
+  // to before this change, so absence has to be absence, not null.
+  assertEquals(
+    Object.hasOwn(requestBody, "biz_opaque_callback_data"),
+    false,
+  );
+});
+
+Deno.test("sendTemplate's auto-registration retry re-posts the SAME correlator (one attempt, not a takeover)", async () => {
+  const captured = { rows: [] as unknown[] };
+  const messageBodies: string[] = [];
+
+  const fetcher = (url: string | URL | Request, init?: RequestInit) => {
+    const u = String(url);
+    if (u.endsWith("/register")) {
+      return Promise.resolve(new Response(JSON.stringify({ success: true }), { status: 200 }));
+    }
+    messageBodies.push(String(init?.body ?? ""));
+    const isRetry = messageBodies.length > 1;
+    return Promise.resolve(new Response(
+      JSON.stringify(isRetry
+        ? { messages: [{ id: "wamid.AFTER" }] }
+        : { error: { code: 133010, message: "not registered" } }),
+      { status: isRetry ? 200 : 400 },
+    ));
+  };
+
+  await sendTemplate(ctx(captured), {
+    recipientPhone: "96512345678",
+    templateName: "invoice_due_v1",
+    templateLanguage: "ar",
+    callbackData: "44444444-4444-4444-8444-444444444444",
+  }, fetcher);
+
+  assertEquals(messageBodies.length, 2);
+  const first = JSON.parse(messageBodies[0]) as Record<string, unknown>;
+  const second = JSON.parse(messageBodies[1]) as Record<string, unknown>;
+  // Both posts of the register+retry pair carry ONE correlator: the pair is
+  // one dispatch attempt under one intent row. If the second post ever
+  // carried a different value, the bookkeeping would mistake its own retry
+  // for a takeover (the 3.3 trap).
+  assertEquals(first.biz_opaque_callback_data, "44444444-4444-4444-8444-444444444444");
+  assertEquals(second.biz_opaque_callback_data, "44444444-4444-4444-8444-444444444444");
+});

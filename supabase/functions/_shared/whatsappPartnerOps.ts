@@ -20,6 +20,18 @@ export interface SendTemplateInput {
   templateName: string;
   templateLanguage: string;
   components?: unknown[];
+  /**
+   * Client correlator stamped into the send as `biz_opaque_callback_data`,
+   * which Meta echoes back inside status webhooks for this message (D13
+   * reconciliation, deliverable 3.4). Carries the dispatch intent id on the
+   * partner path; omitted by callers (the JWT door) that have no intent.
+   *
+   * Meta documents the field for free-form messages; whether it is honoured
+   * on template sends is UNCONFIRMED and gated on a live test — the system
+   * is built to be correct if the echo never arrives (the intent simply
+   * stays terminal, which is today's behaviour).
+   */
+  callbackData?: string;
 }
 
 export interface SendResult {
@@ -67,7 +79,9 @@ export class WhatsAppOpError extends Error {
   }
 }
 
-type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+// Exported: the dispatch orchestration (partnerDispatch.ts) and the crash
+// tests thread their Fetcher through this seam.
+export type Fetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 /**
  * Read a JSON body under its own deadline.
@@ -228,6 +242,14 @@ export async function sendTemplate(
     messaging_product: "whatsapp",
     to: input.recipientPhone,
     type: "template",
+    // The D13 reconciliation channel (3.4): echoed back on status webhooks,
+    // which is how a webhook resolves a dispatch intent whose send was
+    // accepted but never recorded. One correlator per dispatch attempt: the
+    // auto-registration retry below reuses this same payload object, so both
+    // posts of ONE attempt carry the same value.
+    ...(input.callbackData !== undefined
+      ? { biz_opaque_callback_data: input.callbackData }
+      : {}),
     template: {
       name: input.templateName,
       language: { code: input.templateLanguage },

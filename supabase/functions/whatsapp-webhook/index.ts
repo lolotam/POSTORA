@@ -10,6 +10,10 @@ import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
+import {
+  isDispatchIntentId,
+  reconcileDispatchIntentByEcho,
+} from "../_shared/partnerDispatchIntents.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 
 const corsHeaders = {
@@ -633,6 +637,25 @@ async function handleLiveMessages(
     console.log(`[whatsapp-webhook] Received ${newStatus} status update`);
 
     if (!wamid) continue;
+
+    // D13 reconciliation (deliverable 3.4): a status whose
+    // biz_opaque_callback_data carries one of our dispatch intent ids is the
+    // POSITIVE signal that the send happened — the only thing that resolves
+    // an `indeterminate` intent. This must be a SEPARATE lookup from the
+    // whatsapp_messages update above: in the crash case persistOutbound never
+    // ran (it writes that row only after a wamid is known), so the update
+    // matches nothing and this echo is the only reconciliation channel.
+    //
+    // Whether Meta echoes the field for TEMPLATE sends at all is unconfirmed
+    // (it is documented for free-form messages; see the D13 decision record).
+    // If the echo never arrives, every indeterminate intent simply stays
+    // terminal — today's behaviour — so this degrades safely by design.
+    // Reconciliation moves a row to reconciled_sent and never marks anything
+    // resendable; there is no such transition in the state machine.
+    const echoedIntentId = status?.biz_opaque_callback_data;
+    if (isDispatchIntentId(echoedIntentId)) {
+      await reconcileDispatchIntentByEcho(adminClient, echoedIntentId, wamid);
+    }
 
     // Update the original message row
     const updatePayload: Record<string, unknown> = { status: newStatus };
