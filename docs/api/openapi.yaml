@@ -14,17 +14,25 @@ info:
       and messages. All are D7 class A — bounded local reads that proceed
       when the rate limiter is unavailable.
     - `POST /v1/messages` and `GET /v1/templates` (3.5–3.7). The send path is
-      SUSPENDED and answers `temporarily_unavailable`; it is documented here
-      because a suspended capability is a policy state, not an absent
-      endpoint. Undocumented until their schemas settle, hence absent below.
+      SUSPENDED and answers `temporarily_unavailable` — a policy state, not an
+      absent endpoint.
     - The frozen action-based alias `POST /functions/v1/partner-api` with
       three actions (`get_status`, `list_templates`, `send_template`). No new
       actions are accepted on it (D1); the alias and `/v1` have DIFFERENT
       error envelopes on purpose (spec D2), and they must not be unified.
 
-    Not here yet: `GET /v1/usage` (2.7), media, publishing and webhooks. An
-    endpoint appears in this document when it is live, so absence from `paths`
-    means "not served", never "served but undocumented".
+    SERVED BUT NOT YET DESCRIBED BELOW: `POST /v1/messages` and
+    `GET /v1/templates`. Their request and response schemas are settled in
+    code but not yet published here, so `paths` is currently a SUBSET of what
+    is served — do not read absence from `paths` as "not served". That gap is
+    enumerated and asserted in `partner-api/contractConformance.test.ts`, so
+    it stays a tracked list rather than becoming an oversight, and it closes
+    when those two are documented.
+
+    Nothing in `paths` is unserved, which is the direction that would mislead
+    a partner into writing a call that 404s. That direction IS asserted.
+
+    Not built at all: `GET /v1/usage` (2.7), media, publishing and webhooks.
 
     Every `/v1` read is tenant-scoped to the accounts BOUND to the presented
     key (`partner_api_key_accounts`, spec D4) — not to the key's workspace,

@@ -322,6 +322,103 @@ Deno.test("every error code PRESENT IN THE SOURCE is documented, not merely the 
 });
 
 // ---------------------------------------------------------------------------
+// 1b. The document's paths, page bounds and id prefixes match the router.
+//
+// Three comments in the source say a constant "MUST equal" something in the
+// document. Until now nothing checked any of them, which makes them the same
+// kind of claim as the error table that drifted four times: true when
+// written, unenforced afterwards.
+// ---------------------------------------------------------------------------
+
+/** The Kong mount the document spells its paths with. */
+const MOUNT = "/functions/v1/partner-api";
+
+/**
+ * Routes that are SERVED but deliberately not in `paths` yet, each with the
+ * reason — asserted to be exactly the complement of the documented set, in
+ * the same shape as UNREACHABLE_WHILE_SEND_IS_SUSPENDED above.
+ *
+ * An entry here is a tracked decision. An absence would be an oversight, and
+ * the difference matters: the document tells partners that everything in
+ * `paths` is served, and a list nobody maintains is how the opposite claim
+ * quietly becomes false too.
+ */
+const SERVED_BUT_UNDOCUMENTED: Record<string, string> = {
+  "/v1/messages": "3.5 — request/response schemas not published yet; send is suspended",
+  "/v1/templates": "3.7 — response schema follows Meta's shape, not published yet",
+};
+
+Deno.test("the document describes no path the router does not serve, and the gap is enumerated", async () => {
+  const routerSrc = await Deno.readTextFile(new URL("./v1/router.ts", import.meta.url));
+  const registered = [...routerSrc.matchAll(/^ {4}pattern: "([^"]+)",$/gm)].map((m) => m[1] as string);
+
+  // Anti-false-green: a reformat of the route table would make this sweep
+  // find nothing, and an empty sweep satisfies every assertion below.
+  assertEquals(
+    registered.length >= 7,
+    true,
+    `The route-table sweep found only ${registered.length} patterns (${registered.join(", ")}). ` +
+      "V1_ROUTES or this pattern has changed shape — a sweep that matches nothing looks " +
+      "exactly like a sweep that found no problems.",
+  );
+
+  const documented = Object.keys(doc.paths ?? {})
+    .filter((p: string) => p.startsWith(MOUNT))
+    .map((p: string) => p.slice(MOUNT.length));
+
+  // The direction that would mislead a partner into writing a call that 404s.
+  const phantom = documented.filter((p: string) => !registered.includes(p)).sort();
+  assertEquals(
+    phantom,
+    [],
+    `docs/api/openapi.yaml describes path(s) the router does not serve: ${phantom.join(", ")}.`,
+  );
+
+  // The other direction, as an enumerated gap rather than a silence.
+  const undocumented = registered.filter((p) => !documented.includes(p)).sort();
+  assertEquals(
+    undocumented,
+    Object.keys(SERVED_BUT_UNDOCUMENTED).sort(),
+    "A served /v1 route is missing from docs/api/openapi.yaml without a reason. " +
+      "Document it, or add it to SERVED_BUT_UNDOCUMENTED with why.",
+  );
+});
+
+Deno.test("the page-size bounds the code enforces are the ones the document publishes", async () => {
+  const src = await Deno.readTextFile(new URL("./v1/pagination.ts", import.meta.url));
+  const constOf = (name: string) => {
+    const m = src.match(new RegExp(`export const ${name} = (\\d+);`));
+    assertEquals(m !== null, true, `${name} not found in pagination.ts`);
+    return Number(m![1]);
+  };
+  const documented = doc.components.schemas.LimitParameter;
+  // A partner reading the document and a partner reading a response must
+  // agree about the page they get; clamping to bounds nobody published is
+  // how a client's paging loop silently misses rows.
+  assertEquals(constOf("LIMIT_MIN"), documented.minimum);
+  assertEquals(constOf("LIMIT_MAX"), documented.maximum);
+  assertEquals(constOf("LIMIT_DEFAULT"), documented.default);
+});
+
+Deno.test("every id prefix the code can emit is accepted by the document's PrefixedId pattern", async () => {
+  const src = await Deno.readTextFile(new URL("./v1/ids.ts", import.meta.url));
+  const listed = src.match(/export const ID_PREFIXES = \[([^\]]+)\]/);
+  assertEquals(listed !== null, true, "ID_PREFIXES not found in ids.ts");
+  const prefixes = [...listed![1].matchAll(/"([a-z]+)"/g)].map((m) => m[1] as string);
+  assertEquals(prefixes.length >= 7, true, `ID_PREFIXES sweep found only ${prefixes.length}`);
+
+  const pattern = new RegExp(doc.components.schemas.PrefixedId.pattern);
+  // A prefix the code emits but the pattern rejects would make the published
+  // contract call Postora's own ids malformed.
+  const rejected = prefixes.filter((p) => !pattern.test(`${p}_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1`));
+  assertEquals(
+    rejected,
+    [],
+    `ids.ts can emit prefix(es) the document's PrefixedId pattern rejects: ${rejected.join(", ")}.`,
+  );
+});
+
+// ---------------------------------------------------------------------------
 // 2. The documented security scheme names the header the code actually reads.
 // ---------------------------------------------------------------------------
 
