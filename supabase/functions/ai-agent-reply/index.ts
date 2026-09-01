@@ -786,20 +786,6 @@ Deno.serve(async (req) => {
       : request.platform === "whatsapp" && adminNumbers.includes(waRecipient(request.recipient_phone));
 
     language = detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint);
-    const systemPrompt = buildSystemPrompt({
-      persona: config.persona_instructions,
-      language,
-      // "ar"/"en" is a deliberate operator choice; "auto" mirrors the customer.
-      languageForced: config.language_mode === "ar" || config.language_mode === "en",
-      knowledgeBlocks: [
-        ...relevantChunks.map((chunk: { content: string }) => chunk.content),
-        relatedFacts,
-      ].filter(Boolean),
-      nowIso: new Date().toISOString(),
-      isAdmin,
-      surface: request.comment_id ? "comment" : "dm",
-    });
-
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
     // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
@@ -905,6 +891,26 @@ Deno.serve(async (req) => {
     );
     const customTools: CustomTool[] = toolResolution.tools;
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
+
+    // Built HERE, not where the knowledge was gathered, because the prompt now
+    // has to name the connectors this account actually resolved. A rule that
+    // merely alludes to "a connector" loses to a persona holding a ready
+    // answer -- a configured Supabase price table went unqueried that way
+    // (2026-09-01). systemPrompt is read once, at the messages array below.
+    const systemPrompt = buildSystemPrompt({
+      persona: config.persona_instructions,
+      language,
+      // "ar"/"en" is a deliberate operator choice; "auto" mirrors the customer.
+      languageForced: config.language_mode === "ar" || config.language_mode === "en",
+      knowledgeBlocks: [
+        ...relevantChunks.map((chunk: { content: string }) => chunk.content),
+        relatedFacts,
+      ].filter(Boolean),
+      nowIso: new Date().toISOString(),
+      isAdmin,
+      surface: request.comment_id ? "comment" : "dm",
+      connectorNames: customTools.map((tool) => tool.name),
+    });
 
     if (toolResolution.droppedDuplicates.length > 0) {
       // Recorded in system_logs rather than ai_agent_logs: the latter is the

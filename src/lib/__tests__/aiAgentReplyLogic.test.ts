@@ -360,9 +360,27 @@ describe("completionFailure", () => {
     expect(completionFailure("upstream timeout")).toBe("Chat completion returned no body");
   });
 
-  it("falls back to a generic reason when the error carries no message", () => {
-    expect(completionFailure({ error: { code: 502 } })).toBe("Chat completion failed");
+  it("falls back to a generic reason but keeps the code the provider gave", () => {
+    // The code is retained deliberately. OpenRouter answers a failed upstream
+    // with message "Provider returned error" and puts the reason in code and
+    // metadata, so a bare message made every such failure in system_logs read
+    // identically and explain nothing (2026-09-01).
+    expect(completionFailure({ error: { code: 502 } })).toBe("Chat completion failed (code 502)");
     expect(completionFailure({ error: "rate limited" })).toBe("rate limited");
+  });
+
+  it("carries the upstream provider name a bare message hides", () => {
+    expect(
+      completionFailure({
+        error: {
+          message: "Provider returned error",
+          code: 429,
+          metadata: { provider_name: "Liquid", raw: "rate limit exceeded" },
+        },
+      }),
+    ).toBe(
+      'Provider returned error (code 429 {"provider_name":"Liquid","raw":"rate limit exceeded"})',
+    );
   });
 
   // Null is the signal the caller keeps the completion. An error body must win over a

@@ -72,6 +72,37 @@ export function validateSupabaseAnonKey(key: string): void {
   }
 }
 
+const ROW_LIMIT = 5;
+// Derived, not picked: connectorExecution.ts allows 2000 characters for the
+// whole payload and ROW_LIMIT rows share it, so a row gets ~400 and no single
+// cell may take most of one. A real product permalink fits comfortably; a
+// signed storage token does not, which is the point.
+const MAX_VALUE_CHARS = 160;
+
+/**
+ * Bounds one cell. The table is arbitrary -- unlike WooCommerce there is no
+ * known field list to project down to -- so length is the only thing that can
+ * be bounded without knowing what the column means. A signed storage URL is
+ * the case that forced this: several hundred characters of token that answer
+ * no customer question, crowding out the price that does.
+ *
+ * The marker is deliberate: a silently shortened URL reads as a working link.
+ */
+function trimValue(value: unknown): unknown {
+  if (typeof value !== "string" || value.length <= MAX_VALUE_CHARS) return value;
+  return `${value.slice(0, MAX_VALUE_CHARS)}…[truncated]`;
+}
+
+function trimRows(payload: unknown): unknown {
+  const trimRow = (row: unknown): unknown => {
+    if (typeof row !== "object" || row === null || Array.isArray(row)) return trimValue(row);
+    return Object.fromEntries(
+      Object.entries(row as Record<string, unknown>).map(([key, value]) => [key, trimValue(value)]),
+    );
+  };
+  return Array.isArray(payload) ? payload.map(trimRow) : trimRow(payload);
+}
+
 function tableAllowList(settings: Record<string, unknown>): string[] {
   const raw = settings.table_allow_list;
   if (Array.isArray(raw)) {
@@ -122,7 +153,12 @@ function buildUrl(invocation: ConnectorInvocation): { url: string; schema: strin
 
   const url = new URL(`${projectUrl.replace(/\/+$/, "")}/rest/v1/${encodeURIComponent(table)}`);
   url.searchParams.set("select", select);
-  url.searchParams.set("limit", invocation.request.action === "test_connection" ? "1" : "20");
+  // Five, not twenty. The caller serialises this payload into the model's
+  // message list under a 2000-character budget (connectorExecution.ts), and a
+  // real price table's rows carry signed storage URLs hundreds of characters
+  // long -- twenty of those means the model reads three rows and half of a
+  // fourth, cut mid-JSON.
+  url.searchParams.set("limit", invocation.request.action === "test_connection" ? "1" : String(ROW_LIMIT));
 
   const filters = parameters.filters;
   if (filters !== null && typeof filters === "object" && !Array.isArray(filters)) {
@@ -183,7 +219,7 @@ async function callSupabase(
         read_only: true,
       };
     }
-    return { ok: true, vendor: "supabase", action: "execute", capability, data: payload };
+    return { ok: true, vendor: "supabase", action: "execute", capability, data: trimRows(payload) };
   } catch (error) {
     if (error instanceof SupabaseValidationError) {
       return supabaseFailure(error.code, error.message);
