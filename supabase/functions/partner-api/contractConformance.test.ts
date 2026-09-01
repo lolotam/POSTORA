@@ -229,6 +229,8 @@ const PARTNER_SURFACE = [
   "../_shared/partnerApiKeys.ts",
   "../_shared/partnerApiMetering.ts",
   "../_shared/partnerApiIdempotency.ts",
+  "../_shared/partnerDispatch.ts",
+  "../_shared/partnerDispatchIntents.ts",
   "../_shared/whatsappPartnerOps.ts",
 ];
 

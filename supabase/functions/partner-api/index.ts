@@ -14,22 +14,12 @@ import {
   checkRateLimit,
   RateLimitedError,
   recordUsage,
-  releaseQuota,
-  reserveQuota,
   touchKey,
   type RateLimitBudget,
 } from "../_shared/partnerApiMetering.ts";
-import {
-  claimIdempotency,
-  completeIdempotency,
-  hashRequest,
-  markIndeterminate,
-} from "../_shared/partnerApiIdempotency.ts";
-import {
-  listTemplates,
-  sendTemplate,
-  WhatsAppOpError,
-} from "../_shared/whatsappPartnerOps.ts";
+import { claimIdempotency, hashRequest } from "../_shared/partnerApiIdempotency.ts";
+import { dispatchPartnerTemplate } from "../_shared/partnerDispatch.ts";
+import { listTemplates, WhatsAppOpError } from "../_shared/whatsappPartnerOps.ts";
 import { isActionSuspended, isSendAction, limiterRiskClassFor, satisfyingScopesFor } from "./router.ts";
 import { handleV1Request, v1SubpathOf } from "./v1/router.ts";
 
@@ -384,88 +374,47 @@ export async function handleRequest(
       );
     }
 
-    // Reserve quota only once we are actually about to send. On any definite
-    // rejection below we release it, so a partner is charged only for messages
-    // Meta accepted. On an indeterminate outcome we deliberately do NOT
-    // release: the message may have been delivered.
-    const reserved = await reserveQuota(admin, record);
-    if (!reserved) {
-      // reserve_partner_quota increments before it reports, so a refused
-      // attempt must give its unit back. Otherwise every rejected call pushes
-      // current_usage_count further past the quota and the number stops
-      // meaning anything for reporting.
-      await releaseQuota(admin, record);
-      // Settle the idempotency claim before returning, or a retry of this same
-      // request would see `processing` forever instead of a clear quota error.
-      const body = errorBody("quota_exceeded", "Monthly quota exhausted for this key", false);
-      await completeIdempotency(admin, record.id, idempotencyKey!, attemptToken, 429, body)
-        .catch((e) => console.error("[partner-api] settle after quota refusal failed:", e));
-      return await finish(429, false, body, {}, "quota_exceeded");
-    }
-
-    try {
-      const result = await sendTemplate(ctx, {
+    // The send itself lives in _shared/partnerDispatch.ts, so the frozen
+    // alias and Stage 2's POST /v1/messages run the SAME production path:
+    // quota reservation, the D13 durable pre-call dispatch intent, the
+    // provider call, and the settle ladder, in that order. A takeover of an
+    // expired lease that finds a durable intent NEVER re-dispatches — it
+    // resolves to `indeterminate` or replays the recorded outcome.
+    const dispatched = await dispatchPartnerTemplate({
+      admin,
+      record,
+      ctx,
+      idempotencyKey: idempotencyKey!,
+      attemptToken,
+      input: {
         recipientPhone: String(body.recipient_phone),
         templateName: String(body.template_name),
         templateLanguage: String(body.template_language ?? "en_US"),
         components: body.template_components,
-      });
+      },
+    });
 
-      const success = {
-        success: true,
-        message_id: result.messageId,
-        state: "accepted_by_meta",
-        recorded_in_inbox: result.persisted,
-      };
-
-      // Meta has ACCEPTED the message at this point — the customer may already
-      // have it. A bookkeeping failure here must never be reported as a failed
-      // or indeterminate send, or the partner will show a delivered message as
-      // undelivered. But the claim still has to be settled somehow: if the row
-      // stays `processing`, its lease expires, and the partner's retry would
-      // take it over and send a SECOND message to a real customer.
-      try {
-        await completeIdempotency(admin, record.id, idempotencyKey!, attemptToken, 200, success);
-      } catch (settleError) {
-        console.error("[partner-api] settle failed after a successful send:", settleError);
-        // Best effort, and deliberately not awaited into the failure path:
-        // `indeterminate` is the one state no retry will ever re-send from,
-        // which is exactly the protection needed here.
-        await markIndeterminate(admin, record.id, idempotencyKey!, attemptToken).catch(() => {});
+    switch (dispatched.outcome) {
+      case "sent":
+        return await finish(200, true, dispatched.body);
+      case "failed":
+        return await finish(dispatched.httpStatus, false, dispatched.body, {},
+          dispatched.errorCode);
+      case "replayed": {
+        // A previous attempt recorded this outcome but died before settling
+        // the idempotency row; dispatchPartnerTemplate replayed it into the
+        // claim, so the partner sees the same answer a replay would give.
+        return await finish(dispatched.httpStatus, false, dispatched.body, {
+          "Idempotency-Replayed": "true",
+        });
       }
-
-      return await finish(200, true, success);
-    } catch (err) {
-      // A network failure after the request left leaves us unable to know
-      // whether Meta delivered it. Never auto-retry, and never release the
-      // quota reservation — the message may well have been sent.
-      if (!(err instanceof WhatsAppOpError)) {
-        await markIndeterminate(admin, record.id, idempotencyKey!, attemptToken);
-        const body = errorBody("idempotency_indeterminate",
-          "The send may have been delivered; resolve it before retrying", false);
-        return await finish(409, false, body, {},
-          "idempotency_indeterminate");
-      }
-      // Only a DEFINITE rejection may be refunded and settled as a failure.
-      // An indeterminate one (5xx, missing message id) may already have
-      // reached the customer, so it keeps its quota unit and becomes
-      // non-resendable — the same treatment as a transport failure.
-      if (err.indeterminate) {
-        await markIndeterminate(admin, record.id, idempotencyKey!, attemptToken)
-          .catch((e) => console.error("[partner-api] indeterminate mark failed:", e));
-        const body = errorBody("idempotency_indeterminate",
-          "The send may have been delivered; resolve it before retrying", false,
-          err.metaCode ? { meta_code: err.metaCode } : undefined);
-        return await finish(409, false, body, {},
-          "idempotency_indeterminate");
-      }
-      await releaseQuota(admin, record);
-      const failure = errorBody(err.code, err.message, false,
-        err.metaCode ? { meta_code: err.metaCode } : undefined);
-      // Settling must not turn a clean rejection into a generic 500.
-      await completeIdempotency(admin, record.id, idempotencyKey!, attemptToken, err.status, failure)
-        .catch((e) => console.error("[partner-api] settle after rejection failed:", e));
-      return await finish(err.status, false, failure, {}, err.code);
+      case "indeterminate":
+        return await finish(
+          409, false,
+          errorBody("idempotency_indeterminate",
+            "The send may have been delivered; resolve it before retrying", false),
+          {}, "idempotency_indeterminate",
+        );
     }
   } catch (err) {
     // listTemplates and the account lookups can also throw WhatsAppOpError.
