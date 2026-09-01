@@ -58,6 +58,14 @@ and verified by querying the catalog afterwards.
 | 1.3 | Credential lifecycle (D12), closing F11 and the F3 residual | PR #94. Code **merged and live**; ⚠️ **the migration is NOT applied to production** — `supabase/migrations/20260831170000_partner_api_credential_lifecycle.sql` is the owner's to apply. One nullable column (`superseded_by_key_id`) + three `SECURITY DEFINER` RPCs; rotation reuses `expires_at` rather than adding a second validity rule. **Rehearsed twice** against `supabase/postgres:17.6.1.158` restored from the production baseline, the second time on the final merged tree: harness exit 0, P1–P11 pass, suite mutation-tested. Nothing in production depends on it — it touches no edge function, and only the two operator scripts call its RPCs |
 | 2.1 | `/v1` router — path routing, method validation, `X-Postora-Request-Id` on every response | PR #105. **Live** — auto-deployed by `.github/workflows/deploy-edge-functions.yml` (billing restored 2026-09-01, the workflow path is active again) and probed on production: an unmatched `/v1` path returns the D2 envelope with the header id equal to the body's `request_id`, and the alias still answers its own envelope unchanged. Reached by path inside the SAME function; `/v1x` deliberately does not match |
 | 2.2 | D2 error envelope, one construction site | PR #105. **Live** — `V1_ERROR_POLICY` pins status/`retryable`/message for all 24 codes; `V1ErrorCode` derives from the table so a misspelled code will not compile; `details` omitted rather than null. `resource_not_found` moved from documented-but-unreachable into the enum, and the baseline was regenerated in a second commit so it is now R3-protected |
+| 3.1 | Settle the D13 state machine against what WhatsApp Cloud exposes | PR #108. Research, not implementation — the plan permits it to end the phase. **Verdict: proceed.** Found a reconciliation channel the spec's "no client-side lookup" premise missed: Meta echoes `biz_opaque_callback_data` back in status webhooks. No idempotency key exists, so D13 R2's at-most-once decision stands. Record: `docs/decisions/2026-09-01-d13-dispatch-state-machine.md` |
+| 3.2 | Durable dispatch intent written **before** the provider call | PR #111. Migration `20260901120000_partner_dispatch_intents.sql` — **applied to production 2026-09-01**, verified by catalog: table, 3 triggers, 7 constraints, 5 indexes, `anon` holds nothing. `UNIQUE (key_id, idempotency_key)` makes at-most-once structural rather than procedural |
+| 3.3 | Takeover **never re-dispatches**; resolves to `indeterminate` | PR #111. A takeover is any attempt whose intent INSERT conflicts, and it never touches a fetcher. Crash-verified with a real `Worker.terminate()`: abort **before** the provider call → 0 calls, retry 0 additional; abort **after** → 1 call, retry **0 additional**. Mutation-verified by the orchestrator — removing the guard fails both crash tests at the provider-call-count assertion |
+| 3.4 | Reconciliation where the provider permits it; conservative refusal where it does not | PR #111. `sendTemplate`/`sendText` stamp the intent id as `biz_opaque_callback_data`; the status webhook resolves intents by the echoed value. **One-directional by construction**: `indeterminate → reconciled_sent` exists, no path toward re-dispatch, and silence resolves nothing. Invariant 4 is a **database trigger**, not a convention |
+| 3.5 | `POST /v1/messages` — text and template only | PR #113. **Text was new provider surface** — `sendTemplate` had been the only send here. Both arms now run behind a private `performSend` inside the durable core, deliberately unexported so a route cannot reach the provider without an intent. Ships **behind** `SEND_TEMPLATE_SUSPENDED`, through the same flag as the alias |
+| 3.6 | `unsupported_capability` for platform/type combinations that do not exist | PR #113. Checked **before** the suspension: a misspelled type is a permanent fact about the request, and `temporarily_unavailable` would send a partner away to wait for something that will never work. Enum + policy table + baseline regenerated, so removing it now fires an R3 finding |
+| 3.7 | `GET /v1/templates` (class B); alias convergence | PR #113. Both doors read one policy table for scope and risk class — D1 convergence is a shared implementation underneath, deliberately **not** a shared envelope (D2). Fails CLOSED on a limiter outage |
+| — | Authentication on `/v1` | PR #113. Attaches to a **matched route**, never above routing: an unmatched `/v1` path still 404s without creating a Supabase client, preserving Phase 2's non-enumerability. Mutation-verified — hoisting auth above routing fails 7 tests |
 
 ### Partially landed
 
@@ -66,69 +74,29 @@ and verified by querying the catalog afterwards.
 | 1.7 | Tenancy constraint matrix, each table with a negative database test | Done for the two tables that now exist (`partner_api_key_accounts`, `partner_audit_logs`), proven by `supabase/tests/partner_api_tenancy_negative.sql` — 14 assertions. The matrix's other rows (dispatch intents, webhooks, deliveries, media association) name tables no phase has built yet |
 | ~~0.3~~ | ~~Postgres integration harness~~ | **Done — moved to Landed.** Previously: **No harness exists.** What exists is a repeatable manual rehearsal: dump the production schema, restore into a throwaway database, apply, run the proof. That is enough to have caught real defects but it is not CI, so nothing re-runs it on a future change |
 
-### Remaining, in the order recommended (2026-09-01)
+### Remaining, in the order recommended (updated 2026-09-01, after Phase 3)
 
-**Phases 0 and 1 are complete except the two rows below.** Everything else outstanding is Phase 2
-onward — new surface, not hardening.
+**Phases 0, 1, 3 and the shipped half of Phase 2 are complete.** Everything outstanding is either
+an owner decision, a later phase, or the one empirical check Phase 3 could not run.
 
 | | Item | Owner | Why it is where it is |
 |---|---|---|---|
-| ~~0~~ | ~~Apply `20260831170000_partner_api_credential_lifecycle.sql`~~ | ~~owner~~ | **Done 2026-09-01.** Verified in production: the column, all three RPCs and the composite FK are present |
-| ~~0~~ | ~~Restore GitHub Actions billing~~ | ~~owner~~ | **Done 2026-09-01.** CI and the auto-deploy workflow both run again; PR #105 deployed automatically. Hand-deploys must now stop — the two paths must not both be used |
+| ~~0~~ | ~~Apply the two partner migrations~~ | ~~owner~~ | **Both applied and verified in production.** `20260831170000` (credential lifecycle) on 2026-08-31; `20260901120000` (dispatch intents) on 2026-09-01 — catalog-verified: table, 3 triggers, 7 constraints, 5 indexes, `anon` holds nothing |
+| ~~0~~ | ~~Restore GitHub Actions billing~~ | ~~owner~~ | **Done 2026-09-01.** CI and the auto-deploy workflow both run again |
+| **A** | **Deploy `main` to the functions volume** | **auto, verify** | Phase 3's code is merged but the `/v1` send routes are **not yet live**. `deploy-edge-functions.yml` fires on push to `main` touching `supabase/functions/**` — confirm the run for `5c99c701` went green, and probe `POST /v1/messages`. **Do not hand-deploy**: the automated path is active again, and the two must not both be used |
+| **B** | **One live template send** to confirm `biz_opaque_callback_data` echoes back | **owner** | The single unproven assumption in the whole D13 design. Needs a real WABA, which does not exist yet — the revoked key was pinned to an inactive one. **Not a blocker**: without the echo every `indeterminate` stays terminal, which is today's behaviour |
+| **C** | **Restoring `SEND_TEMPLATE_SUSPENDED`** | **owner decision** | The crash gate passed, so this is now *available* rather than blocked. One flag opens **both** the alias and `POST /v1/messages`. Recommended only after B, since reconciliation is what shrinks the operator escalation queue |
 | 0.6 | Staging environment | owner decision | **Blocked on §2.1's finding**: it must be built by restoring a schema dump, because the migrations cannot rebuild the database. Infrastructure provisioning, not a coding task |
-| 1.7 | Tenancy matrix, remaining rows | later phases | The two tables that exist are proven. The other rows name tables no phase has built yet — this closes incrementally as P3/P5 create them, not as a task of its own |
-| ~~2.1 + 2.2~~ | ~~`/v1` router and error envelope~~ | ~~done~~ | **Landed and live** in PR #105 — see the rows above |
-| ~~3.1~~ | ~~Settle the D13 state machine~~ | ~~done 2026-09-01~~ | **Settled** — see docs/decisions/2026-09-01-d13-dispatch-state-machine.md. A reconciliation channel EXISTS (biz_opaque_callback_data is echoed in status webhooks); no idempotency key exists, so at-most-once stands. Verdict: **proceed to 3.2**, with one empirical gate (template-send coverage) before any send route opens |
-| **3.2–3.7** | **Durable dispatch, and POST /v1/messages** | **next build task** | Gated on 3.1, which passed. The exit criterion stays binary and still binds the alias |
-**3.1 is settled (2026-09-01). Next task: 3.2–3.7.**
+| 2.3–2.6 | `/v1` read surface — accounts, conversations, messages, account selection, cursor pagination | next build task | The router, the envelope, authentication and the contract machinery all exist now; these are endpoints on top of them. **2.7 (`GET /v1/usage`) stays excluded** until its counter schema is settled |
+| 1.7 | Tenancy matrix, remaining rows | later phases | Three tables now proven (`partner_api_key_accounts`, `partner_audit_logs`, `partner_dispatch_intents`). The rest name tables no phase has built |
+| — | `/v1` CORS decision | owner decision | The function emits no `Access-Control-*`; **Kong adds `*` at the gateway**, so the decision cannot be made in the function alone. See `docs/decisions/2026-09-01-v1-cors-is-decided-at-the-gateway.md` |
+| 4–10 | Media, webhooks, publishing, GA | later | Tranche 2 in §3b — justified by observed demand, not architecture |
 
-3.1 was run as research, because the plan permits it to conclude "no clean mechanism" — an outcome
-that would have closed the phase with send routes shut. It did not. The verdict is recorded in
-:
-
-- **A reconciliation channel exists.** Meta echoes `biz_opaque_callback_data` back in status
-  webhooks, which is a client-supplied correlator on delivery — the spec's "no client-side lookup"
-  premise is out of date in this one useful way.
-- **No idempotency key exists**, so D13 R2's at-most-once decision stands unchanged.
-- **One thing is unverified and gates the phase**: the field is documented as added for *free-form*
-  messages, and Phase 3 sends *templates*. One real template send must be observed echoing it back
-  before any send route opens. If that fails, the design degrades cleanly to every
-  `indeterminate` staying terminal — which is exactly today's position, so Phase 3 can still ship.
-
-So 3.1 ships **alone**, as a written state machine plus a decision record, and 3.2–3.7 are
-dispatched only after the owner has read 3.1's verdict. "Do not ship sending" is a real outcome the
-owner must own — not something to route around.
-
-**The fact that decides the phase must be re-verified, not quoted.** The spec asserts WhatsApp
-Cloud "exposes no client-side lookup", and D13's whole `indeterminate`-is-terminal contract rests
-on it. That is a claim about Meta's API *at the spec's writing date*, and 3.1's literal wording is
-"against what WhatsApp Cloud exposes". Two things to check against current Meta documentation and
-against Postora's own webhook ingest:
-
-- whether `POST /messages` accepts any client-supplied dedup token; and
-- whether `biz_opaque_callback_data` — a client-supplied field Meta echoes back in **status
-  webhooks** — appears in the statuses this codebase already receives.
-
-If the second is real, it is a reconciliation channel the spec's "no lookup" claim underweights:
-stamp the dispatch intent's id into the send, and a later status webhook carrying that id **proves
-the send happened**. Note the asymmetry that keeps this safe — it converts some indeterminates into
-*resolved-sent*, and never into *safe-to-resend*. That is exactly 3.4's "conservative refusal where
-the provider does not permit lookup".
-
-**Schema direction, decided in advance:** a separate `partner_dispatch_intents` table, not a fourth
-state on `partner_api_idempotency`. Three reasons. 1.7's tenancy matrix already names "dispatch
-intents" as an expected table, so building it closes another 1.7 row. The idempotency row is
-`ON DELETE CASCADE` on `key_id`, while a dispatch intent is *evidence a real message may have
-reached a customer* and must outlive key rotation or deletion — the same reasoning that gave
-`partner_audit_logs` no FK on `key_id`. And the existing `attempt_token` fence protects *settles*,
-whereas the new property is different: **a takeover that finds a dispatched intent never calls the
-provider.**
-
-**The exit gate binds the alias too.** `SEND_TEMPLATE_SUSPENDED` in `partner-api/router.ts` names
-its restoration condition as exactly this phase's exit criterion — the durable pre-call boundary
-with a passing gate. On a failing or partial result the flag stays `true` and every public send
-route stays closed, the alias included. Nobody should flip it on a partial pass.
-
+**Recommended next build task: Phase 2's read surface (2.3–2.6).** Everything it needs now exists —
+the router, the D2 envelope, the authenticated pipeline, the drift gate and the contract tests — so
+these are endpoints on top of finished machinery rather than new mechanism. They are read-only,
+which means nothing they do can duplicate a customer-visible message, and they are what makes the
+`/v1` surface usable by a partner who is not sending.
 ### 0.3, and what it found
 
 `scripts/db-harness.sh` gates every push and PR: it restores a committed schema
@@ -215,24 +183,32 @@ week".
 
 ### Deployment state
 
-**Current as of 2026-09-01.** `partner-api` **has** been redeployed — `main` was synced to the
-functions volume on 2026-08-31, hashes verified, `functions` and `ai-knowledge-excel-worker`
-restarted, and the live surface probed. Production now runs the new code against the new schema,
-so 1.4 and 1.5 are live rather than merely merged.
+**Current as of 2026-09-01, after Phase 3.**
 
-Two caveats, both real:
+**Both partner migrations are applied to production and catalog-verified.**
+`20260831170000` (credential lifecycle) on 2026-08-31 — the column, all three RPCs and the
+composite FK. `20260901120000` (dispatch intents) on 2026-09-01 — the table, its 3 triggers
+(tenancy, transition guard, `updated_at`), 7 constraints, 5 indexes, and `anon` holding nothing.
 
-1. **The deploy was run by hand.** `.github/workflows/deploy-edge-functions.yml` fired on the
-   merges and failed at startup, like every other Actions job since ~16:16 UTC 2026-08-31
-   (billing). The manual run replicated that workflow step for step. When billing is restored,
-   the automated path takes over and no further hand-deploys should happen — **the two paths must
-   not both be used**, and the workflow is the one to keep.
-2. **The 1.3 migration is still not applied.** This is the reverse of the ordering hazard the
-   earlier version of this section described: the edge code deliberately does not touch the new
-   RPCs, so code-before-schema is safe here. Only the two operator scripts
-   (`scripts/create-partner-key.ts`, `scripts/rotate-partner-key.ts`) call them, and they will fail
-   with a clear error until the migration runs.
+**The automated deploy path is live again.** GitHub Actions billing was restored on 2026-09-01, and
+`deploy-edge-functions.yml` deployed PR #105 on its own. **Hand-deploys must now stop** — the two
+paths must not both be used, and the workflow is the one to keep. The earlier manual deploy
+(2026-08-31) existed only because Actions could not dispatch a job at all; it replicated the
+workflow step for step.
 
+**What is live versus what is merely merged.** Everything through Phase 2 is deployed and probed on
+production. **Phase 3's code is merged but its `/v1` send routes are not yet confirmed live** —
+verify the deploy run for the Phase 3 merge went green and probe `POST /v1/messages` before
+treating them as available.
+
+Two things remain deliberately closed, and neither is an accident:
+
+1. **`SEND_TEMPLATE_SUSPENDED` is still `true`.** The crash gate passed, so restoring it is now an
+   *available* decision rather than a blocked one — but it is the owner's, and one flag opens
+   **both** the alias action and `POST /v1/messages`.
+2. **`biz_opaque_callback_data` on template sends is unproven.** Meta documents it for free-form
+   messages; no live WABA exists to test the template case. The system is correct either way — with
+   no echo, every `indeterminate` stays terminal, which is the pre-Phase-3 behaviour.
 ### One thing found while working, outside this programme's scope
 
 `partner_api_usage` — the billing ledger created by the foundation migration — grants `anon`,
