@@ -340,3 +340,43 @@ Deno.test("no connectors means no trailing reminder", async () => {
   });
   assertEquals(prompt.includes("even if the business knowledge appears to list"), false);
 });
+
+/**
+ * Production, 2026-09-01 02:01 UTC, conversation wa_201000689201_96555683677.
+ *
+ * The connector was offered, the adapter was by then provably working (a direct
+ * call returned the live ١٨ جنية row), and the model called NOTHING -- it
+ * repeated the excuse from earlier in the same thread: "I can't fetch the live
+ * price from the system right now".
+ *
+ * Three of the last four turns carried that sentence, because they were sent
+ * while the connector really was failing. The model treats its own past
+ * statement as settled fact. That is not merely awkward for testing: once the
+ * agent tells a customer it cannot reach the system, it keeps saying so for the
+ * rest of that conversation, even after the cause is fixed.
+ */
+Deno.test("an earlier failure in the thread is not treated as settled", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    languageForced: false,
+    knowledgeBlocks: [],
+    nowIso: "2026-09-01T02:01:00Z",
+    connectorNames: ["supabase_product_catalog"],
+  });
+  assertEquals(prompt.includes("earlier reply in this conversation"), true);
+  assertEquals(prompt.includes("try the connector again"), true);
+});
+
+Deno.test("no connectors still means no reminder at all", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "en",
+    languageForced: false,
+    knowledgeBlocks: [],
+    nowIso: "2026-09-01T02:01:00Z",
+  });
+  assertEquals(prompt.includes("earlier reply in this conversation"), false);
+});
