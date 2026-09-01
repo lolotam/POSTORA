@@ -26,22 +26,36 @@ and verified by querying the catalog afterwards.
 
 ### Landed
 
+> **Deployment status as of 2026-09-01.** Everything below is **live in production**: `main` was
+> deployed to the functions volume on 2026-08-31, all four changed files SHA256-verified against
+> git, `functions` and `ai-knowledge-excel-worker` restarted, healthcheck 200, and `partner-api`
+> probed live (401 `invalid_key` / 405 `method_not_allowed`, with **no** `X-RateLimit-*` on the
+> pre-auth failure — the documented omission, confirmed against production).
+>
+> The deploy ran **by hand via `ssh-contabo-mcp`**, replicating
+> `.github/workflows/deploy-edge-functions.yml` step for step, because GitHub Actions stopped
+> dispatching jobs at ~16:16 UTC on 2026-08-31 (billing: *"recent account payments have failed or
+> your spending limit needs to be increased"*). Jobs fail at startup in ~3s with zero steps; the
+> message is only in the check-runs annotations API. **CI has not run since.**
+>
+> **One thing is NOT applied: the 1.3 migration.** See its row below.
+
 | # | Deliverable | Evidence |
 |---|---|---|
 | 0.4 | CI job running `deno test` over `supabase/functions/**` | **Already done before this plan was written.** PR #67 added the `edge-functions` job to `.github/workflows/test.yml`. The plan was stale in its own favour |
 | 0.12 | Danat credential inventory | Done 2026-08-30 — see "What the inventory found" below |
 | 1.1 | `partner_api_key_accounts`, both composite FKs, `UNIQUE (key_id, social_account_id)`, backfill | PR #70. **Live** — both FKs confirmed in `pg_constraint`, backfill mirrors the one existing key |
-| 1.2 | `partner_audit_logs`, append-only | PR #70. **Live** — `anon` holds nothing, `authenticated` SELECT, `service_role` INSERT+SELECT |
-| 1.4 | Risk-class enforcement: A fails open, B and C fail closed with `503 limiter_unavailable` + `Retry-After` | PR #70. **Merged, NOT deployed** — `partner-api` still runs the old fail-open code |
+| 1.2 | `partner_audit_logs`, append-only | PR #70. **Live** — `anon` holds nothing, `authenticated` SELECT, `service_role` INSERT+SELECT. Note it had **zero writers** until 1.3 |
+| 1.4 | Risk-class enforcement: A fails open, B and C fail closed with `503 limiter_unavailable` + `Retry-After` | PR #70. **Live since 2026-08-31** — `ACTION_RISK_CLASSES` confirmed present in the deployed `partner-api/router.ts`. Was "merged, not deployed" for a day |
 | 0.1, 0.2 | **0A safety suspension.** `send_template` returns a typed `temporarily_unavailable`; the key `pk_live_urCb` is revoked | PR #72. **Live** — refusal verified in the deployed volume, ordering confirmed (scope → suspension → account) |
-| 0.3 | Postgres integration harness | PR #74. **Live in CI** — see "0.3, and what it found" below |
+| 0.3 | Postgres integration harness | PR #74. **In CI** — see "0.3, and what it found" below. Note CI cannot currently run (billing) |
 | — | Least-privilege grants on the four foundation tables | PR #72. **Live** — `anon` now holds zero grants on any partner table; every production access path re-verified as `service_role` |
-| 1.5 | `X-RateLimit-*` with defined response classes | PR #70. **Merged, NOT deployed.** Values now come from `consume_partner_rate_v2` (new, added alongside v1), not the edge function's clock |
+| 1.5 | `X-RateLimit-*` with defined response classes | PR #70. **Live since 2026-08-31** — `consume_partner_rate_v2` confirmed in the deployed `_shared/partnerApiMetering.ts`. The omission on pre-auth failures verified against live production |
 | 0.7 | OpenAPI 3.1 skeleton — `docs/api/openapi.yaml` | PR #91. Servers, `x-postora-key` security scheme, 14 generic + 3 legacy scopes, 23 error codes, cursor pagination, rate-limit headers. No endpoints (`/v1` has none). **Found a FOURTH drift**: `unsupported_direct_qr` was emitted by `whatsappPartnerOps.ts:221` and listed nowhere |
-| 0.8 | Contract-drift gate | PR #91. `scripts/check-openapi-drift.ts` + committed baseline + `contract-drift` CI job. R1 field removal / R2 type narrowing / R3 enum removal / R4 required-field addition; acknowledgement file with per-finding ids; stale acks also fail. **`info.version` is never read** — verified by mutation M6 (break + version bump still fails) |
-| 0.5 | Runtime contract tests | PR #91. Six tests reading the document and checking it against the real handler. Ten codes reached by test, thirteen explained as unreachable behind the 0A suspension, the two sets asserted to be exact complements. Mutation-tested against the source |
-| 1.6 | Legacy scope pinning | PR #93. `_shared/partnerScopes.ts`; per-ACTION satisfying sets, never a vocabulary mapping. `whatsapp:webhooks.manage` is an explicit EMPTY capability. New keys may hold only generic scopes — **no migration needed**, since D3 step 2's reissue has no subject with zero active keys |
-| 1.3 | Credential lifecycle (D12), closing F11 and the F3 residual | PR #94. **Contains a migration the owner must apply.** One nullable column (`superseded_by_key_id`) + three `SECURITY DEFINER` RPCs; rotation reuses `expires_at` rather than adding a second validity rule. **Rehearsed** against `supabase/postgres:17.6.1.158` from the production baseline: harness exit 0, P1–P11 pass, suite mutation-tested |
+| 0.8 | Contract-drift gate | PR #91. `scripts/check-openapi-drift.ts` + committed baseline + `contract-drift` CI job. R1 field removal / R2 type narrowing / R3 enum removal / R4 required-field addition; acknowledgement ids carry the transition, so an ack authorises one change only; stale acks also fail. **`info.version` is never read** — verified by mutation (a break plus a version bump still fails). Descends into path operations, resolves `$ref`, and handles the boolean `required` on Parameter Objects |
+| 0.5 | Runtime contract tests | PR #91. Six runtime tests reading the document and checking it against the real handler, **plus a source-side sweep** asserting every code the partner surface can emit is documented — the runtime tests sample, the sweep enumerates. The sweep fails if it finds fewer than 15 codes, so a regex that stops matching cannot masquerade as a clean result |
+| 1.6 | Legacy scope pinning | PR #93. **Live** — `_shared/partnerScopes.ts` confirmed in the deployed volume. Per-ACTION satisfying sets, never a vocabulary mapping. `whatsapp:webhooks.manage` is an explicit EMPTY capability. New keys may hold only generic scopes — **no migration needed**, since D3 step 2's reissue has no subject with zero active keys |
+| 1.3 | Credential lifecycle (D12), closing F11 and the F3 residual | PR #94. Code **merged and live**; ⚠️ **the migration is NOT applied to production** — `supabase/migrations/20260831170000_partner_api_credential_lifecycle.sql` is the owner's to apply. One nullable column (`superseded_by_key_id`) + three `SECURITY DEFINER` RPCs; rotation reuses `expires_at` rather than adding a second validity rule. **Rehearsed twice** against `supabase/postgres:17.6.1.158` restored from the production baseline, the second time on the final merged tree: harness exit 0, P1–P11 pass, suite mutation-tested. Nothing in production depends on it — it touches no edge function, and only the two operator scripts call its RPCs |
 
 ### Partially landed
 
@@ -49,6 +63,46 @@ and verified by querying the catalog afterwards.
 |---|---|---|
 | 1.7 | Tenancy constraint matrix, each table with a negative database test | Done for the two tables that now exist (`partner_api_key_accounts`, `partner_audit_logs`), proven by `supabase/tests/partner_api_tenancy_negative.sql` — 14 assertions. The matrix's other rows (dispatch intents, webhooks, deliveries, media association) name tables no phase has built yet |
 | ~~0.3~~ | ~~Postgres integration harness~~ | **Done — moved to Landed.** Previously: **No harness exists.** What exists is a repeatable manual rehearsal: dump the production schema, restore into a throwaway database, apply, run the proof. That is enough to have caught real defects but it is not CI, so nothing re-runs it on a future change |
+
+### Remaining, in the order recommended (2026-09-01)
+
+**Phases 0 and 1 are complete except the two rows below.** Everything else outstanding is Phase 2
+onward — new surface, not hardening.
+
+| | Item | Owner | Why it is where it is |
+|---|---|---|---|
+| **0** | Apply `20260831170000_partner_api_credential_lifecycle.sql` | **owner** | Until this runs, `partner_audit_logs` still has zero writers in production and no key can be created atomically. It is the only thing standing between "1.3 is merged" and "1.3 works". Rehearsed twice; nothing depends on it, so it can be applied at any time |
+| **0** | Restore GitHub Actions billing | **owner** | Nothing has been CI-gated since ~16:16 UTC 2026-08-31. Local gates and a hand-run deploy have covered it, but that does not scale and the next contributor will not know to do it |
+| 0.6 | Staging environment | owner decision | **Blocked on §2.1's finding**: it must be built by restoring a schema dump, because the migrations cannot rebuild the database. Infrastructure provisioning, not a coding task |
+| 1.7 | Tenancy matrix, remaining rows | later phases | The two tables that exist are proven. The other rows name tables no phase has built yet — this closes incrementally as P3/P5 create them, not as a task of its own |
+| **2.1 + 2.2** | **`/v1` router and error envelope** | **next build task** | See below |
+
+**Recommended next build task: Phase 2, deliverables 2.1 and 2.2** — the `/v1` router and the D2
+error envelope, with `X-Postora-Request-Id` on every response.
+
+The case for it over the alternatives:
+
+- **The groundwork is already paid for.** 0.7 wrote the security scheme, the error component, the
+  scope vocabulary and the pagination parameters; 0.8 will start defending the new endpoints the
+  moment they exist; 0.5's contract tests already read the document and check it against the real
+  handler. That machinery currently guards a document with **no endpoints**. 2.1/2.2 is what makes
+  it earn its keep.
+- **It carries no risk.** `/v1` is new surface, so nothing can regress; it is read-only; it needs
+  no migration; and it does not touch the frozen alias, which keeps serving unchanged.
+- **It is the last cheap moment to freeze the shape.** The plan's own reasoning (§3b) is that the
+  `/v1` contract should be frozen *before a second consumer exists*. There are currently **zero
+  active partner keys** — the cheapest this decision will ever be.
+
+**Do NOT ship 2.7 (`GET /v1/usage`) in this phase** unless the counter schema is settled first;
+the plan is explicit that shipping it with fixed counters freezes a contract whose commercial
+meaning is still open.
+
+**The runner-up, and why it is second.** Phase 3 (text and template send) is the capability a
+partner has actually asked for, and `send_template` is suspended today. But restoring it is gated
+on D13 — the durable pre-call dispatch boundary — which is the hardest correctness problem in this
+programme and the reason for the 0A suspension. It is the right *next big* piece; it is the wrong
+piece to start immediately after a phase boundary, because P2 establishes the routing, selection
+and envelope that P3's send endpoint would otherwise have to invent and then retrofit.
 
 ### 0.3, and what it found
 
@@ -85,13 +139,21 @@ an explicit operator confirmation rather than assuming.
 
 ### Not started
 
-Phase 0: **0.5** (contract tests), **0.6** (staging — see the constraint above),
-**0.7–0.11** (OpenAPI skeleton, drift gate, threat review, CORS decision, D8
-containment check). Phase 1: **1.3** credential lifecycle, **1.6** legacy scope
-pinning. All of Phases 2–10.
+**Superseded 2026-09-01 — see "Remaining, in the order recommended" above.** 0.5, 0.7–0.11, 1.3 and
+1.6 have all landed; what is left is 0.6 (staging), 1.7's future rows, and Phases 2–10.
 
-**1.3 is larger than its one line suggests:** `partner_api_keys` has no rotation fields
-(`successor key id`, overlap expiry). Spec §8 requires them; the foundation migration never added
+The one note worth keeping from the original text, because it turned out to be **wrong in an
+instructive way**:
+
+> *"1.3 is larger than its one line suggests: `partner_api_keys` has no rotation fields (successor
+> key id, overlap expiry). Spec §8 requires them."*
+
+It needed **one** nullable column, not two. `expires_at` already existed and
+`authenticatePartnerKey` already enforced it, so rotation sets the predecessor's `expires_at` to
+the end of the overlap window and adds only `superseded_by_key_id` for the audit trail. Adding a
+separate overlap-expiry column would have created a *second* way for a key to be invalid, and the
+two can disagree — a key past its overlap but not its expiry, or the reverse, with someone left to
+decide which wins. Reusing the existing field made rotation a **write** rather than a new **rule**.
 them. So credential lifecycle needs its own migration before any UI work.
 
 ### What the Danat inventory (0.12) found
@@ -128,11 +190,23 @@ week".
 
 ### Deployment state
 
-The three migrations are **live in production**. `partner-api` is **not redeployed**, which is the
-correct order and not an oversight: the new edge code calls `consume_partner_rate_v2`, which did
-not exist until the migration landed. Until the redeploy, production runs old code against the new
-schema — old code keeps calling the untouched `consume_partner_rate`, and the new tables sit
-unused.
+**Current as of 2026-09-01.** `partner-api` **has** been redeployed — `main` was synced to the
+functions volume on 2026-08-31, hashes verified, `functions` and `ai-knowledge-excel-worker`
+restarted, and the live surface probed. Production now runs the new code against the new schema,
+so 1.4 and 1.5 are live rather than merely merged.
+
+Two caveats, both real:
+
+1. **The deploy was run by hand.** `.github/workflows/deploy-edge-functions.yml` fired on the
+   merges and failed at startup, like every other Actions job since ~16:16 UTC 2026-08-31
+   (billing). The manual run replicated that workflow step for step. When billing is restored,
+   the automated path takes over and no further hand-deploys should happen — **the two paths must
+   not both be used**, and the workflow is the one to keep.
+2. **The 1.3 migration is still not applied.** This is the reverse of the ordering hazard the
+   earlier version of this section described: the edge code deliberately does not touch the new
+   RPCs, so code-before-schema is safe here. Only the two operator scripts
+   (`scripts/create-partner-key.ts`, `scripts/rotate-partner-key.ts`) call them, and they will fail
+   with a clear error until the migration runs.
 
 ### One thing found while working, outside this programme's scope
 
