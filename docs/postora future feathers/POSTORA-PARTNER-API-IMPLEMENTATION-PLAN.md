@@ -65,6 +65,11 @@ and verified by querying the catalog afterwards.
 | 3.5 | `POST /v1/messages` — text and template only | PR #113. **Text was new provider surface** — `sendTemplate` had been the only send here. Both arms now run behind a private `performSend` inside the durable core, deliberately unexported so a route cannot reach the provider without an intent. Ships **behind** `SEND_TEMPLATE_SUSPENDED`, through the same flag as the alias |
 | 3.6 | `unsupported_capability` for platform/type combinations that do not exist | PR #113. Checked **before** the suspension: a misspelled type is a permanent fact about the request, and `temporarily_unavailable` would send a partner away to wait for something that will never work. Enum + policy table + baseline regenerated, so removing it now fires an R3 finding |
 | 3.7 | `GET /v1/templates` (class B); alias convergence | PR #113. Both doors read one policy table for scope and risk class — D1 convergence is a shared implementation underneath, deliberately **not** a shared envelope (D2). Fails CLOSED on a limiter outage |
+| 2.3 | `GET /v1/accounts`, `/v1/accounts/{id}` | PR #115. Lists the key's **binding**, which may be a strict subset of the workspace's accounts — the map every other `/v1` read is scoped to. Not paginated: the binding is bounded server-side and REFUSES rather than truncates, because a silently truncated tenancy set shows up as accounts that exist in the UI and not in the API |
+| 2.4 | `GET /v1/conversations`, `/{id}`, `/{id}/messages`, `GET /v1/messages/{id}` | PR #115. **WhatsApp-only, and it refuses the rest explicitly**: `messaging_cache` is cross-platform but per-message rows are split — WhatsApp in `whatsapp_messages`, Meta DMs in `social_inbox_events` (`src/hooks/useMessaging.ts:178`), different shapes, no common row. A bound non-WhatsApp account answers `unsupported_capability`, never an empty page a partner cannot tell from a quiet inbox |
+| 2.5 | Account selection per D11, with non-enumerable `resource_not_found` | PR #115. Tenancy anchors on `partner_api_key_accounts`, **never** on `partner_api_keys.social_account_id` — those hold the same value in production, so almost any test passes against the wrong one. Test T1 makes them different accounts deliberately. No fallback for an empty binding: an unbound key reads nothing. A malformed id 404s **without touching the database**, so a typo is neither a 500 nor an existence oracle |
+| 2.6 | Opaque cursor pagination; prefixed opaque ids | PR #115. Keyset on the **pair** (timestamp, id) — history sync makes microsecond collisions routine, and a timestamp-only cursor would re-emit a colliding group or drop all but one of it. Over-fetch `limit + 1`, so `next_cursor` appears only when another page provably exists. Published ids are the **surrogates**: `messaging_cache.conversation_id` is text of the form `wa_<phone_id>_<msisdn>` and would have put a customer's phone number in every partner's URL bar |
+| — | Frozen-alias action allowlist | PR #115. `index.ts` read "present in `ACTION_SCOPES`" as "is an alias action", then dispatched through an if-ladder with **no final else** — adding 2.3-2.6's read policies would have let `{action:"list_conversations", recipient_phone, template_name}` reach the provider, past the 0A suspension AND past the Idempotency-Key requirement, since both match only the literal `send_template`. `ALIAS_ACTIONS` closes the list; no observable change |
 | — | Authentication on `/v1` | PR #113. Attaches to a **matched route**, never above routing: an unmatched `/v1` path still 404s without creating a Supabase client, preserving Phase 2's non-enumerability. Mutation-verified — hoisting auth above routing fails 7 tests |
 
 ### Partially landed
@@ -74,29 +79,34 @@ and verified by querying the catalog afterwards.
 | 1.7 | Tenancy constraint matrix, each table with a negative database test | Done for the two tables that now exist (`partner_api_key_accounts`, `partner_audit_logs`), proven by `supabase/tests/partner_api_tenancy_negative.sql` — 14 assertions. The matrix's other rows (dispatch intents, webhooks, deliveries, media association) name tables no phase has built yet |
 | ~~0.3~~ | ~~Postgres integration harness~~ | **Done — moved to Landed.** Previously: **No harness exists.** What exists is a repeatable manual rehearsal: dump the production schema, restore into a throwaway database, apply, run the proof. That is enough to have caught real defects but it is not CI, so nothing re-runs it on a future change |
 
-### Remaining, in the order recommended (updated 2026-09-01, after Phase 3)
+### Remaining, in the order recommended (updated 2026-09-01, after Phase 2's read surface)
 
-**Phases 0, 1, 3 and the shipped half of Phase 2 are complete.** Everything outstanding is either
-an owner decision, a later phase, or the one empirical check Phase 3 could not run.
+**Phases 0, 1, 3 and all of Phase 2 except 2.7 are complete.** Everything outstanding is either an
+owner decision, a later phase, or the one empirical check Phase 3 could not run.
 
 | | Item | Owner | Why it is where it is |
 |---|---|---|---|
 | ~~0~~ | ~~Apply the two partner migrations~~ | ~~owner~~ | **Both applied and verified in production.** `20260831170000` (credential lifecycle) on 2026-08-31; `20260901120000` (dispatch intents) on 2026-09-01 — catalog-verified: table, 3 triggers, 7 constraints, 5 indexes, `anon` holds nothing |
 | ~~0~~ | ~~Restore GitHub Actions billing~~ | ~~owner~~ | **Done 2026-09-01.** CI and the auto-deploy workflow both run again |
-| **A** | **Deploy `main` to the functions volume** | **auto, verify** | Phase 3's code is merged but the `/v1` send routes are **not yet live**. `deploy-edge-functions.yml` fires on push to `main` touching `supabase/functions/**` — confirm the run for `5c99c701` went green, and probe `POST /v1/messages`. **Do not hand-deploy**: the automated path is active again, and the two must not both be used |
+| ~~A~~ | ~~Deploy `main` to the functions volume~~ | ~~auto~~ | **Done and probed.** The workflow deployed both `5c99c701` (Phase 3) and `1b9b7bfa` (the read surface). Live: the three read paths answer 401 `invalid_key` while `/v1/nope` answers 404 `resource_not_found` — that difference IS the proof the routes are registered, and that non-enumerability survived — and `DELETE /v1/accounts` answers 405 `allow: GET`. **Do not hand-deploy**: the automated path is active, and the two must not both be used |
+| **A′** | **Apply migration `20260901180000`** | **owner** | Two additive indexes for the read surface. **Not applied as of 2026-09-01** — verified absent from `pg_indexes`. Order is not load-bearing: code-before-index means slow reads, never wrong ones, and at 6.8k rows / 6.3 MB the scan is currently milliseconds. Apply before `whatsapp_messages` grows |
 | **B** | **One live template send** to confirm `biz_opaque_callback_data` echoes back | **owner** | The single unproven assumption in the whole D13 design. Needs a real WABA, which does not exist yet — the revoked key was pinned to an inactive one. **Not a blocker**: without the echo every `indeterminate` stays terminal, which is today's behaviour |
 | **C** | **Restoring `SEND_TEMPLATE_SUSPENDED`** | **owner decision** | The crash gate passed, so this is now *available* rather than blocked. One flag opens **both** the alias and `POST /v1/messages`. Recommended only after B, since reconciliation is what shrinks the operator escalation queue |
 | 0.6 | Staging environment | owner decision | **Blocked on §2.1's finding**: it must be built by restoring a schema dump, because the migrations cannot rebuild the database. Infrastructure provisioning, not a coding task |
-| 2.3–2.6 | `/v1` read surface — accounts, conversations, messages, account selection, cursor pagination | next build task | The router, the envelope, authentication and the contract machinery all exist now; these are endpoints on top of them. **2.7 (`GET /v1/usage`) stays excluded** until its counter schema is settled |
+| **D** | **One live page-2 probe** of a paginated listing | **owner** | The one thing a stubbed client cannot check: a PostgREST filter STRING is only validated by a real server. `T12` pins the disjunction's shape and asserts exactly one `.or()` call — this repo shipped the double-`.or()` bug once (PR #35) — but needs data and a real key to close |
+| 2.7 | `GET /v1/usage` | next build task, **gated** | The last of Phase 2, and deliberately last: it ships **only if** its counter schema is settled first (reserved / confirmed / indeterminate), otherwise it moves to P10 with 10.1 |
 | 1.7 | Tenancy matrix, remaining rows | later phases | Three tables now proven (`partner_api_key_accounts`, `partner_audit_logs`, `partner_dispatch_intents`). The rest name tables no phase has built |
 | — | `/v1` CORS decision | owner decision | The function emits no `Access-Control-*`; **Kong adds `*` at the gateway**, so the decision cannot be made in the function alone. See `docs/decisions/2026-09-01-v1-cors-is-decided-at-the-gateway.md` |
 | 4–10 | Media, webhooks, publishing, GA | later | Tranche 2 in §3b — justified by observed demand, not architecture |
 
-**Recommended next build task: Phase 2's read surface (2.3–2.6).** Everything it needs now exists —
-the router, the D2 envelope, the authenticated pipeline, the drift gate and the contract tests — so
-these are endpoints on top of finished machinery rather than new mechanism. They are read-only,
-which means nothing they do can duplicate a customer-visible message, and they are what makes the
-`/v1` surface usable by a partner who is not sending.
+**Recommended next build task: Phase 4 (media) or Phase 5 (webhooks), not 2.7.**
+
+2.7 is the only Phase 2 row left and it is gated on a schema decision, not on engineering — building
+it before that decision is how the counters get a shape nobody chose. Of the two tranche-2 phases,
+**webhooks (D5) is the one the read surface makes newly worth having**: a partner who can list
+conversations still has to poll them, and the outbox is what turns that into delivery.
+
+Both are larger than anything since Phase 1, and both are genuinely blocked on nothing.
 ### 0.3, and what it found
 
 `scripts/db-harness.sh` gates every push and PR: it restores a committed schema
@@ -196,10 +206,13 @@ paths must not both be used, and the workflow is the one to keep. The earlier ma
 (2026-08-31) existed only because Actions could not dispatch a job at all; it replicated the
 workflow step for step.
 
-**What is live versus what is merely merged.** Everything through Phase 2 is deployed and probed on
-production. **Phase 3's code is merged but its `/v1` send routes are not yet confirmed live** —
-verify the deploy run for the Phase 3 merge went green and probe `POST /v1/messages` before
-treating them as available.
+**Everything merged is deployed and probed**, through Phase 3 and Phase 2's read surface. The
+workflow deployed `5c99c701` and `1b9b7bfa`; the live surface answers 401 on a registered `/v1`
+path, 404 on an unregistered one, and 405 with `Allow` on a wrong method.
+
+**One migration is outstanding**: `20260901180000` (the read surface's two indexes) is committed and
+harness-verified but **not applied to production**. Additive and order-independent — code-before-index
+means slow reads, never wrong ones.
 
 Two things remain deliberately closed, and neither is an accident:
 
