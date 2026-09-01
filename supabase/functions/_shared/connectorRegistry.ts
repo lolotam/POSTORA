@@ -135,6 +135,13 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         required: true,
         help: "The tables this connector may query, subject to the target project's RLS.",
       },
+      {
+        key: "select_columns",
+        label: "Columns to read (optional)",
+        kind: "text",
+        required: false,
+        help: "Comma-separated columns the AI agent reads, e.g. type_name, price. Leave empty to return every column. Fewer columns means smaller prompts and cheaper replies.",
+      },
     ],
     usageGuide: {
       whenToUse: "Live rows exposed by this Supabase project's PostgREST API. Prefer it when the answer depends on current database state.",

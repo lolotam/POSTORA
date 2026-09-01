@@ -576,7 +576,9 @@ Deno.test("an unrecognised payload shape is passed through, not emptied", () => 
  * fields cannot be projected; the row count and the per-value length are what
  * can be bounded.
  */
-Deno.test("Supabase asks for a row count a model can actually read", async () => {
+Deno.test("Supabase fetches enough rows to cover a small catalog whole", async () => {
+  // Five arbitrary rows of a 14-type price table made the model fill the gaps
+  // from the stale knowledge base; see the ROW_LIMIT comment in supabase.ts.
   let requested = "";
   await executeConnector(
     {
@@ -589,12 +591,12 @@ Deno.test("Supabase asks for a row count a model can actually read", async () =>
       return Promise.resolve(jsonResponse([]));
     }),
   );
-  assertStringIncludes(requested, "limit=5");
+  assertStringIncludes(requested, "limit=25");
 });
 
 Deno.test("an oversized cell is truncated so the rest of the rows survive", async () => {
   const signedUrl = `https://p.supabase.co/storage/v1/object/sign/x.png?token=${"e".repeat(600)}`;
-  const rows = Array.from({ length: 5 }, (_, i) => ({
+  const rows = Array.from({ length: 25 }, (_, i) => ({
     id: `row-${i}`,
     type_name: "كتاكيت جميزة",
     price: "١٨ جنية",
@@ -614,9 +616,12 @@ Deno.test("an oversized cell is truncated so the rest of the rows survive", asyn
   assertEquals(result.ok, true);
   const body = serialized(result.ok === true && result.action === "execute" ? result.data : null);
   // Every row's price must still be there -- that is the answer the customer asked for.
-  assertEquals((body.match(/١٨ جنية/g) || []).length, 5);
+  assertEquals((body.match(/١٨ جنية/g) || []).length, 25);
   assertEquals(body.includes("e".repeat(600)), false);
-  assertEquals(body.length < 2000, true, `payload is ${body.length} chars`);
+  // The whole table must fit connectorExecution's 8000-character allowance,
+  // because a truncated table is not "less data" -- it is wrong data, filled in
+  // from stale knowledge by the model.
+  assertEquals(body.length < 8000, true, `payload is ${body.length} chars`);
 });
 
 Deno.test("ordinary values are returned untouched", async () => {
@@ -635,4 +640,80 @@ Deno.test("ordinary values are returned untouched", async () => {
     serialized(result.ok === true && result.action === "execute" ? result.data : null),
     '[{"id":1,"price":"١٨ جنية","in_stock":true,"qty":40}]',
   );
+});
+
+/**
+ * Operator-configured column list (2026-09-01, owner request): the Supabase
+ * card can name which columns the agent reads, so a wide table does not spend
+ * tokens on ids, timestamps and signed URLs that answer nothing.
+ */
+Deno.test("configured columns drive the select", async () => {
+  let requested = "";
+  await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: "price_table",
+          select_columns: "type_name, price",
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ capability: "search_products", parameters: { table: "price_table" } }),
+    },
+    dependencies((url) => {
+      requested = String(url);
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+  assertStringIncludes(requested, "select=type_name%2Cprice");
+});
+
+Deno.test("configured columns override the model's own select", async () => {
+  // The setting means "the agent reads ONLY these" — and the model has a record
+  // of inventing column names that 400 the whole query.
+  let requested = "";
+  await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: "price_table",
+          select_columns: "type_name,price",
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({
+        capability: "search_products",
+        parameters: { table: "price_table", select: "product_name,secret_notes" },
+      }),
+    },
+    dependencies((url) => {
+      requested = String(url);
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+  assertStringIncludes(requested, "select=type_name%2Cprice");
+  assertEquals(requested.includes("secret_notes"), false);
+});
+
+Deno.test("without the setting the model's select still works as before", async () => {
+  let requested = "";
+  await executeConnector(
+    {
+      tool: supabaseTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({
+        capability: "search_products",
+        parameters: { table: "products", select: "name,price" },
+      }),
+    },
+    dependencies((url) => {
+      requested = String(url);
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+  assertStringIncludes(requested, "select=name%2Cprice");
 });
