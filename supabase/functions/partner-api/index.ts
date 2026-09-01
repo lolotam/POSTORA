@@ -31,6 +31,7 @@ import {
   WhatsAppOpError,
 } from "../_shared/whatsappPartnerOps.ts";
 import { isActionSuspended, isSendAction, limiterRiskClassFor, satisfyingScopesFor } from "./router.ts";
+import { handleV1Request, v1SubpathOf } from "./v1/router.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -142,12 +143,24 @@ export async function handleRequest(
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     ),
 ): Promise<Response> {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-
   // Declared first: every exit path below stamps it, including the ones that
   // run before a key is authenticated. `const` is not hoisted, so declaring it
   // later would make the method-not-allowed branch a ReferenceError.
   const requestId = crypto.randomUUID();
+
+  // The /v1 door (deliverable 2.1). A request whose path is under /v1 —
+  // relative to this function's mount — is served by the v1 router; everything
+  // else keeps the alias behaviour below, unchanged. Checked BEFORE the
+  // OPTIONS preflight so a /v1 preflight is not answered with the alias's
+  // CORS headers: the recorded CORS decision
+  // (docs/decisions/2026-08-30-partner-api-cors.md, 2026-08-31 correction 2)
+  // covers the alias only, and /v1 makes no Access-Control-* claims until its
+  // own decision is recorded.
+  const v1Path = v1SubpathOf(req.url);
+  if (v1Path !== null) return handleV1Request(req, v1Path, requestId);
+
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+
   if (req.method !== "POST") {
     // Before authentication, so there is no key to bill and no ledger row -
     // but the caller still gets a correlatable id.
