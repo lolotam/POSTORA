@@ -58,9 +58,14 @@ import {
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
-// Only the last 4 stored turns are replayed to the model on each reply, to keep
+// Only the last 6 stored turns are replayed to the model on each reply, to keep
 // the prompt (and token cost) small; older context lives in ai_thread_messages.
-const HISTORY_LIMIT = 4;
+//
+// Raised from 4 on 2026-09-02: at 4 rows the model saw roughly two exchanges, so a
+// customer returning to an existing thread ("the one I asked about earlier") got an
+// agent with no idea what that referred to. The 4 was set when the prompt also carried
+// a long stale price list; prices now come from the connector, which freed the budget.
+const HISTORY_LIMIT = 6;
 
 // For WhatsApp, recipient_phone is the customer's phone and phone_number_id
 // the business number. For Facebook/Instagram, recipient_phone carries the
