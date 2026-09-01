@@ -154,8 +154,11 @@ paths:
         Default scope is ALL bound accounts, each row labelled with
         `account_id` (spec D11) — never an implicit single-account default,
         which would change meaning the day a second account is bound.
-        `?account_id=` narrows to one; naming an unbound account answers
-        `resource_not_found`.
+        `?account_id=` narrows to one. Naming an unbound account answers
+        `resource_not_found`; naming a bound account whose platform is not
+        `whatsapp` answers `unsupported_capability`, the same verdict
+        `GET /v1/conversations/{id}` gives for that account — never an empty
+        page, which a partner cannot tell from a quiet inbox.
 
         WhatsApp only. Scope `conversations:read`. D7 class A.
       parameters:
@@ -577,9 +580,10 @@ components:
           type: string
           format: date-time
           description: |
-            Never null in a listing. Conversations with no last message are
-            excluded: it is the sort key the opaque cursor pages by, and a
-            null sort key would make that ordering partial.
+            Never null. Conversations with no last message are excluded from
+            BOTH the listing and the resource read: it is the sort key the
+            opaque cursor pages by, and a null sort key would make that
+            ordering partial.
         unread_count:
           type: integer
 
