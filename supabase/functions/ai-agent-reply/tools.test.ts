@@ -217,3 +217,64 @@ Deno.test("links must come from a tool, and stock status is not a reason to with
   assertEquals(prompt.includes("Never invent a link"), true);
   assertEquals(prompt.includes("out of stock is not a reason"), true);
 });
+
+/**
+ * Production, 2026-09-01 00:08 UTC. A Supabase connector was configured
+ * correctly — project URL, schema `public`, `table_allow_list = price_table`,
+ * anon key in Vault — and calling the adapter by hand returned the live row
+ * (كتاكيت جميزة, ١٨ جنية). Asked "ايه اسعار الكتاكيت اليوم", the agent called
+ * NO tool and answered "prices are set daily, message us on WhatsApp".
+ *
+ * The prompt is why. Rule one said "Answer ONLY from the business knowledge
+ * below", and the only tool it named was search_knowledge. A live connector was
+ * outside the sentence describing where an answer may come from.
+ */
+Deno.test("connectors are named in the prompt and preferred for live data", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    languageForced: false,
+    knowledgeBlocks: ["chicks are sold daily"],
+    nowIso: "2026-09-01T00:08:00Z",
+    connectorNames: ["supabase_product_catalog"],
+  });
+  // Naming the tool beats describing it: the model has to recognise the entry
+  // in its own function list.
+  assertEquals(prompt.includes("supabase_product_catalog"), true);
+  assertEquals(prompt.includes("BEFORE answering from the business knowledge"), true);
+  // The hallucination guard must still be there, widened rather than removed.
+  assertEquals(prompt.includes("Never invent prices"), true);
+});
+
+Deno.test("with no connectors the prompt keeps its knowledge-only wording", async () => {
+  // Most accounts have no connector; they must not be told to call one.
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "en",
+    languageForced: false,
+    knowledgeBlocks: [],
+    nowIso: "2026-09-01T00:08:00Z",
+  });
+  assertEquals(prompt.includes("BEFORE answering from the business knowledge"), false);
+  assertEquals(prompt.includes("Answer ONLY from the business knowledge"), true);
+});
+
+Deno.test("an upstream provider's own error detail is kept, not flattened", async () => {
+  // OpenRouter reports "Provider returned error" as the message and puts the
+  // real reason in code/metadata. Keeping only the message is why every liquid
+  // failure in system_logs reads identically and explains nothing.
+  const { completionFailure } = await import("./logic.ts");
+  const failure = completionFailure({
+    error: {
+      message: "Provider returned error",
+      code: 429,
+      metadata: { provider_name: "Liquid", raw: "rate limit exceeded" },
+    },
+  });
+  assertEquals(typeof failure, "string");
+  assertEquals((failure ?? "").includes("Provider returned error"), true);
+  assertEquals((failure ?? "").includes("429"), true);
+  assertEquals((failure ?? "").includes("Liquid"), true);
+});

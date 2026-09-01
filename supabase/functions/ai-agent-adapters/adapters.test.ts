@@ -565,3 +565,74 @@ Deno.test("an unrecognised payload shape is passed through, not emptied", () => 
     assertEquals(serialized(result.ok === true && result.action === "execute" ? result.data : null), '["a plain string",7]');
   });
 });
+
+/**
+ * Production, 2026-09-01. A Supabase price table answers correctly through the
+ * adapter, but its rows carry signed storage URLs several hundred characters
+ * long. The adapter asked for 20 rows and returned them verbatim, and
+ * connectorExecution.ts serialises that into the model's messages under a
+ * 2000-character budget -- so the model would have read three rows and half of
+ * a fourth, cut mid-JSON. Unlike WooCommerce the table is arbitrary, so the
+ * fields cannot be projected; the row count and the per-value length are what
+ * can be bounded.
+ */
+Deno.test("Supabase asks for a row count a model can actually read", async () => {
+  let requested = "";
+  await executeConnector(
+    {
+      tool: supabaseTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ capability: "search_products", parameters: { table: "products" } }),
+    },
+    dependencies((url) => {
+      requested = String(url);
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+  assertStringIncludes(requested, "limit=5");
+});
+
+Deno.test("an oversized cell is truncated so the rest of the rows survive", async () => {
+  const signedUrl = `https://p.supabase.co/storage/v1/object/sign/x.png?token=${"e".repeat(600)}`;
+  const rows = Array.from({ length: 5 }, (_, i) => ({
+    id: `row-${i}`,
+    type_name: "كتاكيت جميزة",
+    price: "١٨ جنية",
+    description: "لحم طبيعي وتحويل عالي",
+    image_url: signedUrl,
+  }));
+
+  const result = await executeConnector(
+    {
+      tool: supabaseTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ capability: "search_products", parameters: { table: "products" } }),
+    },
+    dependencies(() => Promise.resolve(jsonResponse(rows))),
+  );
+
+  assertEquals(result.ok, true);
+  const body = serialized(result.ok === true && result.action === "execute" ? result.data : null);
+  // Every row's price must still be there -- that is the answer the customer asked for.
+  assertEquals((body.match(/١٨ جنية/g) || []).length, 5);
+  assertEquals(body.includes("e".repeat(600)), false);
+  assertEquals(body.length < 2000, true, `payload is ${body.length} chars`);
+});
+
+Deno.test("ordinary values are returned untouched", async () => {
+  // Truncation must be invisible to a normal row, or it becomes a second bug.
+  const result = await executeConnector(
+    {
+      tool: supabaseTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ capability: "search_products", parameters: { table: "products" } }),
+    },
+    dependencies(() =>
+      Promise.resolve(jsonResponse([{ id: 1, price: "١٨ جنية", in_stock: true, qty: 40 }]))
+    ),
+  );
+  assertEquals(
+    serialized(result.ok === true && result.action === "execute" ? result.data : null),
+    '[{"id":1,"price":"١٨ جنية","in_stock":true,"qty":40}]',
+  );
+});

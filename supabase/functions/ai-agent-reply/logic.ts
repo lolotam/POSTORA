@@ -153,6 +153,13 @@ export interface SystemPromptParams {
   nowIso: string;
   isAdmin?: boolean;
   surface?: ReplySurface;
+  /**
+   * Names of the connector tools resolved for THIS account, as they appear in
+   * the model's function list. Naming them beats describing them: the model has
+   * to recognise its own entry, and a connector that is merely alluded to loses
+   * to a persona that already has an answer ready.
+   */
+  connectorNames?: string[];
 }
 
 const SURFACE_INSTRUCTIONS: Record<ReplySurface, { intro: string; rules: string[] }> = {
@@ -192,6 +199,32 @@ const LINK_RULES = [
   "- A product being out of stock is not a reason to withhold its link. Send the link the customer asked for and say plainly that it is currently unavailable.",
 ];
 
+/**
+ * The hallucination guard. Widened, never dropped, when connectors exist: a
+ * connector result is a legitimate source of an answer, and the original
+ * wording ("ONLY from the business knowledge") put live store data outside the
+ * sentence describing where an answer may come from. A correctly configured
+ * Supabase price table went unqueried for exactly that reason (2026-09-01).
+ */
+function knowledgeOnlyRule(connectorNames?: string[]): string {
+  return connectorNames?.length
+    ? "- Answer ONLY from the business knowledge below, your connector tool results, plus general courtesy. Never invent prices, availability, or policies."
+    : "- Answer ONLY from the business knowledge below plus general courtesy. Never invent prices, availability, or policies.";
+}
+
+/**
+ * Said only when the account actually has a connector. Most accounts have none
+ * and must not be told to call one.
+ */
+function connectorRules(connectorNames?: string[]): string[] {
+  if (!connectorNames?.length) return [];
+  const named = connectorNames.join(", ");
+  return [
+    `- This account has live business connectors: ${named}. Their data is current; the business knowledge below is an index and can be out of date.`,
+    "- For anything about current prices, stock, availability, catalogue contents or orders, call the connector tool BEFORE answering from the business knowledge, and before saying you do not have the information. Say you cannot find something only after the connector has actually been asked.",
+  ];
+}
+
 export function buildSystemPrompt(params: SystemPromptParams): string {
   const surface = params.surface ?? "dm";
   const languageName = params.language === "ar" ? "Arabic (العربية)" : "English";
@@ -224,7 +257,8 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     params.persona ? `Business persona and instructions:\n${params.persona}` : "",
     languageInstruction,
     "Rules:",
-    "- Answer ONLY from the business knowledge below plus general courtesy. Never invent prices, availability, or policies.",
+    knowledgeOnlyRule(params.connectorNames),
+    ...connectorRules(params.connectorNames),
     "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool.",
     "- If the customer asks for a person/human/agent, use the escalate_to_human tool and tell them someone will follow up.",
     "- Use the search_knowledge tool to look up product or policy details before saying something is unavailable.",
@@ -318,8 +352,23 @@ export function completionFailure(data: unknown): string | null {
   const body = data as { error?: unknown; choices?: unknown };
   if (typeof body.error === "string") return body.error;
   if (body.error) {
-    const { message } = body.error as { message?: unknown };
-    return typeof message === "string" ? message : "Chat completion failed";
+    // OpenRouter answers a failed upstream with message "Provider returned
+    // error" and puts the reason in `code` and `metadata` (provider name, raw
+    // upstream text). Keeping only `message` is why every such failure in
+    // system_logs reads identically and explains nothing.
+    const { message, code, metadata } = body.error as {
+      message?: unknown;
+      code?: unknown;
+      metadata?: unknown;
+    };
+    const base = typeof message === "string" ? message : "Chat completion failed";
+    const detail = [
+      code === undefined || code === null ? null : `code ${String(code)}`,
+      metadata === undefined || metadata === null
+        ? null
+        : JSON.stringify(metadata).slice(0, 200),
+    ].filter(Boolean).join(" ");
+    return detail ? `${base} (${detail})` : base;
   }
   if (!Array.isArray(body.choices)) return "Chat completion returned no choices";
   const message = (body.choices[0] as { message?: unknown } | undefined)?.message;
