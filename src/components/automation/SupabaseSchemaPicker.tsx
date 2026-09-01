@@ -5,6 +5,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   fetchSupabaseIntrospection,
+  fetchTableColumns,
+  TableListUnavailableError,
   type SupabaseIntrospection,
 } from "@/lib/supabaseIntrospection";
 
@@ -46,6 +48,10 @@ export function SupabaseSchemaPicker({
   const [introspection, setIntrospection] = useState<SupabaseIntrospection | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Supabase Cloud gates the table-listing endpoint to the service_role key,
+  // so on those projects only columns are discoverable -- per table the
+  // operator has named, by reading one sample row with the anon key.
+  const [tableListUnavailable, setTableListUnavailable] = useState(false);
 
   const ready = projectUrl.trim().length > 0 && anonKey.trim().length > 0;
   const selectedTables = parseList(tableAllowList);
@@ -59,14 +65,48 @@ export function SupabaseSchemaPicker({
     )]
     : [];
 
+  const sampleTypedTables = async () => {
+    if (selectedTables.length === 0) {
+      throw new TableListUnavailableError();
+    }
+    const columnsByTable: Record<string, string[]> = {};
+    const failures: string[] = [];
+    for (const table of selectedTables) {
+      try {
+        columnsByTable[table] = await fetchTableColumns(projectUrl, anonKey, schema, table);
+      } catch (cause) {
+        failures.push(cause instanceof Error ? cause.message : `Could not read "${table}".`);
+      }
+    }
+    if (Object.keys(columnsByTable).length === 0) {
+      throw new Error(failures.join(" ") || "Could not read any of the named tables.");
+    }
+    // Partial success still helps; the tables that failed are said out loud.
+    if (failures.length) setError(failures.join(" "));
+    return { tables: selectedTables, columnsByTable };
+  };
+
   const load = async () => {
     setLoading(true);
     setError(null);
+    setTableListUnavailable(false);
     try {
       setIntrospection(await fetchSupabaseIntrospection(projectUrl, anonKey, schema));
     } catch (cause) {
-      setIntrospection(null);
-      setError(cause instanceof Error ? cause.message : "Could not read the project.");
+      if (cause instanceof TableListUnavailableError && selectedTables.length > 0) {
+        // The listing is gated, not the data: fall back to sampling the tables
+        // the operator has already named.
+        try {
+          setIntrospection(await sampleTypedTables());
+          setTableListUnavailable(true);
+        } catch (sampleCause) {
+          setIntrospection(null);
+          setError(sampleCause instanceof Error ? sampleCause.message : "Could not read the project.");
+        }
+      } else {
+        setIntrospection(null);
+        setError(cause instanceof Error ? cause.message : "Could not read the project.");
+      }
     } finally {
       setLoading(false);
     }
@@ -102,6 +142,12 @@ export function SupabaseSchemaPicker({
         </p>
       )}
       {error && <p className="text-[10px] text-destructive">{error}</p>}
+      {tableListUnavailable && (
+        <p className="text-[10px] text-muted-foreground">
+          This project only lists tables to its service_role key, so the table names come from
+          the field above — columns below were read live from each table.
+        </p>
+      )}
 
       {introspection && (
         <div className="space-y-3">

@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   fetchSupabaseIntrospection,
+  fetchTableColumns,
   parseOpenApiDocument,
+  TableListUnavailableError,
 } from "@/lib/supabaseIntrospection";
 
 // The shape a real PostgREST root answers with, cut down to what the parser
@@ -102,5 +104,75 @@ describe("fetchSupabaseIntrospection", () => {
     await expect(
       fetchSupabaseIntrospection("https://p.co", "k", "public", fetcher as typeof fetch),
     ).rejects.toThrow(/CORS/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Supabase Cloud gates the OpenAPI root to the service_role key. Discovered in
+// production (2026-09-01): a provably working anon key -- the same key the
+// connector reads price_table with, HTTP 200 -- got 401 from the root with
+// {"hint":"Only the `service_role` API key can be used for this endpoint."}
+// The old code blamed the operator's key, sending them hunting a typo that
+// did not exist. Columns are instead learned per named table, from one sample
+// row -- the same read the connector itself performs.
+// ---------------------------------------------------------------------------
+
+describe("service_role-gated projects", () => {
+  it("a service_role-gated 401 is TableListUnavailable, not a bad key", async () => {
+    const fetcher = async () =>
+      new Response(
+        JSON.stringify({
+          message: "Invalid API key",
+          hint: "Only the `service_role` API key can be used for this endpoint.",
+        }),
+        { status: 401 },
+      );
+    await expect(
+      fetchSupabaseIntrospection("https://p.co", "valid-anon", "public", fetcher as typeof fetch),
+    ).rejects.toBeInstanceOf(TableListUnavailableError);
+  });
+
+  it("a plain 401 still blames the key", async () => {
+    const fetcher = async () => new Response(JSON.stringify({ message: "Invalid API key" }), { status: 401 });
+    await expect(
+      fetchSupabaseIntrospection("https://p.co", "bad", "public", fetcher as typeof fetch),
+    ).rejects.toThrow(/Check the key/);
+  });
+});
+
+describe("fetchTableColumns", () => {
+  it("derives the columns from one sample row", async () => {
+    let captured = "";
+    const fetcher = async (input: RequestInfo | URL) => {
+      captured = String(input);
+      return new Response(
+        JSON.stringify([{ id: "1", type_name: "كتاكيت جميزة", price: "١٨ جنية" }]),
+        { status: 200 },
+      );
+    };
+    const columns = await fetchTableColumns(
+      "https://p.co/",
+      "anon-1",
+      "public",
+      "price_table",
+      fetcher as typeof fetch,
+    );
+    expect(columns).toEqual(["id", "type_name", "price"]);
+    expect(captured).toBe("https://p.co/rest/v1/price_table?limit=1");
+  });
+
+  it("an empty table is named and explained, not returned as zero columns", async () => {
+    // RLS returning nothing here means the connector would also see nothing.
+    const fetcher = async () => new Response("[]", { status: 200 });
+    await expect(
+      fetchTableColumns("https://p.co", "k", "public", "empty_table", fetcher as typeof fetch),
+    ).rejects.toThrow(/empty, or hidden by RLS/);
+  });
+
+  it("a missing table names the table and the schema", async () => {
+    const fetcher = async () => new Response("", { status: 404 });
+    await expect(
+      fetchTableColumns("https://p.co", "k", "public", "typo_table", fetcher as typeof fetch),
+    ).rejects.toThrow(/"typo_table" was not found in schema "public"/);
   });
 });
