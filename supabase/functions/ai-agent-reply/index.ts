@@ -840,7 +840,9 @@ Deno.serve(async (req) => {
     // scoping real.
     const { data: customToolRows } = await admin
       .from("ai_agent_tools")
-      .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type")
+      // `settings` is read only to tell the model which tables this connector
+      // may reach; it holds no secret (credentials live in Vault).
+      .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, settings")
       .eq("user_id", request.user_id)
       .eq("is_enabled", true);
 

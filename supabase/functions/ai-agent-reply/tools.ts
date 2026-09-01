@@ -336,6 +336,55 @@ export interface CustomTool {
   // Optional so a row written before the registry existed still type-checks.
   // Absent behaves exactly like custom_rest: no guide, description unchanged.
   connector_type?: string | null;
+  /**
+   * The connector's own configuration. Read only to tell the model what this
+   * instance may reach: the registry describes a TYPE, and "Allowed PostgREST
+   * table to query" left the model guessing a name it could not know.
+   */
+  settings?: Record<string, unknown> | null;
+}
+
+/**
+ * The tables this connector instance may read, from its own settings. Stored as
+ * a comma- or newline-separated string, exactly as the adapter's tableAllowList
+ * parses it -- both sides must agree or the model is told one thing and refused
+ * another.
+ */
+function allowedTables(settings: Record<string, unknown> | null | undefined): string[] {
+  const raw = settings?.table_allow_list;
+  if (Array.isArray(raw)) {
+    return raw.filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim()).filter(Boolean);
+  }
+  if (typeof raw !== "string") return [];
+  return raw.split(/[,\n]/).map((value) => value.trim()).filter(Boolean);
+}
+
+/**
+ * Replaces the registry's generic `table` wording with the names this connector
+ * actually allows.
+ *
+ * A model that guesses a table name is refused by the adapter, and the refusal
+ * used to name no alternative, so it could not recover inside its tool
+ * iterations either -- the customer got "I can't reach the system"
+ * (2026-09-01). Left untouched when the connector declares no allow-list.
+ */
+function nameAllowedTables(
+  properties: Record<string, unknown>,
+  settings: Record<string, unknown> | null | undefined,
+): Record<string, unknown> {
+  const tables = allowedTables(settings);
+  const table = properties.table;
+  if (!tables.length || typeof table !== "object" || table === null) return properties;
+  return {
+    ...properties,
+    table: {
+      ...table,
+      description: `The table to query. Must be exactly one of: ${
+        tables.join(", ")
+      }. Omit it to use ${tables[0]}.`,
+    },
+  };
 }
 
 /** "query (required), sku" — what one capability accepts, for the flat schema. */
@@ -421,7 +470,7 @@ export function customToolDefinitions(tools: CustomTool[]) {
           parameters: {
             type: "object",
             description: "Arguments for the chosen capability.",
-            properties: mergeCapabilityParameters(capabilities),
+            properties: nameAllowedTables(mergeCapabilityParameters(capabilities), tool.settings),
           },
         },
         required: ["capability", "parameters"],
