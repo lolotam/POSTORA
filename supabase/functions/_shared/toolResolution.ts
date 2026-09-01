@@ -21,6 +21,8 @@ export interface ResolvableTool {
   scope: "account" | "all_accounts";
   social_account_id: string | null;
   connector_type: string;
+  /** Carried through so the emitted schema can name this instance's tables. */
+  settings?: Record<string, unknown> | null;
 }
 
 export interface ToolAccountLink {

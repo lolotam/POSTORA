@@ -123,7 +123,15 @@ function validateResource(table: string, select: string, allowList: string[]): v
     throw new SupabaseValidationError("supabase_resource_invalid", "The Supabase resource is invalid.");
   }
   if (!allowList.includes(table)) {
-    throw new SupabaseValidationError("supabase_resource_refused", "The Supabase resource is not allowed.");
+    // The allowed names are said out loud so the model can correct itself on a
+    // later tool iteration. "not allowed" alone named no alternative, so a
+    // guessed table ended the conversation with "I cannot reach the system"
+    // (2026-09-01). These names are the operator's own configuration, already
+    // visible to them in the connector form -- not a secret.
+    throw new SupabaseValidationError(
+      "supabase_resource_refused",
+      `Table "${table}" is not allowed for this connector. Allowed tables: ${allowList.join(", ")}.`,
+    );
   }
   // Defence in depth only: the table allow-list is not the security boundary.
   // The target project's RLS is the boundary that PostgREST query syntax cannot bypass.
@@ -196,7 +204,17 @@ async function callSupabase(
       },
     }, dependencies);
     if (!response.ok) {
-      return supabaseFailure("supabase_http_error", "Supabase rejected the request.", response.status);
+      // A 400 here is almost always a column the model invented in `select` or
+      // `filters`; saying so lets it retry without them instead of telling the
+      // customer the system is down. The vendor's own message is NOT echoed:
+      // it names columns of the operator's database.
+      return supabaseFailure(
+        "supabase_http_error",
+        response.status === 400
+          ? "Supabase rejected the query. Retry the same capability with no `select` and no `filters`."
+          : "Supabase rejected the request.",
+        response.status,
+      );
     }
     const payload = await readJson(response);
     if (

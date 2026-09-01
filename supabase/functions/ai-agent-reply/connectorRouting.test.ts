@@ -328,3 +328,68 @@ Deno.test("every capability's arguments are nameable in the flat schema", () => 
     assertEquals(Object.hasOwn(flat, key), true, `flat schema is missing ${key}`);
   }
 });
+
+/**
+ * Production, 2026-09-01 01:49 and 01:50 UTC. After #100 the model finally
+ * called the Supabase connector — twice — and both calls failed:
+ *
+ *   {"event":"connector_failure","operation":"search_products",
+ *    "error_code":"supabase_resource_refused"}
+ *   {"event":"connector_failure","operation":"search_products",
+ *    "error_code":"supabase_http_error","vendor_status":400}
+ *
+ * The customer was told "I can't get the live price from the system".
+ *
+ * Nothing ever told the model which table it may read. The parameter said only
+ * "Allowed PostgREST table to query", so it guessed a name, was refused, and
+ * the refusal — "The Supabase resource is not allowed." — named no alternative,
+ * so it could not self-correct inside its five tool iterations either.
+ *
+ * The connector row already knows: settings.table_allow_list.
+ */
+Deno.test("the schema names the tables this connector may actually read", () => {
+  const tool = {
+    ...legacyTool,
+    id: "44444444-4444-4444-8444-444444444444",
+    name: "supabase_product_catalog",
+    connector_type: "supabase",
+    settings: { schema: "public", table_allow_list: "price_table" },
+  };
+  const parameters = customToolDefinitions([tool])[0].function.parameters as unknown as {
+    properties: { parameters: { properties: Record<string, { description?: string }> } };
+  };
+  const table = parameters.properties.parameters.properties.table;
+  assertStringIncludes(table.description ?? "", "price_table");
+});
+
+Deno.test("several allowed tables are all named", () => {
+  const tool = {
+    ...legacyTool,
+    id: "55555555-5555-4555-8555-555555555555",
+    name: "db",
+    connector_type: "supabase",
+    settings: { table_allow_list: "price_table, stock_table" },
+  };
+  const parameters = customToolDefinitions([tool])[0].function.parameters as unknown as {
+    properties: { parameters: { properties: Record<string, { description?: string }> } };
+  };
+  const described = parameters.properties.parameters.properties.table.description ?? "";
+  assertStringIncludes(described, "price_table");
+  assertStringIncludes(described, "stock_table");
+});
+
+Deno.test("a connector with no allow-list keeps the registry wording", () => {
+  const tool = {
+    ...legacyTool,
+    id: "66666666-6666-4666-8666-666666666666",
+    name: "db2",
+    connector_type: "supabase",
+  };
+  const parameters = customToolDefinitions([tool])[0].function.parameters as unknown as {
+    properties: { parameters: { properties: Record<string, { description?: string }> } };
+  };
+  assertEquals(
+    parameters.properties.parameters.properties.table.description,
+    "Allowed PostgREST table to query. Omit to use the connector's first allowed table.",
+  );
+});
