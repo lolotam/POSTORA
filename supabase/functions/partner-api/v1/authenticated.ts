@@ -1,0 +1,220 @@
+// The authenticated /v1 pipeline (deliverable 3.5).
+//
+// WHAT THIS IS, AND WHAT IT DELIBERATELY IS NOT
+// ---------------------------------------------
+// Phase 2 shipped /v1 with NO authentication: the router was handed a
+// `refusingClient()` that throws if /v1 touches Supabase at all. That was not
+// an omission, it was the non-enumerability property — an unmatched path 404s
+// without a database call, so a probe learns nothing about what exists.
+//
+// **That property survives here.** Authentication attaches to a MATCHED
+// ROUTE, never above routing. `handleV1Request` still resolves the path
+// first; only then does a route's handler reach for a client. Moving auth
+// above routing would make an unmatched path observably different for a
+// valid key, which is exactly what v1/router.test.ts asserts against.
+//
+// This module composes the SAME shared modules the alias composes, in the
+// SAME order, rather than re-deriving any of their logic:
+//
+//     scope -> suspension -> account -> idempotency -> quota
+//
+// The order is a contract, not an implementation detail. Scope precedes
+// suspension so a key lacking the scope still gets `insufficient_scope`
+// rather than `temporarily_unavailable`: a partner must be able to tell
+// "you may never do this with this key" from "nobody may do this yet". The
+// first needs a new grant; the second needs waiting. Collapse them and a
+// partner debugging a 503 goes looking for an outage.
+//
+// The alias keeps its own composition, untouched. Convergence under D1 means
+// a shared implementation UNDERNEATH — these modules — not a shared response
+// shape: the alias answers `{success:false, error:{…}, request_id}` and /v1
+// answers `{error:{…, request_id}}`, deliberately (D2).
+
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import {
+  authenticatePartnerKey,
+  assertActionAuthorized,
+  PartnerAuthError,
+  type PartnerKeyRecord,
+} from "../../_shared/partnerApiKeys.ts";
+import {
+  checkRateLimit,
+  RateLimitedError,
+  type LimiterRiskClass,
+} from "../../_shared/partnerApiMetering.ts";
+import { satisfyingScopesFor } from "../router.ts";
+import { v1ErrorResponse } from "./errors.ts";
+import type { WhatsAppOpsContext } from "../../_shared/whatsappPartnerOps.ts";
+
+/** Everything a /v1 route needs once the caller is known and allowed. */
+export interface V1AuthedContext {
+  // deno-lint-ignore no-explicit-any
+  admin: any;
+  record: PartnerKeyRecord;
+  requestId: string;
+  /** Rate-limit headers for the resolved budget; stamp them on the response. */
+  rateHeaders: Record<string, string>;
+}
+
+export type V1AuthedHandler = (
+  req: Request,
+  authed: V1AuthedContext,
+  params: Record<string, string>,
+) => Promise<Response>;
+
+// deno-lint-ignore no-explicit-any
+export type AdminFactory = () => any;
+
+const defaultAdminFactory: AdminFactory = () =>
+  createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+/**
+ * Wrap a route handler with authentication, the action's scope check, and the
+ * limiter.
+ *
+ * `action` is the ALIAS action name whose policy this route inherits, so the
+ * two surfaces cannot drift into different scope or risk-class answers for the
+ * same capability. That is D1 convergence in practice: one policy table
+ * (`ACTION_SCOPES` / `ACTION_RISK_CLASSES` in router.ts), two doors.
+ */
+export function withPartnerAuth(
+  action: string,
+  riskClass: LimiterRiskClass,
+  handler: V1AuthedHandler,
+  adminFactory: AdminFactory = defaultAdminFactory,
+) {
+  return async (
+    req: Request,
+    requestId: string,
+    params: Record<string, string>,
+    // deno-lint-ignore no-explicit-any
+    doorFactory?: () => any,
+  ): Promise<Response> => {
+    // The door's factory wins when it supplies one: /v1 and the alias then
+    // share a client, and a test can stub the Supabase boundary for both.
+    const admin = (doorFactory ?? adminFactory)();
+    let record: PartnerKeyRecord;
+
+    try {
+      // The same header the document declares and the alias reads. A missing
+      // or unknown key is indistinguishable from a malformed one, by design.
+      record = await authenticatePartnerKey(admin, req.headers.get("x-postora-key") ?? "");
+
+      const satisfying = satisfyingScopesFor(action);
+      if (satisfying === undefined) {
+        // An action this door offers but the policy table does not know is a
+        // programming error, not a partner error — fail closed and loudly.
+        console.error(`[partner-api] v1 route declares unknown action "${action}"`);
+        return v1ErrorResponse("internal_error", requestId);
+      }
+      if (satisfying !== null) assertActionAuthorized(record, action, satisfying);
+    } catch (err) {
+      return authErrorToResponse(err, requestId);
+    }
+
+    // The limiter runs AFTER authorization: an unauthorized caller must not
+    // learn a key's budget, and must not consume one.
+    let rateHeaders: Record<string, string> = {};
+    try {
+      const decision = await checkRateLimit(admin, record, riskClass);
+      if (decision.status === "resolved") {
+        rateHeaders = {
+          "X-RateLimit-Limit": String(record.rateLimitPerMin),
+          "X-RateLimit-Remaining": String(decision.remaining),
+          "X-RateLimit-Reset": String(decision.resetSeconds),
+        };
+      }
+    } catch (err) {
+      return authErrorToResponse(err, requestId);
+    }
+
+    const res = await handler(req, { admin, record, requestId, rateHeaders }, params);
+    // A handler that built its own response still gets the budget headers,
+    // so every post-limiter /v1 response carries them exactly once.
+    for (const [k, v] of Object.entries(rateHeaders)) {
+      if (!res.headers.has(k)) res.headers.set(k, v);
+    }
+    return res;
+  };
+}
+
+/**
+ * Translate the shared modules' typed errors into the /v1 envelope.
+ *
+ * `RateLimitedError` is checked FIRST because it extends `PartnerAuthError`;
+ * an `instanceof` ladder in the other order would answer every 429 as a
+ * generic auth failure.
+ */
+function authErrorToResponse(err: unknown, requestId: string): Response {
+  if (err instanceof RateLimitedError) {
+    return v1ErrorResponse("rate_limited", requestId, {
+      headers: err.resetSeconds !== null
+        ? { "Retry-After": String(err.resetSeconds) }
+        : {},
+    });
+  }
+  if (err instanceof PartnerAuthError) {
+    // The code is already the typed, partner-safe one the alias emits; the
+    // policy table owns its status and retry verdict so the two surfaces
+    // cannot disagree about the same condition.
+    return v1ErrorResponse(err.code as never, requestId);
+  }
+  console.error(`[partner-api] v1 auth pipeline error (request ${requestId}):`, err);
+  return v1ErrorResponse("internal_error", requestId);
+}
+
+/**
+ * Resolve the WhatsApp account a key is pinned to, with the same preflight the
+ * alias applies: the composite FK proves the account is in the workspace, it
+ * does NOT prove the account is WhatsApp or healthy.
+ */
+export async function resolveWhatsAppAccount(
+  authed: V1AuthedContext,
+): Promise<
+  | { ok: true; ctx: WhatsAppOpsContext; wabaId: string | null }
+  | { ok: false; res: Response }
+> {
+  const { admin, record, requestId } = authed;
+  const { data: account, error } = await admin
+    .from("social_accounts")
+    .select(
+      "id, user_id, workspace_id, platform, platform_user_id, access_token, " +
+        "connection_mode, is_active, needs_reauth, token_expires_at, account_metadata",
+    )
+    .eq("id", record.socialAccountId)
+    .maybeSingle();
+
+  if (error) return { ok: false, res: v1ErrorResponse("internal_error", requestId) };
+
+  if (!account || account.platform !== "whatsapp" || !account.is_active) {
+    return { ok: false, res: v1ErrorResponse("account_not_connected", requestId) };
+  }
+
+  const tokenExpired = account.token_expires_at &&
+    new Date(account.token_expires_at) <= new Date();
+  if (account.needs_reauth || tokenExpired) {
+    return { ok: false, res: v1ErrorResponse("account_needs_reauth", requestId) };
+  }
+
+  // Recorded at connection time, not derivable from the account row. Routes
+  // that need it check for null themselves -- the ALIAS answers
+  // `account_not_connected` when it is missing, and /v1 must agree.
+  const wabaId = (account.account_metadata as Record<string, unknown> | null)?.waba_id;
+
+  return {
+    ok: true,
+    wabaId: wabaId ? String(wabaId) : null,
+    ctx: {
+      admin,
+      accountId: account.id,
+      ownerId: account.user_id,
+      workspaceId: account.workspace_id,
+      phoneNumberId: account.platform_user_id,
+      accessToken: account.access_token,
+      connectionMode: account.connection_mode,
+    },
+  };
+}

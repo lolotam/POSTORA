@@ -14,6 +14,9 @@
 // wired into /v1 yet — they arrive with the endpoints that need them (2.3+).
 
 import { v1ErrorResponse } from "./errors.ts";
+import { withPartnerAuth } from "./authenticated.ts";
+import { postMessages } from "./messages.ts";
+import { getTemplates } from "./templates.ts";
 
 /** The segment Kong serves this function under. Located by segment, not by
  *  prefix-of-path, so the mount depth (localhost, gateway, direct) cannot
@@ -45,6 +48,11 @@ export type V1RouteHandler = (
   req: Request,
   requestId: string,
   params: Record<string, string>,
+  /** The door's client factory. Passed down rather than imported so a test can
+   *  drive an authenticated route against a stubbed Supabase boundary, and so
+   *  /v1 and the alias cannot end up with two different clients. */
+  // deno-lint-ignore no-explicit-any
+  createAdminClient?: () => any,
 ) => Promise<Response>;
 
 export interface V1Route {
@@ -59,12 +67,33 @@ export interface V1Route {
 }
 
 /**
- * The /v1 route table. EMPTY in 2.1/2.2 by decree — no business endpoints
- * until 2.3. This is a policy state, not an omission: the alias keeps serving
- * everything real, and the first /v1 endpoint (2.3, GET /v1/accounts) lands
- * as one entry here plus its handler.
+ * The /v1 route table.
+ *
+ * Each entry names the ALIAS action whose policy it inherits, so the two
+ * doors cannot drift into different scope or risk-class answers for the same
+ * capability — that is D1 convergence in practice: one policy table, two
+ * doors. `withPartnerAuth` reads the scope from `ACTION_SCOPES` and hands the
+ * risk class to the limiter.
+ *
+ * Authentication attaches HERE, to a matched route — never above routing.
+ * An unmatched path still 404s without touching Supabase, which is the
+ * non-enumerability property Phase 2 established and v1/router.test.ts
+ * asserts against.
  */
-export const V1_ROUTES: V1Route[] = [];
+export const V1_ROUTES: V1Route[] = [
+  {
+    pattern: "/v1/messages",
+    methods: {
+      POST: withPartnerAuth("send_template", "C", postMessages),
+    },
+  },
+  {
+    pattern: "/v1/templates",
+    methods: {
+      GET: withPartnerAuth("list_templates", "B", getTemplates),
+    },
+  },
+];
 
 export type V1Resolution =
   | { kind: "routed"; route: V1Route; params: Record<string, string> }
@@ -128,12 +157,14 @@ export async function handleV1Request(
   req: Request,
   subPath: string,
   requestId: string,
+  // deno-lint-ignore no-explicit-any
+  createAdminClient?: () => any,
 ): Promise<Response> {
   const resolution = resolveV1Route(V1_ROUTES, subPath, req.method);
   if (resolution.kind === "routed") {
     const handler = resolution.route.methods[req.method.toUpperCase()]!;
     try {
-      return await handler(req, requestId, resolution.params);
+      return await handler(req, requestId, resolution.params, createAdminClient);
     } catch (err) {
       // The response stays typed and partner-safe; the technical detail goes
       // to the server log only, keyed by the correlation handle.

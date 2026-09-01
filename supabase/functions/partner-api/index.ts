@@ -147,7 +147,7 @@ export async function handleRequest(
   // covers the alias only, and /v1 makes no Access-Control-* claims until its
   // own decision is recorded.
   const v1Path = v1SubpathOf(req.url);
-  if (v1Path !== null) return handleV1Request(req, v1Path, requestId);
+  if (v1Path !== null) return handleV1Request(req, v1Path, requestId, createAdminClient);
 
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -387,6 +387,7 @@ export async function handleRequest(
       idempotencyKey: idempotencyKey!,
       attemptToken,
       input: {
+        kind: "template" as const,
         recipientPhone: String(body.recipient_phone),
         templateName: String(body.template_name),
         templateLanguage: String(body.template_language ?? "en_US"),

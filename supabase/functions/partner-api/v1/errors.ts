@@ -138,6 +138,15 @@ export const V1_ERROR_POLICY = {
     status: 400, retryable: false,
     message: "Unknown action",
   },
+  // A platform/type combination that does not exist -- not a permission
+  // problem and not a temporary one, so 422 rather than 403 or 503, and
+  // never retryable: the same request will never become valid. Distinct
+  // from unsupported_direct_qr, which is about the ACCOUNT's connection
+  // mode rather than the request's shape (PRD 15.4).
+  unsupported_capability: {
+    status: 422, retryable: false,
+    message: "That message type is not supported for this account",
+  },
   unsupported_direct_qr: {
     status: 400, retryable: false,
     message: "Template messages are not supported in Direct QR mode",

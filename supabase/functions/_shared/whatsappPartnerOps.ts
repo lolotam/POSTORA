@@ -34,6 +34,19 @@ export interface SendTemplateInput {
   callbackData?: string;
 }
 
+/**
+ * A free-form text send. Unlike a template, this is only deliverable inside
+ * the 24-hour customer service window -- Meta refuses it with 131047 outside,
+ * which translateMetaError already maps to `outside_session_window`. That is
+ * a genuine rejection (proof of non-delivery), not an indeterminate.
+ */
+export interface SendTextInput {
+  recipientPhone: string;
+  body: string;
+  /** Same correlator contract as SendTemplateInput.callbackData (D13, 3.4). */
+  callbackData?: string;
+}
+
 export interface SendResult {
   messageId: string;
   /** False when Meta accepted the send but Postora failed to record it. */
@@ -310,7 +323,93 @@ export async function sendTemplate(
     );
   }
 
-  const persisted = await persistOutbound(ctx, input, messageId);
+  const persisted = await persistOutbound(ctx, {
+    recipientPhone: input.recipientPhone,
+    preview: `[Template: ${input.templateName}]`,
+    messageType: "template",
+  }, messageId);
+  return { messageId, persisted, raw: body };
+}
+
+/**
+ * Send a free-form text message.
+ *
+ * NEW PROVIDER SURFACE for the partner API (deliverable 3.5): before this,
+ * `sendTemplate` was the only send here. It deliberately mirrors sendTemplate
+ * rather than sharing a generic sender, because the two differ in exactly the
+ * places that matter -- the payload shape, the session-window failure mode,
+ * and the inbox preview -- and a parameterised super-sender would hide those
+ * behind flags.
+ *
+ * What it does NOT do differently: it is called from the SAME durable
+ * dispatch core (`dispatchPartnerTemplate` in partnerDispatch.ts), under the
+ * same one-intent-per-attempt boundary. A text send that bypassed that core
+ * would reintroduce the duplicate D13 exists to prevent, which is why the
+ * core owns the provider call and this function is never invoked directly
+ * from a route.
+ *
+ * No auto-registration retry: that path exists for coexistence numbers whose
+ * FIRST Cloud API call is a template send. A text send to an unregistered
+ * number is a configuration error, not something to paper over with a
+ * second POST.
+ */
+export async function sendText(
+  ctx: WhatsAppOpsContext,
+  input: SendTextInput,
+  fetcher: Fetcher = fetch,
+): Promise<SendResult> {
+  if (ctx.connectionMode === "evolution_qr") {
+    throw new WhatsAppOpError(
+      "Free-form sends are not supported in Direct QR mode",
+      "unsupported_direct_qr",
+      400,
+    );
+  }
+
+  const payload = {
+    messaging_product: "whatsapp",
+    to: input.recipientPhone,
+    type: "text",
+    text: { body: input.body },
+    ...(input.callbackData !== undefined
+      ? { biz_opaque_callback_data: input.callbackData }
+      : {}),
+  };
+
+  // Same bounded-request discipline as sendTemplate: a hung Graph call must
+  // not outlive the function, or the idempotency row stays `processing`
+  // forever and that key is poisoned.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  const response = await fetcher(`${GRAPH_API}/${ctx.phoneNumberId}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${ctx.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timer));
+
+  const body = await readJsonWithin(response, 10_000);
+
+  if (!response.ok || body?.error) throw translateMetaError(response.status, body);
+
+  const messageId = body?.messages?.[0]?.id;
+  if (!messageId) {
+    // 2xx means Meta very likely accepted it; we simply cannot name it.
+    // Indeterminate, never a rejection.
+    throw new WhatsAppOpError(
+      "Meta accepted the send but returned no message id",
+      "meta_error", 502, undefined, true,
+    );
+  }
+
+  const persisted = await persistOutbound(ctx, {
+    recipientPhone: input.recipientPhone,
+    preview: input.body.slice(0, 200),
+    messageType: "text",
+  }, messageId);
   return { messageId, persisted, raw: body };
 }
 
@@ -321,11 +420,11 @@ export async function sendTemplate(
  */
 async function persistOutbound(
   ctx: WhatsAppOpsContext,
-  input: SendTemplateInput,
+  outbound: { recipientPhone: string; preview: string; messageType: string },
   messageId: string,
 ): Promise<boolean> {
-  const preview = `[Template: ${input.templateName}]`;
-  const normalizedPhone = input.recipientPhone.replace(/^\+/, "");
+  const { preview } = outbound;
+  const normalizedPhone = outbound.recipientPhone.replace(/^\+/, "");
   const conversationId = `wa_${ctx.phoneNumberId}_${normalizedPhone}`;
 
   const { error } = await ctx.admin.from("whatsapp_messages").insert({
@@ -335,9 +434,9 @@ async function persistOutbound(
     message_id: messageId,
     from_phone: ctx.phoneNumberId,
     from_name: "You",
-    to_phone: input.recipientPhone,
+    to_phone: outbound.recipientPhone,
     message_text: preview,
-    message_type: "template",
+    message_type: outbound.messageType,
     direction: "outbound",
     status: "sent",
     timestamp: new Date().toISOString(),
@@ -355,7 +454,7 @@ async function persistOutbound(
     social_account_id: ctx.accountId,
     workspace_id: ctx.workspaceId,
     phone_number_id: ctx.phoneNumberId,
-    recipient_phone: input.recipientPhone,
+    recipient_phone: outbound.recipientPhone,
     preview,
   });
 }
