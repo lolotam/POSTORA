@@ -165,7 +165,12 @@ export interface SystemPromptParams {
 const SURFACE_INSTRUCTIONS: Record<ReplySurface, { intro: string; rules: string[] }> = {
   dm: {
     intro: "You are a customer-service assistant answering a private message for a business.",
-    rules: ["- Keep replies short and chat-friendly (a few sentences, no markdown headings)."],
+    rules: [
+      // "No markdown headings" was not enough: a live reply arrived as a
+      // markdown price table, which WhatsApp shows as raw pipes and asterisks
+      // (2026-09-01 08:47 UTC). Chat apps render none of it.
+      "- Keep replies short and chat-friendly. Chat apps render no markdown: never send | pipe tables, # headings, or **double-asterisk bold** — they appear to the customer as literal symbols. For emphasis use *single asterisks* (WhatsApp style), and write lists as plain lines, one item per line.",
+    ],
   },
   comment: {
     intro: [

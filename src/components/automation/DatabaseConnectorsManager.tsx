@@ -59,6 +59,7 @@ import {
 import type { AiAgentPlatform } from "@/hooks/useAiAgentConfig";
 import { callEdgeApi } from "@/lib/messagingApi";
 import { connectorDefinition, shouldUseAdapter, type Field } from "@/lib/connectorRegistry";
+import { SupabaseSchemaPicker } from "@/components/automation/SupabaseSchemaPicker";
 import {
   accountLabel,
   agentAccounts,
@@ -2057,6 +2058,24 @@ function DatabaseConnectorsEditor({
                       </div>
                     );
                   })}
+
+                  {/* Dropdown upgrade for Supabase: offers the project's own
+                      tables and columns, writing back into the same registry
+                      fields above. Free text keeps working when it cannot run. */}
+                  {form.connector_type === "supabase" && (
+                    <SupabaseSchemaPicker
+                      projectUrl={form.credentials.project_url ?? ""}
+                      anonKey={form.credentials.anon_key ?? ""}
+                      schema={form.credentials.schema ?? "public"}
+                      tableAllowList={form.credentials.table_allow_list ?? ""}
+                      selectColumns={form.credentials.select_columns ?? ""}
+                      onPatch={(patch) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          credentials: { ...prev.credentials, ...patch },
+                        }))}
+                    />
+                  )}
 
                   {/* Generic endpoint input only for types whose registry
                       declares no url credential field. */}

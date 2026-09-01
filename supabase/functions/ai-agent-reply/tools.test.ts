@@ -380,3 +380,22 @@ Deno.test("no connectors still means no reminder at all", async () => {
   });
   assertEquals(prompt.includes("earlier reply in this conversation"), false);
 });
+
+/**
+ * 2026-09-01 08:47 UTC: a price answer went out as a markdown table --
+ * "| نوع الكتاكيت | السعر |" -- plus **bold**. WhatsApp renders neither; the
+ * customer sees raw pipes and asterisks. The dm rule said only "no markdown
+ * headings", which forbade the one markdown feature the model was not using.
+ */
+Deno.test("a DM is told chat apps render no markdown at all", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    languageForced: false,
+    knowledgeBlocks: [],
+    nowIso: "2026-09-01T08:47:00Z",
+  });
+  assertEquals(prompt.includes("pipe tables"), true);
+  assertEquals(prompt.includes("*single asterisks*"), true);
+});
