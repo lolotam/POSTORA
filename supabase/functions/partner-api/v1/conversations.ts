@@ -30,6 +30,7 @@
 
 import {
   boundAccountIds,
+  fetchBoundAccounts,
   selectBoundAccounts,
 } from "./binding.ts";
 import { decodeId, encodeId } from "./ids.ts";
@@ -81,18 +82,39 @@ function presentMessage(row: any, conversationUuid: string | null): Record<strin
 }
 
 /** `?account_id=` narrowed to the bound set, or the refusal to send. */
-function accountFilterFrom(
+async function accountFilterFrom(
   req: Request,
+  authed: V1AuthedContext,
   boundIds: string[],
-  requestId: string,
-): { ok: true; ids: string[] } | { ok: false; res: Response } {
+): Promise<{ ok: true; ids: string[] } | { ok: false; res: Response }> {
+  const { requestId } = authed;
   const raw = new URL(req.url).searchParams.get("account_id");
   if (raw === null || raw === "") return { ok: true, ids: boundIds };
+
   const accountId = decodeId("acc", raw);
   // A malformed selector answers as an unbound one does — the partner learns
   // nothing about which account ids exist.
   if (accountId === null) return { ok: false, res: v1ErrorResponse("resource_not_found", requestId) };
-  return selectBoundAccounts(boundIds, accountId, requestId);
+
+  const selected = selectBoundAccounts(boundIds, accountId, requestId);
+  if (!selected.ok) return selected;
+
+  // Selecting a bound account whose platform this surface cannot read used to
+  // answer an empty page — the exact lie the file header rejects for the
+  // resource read, arriving through the filter instead. The two now agree,
+  // and the extra lookup is paid only when a selector was supplied.
+  const accounts = await fetchBoundAccounts(authed, selected.ids);
+  if (!accounts.ok) return accounts;
+  const account = accounts.accounts[0];
+  if (account && account.platform !== READABLE_PLATFORM) {
+    return {
+      ok: false,
+      res: v1ErrorResponse("unsupported_capability", requestId, {
+        message: `Conversations are readable for ${READABLE_PLATFORM} accounts only`,
+      }),
+    };
+  }
+  return selected;
 }
 
 export async function listConversations(
@@ -107,7 +129,7 @@ export async function listConversations(
   const bound = await boundAccountIds(authed);
   if (!bound.ok) return bound.res;
 
-  const scope = accountFilterFrom(req, bound.ids, requestId);
+  const scope = await accountFilterFrom(req, authed, bound.ids);
   if (!scope.ok) return scope.res;
   // An unbound key reads nothing. Short-circuiting also keeps an empty
   // `IN ()` — which PostgREST rejects — off the wire.
@@ -187,6 +209,12 @@ async function loadBoundConversation(
     .select(CONVERSATION_COLUMNS)
     .eq("id", conversationId)
     .eq("workspace_id", record.workspaceId)
+    // The same exclusion the listing applies, for a different reason. There
+    // it makes the cursor's ordering total; here it keeps this route inside
+    // the published `Conversation` schema, which types `last_message_at` as
+    // a string. Nothing observable is lost: a listing never emits such a row,
+    // so a partner can never be holding its id.
+    .not("last_message_at", "is", null)
     // The binding filter is part of the LOOKUP, not a check applied to what
     // came back. A row fetched first and rejected second is one refactor away
     // from being returned by mistake; a row that was never selected cannot

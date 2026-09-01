@@ -270,6 +270,29 @@ Deno.test("T6: a tampered cursor is REJECTED, never silently reset to page 1", a
   }
 });
 
+Deno.test("T6b: a cursor timestamp that Date.parse ACCEPTS but PostgREST would choke on is refused", async () => {
+  // Date.parse is not a guard: V8 still honours legacy US formats, so
+  // Date.parse("May 8, 2026") succeeds. That string carries a comma, and a
+  // comma separates disjuncts in PostgREST's `or=` grammar — it would split
+  // the keyset filter into extra terms and answer a partner-triggerable 500
+  // instead of a 400. The shape check, not the parse, is what stops it.
+  const smuggled = btoa(JSON.stringify({ t: "May 8, 2026", i: CONV }));
+  assertEquals(Number.isNaN(Date.parse("May 8, 2026")), false, "the premise: Date.parse accepts it");
+
+  const client = stub();
+  const res = await handleRequest(
+    v1(`/v1/conversations?cursor=${encodeURIComponent(smuggled)}`),
+    () => client,
+  );
+  assertEquals(res.status, 400);
+  assertEquals((await body(res)).error.code, "invalid_request");
+  assertEquals(
+    queryFor(client, "messaging_cache"),
+    undefined,
+    "a rejected cursor must not reach the database at all",
+  );
+});
+
 Deno.test("T7: limit is clamped in range but a non-integer is refused", async () => {
   const clamped = stub();
   await handleRequest(v1("/v1/conversations?limit=5000"), () => clamped);
@@ -352,6 +375,58 @@ Deno.test("T10: a bound non-WhatsApp conversation is unsupported_capability, not
   const res = await handleRequest(v1(`/v1/conversations/conv_${CONV}`), () => client);
   assertEquals(res.status, 422);
   assertEquals((await body(res)).error.code, "unsupported_capability");
+});
+
+Deno.test("T10b: ?account_id= on a bound non-WhatsApp account is 422, not an empty page", async () => {
+  // The filter path used to answer an empty 200 here while the resource read
+  // answered 422 for the same account — the same lie this file's header
+  // rejects, arriving through a query parameter instead.
+  const client = stub({
+    rows: {
+      social_accounts: [{
+        id: ACCT_BOUND,
+        platform: "facebook",
+        platform_user_id: "page-1",
+        platform_username: "a page",
+        is_active: true,
+        needs_reauth: false,
+        connected_at: "2026-08-01T00:00:00Z",
+      }],
+    },
+  });
+  const res = await handleRequest(
+    v1(`/v1/conversations?account_id=acc_${ACCT_BOUND}`),
+    () => client,
+  );
+  assertEquals(res.status, 422);
+  assertEquals((await body(res)).error.code, "unsupported_capability");
+});
+
+Deno.test("T10c: the resource read excludes a null last_message_at, as the listing does", async () => {
+  // The published Conversation schema types last_message_at as a string. The
+  // listing excludes nulls to keep the cursor's ordering total; this route
+  // must exclude them too or it can answer a row the contract forbids.
+  const client = stub({
+    rows: {
+      messaging_cache: [{
+        id: CONV,
+        social_account_id: ACCT_BOUND,
+        platform: "whatsapp",
+        conversation_id: "wa_phone-1_1555",
+        participant_name: "+1555",
+        last_message_preview: "hi",
+        last_message_at: "2026-08-01T00:00:00Z",
+        unread_count: 0,
+      }],
+    },
+  });
+  await handleRequest(v1(`/v1/conversations/conv_${CONV}`), () => client);
+  const lookup = queryFor(client, "messaging_cache")!;
+  assertEquals(
+    lookup.calls.some((c) => c[0] === "not" && c[1] === "last_message_at"),
+    true,
+    "the resource read must apply the same non-null exclusion as the listing",
+  );
 });
 
 // --- T11 — the sub-resource cannot be laxer than its parent -----------------

@@ -86,12 +86,32 @@ export function decodeCursor(value: string): CursorPosition | null {
   if (typeof parsed !== "object" || parsed === null) return null;
   const { t, i } = parsed as Record<string, unknown>;
   if (typeof t !== "string" || typeof i !== "string") return null;
-  // A `t` that is not a real instant would reach PostgREST as a filter value
-  // and come back as a 500. Parsing it here keeps that impossible.
+  // TWO checks, and the first is the one that matters.
+  //
+  // `Date.parse` alone is nowhere near strict enough to be a guard: V8 still
+  // honours legacy US formats, so `Date.parse("May 8, 2026")` SUCCEEDS. That
+  // string contains a comma, and a comma is the disjunct separator in
+  // PostgREST's `or=` grammar -- so it would reach keysetFilter and split the
+  // filter into extra terms, answering a partner-triggerable 500 rather than
+  // a 400. Not a tenancy hole (the or-group is ANDed with the binding and
+  // workspace filters, so a mangled group cannot escape them), but it is a
+  // response-shape oracle and a needless 500.
+  //
+  // The shape check is therefore an explicit ISO-8601 pattern, which admits
+  // no comma, parenthesis or bare dot. `Date.parse` then rejects what is
+  // shaped like an instant but is not one (`2026-13-45T00:00:00Z`).
+  if (!ISO_INSTANT_RE.test(t)) return null;
   if (Number.isNaN(Date.parse(t))) return null;
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(i)) return null;
   return { timestamp: t, id: i };
 }
+
+/** ISO-8601 as PostgREST renders a timestamptz: an optional fractional part
+ *  and an optional `Z` or `±HH:MM` offset. Deliberately anchored and
+ *  character-exact -- its job is to admit nothing that means something in the
+ *  `or=` filter grammar. */
+const ISO_INSTANT_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?$/;
 
 export interface PageRequest {
   limit: number;
