@@ -159,6 +159,15 @@ Deno.test("every error code the handler actually emits is documented in the Open
   await add(post("get_status", {}));                                    // no header at all
   await add(post("get_status", { "x-postora-key": "not-a-postora-key" })); // wrong prefix
 
+  // The /v1 router's unmatched-path 404. resource_not_found is documented as
+  // reachable precisely because the router emits it (deliverable 2.1); this
+  // drive keeps it out of the unreached complement below.
+  await add(
+    new Request("https://partner.example/functions/v1/partner-api/v1/no-such-path", {
+      method: "GET",
+    }),
+  );
+
   // Authentication verdicts, one per key state.
   await add(post("get_status"), { keyRow: { ...KEY_ROW, revoked_at: "2020-01-01T00:00:00Z" } });
   await add(post("get_status"), { keyRow: { ...KEY_ROW, expires_at: "2020-01-01T00:00:00Z" } });
@@ -215,6 +224,8 @@ Deno.test("every error code the handler actually emits is documented in the Open
 const PARTNER_SURFACE = [
   "./index.ts",
   "./router.ts",
+  "./v1/router.ts",
+  "./v1/errors.ts",
   "../_shared/partnerApiKeys.ts",
   "../_shared/partnerApiMetering.ts",
   "../_shared/partnerApiIdempotency.ts",
@@ -233,7 +244,21 @@ const EMIT_PATTERNS: RegExp[] = [
   // super(<message>, <code>, <status>) -- RateLimitedError extends
   // PartnerAuthError and passes its code straight through.
   /\bsuper\(\s*"[^"]*"\s*,\s*"([a-z][a-z0-9_]*)"/g,
+  // The /v1 envelope's policy table (v1/errors.ts): each entry opens with the
+  // code literal on its own line, status/retryable on the next. The whole
+  // table IS /v1's emit surface — every documented code is constructible
+  // through it, so sweeping the entries sweeps the codes.
+  /^ {2}([a-z][a-z0-9_]*): \{\n {4}status: \d{3}, retryable: (?:true|false),$/gm,
+  // v1ErrorResponse(<code>, ...) and v1ErrorBody(<code>, ...) call sites -- a
+  // future /v1 route emitting a code the table does not carry is caught here.
+  /\bv1(?:Error(?:Response|Body))?\(\s*"([a-z][a-z0-9_]*)"/g,
 ];
+
+/** The /v1 table pattern's own liveness alarm, separate from the >=15 guard:
+ *  that guard counts the WHOLE surface, so the alias files alone can satisfy
+ *  it while the v1 table pattern has quietly stopped matching (a reformat, a
+ *  rename). This pins the v1 table's visibility directly. */
+const MIN_V1_TABLE_CODES = 24;
 
 Deno.test("every error code PRESENT IN THE SOURCE is documented, not merely the ones a test reaches", async () => {
   const found = new Set<string>();
@@ -254,6 +279,23 @@ Deno.test("every error code PRESENT IN THE SOURCE is documented, not merely the 
     `The source sweep found only ${found.size} codes (${[...found].sort().join(", ")}). ` +
       "The emit shapes in EMIT_PATTERNS have probably drifted from the code. A sweep " +
       "that matches nothing looks exactly like a sweep that found no problems.",
+  );
+
+  // The same guard for the /v1 table pattern specifically: the >=15 check
+  // above can stay green on the alias files alone while the v1 table entries
+  // have stopped matching. The table has exactly 24 codes today; a count
+  // below that means the pattern (or the table) changed shape.
+  const v1ErrorsSrc = await Deno.readTextFile(new URL("./v1/errors.ts", import.meta.url));
+  const v1TableCodes = [
+    ...v1ErrorsSrc.matchAll(/^ {2}([a-z][a-z0-9_]*): \{$/gm),
+  ].map((m) => m[1] as string);
+  assertEquals(
+    v1TableCodes.length >= MIN_V1_TABLE_CODES,
+    true,
+    `The v1 policy-table pattern found only ${v1TableCodes.length} entries ` +
+      `(${v1TableCodes.join(", ")}). The table in v1/errors.ts or the pattern in ` +
+      "EMIT_PATTERNS has changed shape — fix one of them; a table the sweep cannot " +
+      "see is a table whose codes nobody is checking against the document.",
   );
 
   const documented = new Set(DOCUMENTED_CODES);

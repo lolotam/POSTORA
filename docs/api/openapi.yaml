@@ -7,8 +7,10 @@ info:
 
     This document is a MACHINE-PARSEABLE CONTRACT SKELETON. It defines
     cross-cutting conventions only — security, scopes, error envelope,
-    pagination, and rate-limit headers. `/v1` does NOT exist yet and this
-    document deliberately defines NO paths.
+    pagination, and rate-limit headers. It deliberately defines NO paths: the
+    `/v1` router exists (deliverable 2.1, `partner-api/v1/`) but registers no
+    business endpoints until deliverables 2.3+; every `/v1` request today
+    resolves to the typed 404 below.
 
     What exists today is the frozen action-based alias `POST /functions/v1/partner-api`
     with three actions (`get_status`, `list_templates`, `send_template` — the last
@@ -44,9 +46,10 @@ servers:
   - url: https://api.postora.cloud
     description: Self-hosted Supabase (Kong gateway) — `VITE_SUPABASE_URL` / `SUPABASE_URL` at runtime.
 
-# No endpoints yet — /v1 does not exist. This skeleton exists so the 0.8
-# drift gate has a baseline to diff against. Adding a path is a separate
-# deliverable and must update the gate's baseline document.
+# No documented paths yet — the /v1 router (2.1) exists but registers no
+# business endpoints until 2.3+. This skeleton exists so the 0.8 drift gate
+# has a baseline to diff against. Adding a path is a separate deliverable
+# and must update the gate's baseline document.
 paths: {}
 
 components:
@@ -88,7 +91,10 @@ components:
         v1 (this document):           `{error:{code,message,retryable,request_id,details?}}`
 
         Both carry `X-Postora-Request-Id` on every application response.
-        Verify shapes against `partner-api/index.ts:52-70,509-540`.
+        Alias shape: `partner-api/index.ts:52-70,509-540`. v1 shape:
+        `partner-api/v1/errors.ts` — the single construction site for every
+        /v1 error, with one policy table pinning each code's status and
+        `retryable` verdict in agreement with the alias.
 
     V1ErrorObject:
       type: object
@@ -130,15 +136,14 @@ components:
         derived from the CODE — not from any document that claims to be
         exhaustive.
 
-        "Today" is load-bearing: /v1 has no endpoints, so this enumerates what
-        the frozen alias can return. Two further codes are specified but not
-        yet reachable, because the surface that emits them does not exist:
-        `resource_not_found` and `resource_forbidden` (D11 — a resource outside
-        the key's binding returns the former, never the latter, so the binding
-        is non-enumerable). They are named in `parameters.AccountIdFilter` and
-        are deliberately ABSENT from this enum. Add them when the first
-        account-scoped /v1 route lands; adding an enum value is additive, so
-        the 0.8 gate will not object.
+        "Today" is load-bearing. `resource_not_found` became reachable when
+        the `/v1` router landed (2.1): the router answers every unmatched
+        `/v1` path with it, and from 2.5 on it is also D11's answer for a
+        resource outside the key's binding. `resource_forbidden` is still
+        specified but unreachable and deliberately ABSENT: D11 requires a
+        resource outside the binding to return `resource_not_found`, never
+        `resource_forbidden`, so the binding is non-enumerable. Add it only
+        if a recorded decision ever changes that.
 
         Provenance (grep `supabase/functions/partner-api` + `_shared`):
         - `partnerApiKeys.ts`: `invalid_key`, `key_revoked`, `key_expired`,
@@ -155,6 +160,12 @@ components:
           `invalid_recipient` (131026), `meta_error` (5xx / unparseable / missing message id),
           `account_needs_reauth` (190), `account_not_connected` (phone registration failure),
           `unsupported_direct_qr` (evolution_qr mode — `whatsappPartnerOps.ts:221`)
+        - `partner-api/v1/` (the /v1 router and D2 envelope, 2.1/2.2): all of
+          the above remain expressible through `v1/errors.ts`'s single policy
+          table (statuses and retryable verdicts agreed with the alias), plus
+          `resource_not_found` for the unmatched-path 404. `/v1` never emits
+          `unknown_action` (no action protocol) but keeps it expressible so
+          the two surfaces share one code list.
 
         THIS ENUM IS THE AUTHORITATIVE LIST. Other documents describe the
         error surface in prose; where any of them disagrees with this enum,
@@ -185,6 +196,7 @@ components:
         - outside_session_window
         - quota_exceeded
         - rate_limited
+        - resource_not_found
         - template_not_approved
         - temporarily_unavailable
         - unknown_action
@@ -491,4 +503,10 @@ x-postora-cross-cutting:
   unknownFields: Clients must ignore unknown fields; additive optional fields are non-breaking.
   cors:
     alias: "`Access-Control-Allow-Origin: *` on the alias is the reviewed default per `docs/decisions/2026-08-30-partner-api-cors.md` (covers alias only)."
-    v1: "No pre-adoption. `/v1` makes its own decision when it exists (see that decision's § 'What would change the answer' and ARCHITECTURE.md §25)."
+    v1: |
+      The /v1 router exists (2.1) and still makes NO CORS claims of its own:
+      its responses carry no `Access-Control-*` headers, and an `OPTIONS`
+      under `/v1` is not answered by the alias's preflight short-circuit (it
+      resolves like any other /v1 request). Per that decision's 2026-08-31
+      correction 2, `/v1` must record its own CORS decision before any
+      browser-facing surface ships — that decision remains open (plan 0.10).
