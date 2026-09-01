@@ -255,6 +255,109 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/media:
+    post:
+      operationId: uploadMedia
+      summary: Upload a file for later use in a message
+      description: |
+        Accepts either `multipart/form-data` with a `file` part, or JSON with
+        `data` (base64, or a `data:` URL) plus optional `filename` and
+        `mime_type`. Both shapes reach the same validator, so neither is a way
+        around the controls.
+
+        **The bytes are sniffed on every upload** and a declared type that
+        disagrees with them is REFUSED, not corrected: a mismatch means the
+        client's idea of the file and the file itself have diverged, and the
+        interesting case is not a typo. A type outside the allowlist answers
+        `unsupported_capability`; a file over its kind's limit answers
+        `payload_too_large`.
+
+        `Idempotency-Key` is required — an upload is durable and billable, so
+        a retry must replay rather than store the same bytes twice.
+
+        Media is **workspace-owned** (spec D10 R3): a rotated key still reaches
+        what it uploaded, and any key bound to the same workspace may reference
+        it. Uploads made through the Postora app before this API existed are
+        not visible here.
+
+        Scope `media:write`. D7 class C — it fails CLOSED on a limiter outage,
+        because an unmetered durable write during an incident is how one outage
+        becomes a bill.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+          application/json:
+            schema:
+              type: object
+              required: [data]
+              properties:
+                data:
+                  type: string
+                  description: Base64, or a full `data:<type>;base64,<payload>` URL.
+                filename:
+                  type: string
+                  description: |
+                    Kept for the WhatsApp document `filename` field. Never used
+                    to build a storage path.
+                mime_type:
+                  type: string
+                  description: |
+                    What the client believes the file is. Checked against the
+                    bytes; a disagreement is rejected.
+      responses:
+        '201':
+          description: The file was accepted and stored.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaFile'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/media/{id}:
+    get:
+      operationId: getMedia
+      summary: Get one uploaded file's metadata
+      description: |
+        Scoped to the presented key's workspace. A `media_id` belonging to
+        another workspace is indistinguishable from one that never existed —
+        both answer `resource_not_found`.
+
+        Returns metadata only. `GET /v1/media/{id}/download` is not part of
+        this version: it is the endpoint that would create a partner-facing
+        URL TTL contract, and it is not needed in order to send a message.
+
+        Scope `media:read`. D7 class A.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The file's metadata.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MediaFile'
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/messages/{id}:
     get:
       operationId: getMessage
@@ -395,6 +498,10 @@ components:
           `invalid_recipient` (131026), `meta_error` (5xx / unparseable / missing message id),
           `account_needs_reauth` (190), `account_not_connected` (phone registration failure),
           `unsupported_direct_qr` (evolution_qr mode — `whatsappPartnerOps.ts:221`)
+        - `partner-api/v1/media.ts` (Phase 4): `payload_too_large` when a file
+          exceeds its type's limit, `unsupported_capability` when the sniffed
+          type is not on the allowlist, `resource_not_found` for a `media_id`
+          that is unknown or belongs to another workspace
         - `partner-api/v1/` (the /v1 router and D2 envelope, 2.1/2.2): all of
           the above remain expressible through `v1/errors.ts`'s single policy
           table (statuses and retryable verdicts agreed with the alias), plus
@@ -429,6 +536,7 @@ components:
         - method_not_allowed
         - missing_idempotency_key
         - outside_session_window
+        - payload_too_large
         - quota_exceeded
         - rate_limited
         - resource_not_found
@@ -619,6 +727,56 @@ components:
           type: [string, 'null']
           description: The provider's message id (a WhatsApp `wamid`). Separate field, never the primary id (§7.1).
           example: wamid.HBgLMTU1NTAwMDAwMDAVAgARGB
+
+    MediaFile:
+      type: object
+      description: |
+        An uploaded file. Its `mime_type` and `kind` are what the BYTES are,
+        established by magic-number sniffing at upload time — never what the
+        client declared. An upload whose declared type disagreed with its
+        contents was rejected rather than corrected.
+
+        There is deliberately no URL field. A partner never receives a URL for
+        their media in this version: the only URL that exists is short-lived,
+        generated inside the send path, and handed to WhatsApp.
+      required: [id, mime_type, kind, size_bytes, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/PrefixedId'
+        mime_type:
+          type: string
+          enum:
+            - image/jpeg
+            - image/png
+            - video/mp4
+            - video/3gpp
+            - audio/mpeg
+            - audio/ogg
+            - audio/aac
+            - audio/amr
+            - application/pdf
+          description: |
+            The complete accepted-type allowlist (spec D10). `image/webp` is
+            excluded because a webp is a STICKER on WhatsApp, a different
+            message type. Office formats are excluded because they are ZIP
+            containers that content sniffing cannot tell apart from any other
+            zip — adding them needs a container parser, and would be additive.
+          example: image/jpeg
+        kind:
+          type: string
+          enum: [image, video, audio, document]
+          description: WhatsApp's own message-type name for this file.
+        size_bytes:
+          type: integer
+          description: |
+            Actual byte length. Limits by kind: image 5 MB, audio 16 MB,
+            video 16 MB (WhatsApp's own caps — accepting a file the provider
+            will refuse would cost the partner a quota unit to discover),
+            document 25 MB (below WhatsApp's 100 MB, bounded by the edge
+            worker's memory budget). Over the limit is `payload_too_large`.
+        created_at:
+          type: [string, 'null']
+          format: date-time
 
     CollectionEnvelope:
       type: object

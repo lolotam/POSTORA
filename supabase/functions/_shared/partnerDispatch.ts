@@ -54,10 +54,12 @@ import {
   type DispatchIntentRow,
 } from "./partnerDispatchIntents.ts";
 import {
+  sendMedia,
   sendTemplate,
   sendText,
   WhatsAppOpError,
   type Fetcher,
+  type SendMediaInput,
   type SendResult,
   type SendTemplateInput,
   type SendTextInput,
@@ -86,7 +88,8 @@ export interface PartnerDispatchDeps {
  */
 export type PartnerSendInput =
   | ({ kind: "template" } & SendTemplateInput)
-  | ({ kind: "text" } & SendTextInput);
+  | ({ kind: "text" } & SendTextInput)
+  | ({ kind: "media" } & SendMediaInput);
 
 /**
  * The only provider invocation in the partner surface. Both arms are reached
@@ -104,6 +107,9 @@ function performSend(
 ): Promise<SendResult> {
   if (input.kind === "text") {
     return sendText(ctx, { ...input, callbackData: intentId }, fetcher);
+  }
+  if (input.kind === "media") {
+    return sendMedia(ctx, { ...input, callbackData: intentId }, fetcher);
   }
   return sendTemplate(ctx, { ...input, callbackData: intentId }, fetcher);
 }
@@ -145,6 +151,16 @@ function summaryOf(input: PartnerSendInput): Record<string, unknown> {
       recipient_phone: input.recipientPhone,
       message_type: "text",
       body_length: input.body.length,
+    };
+  }
+  if (input.kind === "media") {
+    return {
+      recipient_phone: input.recipientPhone,
+      message_type: input.mediaKind,
+      // The media file this send referred to -- durable, and the thing an
+      // operator reconciling an indeterminate intent actually needs.
+      media_file_id: input.mediaFileId,
+      caption_length: input.caption?.length ?? 0,
     };
   }
   return {

@@ -1,7 +1,11 @@
-// POST /v1/messages — text and template sends (deliverable 3.5).
+// POST /v1/messages — text, template and media sends (3.5, and Phase 4's 4.5).
 //
-// Attachments are NOT here: they need Phase 4's media controls, and shipping
-// an interim media contract now would freeze a shape Phase 4 has to break.
+// Media arrived in Phase 4, behind the D10 control matrix
+// (docs/decisions/2026-09-01-d10-media-control-matrix.md). A send never
+// carries bytes: it names a `media_id` that POST /v1/media already sniffed,
+// sized and stored. There is deliberately NO `link` passthrough — a
+// partner-supplied URL would route around every control in that matrix and
+// hand Meta something nobody validated.
 //
 // EVERY SEND GOES THROUGH `dispatchPartnerTemplate`. That is not a stylistic
 // preference — it is the D13 safety property. That function owns the durable
@@ -13,14 +17,22 @@
 
 import { claimIdempotency, hashRequest } from "../../_shared/partnerApiIdempotency.ts";
 import { dispatchPartnerTemplate, type PartnerSendInput } from "../../_shared/partnerDispatch.ts";
-import { isActionSuspended } from "../router.ts";
+import { loadPartnerMedia, signPartnerMediaUrl } from "../../_shared/partnerMediaStore.ts";
+import { assertActionAuthorized, PartnerAuthError } from "../../_shared/partnerApiKeys.ts";
+import { isActionSuspended, satisfyingScopesFor } from "../router.ts";
+import { decodeId } from "./ids.ts";
 import { v1ErrorResponse, type V1ErrorCode } from "./errors.ts";
 import { resolveWhatsAppAccount, type V1AuthedContext } from "./authenticated.ts";
+
+/** The media message types, which are also WhatsApp's own type names and the
+ *  `file_type` stored on the media row — one vocabulary, so a mismatch is a
+ *  comparison rather than a mapping table. */
+const MEDIA_TYPES = new Set(["image", "video", "audio", "document"]);
 
 /** The message types this endpoint can carry today. Anything else is
  *  `unsupported_capability` — a permanent, non-retryable "that does not
  *  exist", distinct from a permission problem or an outage. */
-const SUPPORTED_TYPES = new Set(["text", "template"]);
+const SUPPORTED_TYPES = new Set(["text", "template", ...MEDIA_TYPES]);
 
 function json(body: unknown, status: number, requestId: string): Response {
   return new Response(JSON.stringify(body), {
@@ -30,6 +42,107 @@ function json(body: unknown, status: number, requestId: string): Response {
       "X-Postora-Request-Id": requestId,
     },
   });
+}
+
+/**
+ * The parts of a send that identify the REQUEST, for the idempotency hash.
+ *
+ * For text and template that is the whole input. For media it is emphatically
+ * not: `mediaUrl` is a freshly signed URL whose token and expiry differ on
+ * every mint, so hashing the input would give the same logical send a
+ * different hash each time. A partner retrying with the same Idempotency-Key
+ * -- the exact behaviour the header exists to make safe -- would get
+ * `idempotency_conflict` instead of a replay, and the D13 guarantee would be
+ * unreachable for every media send.
+ *
+ * So the basis is the caller-controlled fields only: what they asked for, not
+ * what we minted to satisfy it.
+ */
+function idempotencyBasisOf(input: PartnerSendInput): unknown {
+  if (input.kind !== "media") return input;
+  const { mediaUrl: _signed, ...stable } = input;
+  return stable;
+}
+
+/**
+ * Turn a `media_id` into a send input, or the refusal to answer with.
+ *
+ * Three checks, in this order, and the order is the contract:
+ *
+ *   1. The id is well-formed. A malformed one 404s without a query, so a typo
+ *      is neither a 500 nor an existence oracle (ids.ts).
+ *   2. The row exists IN THIS KEY'S WORKSPACE. `loadPartnerMedia` puts the
+ *      workspace in the lookup, not in a check afterwards, so a media_id
+ *      belonging to another tenant is indistinguishable from one that never
+ *      existed. This is the tenancy boundary of the whole phase: without it a
+ *      partner could send another workspace's files to their own customers.
+ *   3. The requested type matches what the file actually IS — established by
+ *      sniffing at upload time, not by anything the partner has said since.
+ */
+async function buildMediaSend(
+  authed: V1AuthedContext,
+  payload: Record<string, unknown>,
+  recipient: string,
+  type: string,
+): Promise<{ ok: true; input: PartnerSendInput } | { ok: false; res: Response }> {
+  const { admin, record, requestId } = authed;
+
+  const rawId = String(payload.media_id ?? "");
+  const mediaId = decodeId("media", rawId);
+  if (mediaId === null) return { ok: false, res: v1ErrorResponse("resource_not_found", requestId) };
+
+  const caption = typeof payload.caption === "string" ? payload.caption : undefined;
+  // WhatsApp rejects a caption on an audio message. Refusing here names the
+  // real problem; letting it through would surface as a Meta error about a
+  // field the partner did not knowingly set.
+  if (type === "audio" && caption) {
+    return {
+      ok: false,
+      res: v1ErrorResponse("invalid_request", requestId, {
+        message: "Audio messages cannot carry a caption",
+      }),
+    };
+  }
+
+  const loaded = await loadPartnerMedia(admin, record.workspaceId, mediaId);
+  // An error is not an absence: `resource_not_found` is non-retryable, so
+  // answering it during a database blip tells a partner to stop retrying a
+  // file that exists and is theirs.
+  if (loaded.outcome === "error") {
+    return { ok: false, res: v1ErrorResponse("internal_error", requestId) };
+  }
+  if (loaded.outcome === "missing") {
+    return { ok: false, res: v1ErrorResponse("resource_not_found", requestId) };
+  }
+  const stored = loaded.media;
+
+  if (stored.kind !== type) {
+    return {
+      ok: false,
+      res: v1ErrorResponse("invalid_request", requestId, {
+        message: `That media file is ${stored.kind}, not ${type}`,
+      }),
+    };
+  }
+
+  // Minted last, and only once everything else has passed: the URL is a live
+  // read capability, so it should not exist for a request that was going to be
+  // refused anyway.
+  const mediaUrl = await signPartnerMediaUrl(admin, stored.filePath);
+  if (!mediaUrl) return { ok: false, res: v1ErrorResponse("internal_error", requestId) };
+
+  return {
+    ok: true,
+    input: {
+      kind: "media",
+      recipientPhone: recipient,
+      mediaUrl,
+      mediaKind: type as "image" | "video" | "audio" | "document",
+      caption,
+      filename: typeof payload.filename === "string" ? payload.filename : undefined,
+      mediaFileId: stored.id,
+    },
+  };
 }
 
 export async function postMessages(
@@ -59,6 +172,40 @@ export async function postMessages(
     });
   }
 
+  // ---- PER-TYPE SCOPE, and why the route-level check is not enough ----
+  //
+  // The route is authorised as `send_template`, whose satisfying set is
+  // ["whatsapp:template.send", "messages:send"] -- so a key holding ONLY the
+  // frozen legacy scope reaches this handler. That scope authorises approved
+  // TEMPLATE sending and nothing else (D3), yet without this check it would
+  // also buy unsuspended free-form text and media session sends: a credential
+  // silently gaining authority its holder never asked for, which is exactly
+  // the escalation D3 was rewritten to prevent, arriving through a different
+  // door.
+  //
+  // The text half of this predates Phase 4 -- it landed with 3.5 -- and is
+  // fixed here rather than left, because leaving one escalated while fixing
+  // the other would be indefensible and it is the same line of code. No
+  // partner is affected: there are zero active legacy-scoped keys.
+  const typeAction = type === "template"
+    ? "send_template"
+    : (MEDIA_TYPES.has(type) ? "send_media" : "send_text");
+  const satisfying = satisfyingScopesFor(typeAction);
+  if (satisfying === undefined) {
+    console.error(`[partner-api] v1 message type "${type}" declares unknown action "${typeAction}"`);
+    return v1ErrorResponse("internal_error", requestId);
+  }
+  if (satisfying !== null) {
+    try {
+      assertActionAuthorized(record, typeAction, satisfying);
+    } catch (err) {
+      if (err instanceof PartnerAuthError) {
+        return v1ErrorResponse(err.code as V1ErrorCode, requestId);
+      }
+      throw err;
+    }
+  }
+
   // The 0A safety suspension applies to /v1 exactly as it applies to the
   // alias, and through the SAME flag. Restoration must open both surfaces
   // with one deliberate decision rather than leaving /v1 quietly open.
@@ -76,7 +223,11 @@ export async function postMessages(
   }
 
   let input: PartnerSendInput;
-  if (type === "text") {
+  if (MEDIA_TYPES.has(type)) {
+    const media = await buildMediaSend(authed, payload, recipient, type);
+    if (!media.ok) return media.res;
+    input = media.input;
+  } else if (type === "text") {
     const text = payload.text;
     const textBody = typeof text === "object" && text !== null
       ? String((text as Record<string, unknown>).body ?? "")
@@ -122,7 +273,7 @@ export async function postMessages(
     admin,
     record.id,
     idempotencyKey,
-    await hashRequest(input),
+    await hashRequest(idempotencyBasisOf(input)),
   );
 
   if (claim.outcome === "conflict") return v1ErrorResponse("idempotency_conflict", requestId);

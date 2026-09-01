@@ -107,6 +107,14 @@ export const V1_ERROR_POLICY = {
     status: 422, retryable: false,
     message: "Recipient has not messaged in the last 24h — send an approved template.",
   },
+  // 413, and deliberately not 422. The request SHAPE is fine -- it is the
+  // number of bytes that is not, which is what 413 means and what a partner's
+  // client library will already have a branch for. Never retryable: the same
+  // file will be the same size next time.
+  payload_too_large: {
+    status: 413, retryable: false,
+    message: "The uploaded file is larger than the limit for its media type",
+  },
   quota_exceeded: {
     status: 429, retryable: false,
     message: "Monthly quota exhausted for this key",

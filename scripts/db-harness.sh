@@ -103,6 +103,7 @@ SUITES=(
   partner_api_tenancy_negative.sql
   partner_api_credential_lifecycle.sql
   partner_api_dispatch_intents.sql
+  partner_media_tenancy.sql
   whatsapp_workspace_crm.sql
   import_whatsapp_contacts_to_workspace.sql
 )
