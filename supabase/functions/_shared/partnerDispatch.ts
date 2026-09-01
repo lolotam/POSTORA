@@ -55,9 +55,12 @@ import {
 } from "./partnerDispatchIntents.ts";
 import {
   sendTemplate,
+  sendText,
   WhatsAppOpError,
   type Fetcher,
+  type SendResult,
   type SendTemplateInput,
+  type SendTextInput,
   type WhatsAppOpsContext,
 } from "./whatsappPartnerOps.ts";
 
@@ -69,9 +72,40 @@ export interface PartnerDispatchDeps {
   idempotencyKey: string;
   /** Held from the idempotency claim; fences every settle below. */
   attemptToken: string;
-  input: SendTemplateInput;
+  input: PartnerSendInput;
   /** Injectable for the crash-test gate; defaults to global fetch. */
   fetcher?: Fetcher;
+}
+
+/**
+ * What to send. A discriminated union rather than two dispatch functions,
+ * because the whole point of D13 is that there is exactly ONE path from
+ * "idempotency claimed" to "provider called" -- a second entry point is a
+ * second place to forget the intent row, which is the duplicate this module
+ * exists to prevent.
+ */
+export type PartnerSendInput =
+  | ({ kind: "template" } & SendTemplateInput)
+  | ({ kind: "text" } & SendTextInput);
+
+/**
+ * The only provider invocation in the partner surface. Both arms are reached
+ * from step 3 below, under an already-committed intent row, and both stamp
+ * that row's id as the correlator.
+ *
+ * Deliberately NOT exported: a route that could call this directly could call
+ * it without an intent.
+ */
+function performSend(
+  ctx: WhatsAppOpsContext,
+  input: PartnerSendInput,
+  intentId: string,
+  fetcher?: Fetcher,
+): Promise<SendResult> {
+  if (input.kind === "text") {
+    return sendText(ctx, { ...input, callbackData: intentId }, fetcher);
+  }
+  return sendTemplate(ctx, { ...input, callbackData: intentId }, fetcher);
 }
 
 export interface PartnerSendSuccessBody {
@@ -95,6 +129,30 @@ export type PartnerDispatchResult =
  *  documented in docs/api/openapi.yaml. */
 function errorBody(code: string, message: string, retryable: boolean, details?: unknown) {
   return { success: false, error: { code, message, retryable, ...(details ? { details } : {}) } };
+}
+
+/**
+ * What the intent row records about the attempt, for the operator who has to
+ * resolve a terminal `indeterminate` (D13 R3's named escalation path).
+ *
+ * Enough to identify the message; never the message ITSELF. A text body may
+ * carry anything a partner's customer typed, and an intent row outlives key
+ * deletion by design -- so the body stays out and only its length is kept.
+ */
+function summaryOf(input: PartnerSendInput): Record<string, unknown> {
+  if (input.kind === "text") {
+    return {
+      recipient_phone: input.recipientPhone,
+      message_type: "text",
+      body_length: input.body.length,
+    };
+  }
+  return {
+    recipient_phone: input.recipientPhone,
+    message_type: "template",
+    template_name: input.templateName,
+    template_language: input.templateLanguage,
+  };
 }
 
 export async function dispatchPartnerTemplate(
@@ -123,11 +181,7 @@ export async function dispatchPartnerTemplate(
       workspaceId: ctx.workspaceId,
       socialAccountId: ctx.accountId,
       idempotencyKey,
-      summary: {
-        recipient_phone: input.recipientPhone,
-        template_name: input.templateName,
-        template_language: input.templateLanguage,
-      },
+      summary: summaryOf(input),
     });
   } catch (err) {
     // Nothing was dispatched and nothing will be: this attempt provably made
@@ -144,11 +198,7 @@ export async function dispatchPartnerTemplate(
 
   // ---- 3. the provider call, under exactly one intent row ----------------
   try {
-    const result = await sendTemplate(
-      ctx,
-      { ...input, callbackData: intent.intentId },
-      deps.fetcher,
-    );
+    const result = await performSend(ctx, input, intent.intentId, deps.fetcher);
 
     const body: PartnerSendSuccessBody = {
       success: true,

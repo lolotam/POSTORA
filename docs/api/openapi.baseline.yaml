@@ -200,6 +200,7 @@ components:
         - template_not_approved
         - temporarily_unavailable
         - unknown_action
+        - unsupported_capability
         - unsupported_direct_qr
 
     AliasErrorEnvelope:

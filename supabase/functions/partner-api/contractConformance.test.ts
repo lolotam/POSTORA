@@ -168,6 +168,17 @@ Deno.test("every error code the handler actually emits is documented in the Open
     }),
   );
 
+  // The /v1 send route's capability refusal. `unsupported_capability` is
+  // documented precisely because this route emits it (deliverable 3.6); the
+  // drive keeps it out of the unreached complement below.
+  await add(
+    new Request("https://partner.example/functions/v1/partner-api/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-postora-key": "pk_live_test" },
+      body: JSON.stringify({ type: "sticker", recipient_phone: "+10000000000" }),
+    }),
+  );
+
   // Authentication verdicts, one per key state.
   await add(post("get_status"), { keyRow: { ...KEY_ROW, revoked_at: "2020-01-01T00:00:00Z" } });
   await add(post("get_status"), { keyRow: { ...KEY_ROW, expires_at: "2020-01-01T00:00:00Z" } });
@@ -260,7 +271,7 @@ const EMIT_PATTERNS: RegExp[] = [
  *  that guard counts the WHOLE surface, so the alias files alone can satisfy
  *  it while the v1 table pattern has quietly stopped matching (a reformat, a
  *  rename). This pins the v1 table's visibility directly. */
-const MIN_V1_TABLE_CODES = 24;
+const MIN_V1_TABLE_CODES = 25;
 
 Deno.test("every error code PRESENT IN THE SOURCE is documented, not merely the ones a test reaches", async () => {
   const found = new Set<string>();
