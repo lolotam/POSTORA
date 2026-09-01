@@ -200,6 +200,18 @@ const LINK_RULES = [
 ];
 
 /**
+ * The connector instruction, restated where a model actually weights it: after
+ * the knowledge block rather than only before it. Empty when the account has no
+ * connector, so nothing is added to the prompts that do not need it.
+ */
+function connectorReminder(connectorNames?: string[]): string {
+  if (!connectorNames?.length) return "";
+  return `REMINDER: for current prices, stock, availability or orders you must call ${
+    connectorNames.join(" or ")
+  } first, even if the business knowledge appears to list the product already — that list can be stale or hold unfilled placeholders, and the connector holds today's real values.`;
+}
+
+/**
  * The hallucination guard. Widened, never dropped, when connectors exist: a
  * connector result is a legitimate source of an answer, and the original
  * wording ("ONLY from the business knowledge") put live store data outside the
@@ -266,8 +278,16 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     ...surfaceInstructions.rules,
     "Business knowledge:",
     knowledge,
-    // Repeated last on purpose: the knowledge block above can run long, and the final
-    // instruction is the one a model weights most heavily.
+    // Repeated after the knowledge for the same reason the language override is:
+    // that block runs long -- 4058 characters for the account this was found on
+    // -- and the final instruction is the one a model weights most heavily.
+    //
+    // Stating it once in the Rules list above was not enough. The knowledge for
+    // that account happens to contain the entire product list, with prices left
+    // as unrendered n8n `{{ ... }}` placeholders, so the model read the list,
+    // believed it already had the products, and answered from the persona's
+    // fallback without ever calling the connector (2026-09-01).
+    connectorReminder(params.connectorNames),
     params.languageForced ? `REMINDER: Your entire reply must be written in ${languageName}.` : "",
   ].filter(Boolean).join("\n\n");
 }

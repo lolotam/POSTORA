@@ -278,3 +278,65 @@ Deno.test("an upstream provider's own error detail is kept, not flattened", asyn
   assertEquals((failure ?? "").includes("429"), true);
   assertEquals((failure ?? "").includes("Liquid"), true);
 });
+
+/**
+ * 2026-09-01, third attempt at the same symptom. The connector resolves for the
+ * account, the prompt names it, the operator's persona says "query the
+ * connector first" — and the model still answered a price question with the
+ * persona's fallback and called no tool.
+ *
+ * The rule was in the wrong place. It sat in the Rules list, ABOVE a
+ * business-knowledge block that for this account runs 4058 characters and
+ * happens to contain the whole product list (with prices left as unrendered
+ * n8n `{{ ... }}` placeholders). The model reads the list, believes it already
+ * has the products, and never reaches for a tool.
+ *
+ * This file already knows the remedy: the forced-language reminder is
+ * "repeated last on purpose ... the final instruction is the one a model
+ * weights most heavily". The connector instruction needs the same treatment.
+ */
+Deno.test("the connector instruction is repeated after the knowledge block", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    languageForced: false,
+    knowledgeBlocks: ["المنتجات والأسعار الحالية: كتكوت كب {{ placeholder }} جنيه"],
+    nowIso: "2026-09-01T01:06:00Z",
+    connectorNames: ["supabase_product_catalog"],
+  });
+
+  const knowledgeAt = prompt.indexOf("Business knowledge:");
+  const reminderAt = prompt.lastIndexOf("supabase_product_catalog");
+  assertEquals(knowledgeAt > -1, true);
+  // Named again AFTER the knowledge, not only before it.
+  assertEquals(reminderAt > knowledgeAt, true, "connector reminder must follow the knowledge block");
+  assertEquals(prompt.includes("even if the business knowledge appears to list"), true);
+});
+
+Deno.test("a forced language still gets the very last word", async () => {
+  // The connector reminder must not displace the language override, which this
+  // file documents as final on purpose.
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "ar",
+    languageForced: true,
+    knowledgeBlocks: ["x"],
+    nowIso: "2026-09-01T01:06:00Z",
+    connectorNames: ["supabase_product_catalog"],
+  });
+  assertEquals(prompt.trimEnd().endsWith("must be written in Arabic (العربية)."), true);
+});
+
+Deno.test("no connectors means no trailing reminder", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    persona: null,
+    language: "en",
+    languageForced: false,
+    knowledgeBlocks: ["x"],
+    nowIso: "2026-09-01T01:06:00Z",
+  });
+  assertEquals(prompt.includes("even if the business knowledge appears to list"), false);
+});

@@ -1134,6 +1134,12 @@ Deno.serve(async (req) => {
         rag_error: ragError,
         graph_error: graphError,
       tool_calls: executedToolCalls.length ? executedToolCalls.map((t) => t.name) : null,
+      // What the model was actually OFFERED, next to what it chose to call.
+      // Without this, "the connector did not answer" needed a hand-run of
+      // resolveToolsForAccount against live rows to tell "not offered" from
+      // "offered and declined" -- two very different bugs that look identical
+      // in this log. Names only; nothing here is a secret.
+      connectors_offered: customTools.length ? customTools.map((tool) => tool.name) : null,
       escalated,
       dry_run: dryRun,
     });
