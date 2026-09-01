@@ -20,7 +20,13 @@ import {
 import { claimIdempotency, hashRequest } from "../_shared/partnerApiIdempotency.ts";
 import { dispatchPartnerTemplate } from "../_shared/partnerDispatch.ts";
 import { listTemplates, WhatsAppOpError } from "../_shared/whatsappPartnerOps.ts";
-import { isActionSuspended, isSendAction, limiterRiskClassFor, satisfyingScopesFor } from "./router.ts";
+import {
+  isActionSuspended,
+  isAliasAction,
+  isSendAction,
+  limiterRiskClassFor,
+  satisfyingScopesFor,
+} from "./router.ts";
 import { handleV1Request, v1SubpathOf } from "./v1/router.ts";
 
 const corsHeaders = {
@@ -187,7 +193,11 @@ export async function handleRequest(
     action = String(body.action ?? "");
 
     const satisfying = satisfyingScopesFor(action);
-    if (satisfying === undefined) {
+    // BOTH conditions. `satisfying === undefined` alone would let any action
+    // carrying a /v1 route policy through this door and into the if-ladder
+    // below, which has no final else and ends in the send path. See
+    // ALIAS_ACTIONS in router.ts for what that would have cost.
+    if (satisfying === undefined || !isAliasAction(action)) {
       return await finish(400, false,
         errorBody("unknown_action", `Unknown action: ${action}`, false), {}, "unknown_action");
     }

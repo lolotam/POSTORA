@@ -5,16 +5,24 @@
 // peels that mount off to decide which door a request belongs to. This is NOT
 // a new supabase/functions/<name>/ directory.
 //
-// Phase 2.1/2.2 registers NO routes, by decree: business endpoints are
-// deliverables 2.3–2.7. Until one registers, every /v1 request resolves to the
-// typed 404 below. The route table, the matcher and the 405/Allow machinery
-// are here so that adding a route later is a table entry, not a redesign.
+// Adding a route is a table entry, not a redesign — which is what the empty
+// table of 2.1/2.2 bought. The read surface (2.3–2.6) and the send surface
+// (3.5–3.7) are both entries in V1_ROUTES below; `GET /v1/usage` (2.7) is
+// deliberately still absent until its counter schema is settled.
 //
-// Authentication, rate limiting, idempotency and quota are deliberately NOT
-// wired into /v1 yet — they arrive with the endpoints that need them (2.3+).
+// Authentication attaches PER ROUTE, via withPartnerAuth — never above
+// routing, so an unmatched path still 404s without a Supabase client. See
+// handleV1Request and v1/router.test.ts.
 
 import { v1ErrorResponse } from "./errors.ts";
 import { withPartnerAuth } from "./authenticated.ts";
+import { getAccount, listAccounts } from "./accounts.ts";
+import {
+  getConversation,
+  getMessage,
+  listConversationMessages,
+  listConversations,
+} from "./conversations.ts";
 import { postMessages } from "./messages.ts";
 import { getTemplates } from "./templates.ts";
 
@@ -82,9 +90,45 @@ export interface V1Route {
  */
 export const V1_ROUTES: V1Route[] = [
   {
+    pattern: "/v1/accounts",
+    methods: {
+      GET: withPartnerAuth("list_accounts", "A", listAccounts),
+    },
+  },
+  {
+    pattern: "/v1/accounts/{id}",
+    methods: {
+      GET: withPartnerAuth("get_account", "A", getAccount),
+    },
+  },
+  {
+    pattern: "/v1/conversations",
+    methods: {
+      GET: withPartnerAuth("list_conversations", "A", listConversations),
+    },
+  },
+  {
+    pattern: "/v1/conversations/{id}",
+    methods: {
+      GET: withPartnerAuth("get_conversation", "A", getConversation),
+    },
+  },
+  {
+    pattern: "/v1/conversations/{id}/messages",
+    methods: {
+      GET: withPartnerAuth("list_conversation_messages", "A", listConversationMessages),
+    },
+  },
+  {
     pattern: "/v1/messages",
     methods: {
       POST: withPartnerAuth("send_template", "C", postMessages),
+    },
+  },
+  {
+    pattern: "/v1/messages/{id}",
+    methods: {
+      GET: withPartnerAuth("get_message", "A", getMessage),
     },
   },
   {

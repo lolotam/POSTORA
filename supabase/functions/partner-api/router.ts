@@ -24,6 +24,18 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   get_status: null,
   send_template: ["whatsapp:template.send", "messages:send"],
   list_templates: ["whatsapp:templates.read", "templates:read"],
+  // The /v1 read surface (deliverables 2.3-2.6). Generic scopes only: no
+  // legacy string satisfies any of them, because a legacy scope is frozen at
+  // the capability it had when D3 froze it, and none of these existed then.
+  // Adding one here would be the same escalation D3 was rewritten to prevent.
+  //
+  // These are /v1 ROUTE policies, not alias actions -- see ALIAS_ACTIONS.
+  list_accounts: ["accounts:read"],
+  get_account: ["accounts:read"],
+  list_conversations: ["conversations:read"],
+  get_conversation: ["conversations:read"],
+  list_conversation_messages: ["messages:read"],
+  get_message: ["messages:read"],
 };
 
 /** D7 limiter-failure risk class per action, next to ACTION_SCOPES so an
@@ -39,7 +51,43 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   get_status: "A",
   list_templates: "B",
   send_template: "C",
+  // Every /v1 read is class A: Postora's own database, a set bounded by the
+  // key's binding, a bounded page, no outbound call. Class A proceeds through
+  // a limiter outage on purpose -- a read that costs nothing and reaches no
+  // customer should not become collateral damage of a database incident,
+  // which is the asymmetry D7 exists to encode.
+  list_accounts: "A",
+  get_account: "A",
+  list_conversations: "A",
+  get_conversation: "A",
+  list_conversation_messages: "A",
+  get_message: "A",
 };
+
+/**
+ * The actions the FROZEN ALIAS accepts. D1 sunsets that door and forbids new
+ * actions on it, so this list is closed.
+ *
+ * It is not a redundant copy of ACTION_SCOPES' keys, and the difference is
+ * the entire point. index.ts used to treat "present in ACTION_SCOPES" as
+ * "this is an alias action", then dispatch through an if-ladder with NO final
+ * else -- so a known-but-unhandled action fell through to the send path. The
+ * moment /v1 added a route policy, an alias request of
+ * `{action: "list_conversations", recipient_phone, template_name}` would have
+ * reached the provider: past the 0A suspension, which only recognises
+ * `send_template`, and past the Idempotency-Key requirement, which
+ * `isSendAction` imposes on that same single name. An unsuspended,
+ * non-idempotent template send, opened by adding a row to a READ policy
+ * table.
+ *
+ * The allowlist closes that permanently: the alias answers `unknown_action`
+ * for anything outside it, however ACTION_SCOPES later grows.
+ */
+export const ALIAS_ACTIONS = ["get_status", "list_templates", "send_template"] as const;
+
+export function isAliasAction(action: string): boolean {
+  return (ALIAS_ACTIONS as readonly string[]).includes(action);
+}
 
 /**
  * ── 0A SAFETY SUSPENSION SWITCH ──────────────────────────────────────────
