@@ -56,6 +56,8 @@ and verified by querying the catalog afterwards.
 | 0.5 | Runtime contract tests | PR #91. Six runtime tests reading the document and checking it against the real handler, **plus a source-side sweep** asserting every code the partner surface can emit is documented — the runtime tests sample, the sweep enumerates. The sweep fails if it finds fewer than 15 codes, so a regex that stops matching cannot masquerade as a clean result |
 | 1.6 | Legacy scope pinning | PR #93. **Live** — `_shared/partnerScopes.ts` confirmed in the deployed volume. Per-ACTION satisfying sets, never a vocabulary mapping. `whatsapp:webhooks.manage` is an explicit EMPTY capability. New keys may hold only generic scopes — **no migration needed**, since D3 step 2's reissue has no subject with zero active keys |
 | 1.3 | Credential lifecycle (D12), closing F11 and the F3 residual | PR #94. Code **merged and live**; ⚠️ **the migration is NOT applied to production** — `supabase/migrations/20260831170000_partner_api_credential_lifecycle.sql` is the owner's to apply. One nullable column (`superseded_by_key_id`) + three `SECURITY DEFINER` RPCs; rotation reuses `expires_at` rather than adding a second validity rule. **Rehearsed twice** against `supabase/postgres:17.6.1.158` restored from the production baseline, the second time on the final merged tree: harness exit 0, P1–P11 pass, suite mutation-tested. Nothing in production depends on it — it touches no edge function, and only the two operator scripts call its RPCs |
+| 2.1 | `/v1` router — path routing, method validation, `X-Postora-Request-Id` on every response | PR #105. **Live** — auto-deployed by `.github/workflows/deploy-edge-functions.yml` (billing restored 2026-09-01, the workflow path is active again) and probed on production: an unmatched `/v1` path returns the D2 envelope with the header id equal to the body's `request_id`, and the alias still answers its own envelope unchanged. Reached by path inside the SAME function; `/v1x` deliberately does not match |
+| 2.2 | D2 error envelope, one construction site | PR #105. **Live** — `V1_ERROR_POLICY` pins status/`retryable`/message for all 24 codes; `V1ErrorCode` derives from the table so a misspelled code will not compile; `details` omitted rather than null. `resource_not_found` moved from documented-but-unreachable into the enum, and the baseline was regenerated in a second commit so it is now R3-protected |
 
 ### Partially landed
 
@@ -71,38 +73,52 @@ onward — new surface, not hardening.
 
 | | Item | Owner | Why it is where it is |
 |---|---|---|---|
-| **0** | Apply `20260831170000_partner_api_credential_lifecycle.sql` | **owner** | Until this runs, `partner_audit_logs` still has zero writers in production and no key can be created atomically. It is the only thing standing between "1.3 is merged" and "1.3 works". Rehearsed twice; nothing depends on it, so it can be applied at any time |
-| **0** | Restore GitHub Actions billing | **owner** | Nothing has been CI-gated since ~16:16 UTC 2026-08-31. Local gates and a hand-run deploy have covered it, but that does not scale and the next contributor will not know to do it |
+| ~~0~~ | ~~Apply `20260831170000_partner_api_credential_lifecycle.sql`~~ | ~~owner~~ | **Done 2026-09-01.** Verified in production: the column, all three RPCs and the composite FK are present |
+| ~~0~~ | ~~Restore GitHub Actions billing~~ | ~~owner~~ | **Done 2026-09-01.** CI and the auto-deploy workflow both run again; PR #105 deployed automatically. Hand-deploys must now stop — the two paths must not both be used |
 | 0.6 | Staging environment | owner decision | **Blocked on §2.1's finding**: it must be built by restoring a schema dump, because the migrations cannot rebuild the database. Infrastructure provisioning, not a coding task |
 | 1.7 | Tenancy matrix, remaining rows | later phases | The two tables that exist are proven. The other rows name tables no phase has built yet — this closes incrementally as P3/P5 create them, not as a task of its own |
-| **2.1 + 2.2** | **`/v1` router and error envelope** | **next build task** | See below |
+| ~~2.1 + 2.2~~ | ~~`/v1` router and error envelope~~ | ~~done~~ | **Landed and live** in PR #105 — see the rows above |
+| **3.1** | **Settle the D13 state machine** | **next task, and it is RESEARCH** | See below |
+**Next task: 3.1 — and it is RESEARCH, not implementation.**
 
-**Recommended next build task: Phase 2, deliverables 2.1 and 2.2** — the `/v1` router and the D2
-error envelope, with `X-Postora-Request-Id` on every response.
+Phase 3's own text makes this the only defensible reading: *"3.1 may find no clean mechanism. That
+is an acceptable outcome — it ends the phase as a recorded research finding with send routes
+closed. It is not a licence to ship."* A phase whose first deliverable may legitimately conclude
+"do not build the rest" cannot be dispatched as one implementation task.
 
-The case for it over the alternatives:
+So 3.1 ships **alone**, as a written state machine plus a decision record, and 3.2–3.7 are
+dispatched only after the owner has read 3.1's verdict. "Do not ship sending" is a real outcome the
+owner must own — not something to route around.
 
-- **The groundwork is already paid for.** 0.7 wrote the security scheme, the error component, the
-  scope vocabulary and the pagination parameters; 0.8 will start defending the new endpoints the
-  moment they exist; 0.5's contract tests already read the document and check it against the real
-  handler. That machinery currently guards a document with **no endpoints**. 2.1/2.2 is what makes
-  it earn its keep.
-- **It carries no risk.** `/v1` is new surface, so nothing can regress; it is read-only; it needs
-  no migration; and it does not touch the frozen alias, which keeps serving unchanged.
-- **It is the last cheap moment to freeze the shape.** The plan's own reasoning (§3b) is that the
-  `/v1` contract should be frozen *before a second consumer exists*. There are currently **zero
-  active partner keys** — the cheapest this decision will ever be.
+**The fact that decides the phase must be re-verified, not quoted.** The spec asserts WhatsApp
+Cloud "exposes no client-side lookup", and D13's whole `indeterminate`-is-terminal contract rests
+on it. That is a claim about Meta's API *at the spec's writing date*, and 3.1's literal wording is
+"against what WhatsApp Cloud exposes". Two things to check against current Meta documentation and
+against Postora's own webhook ingest:
 
-**Do NOT ship 2.7 (`GET /v1/usage`) in this phase** unless the counter schema is settled first;
-the plan is explicit that shipping it with fixed counters freezes a contract whose commercial
-meaning is still open.
+- whether `POST /messages` accepts any client-supplied dedup token; and
+- whether `biz_opaque_callback_data` — a client-supplied field Meta echoes back in **status
+  webhooks** — appears in the statuses this codebase already receives.
 
-**The runner-up, and why it is second.** Phase 3 (text and template send) is the capability a
-partner has actually asked for, and `send_template` is suspended today. But restoring it is gated
-on D13 — the durable pre-call dispatch boundary — which is the hardest correctness problem in this
-programme and the reason for the 0A suspension. It is the right *next big* piece; it is the wrong
-piece to start immediately after a phase boundary, because P2 establishes the routing, selection
-and envelope that P3's send endpoint would otherwise have to invent and then retrofit.
+If the second is real, it is a reconciliation channel the spec's "no lookup" claim underweights:
+stamp the dispatch intent's id into the send, and a later status webhook carrying that id **proves
+the send happened**. Note the asymmetry that keeps this safe — it converts some indeterminates into
+*resolved-sent*, and never into *safe-to-resend*. That is exactly 3.4's "conservative refusal where
+the provider does not permit lookup".
+
+**Schema direction, decided in advance:** a separate `partner_dispatch_intents` table, not a fourth
+state on `partner_api_idempotency`. Three reasons. 1.7's tenancy matrix already names "dispatch
+intents" as an expected table, so building it closes another 1.7 row. The idempotency row is
+`ON DELETE CASCADE` on `key_id`, while a dispatch intent is *evidence a real message may have
+reached a customer* and must outlive key rotation or deletion — the same reasoning that gave
+`partner_audit_logs` no FK on `key_id`. And the existing `attempt_token` fence protects *settles*,
+whereas the new property is different: **a takeover that finds a dispatched intent never calls the
+provider.**
+
+**The exit gate binds the alias too.** `SEND_TEMPLATE_SUSPENDED` in `partner-api/router.ts` names
+its restoration condition as exactly this phase's exit criterion — the durable pre-call boundary
+with a passing gate. On a failing or partial result the flag stays `true` and every public send
+route stays closed, the alias included. Nobody should flip it on a partial pass.
 
 ### 0.3, and what it found
 
