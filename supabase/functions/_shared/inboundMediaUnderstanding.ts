@@ -70,11 +70,21 @@ export interface UnderstandingLimits {
    * 60s. 20s leaves room for the download plus two Gemini rungs.
    */
   documentTimeoutMs?: number;
+  /**
+   * Images too: gemini-2.5-flash reasons before answering, and on 2026-09-01 every
+   * WhatsApp photo hit the 10s deadline (7.6s measured for a simple graphic with
+   * thinking on). Thinking is disabled for images below, but the wider deadline stays
+   * as the margin the incident proved 10s did not have. Same 60s-ceiling math as
+   * documents: 2×20s ladder + 10s download still fits.
+   */
+  imageTimeoutMs?: number;
 }
 
-/** The deadline for one kind. Only documents differ, and only because they are slower. */
+/** The deadline for one kind. Audio keeps the base; the slower kinds get their own. */
 export function timeoutFor(kind: MediaKind, limits: UnderstandingLimits): number {
-  return kind === "document" ? limits.documentTimeoutMs ?? limits.timeoutMs : limits.timeoutMs;
+  if (kind === "document") return limits.documentTimeoutMs ?? limits.timeoutMs;
+  if (kind === "image") return limits.imageTimeoutMs ?? limits.timeoutMs;
+  return limits.timeoutMs;
 }
 
 /**
@@ -139,6 +149,7 @@ export const DEFAULT_LIMITS: UnderstandingLimits = {
   maxBytes: 15 * 1024 * 1024,
   timeoutMs: 10_000,
   documentTimeoutMs: 20_000,
+  imageTimeoutMs: 20_000,
 };
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -331,7 +342,21 @@ function isAbort(error: unknown): boolean {
   return (error as Error)?.name === "AbortError";
 }
 
-async function callGemini(call: ProviderCall, prompt: string): Promise<string> {
+/**
+ * Describe-an-image needs no chain of thought, and on 2.5-flash the thinking pass is
+ * where the deadline went: 7.6s with thinking vs 2.6s without, measured on the
+ * production host on 2026-09-01 — against a 10s budget. An allowlist on the flash
+ * family, not a "not pro" denylist: pro models REJECT thinkingBudget 0 (minimum 128),
+ * and an unknown future model name must default to the request shape every model
+ * accepts. Audio and documents keep their working request untouched.
+ */
+function thinkingConfigFor(model: string, kind: MediaKind): Record<string, unknown> {
+  return kind === "image" && model.toLowerCase().includes("flash")
+    ? { thinkingConfig: { thinkingBudget: 0 } }
+    : {};
+}
+
+async function callGemini(call: ProviderCall, prompt: string, kind: MediaKind): Promise<string> {
   const { bytes, mimeType, key, model, timeoutMs, fetcher } = call;
   const deadline = new ProviderDeadline(timeoutMs);
   let response: Response | null = null;
@@ -350,7 +375,7 @@ async function callGemini(call: ProviderCall, prompt: string): Promise<string> {
               { inline_data: { mime_type: bareMime(mimeType), data: toBase64(bytes) } },
             ],
           }],
-          generationConfig: { temperature: 0, maxOutputTokens: 2048 },
+          generationConfig: { temperature: 0, maxOutputTokens: 2048, ...thinkingConfigFor(model, kind) },
         }),
       }),
     );
@@ -583,7 +608,7 @@ async function attemptGemini(
 ): Promise<ProviderAttempt> {
   try {
     const prompt = geminiPrompt(kind, promptContext);
-    const raw = await callGemini(call, prompt);
+    const raw = await callGemini(call, prompt, kind);
     return { ok: true, result: geminiResult(raw, kind, call.model) };
   } catch (error) {
     const timedOut = isAbort(error);
@@ -645,7 +670,7 @@ async function attemptTier(
     }
     // gemini / google
     const prompt = geminiPrompt(kind, config.promptContext);
-    const raw = await callGemini(providerCall, prompt);
+    const raw = await callGemini(providerCall, prompt, kind);
     return { ok: true, result: geminiResult(raw, kind, tier.model) };
   } catch (error) {
     const timedOut = isAbort(error);
