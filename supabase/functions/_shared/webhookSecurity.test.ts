@@ -32,7 +32,7 @@ Deno.test("postWebhook aborts an unresponsive hop", async () => {
           receivedSignal?.addEventListener("abort", () =>
             reject(receivedSignal?.reason));
         });
-      }, 1),
+      }, { timeoutMs: 1 }),
     DOMException,
     "Webhook request timed out",
   );

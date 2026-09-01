@@ -390,6 +390,234 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/webhooks:
+    get:
+      operationId: listWebhooks
+      summary: List webhook subscriptions
+      description: |
+        Every subscription in the caller's workspace, newest first. The
+        signing secret is **never** in a read: it is returned once at
+        creation and once at each rotation, and nowhere else — a read that
+        could return it would make `webhooks:read` a credential grant.
+
+        `next_cursor` is always present and always null here: subscriptions
+        are few enough that this listing is not paginated, and a client's
+        "loop while next_cursor is not null" must still terminate.
+
+        Scope `webhooks:read`. D7 class A.
+      responses:
+        '200':
+          description: The subscriptions.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CollectionEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Webhook'
+        default:
+          $ref: '#/components/responses/V1Error'
+    post:
+      operationId: createWebhook
+      summary: Create a webhook subscription
+      description: |
+        The response carries `secret` — the **only** time it is returned
+        other than a rotation. Store it: Postora cannot show it again.
+
+        `events` accepts only certified event types. In this phase that is
+        `webhook.test` alone: Phase 5 ships the delivery substrate and no
+        event family (decision D6), and a closed allowlist is what stops a
+        partner building against an event that would never fire.
+
+        `url` must be a public HTTPS target. It is validated here and
+        **revalidated on every redirect hop** at delivery time.
+
+        No `Idempotency-Key` is required, unlike a send, because a duplicate
+        subscription is a visible row the partner can list and delete — a
+        duplicated message reaches a customer and cannot be recalled.
+
+        Scope `webhooks:manage`. D7 class C.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookCreateRequest'
+      responses:
+        '201':
+          description: The subscription, with its secret.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookWithSecret'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/webhooks/{id}:
+    get:
+      operationId: getWebhook
+      summary: Get one webhook subscription
+      description: |
+        An id from another workspace — and an id that is not well-formed —
+        answers `resource_not_found`, indistinguishably.
+
+        Scope `webhooks:read`. D7 class A.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The subscription.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        default:
+          $ref: '#/components/responses/V1Error'
+    patch:
+      operationId: updateWebhook
+      summary: Update a webhook subscription
+      description: |
+        Only the fields present in the body are changed. Setting
+        `is_active: true` is how an endpoint disabled by an exhausted retry
+        ladder is brought back: it clears the disabled reason and the failure
+        count with it.
+
+        Scope `webhooks:manage`. D7 class C.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookUpdateRequest'
+      responses:
+        '200':
+          description: The updated subscription.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Webhook'
+        default:
+          $ref: '#/components/responses/V1Error'
+    delete:
+      operationId: deleteWebhook
+      summary: Delete a webhook subscription
+      description: |
+        Undelivered events queued for this subscription are deleted with it.
+        A partner who removed a subscription is not owed its backlog, and
+        keeping those rows would leave an outbox nothing ever drains.
+
+        Scope `webhooks:manage`. D7 class C.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '204':
+          description: Deleted.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/webhooks/{id}/rotate-secret:
+    post:
+      operationId: rotateWebhookSecret
+      summary: Rotate a subscription's signing secret
+      description: |
+        Returns the new secret once, and keeps the previous one verifying for
+        a bounded overlap (`previous_secret_expires_at`, 24 hours) so a
+        rotation is not an outage while the receiver deploys the new value.
+
+        A delivery captures its secret **version** when it is enqueued, so an
+        event already on the retry ladder is still signed with the secret that
+        was current when it occurred — its `X-Postora-Event-Id` is immutable,
+        and one event id arriving under two signatures would be
+        indistinguishable from a replay.
+
+        Scope `webhooks:manage`. D7 class C.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The subscription, with its new secret.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookWithSecret'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/webhooks/{id}/test:
+    post:
+      operationId: testWebhook
+      summary: Queue a webhook.test event for this subscription
+      description: |
+        Answers **202**, not 200: the event is durably queued, not delivered.
+        A 200 would claim an outcome the outbox exists precisely because
+        Postora cannot yet know — the worker delivers on its own cadence and
+        its own retry ladder.
+
+        Refused when the subscription is disabled, or is not subscribed to
+        `webhook.test`.
+
+        Scope `webhooks:manage`. D7 class C — classified by RISK, not
+        billability: this makes Postora issue an outbound request to a
+        partner-supplied URL.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '202':
+          description: Queued for delivery.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookTestAccepted'
+        default:
+          $ref: '#/components/responses/V1Error'
+
 components:
   securitySchemes:
     PartnerApiKey:
@@ -777,6 +1005,178 @@ components:
         created_at:
           type: [string, 'null']
           format: date-time
+
+    Webhook:
+      type: object
+      description: |
+        A webhook subscription. The signing `secret` is deliberately absent:
+        it appears only in the response to a create or a rotate.
+      required: [id, url, events, platform, account_id, is_active, secret_version, health, created_at]
+      properties:
+        id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+          description: Prefixed `wh_`.
+        url:
+          type: string
+          format: uri
+          description: A public HTTPS target.
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/CertifiedEventType'
+        platform:
+          type: string
+          nullable: true
+          enum: [whatsapp, null]
+          description: |
+            A narrowing filter. `null` means no platform narrowing — a filter
+            can only ever remove subscriptions from a match, never add one.
+        account_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+          nullable: true
+          description: |
+            A narrowing filter, prefixed `acc_`. `null` means every account
+            the key is bound to. An id outside the binding answers
+            `resource_not_found`.
+        is_active:
+          type: boolean
+          description: |
+            False once the retry ladder has been exhausted for one of this
+            subscription's deliveries. Set it back to true to resume.
+        secret_version:
+          type: integer
+          minimum: 1
+          description: |
+            Incremented by each rotation. A delivery captures this value when
+            it is enqueued, so a retry is signed with the secret that was
+            current when the event occurred.
+        health:
+          $ref: '#/components/schemas/WebhookHealth'
+        created_at:
+          type: string
+          format: date-time
+
+    WebhookHealth:
+      type: object
+      description: Why an endpoint is in the state it is in.
+      required: [consecutive_failures, last_success_at, last_failure_at, last_error, disabled_at, disabled_reason]
+      properties:
+        consecutive_failures:
+          type: integer
+        last_success_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_failure_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+        disabled_at:
+          type: string
+          format: date-time
+          nullable: true
+        disabled_reason:
+          type: string
+          nullable: true
+
+    WebhookWithSecret:
+      allOf:
+        - $ref: '#/components/schemas/Webhook'
+        - type: object
+          required: [secret]
+          properties:
+            secret:
+              type: string
+              description: |
+                The HMAC signing secret, prefixed `whsec_`. Returned by create
+                and by rotate and **never again** — Postora cannot show it a
+                second time.
+            previous_secret_expires_at:
+              type: string
+              format: date-time
+              description: |
+                Rotation only. Until this moment the superseded secret also
+                verifies, so a rotation is not an outage while the receiver
+                deploys the new value.
+
+    CertifiedEventType:
+      type: string
+      description: |
+        An event whose transition, stable identifier and **transactional**
+        producer are all defined (decision D6). Phase 5 ships the delivery
+        substrate and certifies exactly one event; Phase 6 and Phase 8 add
+        entries one at a time.
+
+        MUST equal `CERTIFIED_EVENT_TYPES` in
+        `supabase/functions/_shared/partnerWebhookEvents.ts`, which the
+        `partner_webhooks.events` CHECK constraint also enforces.
+      enum: [webhook.test]
+
+    WebhookCreateRequest:
+      type: object
+      required: [url, events]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: A public HTTPS target. Private and link-local hosts are refused.
+        events:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/CertifiedEventType'
+        platform:
+          type: string
+          nullable: true
+          enum: [whatsapp, null]
+        account_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+          nullable: true
+
+    WebhookUpdateRequest:
+      type: object
+      description: Only the fields present are changed.
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          minItems: 1
+          items:
+            $ref: '#/components/schemas/CertifiedEventType'
+        platform:
+          type: string
+          nullable: true
+          enum: [whatsapp, null]
+        account_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+          nullable: true
+        is_active:
+          type: boolean
+
+    WebhookTestAccepted:
+      type: object
+      description: |
+        The event was queued. Delivery is the worker's job and is reported by
+        the subscription's `health`, not by this response.
+      required: [status, occurrence_id]
+      properties:
+        status:
+          type: string
+          enum: [queued]
+        occurrence_id:
+          type: string
+          description: |
+            Identifies the transition, not the resource. Exactly one delivery
+            row exists per (subscription, occurrence).
 
     CollectionEnvelope:
       type: object

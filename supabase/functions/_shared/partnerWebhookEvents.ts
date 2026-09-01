@@ -1,0 +1,129 @@
+/**
+ * The event vocabulary and the fan-out that turns one occurrence into outbox
+ * rows (deliverables 5.2, 5.7).
+ *
+ * Design record: docs/decisions/2026-09-02-d5-webhook-substrate.md.
+ */
+
+/**
+ * The events a subscription may name -- a CLOSED allowlist, and the mechanism
+ * that stops this phase becoming an implicit promise.
+ *
+ * D6 ships an event only once its transition, stable identifier and
+ * TRANSACTIONAL producer are all defined. This phase certifies exactly one,
+ * and `webhook.test` is certifiable precisely because it has no external
+ * producer: its transition is "a partner asked", its occurrence id is minted
+ * at request time, and its enqueue is the request's own write. There is
+ * nothing to crash between.
+ *
+ * Phase 6 and Phase 8 add entries ONE CERTIFIED EVENT AT A TIME. A partner who
+ * cannot subscribe to `message.received` cannot build against it and discover
+ * six weeks later that it never fired. The database CHECK on
+ * partner_webhooks.events enforces the same list, so a widening needs both a
+ * migration and this constant -- deliberately two deliberate acts.
+ */
+export const CERTIFIED_EVENT_TYPES = ["webhook.test"] as const;
+
+export type CertifiedEventType = typeof CERTIFIED_EVENT_TYPES[number];
+
+export function isCertifiedEventType(value: string): value is CertifiedEventType {
+  return (CERTIFIED_EVENT_TYPES as readonly string[]).includes(value);
+}
+
+export interface WebhookEventOccurrence {
+  workspaceId: string;
+  eventType: CertifiedEventType;
+  /**
+   * Identifies the TRANSITION, not the resource. `<event_type>:<stable key>`,
+   * because `message.delivered` and `message.read` for one message share a
+   * provider id -- keyed on the resource alone the second silently collides
+   * with the first and the outbox drops the event it exists to guarantee.
+   */
+  occurrenceId: string;
+  payload: Record<string, unknown>;
+  /** Narrowing filters. null means the occurrence is not platform/account specific. */
+  platform: string | null;
+  accountId: string | null;
+  occurredAt?: string;
+}
+
+interface SubscriptionRow {
+  id: string;
+  secret_version: number;
+  platform: string | null;
+  social_account_id: string | null;
+}
+
+export interface EnqueueResult {
+  /** Rows the insert created. A repeat of the same occurrence enqueues 0. */
+  enqueued: number;
+  matched: number;
+}
+
+/**
+ * Fan one occurrence out to every subscription that matches it.
+ *
+ * One event matching three subscriptions is THREE rows: deduplication is per
+ * subscription because delivery is. Zero rows for non-matching subscriptions
+ * is the other half of the same invariant, and the half a "delivered at least
+ * once" test never notices is missing.
+ */
+export async function enqueuePartnerWebhookEvent(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  occurrence: WebhookEventOccurrence,
+): Promise<EnqueueResult> {
+  // Platform and account filters are applied HERE rather than in the query,
+  // and that is not laziness. Each is an "is null OR equals" disjunction, and
+  // PostgREST's `.or()` does not compose -- a second call REPLACES the first
+  // rather than ANDing with it, which shipped as a real bug in PR #35. Two
+  // disjunctions would need one hand-built or-string, and a hand-built
+  // or-string is where a stray comma becomes a filter that matches everything.
+  // The candidate set is one workspace's subscriptions, so filtering in
+  // TypeScript costs nothing and cannot be got subtly wrong.
+  const { data, error } = await admin
+    .from("partner_webhooks")
+    .select("id, secret_version, platform, social_account_id")
+    .eq("workspace_id", occurrence.workspaceId)
+    .eq("is_active", true)
+    .contains("events", [occurrence.eventType]);
+
+  if (error) throw new Error(`webhook subscription lookup failed: ${error.message}`);
+
+  const matching = ((data ?? []) as SubscriptionRow[]).filter((row) =>
+    // An unset filter means "no narrowing", so it matches. A SET filter that
+    // disagrees with the occurrence excludes it -- a filter may only ever
+    // remove subscriptions from a match, never add one.
+    (row.platform === null || row.platform === occurrence.platform) &&
+    (row.social_account_id === null || row.social_account_id === occurrence.accountId)
+  );
+
+  if (matching.length === 0) return { enqueued: 0, matched: 0 };
+
+  const rows = matching.map((row) => ({
+    webhook_id: row.id,
+    workspace_id: occurrence.workspaceId,
+    event_type: occurrence.eventType,
+    event_occurrence_id: occurrence.occurrenceId,
+    payload: occurrence.payload,
+    // Captured at ENQUEUE. Reading the secret at send time instead would
+    // re-sign a mid-ladder retry under a rotated secret, changing the
+    // signature of an event whose id is immutable.
+    secret_version: row.secret_version,
+    ...(occurrence.occurredAt ? { occurred_at: occurrence.occurredAt } : {}),
+  }));
+
+  const { data: inserted, error: insertError } = await admin
+    .from("partner_webhook_deliveries")
+    // ignoreDuplicates, not an error: re-enqueuing the same occurrence is the
+    // NORMAL outcome of a producer retry, and the UNIQUE constraint absorbing
+    // it is exactly the dedup the outbox is for.
+    .upsert(rows, { onConflict: "webhook_id,event_occurrence_id", ignoreDuplicates: true })
+    .select("id");
+
+  if (insertError) {
+    throw new Error(`webhook delivery enqueue failed: ${insertError.message}`);
+  }
+
+  return { enqueued: (inserted ?? []).length, matched: matching.length };
+}
