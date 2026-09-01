@@ -78,13 +78,22 @@ onward — new surface, not hardening.
 | 0.6 | Staging environment | owner decision | **Blocked on §2.1's finding**: it must be built by restoring a schema dump, because the migrations cannot rebuild the database. Infrastructure provisioning, not a coding task |
 | 1.7 | Tenancy matrix, remaining rows | later phases | The two tables that exist are proven. The other rows name tables no phase has built yet — this closes incrementally as P3/P5 create them, not as a task of its own |
 | ~~2.1 + 2.2~~ | ~~`/v1` router and error envelope~~ | ~~done~~ | **Landed and live** in PR #105 — see the rows above |
-| **3.1** | **Settle the D13 state machine** | **next task, and it is RESEARCH** | See below |
-**Next task: 3.1 — and it is RESEARCH, not implementation.**
+| ~~3.1~~ | ~~Settle the D13 state machine~~ | ~~done 2026-09-01~~ | **Settled** — see docs/decisions/2026-09-01-d13-dispatch-state-machine.md. A reconciliation channel EXISTS (biz_opaque_callback_data is echoed in status webhooks); no idempotency key exists, so at-most-once stands. Verdict: **proceed to 3.2**, with one empirical gate (template-send coverage) before any send route opens |
+| **3.2–3.7** | **Durable dispatch, and POST /v1/messages** | **next build task** | Gated on 3.1, which passed. The exit criterion stays binary and still binds the alias |
+**3.1 is settled (2026-09-01). Next task: 3.2–3.7.**
 
-Phase 3's own text makes this the only defensible reading: *"3.1 may find no clean mechanism. That
-is an acceptable outcome — it ends the phase as a recorded research finding with send routes
-closed. It is not a licence to ship."* A phase whose first deliverable may legitimately conclude
-"do not build the rest" cannot be dispatched as one implementation task.
+3.1 was run as research, because the plan permits it to conclude "no clean mechanism" — an outcome
+that would have closed the phase with send routes shut. It did not. The verdict is recorded in
+:
+
+- **A reconciliation channel exists.** Meta echoes `biz_opaque_callback_data` back in status
+  webhooks, which is a client-supplied correlator on delivery — the spec's "no client-side lookup"
+  premise is out of date in this one useful way.
+- **No idempotency key exists**, so D13 R2's at-most-once decision stands unchanged.
+- **One thing is unverified and gates the phase**: the field is documented as added for *free-form*
+  messages, and Phase 3 sends *templates*. One real template send must be observed echoing it back
+  before any send route opens. If that fails, the design degrades cleanly to every
+  `indeterminate` staying terminal — which is exactly today's position, so Phase 3 can still ship.
 
 So 3.1 ships **alone**, as a written state machine plus a decision record, and 3.2–3.7 are
 dispatched only after the owner has read 3.1's verdict. "Do not ship sending" is a real outcome the
