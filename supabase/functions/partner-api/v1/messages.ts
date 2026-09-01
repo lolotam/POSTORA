@@ -18,7 +18,8 @@
 import { claimIdempotency, hashRequest } from "../../_shared/partnerApiIdempotency.ts";
 import { dispatchPartnerTemplate, type PartnerSendInput } from "../../_shared/partnerDispatch.ts";
 import { loadPartnerMedia, signPartnerMediaUrl } from "../../_shared/partnerMediaStore.ts";
-import { isActionSuspended } from "../router.ts";
+import { assertActionAuthorized, PartnerAuthError } from "../../_shared/partnerApiKeys.ts";
+import { isActionSuspended, satisfyingScopesFor } from "../router.ts";
 import { decodeId } from "./ids.ts";
 import { v1ErrorResponse, type V1ErrorCode } from "./errors.ts";
 import { resolveWhatsAppAccount, type V1AuthedContext } from "./authenticated.ts";
@@ -41,6 +42,26 @@ function json(body: unknown, status: number, requestId: string): Response {
       "X-Postora-Request-Id": requestId,
     },
   });
+}
+
+/**
+ * The parts of a send that identify the REQUEST, for the idempotency hash.
+ *
+ * For text and template that is the whole input. For media it is emphatically
+ * not: `mediaUrl` is a freshly signed URL whose token and expiry differ on
+ * every mint, so hashing the input would give the same logical send a
+ * different hash each time. A partner retrying with the same Idempotency-Key
+ * -- the exact behaviour the header exists to make safe -- would get
+ * `idempotency_conflict` instead of a replay, and the D13 guarantee would be
+ * unreachable for every media send.
+ *
+ * So the basis is the caller-controlled fields only: what they asked for, not
+ * what we minted to satisfy it.
+ */
+function idempotencyBasisOf(input: PartnerSendInput): unknown {
+  if (input.kind !== "media") return input;
+  const { mediaUrl: _signed, ...stable } = input;
+  return stable;
 }
 
 /**
@@ -83,8 +104,17 @@ async function buildMediaSend(
     };
   }
 
-  const stored = await loadPartnerMedia(admin, record.workspaceId, mediaId);
-  if (!stored) return { ok: false, res: v1ErrorResponse("resource_not_found", requestId) };
+  const loaded = await loadPartnerMedia(admin, record.workspaceId, mediaId);
+  // An error is not an absence: `resource_not_found` is non-retryable, so
+  // answering it during a database blip tells a partner to stop retrying a
+  // file that exists and is theirs.
+  if (loaded.outcome === "error") {
+    return { ok: false, res: v1ErrorResponse("internal_error", requestId) };
+  }
+  if (loaded.outcome === "missing") {
+    return { ok: false, res: v1ErrorResponse("resource_not_found", requestId) };
+  }
+  const stored = loaded.media;
 
   if (stored.kind !== type) {
     return {
@@ -140,6 +170,40 @@ export async function postMessages(
       message: `Message type "${type || "(missing)"}" is not supported`,
       details: { supported_types: [...SUPPORTED_TYPES] },
     });
+  }
+
+  // ---- PER-TYPE SCOPE, and why the route-level check is not enough ----
+  //
+  // The route is authorised as `send_template`, whose satisfying set is
+  // ["whatsapp:template.send", "messages:send"] -- so a key holding ONLY the
+  // frozen legacy scope reaches this handler. That scope authorises approved
+  // TEMPLATE sending and nothing else (D3), yet without this check it would
+  // also buy unsuspended free-form text and media session sends: a credential
+  // silently gaining authority its holder never asked for, which is exactly
+  // the escalation D3 was rewritten to prevent, arriving through a different
+  // door.
+  //
+  // The text half of this predates Phase 4 -- it landed with 3.5 -- and is
+  // fixed here rather than left, because leaving one escalated while fixing
+  // the other would be indefensible and it is the same line of code. No
+  // partner is affected: there are zero active legacy-scoped keys.
+  const typeAction = type === "template"
+    ? "send_template"
+    : (MEDIA_TYPES.has(type) ? "send_media" : "send_text");
+  const satisfying = satisfyingScopesFor(typeAction);
+  if (satisfying === undefined) {
+    console.error(`[partner-api] v1 message type "${type}" declares unknown action "${typeAction}"`);
+    return v1ErrorResponse("internal_error", requestId);
+  }
+  if (satisfying !== null) {
+    try {
+      assertActionAuthorized(record, typeAction, satisfying);
+    } catch (err) {
+      if (err instanceof PartnerAuthError) {
+        return v1ErrorResponse(err.code as V1ErrorCode, requestId);
+      }
+      throw err;
+    }
   }
 
   // The 0A safety suspension applies to /v1 exactly as it applies to the
@@ -209,7 +273,7 @@ export async function postMessages(
     admin,
     record.id,
     idempotencyKey,
-    await hashRequest(input),
+    await hashRequest(idempotencyBasisOf(input)),
   );
 
   if (claim.outcome === "conflict") return v1ErrorResponse("idempotency_conflict", requestId);

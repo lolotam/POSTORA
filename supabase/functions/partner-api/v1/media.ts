@@ -226,8 +226,9 @@ export async function getMedia(
   // phase has workspace_id NULL and therefore matches nothing, so the app's
   // existing uploads are unreachable from any partner key without a policy
   // having to say so.
-  const stored = await loadPartnerMedia(admin, record.workspaceId, mediaId);
-  if (!stored) return v1ErrorResponse("resource_not_found", requestId);
+  const loaded = await loadPartnerMedia(admin, record.workspaceId, mediaId);
+  if (loaded.outcome === "error") return v1ErrorResponse("internal_error", requestId);
+  if (loaded.outcome === "missing") return v1ErrorResponse("resource_not_found", requestId);
 
-  return v1JsonResponse(present(stored), requestId);
+  return v1JsonResponse(present(loaded.media), requestId);
 }

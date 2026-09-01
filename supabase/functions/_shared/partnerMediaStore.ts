@@ -155,26 +155,47 @@ export async function storePartnerMedia(
  * this phase — match no workspace, so they are unreachable here without a
  * single policy saying so.
  */
+export type LoadMediaResult =
+  | { outcome: "found"; media: StoredPartnerMedia }
+  | { outcome: "missing" }
+  /** The read itself failed -- a timeout, a connection drop, a schema problem. */
+  | { outcome: "error" };
+
 export async function loadPartnerMedia(
   // deno-lint-ignore no-explicit-any
   admin: any,
   workspaceId: string,
   mediaId: string,
-): Promise<StoredPartnerMedia | null> {
+): Promise<LoadMediaResult> {
   const { data, error } = await admin
     .from("media_files")
     .select("id, file_path, mime_type, file_type, file_size, created_at, storage_bucket, metadata")
     .eq("id", mediaId)
     .eq("workspace_id", workspaceId)
     .maybeSingle();
-  if (error || !data) return null;
+
+  // An error is NOT an absence, and collapsing the two is how an outage gets
+  // reported as a permanent fact. `resource_not_found` is non-retryable: a
+  // partner told that during a database blip would stop retrying a file that
+  // exists and is theirs. They are separated here so the caller can answer
+  // `internal_error` (retryable) for one and `resource_not_found` for the
+  // other.
+  if (error) {
+    console.error("[partner-api] media lookup failed:", error.message);
+    return { outcome: "error" };
+  }
+  if (!data) return { outcome: "missing" };
+
   return {
-    id: data.id,
-    filePath: data.file_path,
-    mimeType: data.mime_type,
-    kind: data.file_type,
-    byteLength: data.file_size ?? 0,
-    createdAt: data.created_at ?? null,
+    outcome: "found",
+    media: {
+      id: data.id,
+      filePath: data.file_path,
+      mimeType: data.mime_type,
+      kind: data.file_type,
+      byteLength: data.file_size ?? 0,
+      createdAt: data.created_at ?? null,
+    },
   };
 }
 

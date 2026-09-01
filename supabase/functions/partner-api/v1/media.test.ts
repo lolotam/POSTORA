@@ -87,10 +87,15 @@ interface StubOpts {
   mediaRows?: Record<string, unknown>[];
   /** Fails the storage write, to exercise the compensating delete. */
   uploadFails?: boolean;
+  /** Makes the media_files read fail, rather than come back empty. */
+  mediaReadFails?: boolean;
 }
 
 function stub(opts: StubOpts = {}) {
   const intents: Record<string, unknown>[] = [];
+  /** Every rpc name with its argument object, so the idempotency hash the
+   *  route actually computed is assertable rather than assumed. */
+  const rpcCalls: { name: string; args: any }[] = [];
   const uploaded: { path: string; size: number }[] = [];
   const removed: string[] = [];
   const signed: string[] = [];
@@ -140,6 +145,9 @@ function stub(opts: StubOpts = {}) {
         }),
       }),
       maybeSingle() {
+        if (table === "media_files" && opts.mediaReadFails) {
+          return Promise.resolve({ data: null, error: { message: "connection reset" } });
+        }
         const rows = (seeded[table] ?? []).filter((row) =>
           filters.every(([col, val]) => row[col] === val)
         );
@@ -161,7 +169,9 @@ function stub(opts: StubOpts = {}) {
     removed,
     signed,
     inserted,
-    rpc(name: string) {
+    rpcCalls,
+    rpc(name: string, args?: unknown) {
+      rpcCalls.push({ name, args });
       if (name === "consume_partner_rate_v2") {
         return Promise.resolve({
           data: { allowed: true, remaining: 59, reset_seconds: 42 },
@@ -466,6 +476,90 @@ Deno.test("R9: a media send is not refused by the 0A template suspension", async
     () => stub(),
   );
   assertEquals(res.status === 503, false, "media must not inherit the template suspension");
+});
+
+// --- F1..F4 — the four P1 findings from review, each pinned ---------------
+
+Deno.test("F1: a legacy template-only key cannot send media OR free-form text", async () => {
+  // The route is authorised as `send_template`, whose satisfying set also
+  // contains the frozen legacy scope. That scope authorises approved TEMPLATE
+  // sending and nothing more (D3) — without a per-type check it would also buy
+  // unsuspended media and free-form session sends, which is the escalation D3
+  // was rewritten to prevent arriving through a different door.
+  //
+  // The text half predates Phase 4 (it landed with 3.5) and is covered here
+  // because it is the same defect and the same line.
+  const legacyOnly = { ...KEY_ROW, scopes: ["whatsapp:template.send"] };
+
+  const media = await handleRequest(
+    send({ type: "image", recipient_phone: "+1", media_id: `media_${MEDIA}` }),
+    () => stub({ keyRow: legacyOnly }),
+  );
+  assertEquals(media.status, 403);
+  assertEquals(await code(media), "insufficient_scope");
+
+  const text = await handleRequest(
+    send({ type: "text", recipient_phone: "+1", text: { body: "hi" } }),
+    () => stub({ keyRow: legacyOnly }),
+  );
+  assertEquals(await code(text), "insufficient_scope");
+});
+
+Deno.test("F1b: the same key with messages:send is allowed through", async () => {
+  // The control for F1. Without it the assertion above would pass against a
+  // route that refused every media send.
+  const client = stub({ keyRow: { ...KEY_ROW, scopes: ["messages:send"] } });
+  const res = await handleRequest(
+    send({ type: "image", recipient_phone: "+1", media_id: `media_${MEDIA}` }),
+    () => client,
+  );
+  assertEquals(res.status === 403, false);
+  assertEquals(client.signed.length, 1, "an authorised send reaches the signing step");
+});
+
+Deno.test("F2: the idempotency hash EXCLUDES the freshly signed URL", async () => {
+  // A signed URL carries a token and an expiry that differ on every mint. If
+  // it entered the hash, the same logical send retried under the same
+  // Idempotency-Key — the exact behaviour the header exists to make safe —
+  // would hash differently and answer idempotency_conflict instead of
+  // replaying. D13's guarantee would be unreachable for every media send.
+  const hashes: string[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const client = stub();
+    await handleRequest(
+      send({ type: "image", recipient_phone: "+1", media_id: `media_${MEDIA}`, caption: "hi" }),
+      () => client,
+    );
+    const claim = client.rpcCalls.find((c: any) => c.name === "claim_partner_idempotency");
+    assert(claim, "the route must claim an idempotency key");
+    hashes.push(claim.args.p_request_hash ?? claim.args.request_hash ?? JSON.stringify(claim.args));
+    // The premise: the URL really did differ between attempts.
+    assertEquals(client.signed.length, 1);
+  }
+  assertEquals(hashes[0], hashes[1], "two identical logical sends must hash identically");
+});
+
+Deno.test("F3: a media read ERROR is internal_error, never resource_not_found", async () => {
+  // resource_not_found is non-retryable. Answering it during a database blip
+  // tells a partner to stop retrying a file that exists and is theirs — an
+  // outage reported as a permanent fact.
+  const onSend = await handleRequest(
+    send({ type: "image", recipient_phone: "+1", media_id: `media_${MEDIA}` }),
+    () => stub({ mediaReadFails: true }),
+  );
+  assertEquals(onSend.status, 500);
+  assertEquals(await code(onSend), "internal_error");
+
+  const onRead = await handleRequest(
+    v1(`/v1/media/media_${MEDIA}`),
+    () => stub({ mediaReadFails: true }),
+  );
+  assertEquals(onRead.status, 500);
+  // One read of the body: it carries the code AND the typed verdict, and the
+  // verdict is what a client's retry logic actually obeys.
+  const readBody = await onRead.json();
+  assertEquals(readBody.error.code, "internal_error");
+  assertEquals(readBody.error.retryable, true);
 });
 
 // --- R10 — the compensating delete ----------------------------------------

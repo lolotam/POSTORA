@@ -58,6 +58,28 @@ CREATE INDEX IF NOT EXISTS media_files_workspace_created_idx
   WHERE workspace_id IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
+-- 1b. file_type has only ever allowed 'image' and 'video'.
+-- ---------------------------------------------------------------------------
+--
+-- Verified against production, not assumed:
+--     media_files_file_type_check => CHECK (file_type = ANY (ARRAY['image','video']))
+--
+-- The partner allowlist adds audio (mp3/ogg/aac/amr) and documents (pdf), so
+-- without this every audio and document upload would write its object, fail
+-- the row insert, trigger the compensating delete, and answer internal_error
+-- -- half the advertised surface broken on merge, with a symptom that looks
+-- like a storage fault rather than a constraint.
+--
+-- Widening a CHECK is additive: every existing row already satisfies the
+-- narrower predicate. The constraint is REPLACED rather than dropped, because
+-- an unconstrained file_type column would let any string in and the check is
+-- what makes `kind` a closed vocabulary shared with WhatsApp's own type names.
+ALTER TABLE public.media_files DROP CONSTRAINT IF EXISTS media_files_file_type_check;
+ALTER TABLE public.media_files
+  ADD CONSTRAINT media_files_file_type_check
+  CHECK (file_type IN ('image', 'video', 'audio', 'document'));
+
+-- ---------------------------------------------------------------------------
 -- 2. A private bucket for partner uploads.
 -- ---------------------------------------------------------------------------
 --

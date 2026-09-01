@@ -83,6 +83,30 @@ BEGIN
     RAISE EXCEPTION 'FAIL: deleting the key did not leave workspace_id intact';
   END IF;
 
+  -- Every kind the partner allowlist advertises must satisfy
+  -- media_files_file_type_check. It has only ever allowed image and video, so
+  -- without the widening in 20260901190000 an audio or document upload writes
+  -- its object, fails HERE, deletes the object and answers internal_error --
+  -- half the advertised surface broken, with a symptom that reads as a
+  -- storage fault rather than a constraint.
+  INSERT INTO public.media_files
+    (user_id, workspace_id, file_path, file_type, storage_bucket)
+  VALUES
+    (user_b, ws_b, 'k/' || nonce || '.mp3', 'audio', 'partner-media'),
+    (user_b, ws_b, 'k/' || nonce || '.pdf', 'document', 'partner-media');
+  RAISE NOTICE 'PASS: audio and document rows satisfy the file_type check';
+
+  -- And the check is still a CHECK: dropping it entirely would pass the line
+  -- above while letting any string in.
+  BEGIN
+    INSERT INTO public.media_files
+      (user_id, workspace_id, file_path, file_type, storage_bucket)
+    VALUES (user_b, ws_b, 'k/' || nonce || '.xxx', 'executable', 'partner-media');
+    RAISE EXCEPTION 'FAIL: file_type accepted a value outside the vocabulary';
+  EXCEPTION WHEN check_violation THEN
+    RAISE NOTICE 'PASS: file_type is still a closed vocabulary';
+  END;
+
   -- A pre-existing app upload (workspace_id NULL) must remain insertable, or
   -- the additive migration is not additive.
   INSERT INTO public.media_files (user_id, file_path, file_type)

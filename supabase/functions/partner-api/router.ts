@@ -40,6 +40,13 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   // billed for -- so it takes media:write, not media:read.
   upload_media: ["media:write"],
   get_media: ["media:read"],
+  // Generic scope ONLY, deliberately. `send_template`'s set also contains the
+  // frozen legacy `whatsapp:template.send`, which authorises approved
+  // templates and nothing more (D3). If either of these accepted it, a legacy
+  // credential would gain free-form and media session sending without anyone
+  // granting it -- the escalation D3 was rewritten to prevent.
+  send_text: ["messages:send"],
+  send_media: ["messages:send"],
 };
 
 /** D7 limiter-failure risk class per action, next to ACTION_SCOPES so an
@@ -72,6 +79,11 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   // route.
   upload_media: "C",
   get_media: "A",
+  // Same class as send_template: they spend money and reach a customer. These
+  // are per-TYPE authorisation entries checked inside POST /v1/messages, not
+  // routes of their own -- and never alias actions (see ALIAS_ACTIONS).
+  send_text: "C",
+  send_media: "C",
 };
 
 /**
