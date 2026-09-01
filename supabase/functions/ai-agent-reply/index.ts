@@ -26,7 +26,7 @@ import {
   shouldAiReply,
   waRecipient,
 } from "./logic.ts";
-import { flattenChatLinks } from "./chatLinks.ts";
+import { repairChatReply } from "./chatLinks.ts";
 import {
   customToolDefinitions,
   type EscalationTarget,
@@ -1022,9 +1022,12 @@ Deno.serve(async (req) => {
       const choice = completion.choices[0].message;
 
       if (!choice.tool_calls?.length) {
-        // Flattened here, at the single place a reply is born, so the repair
+        // Repaired here, at the single place a reply is born, so the fix
         // covers the send, the stored transcript and the sandbox alike.
-        replyText = flattenChatLinks((choice.content || "").trim());
+        // Links AND markdown: the model has ignored the no-markdown prompt
+        // rule on a live reply (11:10 UTC), so rendering safety cannot
+        // depend on it complying.
+        replyText = repairChatReply((choice.content || "").trim());
         break;
       }
 
