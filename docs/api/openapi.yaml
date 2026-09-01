@@ -5,21 +5,40 @@ info:
   description: |
     Partner API v1 — OpenAPI 3.1 skeleton (deliverable 0.7).
 
-    This document is a MACHINE-PARSEABLE CONTRACT SKELETON. It defines
-    cross-cutting conventions only — security, scopes, error envelope,
-    pagination, and rate-limit headers. It deliberately defines NO paths: the
-    `/v1` router exists (deliverable 2.1, `partner-api/v1/`) but registers no
-    business endpoints until deliverables 2.3+; every `/v1` request today
-    resolves to the typed 404 below.
+    This document is a MACHINE-PARSEABLE CONTRACT. It defines the
+    cross-cutting conventions — security, scopes, error envelope, pagination,
+    rate-limit headers — and the `/v1` endpoints that are live.
 
-    What exists today is the frozen action-based alias `POST /functions/v1/partner-api`
-    with three actions (`get_status`, `list_templates`, `send_template` — the last
-    SUSPENDED and returning `temporarily_unavailable`). The alias and `/v1` have
-    DIFFERENT error envelopes on purpose (spec D2); do not unify them.
+    Live today:
+    - The `/v1` READ surface (deliverables 2.3–2.6): accounts, conversations
+      and messages. All are D7 class A — bounded local reads that proceed
+      when the rate limiter is unavailable.
+    - `POST /v1/messages` and `GET /v1/templates` (3.5–3.7). The send path is
+      SUSPENDED and answers `temporarily_unavailable` — a policy state, not an
+      absent endpoint.
+    - The frozen action-based alias `POST /functions/v1/partner-api` with
+      three actions (`get_status`, `list_templates`, `send_template`). No new
+      actions are accepted on it (D1); the alias and `/v1` have DIFFERENT
+      error envelopes on purpose (spec D2), and they must not be unified.
 
-    Future deliverables:
-    - 0.8 drift gate — diffs this baseline and classifies breaking changes.
-    - 0.5 runtime contract tests — proves this document describes real behaviour.
+    SERVED BUT NOT YET DESCRIBED BELOW: `POST /v1/messages` and
+    `GET /v1/templates`. Their request and response schemas are settled in
+    code but not yet published here, so `paths` is currently a SUBSET of what
+    is served — do not read absence from `paths` as "not served". That gap is
+    enumerated and asserted in `partner-api/contractConformance.test.ts`, so
+    it stays a tracked list rather than becoming an oversight, and it closes
+    when those two are documented.
+
+    Nothing in `paths` is unserved, which is the direction that would mislead
+    a partner into writing a call that 404s. That direction IS asserted.
+
+    Not built at all: `GET /v1/usage` (2.7), media, publishing and webhooks.
+
+    Every `/v1` read is tenant-scoped to the accounts BOUND to the presented
+    key (`partner_api_key_accounts`, spec D4) — not to the key's workspace,
+    of which the binding may be a strict subset. A resource outside the
+    binding answers `resource_not_found`, never a distinct forbidden code
+    (D11): a separate answer would confirm the resource exists.
 
     Every component is named and every enum is enumerated explicitly so a
     structural diff is meaningful. Descriptions carry provenance, not contract.
@@ -46,11 +65,227 @@ servers:
   - url: https://api.postora.cloud
     description: Self-hosted Supabase (Kong gateway) — `VITE_SUPABASE_URL` / `SUPABASE_URL` at runtime.
 
-# No documented paths yet — the /v1 router (2.1) exists but registers no
-# business endpoints until 2.3+. This skeleton exists so the 0.8 drift gate
-# has a baseline to diff against. Adding a path is a separate deliverable
-# and must update the gate's baseline document.
-paths: {}
+# Paths are written with the Kong mount included (`/functions/v1/partner-api`),
+# matching the alias's own spelling in the description above, so a partner can
+# concatenate `servers[0].url` with a path and get a URL that works.
+#
+# Adding a path is additive under the 0.8 drift gate and needs no
+# acknowledgement; REMOVING one, or narrowing a published field, does.
+paths:
+  /functions/v1/partner-api/v1/accounts:
+    get:
+      operationId: listAccounts
+      summary: List the accounts bound to this key
+      description: |
+        The accounts this key may reach (spec D4), which may be a strict
+        subset of the workspace's accounts. Every other `/v1` read is scoped
+        to this set, and `?account_id=` on a collection names one of them.
+
+        Not paginated: the binding is bounded server-side, and a key bound to
+        more accounts than an unfiltered listing supports is REFUSED with
+        `invalid_request` rather than truncated — a silently truncated tenancy
+        set would show as accounts that exist in the Postora UI and not in the
+        API. `next_cursor` is still present and null (see `CollectionEnvelope`).
+
+        Scope `accounts:read`. D7 class A.
+      responses:
+        '200':
+          description: The bound accounts.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CollectionEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Account'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/accounts/{id}:
+    get:
+      operationId: getAccount
+      summary: Get one bound account
+      description: |
+        An id outside the binding — and an id that is not well-formed —
+        answers `resource_not_found`. The two are deliberately
+        indistinguishable: a different answer for a malformed id would tell a
+        prober which guesses had the right shape.
+
+        Scope `accounts:read`. D7 class A.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The account.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Account'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/conversations:
+    get:
+      operationId: listConversations
+      summary: List WhatsApp conversations across the bound accounts
+      description: |
+        Ordered by `last_message_at` descending, then by id — the pair, not
+        the timestamp alone, because timestamps collide during history sync
+        and a cursor on the timestamp alone would either re-emit a whole
+        colliding group or drop all but one of it.
+
+        Conversations with no `last_message_at` are excluded: that column is
+        the cursor's sort key.
+
+        Default scope is ALL bound accounts, each row labelled with
+        `account_id` (spec D11) — never an implicit single-account default,
+        which would change meaning the day a second account is bound.
+        `?account_id=` narrows to one. Naming an unbound account answers
+        `resource_not_found`; naming a bound account whose platform is not
+        `whatsapp` answers `unsupported_capability`, the same verdict
+        `GET /v1/conversations/{id}` gives for that account — never an empty
+        page, which a partner cannot tell from a quiet inbox.
+
+        WhatsApp only. Scope `conversations:read`. D7 class A.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/AccountIdFilter'
+      responses:
+        '200':
+          description: A page of conversations.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CollectionEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Conversation'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/conversations/{id}:
+    get:
+      operationId: getConversation
+      summary: Get one conversation
+      description: |
+        A conversation belonging to a bound account whose platform is not
+        `whatsapp` answers `unsupported_capability` (422), not
+        `resource_not_found`: the account IS in the binding and
+        `GET /v1/accounts` lists it, so denying its existence would be
+        misleading. There is no per-message table to read for it.
+
+        Scope `conversations:read`. D7 class A.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The conversation.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Conversation'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/conversations/{id}/messages:
+    get:
+      operationId: listConversationMessages
+      summary: List the messages in one conversation
+      description: |
+        Ordered by `timestamp` descending, then by id — newest first. The
+        conversation's binding is checked exactly as it is for
+        `GET /v1/conversations/{id}`; this sub-resource is never laxer than
+        its parent.
+
+        Scope `messages:read`. D7 class A.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of messages.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CollectionEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Message'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/messages/{id}:
+    get:
+      operationId: getMessage
+      summary: Get one message
+      description: |
+        Scoped to the bound accounts. Returns the conversation's prefixed id
+        so a single message threads back to a listing the partner already
+        has; null when that message's conversation was never cached.
+
+        `POST` on this same collection sends a message and is a different
+        deliverable (3.5) with a different risk class.
+
+        Scope `messages:read`. D7 class A.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The message.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Message'
+        default:
+          $ref: '#/components/responses/V1Error'
 
 components:
   securitySchemes:
@@ -287,6 +522,120 @@ components:
         - whatsapp:webhooks.manage
 
     # ---- Identifiers — spec §7.1 ----
+    # ---- Read-surface resources (deliverables 2.3-2.6) ----
+    Account:
+      type: object
+      description: |
+        A social account BOUND to the presented key (spec D4). The listing is
+        the binding, not the workspace's accounts.
+      required: [id, platform, platform_user_id, username, is_active, needs_reauth, connected_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/PrefixedId'
+        platform:
+          type: string
+          description: |
+            The connected platform. `whatsapp` today; conversation and message
+            reads are served for `whatsapp` accounts only and answer
+            `unsupported_capability` for others, because Meta DMs are stored
+            in a different table with a different shape.
+          example: whatsapp
+        platform_user_id:
+          type: [string, 'null']
+          description: |
+            The PROVIDER's id for this account — the WhatsApp phone number id.
+            A separate, clearly named field, never the primary id (spec §7.1).
+          example: '123456789012345'
+        username:
+          type: [string, 'null']
+        is_active:
+          type: boolean
+        needs_reauth:
+          type: boolean
+          description: True when the connection must be re-authorized in Postora before it can be used.
+        connected_at:
+          type: [string, 'null']
+          format: date-time
+
+    Conversation:
+      type: object
+      description: |
+        A WhatsApp conversation. `id` is Postora's surrogate id; the natural
+        key is deliberately not published, because it embeds the customer's
+        phone number. The counterparty is reachable as `participant_name`.
+      required: [id, account_id, platform, participant_name, last_message_preview, last_message_at, unread_count]
+      properties:
+        id:
+          $ref: '#/components/schemas/PrefixedId'
+        account_id:
+          $ref: '#/components/schemas/PrefixedId'
+        platform:
+          type: string
+          example: whatsapp
+        participant_name:
+          type: [string, 'null']
+        last_message_preview:
+          type: [string, 'null']
+        last_message_at:
+          type: string
+          format: date-time
+          description: |
+            Never null. Conversations with no last message are excluded from
+            BOTH the listing and the resource read: it is the sort key the
+            opaque cursor pages by, and a null sort key would make that
+            ordering partial.
+        unread_count:
+          type: integer
+
+    Message:
+      type: object
+      required: [id, conversation_id, account_id, direction, type, text, status, timestamp, provider_message_id]
+      properties:
+        id:
+          $ref: '#/components/schemas/PrefixedId'
+        conversation_id:
+          type: [string, 'null']
+          description: |
+            The conversation's prefixed id, or null for a message whose
+            conversation was never cached. Null rather than absent, so the
+            field's presence does not vary between responses.
+        account_id:
+          $ref: '#/components/schemas/PrefixedId'
+        direction:
+          type: string
+          example: inbound
+        type:
+          type: string
+          example: text
+        text:
+          type: [string, 'null']
+        status:
+          type: string
+          example: delivered
+        timestamp:
+          type: string
+          format: date-time
+        provider_message_id:
+          type: [string, 'null']
+          description: The provider's message id (a WhatsApp `wamid`). Separate field, never the primary id (§7.1).
+          example: wamid.HBgLMTU1NTAwMDAwMDAVAgARGB
+
+    CollectionEnvelope:
+      type: object
+      description: |
+        The envelope every `/v1` listing returns. `next_cursor` is ALWAYS
+        present and explicitly null on the last page — never omitted — so one
+        client loop ("call again while next_cursor is not null") terminates
+        correctly on every listing, including those that are never paginated.
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {}
+        next_cursor:
+          type: [string, 'null']
+          description: Opaque cursor for the next page, or null when the listing is exhausted.
+
     PrefixedId:
       type: string
       description: |

@@ -14,6 +14,7 @@
 
 import { listTemplates } from "../../_shared/whatsappPartnerOps.ts";
 import { v1ErrorResponse } from "./errors.ts";
+import { v1Collection } from "./respond.ts";
 import { resolveWhatsAppAccount, type V1AuthedContext } from "./authenticated.ts";
 
 export async function getTemplates(
@@ -36,22 +37,7 @@ export async function getTemplates(
   const templates = await listTemplates(account.ctx, account.wabaId);
 
   // Cursor pagination is documented (§7.1) but Meta's template listing is
-  // returned whole here, so there is no next page to name. `next_cursor: null`
-  // states that positively rather than omitting the field, so a client can
-  // write one pagination loop that terminates correctly on this endpoint too.
-  return new Response(
-    JSON.stringify({ data: templates, next_cursor: null }),
-    {
-      status: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Postora-Request-Id": requestId,
-      },
-    },
-  );
+  // returned whole here, so there is no next page to name -- hence the null
+  // cursor. v1Collection is why every /v1 listing spells that the same way.
+  return v1Collection(templates, null, requestId);
 }
-
-/** Surfaced for the route table's error path; kept beside the handler so a
- *  future paginated version cannot forget it. */
-export const templatesInternalError = (requestId: string) =>
-  v1ErrorResponse("internal_error", requestId);
