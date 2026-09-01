@@ -23,6 +23,7 @@ import {
   listConversationMessages,
   listConversations,
 } from "./conversations.ts";
+import { getMedia, postMedia } from "./media.ts";
 import { postMessages } from "./messages.ts";
 import { getTemplates } from "./templates.ts";
 
@@ -117,6 +118,18 @@ export const V1_ROUTES: V1Route[] = [
     pattern: "/v1/conversations/{id}/messages",
     methods: {
       GET: withPartnerAuth("list_conversation_messages", "A", listConversationMessages),
+    },
+  },
+  {
+    pattern: "/v1/media",
+    methods: {
+      POST: withPartnerAuth("upload_media", "C", postMedia),
+    },
+  },
+  {
+    pattern: "/v1/media/{id}",
+    methods: {
+      GET: withPartnerAuth("get_media", "A", getMedia),
     },
   },
   {

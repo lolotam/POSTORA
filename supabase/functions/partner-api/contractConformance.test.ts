@@ -56,6 +56,7 @@ const UNREACHABLE_WHILE_SEND_IS_SUSPENDED: Record<string, string> = {
   idempotency_in_progress: "idempotency claim runs only for send actions",
   idempotency_indeterminate: "idempotency settle runs only for send actions",
   quota_exceeded: "monthly quota is reserved only for send actions",
+  payload_too_large: "upload-only; POST /v1/media is not reachable from the alias these tests drive",
   account_not_connected: "account lookup is downstream of the suspension gate",
   account_needs_reauth: "account lookup is downstream of the suspension gate",
   outside_session_window: "emitted by whatsappPartnerOps during a real send",
@@ -271,7 +272,7 @@ const EMIT_PATTERNS: RegExp[] = [
  *  that guard counts the WHOLE surface, so the alias files alone can satisfy
  *  it while the v1 table pattern has quietly stopped matching (a reformat, a
  *  rename). This pins the v1 table's visibility directly. */
-const MIN_V1_TABLE_CODES = 25;
+const MIN_V1_TABLE_CODES = 26;
 
 Deno.test("every error code PRESENT IN THE SOURCE is documented, not merely the ones a test reaches", async () => {
   const found = new Set<string>();

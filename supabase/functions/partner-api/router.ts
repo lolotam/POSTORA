@@ -36,6 +36,10 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   get_conversation: ["conversations:read"],
   list_conversation_messages: ["messages:read"],
   get_message: ["messages:read"],
+  // Phase 4. `upload_media` is a WRITE -- it stores bytes the workspace is
+  // billed for -- so it takes media:write, not media:read.
+  upload_media: ["media:write"],
+  get_media: ["media:read"],
 };
 
 /** D7 limiter-failure risk class per action, next to ACTION_SCOPES so an
@@ -62,6 +66,12 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   get_conversation: "A",
   list_conversation_messages: "A",
   get_message: "A",
+  // An upload is class C: it is a mutation with a durable, billable effect,
+  // so a limiter outage must refuse it rather than let it through unmetered.
+  // Reading media metadata is a bounded local read like every other 2.3-2.6
+  // route.
+  upload_media: "C",
+  get_media: "A",
 };
 
 /**
