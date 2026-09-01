@@ -350,30 +350,54 @@ function compareContent(path: string, base: unknown, cur: unknown, ctx: Ctx): vo
  */
 function compareOperation(path: string, base: Json, cur: Json, ctx: Ctx): void {
   // Parameters are an ARRAY keyed by (name, in), not a map.
+  //
+  // A Parameter Object may also be a `$ref`, and then it has NO name or in of
+  // its own. Keying those on the missing fields mapped every one of them to
+  // the same "?:?" string, so a Map built from them kept only the last and
+  // every ref'd parameter on the path matched against that one. The gate then
+  // reported phantom R2 findings comparing the document to ITSELF -- and,
+  // worse, would have started doing so permanently the first time a baseline
+  // was regenerated with a path carrying two ref'd parameters. Found when the
+  // /v1 read surface (2.3-2.6) became the first path section to have any.
+  //
+  // So: resolve the ref and key on the RESOLVED name/in, which is the
+  // parameter's real identity and keeps a `$ref` and its inlined equivalent
+  // matching each other. Fall back to the ref string only when the target
+  // cannot be resolved.
   if (Array.isArray(base.parameters)) {
     const curParams = Array.isArray(cur.parameters) ? cur.parameters : [];
-    const keyOf = (p: unknown) =>
-      isObj(p) ? `${p.name ?? "?"}:${p.in ?? "?"}` : JSON.stringify(p);
-    const curByKey = new Map(curParams.map((p) => [keyOf(p), p]));
+    const keyOf = (doc: Json) => (p: unknown) => {
+      if (!isObj(p)) return JSON.stringify(p);
+      const resolved = deref(doc, p) ?? p;
+      if (typeof resolved.name === "string" || typeof resolved.in === "string") {
+        return `${resolved.name ?? "?"}:${resolved.in ?? "?"}`;
+      }
+      return typeof p.$ref === "string" ? p.$ref : `${p.name ?? "?"}:${p.in ?? "?"}`;
+    };
+    const baseKey = keyOf(ctx.baseDoc);
+    const curKey = keyOf(ctx.curDoc);
+    const curByKey = new Map(curParams.map((p) => [curKey(p), p]));
     for (const p of base.parameters) {
       if (!isObj(p)) continue;
-      const match = curByKey.get(keyOf(p));
+      const match = curByKey.get(baseKey(p));
       compareParameterLike(
-        `${path}.parameters[${keyOf(p)}]`,
+        `${path}.parameters[${baseKey(p)}]`,
         p,
         isObj(match) ? match : undefined,
         ctx,
       );
     }
     // A parameter that is NEW and required is a required-field addition.
-    const baseKeys = new Set(base.parameters.filter(isObj).map(keyOf));
+    const baseKeys = new Set(base.parameters.filter(isObj).map(baseKey));
     for (const p of curParams) {
-      if (!isObj(p) || baseKeys.has(keyOf(p))) continue;
-      if (p.required === true) {
+      if (!isObj(p) || baseKeys.has(curKey(p))) continue;
+      // `required` may live behind the ref too.
+      const resolved = deref(ctx.curDoc, p) ?? p;
+      if (resolved.required === true) {
         ctx.out.push({
-          id: `R4:${path}.parameters[${keyOf(p)}]:new-required`,
+          id: `R4:${path}.parameters[${curKey(p)}]:new-required`,
           rule: "R4",
-          detail: `${path}: new required parameter ${keyOf(p)}`,
+          detail: `${path}: new required parameter ${curKey(p)}`,
         });
       }
     }
