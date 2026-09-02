@@ -148,6 +148,10 @@ export function AppCredentialsSettings() {
   const [waTestResult, setWaTestResult] = useState<WaTestResponse | null>(null);
   const [tpStatus, setTpStatus] = useState<WhatsAppTpStatus>("approved");
   const [tpSaving, setTpSaving] = useState(false);
+  // Whether the WhatsApp read actually came back. A failed read leaves both config IDs
+  // empty, which is indistinguishable from "never set" — and the summary must not report
+  // a configuration it was unable to read as an absent one.
+  const [waLoaded, setWaLoaded] = useState(false);
 
   const fetchSecrets = async () => {
     try {
@@ -195,6 +199,7 @@ export function AppCredentialsSettings() {
           }
         }
       }
+      setWaLoaded(true);
     } catch (err: any) {
       toast({ title: "Error loading WhatsApp config", description: err.message, variant: "destructive" });
     } finally {
@@ -358,7 +363,10 @@ export function AppCredentialsSettings() {
     return "not_set";
   };
 
-  const waStatus = getWaStatus();
+  // What the two config IDs currently say, versus what the summary is entitled to claim:
+  // until a read has succeeded, empty IDs say nothing about whether WhatsApp is set up.
+  const waConfigStatus = getWaStatus();
+  const waStatus: CredentialStatus = waLoaded ? waConfigStatus : "unknown";
   const panelLabels = [...PLATFORMS.map((p) => p.label), WA_PANEL];
   const statusByLabel: Record<string, CredentialStatus> = {
     ...Object.fromEntries(PLATFORMS.map((p) => [p.label, getStatus(p.key)])),
@@ -727,7 +735,7 @@ export function AppCredentialsSettings() {
                               size="sm"
                               className="h-7 text-xs gap-1"
                               onClick={handleWaTest}
-                              disabled={waTesting || waStatus === "not_set"}
+                              disabled={waTesting || waConfigStatus === "not_set"}
                             >
                               {waTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" />}
                               Test
