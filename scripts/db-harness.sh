@@ -106,6 +106,7 @@ SUITES=(
   partner_media_tenancy.sql
   partner_webhook_outbox.sql
   partner_webhook_phase6_events.sql
+  publishing_seam.sql
   whatsapp_workspace_crm.sql
   import_whatsapp_contacts_to_workspace.sql
 )

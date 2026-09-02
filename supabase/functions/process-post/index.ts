@@ -960,35 +960,24 @@ async function pollTikTokPublishStatus(
 
         console.log(`[Background] TikTok video published! Post ID: ${publiclyAvailablePostId}, URL: ${postUrl}`);
 
-        // Update platform_posts record with success
-        const { error: updateError } = await supabase
-          .from("platform_posts")
-          .update({
-            status: "success",
-            platform_post_id: publiclyAvailablePostId || publishId,
-            platform_post_url: postUrl,
-            posted_at: new Date().toISOString(),
-          })
-          .eq("id", platformPostId);
-
-        if (updateError) {
-          console.error(`[Background] Failed to update platform_posts:`, updateError);
-        }
-
-        // Check if all platforms succeeded and update post status
-        const { data: allPlatformPosts } = await supabase
-          .from("platform_posts")
-          .select("status")
-          .eq("post_id", postId);
-
-        if (allPlatformPosts) {
-          const allSuccess = allPlatformPosts.every(p => p.status === "success");
-          if (allSuccess) {
-            await supabase
-              .from("posts")
-              .update({ status: "completed", posted_at: new Date().toISOString() })
-              .eq("id", postId);
-          }
+        // The terminal status, the parent roll-up and the post.published
+        // enqueue are ONE database operation (Phase 7.4). Three separate client
+        // calls -- as this was -- leave two crash windows: a worker killed
+        // between them publishes a post the partner is never told about, and
+        // the platform will not tell us again.
+        const { error: settleError } = await supabase.rpc("partner_settle_platform_post", {
+          p_platform_post_id: platformPostId,
+          p_post_id: postId,
+          p_social_account_id: null,
+          p_platform: null,
+          p_status: "success",
+          p_provider_post_id: publiclyAvailablePostId || publishId,
+          p_provider_post_url: postUrl,
+          p_error_message: null,
+          p_response_data: null,
+        });
+        if (settleError) {
+          console.error(`[Background] Failed to settle platform_posts:`, settleError.message);
         }
 
         return;
@@ -996,20 +985,27 @@ async function pollTikTokPublishStatus(
         const failReason = statusData?.data?.fail_reason || "Unknown reason";
         console.error(`[Background] TikTok publish failed:`, failReason);
 
-        // Update platform_posts with failure
-        await supabase
-          .from("platform_posts")
-          .update({
-            status: "failed",
-            error_message: `TikTok publish failed: ${failReason}`,
-          })
-          .eq("id", platformPostId);
-
-        // Update post status if all failed
-        await supabase
-          .from("posts")
-          .update({ status: "failed" })
-          .eq("id", postId);
+        // Same single operation as the success branch. Note this REPLACES an
+        // unconditional `posts.status = failed`: the seam's roll-up marks the
+        // parent failed only when every target failed, because a two-platform
+        // post where one worked is not a failed post. That is the one
+        // deliberate behaviour change in 7.4 and it is recorded in the
+        // decision record -- the two old writers disagreed with each other, so
+        // one operation could not reproduce both.
+        const { error: settleError } = await supabase.rpc("partner_settle_platform_post", {
+          p_platform_post_id: platformPostId,
+          p_post_id: postId,
+          p_social_account_id: null,
+          p_platform: null,
+          p_status: "failed",
+          p_provider_post_id: null,
+          p_provider_post_url: null,
+          p_error_message: `TikTok publish failed: ${failReason}`,
+          p_response_data: null,
+        });
+        if (settleError) {
+          console.error(`[Background] Failed to settle platform_posts:`, settleError.message);
+        }
 
         return;
       }
@@ -1565,27 +1561,54 @@ Deno.serve(async (req) => {
         const warnings = (result as any).warnings || [];
         const locationDebug = (result as any).location_debug;
         const topicTagDebug = (result as any).topic_tag_debug;
-        const { data: platformPostRecord, error: insertError } = await supabase.from("platform_posts").insert({
-          post_id: post_id,
-          social_account_id: account.id,
-          platform: account.platform,
-          platform_post_id: result.id,
-          platform_post_url: result.url,
-          status: resultStatus,
-          posted_at: result.url ? new Date().toISOString() : null,
-          response_data: {
-            tiktok_publish_id: result.id,
-            account_username: account.platform_username,
-            account_metadata: account.account_metadata,
-            ...(warnings.length > 0 ? { warnings } : {}),
-            ...(locationDebug ? { location_debug: locationDebug } : {}),
-            ...(topicTagDebug ? { topic_tag_debug: topicTagDebug } : {}),
-          },
-        }).select().single();
+        const responseData = {
+          tiktok_publish_id: result.id,
+          account_username: account.platform_username,
+          account_metadata: account.account_metadata,
+          ...(warnings.length > 0 ? { warnings } : {}),
+          ...(locationDebug ? { location_debug: locationDebug } : {}),
+          ...(topicTagDebug ? { topic_tag_debug: topicTagDebug } : {}),
+        };
 
-        if (insertError) {
-          console.error(`Error inserting platform_posts record for ${account.platform}:`, insertError);
-          throw new Error(`Failed to save platform post: ${insertError.message}`);
+        // The one writer of the five that can produce a NON-terminal row:
+        // TikTok hands back an id before the video is published, and that row
+        // stays `pending` until the poller settles it. A pending row is not a
+        // transition, so it must not emit -- it keeps the plain insert. Every
+        // other outcome is terminal and goes through the seam.
+        let platformPostRecord: { id: string } | null = null;
+        if (resultStatus === "pending") {
+          const { data, error: insertError } = await supabase.from("platform_posts").insert({
+            post_id: post_id,
+            social_account_id: account.id,
+            platform: account.platform,
+            platform_post_id: result.id,
+            platform_post_url: result.url,
+            status: resultStatus,
+            posted_at: result.url ? new Date().toISOString() : null,
+            response_data: responseData,
+          }).select().single();
+          if (insertError) {
+            console.error(`Error inserting platform_posts record for ${account.platform}:`, insertError);
+            throw new Error(`Failed to save platform post: ${insertError.message}`);
+          }
+          platformPostRecord = data;
+        } else {
+          const { data, error: settleError } = await supabase.rpc("partner_settle_platform_post", {
+            p_platform_post_id: null,
+            p_post_id: post_id,
+            p_social_account_id: account.id,
+            p_platform: account.platform,
+            p_status: resultStatus,
+            p_provider_post_id: result.id ?? null,
+            p_provider_post_url: result.url ?? null,
+            p_error_message: null,
+            p_response_data: responseData,
+          });
+          if (settleError) {
+            console.error(`Error settling platform_posts record for ${account.platform}:`, settleError);
+            throw new Error(`Failed to save platform post: ${settleError.message}`);
+          }
+          platformPostRecord = { id: (data as { platform_post_id: string }).platform_post_id };
         }
 
         console.log(`Saved platform_posts record for ${account.platform}: ${platformPostRecord?.id}`);
@@ -1627,13 +1650,20 @@ Deno.serve(async (req) => {
         // do not insert a duplicate failed row.
         const selfWrote = (error as { selfWroteRows?: boolean })?.selfWroteRows === true;
         if (!selfWrote) {
-          await supabase.from("platform_posts").insert({
-            post_id: post_id,
-            social_account_id: account.id,
-            platform: account.platform,
-            status: "failed",
-            error_message: error instanceof Error ? error.message : "Unknown error",
+          const { error: settleError } = await supabase.rpc("partner_settle_platform_post", {
+            p_platform_post_id: null,
+            p_post_id: post_id,
+            p_social_account_id: account.id,
+            p_platform: account.platform,
+            p_status: "failed",
+            p_provider_post_id: null,
+            p_provider_post_url: null,
+            p_error_message: error instanceof Error ? error.message : "Unknown error",
+            p_response_data: null,
           });
+          if (settleError) {
+            console.error(`Failed to settle the failure row for ${account.platform}:`, settleError.message);
+          }
         }
 
         platformResults.push({
@@ -4362,28 +4392,35 @@ async function postToInstagramBusinessLogin(
     extraData?: Record<string, unknown>
   ): Promise<string | null> => {
     try {
-      const { data, error } = await supabase.from("platform_posts").insert({
-        post_id: postId,
-        social_account_id: account.id,
-        platform: "instagram",
-        platform_post_id: mediaId || null,
-        platform_post_url: postUrl || null,
-        status,
-        posted_at: status === "success" ? new Date().toISOString() : null,
-        error_message: errorMessage || null,
-        response_data: {
+      // One Instagram post can be several sub-posts (story, reel, feed), each
+      // its own target with its own row -- so each is its own occurrence, and
+      // keying the event on the POST id rather than the row id would collapse
+      // them into one.
+      const { data, error } = await supabase.rpc("partner_settle_platform_post", {
+        p_platform_post_id: null,
+        p_post_id: postId,
+        p_social_account_id: account.id,
+        p_platform: "instagram",
+        p_status: status,
+        p_provider_post_id: mediaId || null,
+        p_provider_post_url: postUrl || null,
+        p_error_message: errorMessage || null,
+        p_response_data: {
           ig_post_subtype: subtype,
           account_username: account.platform_username,
           account_metadata: account.account_metadata,
           ...(extraData || {}),
         },
-      }).select("id").single();
+      });
       if (error) {
         console.error(`[IG ${subtype}] insert failed:`, error.message);
         return null;
       }
-      console.log(`[IG ${subtype}] platform_posts row inserted: ${data.id} (status=${status})`);
-      return data.id;
+      // The RPC returns its JSONB verdict, not the row: the id is under
+      // `platform_post_id`.
+      const settledId = (data as { platform_post_id?: string } | null)?.platform_post_id ?? null;
+      console.log(`[IG ${subtype}] platform_posts row settled: ${settledId} (status=${status})`);
+      return settledId;
     } catch (e) {
       console.error(`[IG ${subtype}] insert exception:`, e);
       return null;
