@@ -114,15 +114,21 @@ export default function AdminSettings() {
           </TabsList>
 
           {SETTINGS_TABS.map((tab) => {
-            const sections = matches.filter((section) => section.tab === tab);
+            const matchedIds = new Set(matches.map((section) => section.id));
             return (
               <TabsContent key={tab} value={tab} className="space-y-6">
-                {sections.map(({ id }) => {
+                {/* Non-matches are hidden, not unmounted: unmounting a section while
+                    someone filters would throw away its unsaved local edits. */}
+                {SETTINGS_SECTIONS.filter((section) => section.tab === tab).map(({ id }) => {
                   const Section = SECTION_COMPONENTS[id];
-                  return <Section key={id} />;
+                  return (
+                    <div key={id} className={matchedIds.has(id) ? undefined : "hidden"}>
+                      <Section />
+                    </div>
+                  );
                 })}
 
-                {sections.length === 0 && (
+                {counts[tab] === 0 && (
                   <p className="text-sm text-muted-foreground py-8 text-center">
                     Nothing in {SETTINGS_TAB_LABELS[tab]} matches “{query}”.
                   </p>

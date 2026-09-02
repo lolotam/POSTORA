@@ -57,7 +57,7 @@ export const SETTINGS_SECTIONS = [
     id: "scraping-services",
     tab: "integrations",
     title: "Scraping services",
-    keywords: ["scraping", "scraper", "external services", "enrichment", "crawler", "brand data"],
+    keywords: ["scraping", "scraper", "apify", "actor", "endpoint", "external services", "enrichment", "crawler", "brand data"],
   },
   {
     id: "ai-configuration",
