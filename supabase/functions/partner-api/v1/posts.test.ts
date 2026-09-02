@@ -237,6 +237,8 @@ interface StubOpts {
   mediaFiles?: Record<string, unknown>[];
   platformPosts?: Record<string, unknown>[];
   createPostRpcError?: { message: string } | null;
+  /** What claim_partner_idempotency answers; defaults to a fresh claim. */
+  claim?: Record<string, unknown>;
 }
 
 function stub(opts: StubOpts = {}) {
@@ -342,7 +344,7 @@ function stub(opts: StubOpts = {}) {
       }
       if (name === "claim_partner_idempotency") {
         return Promise.resolve({
-          data: { outcome: "claimed", attempt_token: "tok-1" },
+          data: opts.claim ?? { outcome: "claimed", attempt_token: "tok-1" },
           error: null,
         });
       }
@@ -517,6 +519,17 @@ Deno.test("C1: missing Idempotency-Key header on POST /v1/posts answers missing_
   );
   assertEquals(res.status, 400);
   assertEquals(await code(res), "missing_idempotency_key");
+});
+
+Deno.test("C1b: a replayed POST /v1/posts says Idempotency-Replayed and returns the stored verdict verbatim", async () => {
+  const stored = { id: "post_11111111-1111-4111-8111-111111111111", status: "pending" };
+  const client = stub({ claim: { outcome: "replay", http_status: 201, response_body: stored } });
+  const res = await handleRequest(createReq({ targets: [`acc_${ACCT_FB}`], caption: "hi" }), () => client);
+  assertEquals(res.status, 201);
+  assertEquals(res.headers.get("Idempotency-Replayed"), "true");
+  assertEquals(await res.json(), stored);
+  // A replay never re-creates: the create RPC was not called.
+  assertEquals(client.rpcCalls.some((c) => c.name === "partner_create_post"), false);
 });
 
 Deno.test("C2: empty targets array or missing targets answers invalid_request (400)", async () => {
