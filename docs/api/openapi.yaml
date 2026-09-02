@@ -35,6 +35,48 @@ info:
     it stays a tracked list rather than becoming an oversight, and it closes
     when those two are documented.
 
+    <!-- BEGIN Phase 9 rich-media block (feat/partner-api-rich-media) -->
+    ### POST /v1/messages — capability matrix (Phase 9.2)
+
+    Whether a send is even attemptable is decided by the ACCOUNT's
+    `connection_mode` × the request's `type`, at the door, before any side
+    effect (no media row read, no signed URL minted, no idempotency key
+    consumed, no dispatch intent recorded for a refused cell):
+
+    | connection_mode | text | template | image | video | audio | document |
+    |---|---|---|---|---|---|---|
+    | `cloud_api` | supported | supported | supported | supported | supported | supported |
+    | `coexistence` | supported | supported | supported | supported | supported | supported |
+    | `evolution_qr` (Direct QR) | `unsupported_direct_qr` | `unsupported_direct_qr` | `unsupported_direct_qr` | `unsupported_direct_qr` | `unsupported_direct_qr` | `unsupported_direct_qr` |
+    | `null` | supported | supported | supported | supported | supported | supported |
+
+    Notes on the matrix:
+
+    - An `evolution_qr` refusal keeps the code `unsupported_direct_qr`
+      (400, not retryable) because the problem is the ACCOUNT's connection,
+      not the request's shape; the response `details` carry
+      `{connection_mode, type}` so the partner can see which fact refused.
+    - A `type` outside the six in the table is `unsupported_capability`
+      (422), as before; an unrecognized `connection_mode` value (impossible
+      under the schema's CHECK) is also refused `unsupported_capability`
+      rather than guessed at.
+    - Media sends always reference a `media_id` from `POST /v1/media`.
+      No send path on this endpoint accepts an external URL.
+
+    ### Media scan state (Phase 9.3)
+
+    Every `media_id` carries a `scan_state`: `available`, `pending`, or
+    `rejected`. A media id in `pending` or `rejected` state CANNOT be sent:
+
+    - `pending` → `media_pending` (409, `retryable: true`) — retry the SAME
+      request shortly; re-uploading would mint a new id that is pending again.
+    - `rejected` → `media_rejected` (422, `retryable: false`) — a permanent
+      fact about those bytes; upload a different file.
+
+    Files uploaded through the partner API land `available` (there is no
+    scanner today); a refused state only arises once one exists.
+    <!-- END Phase 9 rich-media block -->
+
     Nothing in `paths` is unserved, which is the direction that would mislead
     a partner into writing a call that 404s. That direction IS asserted.
 
@@ -947,6 +989,13 @@ components:
           exceeds its type's limit, `unsupported_capability` when the sniffed
           type is not on the allowlist, `resource_not_found` for a `media_id`
           that is unknown or belongs to another workspace
+        <!-- BEGIN Phase 9 rich-media block (feat/partner-api-rich-media) -->
+        - `partner-api/v1/messages.ts` + `_shared/partnerMediaStore.ts`
+          (Phase 9.3): `media_pending` (409, retryable — the scan state is
+          expected to change on its own; retry the same request) and
+          `media_rejected` (422, permanent) when the `media_id`'s scan_state
+          is not `available`
+        <!-- END Phase 9 rich-media block -->
         - `partner-api/v1/` (the /v1 router and D2 envelope, 2.1/2.2): all of
           the above remain expressible through `v1/errors.ts`'s single policy
           table (statuses and retryable verdicts agreed with the alias), plus
@@ -977,6 +1026,10 @@ components:
         - key_expired
         - key_revoked
         - limiter_unavailable
+        # --- BEGIN Phase 9 rich-media block (feat/partner-api-rich-media) ---
+        - media_pending
+        - media_rejected
+        # --- END Phase 9 rich-media block ---
         - meta_error
         - method_not_allowed
         - missing_idempotency_key

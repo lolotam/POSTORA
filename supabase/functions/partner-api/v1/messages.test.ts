@@ -33,7 +33,12 @@ const ACCOUNT_ROW = {
   platform: "whatsapp",
   platform_user_id: "phone-1",
   access_token: "token",
-  connection_mode: "cloud",
+  // 'cloud_api' is a REAL value from social_accounts_connection_mode_chk
+  // (20260821090000). This fixture said "cloud" for years, which that
+  // constraint forbids — harmless while the route only compared against
+  // 'evolution_qr', wrong the moment the 9.2 capability matrix started
+  // reading the mode meaningfully.
+  connection_mode: "cloud_api",
   is_active: true,
   needs_reauth: false,
   token_expires_at: null,
@@ -205,11 +210,16 @@ Deno.test("T5: an unsupported message type is a permanent unsupported_capability
 // --- T6 — the load-bearing one ---------------------------------------------
 
 Deno.test("T6: the TEXT send path writes a dispatch intent (D13's boundary is not template-only)", async () => {
-  // Pinned to an evolution_qr account so `sendText` refuses at its own guard
-  // BEFORE any network call: the test then makes no outbound request, and the
-  // property under test is isolated exactly -- the intent is recorded before
-  // the provider is approached, whatever the provider then says.
-  const client = stub({ account: { ...ACCOUNT_ROW, connection_mode: "evolution_qr" } });
+  // Before 9.2 this was pinned to an evolution_qr account so `sendText`
+  // refused at its own guard before any network call. The 9.2 capability
+  // matrix now refuses that cell AT THE DOOR — before the intent, which is
+  // the entire point of 9.2 (see messages.capability.test.ts C1b) — so the
+  // old pin would make this property unobservable. The account is a
+  // sendable one instead and the provider call fails against the bogus
+  // token exactly as media.test.ts R2's does: the property under test is
+  // isolated exactly -- the intent is recorded before the provider is
+  // approached, whatever the provider then says.
+  const client = stub();
   await handleRequest(
     v1("/v1/messages", {
       method: "POST",

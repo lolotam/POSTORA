@@ -108,6 +108,7 @@ SUITES=(
   partner_webhook_phase6_events.sql
   publishing_seam.sql
   partner_posts.sql
+  partner_media_scan_state.sql
   whatsapp_workspace_crm.sql
   import_whatsapp_contacts_to_workspace.sql
 )

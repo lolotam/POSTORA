@@ -40,6 +40,10 @@ export interface StoredPartnerMedia {
   kind: string;
   byteLength: number;
   createdAt: string | null;
+  /** 9.3: the scan-state substrate. 'available' | 'pending' | 'rejected',
+   *  per media_files_scan_state_chk. Normalized to 'available' when a
+   *  projection predates the column — see loadPartnerMedia. */
+  scanState: string;
 }
 
 export interface StorePartnerMediaInput {
@@ -119,7 +123,7 @@ export async function storePartnerMedia(
         original_filename: input.filename ?? null,
       },
     })
-    .select("id, file_path, mime_type, file_type, file_size, created_at")
+    .select("id, file_path, mime_type, file_type, file_size, created_at, scan_state")
     .maybeSingle();
 
   if (insertError || !row) {
@@ -139,6 +143,11 @@ export async function storePartnerMedia(
       kind: row.file_type,
       byteLength: row.file_size ?? media.byteLength,
       createdAt: row.created_at ?? null,
+      // The insert does not name scan_state on purpose: the column's DEFAULT
+      // 'available' IS the D10 decision (uploads land available; there is no
+      // scanner). The ?? below only absorbs a projection from a reader that
+      // predates the column — in production the value is always present.
+      scanState: row.scan_state ?? "available",
     },
   };
 }
@@ -169,7 +178,7 @@ export async function loadPartnerMedia(
 ): Promise<LoadMediaResult> {
   const { data, error } = await admin
     .from("media_files")
-    .select("id, file_path, mime_type, file_type, file_size, created_at, storage_bucket, metadata")
+    .select("id, file_path, mime_type, file_type, file_size, created_at, storage_bucket, metadata, scan_state")
     .eq("id", mediaId)
     .eq("workspace_id", workspaceId)
     .maybeSingle();
@@ -195,8 +204,55 @@ export async function loadPartnerMedia(
       kind: data.file_type,
       byteLength: data.file_size ?? 0,
       createdAt: data.created_at ?? null,
+      // The column is NOT NULL DEFAULT 'available' (20260902160000), so a
+      // real row always carries one of the three states and 'available' is
+      // what absence-of-projection means. The ?? is for readers and test
+      // stubs whose select list predates the column — not a guess about the
+      // row, the DB default restated.
+      scanState: data.scan_state ?? "available",
     },
   };
+}
+
+/** The outcome of the 9.3 sendability rule. The codes and their
+ *  status/retryable verdicts live in partner-api/v1/errors.ts — this type
+ *  names only which refusal applies, so the publishing route (when it lands)
+ *  maps it through its own envelope with the same words. */
+export type MediaSendability =
+  | { ok: true }
+  | { ok: false; code: "media_pending" | "media_rejected"; message: string };
+
+/**
+ * Can this stored file be sent? THE one shared rule, so that every send
+ * path — POST /v1/messages today, the publishing seam when Phase 8 lands —
+ * refuses the same rows for the same reasons instead of each growing its
+ * own copy of the state machine.
+ *
+ * This is the substrate D10's "Malware handling" row named, without building
+ * the scanner: `pending` → `media_pending` (409, retryable — the state is
+ * expected to change on its own, so the partner's move is to retry the SAME
+ * request shortly, not re-upload); `rejected` → `media_rejected` (422,
+ * permanent — a fact about these bytes). Everything else — which, given
+ * media_files_scan_state_chk, can only be `available` — sends, exactly as it
+ * did before the column existed.
+ */
+export function mediaSendability(stored: { scanState?: string | null }): MediaSendability {
+  switch (stored.scanState) {
+    case "pending":
+      return {
+        ok: false,
+        code: "media_pending",
+        message: "The media file is pending a security scan; retry the same request shortly",
+      };
+    case "rejected":
+      return {
+        ok: false,
+        code: "media_rejected",
+        message: "The media file was rejected and cannot be sent",
+      };
+    default:
+      return { ok: true };
+  }
 }
 
 /**
