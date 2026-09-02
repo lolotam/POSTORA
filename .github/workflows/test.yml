@@ -124,6 +124,16 @@ jobs:
       - name: Check contract drift
         run: deno run --allow-read scripts/check-openapi-drift.ts
 
+      # The Postman collection is DERIVED from the contract (PRD §33). The
+      # committed JSON must be byte-identical to what the generator produces
+      # from the current document, or a partner imports a collection that
+      # disagrees with the contract it claims to mirror. This test also
+      # refuses any real-looking credential in the generated files.
+      - name: Check the Postman collection is regenerated
+        run: >-
+          deno test --allow-env --allow-read --no-check --node-modules-dir=auto
+          scripts/generate-postman.test.ts
+
   db-harness:
     name: Postgres integration harness
     runs-on: ubuntu-latest
