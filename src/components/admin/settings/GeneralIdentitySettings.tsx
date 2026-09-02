@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bookmark, CreditCard, Globe, Image as ImageIcon, Loader2, RotateCcw, Save, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Bookmark, CreditCard, Globe, Image as ImageIcon, Loader2, RotateCcw, Save, type LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
@@ -49,8 +49,12 @@ export function GeneralIdentitySettings() {
   const [edits, setEdits] = useState<Record<string, string>>({});
   const [uploadingKey, setUploadingKey] = useState<string | null>(null);
   const [previewImage, setPreviewImage] = useState<string | null>(null);
+  // One entry per in-flight write. The mutation's own `variables` only ever describes
+  // the most recent call, so saving a second field while the first is still running
+  // would re-enable the first field's button and allow a concurrent, racing write.
+  const [savingKeys, setSavingKeys] = useState<ReadonlySet<string>>(new Set());
 
-  const { data: settings = [], isLoading } = useQuery({
+  const { data: settings = [], isLoading, isError, error, refetch } = useQuery({
     queryKey: ["admin-settings"],
     queryFn: async (): Promise<AppSetting[]> => {
       const { data, error } = await supabase.from("app_settings").select("*").order("key");
@@ -68,6 +72,16 @@ export function GeneralIdentitySettings() {
           { onConflict: "key" },
         );
       if (error) throw error;
+    },
+    onMutate: ({ key }) => {
+      setSavingKeys((prev) => new Set(prev).add(key));
+    },
+    onSettled: (_data, _error, { key }) => {
+      setSavingKeys((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
     },
     onSuccess: (_data, { key }) => {
       queryClient.invalidateQueries({ queryKey: ["admin-settings"] });
@@ -88,9 +102,7 @@ export function GeneralIdentitySettings() {
     },
   });
 
-  // Which single field is busy. The mutation's own `variables` carries the key being
-  // written, so one field saving no longer spins and disables all four.
-  const busyKey = uploadingKey ?? (updateSetting.isPending ? updateSetting.variables?.key ?? null : null);
+  const isBusy = (key: string): boolean => uploadingKey === key || savingKeys.has(key);
 
   const storedValue = (key: string): string => {
     const setting = settings.find((s) => s.key === key);
@@ -152,6 +164,32 @@ export function GeneralIdentitySettings() {
     );
   }
 
+  // A failed read leaves no rows, and the fields are a fixed list rather than a map over
+  // what came back — so rendering the form here would show four blank inputs over live
+  // values and invite an admin to "correct" them. Refuse until a read succeeds.
+  if (isError) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <AlertTriangle className="w-5 h-5 text-destructive" />
+            Identity settings could not be loaded
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-sm text-muted-foreground">
+            These fields are hidden rather than shown blank, so nothing is saved over the
+            current values by mistake. {error instanceof Error ? error.message : ""}
+          </p>
+          <Button variant="outline" onClick={() => refetch()} className="gap-2">
+            <RotateCcw className="w-4 h-4" />
+            Try again
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <>
       <Card>
@@ -167,7 +205,7 @@ export function GeneralIdentitySettings() {
               const Icon = field.icon;
               const value = fieldValue(field.key);
               const hasChanges = edits[field.key] !== undefined;
-              const isBusy = busyKey === field.key;
+              const busy = isBusy(field.key);
               const savedUrl = storedValue(field.key);
 
               return (
@@ -186,10 +224,10 @@ export function GeneralIdentitySettings() {
                     />
                     <Button
                       onClick={() => handleSave(field)}
-                      disabled={!hasChanges || isBusy}
+                      disabled={!hasChanges || busy}
                       className="gap-2"
                     >
-                      {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                      {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                       Save
                     </Button>
                     {field.isImage && savedUrl && (
@@ -197,7 +235,7 @@ export function GeneralIdentitySettings() {
                         variant="ghost"
                         size="icon"
                         onClick={() => handleReset(field.key)}
-                        disabled={isBusy}
+                        disabled={busy}
                         title="Reset to default"
                       >
                         <RotateCcw className="w-4 h-4" />
