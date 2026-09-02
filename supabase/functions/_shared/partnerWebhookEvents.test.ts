@@ -199,12 +199,33 @@ Deno.test("F6b: the restriction can only narrow, never widen", async () => {
   assertEquals(admin.deliveries.length, 0);
 });
 
-Deno.test("F5: the certified allowlist has exactly one entry in this phase", () => {
-  // Not a tautology: this phase ships NO event family (D6), and the closed
-  // allowlist is the mechanism that stops the substrate becoming an implicit
-  // promise. Widening it is a Phase 6 act with a producer ledger row behind it,
-  // and this fails when someone widens it without one.
-  assertEquals(CERTIFIED_EVENT_TYPES, ["webhook.test"]);
+Deno.test("F5: the certified allowlist contains exactly the Phase 5 + Phase 6 events", () => {
+  // Not a tautology: the closed allowlist is the mechanism that stops the
+  // substrate becoming an implicit promise. Widening it is a deliberate act
+  // with a producer ledger row behind it, and this fails when someone widens
+  // it without one -- or narrows it and breaks published partners.
+  //
+  // Phase 6 additions, each with a completed ledger row and a crash test in
+  // supabase/tests/partner_webhook_phase6_events.sql:
+  //   message.received, message.accepted, message.delivered, message.read,
+  //   message.failed, account.reauthorization_required.
+  //
+  // Deliberately ABSENT: account.connected / account.disconnected. The
+  // activation transition has ~20 commit points (see the ledger's resolved
+  // inventory) and needs a database trigger before it may be advertised.
+  assertEquals(CERTIFIED_EVENT_TYPES, [
+    "webhook.test",
+    "message.received",
+    "message.accepted",
+    "message.delivered",
+    "message.read",
+    "message.failed",
+    "account.reauthorization_required",
+  ]);
   assert(isCertifiedEventType("webhook.test"));
-  assert(!isCertifiedEventType("message.received"));
+  assert(isCertifiedEventType("message.received"));
+  assert(isCertifiedEventType("account.reauthorization_required"));
+  assert(!isCertifiedEventType("account.connected"));
+  assert(!isCertifiedEventType("account.disconnected"));
+  assert(!isCertifiedEventType("post.published"));
 });

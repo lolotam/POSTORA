@@ -118,10 +118,30 @@ async function persistEvolutionMessage(
   const { conversationId, sentByOwner, row } = built;
   const remoteNumber = remoteNumberFor(message.key.remoteJid);
 
-  const { data: insertedRows, error: insertError } = await admin
-    .from("whatsapp_messages")
-    .upsert(row, { onConflict: "user_id,message_id", ignoreDuplicates: true })
-    .select("id");
+  // The persist and the message.received fan-out are ONE statement (D5 R1).
+  // The row here can be EITHER direction -- owner-sent echoes go through
+  // this same statement as direction "outbound" -- and the SQL function
+  // enqueues only for a genuinely inserted INBOUND row, so an owner echo can
+  // never surface as a received event.
+  const { data: persistResult, error: insertError } = await admin
+    .rpc("partner_upsert_whatsapp_message", {
+      p_workspace_id: account.workspace_id,
+      p_user_id: row.user_id,
+      p_social_account_id: row.social_account_id,
+      p_conversation_id: row.conversation_id,
+      p_message_id: row.message_id,
+      p_from_phone: row.from_phone,
+      p_from_name: row.from_name,
+      p_to_phone: row.to_phone,
+      p_message_text: row.message_text,
+      p_message_type: row.message_type,
+      p_media_url: row.media_url ?? null,
+      p_media_type: row.media_type,
+      p_media_metadata: row.media_metadata,
+      p_direction: row.direction,
+      p_status: row.status,
+      p_timestamp: row.timestamp,
+    });
 
   // Without this a failed write is indistinguishable from the deliberate duplicate skip
   // below, which is how a silent persistence failure could look like normal operation.
@@ -129,7 +149,10 @@ async function persistEvolutionMessage(
     console.error("[whatsapp-evolution-webhook] Message persist failed:", insertError.message);
     return false;
   }
-  if (!insertedRows || insertedRows.length === 0) return false;
+  const persisted = (persistResult ?? [])[0] as
+    | { row_id: string | null; was_inserted: boolean }
+    | undefined;
+  if (!persisted || !persisted.was_inserted) return false;
   await touchConversation(admin, account, {
     conversationId,
     participantName: built.participantName,
@@ -190,7 +213,7 @@ async function persistEvolutionMessage(
   const mediaMime = (row.media_metadata as { mime_type?: string } | null)?.mime_type ?? null;
 
   if ((mediaKind === "audio" || mediaKind === "image" || mediaKind === "document") && mediaMime) {
-    const mediaRowId = insertedRows[0]?.id ?? null;
+    const mediaRowId = persisted?.row_id ?? null;
     await runInBackground("evolution inbound media understanding", async () => {
       const evolutionBase = Deno.env.get("EVOLUTION_API_URL");
       const evolutionKey = Deno.env.get("EVOLUTION_API_KEY");

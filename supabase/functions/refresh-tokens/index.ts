@@ -341,28 +341,35 @@ async function handleRefreshFailure(
     (now.getTime() - lastAlertSentAt.getTime()) > ALERT_COOLDOWN_MS
   );
 
-  const updateData: Record<string, unknown> = {
-    failure_count: currentFailureCount,
-    last_refresh_error: errorMessage,
-    updated_at: new Date().toISOString(),
-  };
   if (failureIsTransient) {
     // Recorded so the error is visible, but the count is deliberately left where it was.
     console.log(`[refresh-failure] transient failure for ${account.id}; failure_count held at ${currentFailureCount}`);
   }
 
-  if (needsReauth) {
-    updateData.needs_reauth = true;
+  // The failure record and the account.reauthorization_required fan-out are
+  // ONE statement (D5 R1, Phase 6): partner_record_refresh_failure performs
+  // this exact update and enqueues the event for the accounts whose
+  // needs_reauth actually flipped false -> true, in the same transaction. A
+  // second client call here would have a crash gap between the flag and the
+  // event. The occurrence id carries the transition timestamp because an
+  // account can be flipped, repaired, and flipped again -- the second flip
+  // is a new occurrence, not a duplicate.
+  const { data: reauthResult, error: reauthError } = await supabaseAdmin
+    .rpc('partner_record_refresh_failure', {
+      p_account_id: account.id,
+      p_failure_count: currentFailureCount,
+      p_last_error: errorMessage,
+      p_escalate_reauth: needsReauth,
+      p_last_alert_sent_at: shouldAlert ? now.toISOString() : null,
+    });
+  if (reauthError) {
+    // Logged, never thrown: the refresh loop must survive one account's
+    // bookkeeping failure, exactly as it survived an ignored update error
+    // before this moved into the RPC.
+    console.error(`[refresh-failure] Account ${account.id} failure record write failed:`, reauthError.message);
+  } else if (reauthResult?.transitioned) {
+    console.log(`[refresh-failure] Account ${account.id} escalated to needs_reauth; ${reauthResult.enqueued} webhook delivery row(s) enqueued`);
   }
-
-  if (shouldAlert) {
-    updateData.last_alert_sent_at = now.toISOString();
-  }
-
-  await supabaseAdmin
-    .from('social_accounts')
-    .update(updateData)
-    .eq('id', account.id);
 
   console.log(`[refresh-failure] Account ${account.id} (${account.platform}): failure #${currentFailureCount}, needsReauth=${needsReauth}, shouldAlert=${shouldAlert}`);
 

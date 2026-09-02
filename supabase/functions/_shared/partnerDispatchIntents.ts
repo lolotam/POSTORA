@@ -165,11 +165,18 @@ export async function takeoverIntentToIndeterminate(
  * this row -- and it must be able to replay the outcome verbatim instead of
  * guessing.
  *
+ * Phase 6 (D5 R1): this settle is also the certified producer of
+ * `message.accepted`, so it calls the SQL function
+ * partner_settle_dispatch_intent_sent, which performs the CAS and the webhook
+ * fan-out in ONE statement. Two supabase-js calls would have a crash gap
+ * between them -- the exact gap the outbox exists to close.
+ *
  * Errors are logged, never thrown: the message has been accepted by the
  * provider by the time this runs, and failing the request here would report
  * a delivered message as failed -- the exact inversion the send path's
- * bookkeeping rules forbid. The CAS on `intended` means a webhook that
- * reconciled the row first (proving the same send) wins harmlessly.
+ * bookkeeping rules forbid. If the RPC fails, the row stays `intended` and
+ * the echo reconciliation (which emits the same occurrence id) is the
+ * recovery path.
  */
 export async function markIntentSent(
   // deno-lint-ignore no-explicit-any
@@ -180,16 +187,12 @@ export async function markIntentSent(
   body: unknown,
 ): Promise<void> {
   const { error } = await client
-    .from("partner_dispatch_intents")
-    .update({
-      state: "sent",
-      wamid,
-      http_status: httpStatus,
-      response_body: body,
-      resolved_at: new Date().toISOString(),
-    })
-    .eq("id", intentId)
-    .eq("state", "intended");
+    .rpc("partner_settle_dispatch_intent_sent", {
+      p_intent_id: intentId,
+      p_wamid: wamid,
+      p_http_status: httpStatus,
+      p_response_body: body,
+    });
   if (error) {
     console.error("[partner-dispatch] intent sent-mark failed:", error.message);
   }
@@ -238,6 +241,13 @@ export async function markIntentFailed(
  * `indeterminate` row, and it can never make anything resendable: the
  * transition trigger refuses every path back toward `intended`.
  *
+ * Phase 6 (D5 R1): the reconcile and the `message.accepted` fan-out happen in
+ * ONE statement (partner_reconcile_dispatch_intent_sent). The occurrence id
+ * is shared with the settle, so a row that already settled `sent` emits
+ * nothing new (the UNIQUE anchor absorbs it), while a crashed attempt's
+ * `intended`/`indeterminate` row gets its message.accepted HERE -- the D13
+ * escalation path resolving itself into an event.
+ *
  * Accepts `intended` as a source state deliberately: an attempt that crashed
  * mid-flight (or that observed an unknown outcome, which by design writes no
  * intent state) leaves its row `intended`, and a webhook arriving for it is
@@ -254,17 +264,10 @@ export async function reconcileDispatchIntentByEcho(
   wamid: string,
 ): Promise<void> {
   const { error } = await client
-    .from("partner_dispatch_intents")
-    .update({
-      state: "reconciled_sent",
-      wamid,
-      resolved_at: new Date().toISOString(),
-    })
-    .eq("id", intentId)
-    // `failed` is excluded on purpose: a proven-not-delivered send cannot
-    // produce a status, so a "positive" signal for one means something is
-    // deeply wrong and must not be papered over.
-    .in("state", ["intended", "indeterminate", "sent"]);
+    .rpc("partner_reconcile_dispatch_intent_sent", {
+      p_intent_id: intentId,
+      p_wamid: wamid,
+    });
   if (error) {
     console.error("[partner-dispatch] intent reconcile failed:", error.message);
   }

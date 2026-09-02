@@ -131,10 +131,37 @@ Deno.test("isDispatchIntentId accepts UUIDs and rejects everything a webhook mig
   assertEquals(isDispatchIntentId("33333333-3333-4333-8333-333333333333".toUpperCase()), true);
   assertEquals(isDispatchIntentId(undefined), false);
   assertEquals(isDispatchIntentId(null), false);
-  assertEquals(isDispatchIntentId(12345), false);
+  assertEquals(isDispatchIntentId(123), false);
   assertEquals(isDispatchIntentId("wamid.HBGja0lQ7rBWcYIkwF7ZL1A"), false);
   assertEquals(isDispatchIntentId(""), false);
   // An .eq() with this string would be a Postgres cast error, not an empty
   // result — the guard exists so garbage echoes are ignorable.
   assertEquals(isDispatchIntentId("not-a-uuid"), false);
+});
+
+Deno.test("settle and reconcile log RPC failures instead of throwing (Phase 6: the RPC is the whole settle)", async () => {
+  // The provider has ALREADY accepted the message by the time these run, so
+  // a database failure here must not surface as an exception -- the caller
+  // would fall into its indeterminate branch and report a delivered message
+  // as failed. The wrappers absorb the error and log it; the intent row
+  // stays `intended`, and the echo reconciliation (which emits the same
+  // occurrence id) is the recovery path.
+  // deno-lint-ignore no-explicit-any
+  const failing: any = {
+    rpc: (_name: string, _params: unknown) =>
+      Promise.resolve({ data: null, error: { message: "db down" } }),
+  };
+  // Reaching the end of this test IS the assertion: neither call may reject.
+  await markIntentSent(failing, "44444444-4444-4444-8444-444444444444", "wamid.X", 200, {});
+  await reconcileDispatchIntentByEcho(failing, "44444444-4444-4444-8444-444444444444", "wamid.X");
+
+  // CONTROL: the same wrappers against a working stub DO drive the state
+  // machine, so the passing test above cannot be "the wrappers call nothing".
+  const h = seeded();
+  const first = await recordDispatchIntent(h.admin, base);
+  if (first.status !== "recorded") throw new Error("unreachable");
+  await markIntentSent(h.admin, first.intentId, "wamid.Y", 200, {});
+  assertEquals(h.read().intents[0].state, "sent");
+  await reconcileDispatchIntentByEcho(h.admin, first.intentId, "wamid.Y");
+  assertEquals(h.read().intents[0].state, "reconciled_sent");
 });

@@ -409,7 +409,28 @@ Deno.test("W6b: a disabled webhook refuses a test", async () => {
 // --- W7/W8: what a subscription may say ------------------------------------
 
 Deno.test("W7: only certified events may be subscribed to", async () => {
+  // Phase 6 certified message.received (ledger row complete, crash test in
+  // supabase/tests/partner_webhook_phase6_events.sql), so the refusal must
+  // move to an event that is STILL uncertified. account.connected stays
+  // uncertified until its activation producer exists -- see the resolved
+  // inventory in the producer ledger.
   const res = await handleRequest(
+    v1("/v1/webhooks", {
+      method: "POST",
+      body: JSON.stringify({
+        url: "https://hooks.example.com/x",
+        events: ["account.connected"],
+      }),
+    }),
+    () => stub(),
+  );
+
+  assertEquals(res.status, 400);
+  assertEquals(await code(res), "invalid_request");
+
+  // CONTROL: the refusal is about certification, not about the validation
+  // path being unable to accept anything new -- a certified event passes it.
+  const ok = await handleRequest(
     v1("/v1/webhooks", {
       method: "POST",
       body: JSON.stringify({
@@ -419,12 +440,7 @@ Deno.test("W7: only certified events may be subscribed to", async () => {
     }),
     () => stub(),
   );
-
-  // Phase 5 advertises no event family. A partner who could subscribe to
-  // message.received would build against it and find out six weeks later that
-  // it never fired.
-  assertEquals(res.status, 400);
-  assertEquals(await code(res), "invalid_request");
+  assertEquals(ok.status, 201);
 });
 
 Deno.test("W8: an internal target is refused at registration", async () => {

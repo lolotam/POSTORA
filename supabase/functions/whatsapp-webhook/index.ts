@@ -444,30 +444,43 @@ async function handleLiveMessages(
     const savedName = await findSavedContactName(adminClient, account.workspace_id, from);
     const participantName = savedName || contactName;
 
-    // Store individual message with media info; ignoreDuplicates makes Meta's
-    // webhook redeliveries no-ops instead of double rows.
-    const { data: insertedRows } = await adminClient
-      .from("whatsapp_messages")
-      .upsert({
-        user_id: account.user_id,
-        social_account_id: account.id,
-        conversation_id: conversationId,
-        message_id: messageId,
-        from_phone: from,
-        from_name: contactName,
-        to_phone: displayPhone,
-        message_text: messageText,
-        message_type: msgType,
-        media_url: mediaUrl,
-        media_type: mediaType,
-        media_metadata: mediaMetadata,
-        direction: "inbound",
-        status: "received",
-        timestamp: msgTimestamp,
-      }, { onConflict: "user_id,message_id", ignoreDuplicates: true })
-      .select("id");
+    // Store individual message with media info, and enqueue the
+    // message.received partner event in the SAME statement (D5 R1: a second
+    // client call after this one would have a crash gap between the row and
+    // the event -- the exact gap the outbox exists to close). The SQL
+    // function performs the (user_id, message_id) upsert that consumes
+    // Meta's redeliveries AND fans out to matching webhook subscriptions
+    // atomically; a duplicate message id inserts nothing and emits nothing.
+    const { data: persistResult, error: persistError } = await adminClient
+      .rpc("partner_upsert_whatsapp_message", {
+        p_workspace_id: account.workspace_id,
+        p_user_id: account.user_id,
+        p_social_account_id: account.id,
+        p_conversation_id: conversationId,
+        p_message_id: messageId,
+        p_from_phone: from,
+        p_from_name: contactName,
+        p_to_phone: displayPhone ?? null,
+        p_message_text: messageText,
+        p_message_type: msgType,
+        p_media_url: mediaUrl,
+        p_media_type: mediaType,
+        p_media_metadata: mediaMetadata,
+        p_direction: "inbound",
+        p_status: "received",
+        p_timestamp: msgTimestamp,
+      });
+    // A failed write is not a duplicate. Logging it here distinguishes the
+    // two, which is the distinction the Evolution path already drew.
+    if (persistError) {
+      console.error("[whatsapp-webhook] Inbound message persist failed:", persistError.message);
+      continue;
+    }
+    const persisted = (persistResult ?? [])[0] as
+      | { row_id: string | null; was_inserted: boolean }
+      | undefined;
 
-    if (!insertedRows || insertedRows.length === 0) {
+    if (!persisted || !persisted.was_inserted) {
       console.log("[whatsapp-webhook] Duplicate inbound message skipped");
       continue;
     }
@@ -601,7 +614,7 @@ async function handleLiveMessages(
         promptSafeText,
         media: understandableKind && mediaMime
           ? {
-            rowId: insertedRows[0]?.id ?? null,
+            rowId: persisted.row_id ?? null,
             id: (mediaMetadata as { media_id?: string } | null)?.media_id ?? null,
             url: mediaUrl,
             kind: mediaType!,
@@ -657,19 +670,28 @@ async function handleLiveMessages(
       await reconcileDispatchIntentByEcho(adminClient, echoedIntentId, wamid);
     }
 
-    // Update the original message row
-    const updatePayload: Record<string, unknown> = { status: newStatus };
-    if (errorCode) updatePayload.error_code = errorCode;
-    if (friendlyError) updatePayload.error_message = friendlyError;
+    // Update the original message row AND enqueue the message.delivered /
+    // .read / .failed partner event in the same statement (D5 R1). The SQL
+    // function keeps this handler's exact update semantics (error fields
+    // only where present) and emits only for the three certified status
+    // transitions -- a 'sent' status is not an event, because D6 renamed
+    // message.sent to message.accepted and its certified producer is the
+    // dispatch settle, not a status echo. The occurrence id is
+    // message.<status>:<wamid>, so the three transitions of one message can
+    // never collide on the resource id alone.
+    const { data: updatedRows, error: statusError } = await adminClient
+      .rpc("partner_apply_whatsapp_message_status", {
+        p_message_id: wamid,
+        p_status: newStatus,
+        p_error_code: errorCode,
+        p_error_message: friendlyError,
+      });
 
-    const { data: updatedRows } = await adminClient
-      .from("whatsapp_messages")
-      .update(updatePayload)
-      .eq("message_id", wamid)
-      .select("conversation_id, user_id, social_account_id, message_text");
-
-    // On failure, mark the conversation preview with a warning
-    if (newStatus === "failed" && updatedRows && updatedRows.length > 0) {
+    if (statusError) {
+      // Logged, not fatal: one message's status must not abort the rest of
+      // the webhook batch (the same policy the D13 reconcile follows).
+      console.error("[whatsapp-webhook] Status apply failed:", statusError.message);
+    } else if (newStatus === "failed" && updatedRows && updatedRows.length > 0) {
       const row = updatedRows[0] as {
         conversation_id: string;
         user_id: string;
@@ -760,14 +782,23 @@ async function handleHistorySync(
 
       if (rows.length === 0) continue;
 
-      const { error } = await adminClient
-        .from("whatsapp_messages")
-        .upsert(rows, { onConflict: "user_id,message_id", ignoreDuplicates: true });
-      if (error) {
-        console.error("[whatsapp-webhook] History batch insert failed:", error.message);
+      // One statement whose rows commit EITHER direction depending on the
+      // per-row isInbound boolean -- the trap the producer ledger names. The
+      // SQL function performs the whole bulk upsert and enqueues
+      // message.received for the genuinely INSERTED INBOUND rows only, in
+      // the same transaction: a hook attached to "the statement" would fire
+      // for the thread's outbound rows too, and that is precisely what must
+      // not happen.
+      const { data: insertedCount, error: batchError } = await adminClient
+        .rpc("partner_import_whatsapp_message_batch", {
+          p_workspace_id: account.workspace_id,
+          p_rows: rows,
+        });
+      if (batchError) {
+        console.error("[whatsapp-webhook] History batch insert failed:", batchError.message);
         continue;
       }
-      imported += rows.length;
+      imported += insertedCount ?? 0;
 
       await touchConversation(
         adminClient,
