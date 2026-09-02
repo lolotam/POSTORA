@@ -254,6 +254,62 @@ BEGIN
   RAISE NOTICE 'PASS: an unattributable row is recorded but not emitted';
 
   -- ==========================================================================
+  -- 6b. A cross-tenant pairing is refused BEFORE anything is written.
+  -- ==========================================================================
+  --
+  -- platform_posts has two INDEPENDENT foreign keys, so post-of-A with
+  -- account-of-B is a structurally valid row. The function would then roll up
+  -- A's post while deriving the event's workspace from B's account -- A's post
+  -- details delivered to B's webhook.
+  DECLARE
+    other_user UUID;
+    other_ws   UUID;
+    other_acct UUID;
+    rows_before INTEGER;
+  BEGIN
+    -- A second owner. auth.users is seeded with one row, so make another.
+    INSERT INTO auth.users (id, email, instance_id, aud, role)
+    VALUES (gen_random_uuid(), 'seam-' || nonce || '@example.invalid',
+            '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated')
+    RETURNING id INTO other_user;
+    INSERT INTO public.workspaces (name, owner_id, is_personal)
+    VALUES ('seam-other-' || nonce, other_user, false) RETURNING id INTO other_ws;
+    INSERT INTO public.social_accounts (user_id, workspace_id, platform, platform_user_id, access_token, is_active)
+    VALUES (other_user, other_ws, 'facebook', 'other-' || nonce, 'tok', true)
+    RETURNING id INTO other_acct;
+
+    SELECT count(*) INTO rows_before FROM public.platform_posts p WHERE p.post_id = the_post;
+    BEGIN
+      PERFORM public.partner_settle_platform_post(
+        NULL, the_post, other_acct, 'facebook', 'success', NULL, NULL, NULL, NULL
+      );
+      RAISE EXCEPTION 'FAIL: a cross-tenant pairing was accepted';
+    EXCEPTION WHEN foreign_key_violation THEN
+      NULL;  -- the refusal, raised with this errcode on purpose
+    END;
+    -- Refusing must mean refusing to WRITE, not merely refusing to emit.
+    IF (SELECT count(*) FROM public.platform_posts p WHERE p.post_id = the_post) <> rows_before THEN
+      RAISE EXCEPTION 'FAIL: the refused pairing still created a row';
+    END IF;
+    RAISE NOTICE 'PASS: a cross-tenant pairing is refused before any write';
+
+    -- CONTROL: the same call with the RIGHT owner's account still works, so
+    -- the assertion above cannot be satisfied by a function that refuses
+    -- everything.
+    PERFORM public.partner_settle_platform_post(
+      NULL, the_post, acct_a, 'facebook', 'success', NULL, NULL, NULL, NULL
+    );
+    IF (SELECT count(*) FROM public.platform_posts p WHERE p.post_id = the_post) <> rows_before + 1 THEN
+      RAISE EXCEPTION 'FAIL: the control settle did not write its row';
+    END IF;
+    RAISE NOTICE 'PASS: control -- the correctly paired account still settles';
+
+    DELETE FROM public.social_accounts a WHERE a.id = other_acct;
+    DELETE FROM public.workspaces w WHERE w.id = other_ws;
+    DELETE FROM auth.users u WHERE u.id = other_user;
+  END;
+
+  -- ==========================================================================
   -- 7. A non-terminal status is refused.
   -- ==========================================================================
   BEGIN

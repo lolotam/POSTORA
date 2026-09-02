@@ -35,6 +35,8 @@ AS $$
 DECLARE
   v_row        public.platform_posts;
   v_post       public.posts;
+  v_owner      UUID;
+  v_acct_owner UUID;
   v_workspace  UUID;
   v_event      TEXT;
   v_enqueued   INTEGER := 0;
@@ -49,6 +51,46 @@ BEGIN
   -- an event, which would enqueue a publication that has not happened.
   IF p_status NOT IN ('success', 'failed') THEN
     RAISE EXCEPTION 'partner_settle_platform_post: % is not a terminal status', p_status;
+  END IF;
+
+  -- ---- the pairing check, BEFORE anything is written --------------------
+  --
+  -- platform_posts carries two INDEPENDENT foreign keys, so a post belonging
+  -- to user A and an account belonging to user B is a perfectly valid row --
+  -- and this function would then roll up A's post while deriving the event's
+  -- workspace from B's account, delivering A's post details to B's webhook.
+  --
+  -- No caller does that today; all five pair the ids from the same job. But
+  -- "every caller pairs them correctly" is the assumption D4 exists to
+  -- refuse: the tenancy boundary belongs in the constraint, not in the
+  -- discipline of callers. `platform_posts` predates this programme and
+  -- cannot gain a composite FK additively (it has no workspace_id and posts
+  -- has no workspace_id either), so the check lives here instead -- and it
+  -- runs before the write, so a mismatched pair cannot even create a row.
+  IF p_platform_post_id IS NOT NULL THEN
+    SELECT p.user_id INTO v_owner FROM public.posts p
+      JOIN public.platform_posts pp ON pp.post_id = p.id
+     WHERE pp.id = p_platform_post_id;
+  ELSE
+    SELECT p.user_id INTO v_owner FROM public.posts p WHERE p.id = p_post_id;
+  END IF;
+
+  IF p_social_account_id IS NOT NULL OR p_platform_post_id IS NOT NULL THEN
+    SELECT a.user_id INTO v_acct_owner
+      FROM public.social_accounts a
+     WHERE a.id = coalesce(
+             p_social_account_id,
+             (SELECT pp.social_account_id FROM public.platform_posts pp WHERE pp.id = p_platform_post_id)
+           );
+    -- NULL account owner means there is no account to disagree with (the
+    -- fallback insert permits a row without one), so only a PRESENT and
+    -- DIFFERENT owner is a refusal.
+    IF v_acct_owner IS NOT NULL AND v_owner IS NOT NULL AND v_acct_owner <> v_owner THEN
+      RAISE EXCEPTION
+        'partner_settle_platform_post: post % belongs to % but account % belongs to % (cross-tenant pairing refused)',
+        coalesce(p_post_id, p_platform_post_id), v_owner, p_social_account_id, v_acct_owner
+        USING ERRCODE = 'foreign_key_violation';
+    END IF;
   END IF;
 
   IF p_platform_post_id IS NOT NULL THEN
