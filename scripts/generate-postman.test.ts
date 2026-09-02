@@ -10,6 +10,11 @@ function stableStringify(obj: unknown): string {
   return JSON.stringify(obj, null, 2) + "\n";
 }
 
+/** A Windows checkout under autocrlf hands back CRLF; the comparison is on content, not line endings. */
+async function committedText(url: URL): Promise<string> {
+  return (await Deno.readTextFile(url)).replaceAll("\r\n", "\n");
+}
+
 Deno.test("generated Postman collection is byte-identical to committed file", async () => {
   const text = await Deno.readTextFile(DOC_PATH);
   const doc = parse(text);
@@ -17,7 +22,7 @@ Deno.test("generated Postman collection is byte-identical to committed file", as
   const expected = stableStringify(built);
   let committed: string;
   try {
-    committed = await Deno.readTextFile(COLLECTION_PATH);
+    committed = await committedText(COLLECTION_PATH);
   } catch {
     throw new Error("run `deno run --allow-read --allow-write scripts/generate-postman.ts` and commit the result");
   }
@@ -30,7 +35,7 @@ Deno.test("generated Postman environments are byte-identical to committed files"
     const expected = stableStringify(built);
     let committed: string;
     try {
-      committed = await Deno.readTextFile(new URL(fname, ENV_DIR));
+      committed = await committedText(new URL(fname, ENV_DIR));
     } catch {
       throw new Error("run `deno run --allow-read --allow-write scripts/generate-postman.ts` and commit the result");
     }
