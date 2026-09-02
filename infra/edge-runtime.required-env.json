@@ -115,6 +115,14 @@
       "aliases": [],
       "description": "Shared secret required to invoke scheduled (cron-triggered) edge functions. Sent by pg_cron as `Authorization: Bearer <CRON_SECRET>` or `x-cron-secret: <CRON_SECRET>`. Verified by supabase/functions/_shared/cron-auth.ts. Must be a high-entropy random string (>=32 chars). Rotate by updating .env, restarting the functions container, and re-running the manual SQL that rewrites the pg_cron headers."
     },
+    {
+      "name": "PARTNER_API_ENVIRONMENT",
+      "category": "supabase",
+      "required": false,
+      "runtime": "edge-runtime",
+      "aliases": [],
+      "description": "Environment for the Partner API door (partner-api). staging accepts only pk_test_ keys, production accepts only pk_live_. Unset defaults to production. Any other value makes the door refuse every key with internal_error. See supabase/functions/_shared/partnerApiKeys.ts doorEnvironment()."
+    },
 
     {
       "name": "FACEBOOK_APP_ID",

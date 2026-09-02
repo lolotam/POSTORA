@@ -34,6 +34,13 @@ if (rawQuota !== undefined) {
 
 
 
+const rawEnvironment = arg("environment") ?? "production";
+if (rawEnvironment !== "staging" && rawEnvironment !== "production") {
+  console.error(`--environment must be staging or production, got: ${rawEnvironment}`);
+  Deno.exit(2);
+}
+const environment = rawEnvironment as "staging" | "production";
+
 if (!workspaceId || !accountId || !name || scopes.length === 0) {
   console.error("Missing --workspace, --account, --name, or --scopes");
   Deno.exit(2);
@@ -97,7 +104,7 @@ if (!account.is_active || account.needs_reauth) {
   console.error("Account is inactive or needs re-authorization"); Deno.exit(1);
 }
 
-const { key, prefix, hash } = await generatePartnerKey();
+const { key, prefix, hash } = await generatePartnerKey(environment);
 
 // ONE atomic call: the key row, its account binding and the `create` audit row
 // share create_partner_key()'s single transaction. The previous two-insert flow
@@ -117,6 +124,7 @@ const { data: newKeyId, error: rpcError } = await admin.rpc("create_partner_key"
   p_key_hash: hash,
   p_scopes: scopes,
   p_monthly_quota: quota,
+  p_environment: environment,
 });
 
 if (rpcError) {

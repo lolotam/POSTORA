@@ -110,6 +110,7 @@ SUITES=(
   partner_posts.sql
   partner_media_scan_state.sql
   partner_usage_counters.sql
+  partner_key_environment.sql
   whatsapp_workspace_crm.sql
   import_whatsapp_contacts_to_workspace.sql
 )

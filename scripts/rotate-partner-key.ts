@@ -56,7 +56,20 @@ const client = createClient(
   { global: { headers: { Authorization: `Bearer ${userJwt}` } } },
 );
 
-const { key, prefix, hash } = await generatePartnerKey();
+// The successor is minted in the predecessor's environment: a rotation is
+// never a way to move a key between staging and production, and
+// rotate_partner_key() refuses a prefix from the other one.
+const { data: predecessorBefore, error: lookupError } = await client
+  .from("partner_api_keys")
+  .select("environment")
+  .eq("id", keyId)
+  .maybeSingle();
+
+if (lookupError) { console.error("Lookup failed:", lookupError.message); Deno.exit(1); }
+if (!predecessorBefore) { console.error("No such partner key"); Deno.exit(1); }
+const predecessorEnv = predecessorBefore.environment as "staging" | "production";
+
+const { key, prefix, hash } = await generatePartnerKey(predecessorEnv);
 
 // One atomic call: the successor key, every copied binding, the predecessor's
 // new deadline and both audit rows share a single transaction.
