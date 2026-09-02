@@ -117,7 +117,7 @@ A Grok session started the fix, then the user stopped further code changes. **Re
 | `src/components/admin/settings/HiggsfieldIntegrationCard.tsx` | Read nested `platform.connected`; pass `return_to: "/admin/settings"` |
 | `supabase/functions/higgsfield-oauth/index.ts` | Validate redirect_uri, persist `return_to`, flatten status, persist BYO `meta`, auto-sync models after platform connect |
 | `supabase/functions/ai-config/index.ts` | Higgsfield Test uses MCP `models_explore`, not OpenAI |
-| `src/pages/admin/AIConfigurationTab.tsx` | Hide API-key form for OAuth/Higgsfield |
+| `src/pages/admin/AIConfigurationTab.tsx` (since split into `src/components/admin/settings/ai/AiProvidersCard.tsx`) | Hide API-key form for OAuth/Higgsfield |
 | `src/hooks/ai-config/types.ts` | `auth_type?: string` |
 | `src/integrations/supabase/types.ts` | `higgsfield_connections.meta` |
 | `supabase/migrations/20260820180000_higgsfield_connections_meta.sql` | `ADD COLUMN meta jsonb` |
@@ -239,7 +239,7 @@ src/pages/Auth.tsx
 src/pages/AdminHiggsfieldCallback.tsx
 src/components/settings/HiggsfieldConnectionCard.tsx
 src/components/admin/settings/HiggsfieldIntegrationCard.tsx
-src/pages/admin/AIConfigurationTab.tsx
+src/pages/admin/AIConfigurationTab.tsx   # now src/components/admin/settings/ai/AiProvidersCard.tsx
 src/hooks/ai-config/types.ts
 src/integrations/supabase/types.ts
 supabase/functions/higgsfield-oauth/index.ts

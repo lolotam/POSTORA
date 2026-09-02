@@ -4,7 +4,6 @@ import { Bot, Plug, Settings as SettingsIcon } from "lucide-react";
 import { AdminLayout } from "@/components/admin/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { AIConfigurationTab } from "@/pages/admin/AIConfigurationTab";
 import { UserAiModelOverrides } from "@/components/admin/UserAiModelOverrides";
 import { ThemeSelector } from "@/components/admin/ThemeSelector";
 import { BrandIntelligenceSettings } from "@/components/admin/BrandIntelligenceSettings";
@@ -16,14 +15,27 @@ import { CdnStorageSettings } from "@/components/admin/settings/CdnStorageSettin
 import { HiggsfieldIntegrationCard } from "@/components/admin/settings/HiggsfieldIntegrationCard";
 import { GeneralIdentitySettings } from "@/components/admin/settings/GeneralIdentitySettings";
 import { TikTokSandboxToggle } from "@/components/admin/settings/TikTokSandboxToggle";
+import { AiProvidersCard } from "@/components/admin/settings/ai/AiProvidersCard";
+import {
+  ChatModelsCard,
+  EmbeddingModelsCard,
+  ImageGenerationCard,
+  SearchModelsCard,
+  SpeechToTextCard,
+  TextToSpeechCard,
+  VideoGenerationCard,
+} from "@/components/admin/settings/ai/AiCategoryCards";
 import {
   SETTINGS_SECTIONS,
   type SettingsSectionId,
 } from "@/components/admin/settings/settingsCatalog";
 import { SettingsSearchBar } from "@/components/admin/settings/SettingsSearchBar";
+import { SettingsSubTabs } from "@/components/admin/settings/SettingsSubTabs";
 import {
   countMatchesByTab,
+  groupSectionsBySubTab,
   readSettingsTab,
+  resolveSubTab,
   searchSettings,
   SETTINGS_TAB_LABELS,
   SETTINGS_TABS,
@@ -42,8 +54,15 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, ComponentType> = {
   "tiktok-analytics-source": TikTokAnalyticsSourceCard,
   "cdn-storage": CdnStorageSettings,
   "scraping-services": ScrapingServicesSettings,
-  "ai-configuration": AIConfigurationTab,
+  "ai-search-models": SearchModelsCard,
+  "ai-embedding-models": EmbeddingModelsCard,
   "ai-agent-models": AdminAiAgentSection,
+  "ai-stt-models": SpeechToTextCard,
+  "ai-tts-models": TextToSpeechCard,
+  "ai-video-models": VideoGenerationCard,
+  "ai-chat-models": ChatModelsCard,
+  "ai-image-models": ImageGenerationCard,
+  "ai-providers": AiProvidersCard,
   "brand-intelligence": BrandIntelligenceSettings,
   "higgsfield": HiggsfieldIntegrationCard,
   "user-ai-overrides": UserAiModelOverrides,
@@ -56,18 +75,22 @@ const TAB_ICONS = {
 } as const;
 
 export default function AdminSettings() {
-  // Tab and query both live in the URL, so a search can be linked and a reload keeps
-  // your place. Every write merges into the existing params rather than replacing them.
+  // Tab, sub-tab and query all live in the URL, so a search can be linked and a reload
+  // keeps your place. Every write merges into the existing params rather than replacing
+  // them.
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = readSettingsTab(searchParams.get("tab"));
   const query = searchParams.get("q") ?? "";
+  const requestedSubTab = searchParams.get("sub");
 
-  const setParam = (key: string, value: string) => {
+  const setParams = (updates: Record<string, string>) => {
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev);
-        if (value) next.set(key, value);
-        else next.delete(key);
+        for (const [key, value] of Object.entries(updates)) {
+          if (value) next.set(key, value);
+          else next.delete(key);
+        }
         return next;
       },
       { replace: true },
@@ -77,6 +100,7 @@ export default function AdminSettings() {
   const matches = searchSettings(SETTINGS_SECTIONS, query);
   const counts = countMatchesByTab(matches);
   const isSearching = query.trim().length > 0;
+  const matchedIds = new Set(matches.map((section) => section.id));
 
   return (
     <AdminLayout>
@@ -88,14 +112,20 @@ export default function AdminSettings() {
 
         <SettingsSearchBar
           query={query}
-          onQueryChange={(value) => setParam("q", value)}
+          onQueryChange={(value) => setParams({ q: value })}
           counts={counts}
           totalMatches={matches.length}
           activeTab={activeTab}
-          onSelectTab={(tab) => setParam("tab", tab)}
+          onSelectTab={(tab) => setParams({ tab, sub: "" })}
         />
 
-        <Tabs value={activeTab} onValueChange={(tab) => setParam("tab", tab)} className="space-y-6">
+        <Tabs
+          value={activeTab}
+          // A sub-tab label belongs to the tab it came from, so switching tabs drops it
+          // rather than carrying a name the new tab has never heard of.
+          onValueChange={(tab) => setParams({ tab, sub: "" })}
+          className="space-y-6"
+        >
           <TabsList>
             {SETTINGS_TABS.map((tab) => {
               const Icon = TAB_ICONS[tab];
@@ -114,12 +144,46 @@ export default function AdminSettings() {
           </TabsList>
 
           {SETTINGS_TABS.map((tab) => {
-            const matchedIds = new Set(matches.map((section) => section.id));
+            const { subTabs, ungrouped } = groupSectionsBySubTab(
+              SETTINGS_SECTIONS.filter((section) => section.tab === tab),
+            );
+            // A search that rules out every section behind a sub-tab hides the sub-tab
+            // too, so the strip only offers panels with something in them.
+            const visibleSubTabs = subTabs.filter((group) =>
+              group.sections.some((section) => matchedIds.has(section.id)),
+            );
+            const activeSubTab = resolveSubTab(
+              visibleSubTabs.map((group) => group.label),
+              requestedSubTab,
+            );
+
             return (
               <TabsContent key={tab} value={tab} className="space-y-6">
-                {/* Non-matches are hidden, not unmounted: unmounting a section while
-                    someone filters would throw away its unsaved local edits. */}
-                {SETTINGS_SECTIONS.filter((section) => section.tab === tab).map(({ id }) => {
+                {/* Every panel is built and stays mounted; a search only takes away the
+                    triggers. That way filtering does not discard what a card was holding
+                    unsaved, and clearing the query puts it back untouched. */}
+                <SettingsSubTabs
+                  active={activeSubTab}
+                  onSelect={(label) => setParams({ sub: label })}
+                  items={subTabs.map((group) => ({
+                    label: group.label,
+                    offered: group.sections.some((section) => matchedIds.has(section.id)),
+                    content: (
+                      <div className="space-y-6">
+                        {group.sections.map(({ id }) => {
+                          const Section = SECTION_COMPONENTS[id];
+                          return (
+                            <div key={id} className={matchedIds.has(id) ? undefined : "hidden"}>
+                              <Section />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ),
+                  }))}
+                />
+
+                {ungrouped.map(({ id }) => {
                   const Section = SECTION_COMPONENTS[id];
                   return (
                     <div key={id} className={matchedIds.has(id) ? undefined : "hidden"}>
