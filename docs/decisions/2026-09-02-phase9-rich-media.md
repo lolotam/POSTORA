@@ -125,6 +125,27 @@ upload, run the worker, flip states. The send path already refuses.
 
 ---
 
+## Review round (Codex on PR #127)
+
+**Matrix before suspension — fixed.** The template-suspension check ran before the matrix, so a
+QR-mode template send answered `temporarily_unavailable`: an invitation to wait for something that
+can never work. The matrix now sits between the per-type scope check and the suspension, which is
+the same permanent-before-temporary rule the type check already follows (C1d).
+
+**Scan state at the publish — fixed.** The creation-time check in `POST /v1/posts` could be
+outrun by a row flipping to `rejected` afterwards; `process-post` now applies `mediaSendability`
+to every loaded media row before any URL is generated, failing the post with the same 422 shape
+the missing-media path uses. Verified by inspection and typecheck — `process-post` has no test
+harness (7,200 lines, 60 pre-existing typecheck errors on `main`), which is itself the Core 1
+refactor's problem.
+
+**Capability refusals and the usage ledger — declined, with a follow-up.** Accurate, but broader
+than this branch: `recordUsage` is called only by the alias, and *no* `/v1` route or the
+`withPartnerAuth` wrapper records anything — success or refusal, on any route. Recording one
+refusal type here would make it the only visible `/v1` event, which is worse telemetry than none.
+The right fix is centralised in the wrapper and belongs with `GET /v1/usage` (plan 2.7) and the
+split counters (10.1), where the counter schema is decided.
+
 ## Owner ratification still required
 
 D10's open row is still open, and this substrate does not answer it — it

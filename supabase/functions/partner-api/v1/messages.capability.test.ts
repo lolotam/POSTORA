@@ -254,6 +254,23 @@ Deno.test("C1b: a TEXT send to a QR account is refused at the door too, with zer
   assertEquals(client.intents.length, 0);
 });
 
+Deno.test("C1d: a TEMPLATE send to a QR account is unsupported_direct_qr, NOT temporarily_unavailable (Codex review, PR #127)", async () => {
+  // SEND_TEMPLATE_SUSPENDED is on, so before the matrix moved above the
+  // suspension check this answered 503/temporarily_unavailable -- telling a
+  // partner to wait for a combination that can never work. Permanent facts
+  // precede temporary ones, same as the type check.
+  const client = stub({ account: ACCOUNT_QR });
+  const res = await handleRequest(
+    send({ type: "template", recipient_phone: "+1", template: { name: "hello", language: "en" } }),
+    () => client,
+  );
+
+  assertEquals(res.status, 400);
+  assertEquals((await bodyOf(res)).error.code, "unsupported_direct_qr");
+  assertEquals(client.claims, 0);
+  assertEquals(client.intents.length, 0);
+});
+
 Deno.test("C1c: the CONTROL — the same media send to a cloud_api account reaches every side effect", async () => {
   // Without this, C1 would pass just as happily against a route that refuses
   // every media send. The provider call itself fails (bogus token, real

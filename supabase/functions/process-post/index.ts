@@ -89,6 +89,7 @@ import { validateRequestBody, validationErrorResponse } from "../_shared/validat
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
 import { claimPostForProcessing } from "../_shared/postProcessingClaim.ts";
+import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { z } from "npm:zod@3.23.8";
@@ -1341,6 +1342,21 @@ Deno.serve(async (req) => {
       if (missingMediaFileIds.length > 0) {
         const message = `Post media is unavailable. Re-upload all ${post.media_file_ids.length} media item(s) before retrying.`;
         console.error(message, { postId: post_id, missingMediaFileIds });
+        await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
+        return createErrorResponse(message, 422);
+      }
+
+      // The scan-state rule is enforced HERE, at the publish, not only when
+      // the post was created: a file marked `rejected` after creation must
+      // not reach a provider. Same shared rule as POST /v1/messages and
+      // POST /v1/posts (partnerMediaStore.mediaSendability); every row is
+      // `available` today because nothing sets another state yet.
+      const unsendable = mediaFiles.filter((file) =>
+        !mediaSendability({ scanState: (file as { scan_state?: string | null }).scan_state ?? "available" }).ok
+      );
+      if (unsendable.length > 0) {
+        const message = `Post media cannot be published: ${unsendable.length} file(s) are pending or rejected by scanning.`;
+        console.error(message, { postId: post_id, mediaFileIds: unsendable.map((file) => file.id) });
         await supabase.from("posts").update({ status: "failed" }).eq("id", post_id);
         return createErrorResponse(message, 422);
       }

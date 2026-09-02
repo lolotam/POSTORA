@@ -228,16 +228,12 @@ export async function postMessages(
     }
   }
 
-  // The 0A safety suspension applies to /v1 exactly as it applies to the
-  // alias, and through the SAME flag. Restoration must open both surfaces
-  // with one deliberate decision rather than leaving /v1 quietly open.
-  // Checked after the scope gate in withPartnerAuth, preserving the alias's
-  // ordering: a key lacking the scope still gets `insufficient_scope`.
-  if (type === "template" && isActionSuspended("send_template")) {
-    return v1ErrorResponse("temporarily_unavailable", requestId);
-  }
-
   // ---- 9.2: the capability matrix, decided AT THE DOOR ---------------------
+  //
+  // Applied BEFORE the template suspension below: a QR-mode account can
+  // NEVER carry a template, and `temporarily_unavailable` would tell the
+  // partner to wait for something that will never work -- the same
+  // permanent-before-temporary rule the type check above follows.
   //
   // The account is resolved HERE — earlier than it used to be — because the
   // matrix needs its connection_mode, and because the refusal must precede
@@ -264,6 +260,16 @@ export async function postMessages(
       details: { connection_mode: account.ctx.connectionMode, type },
     });
   }
+
+  // The 0A safety suspension applies to /v1 exactly as it applies to the
+  // alias, and through the SAME flag. Restoration must open both surfaces
+  // with one deliberate decision rather than leaving /v1 quietly open.
+  // Checked after the scope gate in withPartnerAuth, preserving the alias's
+  // ordering: a key lacking the scope still gets `insufficient_scope`.
+  if (type === "template" && isActionSuspended("send_template")) {
+    return v1ErrorResponse("temporarily_unavailable", requestId);
+  }
+
 
   const recipient = String(payload.recipient_phone ?? "");
   if (!recipient) {
