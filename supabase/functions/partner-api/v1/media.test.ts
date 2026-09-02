@@ -49,7 +49,12 @@ const ACCOUNT_ROW = {
   platform: "whatsapp",
   platform_user_id: "phone-1",
   access_token: "token",
-  connection_mode: "cloud",
+  // 'cloud_api' is a REAL value from social_accounts_connection_mode_chk
+  // (20260821090000). This fixture said "cloud" for years, which that
+  // constraint forbids — harmless while the route only compared against
+  // 'evolution_qr', wrong the moment the 9.2 capability matrix started
+  // reading the mode meaningfully.
+  connection_mode: "cloud_api",
   is_active: true,
   needs_reauth: false,
   token_expires_at: null,

@@ -186,9 +186,16 @@ const PARTNER_API_POSTS = [
   // Note: UNBOUND_POST_ID has NO entry here deliberately.
 ];
 
+const PENDING_MEDIA_ID = "44444444-4444-4444-8444-444444444444";
+const REJECTED_MEDIA_ID = "33333333-3333-4333-8333-333333333333";
+
 const MEDIA_ROWS = [
   { id: MEDIA_ID, workspace_id: WS, file_path: `${WS}/img.jpg` },
   { id: FOREIGN_MEDIA_ID, workspace_id: OTHER_WS, file_path: `${OTHER_WS}/img.jpg` },
+  // Phase 9.3 scan states. MEDIA_ID above carries no scan_state at all, which
+  // is the available-by-default control every media-bearing create relies on.
+  { id: PENDING_MEDIA_ID, workspace_id: WS, file_path: `${WS}/pending.jpg`, scan_state: "pending" },
+  { id: REJECTED_MEDIA_ID, workspace_id: WS, file_path: `${WS}/rejected.jpg`, scan_state: "rejected" },
 ];
 
 const PLATFORM_POSTS = [
@@ -586,6 +593,26 @@ Deno.test("C7: a media_file_ids entry from another workspace answers resource_no
   assertEquals(res.status, 404);
   assertEquals(await code(res), "resource_not_found");
 });
+
+// Phase 9.3: the ONE sendability rule (partnerMediaStore.mediaSendability)
+// applies at this door too. A post is a customer-reaching send of the file.
+for (
+  const [label, id, expectedCode, expectedStatus] of [
+    ["pending", PENDING_MEDIA_ID, "media_pending", 409],
+    ["rejected", REJECTED_MEDIA_ID, "media_rejected", 422],
+  ] as const
+) {
+  Deno.test(`C13: a media_file_ids entry in scan_state ${label} answers ${expectedCode} and creates nothing`, async () => {
+    const client = stub();
+    const res = await handleRequest(
+      createReq({ targets: [`acc_${ACCT_FB}`], caption: "hi", media_file_ids: [`media_${id}`] }),
+      () => client,
+    );
+    assertEquals(res.status, expectedStatus);
+    assertEquals(await code(res), expectedCode);
+    assertEquals(client.rpcCalls.filter((c: any) => c.name === "partner_create_post").length, 0);
+  });
+}
 
 Deno.test("C8: scheduled_at: 'May 8, 2026' answers invalid_request (400) because strict ISO is required", async () => {
   const client = stub();

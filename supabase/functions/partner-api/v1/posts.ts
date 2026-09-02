@@ -32,6 +32,7 @@
 // while writing an unmatchable row would "work" forever and publish nothing.
 
 import { claimIdempotency, completeIdempotency, hashRequest } from "../../_shared/partnerApiIdempotency.ts";
+import { mediaSendability } from "../../_shared/partnerMediaStore.ts";
 import { decodeId, encodeId } from "./ids.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { v1JsonResponse } from "./respond.ts";
@@ -298,7 +299,7 @@ export async function createPost(
   if (mediaIds.length > 0) {
     const { data: mediaRows, error: mediaError } = await admin
       .from("media_files")
-      .select("id")
+      .select("id, scan_state")
       .in("id", mediaIds)
       .eq("workspace_id", record.workspaceId);
     if (mediaError) {
@@ -307,6 +308,14 @@ export async function createPost(
     }
     if ((mediaRows ?? []).length !== mediaIds.length) {
       return v1ErrorResponse("resource_not_found", requestId);
+    }
+    // 9.3: the same sendability rule POST /v1/messages applies, so a pending
+    // or rejected file cannot reach a post either. One rule, two doors.
+    for (const row of mediaRows as { id: string; scan_state?: string | null }[]) {
+      const sendability = mediaSendability({ scanState: row.scan_state ?? "available" });
+      if (!sendability.ok) {
+        return v1ErrorResponse(sendability.code, requestId, { message: sendability.message });
+      }
     }
   }
 

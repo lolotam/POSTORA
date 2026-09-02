@@ -87,6 +87,22 @@ export const V1_ERROR_POLICY = {
     status: 503, retryable: true,
     message: "Rate limiter is unavailable; retry shortly",
   },
+  // 9.3: the scan-state substrate. 409 + retryable because `pending` is the
+  // one scan state expected to change on its own — the worker (when one
+  // exists) flips it to available or rejected, and the partner's correct
+  // move is to retry the SAME request shortly. Re-uploading would mint a
+  // new media_id that is pending again, which is the opposite of progress.
+  media_pending: {
+    status: 409, retryable: true,
+    message: "The media file is pending a security scan; retry shortly",
+  },
+  // `rejected` is a permanent fact about these bytes. Retrying the same
+  // media_id can never succeed, and re-uploading the same bytes should meet
+  // the same verdict — so never retryable, like every other 422 here.
+  media_rejected: {
+    status: 422, retryable: false,
+    message: "The media file was rejected and cannot be sent",
+  },
   // The alias emits meta_error as 502/retryable:true when the outcome is
   // indeterminate and 422/retryable:false on a definite rejection
   // (whatsappPartnerOps.translateMetaError) — both reachable, hence the

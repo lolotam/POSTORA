@@ -14,10 +14,16 @@
 // crash mid-call would let a retry send the customer a SECOND REAL MESSAGE —
 // exactly the defect Phase 3 Stage 1 closed. `performSend` is deliberately not
 // exported from partnerDispatch.ts so this cannot be done by accident.
+//
+// Before ANY of that, the 9.2 capability matrix is consulted at the door
+// (partnerMessagingCapabilities.ts): a connection mode × message type cell
+// that can never be sent is refused before the media row is read, before a
+// URL is minted, before a key is claimed and before an intent exists.
 
 import { claimIdempotency, hashRequest } from "../../_shared/partnerApiIdempotency.ts";
 import { dispatchPartnerTemplate, type PartnerSendInput } from "../../_shared/partnerDispatch.ts";
-import { loadPartnerMedia, signPartnerMediaUrl } from "../../_shared/partnerMediaStore.ts";
+import { loadPartnerMedia, mediaSendability, signPartnerMediaUrl } from "../../_shared/partnerMediaStore.ts";
+import { partnerMessagingCapability, type PartnerMessageType } from "../../_shared/partnerMessagingCapabilities.ts";
 import { assertActionAuthorized, PartnerAuthError } from "../../_shared/partnerApiKeys.ts";
 import { isActionSuspended, satisfyingScopesFor } from "../router.ts";
 import { decodeId } from "./ids.ts";
@@ -67,7 +73,7 @@ function idempotencyBasisOf(input: PartnerSendInput): unknown {
 /**
  * Turn a `media_id` into a send input, or the refusal to answer with.
  *
- * Three checks, in this order, and the order is the contract:
+ * Four checks, in this order, and the order is the contract:
  *
  *   1. The id is well-formed. A malformed one 404s without a query, so a typo
  *      is neither a 500 nor an existence oracle (ids.ts).
@@ -78,6 +84,9 @@ function idempotencyBasisOf(input: PartnerSendInput): unknown {
  *      partner could send another workspace's files to their own customers.
  *   3. The requested type matches what the file actually IS — established by
  *      sniffing at upload time, not by anything the partner has said since.
+ *   4. The file is SENDABLE — its scan_state is neither `pending` nor
+ *      `rejected` (9.3). Applied BEFORE the URL is minted, same rule as the
+ *      9.2 door: a refused file must not produce a live read capability.
  */
 async function buildMediaSend(
   authed: V1AuthedContext,
@@ -122,6 +131,19 @@ async function buildMediaSend(
       res: v1ErrorResponse("invalid_request", requestId, {
         message: `That media file is ${stored.kind}, not ${type}`,
       }),
+    };
+  }
+
+  // 9.3: the scan-state gate, via the ONE shared rule so every send path
+  // (this route today, the publishing route when it lands) refuses the same
+  // rows for the same reasons. `pending` is retryable — the state is
+  // expected to change on its own once a scanner exists; `rejected` never
+  // is. Both come before the URL: a refused file must not mint one.
+  const sendability = mediaSendability(stored);
+  if (!sendability.ok) {
+    return {
+      ok: false,
+      res: v1ErrorResponse(sendability.code, requestId, { message: sendability.message }),
     };
   }
 
@@ -206,6 +228,39 @@ export async function postMessages(
     }
   }
 
+  // ---- 9.2: the capability matrix, decided AT THE DOOR ---------------------
+  //
+  // Applied BEFORE the template suspension below: a QR-mode account can
+  // NEVER carry a template, and `temporarily_unavailable` would tell the
+  // partner to wait for something that will never work -- the same
+  // permanent-before-temporary rule the type check above follows.
+  //
+  // The account is resolved HERE — earlier than it used to be — because the
+  // matrix needs its connection_mode, and because the refusal must precede
+  // every side effect this route can produce. The old order answered a media
+  // send to a QR-mode account only from the deep guard in sendMedia, AFTER
+  // the media row was loaded, a signed URL minted, an idempotency key
+  // claimed and a dispatch intent recorded. A request that was always going
+  // to be refused had already spent a key and created a live read
+  // capability.
+  //
+  // QR-mode refusals keep `unsupported_direct_qr` (the account's connection
+  // is the problem — errors.ts pins that vocabulary); the deep guards in
+  // whatsappPartnerOps stay as defence in depth for every other caller.
+  const account = await resolveWhatsAppAccount(authed);
+  if (!account.ok) return account.res;
+
+  const capability = partnerMessagingCapability(
+    account.ctx.connectionMode,
+    type as PartnerMessageType,
+  );
+  if (!capability.supported) {
+    return v1ErrorResponse(capability.code, requestId, {
+      message: capability.message,
+      details: { connection_mode: account.ctx.connectionMode, type },
+    });
+  }
+
   // The 0A safety suspension applies to /v1 exactly as it applies to the
   // alias, and through the SAME flag. Restoration must open both surfaces
   // with one deliberate decision rather than leaving /v1 quietly open.
@@ -214,6 +269,7 @@ export async function postMessages(
   if (type === "template" && isActionSuspended("send_template")) {
     return v1ErrorResponse("temporarily_unavailable", requestId);
   }
+
 
   const recipient = String(payload.recipient_phone ?? "");
   if (!recipient) {
@@ -265,9 +321,6 @@ export async function postMessages(
   if (!idempotencyKey) {
     return v1ErrorResponse("missing_idempotency_key", requestId);
   }
-
-  const account = await resolveWhatsAppAccount(authed);
-  if (!account.ok) return account.res;
 
   const claim = await claimIdempotency(
     admin,
