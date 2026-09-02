@@ -160,8 +160,15 @@ BEGIN
     SELECT array_agg(DISTINCT ws) INTO v_distinct_ws
       FROM (
         SELECT public.partner_workspace_of_account(aid::uuid) AS ws
+          -- jsonb_typeof, not coalesce: a scalar or object here is malformed
+          -- metadata, and jsonb_array_elements_text RAISES on a scalar. That
+          -- would roll back the user's own schedule write -- the one thing
+          -- this trigger must never do. Malformed means unattributable.
           FROM jsonb_array_elements_text(
-                 coalesce(NEW.metadata->'selected_account_ids', '[]'::jsonb)
+                 CASE WHEN jsonb_typeof(NEW.metadata->'selected_account_ids') = 'array'
+                      THEN NEW.metadata->'selected_account_ids'
+                      ELSE '[]'::jsonb
+                 END
                ) AS aid
          WHERE aid ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
       ) t
@@ -241,7 +248,51 @@ AS $$
 DECLARE
   v_id UUID;
   v_row JSONB;
+  v_distinct_targets INTEGER;
+  v_matching_targets INTEGER;
+  v_distinct_media INTEGER;
+  v_matching_media INTEGER;
 BEGIN
+  -- TENANCY IS ENFORCED HERE, not only in the TypeScript caller. The binding
+  -- row this function writes becomes the authorisation grant for every
+  -- /v1/posts route, so a caller that pairs user A's accounts with workspace
+  -- B -- a refactor, a second caller, a hand-typed service-role call -- would
+  -- hand B every read and mutation on A's post. Refused with the same
+  -- ERRCODE the Phase 7 seam uses for its cross-tenant pairing.
+  IF p_key_id IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM public.partner_api_keys k
+     WHERE k.id = p_key_id AND k.workspace_id = p_workspace_id
+  ) THEN
+    RAISE EXCEPTION 'partner_create_post: key % is not in workspace % (cross-tenant pairing refused)',
+      p_key_id, p_workspace_id USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  SELECT count(DISTINCT t) INTO v_distinct_targets FROM unnest(p_selected_account_ids) AS t;
+  IF coalesce(v_distinct_targets, 0) = 0 THEN
+    RAISE EXCEPTION 'partner_create_post: at least one target account is required'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  SELECT count(DISTINCT sa.id) INTO v_matching_targets
+    FROM public.social_accounts sa
+   WHERE sa.id = ANY (p_selected_account_ids)
+     AND sa.workspace_id = p_workspace_id
+     AND sa.user_id = p_user_id;
+  IF v_matching_targets <> v_distinct_targets THEN
+    RAISE EXCEPTION 'partner_create_post: a target account is not owned by user % in workspace % (cross-tenant pairing refused)',
+      p_user_id, p_workspace_id USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  SELECT count(DISTINCT m) INTO v_distinct_media FROM unnest(coalesce(p_media_file_ids, ARRAY[]::uuid[])) AS m;
+  IF v_distinct_media > 0 THEN
+    SELECT count(DISTINCT mf.id) INTO v_matching_media
+      FROM public.media_files mf
+     WHERE mf.id = ANY (p_media_file_ids) AND mf.workspace_id = p_workspace_id;
+    IF v_matching_media <> v_distinct_media THEN
+      RAISE EXCEPTION 'partner_create_post: a media file is not in workspace % (cross-tenant pairing refused)',
+        p_workspace_id USING ERRCODE = 'foreign_key_violation';
+    END IF;
+  END IF;
+
   INSERT INTO public.posts (
     user_id, caption, platforms, media_file_ids, status, scheduled_at,
     metadata, source

@@ -615,6 +615,42 @@ Deno.test("C9: scheduled_at: '2026-09-03T14:00:00' (no offset) answers invalid_r
   assertEquals(await code(res), "invalid_request");
 });
 
+// Codex review on PR #125: Date.parse and Date.UTC both NORMALISE, so a
+// well-shaped but impossible timestamp used to publish on a day the partner
+// never named. Every value here matches the ISO shape regex; only the
+// calendar round-trip can refuse it.
+for (
+  const [label, value] of [
+    ["Feb 30th", "2026-02-30T14:00:00Z"],
+    ["hour 24", "2026-09-03T24:00:00Z"],
+    ["minute 60", "2026-09-03T14:60:00Z"],
+    ["month 13", "2026-13-01T14:00:00Z"],
+    ["offset +25:00", "2026-09-03T14:00:00+25:00"],
+  ] as const
+) {
+  Deno.test(`C12: a shape-valid but impossible scheduled_at (${label}) answers invalid_request`, async () => {
+    const client = stub();
+    const res = await handleRequest(
+      createReq({ targets: [`acc_${ACCT_FB}`], caption: "hi", scheduled_at: value }),
+      () => client,
+    );
+    assertEquals(res.status, 400);
+    assertEquals(await code(res), "invalid_request");
+    assertEquals(client.rpcCalls.filter((c: any) => c.name === "partner_create_post").length, 0);
+  });
+}
+
+Deno.test("C12 control: a leap-day timestamp with an offset is accepted and normalised to UTC", async () => {
+  const client = stub();
+  const res = await handleRequest(
+    createReq({ targets: [`acc_${ACCT_FB}`], caption: "hi", scheduled_at: "2028-02-29T02:30:00+03:00" }),
+    () => client,
+  );
+  assertEquals(res.status, 201);
+  const call = client.rpcCalls.find((c: any) => c.name === "partner_create_post");
+  assertEquals(call.args.p_scheduled_at, "2028-02-28T23:30:00.000Z");
+});
+
 Deno.test("C10: a valid create calls partner_create_post RPC exactly once with derived platforms, user_id, and account UUIDs", async () => {
   const client = stub();
   const res = await handleRequest(

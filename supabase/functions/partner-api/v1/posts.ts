@@ -32,7 +32,6 @@
 // while writing an unmatchable row would "work" forever and publish nothing.
 
 import { claimIdempotency, completeIdempotency, hashRequest } from "../../_shared/partnerApiIdempotency.ts";
-import { boundAccountIds } from "./binding.ts";
 import { decodeId, encodeId } from "./ids.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { v1JsonResponse } from "./respond.ts";
@@ -44,13 +43,41 @@ import type { V1AuthedContext } from "./authenticated.ts";
  *  offset is required because a partner's "14:00" without one would silently
  *  mean the edge worker's timezone. */
 const ISO_8601_RE =
-  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$/;
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?(Z|([+-])(\d{2}):(\d{2}))$/;
 
+/**
+ * The shape check above is not a calendar check: Date.UTC NORMALISES, so
+ * "2026-02-30" becomes March 2nd and "24:00" becomes tomorrow, and a partner
+ * who typo'd a date would get a post published on a day they never named.
+ * So the components are round-tripped through Date.UTC and anything that did
+ * not survive unchanged is refused.
+ */
 function parseScheduledAt(value: unknown): string | null {
-  if (typeof value !== "string" || !ISO_8601_RE.test(value)) return null;
-  const ms = Date.parse(value);
-  if (Number.isNaN(ms)) return null;
-  return new Date(ms).toISOString();
+  if (typeof value !== "string") return null;
+  const match = ISO_8601_RE.exec(value);
+  if (!match) return null;
+
+  const [year, month, day, hour, minute] = [1, 2, 3, 4, 5].map((i) => Number(match[i]));
+  const second = match[6] ? Number(match[6]) : 0;
+  const millis = match[7] ? Math.round(Number(`0.${match[7]}`) * 1000) : 0;
+
+  const asUtc = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millis));
+  if (
+    asUtc.getUTCFullYear() !== year || asUtc.getUTCMonth() !== month - 1 ||
+    asUtc.getUTCDate() !== day || asUtc.getUTCHours() !== hour ||
+    asUtc.getUTCMinutes() !== minute || asUtc.getUTCSeconds() !== second
+  ) {
+    return null;
+  }
+
+  let offsetMinutes = 0;
+  if (match[8] !== "Z") {
+    const offsetHours = Number(match[10]);
+    const offsetMins = Number(match[11]);
+    if (offsetHours > 23 || offsetMins > 59) return null;
+    offsetMinutes = (offsetHours * 60 + offsetMins) * (match[9] === "-" ? -1 : 1);
+  }
+  return new Date(asUtc.getTime() - offsetMinutes * 60_000).toISOString();
 }
 
 interface PostRow {
@@ -201,10 +228,23 @@ export async function createPost(
   // Every target must be bound to THIS key. An unbound target — another
   // workspace's account, a revoked binding, a guess — answers
   // resource_not_found, teaching a prober nothing (D11).
-  const bound = await boundAccountIds(authed);
-  if (!bound.ok) return bound.res;
-  for (const id of targetIds) {
-    if (!bound.ids.includes(id)) return v1ErrorResponse("resource_not_found", requestId);
+  //
+  // Queried for the REQUESTED ids, not via boundAccountIds(): that helper
+  // refuses outright past BOUND_ACCOUNT_FILTER_MAX bindings because it exists
+  // for unfiltered listings, and binding a 201st account must not take away
+  // a key's ability to create a post for the first.
+  const { data: bindingRows, error: bindingError } = await admin
+    .from("partner_api_key_accounts")
+    .select("social_account_id")
+    .eq("key_id", record.id)
+    .eq("workspace_id", record.workspaceId)
+    .in("social_account_id", targetIds);
+  if (bindingError) {
+    console.error(`[partner-api] post target binding lookup failed (request ${requestId}):`, bindingError);
+    return v1ErrorResponse("internal_error", requestId);
+  }
+  if ((bindingRows ?? []).length !== targetIds.length) {
+    return v1ErrorResponse("resource_not_found", requestId);
   }
 
   // Hydrate the targets: platform set, activity, and OWNER. Workspace-scoped

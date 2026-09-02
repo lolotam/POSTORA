@@ -184,6 +184,30 @@ than by the metadata fallback. Within one transaction the intermediate state is 
 
 ---
 
+## Two findings from review (Codex on PR #125), both verified before fixing
+
+**Unscheduling raced the scheduler and lost.** `process-scheduled-posts` SELECTs due rows, refreshes
+tokens, then invokes `process-post`, which wrote `status = 'processing'` with a bare `.eq("id")`.
+An unschedule or reschedule landing in that window returned 200 and the post published anyway.
+The scheduler now passes the `scheduled_at` it selected, and `process-post`'s transition is a
+compare-and-set on it (`_shared/postProcessingClaim.ts`): a row that no longer carries that
+instant matches nothing, `process-post` answers 409, and the scheduler records a skip. Status is
+deliberately not part of the predicate — retrying a `failed` post through `process-post` is a
+supported path.
+
+**The create RPC trusted its caller.** `partner_create_post` wrote whatever workspace, key, account
+and media ids it was handed, and the binding row it writes *is* the authorisation grant for every
+`/v1/posts` route. It now refuses, with `foreign_key_violation`, any key outside the workspace, any
+target account not owned by `p_user_id` in that workspace, and any media file outside it — and the
+suite proves each refusal leaves no `posts` row behind.
+
+Three smaller ones in the same round: malformed `selected_account_ids` (a scalar or object) made
+`jsonb_array_elements_text` raise *inside the trigger*, rolling back the user's own schedule write —
+now `jsonb_typeof`-gated and treated as unattributable; `Date.UTC` normalises Feb 30th and 24:00, so
+timestamps are round-tripped through it and refused if they changed; and target bindings are queried
+for the requested ids rather than through `boundAccountIds()`, whose 200-binding refusal would have
+stopped a key creating posts for its first account once it bound a 201st.
+
 ## Migrations for the owner to apply
 
 | File | Contents |

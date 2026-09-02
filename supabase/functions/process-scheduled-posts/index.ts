@@ -195,11 +195,24 @@ Deno.serve(async (req) => {
               'Content-Type': 'application/json',
               'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`
             },
-            body: JSON.stringify({ post_id: post.id })
+            // The scheduled_at THIS run selected. process-post claims the row
+            // only if it still carries it, so an unschedule or reschedule that
+            // landed after the SELECT above -- from /v1 or the UI -- is honoured
+            // instead of published over. See _shared/postProcessingClaim.ts.
+            body: JSON.stringify({ post_id: post.id, expected_scheduled_at: post.scheduled_at })
           }
         );
 
         const processResult = await processResponse.json();
+
+        if (processResponse.status === 409) {
+          // Not a failure: the schedule changed under us and process-post
+          // declined. The row keeps whatever the later write gave it.
+          console.log(`Post ${post.id} skipped: schedule changed after selection`, processResult);
+          results.push({ postId: post.id, status: 'skipped', result: processResult });
+          continue;
+        }
+
         console.log(`Post ${post.id} processed:`, processResult);
 
         results.push({

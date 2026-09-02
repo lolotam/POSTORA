@@ -82,6 +82,8 @@ DECLARE
   post_g2            UUID;
   post_g3            UUID;
   post_g4            UUID;
+  post_g5            UUID;
+  post_g5_meta       JSONB;
   post_x1            UUID;
   res_json           JSONB;
   count_before       INTEGER;
@@ -306,6 +308,87 @@ BEGIN
   RAISE NOTICE 'PASS G4: ambiguous targets in multiple workspaces commit and produce zero delivery rows';
 
   -- ==========================================================================
+  -- ==========================================================================
+  -- G5: MALFORMED metadata (Codex review on PR #125). selected_account_ids
+  -- as a scalar or an object must be treated as unattributable -- commit,
+  -- emit nothing -- NOT raise. jsonb_array_elements_text on a scalar raises
+  -- "cannot extract elements from a scalar", and because this trigger runs
+  -- inside every schedule write, an unguarded expansion would roll back the
+  -- user's own scheduling.
+  -- ==========================================================================
+  SELECT count(*) INTO count_before FROM public.partner_webhook_deliveries
+   WHERE workspace_id IN (ws_a, ws_b);
+  FOR post_g5_meta IN
+    SELECT * FROM (VALUES
+      ('"not-an-array"'::jsonb),
+      ('{"nested": true}'::jsonb),
+      ('null'::jsonb),
+      ('42'::jsonb)
+    ) AS v(m)
+  LOOP
+    INSERT INTO public.posts (user_id, caption, platforms, status, scheduled_at, metadata, source)
+    VALUES (usr, 'g5 malformed ' || nonce, ARRAY['facebook'], 'scheduled', now() + interval '1 hour',
+            jsonb_build_object('selected_account_ids', post_g5_meta), 'ui')
+    RETURNING id INTO post_g5;
+    IF (SELECT scheduled_at FROM public.posts WHERE id = post_g5) IS NULL THEN
+      RAISE EXCEPTION 'FAIL G5: schedule write with metadata % did not commit', post_g5_meta;
+    END IF;
+  END LOOP;
+  SELECT count(*) INTO count_after FROM public.partner_webhook_deliveries
+   WHERE workspace_id IN (ws_a, ws_b);
+  IF count_after <> count_before THEN
+    RAISE EXCEPTION 'FAIL G5: malformed metadata emitted % delivery row(s), expected 0', count_after - count_before;
+  END IF;
+  RAISE NOTICE 'PASS G5: malformed selected_account_ids commits the schedule write and emits nothing';
+
+  -- ==========================================================================
+  -- T1..T3: partner_create_post ENFORCES tenancy itself (Codex review on PR
+  -- #125). The binding row it writes is the authorisation grant for every
+  -- /v1/posts route, so the function must refuse a cross-tenant pairing even
+  -- from a service-role caller that got it wrong. Each refusal must leave NO
+  -- posts row behind -- a refused create that still inserted would be worse
+  -- than an accepted one. G1 is the control: the same call with consistent
+  -- ids succeeds.
+  -- ==========================================================================
+  SELECT count(*) INTO count_before FROM public.posts WHERE caption LIKE 'tenancy-probe ' || nonce || '%';
+  -- T1: an account from workspace B under workspace A
+  BEGIN
+    PERFORM public.partner_create_post(ws_a, key_a, usr, 'tenancy-probe ' || nonce || ' T1',
+      ARRAY['facebook'], ARRAY[]::uuid[], ARRAY[acct_b], now() + interval '1 hour');
+    RAISE EXCEPTION 'FAIL T1: partner_create_post accepted an account from another workspace';
+  EXCEPTION WHEN foreign_key_violation THEN
+    NULL;
+  END;
+  -- T2: a key from workspace B under workspace A
+  BEGIN
+    PERFORM public.partner_create_post(ws_a, key_b, usr, 'tenancy-probe ' || nonce || ' T2',
+      ARRAY['facebook'], ARRAY[]::uuid[], ARRAY[acct_a1], now() + interval '1 hour');
+    RAISE EXCEPTION 'FAIL T2: partner_create_post accepted a key from another workspace';
+  EXCEPTION WHEN foreign_key_violation THEN
+    NULL;
+  END;
+  -- T3: a media file that is not in workspace A (a random uuid matches nothing)
+  BEGIN
+    PERFORM public.partner_create_post(ws_a, key_a, usr, 'tenancy-probe ' || nonce || ' T3',
+      ARRAY['facebook'], ARRAY[gen_random_uuid()], ARRAY[acct_a1], now() + interval '1 hour');
+    RAISE EXCEPTION 'FAIL T3: partner_create_post accepted a media id outside the workspace';
+  EXCEPTION WHEN foreign_key_violation THEN
+    NULL;
+  END;
+  -- T4: an empty target list is a check_violation, not a silent post with no targets
+  BEGIN
+    PERFORM public.partner_create_post(ws_a, key_a, usr, 'tenancy-probe ' || nonce || ' T4',
+      ARRAY['facebook'], ARRAY[]::uuid[], ARRAY[]::uuid[], NULL);
+    RAISE EXCEPTION 'FAIL T4: partner_create_post accepted an empty target list';
+  EXCEPTION WHEN check_violation THEN
+    NULL;
+  END;
+  SELECT count(*) INTO count_after FROM public.posts WHERE caption LIKE 'tenancy-probe ' || nonce || '%';
+  IF count_after <> count_before THEN
+    RAISE EXCEPTION 'FAIL T1-T4: a refused create still left % posts row(s) behind', count_after - count_before;
+  END IF;
+  RAISE NOTICE 'PASS T1-T4: partner_create_post refuses cross-tenant accounts, keys, media and empty targets, leaving no row';
+
   -- OCCURRENCE IDENTITY (O1, O2, O3)
   -- ==========================================================================
   -- O1: Rescheduling to a NEW time produces a SECOND delivery row (a new occurrence)
