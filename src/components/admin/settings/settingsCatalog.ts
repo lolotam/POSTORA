@@ -59,20 +59,75 @@ export const SETTINGS_SECTIONS = [
     title: "Scraping services",
     keywords: ["scraping", "scraper", "apify", "actor", "endpoint", "external services", "enrichment", "crawler", "brand data"],
   },
+  // One section per model category, in the order they appear as sub-tabs. Splitting the
+  // former single "AI models and providers" section is what lets each card own a sub-tab,
+  // and it also gives the search bar something to match: "embedding" and "transcription"
+  // hit nothing while all seven categories shared one keyword list.
   {
-    id: "ai-configuration",
+    id: "ai-search-models",
     tab: "ai",
-    title: "AI models and providers",
-    keywords: [
-      "ai", "model", "provider", "openai", "gemini", "google", "openrouter", "anthropic",
-      "api key", "fallback", "temperature", "caption", "hashtags", "image generation",
-    ],
+    title: "Search Models",
+    subTab: "Search Models",
+    keywords: ["search", "web search", "grounding", "perplexity", "browse", "model", "fallback"],
+  },
+  {
+    id: "ai-embedding-models",
+    tab: "ai",
+    title: "Embedding",
+    subTab: "Embedding",
+    keywords: ["embedding", "vector", "rag", "knowledge base", "dimensions", "similarity", "re-embed"],
   },
   {
     id: "ai-agent-models",
     tab: "ai",
-    title: "Messaging agent models",
+    title: "AI Agent",
+    subTab: "AI Agent",
     keywords: ["agent", "messaging", "whatsapp", "chat", "reply", "model", "conversation", "inbox"],
+  },
+  {
+    id: "ai-stt-models",
+    tab: "ai",
+    title: "Speech to Text",
+    subTab: "Speech to Text",
+    keywords: ["speech to text", "stt", "transcription", "transcribe", "voice note", "whisper", "audio"],
+  },
+  {
+    id: "ai-tts-models",
+    tab: "ai",
+    title: "Text to Speech",
+    subTab: "Text to Speech",
+    keywords: ["text to speech", "tts", "voice", "narration", "audio", "speak"],
+  },
+  {
+    id: "ai-video-models",
+    tab: "ai",
+    title: "Video Generation",
+    subTab: "Video Generation",
+    keywords: ["video", "video generation", "clip", "veo", "higgsfield", "motion"],
+  },
+  {
+    id: "ai-chat-models",
+    tab: "ai",
+    title: "Chat Models",
+    subTab: "Chat Models",
+    keywords: ["chat", "text", "caption", "hashtags", "completion", "gpt", "gemini", "claude", "prompt"],
+  },
+  {
+    id: "ai-image-models",
+    tab: "ai",
+    title: "Image Generation",
+    subTab: "Image Generation",
+    keywords: ["image", "image generation", "picture", "art", "dall-e", "flux", "render"],
+  },
+  {
+    id: "ai-providers",
+    tab: "ai",
+    title: "Providers and API keys",
+    subTab: "Providers",
+    keywords: [
+      "provider", "api key", "openai", "gemini", "google", "openrouter", "anthropic",
+      "connection", "test", "firecrawl", "apify", "scraping", "credentials",
+    ],
   },
   {
     id: "brand-intelligence",

@@ -27,6 +27,57 @@ export interface SearchableSection {
   title: string;
   /** Field labels and synonyms someone might type instead of the title. */
   keywords: readonly string[];
+  /**
+   * Label of the sub-tab this section sits behind, if any. Sections sharing a label
+   * share a panel; sections without one stack below the sub-tab strip.
+   */
+  subTab?: string;
+}
+
+export interface SubTabGroup<T> {
+  label: string;
+  sections: T[];
+}
+
+/**
+ * Splits sections into the sub-tabs they declare and the ones that stay stacked.
+ *
+ * Sub-tab order follows first appearance in the catalog, so the rendered strip is
+ * reordered by moving a section rather than by maintaining a second list that could
+ * drift out of step with it.
+ */
+export function groupSectionsBySubTab<T extends SearchableSection>(
+  sections: readonly T[],
+): { subTabs: SubTabGroup<T>[]; ungrouped: T[] } {
+  const subTabs: SubTabGroup<T>[] = [];
+  const byLabel = new Map<string, SubTabGroup<T>>();
+  const ungrouped: T[] = [];
+
+  for (const section of sections) {
+    if (!section.subTab) {
+      ungrouped.push(section);
+      continue;
+    }
+    let group = byLabel.get(section.subTab);
+    if (!group) {
+      group = { label: section.subTab, sections: [] };
+      byLabel.set(section.subTab, group);
+      subTabs.push(group);
+    }
+    group.sections.push(section);
+  }
+
+  return { subTabs, ungrouped };
+}
+
+/**
+ * Which sub-tab to show, derived rather than stored: a label the URL asks for that is
+ * not on offer — stale link, or filtered away by a search — falls back to the first one
+ * still standing instead of rendering an empty panel.
+ */
+export function resolveSubTab(available: readonly string[], requested: string | null): string | null {
+  if (requested && available.includes(requested)) return requested;
+  return available[0] ?? null;
 }
 
 /**

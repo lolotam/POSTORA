@@ -6,45 +6,40 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
+import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from '@/components/ui/dialog';
 import {
-  Activity, CheckCircle2, XCircle, MessageSquare, ImageIcon, AudioLines,
-  Video, Layers, Search, Mic, Loader2, Eye, EyeOff, KeyRound,
+  Activity, CheckCircle2, XCircle, Layers, Loader2, Eye, EyeOff, KeyRound,
 } from 'lucide-react';
-import {
-  useAIConfiguration, useSetDefaultModel, useSetFallbackModel, useToggleProvider,
-  useToggleModel, useTestConnection, useSetServiceKey, useTestService, useCheckServiceKey,
-} from '@/hooks/useAIConfiguration';
-import { Input } from '@/components/ui/input';
-import { DefaultModelSelector } from '@/components/admin/DefaultModelSelector';
-import { useSetFallback2Model, useSetModelAdminParams } from '@/hooks/useAIConfiguration';
 import { toast } from 'sonner';
-import type { AIProvider, AIModel, ModelCategory } from '@/hooks/useAIConfiguration';
-import { embeddingModelNote } from '@/hooks/ai-config/embeddingDimensions';
-import { reEmbedWarningFor, useEmbeddingColumnOwners } from '@/hooks/useEmbeddingColumnOwners';
-import { supabase } from '@/integrations/supabase/client';
+import {
+  useAIConfiguration, useToggleProvider, useToggleModel, useTestConnection,
+  useSetServiceKey, useTestService, useCheckServiceKey,
+} from '@/hooks/useAIConfiguration';
+import type { AIProvider } from '@/hooks/useAIConfiguration';
 
 function isOAuthProvider(provider: AIProvider | null) {
   return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
 }
 
-export function AIConfigurationTab() {
+/**
+ * Providers, their API keys, and the two non-model scraping services.
+ *
+ * These live in one panel rather than one per provider because they share state that
+ * cannot be split: the dialog holds whichever provider was clicked, and the key-status
+ * badge on every tile comes from a single `useCheckServiceKey` call over all codes.
+ */
+export function AiProvidersCard() {
   const queryClient = useQueryClient();
   const { data: aiConfig, isLoading } = useAIConfiguration();
-  const setDefaultModel = useSetDefaultModel();
-  const setFallbackModel = useSetFallbackModel();
-  const setFallback2Model = useSetFallback2Model();
-  const setModelAdminParams = useSetModelAdminParams();
   const toggleProvider = useToggleProvider();
   const toggleModel = useToggleModel();
   const testConnection = useTestConnection();
   const setServiceKey = useSetServiceKey();
   const testService = useTestService();
-  const { data: columnOwners = {} } = useEmbeddingColumnOwners();
 
-  // Build list of all provider codes for key status checking
   const allProviderCodes = [
     'firecrawl', 'apify',
     ...(aiConfig?.providers?.map(p => p.provider_code) || []),
@@ -55,7 +50,6 @@ export function AIConfigurationTab() {
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; latency?: number; error?: string }>>({});
   const [serviceTestResults, setServiceTestResults] = useState<Record<string, { success: boolean; latency?: number; error?: string } | null>>({});
 
-  // Provider dialog API key state
   const [providerApiKey, setProviderApiKey] = useState('');
   const [showProviderKey, setShowProviderKey] = useState(false);
   const [savingProviderKey, setSavingProviderKey] = useState(false);
@@ -83,64 +77,10 @@ export function AIConfigurationTab() {
       setTestResults(prev => ({ ...prev, [providerId]: { success: false } }));
       const result = await testConnection.mutateAsync({ provider_id: providerId });
       setTestResults(prev => ({ ...prev, [providerId]: result }));
-      result.success
-        ? toast.success(`Connection successful (${result.latency}ms)`)
-        : toast.error(`Connection failed: ${result.error}`);
+      if (result.success) toast.success(`Connection successful (${result.latency}ms)`);
+      else toast.error(`Connection failed: ${result.error}`);
     } catch {
       toast.error('Connection test failed');
-    }
-  };
-
-  // Typed as ModelCategory, not a hand-copied union: the local unions had
-  // already drifted (they omitted 'agent' even though default_ai_model_agent*
-  // rows exist in production).
-  const handleSetCategoryDefault = async (category: ModelCategory, providerCode: string, modelId: string) => {
-    // Embedding is the one category where changing the model destroys value:
-    // the stored vectors stop being comparable to new queries. The edge function
-    // refuses, but only after the click — ask first, and say what it costs.
-    if (category === 'embedding') {
-      const warning = reEmbedWarningFor(
-        { provider_code: providerCode, model_id: modelId },
-        aiConfig?.models || [],
-        columnOwners,
-        aiConfig?.providers || [],
-      );
-      if (warning && !window.confirm(`${warning}\n\nSwitch anyway?`)) return;
-    }
-    try {
-      await setDefaultModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category });
-      toast.success('Default model updated');
-    } catch {
-      toast.error('Failed to update default');
-    }
-  };
-
-  const handleSetCategoryFallback2 = async (category: ModelCategory, providerCode: string, modelId: string) => {
-    setFallback2Model.mutate(
-      { provider_code: providerCode, model_id: modelId, category },
-      {
-        onSuccess: () => toast.success('Second fallback updated'),
-        onError: (error: Error) => toast.error(error.message),
-      },
-    );
-  };
-
-  const handleSetAdminParams = (modelRowId: string, params: Record<string, string | number | boolean>) => {
-    setModelAdminParams.mutate(
-      { model_row_id: modelRowId, admin_params: params },
-      {
-        onSuccess: () => toast.success('Model parameters saved'),
-        onError: (error: Error) => toast.error(error.message),
-      },
-    );
-  };
-
-  const handleSetCategoryFallback = async (category: ModelCategory, providerCode: string, modelId: string) => {
-    try {
-      await setFallbackModel.mutateAsync({ provider_code: providerCode, model_id: modelId, category });
-      toast.success('Fallback model updated');
-    } catch {
-      toast.error('Failed to update fallback');
     }
   };
 
@@ -179,9 +119,6 @@ export function AIConfigurationTab() {
 
   const providers = aiConfig?.providers || [];
   const models = aiConfig?.models || [];
-  const categoryDefaults = aiConfig?.categoryDefaults || { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
-  const categoryFallbacks = aiConfig?.categoryFallbacks || { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
-  const categoryFallbacks2 = aiConfig?.categoryFallbacks2 || { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
 
   if (providers.length === 0) {
     return (
@@ -205,26 +142,6 @@ export function AIConfigurationTab() {
 
   return (
     <div className="space-y-6">
-      {/* Category Default Selectors */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <DefaultModelSelector category="chat" capability="chat" title="Chat Models" description="Default model for AI chat conversations" icon={MessageSquare}
-          providers={providers} models={models} currentDefault={categoryDefaults.chat} currentFallback={categoryFallbacks.chat} onSetDefault={(pc, mid) => handleSetCategoryDefault('chat', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('chat', pc, mid)} currentFallback2={categoryFallbacks2.chat} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('chat', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
-        <DefaultModelSelector category="image" capability="image" title="Image Generation" description="Default model for AI image generation" icon={ImageIcon}
-          providers={providers} models={models} currentDefault={categoryDefaults.image} currentFallback={categoryFallbacks.image} onSetDefault={(pc, mid) => handleSetCategoryDefault('image', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('image', pc, mid)} currentFallback2={categoryFallbacks2.image} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('image', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
-        <DefaultModelSelector category="tts" capability="tts" title="Text to Speech" description="Default model for text-to-speech conversion" icon={AudioLines}
-          providers={providers} models={models} currentDefault={categoryDefaults.tts} currentFallback={categoryFallbacks.tts} onSetDefault={(pc, mid) => handleSetCategoryDefault('tts', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('tts', pc, mid)} currentFallback2={categoryFallbacks2.tts} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('tts', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
-        <DefaultModelSelector category="video" capability="video" title="Video Generation" description="Default model for AI video generation" icon={Video}
-          providers={providers} models={models} currentDefault={categoryDefaults.video} currentFallback={categoryFallbacks.video} onSetDefault={(pc, mid) => handleSetCategoryDefault('video', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('video', pc, mid)} currentFallback2={categoryFallbacks2.video} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('video', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
-        <DefaultModelSelector category="search" capability="search" title="Search Models" description="Default model for AI-powered web search" icon={Search}
-          providers={providers} models={models} currentDefault={categoryDefaults.search} currentFallback={categoryFallbacks.search} onSetDefault={(pc, mid) => handleSetCategoryDefault('search', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('search', pc, mid)} currentFallback2={categoryFallbacks2.search} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('search', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
-        <DefaultModelSelector category="stt" capability="stt" title="Speech to Text" description="Default model for voice-to-text transcription" icon={Mic}
-          providers={providers} models={models} currentDefault={categoryDefaults.stt} currentFallback={categoryFallbacks.stt} onSetDefault={(pc, mid) => handleSetCategoryDefault('stt', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('stt', pc, mid)} currentFallback2={categoryFallbacks2.stt} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('stt', pc, mid)} onSetAdminParams={handleSetAdminParams} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending} />
-        <DefaultModelSelector category="embedding" capability="embedding" title="Embedding Models" description="Default vector model for Knowledge Base & RAG search" icon={Layers}
-          providers={providers} models={models} currentDefault={categoryDefaults.embedding} currentFallback={categoryFallbacks.embedding} onSetDefault={(pc, mid) => handleSetCategoryDefault('embedding', pc, mid)} onSetFallback={(pc, mid) => handleSetCategoryFallback('embedding', pc, mid)} currentFallback2={categoryFallbacks2.embedding} onSetFallback2={(pc, mid) => handleSetCategoryFallback2('embedding', pc, mid)} isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
-          modelNote={embeddingModelNote} />
-      </div>
-
-      {/* Providers Grid */}
       <Card>
         <CardHeader>
           <CardTitle>AI Providers</CardTitle>
@@ -294,8 +211,8 @@ export function AIConfigurationTab() {
             <DialogTitle className="flex items-center gap-2">
               {selectedProvider?.name}
               <Badge variant="outline" className="text-xs">{selectedProvider?.provider_code}</Badge>
-              {selectedProvider && (serviceKeyStatus?.[selectedProvider.provider_code] 
-                ? <CheckCircle2 className="w-4 h-4 text-primary" /> 
+              {selectedProvider && (serviceKeyStatus?.[selectedProvider.provider_code]
+                ? <CheckCircle2 className="w-4 h-4 text-primary" />
                 : <XCircle className="w-4 h-4 text-destructive" />
               )}
             </DialogTitle>
@@ -316,7 +233,7 @@ export function AIConfigurationTab() {
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <KeyRound className="w-3.5 h-3.5" />
                 <span>API Key ({selectedProvider.api_key_env_var})</span>
-                {serviceKeyStatus?.[selectedProvider.provider_code] 
+                {serviceKeyStatus?.[selectedProvider.provider_code]
                   ? <Badge variant="outline" className="text-[10px] text-primary border-primary/30">Configured</Badge>
                   : <Badge variant="outline" className="text-[10px] text-destructive border-destructive/30">Missing</Badge>
                 }
@@ -386,14 +303,15 @@ export function AIConfigurationTab() {
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <ExternalServiceCard name="Firecrawl" description="Website scraping (markdown extraction)" providerCode="firecrawl"
+            <ExternalServiceCard name="Firecrawl" description="Website scraping (markdown extraction)"
               hasKey={serviceKeyStatus?.firecrawl ?? false} isSaving={setServiceKey.isPending} isTesting={testService.isPending}
               testResult={serviceTestResults.firecrawl ?? null}
               onTest={async () => {
                 try {
                   const r = await testService.mutateAsync({ provider_code: 'firecrawl' });
                   setServiceTestResults(p => ({ ...p, firecrawl: r }));
-                  r.success ? toast.success(`Firecrawl connected (${r.latency}ms)`) : toast.error(r.error || 'Failed');
+                  if (r.success) toast.success(`Firecrawl connected (${r.latency}ms)`);
+                  else toast.error(r.error || 'Failed');
                 } catch { toast.error('Test failed'); }
               }}
               onSaveKey={async (key) => {
@@ -403,14 +321,15 @@ export function AIConfigurationTab() {
                   else toast.error(r.error || 'Invalid key');
                 } catch { toast.error('Failed to save key'); }
               }} />
-            <ExternalServiceCard name="Apify" description="Social media scraping (LinkedIn, Instagram)" providerCode="apify"
+            <ExternalServiceCard name="Apify" description="Social media scraping (LinkedIn, Instagram)"
               hasKey={serviceKeyStatus?.apify ?? false} isSaving={setServiceKey.isPending} isTesting={testService.isPending}
               testResult={serviceTestResults.apify ?? null}
               onTest={async () => {
                 try {
                   const r = await testService.mutateAsync({ provider_code: 'apify' });
                   setServiceTestResults(p => ({ ...p, apify: r }));
-                  r.success ? toast.success(`Apify connected (${r.latency}ms)`) : toast.error(r.error || 'Failed');
+                  if (r.success) toast.success(`Apify connected (${r.latency}ms)`);
+                  else toast.error(r.error || 'Failed');
                 } catch { toast.error('Test failed'); }
               }}
               onSaveKey={async (key) => {
@@ -427,8 +346,8 @@ export function AIConfigurationTab() {
   );
 }
 
-function ExternalServiceCard({ name, description, providerCode, hasKey, onSaveKey, onTest, isSaving, isTesting, testResult }: {
-  name: string; description: string; providerCode: string;
+function ExternalServiceCard({ name, description, hasKey, onSaveKey, onTest, isSaving, isTesting, testResult }: {
+  name: string; description: string;
   hasKey: boolean; onSaveKey: (key: string) => void; onTest: () => void;
   isSaving: boolean; isTesting: boolean;
   testResult: { success: boolean; latency?: number; error?: string } | null;

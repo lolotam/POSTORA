@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   countMatchesByTab,
+  groupSectionsBySubTab,
   readSettingsTab,
+  resolveSubTab,
   searchSettings,
   type SearchableSection,
 } from "@/lib/settingsSearch";
@@ -60,6 +62,42 @@ describe("readSettingsTab", () => {
   });
 });
 
+describe("groupSectionsBySubTab", () => {
+  const GROUPED: SearchableSection[] = [
+    { id: "chat", tab: "ai", title: "Chat", keywords: ["chat"], subTab: "Chat Models" },
+    { id: "image", tab: "ai", title: "Image", keywords: ["image"], subTab: "Image Generation" },
+    { id: "notes", tab: "ai", title: "Notes", keywords: ["notes"] },
+    { id: "chat-extra", tab: "ai", title: "Chat extra", keywords: ["extra"], subTab: "Chat Models" },
+  ];
+
+  it("keeps sections without a sub-tab out of the strip so they stay stacked", () => {
+    expect(groupSectionsBySubTab(GROUPED).ungrouped.map((s) => s.id)).toEqual(["notes"]);
+  });
+
+  it("collects every section sharing a label into one panel", () => {
+    const chat = groupSectionsBySubTab(GROUPED).subTabs.find((g) => g.label === "Chat Models");
+    expect(chat?.sections.map((s) => s.id)).toEqual(["chat", "chat-extra"]);
+  });
+
+  it("orders sub-tabs by first appearance, so reordering the catalog reorders the strip", () => {
+    expect(groupSectionsBySubTab(GROUPED).subTabs.map((g) => g.label)).toEqual([
+      "Chat Models",
+      "Image Generation",
+    ]);
+  });
+});
+
+describe("resolveSubTab", () => {
+  it.each([
+    [["A", "B"], "B", "B", "an offered sub-tab is honoured"],
+    [["A", "B"], "Z", "A", "a stale label falls back rather than rendering an empty panel"],
+    [["A", "B"], null, "A", "no request opens the first sub-tab"],
+    [[], "A", null, "nothing on offer resolves to nothing"],
+  ])("%j + %j resolves to %j — %s", (available, requested, expected) => {
+    expect(resolveSubTab(available as string[], requested as string | null)).toBe(expected);
+  });
+});
+
 describe("the settings catalog", () => {
   // The catalog is what the page renders from, so a duplicate id would silently render
   // one section twice under the same React key.
@@ -73,4 +111,33 @@ describe("the settings catalog", () => {
       expect(section.keywords.length, `${section.id} has no keywords`).toBeGreaterThan(0);
     }
   });
+
+  it("offers the AI tab's sub-tabs in the order an admin reads them", () => {
+    const aiSections = SETTINGS_SECTIONS.filter((section) => section.tab === "ai");
+    expect(groupSectionsBySubTab(aiSections).subTabs.map((group) => group.label)).toEqual([
+      "Search Models",
+      "Embedding",
+      "AI Agent",
+      "Speech to Text",
+      "Text to Speech",
+      "Video Generation",
+      "Chat Models",
+      "Image Generation",
+      "Providers",
+    ]);
+  });
+
+  it.each([
+    ["embedding", "ai-embedding-models"],
+    ["transcription", "ai-stt-models"],
+    ["video generation", "ai-video-models"],
+    ["hashtags", "ai-chat-models"],
+  ])(
+    // These queries matched nothing while all seven categories shared one section's
+    // keyword list, which is what splitting them apart was meant to fix.
+    "search for %j reaches %j",
+    (query, expectedId) => {
+      expect(searchSettings(SETTINGS_SECTIONS, query).map((s) => s.id)).toContain(expectedId);
+    },
+  );
 });
