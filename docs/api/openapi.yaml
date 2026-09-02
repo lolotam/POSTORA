@@ -1108,14 +1108,37 @@ components:
       type: string
       description: |
         An event whose transition, stable identifier and **transactional**
-        producer are all defined (decision D6). Phase 5 ships the delivery
-        substrate and certifies exactly one event; Phase 6 and Phase 8 add
-        entries one at a time.
+        producer are all defined (decision D6). Phase 5 shipped the delivery
+        substrate and certified `webhook.test`; Phase 6 certified the six
+        messaging/account events below. Phase 8 will add the publishing
+        events.
 
         MUST equal `CERTIFIED_EVENT_TYPES` in
         `supabase/functions/_shared/partnerWebhookEvents.ts`, which the
         `partner_webhooks.events` CHECK constraint also enforces.
-      enum: [webhook.test]
+
+        Latency and availability are PER EVENT, not global (D6):
+
+        | Event | Source | Latency |
+        |---|---|---|
+        | `webhook.test` | this API | delivered on the worker's cadence after queueing |
+        | `message.received` | Meta / Evolution webhook | near-real-time |
+        | `message.accepted` | the dispatch settle | near-real-time; an echo-reconciled send reports at the provider's first status callback |
+        | `message.delivered` / `.read` / `.failed` | Meta status callback | near-real-time — **WhatsApp Cloud accounts ONLY; these events never fire for Evolution QR accounts** |
+        | `account.reauthorization_required` | the token-refresh cron | **bounded by the cron cadence — not real-time** |
+
+        `message.accepted` fires for **Partner-API-originated sends only**.
+        Messages sent from the Postora UI, broadcasts, scheduled sends and
+        automations do not produce it (spec D6 names the partner send path as
+        the producer).
+      enum:
+        - webhook.test
+        - message.received
+        - message.accepted
+        - message.delivered
+        - message.read
+        - message.failed
+        - account.reauthorization_required
 
     WebhookCreateRequest:
       type: object
@@ -1177,6 +1200,189 @@ components:
           description: |
             Identifies the transition, not the resource. Exactly one delivery
             row exists per (subscription, occurrence).
+
+    # ---- Webhook event delivery payloads (Phase 6) -------------------------
+    # The body POSTed to the partner's URL for every event type. Signed with
+    # X-Postora-Signature; see the Webhook schema and decision D5.
+
+    WebhookEventDelivery:
+      type: object
+      description: |
+        The envelope POSTed to the subscription's URL for every event. `id`
+        (`evt_` + the delivery row's id) is immutable across retries — one row
+        exists per (subscription, occurrence), so deduplicating on `id` is
+        deduplicating on the occurrence for YOUR subscription. `data`'s shape
+        depends on `type`; see the WebhookEventData* schemas.
+      required: [id, type, occurrence_id, data]
+      properties:
+        id:
+          type: string
+          description: The delivery's id, prefix `evt_`. Immutable across retries.
+        type:
+          $ref: '#/components/schemas/CertifiedEventType'
+        occurrence_id:
+          type: string
+          description: |
+            Identifies the TRANSITION, not the resource — e.g.
+            `message.delivered:wamid.X` and `message.read:wamid.X` for one
+            message are two occurrences. The event type is part of the key
+            precisely so the three status transitions of one message can never
+            collide.
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/WebhookEventDataTest'
+            - $ref: '#/components/schemas/WebhookEventDataMessageReceived'
+            - $ref: '#/components/schemas/WebhookEventDataMessageAccepted'
+            - $ref: '#/components/schemas/WebhookEventDataMessageStatus'
+            - $ref: '#/components/schemas/WebhookEventDataReauthorization'
+
+    WebhookEventDataTest:
+      type: object
+      required: [type, webhook_id, requested_at]
+      properties:
+        type:
+          type: string
+          enum: [webhook.test]
+        webhook_id:
+          $ref: '#/components/schemas/PrefixedId'
+        requested_at:
+          type: string
+          format: date-time
+
+    WebhookEventDataMessageReceived:
+      type: object
+      description: |
+        `data` for `message.received`. Fired when an inbound WhatsApp message
+        is persisted, for BOTH Cloud API and Evolution QR accounts.
+        Near-real-time (webhook-sourced).
+
+        The raw `wa_…` conversation key is deliberately not published (it
+        embeds a customer phone number); correlate by `account_id` plus
+        `message.from_phone`.
+      required: [account_id, platform, message]
+      properties:
+        account_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+        platform:
+          type: string
+          enum: [whatsapp]
+        message:
+          type: object
+          required: [id, direction, type, timestamp]
+          properties:
+            id:
+              type: string
+              description: The provider message id (wamid / Evolution id).
+            direction:
+              type: string
+              enum: [inbound]
+            from_phone:
+              type: [string, 'null']
+            from_name:
+              type: [string, 'null']
+            to_phone:
+              type: [string, 'null']
+            type:
+              type: string
+              description: The provider's message type (text, image, audio, …).
+            text:
+              type: [string, 'null']
+            media_url:
+              type: [string, 'null']
+              description: Resolved for live Cloud messages; null for history imports (expired media).
+            media_type:
+              type: [string, 'null']
+            timestamp:
+              type: string
+              format: date-time
+
+    WebhookEventDataMessageAccepted:
+      type: object
+      description: |
+        `data` for `message.accepted`. Fired when the provider accepts a
+        **Partner-API-originated** send (the dispatch settle). Sends made from
+        the Postora UI, broadcasts, schedules and automations do not produce
+        this event. For a send whose attempt failed after the provider call,
+        this event arrives on the provider's first status callback instead —
+        same occurrence id either way.
+      required: [account_id, platform, message_id, source]
+      properties:
+        account_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+        platform:
+          type: string
+          enum: [whatsapp]
+        message_id:
+          type: string
+          description: The provider message id (wamid).
+        source:
+          type: string
+          enum: [partner_api]
+
+    WebhookEventDataMessageStatus:
+      type: object
+      description: |
+        `data` for `message.delivered`, `message.read` and `message.failed`.
+        Provider status callback, near-real-time.
+
+        **WhatsApp Cloud accounts ONLY.** These three events are structurally
+        unavailable for Evolution QR accounts — Evolution does not route
+        provider statuses through the Cloud webhook — so a subscription
+        filtered to a QR account will never receive them.
+      required: [account_id, platform, message_id, status, timestamp]
+      properties:
+        account_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+        platform:
+          type: string
+          enum: [whatsapp]
+        message_id:
+          type: string
+        status:
+          type: string
+          enum: [delivered, read, failed]
+        timestamp:
+          type: string
+          format: date-time
+        error:
+          type: [object, 'null']
+          description: Present for `failed`, null otherwise.
+          required: [code, message]
+          properties:
+            code:
+              type: [string, 'null']
+              description: The provider error code, when one was supplied.
+            message:
+              type: [string, 'null']
+              description: The provider error message or Postora's friendly mapping.
+
+    WebhookEventDataReauthorization:
+      type: object
+      description: |
+        `data` for `account.reauthorization_required`. Fired when an account's
+        `needs_reauth` flips false → true. One occurrence per TRANSITION: an
+        account that is flagged, repaired by a reconnect, and flagged again
+        produces two distinct events.
+
+        Latency: **bounded by the token-refresh cron's cadence** — this is a
+        polled transition, not a webhook-sourced one, and is the one Phase 6
+        event that is not near-real-time.
+      required: [account_id, platform, failure_count]
+      properties:
+        account_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+        platform:
+          type: string
+          description: The account's platform (whatsapp, facebook, …).
+        failure_count:
+          type: integer
+        last_refresh_error:
+          type: [string, 'null']
+          description: Truncated to 300 characters.
 
     CollectionEnvelope:
       type: object

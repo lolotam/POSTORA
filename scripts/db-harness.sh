@@ -105,6 +105,7 @@ SUITES=(
   partner_api_dispatch_intents.sql
   partner_media_tenancy.sql
   partner_webhook_outbox.sql
+  partner_webhook_phase6_events.sql
   whatsapp_workspace_crm.sql
   import_whatsapp_contacts_to_workspace.sql
 )

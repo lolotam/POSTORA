@@ -10,19 +10,43 @@
  * that stops this phase becoming an implicit promise.
  *
  * D6 ships an event only once its transition, stable identifier and
- * TRANSACTIONAL producer are all defined. This phase certifies exactly one,
- * and `webhook.test` is certifiable precisely because it has no external
- * producer: its transition is "a partner asked", its occurrence id is minted
- * at request time, and its enqueue is the request's own write. There is
- * nothing to crash between.
+ * TRANSACTIONAL producer are all defined. `webhook.test` is certifiable
+ * precisely because it has no external producer: its transition is "a partner
+ * asked", its occurrence id is minted at request time, and its enqueue is the
+ * request's own write. There is nothing to crash between.
  *
- * Phase 6 and Phase 8 add entries ONE CERTIFIED EVENT AT A TIME. A partner who
- * cannot subscribe to `message.received` cannot build against it and discover
- * six weeks later that it never fired. The database CHECK on
- * partner_webhooks.events enforces the same list, so a widening needs both a
- * migration and this constant -- deliberately two deliberate acts.
+ * Phase 6 (2026-09-02) certifies six more, each via a SECURITY DEFINER SQL
+ * function that performs the state change AND the fan-out in one statement --
+ * see migration 20260902130000 and the Phase 6 decision record:
+ *
+ *   message.received                 partner_upsert_whatsapp_message /
+ *                                    partner_import_whatsapp_message_batch
+ *   message.accepted                 partner_settle_dispatch_intent_sent /
+ *                                    partner_reconcile_dispatch_intent_sent
+ *   message.delivered/.read/.failed  partner_apply_whatsapp_message_status
+ *                                    (WhatsApp Cloud only -- unavailable in
+ *                                    Evolution QR mode)
+ *   account.reauthorization_required partner_record_refresh_failure
+ *
+ * account.connected / account.disconnected are deliberately STILL ABSENT: the
+ * activation transition has 24 genuine commit points across 15 files
+ * (ledger, resolved inventory) and the correct mechanism is a database
+ * trigger, not hand-wired enqueues. Advertising them before that exists
+ * would be the implicit promise this list exists to prevent.
+ *
+ * The database CHECK on partner_webhooks.events enforces the same list, so a
+ * widening needs both a migration and this constant -- deliberately two
+ * deliberate acts.
  */
-export const CERTIFIED_EVENT_TYPES = ["webhook.test"] as const;
+export const CERTIFIED_EVENT_TYPES = [
+  "webhook.test",
+  "message.received",
+  "message.accepted",
+  "message.delivered",
+  "message.read",
+  "message.failed",
+  "account.reauthorization_required",
+] as const;
 
 export type CertifiedEventType = typeof CERTIFIED_EVENT_TYPES[number];
 

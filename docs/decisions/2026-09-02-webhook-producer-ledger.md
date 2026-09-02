@@ -2,6 +2,9 @@
 
 **Date:** 2026-09-02 · **Owner:** Partner API programme · **Deliverable:** Phase 5.8
 **Status:** inventory complete; **one row of D6's producer table is wrong** and is corrected here
+**Updated 2026-09-02 (Phase 6):** five rows completed and shipped; the activation inventory is
+resolved below. Design record for the shipped rows:
+`2026-09-02-phase6-messaging-account-events.md`.
 
 **Companion to** `docs/decisions/2026-09-02-d5-webhook-substrate.md`.
 
@@ -65,6 +68,52 @@ that only `handleRefreshSuccess` may clear the health columns.
 
 ### `account.connected` / `.disconnected` — activation transitions
 
+**RESOLVED 2026-09-02 (Phase 6)** — every candidate site was READ, not grepped. The original
+candidate framing is kept below for audit; the resolution is:
+
+**Activation (`is_active` → true): 24 genuine commit points across 15 files.**
+
+| File | Genuine activation writes |
+|---|---|
+| `bluesky-oauth/index.ts` | 2 upserts (OAuth :318, app-password :611) |
+| `facebook-oauth/index.ts` | 3 (instagram accountData :117, page upserts :742, :934) |
+| `instagram-business-oauth/index.ts` | 1 upsert (:211) |
+| `instagram-oauth/index.ts` | 1 (:209) |
+| `linkedin-oauth/index.ts` | 1 upsert (:469) |
+| `pinterest-oauth/index.ts` | 2 (upsert :125, reconnect update :214) |
+| `reddit-oauth/index.ts` | 1 upsert (:91) |
+| `threads-oauth/index.ts` | 1 upsert (:276) |
+| `tiktok-oauth/index.ts` | 2 (upsert :126, reconnect update :233) |
+| `twitter-oauth/index.ts` | 2 (reconnect update :477, upsert :508) |
+| `whatsapp-oauth/index.ts` | 2 (reconnect update :385, insert :400) |
+| `youtube-oauth/index.ts` | 1 upsert (:416) |
+| `_shared/whatsappDisconnect.ts` | 1 (the reconnect's reactivation update :201) |
+| `_shared/evolutionQrAccount.ts` | 1 conditional update (:133, the non-claimsIdentity `open` path) |
+| `activate_evolution_qr_account()` (SQL RPC) | **3 branches** (:77, :86, :160 of migration 20260824000000) |
+
+19 statements in the twelve OAuth callbacks, the WhatsApp reconnect, the Evolution `open` path,
+and three UPDATE branches inside the SQL RPC — 24 in total.
+
+**Not activation writers** (the candidates that fell out on reading): `higgsfield-oauth` (its
+`is_active` literals write `ai_models`), `n8n-api` (its `is_active: true` is an `app_settings`
+webhook value; its other hits are query filters). `whatsapp-evolution-bridge:206` INSERTs the
+provisional row `is_active: false` — a born-inactive placeholder, not a disconnection.
+
+**Deactivation (`is_active` → false): 3 genuine commit points** — `_shared/whatsappDisconnect.ts`
+(the mandatory deactivation), `_shared/evolutionQrAccount.ts` (Evolution `close`), and the
+duplicate-row retirement inside `activate_evolution_qr_account()`.
+
+**Conclusion, and why neither event is certified:** 21 statements with per-provider payloads is
+not a checklist, and a hand-wired certification rots the moment a new OAuth callback lands
+without its enqueue. The correct mechanism is a **database trigger** on the
+`is_active IS DISTINCT FROM` transition calling `partner_emit_webhook_event` — transactional by
+construction, covering writers that do not exist yet. Proposed in the Phase 6 design record
+(§5), deliberately not built in Phase 6. Until it exists, both events stay off both allowlists.
+
+---
+
+*(original Phase 5 framing, kept for audit:)*
+
 | | |
 |---|---|
 | Files carrying an `is_active: true` literal | **16** — every OAuth callback plus `_shared/evolutionQrAccount.ts`, `_shared/whatsappDisconnect.ts`, `n8n-api`, `higgsfield-oauth` |
@@ -73,10 +122,10 @@ that only `handleRefreshSuccess` may clear the health columns.
 **Deliberately stated as candidates, not as producers.** Some of those 16 are write payloads and
 some are query filters, and separating them needs each call site read rather than grepped — the
 literal sits many lines from its `.insert(`/`.update(`, so no pattern decides it. Resolving the
-exact set is Phase 6's first task, and this row exists to say that it is *unresolved* rather than
+exact set was Phase 6's first task, and this row existed to say it was *unresolved* rather than
 to guess a number.
 
-What the count already settles is the only thing Phase 5 needs from it: this transition has
+What the count already settled was the only thing Phase 5 needed from it: this transition has
 **many independent commit points**, so "enqueue transactionally at every producer" is a sentence
 here, not a checklist. The finding that the UI had wired only *one* of the two WhatsApp disconnect
 paths is the same shape of defect one level down.
@@ -112,23 +161,26 @@ assumption.
 ## 2. The ledger
 
 One row per **(event type, writer path)**. Only a row that is complete in every column may be
-advertised.
+advertised. **Rows marked ✅ (2026-09-02, Phase 6) are shipped** — migration
+`20260902130000_partner_webhook_phase6_events.sql`, SQL proof
+`supabase/tests/partner_webhook_phase6_events.sql`.
 
 | Event | Transition | Writer path | Occurrence ID | Transaction mechanism | Crash test | Advertised |
 |---|---|---|---|---|---|---|
 | `webhook.test` | A partner asked | `partner-api/v1/webhooks.ts` → `enqueuePartnerWebhookEvent` | `webhook.test:<uuid>` minted per request | **The enqueue IS the transition.** There is no state change to crash between — which is exactly why this is the one event Phase 5 can certify | Not required: no window exists | ✅ **Yes** |
-| `account.reauthorization_required` | `needs_reauth` false → true | `refresh-tokens/index.ts:355` | `account.reauthorization_required:<account_id>:<transition timestamp>` | ❌ **Not built.** Needs a SECURITY DEFINER function that flips the flag and enqueues in one statement | ❌ | ❌ No |
-| `account.connected` | `is_active` → true | **Unresolved — 16 candidate files** (see above) | — | ❌ Not built | ❌ | ❌ No |
-| `account.disconnected` | `is_active` → false | **4 paths** | — | ❌ Not built | ❌ | ❌ No |
-| `message.received` | Inbound row committed | `whatsapp-webhook:451`, `:765` (inbound rows), `whatsapp-evolution-webhook:123` | `message.received:<provider message id>` | ❌ Not built | ❌ | ❌ No |
-| `message.accepted` | Provider accepted a send | **12 outbound sites** | `message.accepted:<wamid>` | ❌ Not built | ❌ | ❌ No |
-| `message.delivered` / `.read` / `.failed` | Provider status callback | `whatsapp-webhook` status handler | `<event_type>:<wamid>` — **the type is part of the key**, or the three collide on one provider id | ❌ Not built | ❌ | ❌ No |
+| `message.received` | Inbound row committed | `whatsapp-webhook` live persist and `whatsapp-evolution-webhook` persist → `partner_upsert_whatsapp_message`; history bulk upsert → `partner_import_whatsapp_message_batch` (emits for inserted **inbound** rows only — the :765 trap) | `message.received:<provider message id>` | ✅ `SECURITY DEFINER` function: the `(user_id, message_id)` upsert and the fan-out in ONE statement; a duplicate inserts nothing and emits nothing | ✅ SQL suite: both directions (committed insert carries its delivery; rolled-back insert leaves none); outbound rows through the same producers emit ZERO | ✅ **Yes** (Phase 6) |
+| `message.accepted` | Provider accepted a **partner-originated** send | The D13 seam: `partnerDispatch.ts` → `partner_settle_dispatch_intent_sent` (intended→sent) and `partner_reconcile_dispatch_intent_sent` (echo reconcile) | `message.accepted:<wamid>` | ✅ The intent CAS and the fan-out in ONE statement; the settle and the echo share the occurrence id, so a crashed attempt's event arrives via the echo instead | ✅ SQL suite: settle both directions; reconcile-after-settle adds nothing (anchor absorbs); an `intended` row's echo produces the event | ✅ **Yes, scoped to Partner-API sends.** The other 11 outbound `whatsapp_messages` writers are NOT producers (D6 names the partner send path); documented as such, not silently omitted |
+| `message.delivered` / `.read` / `.failed` | Provider status callback (WhatsApp Cloud ONLY; structurally unavailable in Evolution QR mode) | `whatsapp-webhook` status handler → `partner_apply_whatsapp_message_status` | `<event_type>:<wamid>` — **the type is part of the key** | ✅ The status UPDATE and the fan-out in ONE statement; a `sent` status emits nothing (D6 R1) | ✅ SQL suite: one wamid through delivered→read→failed is three distinct rows per subscription; `sent` emits ZERO (with a delivered control); rollback leaves neither row nor delivery | ✅ **Yes** (Phase 6) |
+| `account.reauthorization_required` | `needs_reauth` false → true | `refresh-tokens` `handleRefreshFailure` → `partner_record_refresh_failure` (the ONE writer; D6's `check-connection-health` was wrong — it writes nothing) | `account.reauthorization_required:<account_id>:<epoch_us>` — the timestamp distinguishes flip→repair→flip | ✅ The whole failure-record write and the fan-out in ONE statement; the escalation is guarded on the PREVIOUS value, so a cron retry against a flagged account is not a transition | ✅ SQL suite: both directions; re-escalation is a no-op; flip→repair→flip yields two DISTINCT occurrences | ✅ **Yes** (Phase 6) |
+| `account.connected` | `is_active` → true | **Resolved above: 24 commit points across 15 files** (incl. 3 branches inside a SQL RPC) | — | ❌ Not built. A per-statement enqueue would rot on the next OAuth callback; a database TRIGGER on the transition is the correct mechanism — proposed in the Phase 6 design record §5, not built | ❌ | ❌ No |
+| `account.disconnected` | `is_active` → false | **Resolved above: 3 commit points** (`whatsappDisconnect`, Evolution `close`, the RPC's duplicate retirement) | — | ❌ Not built; same trigger proposal | ❌ | ❌ No |
 | `post.published` / `.failed` | Terminal `platform_posts` status | 3 functions; needs the D9 seam | — | ❌ Not built | ❌ | ❌ No |
 
 **Every "no" is enforced, not merely intended.** `partner_webhooks.events` carries a CHECK
-constraint listing the certified events, and `CERTIFIED_EVENT_TYPES` carries the same list in
-TypeScript. A partner cannot subscribe to a row that is not complete above, so an uncertified
-event cannot be built against and later discovered never to fire.
+constraint (now `partner_webhooks_events_certified`) listing the certified events, and
+`CERTIFIED_EVENT_TYPES` carries the same list in TypeScript. A partner cannot subscribe to a row
+that is not complete above, so an uncertified event cannot be built against and later discovered
+never to fire.
 
 ---
 

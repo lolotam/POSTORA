@@ -167,7 +167,7 @@ export function createDispatchHarness(statePath: string | null): DispatchHarness
 
   // deno-lint-ignore no-explicit-any
   const admin: any = {
-    rpc(name: string, _params: unknown) {
+    rpc(name: string, params: unknown) {
       if (name === "reserve_partner_quota") {
         mutate((s) => {
           s.quotaReserved += 1;
@@ -181,6 +181,49 @@ export function createDispatchHarness(statePath: string | null): DispatchHarness
           s.log.push("quota-released");
         });
         return Promise.resolve({ error: null });
+      }
+      // Phase 6: the settle and the reconcile became single-statement RPCs
+      // (state change + webhook fan-out in one call). The stub mirrors the
+      // SQL CAS semantics so the dispatch and crash tests keep asserting
+      // real transitions. `enqueued: 0` is honest -- no webhook tables exist
+      // in this harness; the enqueue half is proven by the SQL suite
+      // (supabase/tests/partner_webhook_phase6_events.sql).
+      if (name === "partner_settle_dispatch_intent_sent") {
+        const p = params as { p_intent_id: string; p_wamid: string; p_http_status: number; p_response_body: unknown };
+        let settled = false;
+        mutate((s) => {
+          const row = s.intents.find((r) => r.id === p.p_intent_id);
+          // Compare-and-set, like the SQL WHERE state = 'intended'.
+          if (row && row.state === "intended") {
+            Object.assign(row, {
+              state: "sent",
+              wamid: p.p_wamid,
+              http_status: p.p_http_status,
+              response_body: p.p_response_body,
+              resolved_at: new Date().toISOString(),
+            });
+            settled = true;
+            s.log.push("intent-updated:sent");
+          }
+        });
+        return Promise.resolve({ data: { settled, enqueued: 0 }, error: null });
+      }
+      if (name === "partner_reconcile_dispatch_intent_sent") {
+        const p = params as { p_intent_id: string; p_wamid: string };
+        let reconciled = false;
+        mutate((s) => {
+          const row = s.intents.find((r) => r.id === p.p_intent_id);
+          if (row && ["intended", "indeterminate", "sent"].includes(row.state as string)) {
+            Object.assign(row, {
+              state: "reconciled_sent",
+              wamid: p.p_wamid,
+              resolved_at: new Date().toISOString(),
+            });
+            reconciled = true;
+            s.log.push("intent-updated:reconciled_sent");
+          }
+        });
+        return Promise.resolve({ data: { reconciled, enqueued: 0 }, error: null });
       }
       return Promise.resolve({ error: null });
     },
