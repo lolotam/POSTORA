@@ -159,31 +159,29 @@ export default function AdminSettings() {
 
             return (
               <TabsContent key={tab} value={tab} className="space-y-6">
-                {visibleSubTabs.length > 0 && (
-                  <SettingsSubTabs
-                    labels={visibleSubTabs.map((group) => group.label)}
-                    active={activeSubTab}
-                    onSelect={(label) => setParams({ sub: label })}
-                  />
-                )}
-
-                {/* Panels stay mounted and are hidden, never unmounted: dropping one while
-                    someone switches sub-tab or filters would throw away its unsaved edits. */}
-                {subTabs.map((group) => (
-                  <div
-                    key={group.label}
-                    className={group.label === activeSubTab ? "space-y-6" : "hidden"}
-                  >
-                    {group.sections.map(({ id }) => {
-                      const Section = SECTION_COMPONENTS[id];
-                      return (
-                        <div key={id} className={matchedIds.has(id) ? undefined : "hidden"}>
-                          <Section />
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
+                {/* Every panel is built and stays mounted; a search only takes away the
+                    triggers. That way filtering does not discard what a card was holding
+                    unsaved, and clearing the query puts it back untouched. */}
+                <SettingsSubTabs
+                  active={activeSubTab}
+                  onSelect={(label) => setParams({ sub: label })}
+                  items={subTabs.map((group) => ({
+                    label: group.label,
+                    offered: group.sections.some((section) => matchedIds.has(section.id)),
+                    content: (
+                      <div className="space-y-6">
+                        {group.sections.map(({ id }) => {
+                          const Section = SECTION_COMPONENTS[id];
+                          return (
+                            <div key={id} className={matchedIds.has(id) ? undefined : "hidden"}>
+                              <Section />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ),
+                  }))}
+                />
 
                 {ungrouped.map(({ id }) => {
                   const Section = SECTION_COMPONENTS[id];

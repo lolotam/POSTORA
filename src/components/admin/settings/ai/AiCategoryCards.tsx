@@ -1,6 +1,7 @@
-import { AudioLines, ImageIcon, Layers, MessageSquare, Mic, Search, Video } from 'lucide-react';
+import { AudioLines, ImageIcon, Layers, Loader2, MessageSquare, Mic, Search, Video } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
+import { Card, CardContent } from '@/components/ui/card';
 import { DefaultModelSelector } from '@/components/admin/DefaultModelSelector';
 import {
   useAIConfiguration,
@@ -34,7 +35,7 @@ function AiCategoryCard({
   icon: LucideIcon;
   modelNote?: (model: AIModel) => string | null;
 }) {
-  const { data: aiConfig } = useAIConfiguration();
+  const { data: aiConfig, isLoading } = useAIConfiguration();
   const setDefaultModel = useSetDefaultModel();
   const setFallbackModel = useSetFallbackModel();
   const setFallback2Model = useSetFallback2Model();
@@ -91,6 +92,19 @@ function AiCategoryCard({
     );
   };
 
+  // The monolith this was split out of guarded the whole AI tab on `isLoading`. Without
+  // the same guard here, DefaultModelSelector sees an empty model list on first render
+  // and states "No models available for this category yet" — an answer, not a wait.
+  if (isLoading) {
+    return (
+      <Card>
+        <CardContent className="flex items-center justify-center h-40">
+          <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <DefaultModelSelector
       category={category}
@@ -106,8 +120,9 @@ function AiCategoryCard({
       onSetDefault={handleSetDefault}
       onSetFallback={handleSetFallback}
       onSetFallback2={handleSetFallback2}
-      // Embedding has no per-model admin params to tune, and offering the controls
-      // would suggest a knob that changes nothing about how vectors are produced.
+      // Withheld from embedding for the reason DefaultModelSelector's own prop docs give:
+      // a category whose engine does not read ai_models.admin_params must not show a Save
+      // button that discards what the admin typed.
       onSetAdminParams={category === 'embedding' ? undefined : handleSetAdminParams}
       isSaving={setDefaultModel.isPending || setFallbackModel.isPending || setFallback2Model.isPending}
       modelNote={modelNote}

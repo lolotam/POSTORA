@@ -85,6 +85,19 @@ const STATUS_PILL: Record<CredentialStatus, { label: string; className: string }
   unknown: null,
 };
 
+/**
+ * The status marker on a sub-tab trigger. The dot alone would carry the state in colour
+ * only, so the word travels with it for anyone not reading the colour.
+ */
+function StatusDot({ status }: { status: CredentialStatus }) {
+  return (
+    <>
+      <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status]}`} aria-hidden />
+      <span className="sr-only">{STATUS_PILL[status]?.label ?? "Status unknown"}</span>
+    </>
+  );
+}
+
 function StatusPill({ status }: { status: CredentialStatus }) {
   const pill = STATUS_PILL[status];
   if (!pill) return null;
@@ -345,12 +358,18 @@ export function AppCredentialsSettings() {
     return "not_set";
   };
 
+  const waStatus = getWaStatus();
   const panelLabels = [...PLATFORMS.map((p) => p.label), WA_PANEL];
   const statusByLabel: Record<string, CredentialStatus> = {
     ...Object.fromEntries(PLATFORMS.map((p) => [p.label, getStatus(p.key)])),
-    [WA_PANEL]: getWaStatus(),
+    [WA_PANEL]: waStatus,
   };
-  const configuredCount = panelLabels.filter((label) => statusByLabel[label] === "configured").length;
+  // Only panels whose state we can actually read are counted. On self-hosted Supabase
+  // the management API answers `management_api_unavailable`, every OAuth platform comes
+  // back "unknown", and a denominator of nine would report "0 of 9 configured" over
+  // credentials that are set — contradicting the banner directly above it.
+  const knownLabels = panelLabels.filter((label) => statusByLabel[label] !== "unknown");
+  const configuredCount = knownLabels.filter((label) => statusByLabel[label] === "configured").length;
 
   return (
     <Card>
@@ -367,9 +386,9 @@ export function AppCredentialsSettings() {
               </CardDescription>
             </div>
           </div>
-          {!loading && (
+          {!loading && knownLabels.length > 0 && (
             <span className="text-xs text-muted-foreground whitespace-nowrap pt-1">
-              {configuredCount} of {panelLabels.length} configured
+              {configuredCount} of {knownLabels.length} configured
             </span>
           )}
         </div>
@@ -387,361 +406,340 @@ export function AppCredentialsSettings() {
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <>
-            <SettingsSubTabs
-              labels={panelLabels}
-              active={activePanel}
-              onSelect={setActivePanel}
-              icons={Object.fromEntries([
-                ...PLATFORMS.map((p) => [p.label, <span key={p.key} className="text-base leading-none">{p.icon}</span>]),
-                [WA_PANEL, <span key="wa" className="text-base leading-none">💬</span>],
-              ])}
-              badges={Object.fromEntries(
-                panelLabels.map((label) => [
-                  label,
-                  <span
-                    key={label}
-                    className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[statusByLabel[label]]}`}
-                    aria-hidden
-                  />,
-                ]),
-              )}
-            />
+          <SettingsSubTabs
+            active={activePanel}
+            onSelect={setActivePanel}
+            items={[
+              ...PLATFORMS.map((platform) => {
+                const status = getStatus(platform.key);
+                const isEditing = editingPlatform === platform.key;
+                const testResult = testResults[platform.key];
+                const platformSecrets = secrets[platform.key];
 
-            {PLATFORMS.map((platform) => {
-              const status = getStatus(platform.key);
-              const isEditing = editingPlatform === platform.key;
-              const testResult = testResults[platform.key];
-              const platformSecrets = secrets[platform.key];
-
-              return (
-                // Panels stay mounted so a half-typed secret survives a look at another
-                // platform — the accordion this replaced behaved the same way.
-                <div
-                  key={platform.key}
-                  className={
-                    platform.label === activePanel
-                      ? "rounded-lg border border-border p-3 space-y-2"
-                      : "hidden"
-                  }
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">{platform.icon}</span>
-                      <span className="text-sm font-medium">{platform.label}</span>
-                    </div>
-                    <StatusPill status={status} />
-                  </div>
-                  {/* Current values (masked) */}
-                  {!isEditing && platformSecrets && (
-                    <div className="space-y-1 text-xs">
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Client ID:</span>
-                        <code className="text-foreground/70 font-mono text-[11px]">
-                          {platformSecrets.clientId || "—"}
-                        </code>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">Secret:</span>
-                        <code className="text-foreground/70 font-mono text-[11px]">
-                          {platformSecrets.clientSecret || "—"}
-                        </code>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Edit mode */}
-                  {isEditing && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <div>
-                        <label className="text-[11px] text-muted-foreground mb-0.5 block">
-                          Client ID ({platform.clientIdSecret})
-                        </label>
-                        <Input
-                          type="text"
-                          className="h-7 text-xs font-mono"
-                          placeholder="Leave empty to keep current"
-                          value={editValues.clientId}
-                          onChange={(e) => setEditValues((prev) => ({ ...prev, clientId: e.target.value }))}
-                        />
-                      </div>
-                      <div>
-                        <label className="text-[11px] text-muted-foreground mb-0.5 block">
-                          Client Secret ({platform.clientSecretSecret})
-                        </label>
-                        <div className="relative">
-                          <Input
-                            type={showSecret[platform.key] ? "text" : "password"}
-                            className="h-7 text-xs font-mono pr-8"
-                            placeholder="Leave empty to keep current"
-                            value={editValues.clientSecret}
-                            onChange={(e) => setEditValues((prev) => ({ ...prev, clientSecret: e.target.value }))}
-                          />
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="absolute right-0 top-0 h-7 w-7 p-0"
-                            onClick={() => setShowSecret((prev) => ({ ...prev, [platform.key]: !prev[platform.key] }))}
-                          >
-                            {showSecret[platform.key] ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                          </Button>
+                return {
+                  label: platform.label,
+                  icon: <span className="text-base leading-none">{platform.icon}</span>,
+                  badge: <StatusDot status={status} />,
+                  content: (
+                    <div className="rounded-lg border border-border p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-lg">{platform.icon}</span>
+                          <span className="text-sm font-medium">{platform.label}</span>
                         </div>
+                        <StatusPill status={status} />
                       </div>
-                    </div>
-                  )}
-
-                  {/* Test result */}
-                  {testResult && (
-                    <div
-                      className={`text-[11px] px-2 py-1 rounded ${
-                        testResult.success
-                          ? "bg-green-500/10 text-green-700"
-                          : "bg-destructive/10 text-destructive"
-                      }`}
-                    >
-                      {testResult.message}
-                    </div>
-                  )}
-
-                  {/* Actions */}
-                  <div className="flex items-center gap-1.5 pt-1">
-                    {isEditing ? (
-                      <>
-                        <Button
-                          size="sm"
-                          className="h-7 text-xs gap-1"
-                          onClick={() => handleSave(platform)}
-                          disabled={saving}
-                        >
-                          {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                          Save
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={() => setEditingPlatform(null)}
-                          disabled={saving}
-                        >
-                          Cancel
-                        </Button>
-                      </>
-                    ) : (
-                      <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs"
-                          onClick={() => handleEdit(platform)}
-                        >
-                          {status === "not_set" ? "Add" : "Update"}
-                        </Button>
-                        {status !== "not_set" && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 text-xs gap-1"
-                            onClick={() => handleTest(platform)}
-                            disabled={testing === platform.key}
-                          >
-                            {testing === platform.key ? (
-                              <Loader2 className="w-3 h-3 animate-spin" />
-                            ) : (
-                              <TestTube className="w-3 h-3" />
-                            )}
-                            Test
-                          </Button>
-                        )}
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-
-            {/* WhatsApp Embedded Signup */}
-            <div
-              className={
-                WA_PANEL === activePanel
-                  ? "rounded-lg border border-border p-3 space-y-2"
-                  : "hidden"
-              }
-            >
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-lg">💬</span>
-                  <span className="text-sm font-medium">WhatsApp Embedded Signup</span>
-                </div>
-                <StatusPill status={getWaStatus()} />
-              </div>
-              {waLoading ? (
-                <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
-                </div>
-              ) : (
-                <>
-                  <p className="text-[11px] text-muted-foreground">
-                    Configuration IDs from Meta → App Dashboard → Facebook Login for Business → Configurations.
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[11px] text-muted-foreground mb-0.5 block">
-                        Cloud API Configuration ID ({WA_CLOUD_KEY})
-                      </label>
-                      <Input
-                        type="text"
-                        inputMode="numeric"
-                        className="h-7 text-xs font-mono"
-                        placeholder="e.g. 1663110164872480"
-                        value={waCloudId}
-                        onChange={(e) => setWaCloudId(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] text-muted-foreground mb-0.5 block">
-                        Coexistence Configuration ID ({WA_COEX_KEY})
-                      </label>
-                      <Input
-                        type="text"
-                        inputMode="numeric"
-                        className="h-7 text-xs font-mono"
-                        placeholder="e.g. 978825294740266"
-                        value={waCoexId}
-                        onChange={(e) => setWaCoexId(e.target.value)}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Tech Provider approval status */}
-                  <div className="rounded-md border border-border/60 bg-muted/30 p-2 space-y-1.5">
-                    <label className="text-[11px] font-medium text-foreground block">
-                      Tech Provider Approval Status
-                    </label>
-                    <p className="text-[10px] text-muted-foreground leading-snug">
-                      Meta requires Tech Provider (or BSP) approval before Embedded Signup will load for users.
-                      Set this once approval is granted.
-                    </p>
-                    <Select
-                      value={tpStatus}
-                      onValueChange={(v) => handleTpStatusChange(v as WhatsAppTpStatus)}
-                      disabled={tpSaving}
-                    >
-                      <SelectTrigger className="h-7 text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="not_started" className="text-xs">
-                          Not started — hide Connect buttons
-                        </SelectItem>
-                        <SelectItem value="pending" className="text-xs">
-                          Pending — show banner, buttons clickable
-                        </SelectItem>
-                        <SelectItem value="approved" className="text-xs">
-                          Approved — normal flow
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <div className="flex flex-col gap-0.5 pt-1 text-[10px]">
-                      <a
-                        href="https://business.facebook.com/wa/manage/home/"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        → Apply for Tech Provider program
-                      </a>
-                      <a
-                        href="https://developers.facebook.com/docs/whatsapp/solution-providers/get-started-for-tech-providers"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        → Tech Provider documentation
-                      </a>
-                      <a
-                        href="https://developers.facebook.com/docs/whatsapp/solution-providers/get-started-for-solution-partners"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-primary hover:underline"
-                      >
-                        → BSP documentation (reference)
-                      </a>
-                    </div>
-                  </div>
-
-                  {waTestResult && (
-                    <div className="space-y-1.5">
-                      {waTestResult.facebook_app_id && (
-                        <div className="text-[11px] px-2 py-1.5 rounded bg-muted/50 text-muted-foreground">
-                          <span className="font-medium text-foreground">Active Facebook App ID:</span>{" "}
-                          <span className="font-mono">{waTestResult.facebook_app_id}</span>
-                          <div className="opacity-80 mt-0.5">
-                            The Configuration IDs above must be created under this exact Meta App. If they were created in a different app or Business Manager, Meta will return "Unsupported get request".
-                          </div>
-                        </div>
-                      )}
-                      {(["cloud_api", "coexistence"] as const).map((mode) => {
-                        const c = waTestResult[mode];
-                        const label = mode === "cloud_api" ? "Cloud API" : "Coexistence";
-                        return (
-                          <div
-                            key={mode}
-                            className={`text-[11px] px-2 py-1.5 rounded flex items-start gap-1.5 ${
-                              c.valid ? "bg-green-500/10 text-green-700" : "bg-destructive/10 text-destructive"
-                            }`}
-                          >
-                            {c.valid ? (
-                              <CheckCircle2 className="w-3 h-3 mt-0.5 shrink-0" />
-                            ) : (
-                              <XCircle className="w-3 h-3 mt-0.5 shrink-0" />
-                            )}
-                            <div className="min-w-0 flex-1">
-                              <div className="font-medium">
-                                {label}{" "}
-                                <span className="opacity-70 font-normal">
-                                  {c.config_id ? `(${c.config_id})` : "(not set)"}
-                                </span>
-                              </div>
-                              <div className="opacity-80 break-words">
-                                {c.valid ? `${c.name ?? ""}${c.feature_type ? ` · ${c.feature_type}` : ""}` : c.error}
-                              </div>
-                              {!c.valid && c.hint && (
-                                <div className="mt-1 text-[10px] opacity-90 break-words border-t border-destructive/20 pt-1">
-                                  {c.hint}
-                                </div>
-                              )}
+                        {/* Current values (masked) */}
+                        {!isEditing && platformSecrets && (
+                          <div className="space-y-1 text-xs">
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Client ID:</span>
+                              <code className="text-foreground/70 font-mono text-[11px]">
+                                {platformSecrets.clientId || "—"}
+                              </code>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-muted-foreground">Secret:</span>
+                              <code className="text-foreground/70 font-mono text-[11px]">
+                                {platformSecrets.clientSecret || "—"}
+                              </code>
                             </div>
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                        )}
 
-                  <div className="flex items-center gap-1.5 pt-1">
-                    <Button
-                      size="sm"
-                      className="h-7 text-xs gap-1"
-                      onClick={handleWaSave}
-                      disabled={waSaving}
-                    >
-                      {waSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
-                      Save
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-7 text-xs gap-1"
-                      onClick={handleWaTest}
-                      disabled={waTesting || getWaStatus() === "not_set"}
-                    >
-                      {waTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" />}
-                      Test
-                    </Button>
+                        {/* Edit mode */}
+                        {isEditing && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[11px] text-muted-foreground mb-0.5 block">
+                                Client ID ({platform.clientIdSecret})
+                              </label>
+                              <Input
+                                type="text"
+                                className="h-7 text-xs font-mono"
+                                placeholder="Leave empty to keep current"
+                                value={editValues.clientId}
+                                onChange={(e) => setEditValues((prev) => ({ ...prev, clientId: e.target.value }))}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground mb-0.5 block">
+                                Client Secret ({platform.clientSecretSecret})
+                              </label>
+                              <div className="relative">
+                                <Input
+                                  type={showSecret[platform.key] ? "text" : "password"}
+                                  className="h-7 text-xs font-mono pr-8"
+                                  placeholder="Leave empty to keep current"
+                                  value={editValues.clientSecret}
+                                  onChange={(e) => setEditValues((prev) => ({ ...prev, clientSecret: e.target.value }))}
+                                />
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="absolute right-0 top-0 h-7 w-7 p-0"
+                                  onClick={() => setShowSecret((prev) => ({ ...prev, [platform.key]: !prev[platform.key] }))}
+                                >
+                                  {showSecret[platform.key] ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Test result */}
+                        {testResult && (
+                          <div
+                            className={`text-[11px] px-2 py-1 rounded ${
+                              testResult.success
+                                ? "bg-green-500/10 text-green-700"
+                                : "bg-destructive/10 text-destructive"
+                            }`}
+                          >
+                            {testResult.message}
+                          </div>
+                        )}
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-1.5 pt-1">
+                          {isEditing ? (
+                            <>
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs gap-1"
+                                onClick={() => handleSave(platform)}
+                                disabled={saving}
+                              >
+                                {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                                Save
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => setEditingPlatform(null)}
+                                disabled={saving}
+                              >
+                                Cancel
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => handleEdit(platform)}
+                              >
+                                {status === "not_set" ? "Add" : "Update"}
+                              </Button>
+                              {status !== "not_set" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 text-xs gap-1"
+                                  onClick={() => handleTest(platform)}
+                                  disabled={testing === platform.key}
+                                >
+                                  {testing === platform.key ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <TestTube className="w-3 h-3" />
+                                  )}
+                                  Test
+                                </Button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                    </div>
+                  ),
+                };
+              }),
+              {
+                label: WA_PANEL,
+                icon: <span className="text-base leading-none">💬</span>,
+                badge: <StatusDot status={waStatus} />,
+                content: (
+                  <div className="rounded-lg border border-border p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">💬</span>
+                        <span className="text-sm font-medium">WhatsApp Embedded Signup</span>
+                      </div>
+                      <StatusPill status={waStatus} />
+                    </div>
+                    {waLoading ? (
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-[11px] text-muted-foreground">
+                            Configuration IDs from Meta → App Dashboard → Facebook Login for Business → Configurations.
+                          </p>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[11px] text-muted-foreground mb-0.5 block">
+                                Cloud API Configuration ID ({WA_CLOUD_KEY})
+                              </label>
+                              <Input
+                                type="text"
+                                inputMode="numeric"
+                                className="h-7 text-xs font-mono"
+                                placeholder="e.g. 1663110164872480"
+                                value={waCloudId}
+                                onChange={(e) => setWaCloudId(e.target.value)}
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[11px] text-muted-foreground mb-0.5 block">
+                                Coexistence Configuration ID ({WA_COEX_KEY})
+                              </label>
+                              <Input
+                                type="text"
+                                inputMode="numeric"
+                                className="h-7 text-xs font-mono"
+                                placeholder="e.g. 978825294740266"
+                                value={waCoexId}
+                                onChange={(e) => setWaCoexId(e.target.value)}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Tech Provider approval status */}
+                          <div className="rounded-md border border-border/60 bg-muted/30 p-2 space-y-1.5">
+                            <label className="text-[11px] font-medium text-foreground block">
+                              Tech Provider Approval Status
+                            </label>
+                            <p className="text-[10px] text-muted-foreground leading-snug">
+                              Meta requires Tech Provider (or BSP) approval before Embedded Signup will load for users.
+                              Set this once approval is granted.
+                            </p>
+                            <Select
+                              value={tpStatus}
+                              onValueChange={(v) => handleTpStatusChange(v as WhatsAppTpStatus)}
+                              disabled={tpSaving}
+                            >
+                              <SelectTrigger className="h-7 text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="not_started" className="text-xs">
+                                  Not started — hide Connect buttons
+                                </SelectItem>
+                                <SelectItem value="pending" className="text-xs">
+                                  Pending — show banner, buttons clickable
+                                </SelectItem>
+                                <SelectItem value="approved" className="text-xs">
+                                  Approved — normal flow
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <div className="flex flex-col gap-0.5 pt-1 text-[10px]">
+                              <a
+                                href="https://business.facebook.com/wa/manage/home/"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                → Apply for Tech Provider program
+                              </a>
+                              <a
+                                href="https://developers.facebook.com/docs/whatsapp/solution-providers/get-started-for-tech-providers"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                → Tech Provider documentation
+                              </a>
+                              <a
+                                href="https://developers.facebook.com/docs/whatsapp/solution-providers/get-started-for-solution-partners"
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-primary hover:underline"
+                              >
+                                → BSP documentation (reference)
+                              </a>
+                            </div>
+                          </div>
+
+                          {waTestResult && (
+                            <div className="space-y-1.5">
+                              {waTestResult.facebook_app_id && (
+                                <div className="text-[11px] px-2 py-1.5 rounded bg-muted/50 text-muted-foreground">
+                                  <span className="font-medium text-foreground">Active Facebook App ID:</span>{" "}
+                                  <span className="font-mono">{waTestResult.facebook_app_id}</span>
+                                  <div className="opacity-80 mt-0.5">
+                                    The Configuration IDs above must be created under this exact Meta App. If they were created in a different app or Business Manager, Meta will return "Unsupported get request".
+                                  </div>
+                                </div>
+                              )}
+                              {(["cloud_api", "coexistence"] as const).map((mode) => {
+                                const c = waTestResult[mode];
+                                const label = mode === "cloud_api" ? "Cloud API" : "Coexistence";
+                                return (
+                                  <div
+                                    key={mode}
+                                    className={`text-[11px] px-2 py-1.5 rounded flex items-start gap-1.5 ${
+                                      c.valid ? "bg-green-500/10 text-green-700" : "bg-destructive/10 text-destructive"
+                                    }`}
+                                  >
+                                    {c.valid ? (
+                                      <CheckCircle2 className="w-3 h-3 mt-0.5 shrink-0" />
+                                    ) : (
+                                      <XCircle className="w-3 h-3 mt-0.5 shrink-0" />
+                                    )}
+                                    <div className="min-w-0 flex-1">
+                                      <div className="font-medium">
+                                        {label}{" "}
+                                        <span className="opacity-70 font-normal">
+                                          {c.config_id ? `(${c.config_id})` : "(not set)"}
+                                        </span>
+                                      </div>
+                                      <div className="opacity-80 break-words">
+                                        {c.valid ? `${c.name ?? ""}${c.feature_type ? ` · ${c.feature_type}` : ""}` : c.error}
+                                      </div>
+                                      {!c.valid && c.hint && (
+                                        <div className="mt-1 text-[10px] opacity-90 break-words border-t border-destructive/20 pt-1">
+                                          {c.hint}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-1.5 pt-1">
+                            <Button
+                              size="sm"
+                              className="h-7 text-xs gap-1"
+                              onClick={handleWaSave}
+                              disabled={waSaving}
+                            >
+                              {waSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
+                              Save
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 text-xs gap-1"
+                              onClick={handleWaTest}
+                              disabled={waTesting || waStatus === "not_set"}
+                            >
+                              {waTesting ? <Loader2 className="w-3 h-3 animate-spin" /> : <TestTube className="w-3 h-3" />}
+                              Test
+                            </Button>
+                          </div>
+                        </>
+                      )}
                   </div>
-                </>
-              )}
-            </div>
-          </>
+                ),
+              },
+            ]}
+          />
         )}
       </CardContent>
     </Card>

@@ -114,7 +114,7 @@ describe("the settings catalog", () => {
     }
   });
 
-  it("renders the AI sub-tab strip as these nine labels, in catalog order", () => {
+  it("renders the AI sub-tab strip as these twelve labels, in catalog order", () => {
     const aiSections = SETTINGS_SECTIONS.filter((section) => section.tab === "ai");
     expect(groupSectionsBySubTab(aiSections).subTabs.map((group) => group.label)).toEqual([
       "Search Models",
@@ -126,8 +126,35 @@ describe("the settings catalog", () => {
       "Chat Models",
       "Image Generation",
       "Providers",
+      "Brand Intelligence",
+      "Higgsfield",
+      "Per-user Overrides",
     ]);
   });
+
+  // Every AI section sits behind a sub-tab. One that did not would render underneath
+  // whichever panel happened to be open, which is what the sub-tabs exist to stop.
+  it("leaves no AI section stacked under every panel", () => {
+    const aiSections = SETTINGS_SECTIONS.filter((section) => section.tab === "ai");
+    expect(groupSectionsBySubTab(aiSections).ungrouped).toEqual([]);
+  });
+
+  // The search placeholder suggests "model", and every card carries a temperature knob,
+  // so both queries have to reach all eight category cards. Splitting the categories into
+  // separate keyword lists is what nearly cost that: each generic term survived only
+  // wherever it happened to be retyped.
+  it.each<[string]>([["model"], ["temperature"], ["fallback"]])(
+    "generic query %j still reaches every model card",
+    (query) => {
+      const hits = searchSettings(SETTINGS_SECTIONS, query).map((section) => section.id);
+      const categoryIds = SETTINGS_SECTIONS.filter(
+        (section) => section.tab === "ai" && section.id.startsWith("ai-") && section.id !== "ai-providers",
+      ).map((section) => section.id);
+
+      expect(categoryIds).toHaveLength(8);
+      for (const id of categoryIds) expect(hits).toContain(id);
+    },
+  );
 
   // "embedding" and "transcription" matched nothing at all while the seven categories
   // shared one section's keyword list; "hashtags" and "video generation" matched, but

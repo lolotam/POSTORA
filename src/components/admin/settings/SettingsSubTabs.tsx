@@ -1,58 +1,67 @@
-import { cn } from "@/lib/utils";
+import type { ReactNode } from "react";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+export interface SettingsSubTab {
+  /** Doubles as the panel's identity, so it is what a `?sub=` link carries. */
+  label: string;
+  content: ReactNode;
+  /** Leading marker — a platform glyph, an icon. */
+  icon?: ReactNode;
+  /** Trailing marker — a status dot, a count. Include text for screen readers. */
+  badge?: ReactNode;
+  /**
+   * Set false to drop the trigger while keeping the panel mounted — how a search hides
+   * a sub-tab without discarding whatever was typed into it.
+   */
+  offered?: boolean;
+}
 
 /**
- * The strip of sub-tabs above a settings panel.
+ * A strip of sub-tabs over one full-width panel.
  *
- * Deliberately a row of buttons rather than Radix `Tabs`: the panels below stay mounted
- * whichever one is showing, so a half-typed API key survives a glance at another
- * sub-tab. `TabsContent` unmounts the inactive panel and would throw that away.
+ * Built on Radix `Tabs` rather than a hand-rolled row of buttons: arrow-key navigation
+ * and the trigger/panel wiring assistive tech needs come with it, and getting those
+ * wrong is worse than not claiming the tab role at all.
+ *
+ * `forceMount` keeps every panel in the tree and CSS hides the inactive ones, so a
+ * half-typed API key is still there when you come back. Radix would otherwise unmount
+ * the panel you switched away from.
  */
 export function SettingsSubTabs({
-  labels,
+  items,
   active,
   onSelect,
-  icons,
-  badges,
 }: {
-  labels: readonly string[];
+  items: readonly SettingsSubTab[];
   active: string | null;
   onSelect: (label: string) => void;
-  /** Optional leading marker per label — a platform glyph, an icon. */
-  icons?: Record<string, React.ReactNode>;
-  /** Optional trailing marker per label — a status dot, a count. */
-  badges?: Record<string, React.ReactNode>;
 }) {
-  if (labels.length === 0) return null;
+  if (items.length === 0) return null;
 
   return (
-    <div
-      role="tablist"
-      aria-orientation="horizontal"
-      className="flex flex-wrap gap-1 rounded-lg border bg-muted/40 p-1"
-    >
-      {labels.map((label) => {
-        const isActive = label === active;
-        return (
-          <button
-            key={label}
-            type="button"
-            role="tab"
-            aria-selected={isActive}
-            onClick={() => onSelect(label)}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors",
-              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              isActive
-                ? "bg-background text-foreground shadow-sm"
-                : "text-muted-foreground hover:bg-background/60 hover:text-foreground",
-            )}
-          >
-            {icons?.[label]}
-            {label}
-            {badges?.[label]}
-          </button>
-        );
-      })}
-    </div>
+    <Tabs value={active ?? undefined} onValueChange={onSelect} className="space-y-4">
+      <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+        {items
+          .filter((item) => item.offered !== false)
+          .map((item) => (
+            <TabsTrigger key={item.label} value={item.label} className="gap-1.5">
+              {item.icon}
+              {item.label}
+              {item.badge}
+            </TabsTrigger>
+          ))}
+      </TabsList>
+
+      {items.map((item) => (
+        <TabsContent
+          key={item.label}
+          value={item.label}
+          forceMount
+          className="mt-0 data-[state=inactive]:hidden"
+        >
+          {item.content}
+        </TabsContent>
+      ))}
+    </Tabs>
   );
 }
