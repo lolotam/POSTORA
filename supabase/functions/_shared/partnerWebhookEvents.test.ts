@@ -163,6 +163,42 @@ Deno.test("F4: distinct transitions of one resource get distinct rows", async ()
   assertEquals(admin.deliveries.length, 2);
 });
 
+Deno.test("F6: restrictToWebhookId narrows to one subscription", async () => {
+  const subs = [
+    { id: "wh-1", secret_version: 1, platform: null, social_account_id: null },
+    { id: "wh-2", secret_version: 1, platform: null, social_account_id: null },
+    { id: "wh-3", secret_version: 1, platform: null, social_account_id: null },
+  ];
+  // F2 is this test's control: the SAME three subscriptions, unrestricted,
+  // produce three rows. Without that pairing, this would pass against a
+  // fan-out that had simply stopped working.
+  const admin = stub(subs);
+  const result = await enqueuePartnerWebhookEvent(admin, {
+    ...OCCURRENCE,
+    restrictToWebhookId: "wh-2",
+  });
+
+  assertEquals(result.matched, 1);
+  assertEquals(admin.deliveries.length, 1);
+  assertEquals(admin.deliveries[0].webhook_id, "wh-2");
+});
+
+Deno.test("F6b: the restriction can only narrow, never widen", async () => {
+  // A restriction naming a subscription that fails the other axes must still
+  // match nothing -- otherwise "restrict" would be a way to bypass the
+  // platform and account filters rather than to add to them.
+  const admin = stub([
+    { id: "wh-9", secret_version: 1, platform: "instagram", social_account_id: null },
+  ]);
+  const result = await enqueuePartnerWebhookEvent(admin, {
+    ...OCCURRENCE,
+    restrictToWebhookId: "wh-9",
+  });
+
+  assertEquals(result.matched, 0);
+  assertEquals(admin.deliveries.length, 0);
+});
+
 Deno.test("F5: the certified allowlist has exactly one entry in this phase", () => {
   // Not a tautology: this phase ships NO event family (D6), and the closed
   // allowlist is the mechanism that stops the substrate becoming an implicit

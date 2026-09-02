@@ -45,6 +45,18 @@ export interface WebhookEventOccurrence {
   platform: string | null;
   accountId: string | null;
   occurredAt?: string;
+  /**
+   * Restrict the fan-out to ONE subscription.
+   *
+   * Fan-out is right for a real event: a transition happened in the world and
+   * every subscription that asked about it should hear. It is wrong for
+   * `POST /v1/webhooks/{id}/test`, which is a request to exercise ONE
+   * endpoint. Without this, testing one subscription posts that test to every
+   * other subscription in the workspace whose filters happen to be compatible
+   * -- so a partner debugging endpoint A wakes endpoints B and C, and reads
+   * the arriving payload as evidence about A.
+   */
+  restrictToWebhookId?: string;
 }
 
 interface SubscriptionRow {
@@ -95,7 +107,12 @@ export async function enqueuePartnerWebhookEvent(
     // disagrees with the occurrence excludes it -- a filter may only ever
     // remove subscriptions from a match, never add one.
     (row.platform === null || row.platform === occurrence.platform) &&
-    (row.social_account_id === null || row.social_account_id === occurrence.accountId)
+    (row.social_account_id === null || row.social_account_id === occurrence.accountId) &&
+    // ...and the caller's own restriction obeys the same rule: it can only
+    // narrow. A restriction naming a subscription that fails the other axes
+    // still matches nothing.
+    (occurrence.restrictToWebhookId === undefined ||
+      row.id === occurrence.restrictToWebhookId)
   );
 
   if (matching.length === 0) return { enqueued: 0, matched: 0 };

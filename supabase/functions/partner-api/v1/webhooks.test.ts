@@ -27,6 +27,7 @@ import { hashPartnerKey } from "../../_shared/partnerApiKeys.ts";
 const WS = "ws-1";
 const WH = "77777777-7777-4777-8777-777777777777";
 const OTHER_WH = "88888888-8888-4888-8888-888888888888";
+const THIRD_WH = "99999999-9999-4999-8999-999999999999";
 const ACCT = "22222222-2222-4222-8222-222222222222";
 
 const KEY_ID = "key-1";
@@ -88,6 +89,7 @@ function stub(opts: StubOpts = {}) {
     partner_audit_logs: [],
   };
   const writes: Array<{ table: string; op: string; values: any }> = [];
+  const rpcCalls: Array<{ name: string; args: any }> = [];
 
   function builder(table: string) {
     const filters: Array<[string, unknown]> = [];
@@ -159,7 +161,27 @@ function stub(opts: StubOpts = {}) {
   return {
     seeded,
     writes,
-    rpc(name: string) {
+    rpcCalls,
+    rpc(name: string, args?: any) {
+      rpcCalls.push({ name, args });
+      if (name === "rotate_partner_webhook_secret") {
+        // Modelled on the SQL: workspace-scoped, and a SET-RETURNING function
+        // reaches supabase-js as an ARRAY even for one row.
+        const row = seeded.partner_webhooks.find((w: any) =>
+          w.id === args.p_webhook_id && w.workspace_id === args.p_workspace_id
+        );
+        if (!row) return Promise.resolve({ data: [], error: null });
+        const rotated = {
+          ...row,
+          previous_secret: row.secret,
+          previous_secret_version: row.secret_version,
+          previous_secret_expires_at: "2026-09-03T00:00:00Z",
+          secret: args.p_new_secret,
+          secret_version: row.secret_version + 1,
+        };
+        Object.assign(row, rotated);
+        return Promise.resolve({ data: [rotated], error: null });
+      }
       if (name === "consume_partner_rate_v2") {
         return Promise.resolve({
           data: { allowed: true, remaining: 59, reset_seconds: 42 },
@@ -299,14 +321,21 @@ Deno.test("W5: rotation supersedes the old secret and keeps it verifying", async
   assert(String(body.secret).startsWith("whsec_"));
   assertEquals(body.secret_version, 2);
 
-  const update = client.writes.find((w: any) => w.op === "update" && w.table === "partner_webhooks");
-  assert(update, "the rotation must persist");
-  // The value read BEFORE the update, not the one being written. Get this
-  // backwards and the overlap verifies the new secret against itself, which
-  // breaks every receiver mid-deployment -- so nobody would ever rotate.
-  assertEquals(update.values.previous_secret, "whsec_live");
-  assertEquals(update.values.previous_secret_version, 1);
-  assert(update.values.previous_secret_expires_at, "the overlap must be bounded");
+  // ONE statement under a row lock, not a read followed by an update. Two
+  // overlapping rotations reading version n and both writing n+1 would leave
+  // the FIRST caller holding a secret that is neither current nor previous --
+  // verifying nothing, during the overlap the rotation promised.
+  const rotate = client.rpcCalls.find((c: any) => c.name === "rotate_partner_webhook_secret");
+  assert(rotate, "rotation must go through the atomic function");
+  assertEquals(rotate.args.p_workspace_id, WS);
+  assertEquals(
+    client.writes.filter((w: any) => w.op === "update" && w.table === "partner_webhooks").length,
+    0,
+    "a read-then-update rotation is the race this replaced",
+  );
+  // The superseded secret keeps verifying, and the window is bounded.
+  assertEquals(body.previous_secret_expires_at, "2026-09-03T00:00:00Z");
+  assertEquals(client.seeded.partner_webhooks[0].previous_secret, "whsec_live");
 
   const audit = client.writes.find((w: any) => w.table === "partner_audit_logs");
   assert(audit, "a rotation with no audit row is indistinguishable from a compromise");
@@ -332,6 +361,32 @@ Deno.test("W6: a test enqueues durably and answers 202, not 200", async () => {
   // The version captured at enqueue, so a retry after a rotation still signs
   // with the secret that was current when the event occurred.
   assertEquals(enqueued.values[0].secret_version, 1);
+});
+
+Deno.test("W6c: a test reaches ONE subscription, not every compatible one", async () => {
+  // Fan-out is right for a real event -- a transition happened and everyone who
+  // asked should hear. It is wrong here: this is a request to exercise ONE
+  // endpoint. Without the restriction, a partner testing endpoint A posts that
+  // test to endpoints B and C as well, and then reads the payload arriving at
+  // B as evidence about A.
+  const client = stub({
+    webhooks: [
+      webhookRow(),
+      { ...webhookRow(), id: OTHER_WH, url: "https://hooks.example.com/other" },
+      { ...webhookRow(), id: THIRD_WH, url: "https://hooks.example.com/third" },
+    ],
+  });
+
+  const res = await handleRequest(
+    v1(`/v1/webhooks/wh_${WH}/test`, { method: "POST" }),
+    () => client,
+  );
+
+  assertEquals(res.status, 202);
+  const enqueued = client.writes.filter((w: any) => w.table === "partner_webhook_deliveries");
+  assertEquals(enqueued.length, 1);
+  assertEquals(enqueued[0].values.length, 1, "three compatible subscriptions, one delivery");
+  assertEquals(enqueued[0].values[0].webhook_id, WH);
 });
 
 Deno.test("W6b: a disabled webhook refuses a test", async () => {

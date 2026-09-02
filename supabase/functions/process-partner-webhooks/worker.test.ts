@@ -260,6 +260,92 @@ Deno.test("Y5b: one row throwing does not abandon the rest of the wave", async (
   assertEquals(summary.delivered + summary.retried, 2);
 });
 
+// --- Y7: no exit path may strand a claimed row ----------------------------
+
+Deno.test("Y7b: a row that throws OUTSIDE deliverWebhook is still settled", async () => {
+  // `deliverWebhook` catches its own transport failures, so a thrown fetch
+  // exercises the ordinary ladder and proves nothing about the catch. The
+  // throw has to come from somewhere else inside deliverOne -- here the
+  // secret re-version write, which runs before the request is ever made.
+  const rotatedLongAgo = {
+    ...WEBHOOK,
+    secret_version: 3,
+    previous_secret: "whsec_old",
+    previous_secret_version: 2,
+    previous_secret_expires_at: "2026-01-01T00:00:00.000Z",
+  };
+  const admin = stub({
+    waves: [[delivery({ id: "del-x", secret_version: 1 })]],
+    targets: [rotatedLongAgo],
+  });
+  const realFrom = admin.from.bind(admin);
+  admin.from = (table: string) => {
+    if (table === "partner_webhook_deliveries") {
+      return {
+        update: () => {
+          throw new Error("write failed mid-delivery");
+        },
+      };
+    }
+    return realFrom(table);
+  };
+
+  await runWebhookWorker({
+    admin,
+    fetcher: ok,
+    now: () => Date.parse("2026-09-02T00:00:00Z"),
+  });
+
+  const settles = admin.calls.filter((c: any) =>
+    c.name === "settle_partner_webhook_delivery"
+  );
+  // Without this the row stays `delivering` with its attempt already charged.
+  assertEquals(settles.length, 1, "every exit path settles the row it claimed");
+  assertEquals(settles[0].args.p_ok, false);
+});
+
+Deno.test("Y7c: a target-lookup failure settles the WHOLE wave", async () => {
+  const admin = stub({ waves: [[delivery({ id: "a" }), delivery({ id: "b" })]] });
+  admin.from = (table: string) => {
+    const self: any = {
+      select: () => self,
+      in: () => self,
+      eq: () => self,
+      update: () => self,
+      insert: () => Promise.resolve({ error: null }),
+      then: (resolve: (v: unknown) => unknown) =>
+        resolve(
+          table === "partner_webhooks"
+            ? { data: null, error: { message: "connection reset" } }
+            : { data: [], error: null },
+        ),
+    };
+    return self;
+  };
+
+  await runWebhookWorker({ admin, fetcher: ok, now: () => 1_000 });
+
+  const settles = admin.calls.filter((c: any) =>
+    c.name === "settle_partner_webhook_delivery"
+  );
+  // Both rows are already claimed and already charged when the lookup fails.
+  // Letting it throw would strand the pair.
+  assertEquals(settles.length, 2);
+});
+
+Deno.test("Y7d: every tick reaps rows a previous tick stranded", async () => {
+  const admin = stub({ waves: [[]] });
+  await runWebhookWorker({ admin, fetcher: ok, now: () => 1_000 });
+
+  const reap = admin.calls.find((c: any) =>
+    c.name === "reap_stuck_partner_webhook_deliveries"
+  );
+  // The backstop for the one case the in-process settle cannot cover: the
+  // settle itself failing.
+  assert(reap, "a stranded row is invisible to the claim, so something must reap it");
+  assertEquals(reap.args.p_max_attempts, WORKER_LIMITS.maxAttempts);
+});
+
 // --- Y6: the re-versioned secret is recorded -------------------------------
 
 Deno.test("Y6: a re-signed row records the version it was ACTUALLY signed with", async () => {

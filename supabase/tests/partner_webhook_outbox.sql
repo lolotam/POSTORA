@@ -92,6 +92,10 @@ DECLARE
   status  TEXT;
   next_at TIMESTAMPTZ;
   redriven INTEGER;
+  rot_secret TEXT;
+  rot_prev TEXT;
+  rot_version INTEGER;
+  rot_prev_version INTEGER;
 BEGIN
   SELECT id INTO usr FROM auth.users LIMIT 1;
   IF usr IS NULL THEN RAISE EXCEPTION 'the harness seeds one auth.users row; none found'; END IF;
@@ -315,6 +319,80 @@ BEGIN
     RAISE EXCEPTION 'FAIL: a lapsed lease on a delivering row is not reported as stuck';
   END IF;
   RAISE NOTICE 'PASS: the backlog probe sees a stuck lease';
+
+  -- ==========================================================================
+  -- 7b. Rotation is ONE statement, and the chain it writes is usable.
+  -- ==========================================================================
+  UPDATE public.partner_webhook_deliveries SET status = 'delivered' WHERE webhook_id = wh_1;
+  PERFORM public.rotate_partner_webhook_secret(wh_1, ws_a, 'whsec_second', 24);
+  SELECT secret, secret_version, previous_secret, previous_secret_version
+    INTO rot_secret, rot_version, rot_prev, rot_prev_version
+    FROM public.partner_webhooks WHERE id = wh_1;
+  IF rot_secret <> 'whsec_second' OR rot_version <> 2
+     OR rot_prev <> 'whsec_1' OR rot_prev_version <> 1 THEN
+    RAISE EXCEPTION 'FAIL: rotation wrote %/% with previous %/%',
+      rot_secret, rot_version, rot_prev, rot_prev_version;
+  END IF;
+  IF (SELECT previous_secret_expires_at FROM public.partner_webhooks WHERE id = wh_1) <= now() THEN
+    RAISE EXCEPTION 'FAIL: the overlap window is already over';
+  END IF;
+  RAISE NOTICE 'PASS: rotation supersedes the old secret atomically';
+
+  -- Another workspace cannot rotate it. Zero rows, not an exception: the
+  -- caller answers resource_not_found, the same as for an id that never was.
+  IF EXISTS (SELECT 1 FROM public.rotate_partner_webhook_secret(wh_1, ws_b, 'whsec_evil', 24)) THEN
+    RAISE EXCEPTION 'FAIL: another workspace rotated this subscription''s secret';
+  END IF;
+  IF (SELECT secret FROM public.partner_webhooks WHERE id = wh_1) <> 'whsec_second' THEN
+    RAISE EXCEPTION 'FAIL: a cross-workspace rotation changed the secret anyway';
+  END IF;
+  RAISE NOTICE 'PASS: rotation is workspace-scoped inside the lock';
+
+  -- ==========================================================================
+  -- 7c. Nothing may strand in 'delivering'.
+  -- ==========================================================================
+  --
+  -- A worker that dies between the claim and the settle on the FINAL allowed
+  -- attempt leaves a row the claim cannot see (attempts is at the ceiling),
+  -- settle never reached, and redrive ignores (it takes exhausted rows only).
+  UPDATE public.partner_webhooks SET is_active = TRUE, disabled_at = NULL,
+         disabled_reason = NULL WHERE id = wh_1;
+  DELETE FROM public.partner_webhook_deliveries WHERE webhook_id = wh_1;
+  INSERT INTO public.partner_webhook_deliveries
+    (webhook_id, workspace_id, event_type, event_occurrence_id, payload, secret_version,
+     status, attempts, lease_expires_at)
+  VALUES (wh_1, ws_a, 'webhook.test', 'stranded:' || nonce, '{}', 1,
+          'delivering', 6, now() - interval '5 minutes')
+  RETURNING id INTO del_1;
+
+  SELECT count(*) INTO claimed FROM public.claim_partner_webhook_deliveries(10, 90, 6);
+  IF claimed <> 0 THEN
+    RAISE EXCEPTION 'FAIL: premise broken -- the claim CAN see a row at the attempt ceiling';
+  END IF;
+
+  SELECT count(*) INTO claimed FROM public.reap_stuck_partner_webhook_deliveries(6);
+  IF claimed <> 1 THEN
+    RAISE EXCEPTION 'FAIL: the stranded row was not reaped';
+  END IF;
+  IF (SELECT d.status FROM public.partner_webhook_deliveries d WHERE d.id = del_1) <> 'exhausted' THEN
+    RAISE EXCEPTION 'FAIL: the reaped row is not in a terminal state';
+  END IF;
+  IF (SELECT is_active FROM public.partner_webhooks WHERE id = wh_1) THEN
+    RAISE EXCEPTION 'FAIL: reaping did not disable the endpoint, so it fails this way for ever';
+  END IF;
+  RAISE NOTICE 'PASS: a stranded delivery is reaped into exhausted and disables its endpoint';
+
+  -- The control. Without it, a reaper that marked EVERYTHING exhausted would
+  -- pass every assertion above.
+  UPDATE public.partner_webhooks SET is_active = TRUE WHERE id = wh_1;
+  UPDATE public.partner_webhook_deliveries
+     SET status = 'delivering', attempts = 2, lease_expires_at = now() + interval '1 minute'
+   WHERE id = del_1;
+  SELECT count(*) INTO claimed FROM public.reap_stuck_partner_webhook_deliveries(6);
+  IF claimed <> 0 THEN
+    RAISE EXCEPTION 'FAIL: the reaper took a row with a LIVE lease below the ceiling';
+  END IF;
+  RAISE NOTICE 'PASS: the reaper leaves live work alone';
 
   -- ==========================================================================
   -- 8. Deleting a subscription takes its undelivered backlog with it.

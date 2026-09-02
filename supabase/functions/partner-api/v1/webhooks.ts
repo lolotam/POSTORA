@@ -2,6 +2,29 @@
 //
 // Design record: docs/decisions/2026-09-02-d5-webhook-substrate.md.
 //
+// THE TENANCY BOUNDARY IS THE WORKSPACE, NOT THE KEY -- deliberately.
+//
+// Every query below scopes by `workspace_id`, so a second key in the same
+// workspace can read, update, rotate and delete a subscription this key
+// created. That was raised in review as a possible privilege boundary, and it
+// is a decision rather than an oversight:
+//
+//   * The workspace IS the tenant. Two keys in one workspace are one customer,
+//     and a key holding `webhooks:manage` can already create its own
+//     subscription and receive its own secret -- so key-scoping would not deny
+//     it any capability, only the ability to disturb a sibling integration.
+//   * Key-scoping would break D12. Credential rotation supersedes a key with a
+//     new one; if subscriptions were key-owned, every rotation would strand
+//     them, and rotation is meant to be routine.
+//   * It matches Phase 4: partner media is workspace-owned for the same
+//     reason, and a different answer here would mean two tenancy models one
+//     directory apart.
+//
+// The residual risk is blast radius WITHIN a tenant: a compromised key can
+// disrupt a sibling integration's webhooks. If that ever needs narrowing, the
+// shape is a per-key subscription filter on the LIST and a `created_by_key_id`
+// predicate on the mutations -- additive, and nothing here forecloses it.
+//
 // Every route here is class C, including the reads' siblings, because D7
 // classifies by RISK and not by billability: a webhook test makes Postora
 // issue an outbound request to a partner-supplied URL, which is SSRF
@@ -432,64 +455,50 @@ export async function rotateWebhookSecret(
   const id = pathWebhookId(params, requestId);
   if (!id.ok) return id.res;
 
-  const loaded = await loadWebhook(authed, id.value);
-  if (loaded.outcome === "error") return v1ErrorResponse("internal_error", requestId);
-  if (loaded.outcome === "missing") return v1ErrorResponse("resource_not_found", requestId);
-
-  const current = loaded.row;
   const secret = mintSecret();
-  const overlapEnds = new Date(Date.now() + SECRET_OVERLAP_HOURS * 3600 * 1000).toISOString();
-  // Read BEFORE the update, or previous_secret would be the value we are about
-  // to write and the overlap would verify nothing.
-  const supersededSecret = await currentSecretOf(authed, id.value);
 
-  // The OLD secret keeps verifying for the overlap. Rotating without one
+  // ONE statement, under a row lock, because read-then-update loses a race:
+  // two overlapping rotations both read version n and both write n+1, and the
+  // secret the FIRST caller was told to deploy is then neither current nor
+  // previous. It verifies nothing, during the very overlap the rotation
+  // promised, and that partner's only way to find out is their deliveries
+  // failing.
+  //
+  // Folding the read in also removes the separate secret lookup, whose
+  // discarded error turned a transient read failure into a NULL
+  // previous_secret written beside a non-null version and expiry -- surfacing
+  // as a confusing CHECK violation instead of as the read failure it was.
+  //
+  // The old secret keeps verifying for the overlap: rotating without one
   // breaks every receiver between the moment the rotation lands and the moment
-  // they finish deploying the new value -- rotation would be an outage, so
-  // nobody would rotate.
-  const { data, error } = await admin
-    .from("partner_webhooks")
-    .update({
-      secret,
-      secret_version: current.secret_version + 1,
-      previous_secret: supersededSecret,
-      previous_secret_version: current.secret_version,
-      previous_secret_expires_at: overlapEnds,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", id.value)
-    .eq("workspace_id", record.workspaceId)
-    .select(WEBHOOK_COLUMNS)
-    .maybeSingle();
+  // they finish deploying the new value, which would make rotation an outage
+  // and so make nobody rotate.
+  const { data, error } = await admin.rpc("rotate_partner_webhook_secret", {
+    p_webhook_id: id.value,
+    p_workspace_id: record.workspaceId,
+    p_new_secret: secret,
+    p_overlap_hours: SECRET_OVERLAP_HOURS,
+  });
 
-  if (error || !data) {
+  if (error) {
     console.error(`[partner-api] webhook rotate failed (request ${requestId}):`, error);
     return v1ErrorResponse("internal_error", requestId);
   }
+  // A set-returning function reaches supabase-js as an ARRAY even for one row.
+  // Zero rows means the id is not this workspace's -- the same answer an id
+  // that never existed gets.
+  const rotated = (Array.isArray(data) ? data[0] : data) as
+    | (WebhookRow & { previous_secret_expires_at: string })
+    | undefined;
+  if (!rotated) return v1ErrorResponse("resource_not_found", requestId);
 
   await recordRotation(authed, id.value);
 
   return v1JsonResponse({
-    ...present(data as WebhookRow),
+    ...present(rotated),
     secret,
-    previous_secret_expires_at: overlapEnds,
+    previous_secret_expires_at: rotated.previous_secret_expires_at,
   }, requestId);
-}
-
-/** The secret column is deliberately absent from WEBHOOK_COLUMNS, so rotation
- *  reads it in its own narrow query rather than widening the projection every
- *  other route shares. */
-async function currentSecretOf(
-  authed: V1AuthedContext,
-  webhookId: string,
-): Promise<string | null> {
-  const { data } = await authed.admin
-    .from("partner_webhooks")
-    .select("secret")
-    .eq("id", webhookId)
-    .eq("workspace_id", authed.record.workspaceId)
-    .maybeSingle();
-  return (data as { secret: string } | null)?.secret ?? null;
 }
 
 /** D12's audit trail. A rotation that leaves no record is indistinguishable
@@ -556,6 +565,11 @@ export async function testWebhook(
       },
       platform: webhook.platform,
       accountId: webhook.social_account_id,
+      // ONE subscription: this is a request to exercise {id}, not an event
+      // that happened in the world. Without it a partner testing endpoint A
+      // posts that test to every other compatible subscription in the
+      // workspace, then reads what arrives at B as evidence about A.
+      restrictToWebhookId: webhook.id,
     });
   } catch (err) {
     console.error(`[partner-api] webhook test enqueue failed (request ${requestId}):`, err);

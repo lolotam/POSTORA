@@ -248,6 +248,34 @@ async function reportBacklog(
   if (logError) console.error(`[partner-webhooks] backlog log write failed: ${logError.message}`);
 }
 
+/**
+ * Settle a row that threw, so no exit path can leave it leased.
+ *
+ * The claim charged an attempt before the attempt ran. A row abandoned in
+ * `delivering` at the attempt ceiling is claimable by nothing (the claim
+ * requires `attempts < max`), exhausted by nothing (only settle sets that) and
+ * redrivable by nothing (redrive takes exhausted rows only) -- it disappears,
+ * with the endpoint never disabled and the partner never told.
+ *
+ * If the settle ITSELF is what failed there is nothing more this process can
+ * do; `reap_stuck_partner_webhook_deliveries` is the backstop for that, and it
+ * runs at the top of every tick.
+ */
+async function settleAfterThrow(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  row: DeliveryRow,
+  err: unknown,
+  limits: WorkerLimits,
+): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  try {
+    await settle(admin, row, false, null, message, limits, false);
+  } catch (settleError) {
+    console.error(`[partner-webhooks] ${row.id} could not be settled:`, settleError);
+  }
+}
+
 /** One tick. */
 export async function runWebhookWorker(options: WorkerOptions): Promise<WorkerSummary> {
   const { admin } = options;
@@ -264,6 +292,22 @@ export async function runWebhookWorker(options: WorkerOptions): Promise<WorkerSu
     errors: 0,
     elapsedMs: 0,
   };
+
+  // Before claiming anything: recover rows a previous tick abandoned at the
+  // attempt ceiling. They are invisible to the claim, so without this they stay
+  // in `delivering` for ever.
+  const { data: reaped, error: reapError } = await admin.rpc(
+    "reap_stuck_partner_webhook_deliveries",
+    { p_max_attempts: limits.maxAttempts },
+  );
+  if (reapError) {
+    console.error(`[partner-webhooks] reap failed: ${reapError.message}`);
+  } else if (((reaped ?? []) as unknown[]).length > 0) {
+    summary.exhausted += (reaped as unknown[]).length;
+    console.error(
+      `[partner-webhooks] reaped ${(reaped as unknown[]).length} stranded deliveries`,
+    );
+  }
 
   while (
     summary.claimed < limits.claimLimit &&
@@ -284,15 +328,27 @@ export async function runWebhookWorker(options: WorkerOptions): Promise<WorkerSu
     if (rows.length === 0) break;
     summary.claimed += rows.length;
 
-    const targets = await loadTargets(admin, [...new Set(rows.map((row) => row.webhook_id))]);
+    let targets: Map<string, WebhookTarget>;
+    try {
+      targets = await loadTargets(admin, [...new Set(rows.map((row) => row.webhook_id))]);
+    } catch (err) {
+      // The whole wave is already claimed and already charged. Letting this
+      // throw would strand every one of them.
+      console.error(`[partner-webhooks] target lookup failed:`, err);
+      for (const row of rows) await settleAfterThrow(admin, row, err, limits);
+      summary.errors += rows.length;
+      break;
+    }
 
     const results = await Promise.all(rows.map(async (row) => {
       try {
         return await deliverOne(admin, row, targets.get(row.webhook_id), fetcher, now, limits);
       } catch (err) {
-        // One row's failure must not abandon the rest of the wave. The row
-        // keeps its lease and the next tick reclaims it.
+        // One row's failure must not abandon the rest of the wave -- and must
+        // not abandon the ROW either. Leaving it leased is what strands it at
+        // the attempt ceiling.
         console.error(`[partner-webhooks] ${row.id} threw:`, err);
+        await settleAfterThrow(admin, row, err, limits);
         return "error" as const;
       }
     }));
