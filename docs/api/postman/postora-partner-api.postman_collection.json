@@ -1,0 +1,879 @@
+{
+  "info": {
+    "name": "Postora Partner API",
+    "_postman_id": "00000000-0000-4000-8000-000000000001",
+    "description": "Generated from docs/api/openapi.yaml — do not hand-edit. Run `deno run --allow-read --allow-write scripts/generate-postman.ts` to regenerate.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "accounts",
+      "item": [
+        {
+          "name": "Get one bound account",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/accounts/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "accounts",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "An id outside the binding — and an id that is not well-formed —\nanswers `resource_not_found`. The two are deliberately\nindistinguishable: a different answer for a malformed id would tell a\nprober which guesses had the right shape.\n\nScope `accounts:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "List the accounts bound to this key",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/accounts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "accounts"
+              ]
+            },
+            "description": "The accounts this key may reach (spec D4), which may be a strict\nsubset of the workspace's accounts. Every other `/v1` read is scoped\nto this set, and `?account_id=` on a collection names one of them.\n\nNot paginated: the binding is bounded server-side, and a key bound to\nmore accounts than an unfiltered listing supports is REFUSED with\n`invalid_request` rather than truncated — a silently truncated tenancy\nset would show as accounts that exist in the Postora UI and not in the\nAPI. `next_cursor` i"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "conversations",
+      "item": [
+        {
+          "name": "Get one conversation",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "A conversation belonging to a bound account whose platform is not\n`whatsapp` answers `unsupported_capability` (422), not\n`resource_not_found`: the account IS in the binding and\n`GET /v1/accounts` lists it, so denying its existence would be\nmisleading. There is no per-message table to read for it.\n\nScope `conversations:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "List the messages in one conversation",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "messages"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Ordered by `timestamp` descending, then by id — newest first. The\nconversation's binding is checked exactly as it is for\n`GET /v1/conversations/{id}`; this sub-resource is never laxer than\nits parent.\n\nScope `messages:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "List WhatsApp conversations across the bound accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations"
+              ]
+            },
+            "description": "Ordered by `last_message_at` descending, then by id — the pair, not\nthe timestamp alone, because timestamps collide during history sync\nand a cursor on the timestamp alone would either re-emit a whole\ncolliding group or drop all but one of it.\n\nConversations with no `last_message_at` are excluded: that column is\nthe cursor's sort key.\n\nDefault scope is ALL bound accounts, each row labelled with\n`account_id` (spec D11) — never an implicit single-account default,\nwhich would change meaning the day"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "media",
+      "item": [
+        {
+          "name": "Get one uploaded file's metadata",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/media/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "media",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Scoped to the presented key's workspace. A `media_id` belonging to\nanother workspace is indistinguishable from one that never existed —\nboth answer `resource_not_found`.\n\nReturns metadata only. `GET /v1/media/{id}/download` is not part of\nthis version: it is the endpoint that would create a partner-facing\nURL TTL contract, and it is not needed in order to send a message.\n\nScope `media:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Upload a file for later use in a message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/media",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "media"
+              ]
+            },
+            "description": "Accepts either `multipart/form-data` with a `file` part, or JSON with\n`data` (base64, or a `data:` URL) plus optional `filename` and\n`mime_type`. Both shapes reach the same validator, so neither is a way\naround the controls.\n\n**The bytes are sniffed on every upload** and a declared type that\ndisagrees with them is REFUSED, not corrected: a mismatch means the\nclient's idea of the file and the file itself have diverged, and the\ninteresting case is not a typo. A type outside the allowlist answers\n`",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"data\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "messages",
+      "item": [
+        {
+          "name": "Get one message",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/messages/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "messages",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Scoped to the bound accounts. Returns the conversation's prefixed id\nso a single message threads back to a listing the partner already\nhas; null when that message's conversation was never cached.\n\n`POST` on this same collection sends a message and is a different\ndeliverable (3.5) with a different risk class.\n\nScope `messages:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Send a WhatsApp message",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/messages",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "messages"
+              ]
+            },
+            "description": "Sends a WhatsApp message on behalf of the account bound to the\npresented key. The workspace's single WhatsApp account is resolved\nfrom the key binding — there is no `account_id` in the body.\n\n`Idempotency-Key` is **required**. A retry with the same key and an\nidentical body replays the previous response; a different body with the\nsame key answers `idempotency_conflict` (409). An in-flight duplicate\nanswers `idempotency_in_progress` (409, `retryable:true`), and a lost\noutcome answers `idempotency",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"text\",\n  \"recipient_phone\": \"+15550000000\",\n  \"text\": {\n    \"body\": \"Hello from Postora\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "templates",
+      "item": [
+        {
+          "name": "List approved WhatsApp templates",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/templates",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "templates"
+              ]
+            },
+            "description": "The approved template catalogue for the bound WhatsApp account's\nWABA. Proxied from Meta Graph `GET /{waba_id}/message_templates`\nvia `whatsappPartnerOps.listTemplates` — fields follow Meta's shape\n(`name`, `language`, `status`, `category`, `components`) verbatim.\n\n`next_cursor` is always present and always **null**: the Graph listing\nis returned whole (limit 100) so there is no next page to name. Every\n`/v1` listing spells that the same way via `CollectionEnvelope`; a\nclient's \"loop while next_"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "posts",
+      "item": [
+        {
+          "name": "Create a post for explicit target accounts",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/posts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "posts"
+              ]
+            },
+            "description": "**Only posts created through this operation are addressable by the\n`/v1/posts` routes.** A post created in the Postora UI answers\n`resource_not_found` on every one of them, permanently and by design.\n\n`targets` is required and must be a non-empty array of `acc_` ids;\nthere is no \"publish to everything\" shorthand. Every target must be\nbound to the calling key and all targets must belong to one Postora\nuser. An unbound target answers `resource_not_found`, never 403, so\nthe caller learns nothing ab",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"targets\": [\n    \"acc_000000000000000000000000\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get one Partner API-created post",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/posts/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "posts",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Only posts created through `POST /v1/posts` are addressable. A Postora\nUI-created post, a post outside the caller's workspace and an id that\nis not well-formed all answer `resource_not_found`,\nindistinguishably.\n\n`id` is the opaque `post_` identifier. Provider post ids are never\naccepted as the primary id.\n\nScope `posts:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Get per-target publishing status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/posts/:id/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "posts",
+                ":id",
+                "status"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Returns one row per target result from `platform_posts`. One platform\nsucceeding while another fails is represented faithfully, never\ncollapsed into one verdict. Provider ids and URLs appear only as the\nclearly named `provider_post_id` and `provider_post_url` fields; the\nprimary post and account ids remain opaque `post_` and `acc_` ids.\n\nOnly posts created through `POST /v1/posts` are addressable. A Postora\nUI-created post answers `resource_not_found`, permanently and by\ndesign.\n\nScope `posts:re"
+          },
+          "response": []
+        },
+        {
+          "name": "Remove a post's schedule",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/posts/:id/schedule",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "posts",
+                ":id",
+                "schedule"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Clears `scheduled_at` and parks the post as `pending`, where the\nscheduler cannot pick it up. A post that is already `pending` returns\nthe same post as an idempotent success; a post in any other state\nanswers `invalid_request` (400).\n\nThis operation emits no webhook event. There is no certified\n`post.unscheduled` event type.\n\nScope `posts:schedule`. D7 class C.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Schedule or reschedule a post",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/posts/:id/schedule",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "posts",
+                ":id",
+                "schedule"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Sets the post to `scheduled` with the supplied `scheduled_at`. The\ntimestamp is required and must be ISO-8601 with an explicit offset,\nfor example `2026-09-03T14:00:00Z`; a value without an offset answers\n`invalid_request` (400). Only a `pending` or `scheduled` post can be\nscheduled.\n\nThere is no `POST /v1/posts/{id}/publish` yet. Scheduling is how a\npartner publishes: the scheduler picks the post up and publishes it.\n\nScope `posts:schedule`. D7 class C.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"scheduled_at\": \"2026-09-03T14:00:00Z\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "webhooks",
+      "item": [
+        {
+          "name": "Create a webhook subscription",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "webhooks"
+              ]
+            },
+            "description": "The response carries `secret` — the **only** time it is returned\nother than a rotation. Store it: Postora cannot show it again.\n\n`events` accepts only certified event types. In this phase that is\n`webhook.test` alone: Phase 5 ships the delivery substrate and no\nevent family (decision D6), and a closed allowlist is what stops a\npartner building against an event that would never fire.\n\n`url` must be a public HTTPS target. It is validated here and\n**revalidated on every redirect hop** at delivery t",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/webhook\",\n  \"events\": [\n    \"webhook.test\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete a webhook subscription",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/webhooks/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "webhooks",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Undelivered events queued for this subscription are deleted with it.\nA partner who removed a subscription is not owed its backlog, and\nkeeping those rows would leave an outbox nothing ever drains.\n\nScope `webhooks:manage`. D7 class C.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Get one webhook subscription",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/webhooks/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "webhooks",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "An id from another workspace — and an id that is not well-formed —\nanswers `resource_not_found`, indistinguishably.\n\nScope `webhooks:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "List webhook subscriptions",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/webhooks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "webhooks"
+              ]
+            },
+            "description": "Every subscription in the caller's workspace, newest first. The\nsigning secret is **never** in a read: it is returned once at\ncreation and once at each rotation, and nowhere else — a read that\ncould return it would make `webhooks:read` a credential grant.\n\n`next_cursor` is always present and always null here: subscriptions\nare few enough that this listing is not paginated, and a client's\n\"loop while next_cursor is not null\" must still terminate.\n\nScope `webhooks:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Queue a webhook.test event for this subscription",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/webhooks/:id/test",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "webhooks",
+                ":id",
+                "test"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Answers **202**, not 200: the event is durably queued, not delivered.\nA 200 would claim an outcome the outbox exists precisely because\nPostora cannot yet know — the worker delivers on its own cadence and\nits own retry ladder.\n\nRefused when the subscription is disabled, or is not subscribed to\n`webhook.test`.\n\nScope `webhooks:manage`. D7 class C — classified by RISK, not\nbillability: this makes Postora issue an outbound request to a\npartner-supplied URL.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Rotate a subscription's signing secret",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/webhooks/:id/rotate-secret",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "webhooks",
+                ":id",
+                "rotate-secret"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Returns the new secret once, and keeps the previous one verifying for\na bounded overlap (`previous_secret_expires_at`, 24 hours) so a\nrotation is not an outage while the receiver deploys the new value.\n\nA delivery captures its secret **version** when it is enqueued, so an\nevent already on the retry ladder is still signed with the secret that\nwas current when it occurred — its `X-Postora-Event-Id` is immutable,\nand one event id arriving under two signatures would be\nindistinguishable from a repla"
+          },
+          "response": []
+        },
+        {
+          "name": "Update a webhook subscription",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/webhooks/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "webhooks",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Only the fields present in the body are changed. Setting\n`is_active: true` is how an endpoint disabled by an exhausted retry\nladder is brought back: it clears the disabled reason and the failure\ncount with it.\n\nScope `webhooks:manage`. D7 class C.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/webhook\",\n  \"events\": [\n    \"webhook.test\"\n  ],\n  \"platform\": \"whatsapp\",\n  \"account_id\": \"msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1\",\n  \"is_active\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "usage",
+      "item": [
+        {
+          "name": "Get quota and usage for this key",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/usage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "usage"
+              ]
+            },
+            "description": "The charged total for the presented key and the three buckets that sum\nto it — reserved (in-flight), confirmed (provider accepted) and\nindeterminate (outcome unknown, never refunded). The period is the\ncalendar month anchored at `last_reset_at`; `period.end` is the first\ninstant of the next month in UTC. `meters` is extensible so a second\nmeter can be added without renaming fields.\n\nScope `usage:read`. D7 class A.\n"
+          },
+          "response": []
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://api.postora.cloud",
+      "type": "string"
+    },
+    {
+      "key": "partnerApiKey",
+      "value": "pk_live_REPLACE_ME",
+      "type": "string"
+    }
+  ]
+}

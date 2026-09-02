@@ -71,6 +71,7 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   get_post_status: ["posts:read"],
   schedule_post: ["posts:schedule"],
   unschedule_post: ["posts:schedule"],
+  get_usage: ["usage:read"],
 };
 
 /** D7 limiter-failure risk class per action, next to ACTION_SCOPES so an
@@ -131,7 +132,18 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   get_post_status: "A",
   schedule_post: "C",
   unschedule_post: "C",
+  get_usage: "A",
 };
+
+/**
+ * The actions whose 2xx is a billable unit in the usage ledger: exactly the
+ * ones that reserve monthly quota before dispatch. A set, not a flag on the
+ * policy rows above, so a future publish action is billed by an explicit
+ * decision here rather than by inheriting a default. The /v1 messages route
+ * is registered under `send_template` for every message type, so text and
+ * media sends are billed through this same entry.
+ */
+export const QUOTA_RESERVING_ACTIONS: ReadonlySet<string> = new Set(["send_template"]);
 
 /**
  * The actions the FROZEN ALIAS accepts. D1 sunsets that door and forbids new

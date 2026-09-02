@@ -186,7 +186,9 @@ export async function postMedia(
     return v1ErrorResponse("idempotency_indeterminate", requestId);
   }
   if (claim.outcome === "replay") {
-    return v1JsonResponse(claim.body, requestId, claim.httpStatus);
+    const replayed = v1JsonResponse(claim.body, requestId, claim.httpStatus);
+    replayed.headers.set("Idempotency-Replayed", "true");
+    return replayed;
   }
 
   const stored = await storePartnerMedia({

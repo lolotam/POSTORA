@@ -4,7 +4,15 @@
 // hex digest, following the mcp_oauth_tokens precedent — a database leak
 // yields no usable credentials.
 
-const KEY_PREFIX = "pk_live_";
+// One prefix per environment (10.5). The prefix is the door's first check,
+// before any lookup, so a staging key never costs production a database read
+// and a restored production dump cannot make production keys usable in
+// staging. The database's partner_key_environment_for_prefix() is the same
+// rule; a row whose prefix disagrees with its environment is refused there.
+const KEY_PREFIX_BY_ENVIRONMENT = {
+  production: "pk_live_",
+  staging: "pk_test_",
+} as const;
 const BASE62 = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 // The scope vocabularies live in partnerScopes.ts, which owns decision D3's
@@ -35,18 +43,39 @@ export class PartnerAuthError extends Error {
   }
 }
 
+export type PartnerEnvironment = keyof typeof KEY_PREFIX_BY_ENVIRONMENT;
+
+/**
+ * Which environment this door is. Read from PARTNER_API_ENVIRONMENT; unset
+ * means production, because the one deployment that exists today has it
+ * unset and must keep working unchanged. Any other value is a misconfigured
+ * door, and a misconfigured door refuses every key rather than guessing —
+ * the log names the variable and never its value or any key.
+ */
+export function doorEnvironment(
+  raw: string | undefined = Deno.env.get("PARTNER_API_ENVIRONMENT"),
+): PartnerEnvironment {
+  if (raw === undefined || raw === "") return "production";
+  if (raw === "staging" || raw === "production") return raw;
+  console.error("[partner-api] PARTNER_API_ENVIRONMENT is not staging or production; refusing all keys");
+  throw new PartnerAuthError("Server misconfigured", "internal_error", 500);
+}
+
 /** Async because SubtleCrypto's digest is the only hash available in the
  *  edge runtime — node:crypto is not reliably present. */
-export async function generatePartnerKey(): Promise<{
+export async function generatePartnerKey(
+  environment: PartnerEnvironment = "production",
+): Promise<{
   key: string;
   prefix: string;
   hash: string;
 }> {
+  const prefix = KEY_PREFIX_BY_ENVIRONMENT[environment];
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
   let body = "";
   for (const b of bytes) body += BASE62[b % BASE62.length];
-  const key = KEY_PREFIX + body;
+  const key = prefix + body;
   return { key, prefix: key.slice(0, 12), hash: await hashPartnerKey(key) };
 }
 
@@ -65,8 +94,14 @@ export async function authenticatePartnerKey(
   client: any,
   presentedKey: string,
   now: Date = new Date(),
+  // Evaluated before the body runs, so a misconfigured door throws before any
+  // key is hashed or looked up. Tests pass it explicitly to drive either door.
+  doorEnv: PartnerEnvironment = doorEnvironment(),
 ): Promise<PartnerKeyRecord> {
-  if (!presentedKey || !presentedKey.startsWith(KEY_PREFIX)) {
+  // The prefix layer: a key from the other environment is refused here, before
+  // any lookup, with the same answer an unknown key gets — so a production
+  // door never confirms that a staging key exists, and vice versa.
+  if (!presentedKey || !presentedKey.startsWith(KEY_PREFIX_BY_ENVIRONMENT[doorEnv])) {
     throw new PartnerAuthError("Invalid API key", "invalid_key", 401);
   }
 
@@ -75,14 +110,26 @@ export async function authenticatePartnerKey(
     .from("partner_api_keys")
     .select(
       "id, workspace_id, social_account_id, key_prefix, scopes, " +
-        "rate_limit_per_min, monthly_quota, expires_at, revoked_at",
+        "rate_limit_per_min, monthly_quota, expires_at, revoked_at, environment",
     )
     .eq("key_hash", hash)
     .maybeSingle();
 
   if (error) throw new PartnerAuthError("Key lookup failed", "internal_error", 500);
   // Same response for "no such key" as for a malformed one: non-enumerable.
+  // An environment mismatch shares this answer so a staging key cannot be
+  // probed for existence through a production door and a restored dump cannot
+  // be distinguished from "no such key".
   if (!data) throw new PartnerAuthError("Invalid API key", "invalid_key", 401);
+
+  // Column layer (after the lookup): the row's environment must match the
+  // door's. A missing field is treated as production because the column is
+  // NOT NULL DEFAULT production — every existing row has it, and the only
+  // fixtures that omit it are tests written before the column existed.
+  const rowEnv: string = (data.environment as string | undefined) ?? "production";
+  if (rowEnv !== doorEnv) {
+    throw new PartnerAuthError("Invalid API key", "invalid_key", 401);
+  }
 
   if (data.revoked_at) {
     throw new PartnerAuthError("API key revoked", "key_revoked", 401);

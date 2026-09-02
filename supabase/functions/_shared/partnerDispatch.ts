@@ -45,7 +45,7 @@ import {
   completeIdempotency,
   markIndeterminate,
 } from "./partnerApiIdempotency.ts";
-import { releaseQuota, reserveQuota } from "./partnerApiMetering.ts";
+import { confirmQuota, indeterminateQuota, releaseQuota, reserveQuota } from "./partnerApiMetering.ts";
 import {
   markIntentFailed,
   markIntentSent,
@@ -227,6 +227,7 @@ export async function dispatchPartnerTemplate(
     // row that says `sent` with the wamid and the replayable body, which is
     // precisely what the takeover above needs to replay instead of guessing.
     await markIntentSent(admin, intent.intentId, result.messageId, 200, body);
+    await confirmQuota(admin, record);
 
     try {
       await completeIdempotency(admin, record.id, idempotencyKey, attemptToken, 200, body);
@@ -243,10 +244,12 @@ export async function dispatchPartnerTemplate(
     // partner-facing verdict, and a webhook carrying the intent id can still
     // reconcile this row later.
     if (!(err instanceof WhatsAppOpError)) {
+      await indeterminateQuota(admin, record);
       await markIndeterminate(admin, record.id, idempotencyKey, attemptToken);
       return { outcome: "indeterminate" };
     }
     if (err.indeterminate) {
+      await indeterminateQuota(admin, record);
       await markIndeterminate(admin, record.id, idempotencyKey, attemptToken)
         .catch((e) => console.error("[partner-dispatch] indeterminate mark failed:", e));
       return { outcome: "indeterminate" };

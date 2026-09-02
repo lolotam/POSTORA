@@ -109,6 +109,8 @@ SUITES=(
   publishing_seam.sql
   partner_posts.sql
   partner_media_scan_state.sql
+  partner_usage_counters.sql
+  partner_key_environment.sql
   whatsapp_workspace_crm.sql
   import_whatsapp_contacts_to_workspace.sql
 )
@@ -766,5 +768,26 @@ for s in "${SUITES[@]}"; do
 done
 
 echo "db-harness: race fixture partner_api_race_fixture.sql intentionally NOT applied (manual concurrency rehearsal; see supabase/tests/README.md)"
+
+# The end-to-end chain test (supabase/functions/partner-api/e2e/) runs the
+# real /v1 code against THIS database through PostgREST, and needs one
+# SECURITY DEFINER fixture function that mints its tenants and keys. It is
+# installed here, after every suite has passed, and never anywhere else: it
+# is not a migration, and a throwaway database is the only place it may exist.
+# A failure to install is a failure of the run -- an E2E job that silently
+# found no fixture would report its tests as ignored, which reads as green.
+STEP="e2e fixture"
+E2E_FIXTURE="$TESTS_DIR/e2e/partner_e2e_fixture.sql"
+if [ ! -f "$E2E_FIXTURE" ]; then
+  echo "db-harness: FAIL: E2E fixture $E2E_FIXTURE is missing." >&2
+  exit 1
+fi
+if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -f "$E2E_FIXTURE" >"$OUT" 2>"$ERR"; then
+  echo "db-harness: FAIL: installing the E2E fixture failed:" >&2
+  sed 's/^/  /' "$ERR" >&2
+  exit 1
+fi
+echo "db-harness: E2E fixture installed (partner_e2e_fixture)"
+
 echo "db-harness: OK — baseline ($MARKER) + ${#NEW_MIGRATIONS[@]} newer migrations + ${#SUITES[@]} suites passed"
 echo "db-harness: harness database left in place for inspection: $(redacted_url)"

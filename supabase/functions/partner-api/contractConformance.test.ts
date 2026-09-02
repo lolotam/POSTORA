@@ -341,15 +341,12 @@ const MOUNT = "/functions/v1/partner-api";
  * reason — asserted to be exactly the complement of the documented set, in
  * the same shape as UNREACHABLE_WHILE_SEND_IS_SUSPENDED above.
  *
- * An entry here is a tracked decision. An absence would be an oversight, and
- * the difference matters: the document tells partners that everything in
- * `paths` is served, and a list nobody maintains is how the opposite claim
- * quietly becomes false too.
+ * This map is **empty by design** as of Phase 10.3: every served /v1 route
+ * is now documented in `docs/api/openapi.yaml`. If a route is ever added
+ * without documentation, list it here with a reason until the document
+ * catches up; an undocumented route must never be silent.
  */
-const SERVED_BUT_UNDOCUMENTED: Record<string, string> = {
-  "/v1/messages": "3.5 — request/response schemas not published yet; send is suspended",
-  "/v1/templates": "3.7 — response schema follows Meta's shape, not published yet",
-};
+const SERVED_BUT_UNDOCUMENTED: Record<string, string> = {};
 
 Deno.test("the document describes no path the router does not serve, and the gap is enumerated", async () => {
   const routerSrc = await Deno.readTextFile(new URL("./v1/router.ts", import.meta.url));

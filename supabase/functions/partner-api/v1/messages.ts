@@ -40,12 +40,23 @@ const MEDIA_TYPES = new Set(["image", "video", "audio", "document"]);
  *  exist", distinct from a permission problem or an outage. */
 const SUPPORTED_TYPES = new Set(["text", "template", ...MEDIA_TYPES]);
 
-function json(body: unknown, status: number, requestId: string): Response {
-  return new Response(JSON.stringify(body), {
+/**
+ * A dispatch verdict as a /v1 response. A 2xx body carries `request_id` (D2:
+ * correlation must not depend on failing), stamped at response time so a
+ * replay names the request that asked, not the one that sent. A replay also
+ * says so in `Idempotency-Replayed`, as the alias does — the same wire fact
+ * on both doors.
+ */
+function json(body: unknown, status: number, requestId: string, replayed = false): Response {
+  const stamped = status < 300 && body !== null && typeof body === "object"
+    ? { ...(body as Record<string, unknown>), request_id: requestId }
+    : body;
+  return new Response(JSON.stringify(stamped), {
     status,
     headers: {
       "Content-Type": "application/json",
       "X-Postora-Request-Id": requestId,
+      ...(replayed ? { "Idempotency-Replayed": "true" } : {}),
     },
   });
 }
@@ -337,7 +348,7 @@ export async function postMessages(
   if (claim.outcome === "replay") {
     // A settled outcome from a previous attempt. Replaying is not
     // re-dispatching; the provider is never touched.
-    return json(claim.body, claim.httpStatus, requestId);
+    return json(claim.body, claim.httpStatus, requestId, true);
   }
 
   const dispatched = await dispatchPartnerTemplate({
@@ -353,7 +364,7 @@ export async function postMessages(
     case "sent":
       return json(dispatched.body, 200, requestId);
     case "replayed":
-      return json(dispatched.body, dispatched.httpStatus, requestId);
+      return json(dispatched.body, dispatched.httpStatus, requestId, true);
     case "indeterminate":
       // Terminal, and never advertised as retryable (D13 R3).
       return v1ErrorResponse("idempotency_indeterminate", requestId);

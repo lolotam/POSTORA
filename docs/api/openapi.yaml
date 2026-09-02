@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Postora Partner API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Partner API v1 — OpenAPI 3.1 skeleton (deliverable 0.7).
 
@@ -27,13 +27,11 @@ info:
       actions are accepted on it (D1); the alias and `/v1` have DIFFERENT
       error envelopes on purpose (spec D2), and they must not be unified.
 
-    SERVED BUT NOT YET DESCRIBED BELOW: `POST /v1/messages` and
-    `GET /v1/templates`. Their request and response schemas are settled in
-    code but not yet published here, so `paths` is currently a SUBSET of what
-    is served — do not read absence from `paths` as "not served". That gap is
-    enumerated and asserted in `partner-api/contractConformance.test.ts`, so
-    it stays a tracked list rather than becoming an oversight, and it closes
-    when those two are documented.
+    Every served `/v1` route is described in `paths` — the gap that
+    used to be tracked in `partner-api/contractConformance.test.ts` as
+    `SERVED_BUT_UNDOCUMENTED` is now empty by design. If a route is ever
+    added without documentation, that map must list it with a reason until the
+    document catches up; an undocumented route must never be silent.
 
     <!-- BEGIN Phase 9 rich-media block (feat/partner-api-rich-media) -->
     ### POST /v1/messages — capability matrix (Phase 9.2)
@@ -80,7 +78,9 @@ info:
     Nothing in `paths` is unserved, which is the direction that would mislead
     a partner into writing a call that 404s. That direction IS asserted.
 
-    Not built at all: `GET /v1/usage` (2.7), media, publishing and webhooks.
+    Not built: `POST /v1/posts/{id}/publish` (a partner publishes by
+    scheduling), OAuth, contacts, analytics and AI surfaces. Everything else
+    the PRD names for v1 is served and described here.
 
     Every `/v1` read is tenant-scoped to the accounts BOUND to the presented
     key (`partner_api_key_accounts`, spec D4) — not to the key's workspace,
@@ -331,6 +331,8 @@ paths:
         Scope `media:write`. D7 class C — it fails CLOSED on a limiter outage,
         because an unmetered durable write during an incident is how one outage
         becomes a bill.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
@@ -435,6 +437,178 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/messages:
+    post:
+      operationId: sendMessage
+      summary: Send a WhatsApp message
+      description: |
+        Sends a WhatsApp message on behalf of the account bound to the
+        presented key. The workspace's single WhatsApp account is resolved
+        from the key binding — there is no `account_id` in the body.
+
+        `Idempotency-Key` is **required**. A retry with the same key and an
+        identical body replays the previous response; a different body with the
+        same key answers `idempotency_conflict` (409). An in-flight duplicate
+        answers `idempotency_in_progress` (409, `retryable:true`), and a lost
+        outcome answers `idempotency_indeterminate` (409). See
+        `components.headers.Idempotency-Key` and `Idempotency-Replayed`.
+
+        `type` discriminates the three request shapes:
+
+        - `text` — free-form session message (`text.body` required, inside the
+          24-hour service window).
+        - `template` — approved template (`template.name` required,
+          `template.language` defaults to `en_US`, optional `components`).
+          **Currently SUSPENDED** as a policy state (decision record
+          2026-08-30): a `type: template` request answers
+          `temporarily_unavailable` 503 `retryable:false`. Re-enabling is an
+          owner decision announced in the changelog; retrying does not help.
+          The endpoint exists; one message type is suspended.
+        - `image` | `video` | `audio` | `document` — media send referencing a
+          `media_id` from `POST /v1/media`. `caption` is optional and
+          **forbidden for `audio`** (`invalid_request`); `filename` is optional
+          for `document`.
+
+        Capability is checked at the door via the 9.2 matrix before any side
+        effect (no media row read, no signed URL minted, no idempotency key
+        consumed, no dispatch intent): an `evolution_qr` account answers
+        `unsupported_direct_qr` (400) for every type.
+
+        Scope: `messages:send` for `text` and media; `messages:send` **or**
+        legacy `whatsapp:template.send` for `template` (router `send_template`
+        satisfies either; `send_text`/`send_media` require the generic scope
+        only). D7 class C — fails closed on a limiter outage
+        (`limiter_unavailable` 503 `retryable:true`).
+
+        Error mapping (every code this path can emit, pinned in
+        `v1/errors.ts:V1_ERROR_POLICY`):
+
+        - 400 `invalid_request` — malformed JSON, missing/invalid
+          `recipient_phone`, `text.body`, `template.name`, kind mismatch,
+          caption on audio
+        - 400 `missing_idempotency_key` — no `Idempotency-Key` header
+        - 400 `unsupported_direct_qr` — `evolution_qr` connection mode
+        - 401 `account_needs_reauth` — token expired or `needs_reauth`
+        - 403 `insufficient_scope` — key lacks the required scope for this type
+        - 404 `resource_not_found` — malformed or cross-workspace `media_id`
+        - 409 `idempotency_conflict` / `idempotency_in_progress` /
+          `idempotency_indeterminate` — idempotency guard
+        - 409 `account_not_connected` — account inactive or not WhatsApp
+        - 409 `media_pending` — media `scan_state` is `pending` (`retryable:true`)
+        - 422 `invalid_recipient` — 131026
+        - 422 `outside_session_window` — 131047
+        - 422 `template_not_approved` — 132000/132001/132005/132007
+        - 422 `media_rejected` — media `scan_state` is `rejected`
+        - 422 `unsupported_capability` — unknown `type`
+        - 429 `quota_exceeded` — monthly quota exhausted
+        - 429 `rate_limited` — per-minute limit
+        - 502 `meta_error` — Meta 5xx / unparseable / missing message id
+        - 503 `temporarily_unavailable` — `type: template` suspension (`retryable:false`)
+        - 503 `limiter_unavailable` — rate limiter outage (class C fail-closed, `retryable:true`)
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - $ref: '#/components/schemas/TextMessageRequest'
+                - $ref: '#/components/schemas/TemplateMessageRequest'
+                - $ref: '#/components/schemas/MediaMessageRequest'
+              discriminator:
+                propertyName: type
+                mapping:
+                  text: '#/components/schemas/TextMessageRequest'
+                  template: '#/components/schemas/TemplateMessageRequest'
+                  image: '#/components/schemas/MediaMessageRequest'
+                  video: '#/components/schemas/MediaMessageRequest'
+                  audio: '#/components/schemas/MediaMessageRequest'
+                  document: '#/components/schemas/MediaMessageRequest'
+      responses:
+        '200':
+          description: Accepted by Meta.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageAcceptedResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/templates:
+    get:
+      operationId: listTemplates
+      summary: List approved WhatsApp templates
+      description: |
+        The approved template catalogue for the bound WhatsApp account's
+        WABA. Proxied from Meta Graph `GET /{waba_id}/message_templates`
+        via `whatsappPartnerOps.listTemplates` — fields follow Meta's shape
+        (`name`, `language`, `status`, `category`, `components`) verbatim.
+
+        `next_cursor` is always present and always **null**: the Graph listing
+        is returned whole (limit 100) so there is no next page to name. Every
+        `/v1` listing spells that the same way via `CollectionEnvelope`; a
+        client's "loop while next_cursor is not null" must terminate.
+
+        Scope `templates:read` (or legacy `whatsapp:templates.read`). D7
+        class B — fails closed on a limiter outage (`limiter_unavailable`
+        503 `retryable:true`), because an unbounded outbound call during an
+        incident must not become a second outage.
+
+        Errors: `account_not_connected` 409 (no WABA id), `account_needs_reauth`
+        401, `insufficient_scope` 403, `meta_error` 502, `rate_limited` 429,
+        `limiter_unavailable` 503.
+      responses:
+        '200':
+          description: The templates.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CollectionEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/WhatsAppTemplate'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/usage:
+    get:
+      operationId: getUsage
+      summary: Get quota and usage for this key
+      description: |
+        The charged total for the presented key and the three buckets that sum
+        to it — reserved (in-flight), confirmed (provider accepted) and
+        indeterminate (outcome unknown, never refunded). The period is the
+        calendar month anchored at `last_reset_at`; `period.end` is the first
+        instant of the next month in UTC. `meters` is extensible so a second
+        meter can be added without renaming fields.
+
+        Scope `usage:read`. D7 class A.
+      responses:
+        '200':
+          description: The current usage.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageResponse'
         default:
           $ref: '#/components/responses/V1Error'
 
@@ -945,8 +1119,8 @@ components:
           type: string
           description: |
             Correlation handle — same value as `X-Postora-Request-Id` header.
-            Format `req_…` / UUID in current alias; treat as opaque string.
-          example: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+            A UUID (crypto.randomUUID()); treat as an opaque string.
+          example: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
         details:
           type: object
           description: Optional machine-readable context (e.g. `meta_code` from Meta Graph API).
@@ -1225,6 +1399,172 @@ components:
           type: [string, 'null']
           description: The provider's message id (a WhatsApp `wamid`). Separate field, never the primary id (§7.1).
           example: wamid.HBgLMTU1NTAwMDAwMDAVAgARGB
+
+    MessageAcceptedResponse:
+      type: object
+      description: |
+        Success body for `POST /v1/messages`, as built in
+        `_shared/partnerDispatch.ts:219-224` (`dispatchPartnerTemplate`)
+        and returned verbatim via `partner-api/v1/messages.ts:352-356`.
+        `message_id` is the provider's `wamid`; `state` is always
+        `accepted_by_meta` on this path; `recorded_in_inbox` is false when
+        the inbox persist failed (the send was still accepted). `request_id`
+        mirrors `X-Postora-Request-Id` for correlation.
+      required: [success, message_id, state, recorded_in_inbox, request_id]
+      properties:
+        success:
+          type: boolean
+          const: true
+          example: true
+        message_id:
+          type: string
+          description: The provider message id (wamid).
+          example: wamid.HBgLMTU1NTAwMDAwMDAVAgARGB
+        state:
+          type: string
+          enum: [accepted_by_meta]
+          example: accepted_by_meta
+        recorded_in_inbox:
+          type: boolean
+          description: Whether the outbound inbox row was recorded.
+          example: true
+        request_id:
+          type: string
+          description: Correlation handle, same as `X-Postora-Request-Id`.
+          example: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+
+    TextMessageRequest:
+      type: object
+      description: |
+        `type: text` send. Free-form session message — Meta refuses it with
+        131047 `outside_session_window` outside the 24-hour window.
+      required: [type, recipient_phone, text]
+      properties:
+        type:
+          type: string
+          enum: [text]
+          example: text
+        recipient_phone:
+          type: string
+          description: Recipient phone in E.164.
+          example: "+15550000000"
+        text:
+          type: object
+          required: [body]
+          properties:
+            body:
+              type: string
+              description: The text body.
+              example: "Hello from Postora"
+          example:
+            body: "Hello from Postora"
+
+    TemplateMessageRequest:
+      type: object
+      description: |
+        `type: template` send. References an approved template by name.
+        **Currently SUSPENDED** — answers `temporarily_unavailable` 503
+        `retryable:false` as a policy state (the endpoint exists; this type
+        is suspended). Text and media sends are live.
+      required: [type, recipient_phone, template]
+      properties:
+        type:
+          type: string
+          enum: [template]
+          example: template
+        recipient_phone:
+          type: string
+          description: Recipient phone in E.164.
+          example: "+15550000000"
+        template:
+          type: object
+          required: [name]
+          properties:
+            name:
+              type: string
+              description: Approved template name.
+              example: hello_world
+            language:
+              type: string
+              description: BCP-47 language code, defaults to `en_US`.
+              example: en_US
+            components:
+              type: array
+              description: Template components (header/body/button parameters).
+              items:
+                type: object
+                additionalProperties: true
+              example: []
+          example:
+            name: hello_world
+            language: en_US
+
+    MediaMessageRequest:
+      type: object
+      description: |
+        `type: image | video | audio | document` send. References a
+        `media_id` from `POST /v1/media` (workspace-owned, sniffed bytes).
+        No external URL is accepted. `caption` is optional and **forbidden
+        for `audio`** (`invalid_request`); `filename` is optional for
+        `document` and carried as the WhatsApp `filename` field.
+      required: [type, recipient_phone, media_id]
+      properties:
+        type:
+          type: string
+          enum: [image, video, audio, document]
+          example: image
+        recipient_phone:
+          type: string
+          description: Recipient phone in E.164.
+          example: "+15550000000"
+        media_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+          pattern: '^media_[A-Za-z0-9_-]+$'
+          description: Workspace-owned media id from `POST /v1/media`.
+          example: media_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1
+        caption:
+          type: string
+          description: |
+            Optional caption for image/video/document. Forbidden for audio —
+            the route refuses it with `invalid_request` rather than letting
+            Meta reject an unknown field the partner did not knowingly set.
+          example: "Check this out"
+        filename:
+          type: string
+          description: Optional filename for document, shown to recipient.
+          example: "invoice.pdf"
+
+    WhatsAppTemplate:
+      type: object
+      description: |
+        An approved WhatsApp template as returned by
+        `whatsappPartnerOps.listTemplates` (Meta Graph shape, proxied verbatim).
+      required: [name, language, status, category, components]
+      properties:
+        name:
+          type: string
+          example: hello_world
+        language:
+          type: string
+          example: en_US
+        status:
+          type: string
+          description: Meta approval status (e.g. `APPROVED`).
+          example: APPROVED
+        category:
+          type: string
+          description: Template category (e.g. `MARKETING`, `UTILITY`).
+          example: MARKETING
+        components:
+          type: array
+          description: |
+            Template components (header, body, buttons) as Meta returns them.
+            Rendered by the Postora template UI.
+          items:
+            type: object
+            additionalProperties: true
+          example: []
 
     MediaFile:
       type: object
@@ -1774,6 +2114,65 @@ components:
           type: [string, 'null']
           description: Truncated to 300 characters.
 
+    UsageMeter:
+      type: object
+      description: |
+        One quota meter. `charged` is the sum the cap enforces; the three
+        buckets explain where that sum comes from. `limit` null means unlimited.
+      required: [meter, limit, reserved, confirmed, indeterminate, charged]
+      properties:
+        meter:
+          type: string
+          example: messages
+        limit:
+          type: [integer, 'null']
+          description: The monthly quota, or null when unlimited.
+        reserved:
+          type: integer
+          minimum: 0
+        confirmed:
+          type: integer
+          minimum: 0
+        indeterminate:
+          type: integer
+          minimum: 0
+        charged:
+          type: integer
+          minimum: 0
+
+    UsageResponse:
+      type: object
+      description: |
+        Usage and quota for the presented key. `meters` is extensible so a
+        second meter can be added without renaming fields.
+      required: [period, meters, rate_limit, request_id]
+      properties:
+        period:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+              description: The start of the current quota period (last_reset_at).
+            end:
+              type: string
+              format: date-time
+              description: The first instant of the next calendar month in UTC.
+        meters:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsageMeter'
+        rate_limit:
+          type: object
+          required: [per_minute]
+          properties:
+            per_minute:
+              type: integer
+              minimum: 1
+        request_id:
+          type: string
+
     CollectionEnvelope:
       type: object
       description: |
@@ -1817,6 +2216,20 @@ components:
       example: eyJpZCI6Im1zZ18wMUgifQ
 
   parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+        example: 550e8400-e29b-41d4-a716-446655440000
+      description: |
+        Caller-supplied key for idempotent mutation. A retry with the same
+        key and an identical body replays the previous response; a different
+        body with the same key answers `idempotency_conflict` (409). See
+        `components.headers.Idempotency-Key` and `Idempotency-Replayed`.
+
     Cursor:
       name: cursor
       in: query
@@ -1957,7 +2370,7 @@ components:
                   code: rate_limited
                   message: Rate limit exceeded
                   retryable: true
-                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+                  request_id: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
             limiterUnavailable:
               summary: 503 limiter_unavailable (retryable, B/C fail-closed)
               value:
@@ -1965,7 +2378,7 @@ components:
                   code: limiter_unavailable
                   message: Rate limiter is unavailable; retry shortly
                   retryable: true
-                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+                  request_id: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
             suspended:
               summary: 503 temporarily_unavailable (NOT retryable, no Retry-After)
               value:
@@ -1973,7 +2386,7 @@ components:
                   code: temporarily_unavailable
                   message: This action is temporarily suspended; see the Partner API changelog. Retrying will not succeed until it is re-enabled
                   retryable: false
-                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+                  request_id: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
 
     # Explicit rate-limit response-class documentation (plan §1.5, index.ts comments).
     # This is not a separate schema — it is the contract for when the headers

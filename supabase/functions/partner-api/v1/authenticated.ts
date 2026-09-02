@@ -40,9 +40,11 @@ import {
 import {
   checkRateLimit,
   RateLimitedError,
+  recordUsage,
   type LimiterRiskClass,
+  type UsageInput,
 } from "../../_shared/partnerApiMetering.ts";
-import { satisfyingScopesFor } from "../router.ts";
+import { QUOTA_RESERVING_ACTIONS, satisfyingScopesFor } from "../router.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import type { WhatsAppOpsContext } from "../../_shared/whatsappPartnerOps.ts";
 
@@ -96,7 +98,18 @@ export function withPartnerAuth(
     // The door's factory wins when it supplies one: /v1 and the alias then
     // share a client, and a test can stub the Supabase boundary for both.
     const admin = (doorFactory ?? adminFactory)();
-    let record: PartnerKeyRecord;
+    let record: PartnerKeyRecord | undefined;
+
+    // Every response produced once the key is known leaves one usage row
+    // behind it (10.1). Written AFTER the response exists and never able to
+    // alter it: recordUsage swallows its own errors, and the edge runtime
+    // offers no background task to defer this to, so it is awaited on the
+    // way out. A failure before the key resolved has nothing to attribute
+    // and writes nothing — that is the non-enumerability rule, not a gap.
+    const ledgered = async (res: Response): Promise<Response> => {
+      if (record) await recordUsage(admin, await usageRowFor(record, action, res));
+      return res;
+    };
 
     try {
       // The same header the document declares and the alias reads. A missing
@@ -108,11 +121,11 @@ export function withPartnerAuth(
         // An action this door offers but the policy table does not know is a
         // programming error, not a partner error — fail closed and loudly.
         console.error(`[partner-api] v1 route declares unknown action "${action}"`);
-        return v1ErrorResponse("internal_error", requestId);
+        return ledgered(v1ErrorResponse("internal_error", requestId));
       }
       if (satisfying !== null) assertActionAuthorized(record, action, satisfying);
     } catch (err) {
-      return authErrorToResponse(err, requestId);
+      return ledgered(authErrorToResponse(err, requestId));
     }
 
     // The limiter runs AFTER authorization: an unauthorized caller must not
@@ -128,17 +141,69 @@ export function withPartnerAuth(
         };
       }
     } catch (err) {
-      return authErrorToResponse(err, requestId);
+      if (err instanceof RateLimitedError) {
+        // The refusal itself proves nothing remains in the window, so
+        // Remaining is 0 without an RPC number; Reset and Retry-After only
+        // when the limiter computed one — the same rule the alias applies.
+        return ledgered(v1ErrorResponse("rate_limited", requestId, {
+          headers: {
+            "X-RateLimit-Limit": String(record.rateLimitPerMin),
+            "X-RateLimit-Remaining": "0",
+            ...(err.resetSeconds !== null
+              ? { "X-RateLimit-Reset": String(err.resetSeconds), "Retry-After": String(err.resetSeconds) }
+              : {}),
+          },
+        }));
+      }
+      return ledgered(authErrorToResponse(err, requestId));
     }
 
-    const res = await handler(req, { admin, record, requestId, rateHeaders }, params);
+    let res: Response;
+    try {
+      res = await handler(req, { admin, record, requestId, rateHeaders }, params);
+    } catch (err) {
+      // Caught here rather than left to the /v1 dispatcher's catch so the
+      // 500 is attributed to the key in the ledger like every other outcome.
+      console.error(`[partner-api] v1 handler error (request ${requestId}, ${action}):`, err);
+      res = v1ErrorResponse("internal_error", requestId);
+    }
     // A handler that built its own response still gets the budget headers,
     // so every post-limiter /v1 response carries them exactly once.
     for (const [k, v] of Object.entries(rateHeaders)) {
       if (!res.headers.has(k)) res.headers.set(k, v);
     }
-    return res;
+    return ledgered(res);
   };
+}
+
+async function usageRowFor(
+  record: PartnerKeyRecord,
+  action: string,
+  res: Response,
+): Promise<UsageInput> {
+  // A replay is the stored verdict handed back: no reservation, no provider
+  // call, nothing to bill again. The handler already says so on the wire
+  // (Idempotency-Replayed), and that header is the signal here — one fact,
+  // read where it is emitted, rather than a second flag to keep in step.
+  const replayed = res.headers.get("Idempotency-Replayed") === "true";
+  return {
+    keyId: record.id,
+    workspaceId: record.workspaceId,
+    action,
+    billable: QUOTA_RESERVING_ACTIONS.has(action) && res.status < 300 && !replayed,
+    httpStatus: res.status,
+    errorCode: res.status >= 400 ? await errorCodeOf(res) : undefined,
+  };
+}
+
+/** The typed code from a v1 error envelope; undefined for a body that is not one. */
+async function errorCodeOf(res: Response): Promise<string | undefined> {
+  try {
+    const body = await res.clone().json() as { error?: { code?: unknown } };
+    return typeof body?.error?.code === "string" ? body.error.code : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
