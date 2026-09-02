@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { AdminLayout } from "@/components/admin/AdminLayout";
+import { AiUsageAnalytics } from "@/components/admin/AiUsageAnalytics";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -464,6 +465,8 @@ export default function AdminAnalytics() {
             </div>
           </>
         )}
+
+        <AiUsageAnalytics />
       </div>
     </AdminLayout>
   );
