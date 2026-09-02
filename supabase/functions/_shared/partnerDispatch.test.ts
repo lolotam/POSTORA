@@ -308,3 +308,58 @@ Deno.test("WhatsAppOpError with indeterminate=true is distinguishable at the dis
   assertEquals(indeterminate.indeterminate, true);
   assertEquals(definite.indeterminate, false);
 });
+
+Deno.test("dispatch: success calls reserve then confirm and never release", async () => {
+  const h = freshHarness();
+  const result = await dispatchPartnerTemplate(deps(h, okFetcher));
+  assertEquals(result.outcome, "sent");
+  assertEquals(h.read().rpcCalls, ["reserve_partner_quota", "confirm_partner_quota"]);
+});
+
+Deno.test("dispatch: definite rejection calls reserve then release and never confirm", async () => {
+  const h = freshHarness();
+  const rejectingFetcher: Fetcher = () =>
+    Promise.resolve(new Response(
+      JSON.stringify({ error: { code: 131047, message: "Re-engagement message" } }),
+      { status: 400 },
+    ));
+  const result = await dispatchPartnerTemplate(deps(h, rejectingFetcher));
+  assertEquals(result.outcome, "failed");
+  assertEquals(h.read().rpcCalls, ["reserve_partner_quota", "release_partner_quota"]);
+});
+
+Deno.test("dispatch: indeterminate fetcher throw calls reserve then indeterminate and never release", async () => {
+  const h = freshHarness();
+  const explodingFetcher: Fetcher = () => Promise.reject(new Error("connection reset mid-flight"));
+  const result = await dispatchPartnerTemplate(deps(h, explodingFetcher));
+  assertEquals(result.outcome, "indeterminate");
+  assertEquals(h.read().rpcCalls, ["reserve_partner_quota", "indeterminate_partner_quota"]);
+});
+
+Deno.test("dispatch: takeover of an existing intended row calls reserve then release and never confirm or indeterminate", async () => {
+  const h = freshHarness();
+  h.admin.from("partner_dispatch_intents").insert({
+    id: "33333333-3333-4333-8333-333333333333",
+    workspace_id: "ws-crash",
+    key_id: h.record.id,
+    social_account_id: "acct-crash",
+    idempotency_key: KEY,
+    state: "intended",
+    request_summary: {},
+  });
+  h.simulateTakeoverClaim("attempt-2");
+  let fetchCalls = 0;
+  const counting: Fetcher = () => {
+    fetchCalls += 1;
+    return Promise.resolve(new Response("{}", { status: 200 }));
+  };
+  const result = await dispatchPartnerTemplate({
+    admin: h.admin, record: h.record, ctx: h.ctx,
+    idempotencyKey: KEY, attemptToken: "attempt-2",
+    input: { recipientPhone: "96512345678", templateName: "t_v1", templateLanguage: "ar" },
+    fetcher: counting,
+  });
+  assertEquals(result.outcome, "indeterminate");
+  assertEquals(fetchCalls, 0);
+  assertEquals(h.read().rpcCalls, ["reserve_partner_quota", "release_partner_quota"]);
+});

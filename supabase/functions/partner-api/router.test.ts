@@ -3,6 +3,7 @@ import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   ACTION_RISK_CLASSES,
   ACTION_SCOPES,
+  QUOTA_RESERVING_ACTIONS,
   isSendAction,
   limiterRiskClassFor,
   satisfyingScopesFor,
@@ -56,4 +57,21 @@ Deno.test("every scoped action also carries a risk class, and vice versa", () =>
     Object.keys(ACTION_SCOPES).sort(),
     Object.keys(ACTION_RISK_CLASSES).sort(),
   );
+});
+
+Deno.test("every quota-reserving action is a known scoped action", () => {
+  // A reservation without a scope would be an unbillable billable action, or
+  // a billable action nobody can authorize — either way a silent policy gap.
+  for (const action of QUOTA_RESERVING_ACTIONS) {
+    assertEquals(
+      Object.hasOwn(ACTION_SCOPES, action),
+      true,
+      `${action} in QUOTA_RESERVING_ACTIONS but not in ACTION_SCOPES`,
+    );
+  }
+});
+
+Deno.test("get_usage declares its scope and risk class", () => {
+  assertEquals(satisfyingScopesFor("get_usage"), ["usage:read"]);
+  assertEquals(limiterRiskClassFor("get_usage"), "A");
 });

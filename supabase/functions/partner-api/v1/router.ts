@@ -33,6 +33,7 @@ import {
   unschedulePost,
 } from "./posts.ts";
 import { getTemplates } from "./templates.ts";
+import { getUsage } from "./usage.ts";
 import {
   createWebhook,
   deleteWebhook,
@@ -106,6 +107,12 @@ export interface V1Route {
  * asserts against.
  */
 export const V1_ROUTES: V1Route[] = [
+  {
+    pattern: "/v1/usage",
+    methods: {
+      GET: withPartnerAuth("get_usage", "A", getUsage),
+    },
+  },
   {
     pattern: "/v1/accounts",
     methods: {

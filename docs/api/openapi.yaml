@@ -438,6 +438,32 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/usage:
+    get:
+      operationId: getUsage
+      summary: Get quota and usage for this key
+      description: |
+        The charged total for the presented key and the three buckets that sum
+        to it — reserved (in-flight), confirmed (provider accepted) and
+        indeterminate (outcome unknown, never refunded). The period is the
+        calendar month anchored at `last_reset_at`; `period.end` is the first
+        instant of the next month in UTC. `meters` is extensible so a second
+        meter can be added without renaming fields.
+
+        Scope `usage:read`. D7 class A.
+      responses:
+        '200':
+          description: The current usage.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/posts:
     post:
       operationId: createPost
@@ -1773,6 +1799,65 @@ components:
         last_refresh_error:
           type: [string, 'null']
           description: Truncated to 300 characters.
+
+    UsageMeter:
+      type: object
+      description: |
+        One quota meter. `charged` is the sum the cap enforces; the three
+        buckets explain where that sum comes from. `limit` null means unlimited.
+      required: [meter, limit, reserved, confirmed, indeterminate, charged]
+      properties:
+        meter:
+          type: string
+          example: messages
+        limit:
+          type: [integer, 'null']
+          description: The monthly quota, or null when unlimited.
+        reserved:
+          type: integer
+          minimum: 0
+        confirmed:
+          type: integer
+          minimum: 0
+        indeterminate:
+          type: integer
+          minimum: 0
+        charged:
+          type: integer
+          minimum: 0
+
+    UsageResponse:
+      type: object
+      description: |
+        Usage and quota for the presented key. `meters` is extensible so a
+        second meter can be added without renaming fields.
+      required: [period, meters, rate_limit, request_id]
+      properties:
+        period:
+          type: object
+          required: [start, end]
+          properties:
+            start:
+              type: string
+              format: date-time
+              description: The start of the current quota period (last_reset_at).
+            end:
+              type: string
+              format: date-time
+              description: The first instant of the next calendar month in UTC.
+        meters:
+          type: array
+          items:
+            $ref: '#/components/schemas/UsageMeter'
+        rate_limit:
+          type: object
+          required: [per_minute]
+          properties:
+            per_minute:
+              type: integer
+              minimum: 1
+        request_id:
+          type: string
 
     CollectionEnvelope:
       type: object

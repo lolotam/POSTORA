@@ -49,6 +49,26 @@ export async function releaseQuota(
   if (error) console.error("[partner-api] quota release failed:", error.message);
 }
 
+/** Move a reservation to confirmed after the provider definitely accepted the message. */
+export async function confirmQuota(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  record: PartnerKeyRecord,
+): Promise<void> {
+  const { error } = await client.rpc("confirm_partner_quota", { p_key_id: record.id });
+  if (error) console.error("[partner-api] quota confirm failed:", error.message);
+}
+
+/** Move a reservation to indeterminate when the provider outcome is unknown — the message may have been delivered. */
+export async function indeterminateQuota(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  record: PartnerKeyRecord,
+): Promise<void> {
+  const { error } = await client.rpc("indeterminate_partner_quota", { p_key_id: record.id });
+  if (error) console.error("[partner-api] quota indeterminate failed:", error.message);
+}
+
 /**
  * Non-send actions never reserve quota, so they update last_used_at here.
  *

@@ -37,10 +37,12 @@ export interface DurableDispatchState {
   idempotency: Array<Record<string, unknown>>;
   /** Ordered operation log, for ordering assertions. */
   log: string[];
+  /** Every quota RPC invoked, in order — for the Phase 10.1 bucket-move assertions. */
+  rpcCalls: string[];
 }
 
 export function initialDurableState(): DurableDispatchState {
-  return { providerCalls: 0, requestBodies: [], quotaReserved: 0, intents: [], idempotency: [], log: [] };
+  return { providerCalls: 0, requestBodies: [], quotaReserved: 0, intents: [], idempotency: [], log: [], rpcCalls: [] };
 }
 
 const encoder = new TextEncoder();
@@ -171,6 +173,7 @@ export function createDispatchHarness(statePath: string | null): DispatchHarness
       if (name === "reserve_partner_quota") {
         mutate((s) => {
           s.quotaReserved += 1;
+          s.rpcCalls.push(name);
           s.log.push("quota-reserved");
         });
         return Promise.resolve({ data: { allowed: true }, error: null });
@@ -178,7 +181,22 @@ export function createDispatchHarness(statePath: string | null): DispatchHarness
       if (name === "release_partner_quota") {
         mutate((s) => {
           s.quotaReserved = Math.max(0, s.quotaReserved - 1);
+          s.rpcCalls.push(name);
           s.log.push("quota-released");
+        });
+        return Promise.resolve({ error: null });
+      }
+      if (name === "confirm_partner_quota") {
+        mutate((s) => {
+          s.rpcCalls.push(name);
+          s.log.push("quota-confirmed");
+        });
+        return Promise.resolve({ error: null });
+      }
+      if (name === "indeterminate_partner_quota") {
+        mutate((s) => {
+          s.rpcCalls.push(name);
+          s.log.push("quota-indeterminate");
         });
         return Promise.resolve({ error: null });
       }
