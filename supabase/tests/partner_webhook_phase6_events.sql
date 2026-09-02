@@ -66,6 +66,7 @@ DECLARE
   result JSONB;
   rows   INTEGER;
   n      INTEGER;
+  n_after      INTEGER;
   msg_id TEXT;
   -- partner_upsert_whatsapp_message returns a 3-column row, not jsonb.
   v_rowid UUID;
@@ -441,13 +442,26 @@ BEGIN
 
   -- A 'sent' status is NOT an event (D6 R1: message.sent was renamed
   -- message.accepted; its certified producer is the dispatch settle).
+  -- Counted BEFORE and AFTER rather than against an expected total.
+  --
+  -- The first version of this assertion expected 6 (delivered + read + failed,
+  -- x2 subscriptions) and matched with LIKE 'message.%:wamid...', which also
+  -- matches `message.received:` for the same wamid -- so it read 8 and failed
+  -- for a reason that had nothing to do with 'sent'. An expected-total
+  -- assertion has to be re-derived every time a phase certifies another event;
+  -- a before/after equality says the thing actually meant -- "this transition
+  -- changes nothing" -- and stays true however the vocabulary grows.
+  SELECT count(*) INTO n FROM public.partner_webhook_deliveries
+   WHERE event_occurrence_id LIKE '%:wamid.p6.' || nonce;
+
   SELECT count(*) INTO rows FROM public.partner_apply_whatsapp_message_status(
     'wamid.p6.' || nonce, 'sent', null, null
   );
-  SELECT count(*) INTO n FROM public.partner_webhook_deliveries
-   WHERE event_occurrence_id LIKE 'message.%:wamid.p6.' || nonce;
-  IF n <> 6 THEN
-    RAISE EXCEPTION 'FAIL: a ''sent'' status changed the delivery count (expected 6: delivered+read+failed x 2 subs), got %', n;
+
+  SELECT count(*) INTO n_after FROM public.partner_webhook_deliveries
+   WHERE event_occurrence_id LIKE '%:wamid.p6.' || nonce;
+  IF n_after <> n THEN
+    RAISE EXCEPTION 'FAIL: a ''sent'' status enqueued % event(s); it must enqueue none', n_after - n;
   END IF;
   RAISE NOTICE 'PASS: a sent status updates the row and emits ZERO events';
 

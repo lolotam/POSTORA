@@ -140,9 +140,14 @@ BEGIN
   -- ==========================================================================
   -- 2. The closed event allowlist is a CHECK, not only a TypeScript constant.
   -- ==========================================================================
+  -- A name that no phase will ever certify. This used to be
+  -- 'message.received', which Phase 6 legitimately certified -- so the
+  -- assertion started failing for the RIGHT reason and had to be re-anchored
+  -- on a value the allowlist can never contain rather than on whichever
+  -- event happens to be uncertified this month.
   BEGIN
     INSERT INTO public.partner_webhooks (workspace_id, created_by_key_id, url, events, secret)
-    VALUES (ws_a, key_a, 'https://hooks.example.com/x', ARRAY['message.received'], 'whsec_x');
+    VALUES (ws_a, key_a, 'https://hooks.example.com/x', ARRAY['not.a.real.event'], 'whsec_x');
     RAISE EXCEPTION 'FAIL: an uncertified event was accepted';
   EXCEPTION WHEN check_violation THEN
     RAISE NOTICE 'PASS: only certified events may be subscribed to';
