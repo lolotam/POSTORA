@@ -1119,8 +1119,8 @@ components:
           type: string
           description: |
             Correlation handle — same value as `X-Postora-Request-Id` header.
-            Format `req_…` / UUID in current alias; treat as opaque string.
-          example: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+            A UUID (crypto.randomUUID()); treat as an opaque string.
+          example: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
         details:
           type: object
           description: Optional machine-readable context (e.g. `meta_code` from Meta Graph API).
@@ -1431,7 +1431,7 @@ components:
         request_id:
           type: string
           description: Correlation handle, same as `X-Postora-Request-Id`.
-          example: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+          example: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
 
     TextMessageRequest:
       type: object
@@ -2370,7 +2370,7 @@ components:
                   code: rate_limited
                   message: Rate limit exceeded
                   retryable: true
-                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+                  request_id: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
             limiterUnavailable:
               summary: 503 limiter_unavailable (retryable, B/C fail-closed)
               value:
@@ -2378,7 +2378,7 @@ components:
                   code: limiter_unavailable
                   message: Rate limiter is unavailable; retry shortly
                   retryable: true
-                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+                  request_id: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
             suspended:
               summary: 503 temporarily_unavailable (NOT retryable, no Retry-After)
               value:
@@ -2386,7 +2386,7 @@ components:
                   code: temporarily_unavailable
                   message: This action is temporarily suspended; see the Partner API changelog. Retrying will not succeed until it is re-enabled
                   retryable: false
-                  request_id: req_018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
+                  request_id: 018f3a2e-7b1a-7c9d-9e0f-1a2b3c4d5e6f
 
     # Explicit rate-limit response-class documentation (plan §1.5, index.ts comments).
     # This is not a separate schema — it is the contract for when the headers

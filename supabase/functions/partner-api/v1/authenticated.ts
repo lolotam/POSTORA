@@ -141,6 +141,20 @@ export function withPartnerAuth(
         };
       }
     } catch (err) {
+      if (err instanceof RateLimitedError) {
+        // The refusal itself proves nothing remains in the window, so
+        // Remaining is 0 without an RPC number; Reset and Retry-After only
+        // when the limiter computed one — the same rule the alias applies.
+        return ledgered(v1ErrorResponse("rate_limited", requestId, {
+          headers: {
+            "X-RateLimit-Limit": String(record.rateLimitPerMin),
+            "X-RateLimit-Remaining": "0",
+            ...(err.resetSeconds !== null
+              ? { "X-RateLimit-Reset": String(err.resetSeconds), "Retry-After": String(err.resetSeconds) }
+              : {}),
+          },
+        }));
+      }
       return ledgered(authErrorToResponse(err, requestId));
     }
 

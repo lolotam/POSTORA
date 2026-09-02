@@ -126,6 +126,29 @@ Deno.test("a limiter refusal is recorded as rate_limited against the key", async
   assertEquals(inserts[0].http_status, 429);
 });
 
+Deno.test("a limiter refusal publishes the budget the contract promises: Limit, Remaining 0, Reset and Retry-After", async () => {
+  const { admin } = ledgerStub({
+    limiter: { data: { allowed: false, remaining: 0, reset_seconds: 30 }, error: null },
+  });
+  const wrapped = withPartnerAuth("list_accounts", "A", ok, () => admin);
+  const res = await wrapped(get("pk_live_test"), "req-5b", {}, () => admin);
+  assertEquals(res.status, 429);
+  assertEquals(res.headers.get("X-RateLimit-Limit"), String(KEY_ROW.rate_limit_per_min));
+  assertEquals(res.headers.get("X-RateLimit-Remaining"), "0");
+  assertEquals(res.headers.get("X-RateLimit-Reset"), "30");
+  assertEquals(res.headers.get("Retry-After"), "30");
+
+  // A refusal whose reset the RPC did not compute publishes Remaining 0 and
+  // nothing invented for Reset or Retry-After.
+  const noReset = ledgerStub({ limiter: { data: { allowed: false }, error: null } });
+  const wrappedNoReset = withPartnerAuth("list_accounts", "A", ok, () => noReset.admin);
+  const bare = await wrappedNoReset(get("pk_live_test"), "req-5c", {}, () => noReset.admin);
+  assertEquals(bare.status, 429);
+  assertEquals(bare.headers.get("X-RateLimit-Remaining"), "0");
+  assertEquals(bare.headers.get("X-RateLimit-Reset"), null);
+  assertEquals(bare.headers.get("Retry-After"), null);
+});
+
 Deno.test("a quota-reserving action's 2xx is billable; its refusal is not", async () => {
   const sendKey = { ...KEY_ROW, scopes: ["messages:send"] };
   const accepted = ledgerStub({ keyRow: sendKey });

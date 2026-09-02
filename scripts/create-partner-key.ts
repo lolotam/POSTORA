@@ -1,4 +1,4 @@
-// Mint a partner API key. Operator-only: run with the service-role key.
+// Mint a partner API key. Operator-only: run with a workspace owner/admin USER JWT (--token); the service-role key is refused.
 //
 //   deno run --allow-env --allow-net scripts/create-partner-key.ts //     --workspace <uuid> --account <uuid> --name "Danat backend" //     --scopes messages:send,templates:read //     --quota 5000
 //
