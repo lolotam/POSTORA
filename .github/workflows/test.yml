@@ -134,6 +134,16 @@ jobs:
           deno test --allow-env --allow-read --no-check --node-modules-dir=auto
           scripts/generate-postman.test.ts
 
+      # docs/developer/AGENT-CONTEXT.md is the one file a partner hands to the
+      # agent implementing their integration. It is derived from the developer
+      # pages, the route and policy tables and the contract; a committed bundle
+      # that is not what the generator produces is what that agent would
+      # implement against, and be wrong.
+      - name: Check the agent hand-off bundle is regenerated
+        run: >-
+          deno test --allow-env --allow-read --no-check --node-modules-dir=auto
+          scripts/generate-agent-context.test.ts
+
   db-harness:
     name: Postgres integration harness
     runs-on: ubuntu-latest
