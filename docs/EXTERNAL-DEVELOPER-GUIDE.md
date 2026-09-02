@@ -1,5 +1,7 @@
 > **⚠️ Self-hosted migration notice (2026-06):** This project now runs on a **self-hosted Supabase** at `https://api.postora.cloud`. Any reference below to `efruibswazzuuupgyzmf`, `efruibswazzuuupgyzmf.supabase.co`, or `supabase.postora.cloud` is **historical only** and does not reflect runtime configuration. Runtime URLs come from `VITE_SUPABASE_URL` / `SUPABASE_URL`.
 
+> **Partner API v1:** For the Partner API (machine-to-machine, `x-postora-key`), see `docs/developer/` — this document describes the older user-JWT / n8n surface.
+
 # Postora - External Developer Technical Guide
 
 > **Confidential** - This document is intended for developers under NDA.  

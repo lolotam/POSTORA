@@ -1,5 +1,7 @@
 # Postora API Integration Guide
 
+> **Partner API v1:** For the Partner API (machine-to-machine, `x-postora-key`), see `docs/developer/` — this document describes the older user-JWT / n8n surface.
+
 > **Complete technical reference for connecting any external website to Postora's REST API for multi-platform social media publishing.**
 
 Use this guide to integrate your image-generating website, content tool, or any application with Postora to publish content across Facebook, Instagram, TikTok, YouTube, Pinterest, LinkedIn, and Twitter/X.
