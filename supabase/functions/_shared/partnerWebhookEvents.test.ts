@@ -199,7 +199,7 @@ Deno.test("F6b: the restriction can only narrow, never widen", async () => {
   assertEquals(admin.deliveries.length, 0);
 });
 
-Deno.test("F5: the certified allowlist contains exactly the Phase 5 + Phase 6 events", () => {
+Deno.test("F5: the certified allowlist contains exactly the Phase 5 + 6 + 8 events", () => {
   // Not a tautology: the closed allowlist is the mechanism that stops the
   // substrate becoming an implicit promise. Widening it is a deliberate act
   // with a producer ledger row behind it, and this fails when someone widens
@@ -213,6 +213,12 @@ Deno.test("F5: the certified allowlist contains exactly the Phase 5 + Phase 6 ev
   // Deliberately ABSENT: account.connected / account.disconnected. The
   // activation transition has ~20 commit points (see the ledger's resolved
   // inventory) and needs a database trigger before it may be advertised.
+  //
+  // Phase 8 addition: post.scheduled, produced by a trigger on posts
+  // (migration 20260902150000, suite supabase/tests/partner_posts.sql).
+  // Deliberately ABSENT: post.published / post.failed -- their producer is
+  // live since Phase 7 but has not yet settled a real publish in production,
+  // and that observation is the owner's gate for certifying them.
   assertEquals(CERTIFIED_EVENT_TYPES, [
     "webhook.test",
     "message.received",
@@ -221,6 +227,7 @@ Deno.test("F5: the certified allowlist contains exactly the Phase 5 + Phase 6 ev
     "message.read",
     "message.failed",
     "account.reauthorization_required",
+    "post.scheduled",
   ]);
   assert(isCertifiedEventType("webhook.test"));
   assert(isCertifiedEventType("message.received"));
