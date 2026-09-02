@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Postora Partner API
-  version: 1.0.0
+  version: 1.1.0
   description: |
     Partner API v1 — OpenAPI 3.1 skeleton (deliverable 0.7).
 
