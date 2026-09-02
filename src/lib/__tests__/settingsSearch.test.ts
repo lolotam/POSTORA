@@ -88,13 +88,15 @@ describe("groupSectionsBySubTab", () => {
 });
 
 describe("resolveSubTab", () => {
-  it.each([
+  it.each<[string[], string | null, string | null, string]>([
     [["A", "B"], "B", "B", "an offered sub-tab is honoured"],
-    [["A", "B"], "Z", "A", "a stale label falls back rather than rendering an empty panel"],
+    // A label the search has just filtered away is indistinguishable from a stale
+    // bookmark, and both want the same answer: show something rather than nothing.
+    [["A", "B"], "Z", "A", "a label not on offer falls back rather than rendering an empty panel"],
     [["A", "B"], null, "A", "no request opens the first sub-tab"],
     [[], "A", null, "nothing on offer resolves to nothing"],
   ])("%j + %j resolves to %j — %s", (available, requested, expected) => {
-    expect(resolveSubTab(available as string[], requested as string | null)).toBe(expected);
+    expect(resolveSubTab(available, requested)).toBe(expected);
   });
 });
 
@@ -112,7 +114,7 @@ describe("the settings catalog", () => {
     }
   });
 
-  it("offers the AI tab's sub-tabs in the order an admin reads them", () => {
+  it("renders the AI sub-tab strip as these nine labels, in catalog order", () => {
     const aiSections = SETTINGS_SECTIONS.filter((section) => section.tab === "ai");
     expect(groupSectionsBySubTab(aiSections).subTabs.map((group) => group.label)).toEqual([
       "Search Models",
@@ -127,17 +129,16 @@ describe("the settings catalog", () => {
     ]);
   });
 
-  it.each([
+  // "embedding" and "transcription" matched nothing at all while the seven categories
+  // shared one section's keyword list; "hashtags" and "video generation" matched, but
+  // only reached a section that was not the card they name. Splitting the categories
+  // apart is what routes each query to its own card.
+  it.each<[string, string]>([
     ["embedding", "ai-embedding-models"],
     ["transcription", "ai-stt-models"],
     ["video generation", "ai-video-models"],
     ["hashtags", "ai-chat-models"],
-  ])(
-    // These queries matched nothing while all seven categories shared one section's
-    // keyword list, which is what splitting them apart was meant to fix.
-    "search for %j reaches %j",
-    (query, expectedId) => {
-      expect(searchSettings(SETTINGS_SECTIONS, query).map((s) => s.id)).toContain(expectedId);
-    },
-  );
+  ])("search for %j reaches %j", (query, expectedId) => {
+    expect(searchSettings(SETTINGS_SECTIONS, query).map((s) => s.id)).toContain(expectedId);
+  });
 });
