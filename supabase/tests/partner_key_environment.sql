@@ -339,6 +339,25 @@ BEGIN
 END $e7a$;
 
 -- ---------------------------------------------------------------------------
+-- E7c — the operator scripts run under a user JWT and read `environment`
+-- before rotating; `authenticated` holds a column list, so the new column has
+-- to be named in it. The widening must stay a column: key_hash never.
+-- ---------------------------------------------------------------------------
+DO $e7c$
+BEGIN
+  PERFORM pg_temp.must(
+    has_column_privilege('authenticated', 'public.partner_api_keys', 'environment', 'SELECT'),
+    'E7c authenticated may SELECT partner_api_keys.environment');
+  PERFORM pg_temp.must(
+    NOT has_column_privilege('authenticated', 'public.partner_api_keys', 'key_hash', 'SELECT'),
+    'E7c authenticated still may NOT SELECT partner_api_keys.key_hash');
+  PERFORM pg_temp.must(
+    NOT has_table_privilege('authenticated', 'public.partner_api_keys', 'SELECT'),
+    'E7c authenticated has no table-level SELECT on partner_api_keys');
+  RAISE NOTICE 'PASS E7c: environment is client-readable, key_hash is not';
+END $e7c$;
+
+-- ---------------------------------------------------------------------------
 -- E7b — grants: authenticated may EXECUTE both, anon may not. Checked via the
 -- privilege view, so the result proves the GRANT surface and not the
 -- membership predicate the functions apply internally.

@@ -13,6 +13,28 @@ import { v1ErrorResponse } from "./errors.ts";
 import { v1JsonResponse } from "./respond.ts";
 import type { V1AuthedContext } from "./authenticated.ts";
 
+/**
+ * The quota period a read should render.
+ *
+ * last_reset_at advances only when a send RESERVES, so a read that arrives in
+ * a new calendar month before the first send would otherwise report the
+ * period that just ended — with its exhausted counters — as if it were
+ * current. A read must not write, so the row is not reset; it is rendered
+ * the way the next reservation will reset it: the current UTC month, empty
+ * (`stale`). Date.UTC throughout, so the same row is one period in every
+ * server timezone.
+ */
+export function usagePeriodFor(
+  lastResetAt: Date,
+  now: Date,
+): { start: string; end: string; stale: boolean } {
+  const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const stale = lastResetAt < currentMonthStart;
+  const start = stale ? currentMonthStart : lastResetAt;
+  const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+  return { start: start.toISOString(), end: end.toISOString(), stale };
+}
+
 export async function getUsage(
   _req: Request,
   authed: V1AuthedContext,
@@ -34,22 +56,19 @@ export async function getUsage(
     return v1ErrorResponse("internal_error", requestId);
   }
 
-  const lastReset = new Date(data.last_reset_at as string);
-  const startIso = lastReset.toISOString();
-  const y = lastReset.getUTCFullYear();
-  const m = lastReset.getUTCMonth();
-  const endIso = new Date(Date.UTC(y, m + 1, 1)).toISOString();
+  const period = usagePeriodFor(new Date(data.last_reset_at as string), new Date());
+  const counter = (column: string) => period.stale ? 0 : data[column] as number;
 
   const body = {
-    period: { start: startIso, end: endIso },
+    period: { start: period.start, end: period.end },
     meters: [
       {
         meter: "messages",
         limit: (data.monthly_quota as number | null) ?? null,
-        reserved: data.usage_reserved as number,
-        confirmed: data.usage_confirmed as number,
-        indeterminate: data.usage_indeterminate as number,
-        charged: data.current_usage_count as number,
+        reserved: counter("usage_reserved"),
+        confirmed: counter("usage_confirmed"),
+        indeterminate: counter("usage_indeterminate"),
+        charged: counter("current_usage_count"),
       },
     ],
     rate_limit: { per_minute: data.rate_limit_per_min as number },

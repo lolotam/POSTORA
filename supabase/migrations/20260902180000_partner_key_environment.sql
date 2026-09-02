@@ -29,6 +29,14 @@ BEGIN
   END IF;
 END $$;
 
+-- The least-privilege migration gives `authenticated` a COLUMN list on this
+-- table, not table-level SELECT (so key_hash is never client-readable). A new
+-- column is therefore invisible to the operator scripts, which run under a
+-- user JWT, until it is named here: rotate-partner-key.ts reads the
+-- predecessor's environment before minting. service_role holds table-level
+-- SELECT and needs nothing.
+GRANT SELECT (environment) ON public.partner_api_keys TO authenticated;
+
 -- ---------------------------------------------------------------------------
 -- 2. The prefix ↔ environment rule, in exactly one place.
 -- ---------------------------------------------------------------------------

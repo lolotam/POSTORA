@@ -166,6 +166,22 @@ Deno.test("a quota-reserving action's 2xx is billable; its refusal is not", asyn
   assertEquals(refused.inserts[0].error_code, "quota_exceeded");
 });
 
+Deno.test("a replayed 2xx is recorded but never billed: nothing was reserved or sent again", async () => {
+  const sendKey = { ...KEY_ROW, scopes: ["messages:send"] };
+  const { admin, inserts } = ledgerStub({ keyRow: sendKey });
+  const replay = () => {
+    const res = new Response(JSON.stringify({ success: true }), { status: 200 });
+    res.headers.set("Idempotency-Replayed", "true");
+    return Promise.resolve(res);
+  };
+  const wrapped = withPartnerAuth("send_template", "C", replay, () => admin);
+  const res = await wrapped(get("pk_live_test"), "req-9", {}, () => admin);
+  assertEquals(res.status, 200);
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].billable, false);
+  assertEquals(inserts[0].http_status, 200);
+});
+
 Deno.test("a handler that throws is answered internal_error and still recorded", async () => {
   const { admin, inserts } = ledgerStub();
   const boom = () => Promise.reject(new Error("handler exploded"));

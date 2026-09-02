@@ -181,11 +181,16 @@ async function usageRowFor(
   action: string,
   res: Response,
 ): Promise<UsageInput> {
+  // A replay is the stored verdict handed back: no reservation, no provider
+  // call, nothing to bill again. The handler already says so on the wire
+  // (Idempotency-Replayed), and that header is the signal here — one fact,
+  // read where it is emitted, rather than a second flag to keep in step.
+  const replayed = res.headers.get("Idempotency-Replayed") === "true";
   return {
     keyId: record.id,
     workspaceId: record.workspaceId,
     action,
-    billable: QUOTA_RESERVING_ACTIONS.has(action) && res.status < 300,
+    billable: QUOTA_RESERVING_ACTIONS.has(action) && res.status < 300 && !replayed,
     httpStatus: res.status,
     errorCode: res.status >= 400 ? await errorCodeOf(res) : undefined,
   };
