@@ -47,6 +47,20 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   // granting it -- the escalation D3 was rewritten to prevent.
   send_text: ["messages:send"],
   send_media: ["messages:send"],
+  // Phase 5. `whatsapp:webhooks.manage` is DELIBERATELY absent from every set
+  // below, and partnerScopes.ts explains at length why: that legacy scope
+  // authorises nothing, and letting it satisfy these would convert zero
+  // capability into full webhook CRUD plus an outbound test endpoint -- an
+  // SSRF-capable class-C surface -- for a key that never asked for it. That is
+  // the escalation D3 was rewritten to prevent, arriving through a different
+  // door. partnerScopes.test.ts asserts the absence.
+  list_webhooks: ["webhooks:read"],
+  get_webhook: ["webhooks:read"],
+  create_webhook: ["webhooks:manage"],
+  update_webhook: ["webhooks:manage"],
+  delete_webhook: ["webhooks:manage"],
+  rotate_webhook_secret: ["webhooks:manage"],
+  test_webhook: ["webhooks:manage"],
 };
 
 /** D7 limiter-failure risk class per action, next to ACTION_SCOPES so an
@@ -84,6 +98,20 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   // routes of their own -- and never alias actions (see ALIAS_ACTIONS).
   send_text: "C",
   send_media: "C",
+  // Listing and reading a subscription are ordinary bounded local reads.
+  list_webhooks: "A",
+  get_webhook: "A",
+  // Everything that MUTATES a subscription is C, and so is the test -- which
+  // is the D7(R1) point exactly. Classified by billability a webhook test
+  // looks like a read; classified by RISK it makes Postora issue an outbound
+  // request to a partner-supplied URL, which is SSRF amplification. Class C
+  // fails closed when the limiter is down, and that is the right answer for
+  // an amplifier.
+  create_webhook: "C",
+  update_webhook: "C",
+  delete_webhook: "C",
+  rotate_webhook_secret: "C",
+  test_webhook: "C",
 };
 
 /**

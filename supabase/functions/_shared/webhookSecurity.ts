@@ -97,14 +97,27 @@ type WebhookFetcher = (
   init?: RequestInit,
 ) => Promise<Response>;
 
+export interface PostWebhookOptions {
+  /** Per-hop ceiling. */
+  timeoutMs?: number;
+  /**
+   * How many redirect hops to follow. Every hop is revalidated either way --
+   * this bounds the total TIME one call can take, since each hop carries its
+   * own timeout, not how safe it is.
+   */
+  maxRedirects?: number;
+}
+
 export async function postWebhook(
   webhookUrl: string,
   init: RequestInit,
   fetcher: WebhookFetcher = fetch,
-  timeoutMs = 10_000,
+  options: PostWebhookOptions = {},
 ): Promise<Response> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  const maxRedirects = options.maxRedirects ?? 5;
   let target = webhookUrl;
-  for (let redirects = 0; redirects <= 5; redirects++) {
+  for (let redirects = 0; redirects <= maxRedirects; redirects++) {
     const validationError = validateWebhookTarget(target);
     if (validationError) throw new Error(validationError);
 

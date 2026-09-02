@@ -26,6 +26,15 @@ import {
 import { getMedia, postMedia } from "./media.ts";
 import { postMessages } from "./messages.ts";
 import { getTemplates } from "./templates.ts";
+import {
+  createWebhook,
+  deleteWebhook,
+  getWebhook,
+  listWebhooks,
+  rotateWebhookSecret,
+  testWebhook,
+  updateWebhook,
+} from "./webhooks.ts";
 
 /** The segment Kong serves this function under. Located by segment, not by
  *  prefix-of-path, so the mount depth (localhost, gateway, direct) cannot
@@ -148,6 +157,38 @@ export const V1_ROUTES: V1Route[] = [
     pattern: "/v1/templates",
     methods: {
       GET: withPartnerAuth("list_templates", "B", getTemplates),
+    },
+  },
+  // Phase 5. The two sub-resource routes are registered BEFORE "/v1/webhooks/{id}"
+  // out of the same habit the comment on resolveV1Route names, even though
+  // they cannot collide here: matchPattern compares segment COUNTS first, so
+  // "/v1/webhooks/x/test" can never match a two-segment pattern. Relying on
+  // that silently is how the next three-segment route gets it wrong.
+  {
+    pattern: "/v1/webhooks/{id}/rotate-secret",
+    methods: {
+      POST: withPartnerAuth("rotate_webhook_secret", "C", rotateWebhookSecret),
+    },
+  },
+  {
+    pattern: "/v1/webhooks/{id}/test",
+    methods: {
+      POST: withPartnerAuth("test_webhook", "C", testWebhook),
+    },
+  },
+  {
+    pattern: "/v1/webhooks",
+    methods: {
+      GET: withPartnerAuth("list_webhooks", "A", listWebhooks),
+      POST: withPartnerAuth("create_webhook", "C", createWebhook),
+    },
+  },
+  {
+    pattern: "/v1/webhooks/{id}",
+    methods: {
+      GET: withPartnerAuth("get_webhook", "A", getWebhook),
+      PATCH: withPartnerAuth("update_webhook", "C", updateWebhook),
+      DELETE: withPartnerAuth("delete_webhook", "C", deleteWebhook),
     },
   },
 ];

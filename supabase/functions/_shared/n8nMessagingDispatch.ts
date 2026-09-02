@@ -437,7 +437,9 @@ async function deliverToDestination(
   }
 
   try {
-    const response = await postWebhook(destination.url, { method: "POST", headers, body }, fetcher, WEBHOOK_TIMEOUT_MS);
+    const response = await postWebhook(destination.url, { method: "POST", headers, body }, fetcher, {
+      timeoutMs: WEBHOOK_TIMEOUT_MS,
+    });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     await updateDestination(adminClient, destination, 0, response.status);
   } catch (error) {
