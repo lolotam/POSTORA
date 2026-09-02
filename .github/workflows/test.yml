@@ -160,6 +160,7 @@ jobs:
           docker run -d --name pg-harness
           -v "$GITHUB_WORKSPACE":/repo
           -e POSTGRES_PASSWORD=postgres
+          -p 3000:3000
           supabase/postgres:17.6.1.158
           -c cron.database_name=partner_api_harness
           -c shared_preload_libraries=pg_cron,pg_net
@@ -210,6 +211,62 @@ jobs:
           docker exec -e HARNESS_DB_NAME=partner_api_harness pg-harness
           bash /repo/scripts/db-harness.sh
           'postgres://supabase_admin@localhost:5432/postgres'
+
+      # The end-to-end chain test (PRD §46.8, plan 10.8) runs the real /v1
+      # handlers against the harness database the suites just proved, through
+      # PostgREST -- so the idempotency claim, the quota reservation, the
+      # dispatch intent, the webhook outbox and the reconciliation are the
+      # real SQL, not a stub of it. The provider and the partner's webhook
+      # endpoint are the only stubs, at the fetch boundary.
+      #
+      # PostgREST shares pg-harness's network namespace: from there Postgres is
+      # localhost, which pg_hba trusts (the bridge does not -- see the
+      # container note above), and pg-harness's published port 3000 is how the
+      # runner reaches it. The JWT secret is a throwaway for this database
+      # only; nothing it signs is accepted anywhere else.
+      - name: Start PostgREST against the harness database
+        run: |
+          docker run -d --name pgrst-harness --network container:pg-harness \
+            -e PGRST_DB_URI='postgres://supabase_admin@localhost:5432/partner_api_harness' \
+            -e PGRST_DB_SCHEMAS=public \
+            -e PGRST_DB_ANON_ROLE=anon \
+            -e PGRST_JWT_SECRET='harness-jwt-secret-at-least-32-characters-long' \
+            postgrest/postgrest:v12.2.3
+          for _ in $(seq 1 30); do
+            if curl -sf -o /dev/null http://localhost:3000/; then
+              echo "PostgREST is serving"; exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgREST never became ready" >&2
+          docker logs --tail 50 pgrst-harness
+          exit 1
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      # The tests register as ignored when the two variables are unset, so a
+      # renamed variable would turn this step green with nothing run. The
+      # grep makes "ignored" a failure here, where they must run.
+      - name: Run the end-to-end chain test
+        env:
+          PARTNER_E2E_POSTGREST_URL: http://localhost:3000
+          PARTNER_E2E_JWT_SECRET: harness-jwt-secret-at-least-32-characters-long
+        run: |
+          set -o pipefail
+          deno test --allow-env --allow-net --allow-read --allow-write \
+            --no-check --node-modules-dir=auto \
+            supabase/functions/partner-api/e2e/ 2>&1 | tee e2e.log
+          if grep -q "ignored" e2e.log; then
+            echo "E2E tests were ignored: the environment did not reach them" >&2
+            exit 1
+          fi
+
+      - name: PostgREST logs on failure
+        if: failure()
+        run: docker logs --tail 100 pgrst-harness || true
 
       - name: Postgres logs on failure
         if: failure()
