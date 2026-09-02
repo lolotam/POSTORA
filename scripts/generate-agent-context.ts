@@ -302,13 +302,13 @@ export function buildLlmsTxt(inputs: BundleInputs): string {
   const version = String(inputs.contract?.info?.version ?? "unknown");
   const links = [...inputs.pages.keys()].map((name) => {
     const title = inputs.pages.get(name)!.split("\n").find((l) => l.startsWith("# "))?.slice(2) ?? name;
-    return `- [${title}](docs/developer/${name})`;
+    return `- [${title}](${name})`;
   });
   return normalise(`# Postora Partner API v1
 
 > Machine-to-machine API for sending WhatsApp messages, uploading media, scheduling posts and receiving webhooks on behalf of a Postora workspace. Contract version ${version}. Base URL ${BASE_URL}, routes under /v1, header x-postora-key.
 
-The complete hand-off bundle for an implementing agent is [AGENT-CONTEXT.md](docs/developer/AGENT-CONTEXT.md). The machine contract is [openapi.yaml](docs/api/openapi.yaml); generate clients from it.
+Links below are relative to this file (\`docs/developer/\`). The complete hand-off bundle for an implementing agent is [AGENT-CONTEXT.md](AGENT-CONTEXT.md). The machine contract is [openapi.yaml](../api/openapi.yaml); generate clients from it.
 
 ${RULES.replace("## Rules and traps for the implementing agent", "## Rules and traps").trimEnd()}
 
@@ -318,8 +318,8 @@ ${links.join("\n")}
 
 ## Machine-readable
 
-- [OpenAPI 3.1 contract](docs/api/openapi.yaml)
-- [Postman collection and environments](docs/api/postman/)
+- [OpenAPI 3.1 contract](../api/openapi.yaml)
+- [Postman collection and environments](../api/postman/)
 `);
 }
 

@@ -2,7 +2,7 @@
 
 > Machine-to-machine API for sending WhatsApp messages, uploading media, scheduling posts and receiving webhooks on behalf of a Postora workspace. Contract version 1.1.0. Base URL https://api.postora.cloud/functions/v1/partner-api, routes under /v1, header x-postora-key.
 
-The complete hand-off bundle for an implementing agent is [AGENT-CONTEXT.md](docs/developer/AGENT-CONTEXT.md). The machine contract is [openapi.yaml](docs/api/openapi.yaml); generate clients from it.
+Links below are relative to this file (`docs/developer/`). The complete hand-off bundle for an implementing agent is [AGENT-CONTEXT.md](AGENT-CONTEXT.md). The machine contract is [openapi.yaml](../api/openapi.yaml); generate clients from it.
 
 ## Rules and traps
 
@@ -26,31 +26,31 @@ Read these before the reference. Each one is a mistake an implementation makes w
 
 ## Pages
 
-- [Postora Partner API v1 — Developer Documentation](docs/developer/README.md)
-- [Getting Started](docs/developer/getting-started.md)
-- [Authentication](docs/developer/authentication.md)
-- [API Keys — Lifecycle](docs/developer/api-keys.md)
-- [Scopes](docs/developer/scopes.md)
-- [Pagination](docs/developer/pagination.md)
-- [Idempotency](docs/developer/idempotency.md)
-- [Rate Limits](docs/developer/rate-limits.md)
-- [Quotas](docs/developer/quotas.md)
-- [Errors](docs/developer/errors.md)
-- [Webhooks](docs/developer/webhooks.md)
-- [Messaging](docs/developer/messaging.md)
-- [Media](docs/developer/media.md)
-- [Publishing](docs/developer/publishing.md)
-- [Social Accounts](docs/developer/social-accounts.md)
-- [Integration Guide — End-to-End](docs/developer/integration-guides.md)
-- [Versioning and Compatibility](docs/developer/versioning.md)
-- [Deprecations](docs/developer/deprecations.md)
-- [Changelog](docs/developer/changelog.md)
-- [OAuth](docs/developer/oauth.md)
-- [Contacts](docs/developer/contacts.md)
-- [Analytics](docs/developer/analytics.md)
-- [AI](docs/developer/ai.md)
+- [Postora Partner API v1 — Developer Documentation](README.md)
+- [Getting Started](getting-started.md)
+- [Authentication](authentication.md)
+- [API Keys — Lifecycle](api-keys.md)
+- [Scopes](scopes.md)
+- [Pagination](pagination.md)
+- [Idempotency](idempotency.md)
+- [Rate Limits](rate-limits.md)
+- [Quotas](quotas.md)
+- [Errors](errors.md)
+- [Webhooks](webhooks.md)
+- [Messaging](messaging.md)
+- [Media](media.md)
+- [Publishing](publishing.md)
+- [Social Accounts](social-accounts.md)
+- [Integration Guide — End-to-End](integration-guides.md)
+- [Versioning and Compatibility](versioning.md)
+- [Deprecations](deprecations.md)
+- [Changelog](changelog.md)
+- [OAuth](oauth.md)
+- [Contacts](contacts.md)
+- [Analytics](analytics.md)
+- [AI](ai.md)
 
 ## Machine-readable
 
-- [OpenAPI 3.1 contract](docs/api/openapi.yaml)
-- [Postman collection and environments](docs/api/postman/)
+- [OpenAPI 3.1 contract](../api/openapi.yaml)
+- [Postman collection and environments](../api/postman/)
