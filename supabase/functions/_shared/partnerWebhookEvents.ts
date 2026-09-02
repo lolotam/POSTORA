@@ -46,6 +46,14 @@ export const CERTIFIED_EVENT_TYPES = [
   "message.read",
   "message.failed",
   "account.reauthorization_required",
+  // Phase 8 (2026-09-02): a database trigger on posts is the producer
+  // (migration 20260902150000), so EVERY schedule writer -- /v1 and all six
+  // browser paths -- emits transactionally. post.published / post.failed have
+  // a live producer since Phase 7 (partner_settle_platform_post) but stay
+  // uncertified until the seam has settled one real publish in production --
+  // the owner's observation gate. Certify them by widening the DB CHECK and
+  // this list together, nothing else.
+  "post.scheduled",
 ] as const;
 
 export type CertifiedEventType = typeof CERTIFIED_EVENT_TYPES[number];

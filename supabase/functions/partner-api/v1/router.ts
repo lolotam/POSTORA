@@ -25,6 +25,13 @@ import {
 } from "./conversations.ts";
 import { getMedia, postMedia } from "./media.ts";
 import { postMessages } from "./messages.ts";
+import {
+  createPost,
+  getPost,
+  getPostStatus,
+  schedulePost,
+  unschedulePost,
+} from "./posts.ts";
 import { getTemplates } from "./templates.ts";
 import {
   createWebhook,
@@ -157,6 +164,34 @@ export const V1_ROUTES: V1Route[] = [
     pattern: "/v1/templates",
     methods: {
       GET: withPartnerAuth("list_templates", "B", getTemplates),
+    },
+  },
+  // Phase 8. Sub-resource routes before "/v1/posts/{id}", same habit as the
+  // webhook block below. POST /v1/posts/{id}/publish is deliberately absent —
+  // it needs the deferred 7.2/7.3 platform registry (see posts.ts header).
+  {
+    pattern: "/v1/posts/{id}/status",
+    methods: {
+      GET: withPartnerAuth("get_post_status", "A", getPostStatus),
+    },
+  },
+  {
+    pattern: "/v1/posts/{id}/schedule",
+    methods: {
+      POST: withPartnerAuth("schedule_post", "C", schedulePost),
+      DELETE: withPartnerAuth("unschedule_post", "C", unschedulePost),
+    },
+  },
+  {
+    pattern: "/v1/posts",
+    methods: {
+      POST: withPartnerAuth("create_post", "C", createPost),
+    },
+  },
+  {
+    pattern: "/v1/posts/{id}",
+    methods: {
+      GET: withPartnerAuth("get_post", "A", getPost),
     },
   },
   // Phase 5. The two sub-resource routes are registered BEFORE "/v1/webhooks/{id}"

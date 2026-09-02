@@ -107,6 +107,7 @@ SUITES=(
   partner_webhook_outbox.sql
   partner_webhook_phase6_events.sql
   publishing_seam.sql
+  partner_posts.sql
   whatsapp_workspace_crm.sql
   import_whatsapp_contacts_to_workspace.sql
 )
@@ -573,6 +574,26 @@ psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c \
 #
 # stdout is captured rather than streamed so it can be inspected. It is
 # echoed back on failure, so a red run still shows its output.
+# A suite that exists on disk but is not in SUITES is a suite nobody runs --
+# and CI reports green. partner_posts.sql sat in that state through a full PR
+# review round (2026-09-02) before anyone noticed the suite count had not
+# moved. So: every *.sql in the tests dir must be listed, or named here as
+# deliberately excluded, or the harness fails before running anything.
+STEP="suite inventory"
+EXCLUDED_FROM_SUITES=(baseline_schema.sql partner_api_race_fixture.sql)
+for f in "$TESTS_DIR"/*.sql; do
+  name="$(basename "$f")"
+  listed=0
+  for s in "${SUITES[@]}" "${EXCLUDED_FROM_SUITES[@]}"; do
+    [ "$s" = "$name" ] && listed=1 && break
+  done
+  if [ "$listed" -eq 0 ]; then
+    echo "db-harness: FAIL: $name exists in $TESTS_DIR but is not in SUITES (or EXCLUDED_FROM_SUITES)." >&2
+    echo "  A suite that is not listed never runs, and this harness would still report OK." >&2
+    exit 1
+  fi
+done
+
 for s in "${SUITES[@]}"; do
   STEP="suite $s"
   echo "db-harness: running suite $s"

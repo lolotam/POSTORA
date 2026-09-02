@@ -61,6 +61,16 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   delete_webhook: ["webhooks:manage"],
   rotate_webhook_secret: ["webhooks:manage"],
   test_webhook: ["webhooks:manage"],
+  // Phase 8. Generic scopes only, like every /v1 route: no legacy scope
+  // predates posts, so none may satisfy them. `posts:schedule` is its own
+  // scope rather than a `posts:write` rider because scheduling CHANGES WHEN a
+  // customer-visible publish happens — a key trusted to draft need not be
+  // trusted to time.
+  create_post: ["posts:write"],
+  get_post: ["posts:read"],
+  get_post_status: ["posts:read"],
+  schedule_post: ["posts:schedule"],
+  unschedule_post: ["posts:schedule"],
 };
 
 /** D7 limiter-failure risk class per action, next to ACTION_SCOPES so an
@@ -112,6 +122,15 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   delete_webhook: "C",
   rotate_webhook_secret: "C",
   test_webhook: "C",
+  // Phase 8. Creating a post is a durable, quota-charged mutation (C), and so
+  // are (un)scheduling — they change WHEN a customer-reaching publish fires,
+  // and class C's fail-closed limiter answer is right for anything that can
+  // move a customer-visible effect. The two reads are bounded local reads.
+  create_post: "C",
+  get_post: "A",
+  get_post_status: "A",
+  schedule_post: "C",
+  unschedule_post: "C",
 };
 
 /**

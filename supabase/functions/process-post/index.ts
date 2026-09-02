@@ -88,6 +88,7 @@ import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/plat
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { getMissingMediaFileIds } from "../_shared/post-media.ts";
+import { claimPostForProcessing } from "../_shared/postProcessingClaim.ts";
 import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { z } from "npm:zod@3.23.8";
@@ -96,6 +97,10 @@ const ProcessPostSchema = z.object({
   post_id: z.string().min(1).max(100),
   platforms: z.array(z.string().max(50)).optional(),
   account_ids: z.array(z.string().max(100)).optional(),
+  // Sent by process-scheduled-posts: the scheduled_at it selected. The
+  // processing claim honours it (see _shared/postProcessingClaim.ts), so a
+  // post unscheduled after selection is declined rather than published.
+  expected_scheduled_at: z.string().max(64).nullable().optional(),
 }).passthrough();
 
 /**
@@ -1215,7 +1220,12 @@ Deno.serve(async (req) => {
         headers: { "Content-Type": "application/json" },
       });
     }
-    const { post_id, platforms: overridePlatforms, account_ids: overrideAccountIds } = validation.data;
+    const {
+      post_id,
+      platforms: overridePlatforms,
+      account_ids: overrideAccountIds,
+      expected_scheduled_at: expectedScheduledAt,
+    } = validation.data;
 
     if (!post_id) {
       return createErrorResponse("Missing post_id", 400);
@@ -1297,11 +1307,22 @@ Deno.serve(async (req) => {
 
     console.log("Post data:", { platforms: post.platforms, caption: post.caption?.substring(0, 50) });
 
-    // Update post status to processing
-    await supabase
-      .from("posts")
-      .update({ status: "processing" })
-      .eq("id", post_id);
+    // The transition to `processing` is a CLAIM: when the scheduler says
+    // which scheduled_at it selected, a row that no longer carries it -- the
+    // partner or the UI unscheduled or moved it after the cron's SELECT --
+    // matches nothing, and this publish is declined before any provider is
+    // touched. Callers with no expectation keep the unconditional transition.
+    const claim = await claimPostForProcessing(supabase, post_id, expectedScheduledAt);
+    if (claim.error) {
+      return createErrorResponse(`Could not claim post for processing: ${claim.error}`, 500);
+    }
+    if (!claim.claimed) {
+      console.log("Declining publish: schedule changed after the scheduler selected this post", {
+        post_id,
+        expected_scheduled_at: expectedScheduledAt,
+      });
+      return createErrorResponse("Post schedule changed after selection; not published", 409);
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // Step 2: Get media files and generate URLs

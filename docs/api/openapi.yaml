@@ -13,6 +13,12 @@ info:
     - The `/v1` READ surface (deliverables 2.3–2.6): accounts, conversations
       and messages. All are D7 class A — bounded local reads that proceed
       when the rate limiter is unavailable.
+    - The Phase 8 posts surface: create, read, per-target status, schedule and
+      unschedule. **Only posts created through `POST /v1/posts` are
+      addressable by these routes.** A post created in the Postora UI answers
+      `resource_not_found` on every one of them, permanently and by design.
+      `POST /v1/posts/{id}/publish` does not exist yet; a partner publishes by
+      scheduling, and the scheduler picks the post up and publishes it.
     - `POST /v1/messages` and `GET /v1/templates` (3.5–3.7). The send path is
       SUSPENDED and answers `temporarily_unavailable` — a policy state, not an
       absent endpoint.
@@ -387,6 +393,217 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Message'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/posts:
+    post:
+      operationId: createPost
+      summary: Create a post for explicit target accounts
+      description: |
+        **Only posts created through this operation are addressable by the
+        `/v1/posts` routes.** A post created in the Postora UI answers
+        `resource_not_found` on every one of them, permanently and by design.
+
+        `targets` is required and must be a non-empty array of `acc_` ids;
+        there is no "publish to everything" shorthand. Every target must be
+        bound to the calling key and all targets must belong to one Postora
+        user. An unbound target answers `resource_not_found`, never 403, so
+        the caller learns nothing about whether that account exists. Mixed
+        owners answer `invalid_request`, and a `whatsapp` target answers
+        `unsupported_capability`.
+
+        Optional `scheduled_at` must be ISO-8601 with an explicit offset, for
+        example `2026-09-03T14:00:00Z`; a value without an offset is refused.
+        The workspace owner's post quota may refuse creation with
+        `quota_exceeded` (429).
+
+        `Idempotency-Key` is required. Omitting it answers
+        `missing_idempotency_key` (400); conflicting, in-progress and
+        indeterminate claims answer the corresponding 409 idempotency code.
+
+        `POST /v1/posts/{id}/publish` does not exist yet. A partner publishes
+        by scheduling; the scheduler picks the post up and publishes it.
+
+        Scope `posts:write`. D7 class C.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+          description: Required caller-supplied key for idempotent creation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostCreateRequest'
+      responses:
+        '201':
+          description: The post was created.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/posts/{id}:
+    get:
+      operationId: getPost
+      summary: Get one Partner API-created post
+      description: |
+        Only posts created through `POST /v1/posts` are addressable. A Postora
+        UI-created post, a post outside the caller's workspace and an id that
+        is not well-formed all answer `resource_not_found`,
+        indistinguishably.
+
+        `id` is the opaque `post_` identifier. Provider post ids are never
+        accepted as the primary id.
+
+        Scope `posts:read`. D7 class A.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The post.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/posts/{id}/status:
+    get:
+      operationId: getPostStatus
+      summary: Get per-target publishing status
+      description: |
+        Returns one row per target result from `platform_posts`. One platform
+        succeeding while another fails is represented faithfully, never
+        collapsed into one verdict. Provider ids and URLs appear only as the
+        clearly named `provider_post_id` and `provider_post_url` fields; the
+        primary post and account ids remain opaque `post_` and `acc_` ids.
+
+        Only posts created through `POST /v1/posts` are addressable. A Postora
+        UI-created post answers `resource_not_found`, permanently and by
+        design.
+
+        Scope `posts:read`. D7 class A.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The post's overall state and per-target publishing rows.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [post_id, status, scheduled_at, targets]
+                properties:
+                  post_id:
+                    allOf:
+                      - $ref: '#/components/schemas/PrefixedId'
+                    pattern: '^post_[A-Za-z0-9_-]+$'
+                    description: Opaque `post_` id.
+                  status:
+                    type: string
+                  scheduled_at:
+                    type: [string, 'null']
+                    format: date-time
+                  targets:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PostTargetStatus'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/posts/{id}/schedule:
+    post:
+      operationId: schedulePost
+      summary: Schedule or reschedule a post
+      description: |
+        Sets the post to `scheduled` with the supplied `scheduled_at`. The
+        timestamp is required and must be ISO-8601 with an explicit offset,
+        for example `2026-09-03T14:00:00Z`; a value without an offset answers
+        `invalid_request` (400). Only a `pending` or `scheduled` post can be
+        scheduled.
+
+        There is no `POST /v1/posts/{id}/publish` yet. Scheduling is how a
+        partner publishes: the scheduler picks the post up and publishes it.
+
+        Scope `posts:schedule`. D7 class C.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostScheduleRequest'
+      responses:
+        '200':
+          description: The scheduled or rescheduled post.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        default:
+          $ref: '#/components/responses/V1Error'
+    delete:
+      operationId: unschedulePost
+      summary: Remove a post's schedule
+      description: |
+        Clears `scheduled_at` and parks the post as `pending`, where the
+        scheduler cannot pick it up. A post that is already `pending` returns
+        the same post as an idempotent success; a post in any other state
+        answers `invalid_request` (400).
+
+        This operation emits no webhook event. There is no certified
+        `post.unscheduled` event type.
+
+        Scope `posts:schedule`. D7 class C.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: The pending post with its schedule removed.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
         default:
           $ref: '#/components/responses/V1Error'
 
@@ -1006,6 +1223,123 @@ components:
           type: [string, 'null']
           format: date-time
 
+    Post:
+      type: object
+      description: |
+        A post created through `POST /v1/posts`. `id`, `targets` and
+        `media_file_ids` are opaque Postora ids with `post_`, `acc_` and
+        `media_` prefixes respectively. Provider ids are never primary ids.
+      required: [id, caption, platforms, status, scheduled_at, posted_at, created_at, media_file_ids, targets]
+      properties:
+        id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+          pattern: '^post_[A-Za-z0-9_-]+$'
+          description: Opaque `post_` id.
+        caption:
+          type: string
+        platforms:
+          type: array
+          items:
+            type: string
+        status:
+          type: string
+        scheduled_at:
+          type: [string, 'null']
+          format: date-time
+        posted_at:
+          type: [string, 'null']
+          format: date-time
+        created_at:
+          type: [string, 'null']
+          format: date-time
+        media_file_ids:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/PrefixedId'
+            pattern: '^media_[A-Za-z0-9_-]+$'
+            description: Opaque `media_` id.
+        targets:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/PrefixedId'
+            pattern: '^acc_[A-Za-z0-9_-]+$'
+            description: Opaque `acc_` id.
+
+    PostCreateRequest:
+      type: object
+      required: [targets]
+      properties:
+        caption:
+          type: string
+        targets:
+          type: array
+          minItems: 1
+          description: |
+            Required explicit target list. Every item is an opaque `acc_` id
+            bound to the calling key, and all targets must share one Postora
+            owner. There is no "publish to everything" shorthand.
+          items:
+            allOf:
+              - $ref: '#/components/schemas/PrefixedId'
+            pattern: '^acc_[A-Za-z0-9_-]+$'
+            description: Opaque `acc_` id.
+        scheduled_at:
+          type: [string, 'null']
+          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$'
+          description: ISO-8601 timestamp with an explicit offset.
+          example: '2026-09-03T14:00:00Z'
+        media_file_ids:
+          type: array
+          items:
+            allOf:
+              - $ref: '#/components/schemas/PrefixedId'
+            pattern: '^media_[A-Za-z0-9_-]+$'
+            description: Opaque `media_` id from this workspace's uploads.
+
+    PostScheduleRequest:
+      type: object
+      required: [scheduled_at]
+      properties:
+        scheduled_at:
+          type: string
+          format: date-time
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,6})?)?(Z|[+-]\d{2}:\d{2})$'
+          description: ISO-8601 timestamp with an explicit offset.
+          example: '2026-09-03T14:00:00Z'
+
+    PostTargetStatus:
+      type: object
+      description: |
+        One target's publishing result. Provider fields are separate and
+        clearly named; `account_id` remains the primary opaque `acc_` id.
+      required: [account_id, platform, status, provider_post_id, provider_post_url, error_message, posted_at]
+      properties:
+        account_id:
+          allOf:
+            - $ref: '#/components/schemas/PrefixedId'
+          nullable: true
+          pattern: '^acc_[A-Za-z0-9_-]+$'
+          description: Opaque `acc_` id, or null when the platform row has no account id.
+        platform:
+          type: string
+        status:
+          type: string
+        provider_post_id:
+          type: [string, 'null']
+          description: The provider's post id, never the primary id.
+        provider_post_url:
+          type: [string, 'null']
+          description: The provider's post URL, never the primary id.
+        error_message:
+          type: [string, 'null']
+        posted_at:
+          type: [string, 'null']
+          format: date-time
+
     Webhook:
       type: object
       description: |
@@ -1110,8 +1444,9 @@ components:
         An event whose transition, stable identifier and **transactional**
         producer are all defined (decision D6). Phase 5 shipped the delivery
         substrate and certified `webhook.test`; Phase 6 certified the six
-        messaging/account events below. Phase 8 will add the publishing
-        events.
+        messaging/account events; Phase 8 certified `post.scheduled`.
+        `post.published` / `post.failed` follow once the Phase 7 publishing
+        seam has settled a real publish in production.
 
         MUST equal `CERTIFIED_EVENT_TYPES` in
         `supabase/functions/_shared/partnerWebhookEvents.ts`, which the
@@ -1126,6 +1461,7 @@ components:
         | `message.accepted` | the dispatch settle | near-real-time; an echo-reconciled send reports at the provider's first status callback |
         | `message.delivered` / `.read` / `.failed` | Meta status callback | near-real-time — **WhatsApp Cloud accounts ONLY; these events never fire for Evolution QR accounts** |
         | `account.reauthorization_required` | the token-refresh cron | **bounded by the cron cadence — not real-time** |
+        | `post.scheduled` | a database trigger on schedule writes (API **and** Postora UI) | near-real-time |
 
         `message.accepted` fires for **Partner-API-originated sends only**.
         Messages sent from the Postora UI, broadcasts, scheduled sends and
@@ -1139,6 +1475,7 @@ components:
         - message.read
         - message.failed
         - account.reauthorization_required
+        - post.scheduled
 
     WebhookCreateRequest:
       type: object
