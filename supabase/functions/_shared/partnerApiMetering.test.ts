@@ -302,3 +302,51 @@ Deno.test("checkRateLimit: remaining above the key's own limit is impossible, so
   assertEquals(error.code, "limiter_unavailable");
   assertEquals(error.status, 503);
 });
+
+// ---- ledger request_id / latency_ms (admin partner hub, spec D4) -----------
+
+Deno.test("recordUsage writes request_id and latency_ms when given", async () => {
+  const inserted: Record<string, unknown>[] = [];
+  const client = {
+    from() {
+      return { insert(row: Record<string, unknown>) { inserted.push(row); return Promise.resolve({ error: null }); } };
+    },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+  await recordUsage(client, {
+    keyId: "key-1", workspaceId: "ws-1", action: "list_accounts",
+    billable: false, httpStatus: 200, requestId: "req-42", latencyMs: 17,
+  });
+  assertEquals(inserted[0].request_id, "req-42");
+  assertEquals(inserted[0].latency_ms, 17);
+});
+
+Deno.test("recordUsage writes null for request_id and latency_ms when absent", async () => {
+  const inserted: Record<string, unknown>[] = [];
+  const client = {
+    from() {
+      return { insert(row: Record<string, unknown>) { inserted.push(row); return Promise.resolve({ error: null }); } };
+    },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+  await recordUsage(client, {
+    keyId: "key-1", workspaceId: "ws-1", action: "list_accounts", billable: false, httpStatus: 200,
+  });
+  assertEquals(inserted[0].request_id, null);
+  assertEquals(inserted[0].latency_ms, null);
+});
+
+Deno.test("recordUsage rounds latency to a non-negative integer", async () => {
+  const inserted: Record<string, unknown>[] = [];
+  const client = {
+    from() {
+      return { insert(row: Record<string, unknown>) { inserted.push(row); return Promise.resolve({ error: null }); } };
+    },
+  // deno-lint-ignore no-explicit-any
+  } as any;
+  await recordUsage(client, {
+    keyId: "key-1", workspaceId: "ws-1", action: "list_accounts",
+    billable: false, httpStatus: 200, latencyMs: -0.4,
+  });
+  assertEquals(inserted[0].latency_ms, 0);
+});

@@ -13,6 +13,10 @@ export interface UsageInput {
   billable: boolean;
   httpStatus: number;
   errorCode?: string;
+  /** The X-Postora-Request-Id the response carried; the operator's only correlation handle. */
+  requestId?: string;
+  /** Wall-clock ms from request entry to response. Rounded and floored at 0 on write. */
+  latencyMs?: number;
 }
 
 /**
@@ -280,6 +284,10 @@ export async function recordUsage(
       billable: input.billable,
       http_status: input.httpStatus,
       error_code: input.errorCode ?? null,
+      request_id: input.requestId ?? null,
+      // The column CHECK refuses a negative; a clock that ran backwards must
+      // not cost the row.
+      latency_ms: input.latencyMs === undefined ? null : Math.max(0, Math.round(input.latencyMs)),
     });
     if (error) console.error("[partner-api] usage ledger write failed:", error.message);
   } catch (err) {

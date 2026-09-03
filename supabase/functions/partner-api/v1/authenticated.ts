@@ -95,6 +95,7 @@ export function withPartnerAuth(
     // deno-lint-ignore no-explicit-any
     doorFactory?: () => any,
   ): Promise<Response> => {
+    const startedAt = performance.now();
     // The door's factory wins when it supplies one: /v1 and the alias then
     // share a client, and a test can stub the Supabase boundary for both.
     const admin = (doorFactory ?? adminFactory)();
@@ -107,7 +108,9 @@ export function withPartnerAuth(
     // way out. A failure before the key resolved has nothing to attribute
     // and writes nothing — that is the non-enumerability rule, not a gap.
     const ledgered = async (res: Response): Promise<Response> => {
-      if (record) await recordUsage(admin, await usageRowFor(record, action, res));
+      if (record) {
+        await recordUsage(admin, await usageRowFor(record, action, res, requestId, startedAt));
+      }
       return res;
     };
 
@@ -180,6 +183,8 @@ async function usageRowFor(
   record: PartnerKeyRecord,
   action: string,
   res: Response,
+  requestId: string,
+  startedAt: number,
 ): Promise<UsageInput> {
   // A replay is the stored verdict handed back: no reservation, no provider
   // call, nothing to bill again. The handler already says so on the wire
@@ -193,6 +198,8 @@ async function usageRowFor(
     billable: QUOTA_RESERVING_ACTIONS.has(action) && res.status < 300 && !replayed,
     httpStatus: res.status,
     errorCode: res.status >= 400 ? await errorCodeOf(res) : undefined,
+    requestId,
+    latencyMs: performance.now() - startedAt,
   };
 }
 

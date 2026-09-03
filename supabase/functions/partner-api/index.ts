@@ -143,6 +143,7 @@ export async function handleRequest(
   // run before a key is authenticated. `const` is not hoisted, so declaring it
   // later would make the method-not-allowed branch a ReferenceError.
   const requestId = crypto.randomUUID();
+  const startedAt = performance.now();
 
   // The /v1 door (deliverable 2.1). A request whose path is under /v1 —
   // relative to this function's mount — is served by the v1 router; everything
@@ -184,7 +185,7 @@ export async function handleRequest(
     extraHeaders: Record<string, string> = {},
     errorCode?: string,
   ) => respond(admin, record!, action, status, billable, body,
-               { ...extraHeaders, ...rateHeaders }, errorCode, requestId);
+               { ...extraHeaders, ...rateHeaders }, errorCode, requestId, startedAt);
 
   try {
     record = await authenticatePartnerKey(admin, req.headers.get("x-postora-key") ?? "");
@@ -492,6 +493,7 @@ async function respond(
   extraHeaders: Record<string, string> = {},
   errorCode?: string,
   requestId?: string,
+  startedAt?: number,
 ) {
   await recordUsage(admin, {
     keyId: record.id,
@@ -500,6 +502,8 @@ async function respond(
     billable,
     httpStatus: status,
     errorCode,
+    requestId,
+    latencyMs: startedAt === undefined ? undefined : performance.now() - startedAt,
   });
   const stamped = requestId && body && typeof body === "object"
     ? withRequestId(body as Record<string, unknown>, requestId)
