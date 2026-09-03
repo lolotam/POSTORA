@@ -30,3 +30,4 @@ export {
   type FinalizerState,
 } from "./ui/hooks/useConnectionFinalizer";
 export { useConnectorWorkspace, type ConnectorWorkspace } from "./ui/hooks/useConnectorWorkspace";
+export { connectionFailureMessage } from "./ui/connectionFailureMessage";

@@ -106,7 +106,12 @@ Deno.serve(async (req) => {
     if (error instanceof ConnectError) {
       return restrictedJsonResponse(req, { error: error.code }, error.status);
     }
-    console.error("[composio-connect] request failed");
+    // The message, never the body: enough to name a failing write (eight
+    // minutes of unlogged 500s on 2026-09-03 were a unique-index violation).
+    console.error(
+      "[composio-connect] request failed",
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    );
     return restrictedJsonResponse(req, { error: "internal_error" }, 500);
   }
 });

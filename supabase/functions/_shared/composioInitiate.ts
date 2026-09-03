@@ -80,6 +80,14 @@ export interface ComposioInitiateDependencies {
   authConfigFor: (connectorType: string) => string | undefined;
   insertConnection: (row: Record<string, unknown>) => Promise<void>;
   updateConnection: (id: string, values: Record<string, unknown>) => Promise<void>;
+  /** Fails, as `superseded`, every other row of this type still waiting in the
+   *  workspace: the account the user is about to authorise belongs to the
+   *  newest click, and an older row polling for it must stop contesting it. */
+  supersedeInitiatedConnections: (input: {
+    workspaceId: string;
+    connectorType: string;
+    keepId: string;
+  }) => Promise<void>;
   recordCall: (
     meta: ConnectorCallMeta,
     outcome: ConnectorCallOutcome,
@@ -143,6 +151,19 @@ export function composioInitiateDependencies(
         ...values,
         updated_at: new Date().toISOString(),
       }).eq("id", id);
+      if (error) throw new Error("connector_database_error");
+    },
+    async supersedeInitiatedConnections({ workspaceId, connectorType, keepId }) {
+      const { error } = await admin.from("connector_connections").update({
+        status: "failed",
+        failure_code: "superseded",
+        state_nonce: null,
+        updated_at: new Date().toISOString(),
+      })
+        .eq("workspace_id", workspaceId)
+        .eq("connector_type", connectorType)
+        .eq("status", "initiated")
+        .neq("id", keepId);
       if (error) throw new Error("connector_database_error");
     },
     recordCall: (meta, outcome) => recordConnectorCall(admin, meta, outcome),
@@ -220,6 +241,13 @@ export async function initiateComposioConnection(
     status: "initiated",
     state_nonce: nonce,
     initiated_by: input.initiatedBy,
+  });
+  // After the insert, so a poll of an older row that races this click finds
+  // its row already failed rather than a moment with no live row at all.
+  await deps.supersedeInitiatedConnections({
+    workspaceId: input.workspaceId,
+    connectorType: input.connectorType,
+    keepId: connectionId,
   });
 
   const state = await signConnectState({

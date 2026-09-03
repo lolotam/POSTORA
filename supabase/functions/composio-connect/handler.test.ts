@@ -47,6 +47,8 @@ function dependencies(overrides: Partial<ComposioConnectDependencies> = {}) {
     updateConnection: async (id, values) => updated.push({ id, values }),
     activateConnection: async () => true,
     loadPendingConnection: async () => null,
+    claimedConnectedAccountIds: async () => new Set<string>(),
+    supersedeInitiatedConnections: async () => {},
     loadConnectionForUser: async () => null,
     revokeRpc: async () => {},
     loadSocialAccountProvider: async () => null,
@@ -131,6 +133,29 @@ Deno.test("initiate inserts pending state before creating a connect link", async
   assertEquals(result.connection_id, "connection-1");
   assertEquals(result.redirect_url, "https://provider.invalid/connect");
   assertEquals(result.expires_at, new Date(1_600_000).toISOString());
+});
+
+// 2026-09-03: two clicks left two rows waiting, and the first row's poll
+// contested the account the second one had adopted.
+Deno.test("initiate supersedes the workspace's earlier waiting rows of the same type once its own row exists", async () => {
+  const order: string[] = [];
+  const superseded: Array<Record<string, string>> = [];
+  const state = dependencies({
+    insertConnection: async () => {
+      order.push("insert");
+    },
+    supersedeInitiatedConnections: async (input) => {
+      order.push("supersede");
+      superseded.push(input);
+    },
+  });
+  await initiateConnection(state.deps, {
+    userId: "user-1",
+    workspaceId: "workspace-1",
+    connectorType: "slack",
+  });
+  assertEquals(order, ["insert", "supersede"]);
+  assertEquals(superseded, [{ workspaceId: "workspace-1", connectorType: "slack", keepId: "connection-1" }]);
 });
 
 Deno.test("initiate marks a provider failure without exposing its body", async () => {

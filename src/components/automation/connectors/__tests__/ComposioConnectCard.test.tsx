@@ -154,8 +154,28 @@ describe("ComposioConnectCard", () => {
   it("names the failure and offers a reconnect after a failed authorisation", async () => {
     from.mockReturnValue(connectionsChain([{ ...BASE, status: "failed", failure_code: "expired", external_account_label: null }]));
     wrap(<ComposioConnectCard connectorType="google_sheets" workspaceId="ws-1" />);
-    expect(await screen.findByText(/expired/)).toBeInTheDocument();
+    expect(await screen.findByText(/not completed in time/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reconnect/i })).toBeInTheDocument();
+  });
+
+  // 2026-09-03: a row left "initiated" by an abandoned click was re-adopted
+  // every time its poll gave up — eight minutes of failing requests.
+  it("does not re-adopt a waiting row once its poll has given up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      from.mockReturnValue(connectionsChain([{ ...BASE, status: "initiated", external_account_label: null }]));
+      fetchMock.mockResolvedValue({ ok: false, status: 500, json: () => Promise.resolve({ error: "internal_error" }) });
+      wrap(<ComposioConnectCard connectorType="google_sheets" workspaceId="ws-1" />);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+      // Five failures in a row, one poll interval apart, end the poll.
+      for (let attempt = 1; attempt < 5; attempt++) await vi.advanceTimersByTimeAsync(3_000);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(5));
+      expect(await screen.findByRole("button", { name: /^connect$/i })).toBeEnabled();
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(fetchMock).toHaveBeenCalledTimes(5);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("offers a reconnect after the connection was revoked", async () => {

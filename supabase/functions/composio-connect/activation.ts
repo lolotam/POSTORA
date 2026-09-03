@@ -38,14 +38,19 @@ export async function findFreshActiveAccount(
 ): Promise<ComposioConnectedAccount | null> {
   if (!deps.composio) throw new ComposioError("composio_unavailable");
   const rowCreatedAt = Date.parse(connection.createdAt);
-  return (await deps.composio.listConnectedAccounts(connection.workspaceId))
+  const fresh = (await deps.composio.listConnectedAccounts(connection.workspaceId))
     .filter((account) =>
       account.status === "ACTIVE" &&
       account.authConfigId === connection.authConfigId &&
       Date.parse(account.createdAt) >= rowCreatedAt
     )
-    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0] ??
-    null;
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  if (fresh.length === 0) return null;
+  // An account another row already holds — the click before this one, or the
+  // row this one superseded — is not this row's to adopt: the column is unique,
+  // and on 2026-09-03 an abandoned row's poll failed on it for eight minutes.
+  const claimed = await deps.claimedConnectedAccountIds(fresh.map((account) => account.id));
+  return fresh.find((account) => !claimed.has(account.id)) ?? null;
 }
 
 /** Why an account may not activate this row, or null when it may. */

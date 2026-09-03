@@ -66,6 +66,15 @@ export interface ComposioConnectDependencies {
     id: string,
     workspaceId: string,
   ) => Promise<PendingConnection | null>;
+  /** Which of these Composio account ids some connection row already holds. */
+  claimedConnectedAccountIds: (accountIds: string[]) => Promise<Set<string>>;
+  /** Fails, as `superseded`, every other row of this type still waiting in the
+   *  workspace, so one click's account is never contested by an earlier one. */
+  supersedeInitiatedConnections: (input: {
+    workspaceId: string;
+    connectorType: string;
+    keepId: string;
+  }) => Promise<void>;
   loadConnectionForUser: (
     id: string,
     userId: string,
@@ -170,6 +179,34 @@ export function createDependencies(): ComposioConnectDependencies {
         initiatedBy: data.initiated_by,
         createdAt: data.created_at,
       };
+    },
+    async claimedConnectedAccountIds(accountIds) {
+      if (accountIds.length === 0) return new Set<string>();
+      const { data, error } = await admin
+        .from("connector_connections")
+        .select("composio_connected_account_id")
+        .in("composio_connected_account_id", accountIds);
+      if (error) throwDatabaseError(error);
+      return new Set<string>(
+        (data ?? []).map((row: { composio_connected_account_id: string }) =>
+          row.composio_connected_account_id
+        ),
+      );
+    },
+    async supersedeInitiatedConnections({ workspaceId, connectorType, keepId }) {
+      const { error } = await admin
+        .from("connector_connections")
+        .update({
+          status: "failed",
+          failure_code: "superseded",
+          state_nonce: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("workspace_id", workspaceId)
+        .eq("connector_type", connectorType)
+        .eq("status", "initiated")
+        .neq("id", keepId);
+      if (error) throwDatabaseError(error);
     },
     async loadConnectionForUser(id, userId) {
       const { data, error } = await admin

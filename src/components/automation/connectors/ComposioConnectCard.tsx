@@ -9,6 +9,7 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  connectionFailureMessage,
   openAuthorisationTab,
   useConnectionFinalizer,
   useConnectorConnections,
@@ -48,9 +49,11 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
   const revoke = useRevokeConnection();
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
   const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null);
-  // Cancel withdraws the poll for a row that stays "initiated" until the
-  // sweep expires it; remembering it keeps the resume below from re-adopting it.
-  const [dismissedConnectionId, setDismissedConnectionId] = useState<string | null>(null);
+  // Resuming a waiting row happens once per mount. After Cancel, or after a
+  // poll gives up, the row may still read "initiated" (the sweep expires it
+  // later); adopting it again would restart the same poll — on 2026-09-03 that
+  // was an eight-minute loop of failing requests behind a "waiting" spinner.
+  const [resumeSpent, setResumeSpent] = useState(false);
 
   const connection = currentConnection(connections.data, connectorType);
   const status = connection?.status ?? "disconnected";
@@ -59,16 +62,14 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
   // A row still "initiated" after a reload (or a tab closed mid-flow) is
   // resumed here: the poll completes it as soon as Composio has the account.
   useEffect(() => {
-    if (
-      status === "initiated" && connection && pendingConnectionId === null &&
-      connection.id !== dismissedConnectionId
-    ) {
+    if (status === "initiated" && connection && pendingConnectionId === null && !resumeSpent) {
+      setResumeSpent(true);
       setPendingConnectionId(connection.id);
     }
-  }, [status, connection, pendingConnectionId, dismissedConnectionId]);
+  }, [status, connection, pendingConnectionId, resumeSpent]);
 
   const cancelWaiting = () => {
-    setDismissedConnectionId(pendingConnectionId);
+    setResumeSpent(true);
     setPendingConnectionId(null);
   };
 
@@ -79,12 +80,9 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
       toast.success(`${label} connected`);
     },
     onFailed: (code) => {
+      setResumeSpent(true);
       setPendingConnectionId(null);
-      toast.error(
-        code === "timeout"
-          ? `The ${label} authorisation was not completed in time. Connect again to retry.`
-          : `The ${label} connection did not complete (${code}).`,
-      );
+      toast.error(connectionFailureMessage(code, label));
     },
   });
   const isWaiting = finalizer.status === "waiting";
@@ -159,7 +157,7 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
         {!isWaiting && (status === "failed" || status === "revoked") && (
           <p className="text-xs text-muted-foreground">
             {status === "failed"
-              ? `Last attempt failed — ${connection?.failure_code ?? "unknown reason"}.`
+              ? connectionFailureMessage(connection?.failure_code ?? "unknown", label)
               : "This connection was disconnected."}
           </p>
         )}

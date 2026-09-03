@@ -43,6 +43,8 @@ function setup(overrides: Partial<ComposioConnectDependencies> = {}) {
     updateConnection: async () => {},
     activateConnection: async () => true,
     loadPendingConnection: async () => null,
+    claimedConnectedAccountIds: async () => new Set<string>(),
+    supersedeInitiatedConnections: async () => {},
     loadConnectionForUser: async () => ({
       id: "connection-1",
       workspaceId: "workspace-1",
