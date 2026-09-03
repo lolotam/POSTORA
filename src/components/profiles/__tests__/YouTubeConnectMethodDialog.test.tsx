@@ -135,7 +135,7 @@ describe("YouTubeConnectMethodDialog", () => {
     await waitFor(() => expect(navigate).toHaveBeenCalledWith("https://provider.invalid/connect"));
   });
 
-  it("names the failure when Composio's account cannot be adopted", async () => {
+  it("explains, in words, why a natively connected channel cannot be adopted", async () => {
     localStorage.setItem("postora.youtubeConnectMethod", "composio");
     const initiate = vi.fn().mockResolvedValue({
       connection_id: "conn-7",
@@ -154,7 +154,9 @@ describe("YouTubeConnectMethodDialog", () => {
       />,
     );
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("channel_already_native");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /already connected through Direct Google OAuth/,
+    );
     expect(screen.getByRole("button", { name: "Continue" })).toBeEnabled();
   });
 });

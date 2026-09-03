@@ -354,10 +354,19 @@ as the path Composio *may* take; completion is something the app asks for:
   shared with the callback). No matching account yet, or a Composio outage mid-poll, answers
   `{status:"pending"}`; a row older than the state TTL is failed `expired` here rather than
   adopting a later account.
+- The listing fallback skips any account a `connector_connections` row already holds
+  (`claimedConnectedAccountIds`): `composio_connected_account_id` is unique, and on 2026-09-03 an
+  abandoned first click's poll spent eight minutes failing its activating write on the account
+  the second click had adopted. Initiate also fails, as `superseded`, every other `initiated`
+  row of the same type in the workspace once its own row exists, so one click's account is
+  never contested by an earlier one.
 - The app opens Composio in a new tab from inside the click (popup-blocker safe; falls back to
   navigating the current tab) and polls `finalize` every 3 s for at most the state TTL
-  (`useConnectionFinalizer`), resuming for a row it finds still `initiated` after a reload. The
-  YouTube dialog sends the profile id with each poll so the channel is homed correctly.
+  (`useConnectionFinalizer`), resuming once per mount for a row it finds still `initiated` after
+  a reload; after Cancel, or after the poll gives up, the row is not adopted again. The
+  YouTube dialog sends the profile id with each poll so the channel is homed correctly. Failure
+  codes reach the person as sentences (`connectionFailureMessage`); `channel_already_native`
+  in particular says the channel is already connected natively and how to switch.
 - Not covered: connections minted through the partner door (`connect-link`) have no poller and
   activate only when something calls the same resolution; see `docs/developer/connectors.md`.
 

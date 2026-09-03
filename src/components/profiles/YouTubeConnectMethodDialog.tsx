@@ -13,6 +13,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
+  connectionFailureMessage,
   finalizeConnection,
   initiateConnection,
   openAuthorisationTab,
@@ -91,11 +92,7 @@ export function YouTubeConnectMethodDialog({
     onFailed: (code) => {
       setPendingConnectionId(null);
       setBusy(false);
-      setError(
-        code === "timeout"
-          ? "The authorisation was not completed in time. Try again."
-          : `The connection did not complete (${code}).`,
-      );
+      setError(connectionFailureMessage(code, "YouTube"));
     },
   });
   const waiting = finalizer.status === "waiting";

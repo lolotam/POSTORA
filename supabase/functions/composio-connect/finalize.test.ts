@@ -98,6 +98,8 @@ function setup(overrides: Partial<ComposioConnectDependencies> = {}, nowMs = ROW
       return true;
     },
     loadPendingConnection: async () => pending,
+    claimedConnectedAccountIds: async () => new Set<string>(),
+    supersedeInitiatedConnections: async () => {},
     loadConnectionForUser: async () => owned,
     revokeRpc: async () => {},
     loadSocialAccountProvider: async () => null,
@@ -156,6 +158,26 @@ Deno.test("finalize stays pending while Composio has no active account for the r
     }),
   });
   assertEquals(await finalizeConnection(state.deps, input), { status: "pending" });
+  assertEquals(state.updates, []);
+});
+
+// 2026-09-03: an abandoned first click kept polling after the second click's
+// account was adopted, and every poll died on the unique account column.
+Deno.test("finalize leaves an account another row already holds alone instead of failing on it", async () => {
+  const asked: string[][] = [];
+  const state = setup({
+    composio: composioClient({
+      async listConnectedAccounts() {
+        return [fresh];
+      },
+    }),
+    claimedConnectedAccountIds: async (ids) => {
+      asked.push(ids);
+      return new Set(["ca-fresh"]);
+    },
+  });
+  assertEquals(await finalizeConnection(state.deps, input), { status: "pending" });
+  assertEquals(asked, [["ca-fresh"]]);
   assertEquals(state.updates, []);
 });
 

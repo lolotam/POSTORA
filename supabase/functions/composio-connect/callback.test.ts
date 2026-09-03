@@ -112,6 +112,8 @@ async function setup(
       return true;
     },
     loadPendingConnection: async () => pending,
+    claimedConnectedAccountIds: async () => new Set<string>(),
+    supersedeInitiatedConnections: async () => {},
     loadConnectionForUser: async () => null,
     revokeRpc: async () => {},
     loadSocialAccountProvider: async () => null,
