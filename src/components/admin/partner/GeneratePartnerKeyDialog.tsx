@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -29,6 +29,8 @@ export function GeneratePartnerKeyDialog({ open, onOpenChange }: GeneratePartner
   const [quota, setQuota] = useState("");
   const [rateLimit, setRateLimit] = useState("60");
   const [created, setCreated] = useState<CreatedKeyDisplay | null>(null);
+  /** Set when the dialog closes, so a mint that resolves afterwards is dropped. */
+  const abandoned = useRef(false);
 
   const workspaces = useMemo(() => {
     const seen = new Map<string, string>();
@@ -49,16 +51,37 @@ export function GeneratePartnerKeyDialog({ open, onOpenChange }: GeneratePartner
   };
 
   const close = (next: boolean) => {
-    if (!next) reset(); // the plaintext leaves memory with the dialog
+    if (!next) {
+      // The plaintext leaves memory with the dialog. This component stays
+      // mounted for the page's lifetime — only DialogContent unmounts — so
+      // clearing state is not enough: a mint still in flight would call
+      // setCreated after the close and re-display the key on the next open.
+      abandoned.current = true;
+      reset();
+      create.reset(); // the mutation cache holds the plaintext too
+    }
     onOpenChange(next);
   };
 
   const submit = async () => {
+    abandoned.current = false;
     try {
       const result = await create.mutateAsync({
         name: name.trim(), workspaceId, socialAccountId: accountId, environment, scopes,
         monthlyQuota: quotaValue, rateLimitPerMin: rateValue,
       });
+      if (abandoned.current) {
+        // The key exists, but the dialog that minted it is gone. Showing it
+        // later would break the "once, and only here" contract, so it is
+        // dropped and the admin is told to revoke it (spec D5, §7).
+        create.reset();
+        toast({
+          title: "Key created but not shown",
+          description: `The dialog closed before "${name.trim()}" could be displayed. Revoke it in the table and generate a new one.`,
+          variant: "destructive",
+        });
+        return;
+      }
       setCreated({
         name: name.trim(), environment, key: result.key, prefix: result.prefix, scopes,
         workspaceId, socialAccountId: accountId, createdAt: result.createdAt,
@@ -85,6 +108,11 @@ export function GeneratePartnerKeyDialog({ open, onOpenChange }: GeneratePartner
           <PartnerKeyCreatedView created={created} onDone={() => close(false)} />
         ) : (
           <div className="space-y-4">
+            {targets.error && (
+              <p className="text-sm text-destructive">
+                Could not load workspaces and accounts: {(targets.error as Error).message}
+              </p>
+            )}
             <div className="space-y-1">
               <Label htmlFor="pk-name">Name</Label>
               <Input id="pk-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Danat backend" />

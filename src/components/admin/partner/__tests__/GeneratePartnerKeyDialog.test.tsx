@@ -68,4 +68,45 @@ describe("GeneratePartnerKeyDialog", () => {
     fireEvent.change(screen.getByLabelText("Account (WhatsApp)"), { target: { value: "a1" } });
     expect(screen.getByRole("button", { name: /generate key/i })).toBeDisabled();
   });
+  // The dialog stays mounted for the page's lifetime, so a mint that resolves
+  // after the admin closed it used to land in state and re-display the key on
+  // the next open — the "shown once" control, silently gone.
+  it("drops a minted key whose dialog was closed while the request was in flight", async () => {
+    let land: () => void = () => {};
+    rpc.mockImplementation((fn: string) => {
+      if (fn === "admin_partner_key_targets") return Promise.resolve({ data: TARGETS, error: null });
+      if (fn === "create_partner_key") {
+        return new Promise((resolve) => { land = () => resolve({ data: "new-id", error: null }); });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+
+    wrap(<GeneratePartnerKeyDialog open onOpenChange={() => {}} />);
+    await screen.findByRole("option", { name: "Danat" });
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "Danat backend" } });
+    fireEvent.change(screen.getByLabelText("Workspace"), { target: { value: "ws1" } });
+    fireEvent.change(screen.getByLabelText("Account (WhatsApp)"), { target: { value: "a1" } });
+    fireEvent.click(screen.getByLabelText("messages:send"));
+    fireEvent.click(screen.getByRole("button", { name: /generate key/i }));
+
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith("create_partner_key", expect.anything()));
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    land();
+
+    // The RPC has resolved. The created view must never appear for this key.
+    await waitFor(() => expect(screen.queryByRole("button", { name: /generate key/i })).toBeInTheDocument());
+    expect(screen.queryByDisplayValue(/^pk_(live|test)_/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/will not be shown again/i)).not.toBeInTheDocument();
+  });
+
+  it("surfaces a failed targets read instead of an empty workspace picker", async () => {
+    rpc.mockImplementation((fn: string) => {
+      if (fn === "admin_partner_key_targets") {
+        return Promise.resolve({ data: null, error: { message: "platform admin only" } });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    wrap(<GeneratePartnerKeyDialog open onOpenChange={() => {}} />);
+    expect(await screen.findByText(/Could not load workspaces and accounts: platform admin only/)).toBeInTheDocument();
+  });
 });
