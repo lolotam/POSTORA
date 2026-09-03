@@ -25,6 +25,13 @@ export const CONNECTOR_TYPES = [
   "formula",
   "custom_rest",
   "mcp_custom",
+  "google_sheets",
+  "slack",
+  "google_calendar",
+  "hubspot",
+  "notion",
+  "airtable",
+  "youtube",
 ] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];

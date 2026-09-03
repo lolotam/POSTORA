@@ -6,9 +6,39 @@ import {
 
 import {
   CONNECTOR_TYPES,
+  PENDING_DB_CONNECTOR_TYPES,
+  composioBinding,
   connectorDefinition,
+  isComposioType,
   shouldUseAdapter,
 } from "./connectorRegistry.ts";
+
+// Empty at HEAD: migration 20260903120000 admitted the seven Composio types
+// before the registry commit that added them (see the browser test's note).
+const PENDING_TYPES: readonly string[] = [];
+
+Deno.test("every connector declares its strategy, category, and valid Composio binding", () => {
+  for (const type of CONNECTOR_TYPES) {
+    const definition = connectorDefinition(type);
+    assert(["manual_credentials", "composio_oauth"].includes(definition.auth_strategy));
+    assert(["ecommerce_payments", "productivity_crm", "databases", "automation"].includes(definition.category));
+    const isComposio = definition.auth_strategy === "composio_oauth";
+    assertEquals(Boolean(definition.composio), isComposio);
+    assertEquals(isComposioType(type), isComposio);
+    assertEquals(composioBinding(type), definition.composio);
+    if (definition.composio) {
+      assertEquals(definition.credentials, []);
+      assert(definition.composio.tools.length > 0);
+      assertEquals(new Set(definition.composio.tools).size, definition.composio.tools.length);
+      assert(definition.composio.mutating.every((slug) => definition.composio?.tools.includes(slug)));
+      assert(/^\d{8}_\d{2}$|^latest$/.test(definition.composio.toolkitVersion));
+    }
+  }
+});
+
+Deno.test("the database seam is empty because the Composio migration precedes the registry", () => {
+  assertEquals([...PENDING_DB_CONNECTOR_TYPES], [...PENDING_TYPES]);
+});
 
 Deno.test("every declared connector type has credentials and a usage guide", () => {
   for (const type of CONNECTOR_TYPES) {

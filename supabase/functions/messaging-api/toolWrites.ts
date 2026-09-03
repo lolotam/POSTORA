@@ -12,9 +12,11 @@
 
 import {
   connectorDefinition,
+  isComposioType,
   type ConnectorType,
   SERVER_CONNECTOR_TYPES,
 } from "../_shared/connectorRegistry.ts";
+import { loadActiveConnection } from "../_shared/composioConnections.ts";
 
 // Carries the HTTP status the Edge Function should answer with. Expected
 // business refusals must not surface as opaque 500s.
@@ -41,6 +43,8 @@ export interface ParsedUpsertToolInput {
   url: string;
   socialAccountId: string;
   connectorType: ConnectorType;
+  authStrategy: "manual_credentials" | "composio_oauth";
+  connectionId?: string;
   permissions: {
     search_products: boolean;
     check_stock: boolean;
@@ -117,6 +121,14 @@ export function parseUpsertToolInput(
   }
   // Narrowed by the allow-list check above; the cast is earned, not assumed.
   const typedConnectorType = connectorType as ConnectorType;
+  const authStrategy = isComposioType(typedConnectorType) ? "composio_oauth" : "manual_credentials";
+  const rawConnectionId = record.connection_id;
+  const connectionId = typeof rawConnectionId === "string" && rawConnectionId.trim()
+    ? rawConnectionId.trim()
+    : undefined;
+  if (authStrategy === "composio_oauth" && !connectionId) {
+    throw new ToolWriteError("connection_required");
+  }
 
   // A save with no owning account is refused, never written unscoped: an
   // account-less row against an account-scoped table is the defect this
@@ -175,6 +187,8 @@ export function parseUpsertToolInput(
     url: toolUrl,
     socialAccountId: socialAccountId.trim(),
     connectorType: typedConnectorType,
+    authStrategy,
+    connectionId: authStrategy === "composio_oauth" ? connectionId : undefined,
     permissions: {
       search_products: rawPermissions.search_products === true,
       check_stock: rawPermissions.check_stock === true,
@@ -232,6 +246,7 @@ interface AccountRow {
   id: string;
   user_id: string;
   platform: string;
+  workspace_id: string | null;
 }
 
 async function resolveToolAccount(
@@ -241,7 +256,7 @@ async function resolveToolAccount(
 ): Promise<AccountRow> {
   const { data, error } = await admin
     .from("social_accounts")
-    .select("id, user_id, platform")
+    .select("id, user_id, platform, workspace_id")
     .eq("id", socialAccountId)
     .maybeSingle();
   if (error) throw error;
@@ -291,6 +306,31 @@ export async function upsertAccountScopedTool(
 ): Promise<Record<string, unknown>> {
   const account = await resolveToolAccount(admin, userId, input.socialAccountId);
 
+  if (input.authStrategy === "composio_oauth") {
+    if (!account.workspace_id || !input.connectionId) {
+      throw new ToolWriteError("connection_forbidden", 403);
+    }
+    const { data: membership, error: membershipError } = await admin
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("workspace_id", account.workspace_id)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (membershipError) throw membershipError;
+    if (!membership) throw new ToolWriteError("connection_forbidden", 403);
+
+    const lookup = await loadActiveConnection(admin, input.connectionId, account.workspace_id);
+    if (!lookup.ok) {
+      if (lookup.code === "connection_inactive") {
+        throw new ToolWriteError("connection_inactive", 409);
+      }
+      throw new ToolWriteError("connection_forbidden", 403);
+    }
+    if (lookup.connection.connectorType !== input.connectorType) {
+      throw new ToolWriteError("connection_forbidden", 403);
+    }
+  }
+
   const { data: toolRows, error: readError } = await admin
     .from("ai_agent_tools")
     .select("id, name, settings, credentials_secret_id")
@@ -303,7 +343,7 @@ export async function upsertAccountScopedTool(
   // Vault first. configured_secret_fields is derived from the blob on every
   // write (the SQL returns the merged key list) -- never accepted from the
   // client and never set independently (§4.3).
-  const credentials = Object.keys(input.secretPatch).length > 0
+  const credentials = input.authStrategy === "manual_credentials" && Object.keys(input.secretPatch).length > 0
     ? await vault.upsertCredentials(existing?.credentials_secret_id ?? null, input.secretPatch)
     : null;
 
@@ -316,6 +356,8 @@ export async function upsertAccountScopedTool(
     is_enabled: input.isEnabled,
     admin_only: input.adminOnly,
     connector_type: input.connectorType,
+    auth_strategy: input.authStrategy,
+    connection_id: input.connectionId ?? null,
     permissions: input.permissions,
     read_only_mode: input.readOnlyMode,
     enable_cache: input.enableCache,

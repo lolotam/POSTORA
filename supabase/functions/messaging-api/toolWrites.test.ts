@@ -144,10 +144,12 @@ function fakeVault() {
 }
 
 const ACCOUNTS: Row[] = [
-  { __table: "social_accounts", id: ACCOUNT, user_id: OWNER, platform: "whatsapp" },
-  { __table: "social_accounts", id: "acc-2", user_id: OWNER, platform: "instagram" },
-  { __table: "social_accounts", id: "acc-other", user_id: OTHER, platform: "whatsapp" },
+  { __table: "social_accounts", id: ACCOUNT, user_id: OWNER, platform: "whatsapp", workspace_id: "ws-1" },
+  { __table: "social_accounts", id: "acc-2", user_id: OWNER, platform: "instagram", workspace_id: "ws-1" },
+  { __table: "social_accounts", id: "acc-other", user_id: OTHER, platform: "whatsapp", workspace_id: "ws-2" },
 ];
+
+const MEMBERSHIP: Row = { __table: "workspace_members", id: "member-1", workspace_id: "ws-1", user_id: OWNER };
 
 function toolPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -167,6 +169,64 @@ function toolPayload(overrides: Record<string, unknown> = {}) {
     },
   };
 }
+
+function composioPayload(overrides: Record<string, unknown> = {}) {
+  return toolPayload({ connector_type: "google_sheets", credentials: {}, connection_id: "connection-1", ...overrides });
+}
+
+Deno.test("Composio parsing requires a connection while native parsing strips one", () => {
+  const missing = composioPayload();
+  delete (missing.tool as Record<string, unknown>).connection_id;
+  let caught: unknown;
+  try {
+    parseUpsertToolInput(missing);
+  } catch (error) {
+    caught = error;
+  }
+  assertEquals(caught instanceof ToolWriteError, true);
+  assertEquals((caught as Error).message, "connection_required");
+
+  const native = parseUpsertToolInput(toolPayload({ connection_id: "ignored" }));
+  assertEquals(native.authStrategy, "manual_credentials");
+  assertEquals(native.connectionId, undefined);
+});
+
+Deno.test("Composio writes refuse inactive and forbidden connections", async () => {
+  const inactiveRows: Row[] = [
+    ...ACCOUNTS, MEMBERSHIP,
+    { __table: "connector_connections", id: "connection-1", workspace_id: "ws-1", connector_type: "google_sheets", toolkit: "googlesheets", composio_connected_account_id: "ca-1", tool_schema_cache: [], status: "revoked" },
+  ];
+  const inactive = await assertRejects(
+    () => upsertAccountScopedTool(fakeAdmin(inactiveRows), fakeVault(), { userId: OWNER, input: parseUpsertToolInput(composioPayload()) }),
+    ToolWriteError,
+    "connection_inactive",
+  );
+  assertEquals(inactive.status, 409);
+
+  const forbiddenRows: Row[] = [
+    ...ACCOUNTS, MEMBERSHIP,
+    { __table: "connector_connections", id: "connection-1", workspace_id: "ws-2", connector_type: "google_sheets", toolkit: "googlesheets", composio_connected_account_id: "ca-1", tool_schema_cache: [], status: "active" },
+  ];
+  const forbidden = await assertRejects(
+    () => upsertAccountScopedTool(fakeAdmin(forbiddenRows), fakeVault(), { userId: OWNER, input: parseUpsertToolInput(composioPayload()) }),
+    ToolWriteError,
+    "connection_forbidden",
+  );
+  assertEquals(forbidden.status, 403);
+});
+
+Deno.test("an active Composio connection writes strategy and id without touching Vault", async () => {
+  const admin = fakeAdmin([
+    ...ACCOUNTS, MEMBERSHIP,
+    { __table: "connector_connections", id: "connection-1", workspace_id: "ws-1", connector_type: "google_sheets", toolkit: "googlesheets", composio_connected_account_id: "ca-1", tool_schema_cache: [], status: "active" },
+  ]);
+  const vault = fakeVault();
+  await upsertAccountScopedTool(admin, vault, { userId: OWNER, input: parseUpsertToolInput(composioPayload()) });
+  const insert = admin.writes.find((write) => write.kind === "insert")!;
+  assertEquals(insert.values?.auth_strategy, "composio_oauth");
+  assertEquals(insert.values?.connection_id, "connection-1");
+  assertEquals(vault.calls, []);
+});
 
 Deno.test("an unknown connector_type is refused by name, not downgraded to custom_rest", () => {
   // Today the deployed writer substitutes custom_rest and returns 200, so the

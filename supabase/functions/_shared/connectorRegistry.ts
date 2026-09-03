@@ -12,6 +12,25 @@ export interface UsageGuide {
   limits: string;
 }
 
+export type AuthStrategy = "manual_credentials" | "composio_oauth";
+export type ConnectorCategory = "ecommerce_payments" | "productivity_crm" | "databases" | "automation";
+
+export interface ComposioBinding {
+  toolkit: string;
+  tools: readonly string[];
+  mutating: readonly string[];
+  toolkitVersion: string;
+}
+
+export const CONNECTOR_CATEGORY_LABELS: Record<ConnectorCategory, string> = {
+  ecommerce_payments: "E-Commerce & Payments",
+  productivity_crm: "Productivity & Apps",
+  databases: "Databases",
+  automation: "Automation",
+};
+
+export const COMPOSIO_TOOLKIT_VERSION = "latest";
+
 export const CONNECTOR_CAPABILITY_NAMES = [
   "search_products",
   "check_stock",
@@ -50,6 +69,13 @@ export const CONNECTOR_TYPES = [
   "stripe",
   "higgsfield",
   "mcp_custom",
+  "google_sheets",
+  "slack",
+  "google_calendar",
+  "hubspot",
+  "notion",
+  "airtable",
+  "youtube",
 ] as const;
 
 export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
@@ -62,7 +88,9 @@ export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
 // custom_rest. Kept as a staging seam rather than deleted: a future type that
 // lands in the registry before its own migration is applied is listed here
 // again, and the contract test re-arms itself the same way it did for these.
-const PENDING_DB_CONNECTOR_TYPES: readonly ConnectorType[] = [];
+// The seven Composio types never sat here: 20260903120000 rebuilt the CHECK
+// with nineteen types before the registry commit that added them.
+export const PENDING_DB_CONNECTOR_TYPES: readonly ConnectorType[] = [];
 
 // The write allow-list ai_upsert_tool validates against. Equal to the full
 // registry since Migration A; derived (not inlined) so the staging seam above
@@ -76,10 +104,13 @@ export const SERVER_CONNECTOR_TYPES = CONNECTOR_TYPES.filter(
 export interface ConnectorDefinition {
   type: ConnectorType;
   label: string;
+  auth_strategy: AuthStrategy;
+  category: ConnectorCategory;
   credentials: Field[];
   usageGuide?: UsageGuide;
   /** Present only when a live ai-agent-adapters implementation exists. */
   capabilities?: readonly ConnectorCapabilityDefinition[];
+  composio?: ComposioBinding;
 }
 
 const SUPABASE_PARAMETERS: ConnectorParameterSchema = {
@@ -106,6 +137,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   supabase: {
     type: "supabase",
     label: "Supabase",
+    auth_strategy: "manual_credentials",
+    category: "databases",
     credentials: [
       {
         key: "project_url",
@@ -161,6 +194,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   mysql_postgres: {
     type: "mysql_postgres",
     label: "PostgreSQL / MySQL",
+    auth_strategy: "manual_credentials",
+    category: "databases",
     credentials: [
       {
         key: "gateway_url",
@@ -193,6 +228,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   woocommerce: {
     type: "woocommerce",
     label: "WooCommerce",
+    auth_strategy: "manual_credentials",
+    category: "ecommerce_payments",
     credentials: [
       {
         key: "store_url",
@@ -282,6 +319,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   shopify: {
     type: "shopify",
     label: "Shopify",
+    auth_strategy: "manual_credentials",
+    category: "ecommerce_payments",
     credentials: [
       {
         key: "shop_domain",
@@ -328,6 +367,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   salla: {
     type: "salla",
     label: "Salla",
+    auth_strategy: "manual_credentials",
+    category: "ecommerce_payments",
     credentials: [
       {
         key: "client_id",
@@ -374,6 +415,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   zid: {
     type: "zid",
     label: "Zid",
+    auth_strategy: "manual_credentials",
+    category: "ecommerce_payments",
     credentials: [
       {
         key: "client_id",
@@ -413,6 +456,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   formula: {
     type: "formula",
     label: "Formula",
+    auth_strategy: "manual_credentials",
+    category: "automation",
     credentials: [],
     usageGuide: {
       whenToUse: "Deterministic local calculations using the formula configured for this tool.",
@@ -423,6 +468,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   custom_rest: {
     type: "custom_rest",
     label: "Custom REST",
+    auth_strategy: "manual_credentials",
+    category: "automation",
     credentials: [
       {
         key: "url",
@@ -450,6 +497,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   myfatoorah: {
     type: "myfatoorah",
     label: "MyFatoorah",
+    auth_strategy: "manual_credentials",
+    category: "ecommerce_payments",
     credentials: [
       {
         key: "api_token",
@@ -475,6 +524,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   stripe: {
     type: "stripe",
     label: "Stripe",
+    auth_strategy: "manual_credentials",
+    category: "ecommerce_payments",
     credentials: [
       {
         key: "restricted_api_key",
@@ -493,6 +544,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   higgsfield: {
     type: "higgsfield",
     label: "Higgsfield",
+    auth_strategy: "manual_credentials",
+    category: "automation",
     credentials: [],
     usageGuide: {
       whenToUse: "Generate or inspect Higgsfield media jobs when the configured tool exposes that capability.",
@@ -503,6 +556,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   mcp_custom: {
     type: "mcp_custom",
     label: "Generic MCP",
+    auth_strategy: "manual_credentials",
+    category: "automation",
     credentials: [
       {
         key: "server_url",
@@ -525,6 +580,73 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
       limits: "Capabilities and limits are defined by the MCP server. Use only tools the server advertises.",
     },
   },
+  google_sheets: {
+    type: "google_sheets", label: "Google Sheets", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
+    composio: {
+      toolkit: "googlesheets", toolkitVersion: COMPOSIO_TOOLKIT_VERSION,
+      tools: ["GOOGLESHEETS_BATCH_GET", "GOOGLESHEETS_LOOKUP_SPREADSHEET_ROW", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_BATCH_UPDATE"],
+      mutating: ["GOOGLESHEETS_BATCH_UPDATE"],
+    },
+    usageGuide: {
+      whenToUse: "Rows in the connected Google Sheets spreadsheet — stock lists, bookings, price tables the business keeps in a sheet.",
+      requestExamples: ["is item 42 in the stock sheet", "what price does the sheet list for the large size"],
+      limits: "Reads the connected account\'s sheets only. Writing rows changes the customer\'s data and is off unless the connector allows writes.",
+    },
+  },
+  slack: {
+    type: "slack", label: "Slack", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
+    composio: { toolkit: "slack", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["SLACK_SEARCH_MESSAGES", "SLACK_LIST_CONVERSATIONS", "SLACK_SEND_MESSAGE"], mutating: ["SLACK_SEND_MESSAGE"] },
+    usageGuide: {
+      whenToUse: "Messages and channels in the connected Slack workspace.",
+      requestExamples: ["find the latest message about order 10432", "which channel discussed the launch"],
+      limits: "Sending a message changes the customer\'s workspace and is off unless the connector allows writes.",
+    },
+  },
+  google_calendar: {
+    type: "google_calendar", label: "Google Calendar", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
+    composio: { toolkit: "googlecalendar", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_FIND_FREE_SLOTS", "GOOGLECALENDAR_CREATE_EVENT"], mutating: ["GOOGLECALENDAR_CREATE_EVENT"] },
+    usageGuide: {
+      whenToUse: "Events and availability in the connected Google Calendar.",
+      requestExamples: ["what appointments are tomorrow", "find a free slot next Tuesday"],
+      limits: "Creating an event changes the customer\'s calendar and is off unless the connector allows writes.",
+    },
+  },
+  hubspot: {
+    type: "hubspot", label: "HubSpot", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
+    composio: { toolkit: "hubspot", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["HUBSPOT_SEARCH_CONTACTS", "HUBSPOT_GET_CONTACT", "HUBSPOT_CREATE_CONTACT"], mutating: ["HUBSPOT_CREATE_CONTACT"] },
+    usageGuide: {
+      whenToUse: "Contacts and customer records in the connected HubSpot account.",
+      requestExamples: ["find the contact for this email", "show the CRM record for this customer"],
+      limits: "Creating a contact changes the customer\'s CRM and is off unless the connector allows writes.",
+    },
+  },
+  notion: {
+    type: "notion", label: "Notion", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
+    composio: { toolkit: "notion", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["NOTION_SEARCH_NOTION_PAGE", "NOTION_FETCH_DATA", "NOTION_QUERY_DATABASE"], mutating: [] },
+    usageGuide: {
+      whenToUse: "Pages and database records shared with the connected Notion integration.",
+      requestExamples: ["find the returns policy page", "look up this item in the product database"],
+      limits: "Reads only pages and databases granted to the integration.",
+    },
+  },
+  airtable: {
+    type: "airtable", label: "Airtable", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
+    composio: { toolkit: "airtable", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["AIRTABLE_LIST_RECORDS", "AIRTABLE_GET_RECORD", "AIRTABLE_CREATE_RECORD"], mutating: ["AIRTABLE_CREATE_RECORD"] },
+    usageGuide: {
+      whenToUse: "Records in the connected Airtable bases.",
+      requestExamples: ["list open bookings", "find the record for customer 402"],
+      limits: "Creating a record changes the customer\'s base and is off unless the connector allows writes.",
+    },
+  },
+  youtube: {
+    type: "youtube", label: "YouTube", auth_strategy: "composio_oauth", category: "automation", credentials: [],
+    composio: { toolkit: "youtube", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["YOUTUBE_LIST_CHANNELS", "YOUTUBE_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"], mutating: ["YOUTUBE_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"] },
+    usageGuide: {
+      whenToUse: "The connected YouTube channel and supported publishing actions.",
+      requestExamples: ["list the connected channels", "upload this approved video"],
+      limits: "Uploads and thumbnail updates change the channel and are off unless the connector allows writes.",
+    },
+  },
 };
 
 export function connectorDefinition(type: string): ConnectorDefinition {
@@ -533,6 +655,16 @@ export function connectorDefinition(type: string): ConnectorDefinition {
   }
 
   return CONNECTOR_DEFINITIONS[type as ConnectorType];
+}
+
+export function isComposioType(type: string | null | undefined): boolean {
+  return Boolean(type && Object.prototype.hasOwnProperty.call(CONNECTOR_DEFINITIONS, type) &&
+    CONNECTOR_DEFINITIONS[type as ConnectorType].auth_strategy === "composio_oauth");
+}
+
+export function composioBinding(type: string | null | undefined): ComposioBinding | undefined {
+  if (!isComposioType(type)) return undefined;
+  return CONNECTOR_DEFINITIONS[type as ConnectorType].composio;
 }
 
 /**

@@ -1,0 +1,170 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+import {
+  type ComposioClient,
+  composioClientFromEnv,
+} from "../_shared/composioClient.ts";
+import {
+  type ConnectorCallMeta,
+  type ConnectorCallOutcome,
+  recordConnectorCall,
+} from "../_shared/connectorTelemetry.ts";
+
+export const DEFAULT_APP_RETURN_URL =
+  "https://postora.cloud/settings?tab=integrations";
+export const COMPOSIO_AUTH_CONFIG_PREFIX = "COMPOSIO_AUTH_CONFIG_";
+
+export interface PendingConnection {
+  id: string;
+  workspaceId: string;
+  connectorType: string;
+  toolkit: string;
+  authConfigId: string;
+  stateNonce: string | null;
+  status: string;
+}
+
+export interface UserConnection {
+  id: string;
+  workspaceId: string;
+  connectorType: string;
+  composioConnectedAccountId: string | null;
+  status: string;
+}
+
+export interface ComposioConnectDependencies {
+  composio: ComposioClient | null;
+  stateSecret: string;
+  callbackUrl: string;
+  appReturnUrl: string;
+  now: () => number;
+  newId: () => string;
+  authConfigFor: (connectorType: string) => string | undefined;
+  isWorkspaceMember: (userId: string, workspaceId: string) => Promise<boolean>;
+  insertConnection: (row: Record<string, unknown>) => Promise<void>;
+  updateConnection: (
+    id: string,
+    values: Record<string, unknown>,
+  ) => Promise<void>;
+  loadPendingConnection: (
+    id: string,
+    workspaceId: string,
+  ) => Promise<PendingConnection | null>;
+  loadConnectionForUser: (
+    id: string,
+    userId: string,
+  ) => Promise<UserConnection | null>;
+  revokeRpc: (userClient: any, connectionId: string) => Promise<void>;
+  recordCall: (
+    meta: ConnectorCallMeta,
+    outcome: ConnectorCallOutcome,
+  ) => Promise<void>;
+}
+
+function envAuthConfigName(connectorType: string): string {
+  return `${COMPOSIO_AUTH_CONFIG_PREFIX}${connectorType.toUpperCase()}`;
+}
+
+function throwDatabaseError(error: unknown): never {
+  if (error instanceof Error) throw error;
+  throw new Error("connector_database_error");
+}
+
+export function createUserClient(authorization: string): any {
+  return createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_ANON_KEY")!,
+    { global: { headers: { Authorization: authorization } } },
+  );
+}
+
+export function createDependencies(): ComposioConnectDependencies {
+  const admin = createClient(
+    Deno.env.get("SUPABASE_URL")!,
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+  );
+
+  const isWorkspaceMember = async (userId: string, workspaceId: string) => {
+    const { data, error } = await admin
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("workspace_id", workspaceId)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error) throwDatabaseError(error);
+    return Boolean(data);
+  };
+
+  return {
+    composio: composioClientFromEnv(),
+    stateSecret: Deno.env.get("COMPOSIO_STATE_SECRET") ?? "",
+    callbackUrl: Deno.env.get("COMPOSIO_CALLBACK_URL") ?? "",
+    appReturnUrl: Deno.env.get("APP_RETURN_URL") ?? DEFAULT_APP_RETURN_URL,
+    now: Date.now,
+    // Wrapped on purpose: randomUUID is a Crypto method and throws
+    // "Illegal invocation" when called detached from its receiver.
+    newId: () => crypto.randomUUID(),
+    authConfigFor: (connectorType) =>
+      Deno.env.get(envAuthConfigName(connectorType))?.trim() || undefined,
+    isWorkspaceMember,
+    async insertConnection(row) {
+      const { error } = await admin.from("connector_connections").insert(row);
+      if (error) throwDatabaseError(error);
+    },
+    async updateConnection(id, values) {
+      const { error } = await admin.from("connector_connections").update({
+        ...values,
+        updated_at: new Date().toISOString(),
+      }).eq("id", id);
+      if (error) throwDatabaseError(error);
+    },
+    async loadPendingConnection(id, workspaceId) {
+      const { data, error } = await admin
+        .from("connector_connections")
+        .select(
+          "id,workspace_id,connector_type,toolkit,composio_auth_config_id,state_nonce,status",
+        )
+        .eq("id", id)
+        .eq("workspace_id", workspaceId)
+        .maybeSingle();
+      if (error) throwDatabaseError(error);
+      if (!data) return null;
+      return {
+        id: data.id,
+        workspaceId: data.workspace_id,
+        connectorType: data.connector_type,
+        toolkit: data.toolkit,
+        authConfigId: data.composio_auth_config_id,
+        stateNonce: data.state_nonce,
+        status: data.status,
+      };
+    },
+    async loadConnectionForUser(id, userId) {
+      const { data, error } = await admin
+        .from("connector_connections")
+        .select(
+          "id,workspace_id,connector_type,composio_connected_account_id,status",
+        )
+        .eq("id", id)
+        .maybeSingle();
+      if (error) throwDatabaseError(error);
+      if (!data || !(await isWorkspaceMember(userId, data.workspace_id))) {
+        return null;
+      }
+      return {
+        id: data.id,
+        workspaceId: data.workspace_id,
+        connectorType: data.connector_type,
+        composioConnectedAccountId: data.composio_connected_account_id,
+        status: data.status,
+      };
+    },
+    async revokeRpc(userClient, connectionId) {
+      const { error } = await userClient.rpc("revoke_connector_connection", {
+        p_connection_id: connectionId,
+      });
+      if (error) throwDatabaseError(error);
+    },
+    recordCall: (meta, outcome) => recordConnectorCall(admin, meta, outcome),
+  };
+}

@@ -58,7 +58,13 @@ import {
 } from "@/hooks/useAiAgentTools";
 import type { AiAgentPlatform } from "@/hooks/useAiAgentConfig";
 import { callEdgeApi } from "@/lib/messagingApi";
-import { connectorDefinition, shouldUseAdapter, type Field } from "@/lib/connectorRegistry";
+import {
+  CONNECTOR_CATEGORY_LABELS,
+  connectorDefinition,
+  shouldUseAdapter,
+  type ConnectorCategory,
+  type Field,
+} from "@/lib/connectorRegistry";
 import { SupabaseSchemaPicker } from "@/components/automation/SupabaseSchemaPicker";
 import {
   accountLabel,
@@ -263,8 +269,6 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 export interface ConnectorDirectoryItem {
   id: ConnectorType;
   name: string;
-  category: "ecommerce" | "payments" | "database" | "automation" | "formula";
-  categoryLabel: string;
   title: string;
   shortDesc: string;
   description: string;
@@ -286,8 +290,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "shopify",
     name: "shopify_storefront",
-    category: "ecommerce",
-    categoryLabel: "E-Commerce",
     title: "Shopify Storefront",
     shortDesc: "Query products, live inventory, and customer orders via Storefront API.",
     description: "Official Shopify integration for automated product catalog lookups, collection browsing, stock verification, and order fulfillment status.",
@@ -302,8 +304,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "woocommerce",
     name: "woocommerce_store",
-    category: "ecommerce",
-    categoryLabel: "E-Commerce",
     title: "WooCommerce Store",
     shortDesc: "Connect WordPress WooCommerce REST API for live products and orders.",
     description: "Official WooCommerce REST API connector to query products, variations, live prices, stock levels, and order history directly in customer chats.",
@@ -318,8 +318,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "salla",
     name: "salla_merchant_api",
-    category: "ecommerce",
-    categoryLabel: "E-Commerce",
     title: "Salla (سلة)",
     shortDesc: "Connect Salla Merchant API for Middle East e-commerce stores.",
     description: "Seamless integration with Salla Merchant API for Saudi & Middle East e-commerce stores to query products, prices, and shipping status.",
@@ -333,8 +331,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "zid",
     name: "zid_merchant_api",
-    category: "ecommerce",
-    categoryLabel: "E-Commerce",
     title: "Zid (زد)",
     shortDesc: "Connect Zid Merchant API for product search and order tracking.",
     description: "Direct integration with Zid Store Manager API for product catalog inquiries, inventory levels, and customer order management.",
@@ -348,8 +344,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "myfatoorah",
     name: "myfatoorah_gateway",
-    category: "payments",
-    categoryLabel: "Payments",
     title: "MyFatoorah",
     shortDesc: "Payment gateway status, invoice queries, and payment link generator.",
     description: "MyFatoorah payment gateway integration to check payment status, lookup customer invoices, and generate instant checkout payment links.",
@@ -364,8 +358,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "stripe",
     name: "stripe_billing",
-    category: "payments",
-    categoryLabel: "Payments",
     title: "Stripe Payments",
     shortDesc: "Query customer invoices, payment intents, and subscription status.",
     description: "Connect to Stripe API to look up customer payment status, invoice details, and active subscriptions in customer support chats.",
@@ -379,8 +371,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "higgsfield",
     name: "higgsfield_ai_studio",
-    category: "automation",
-    categoryLabel: "AI Generation",
     title: "Higgsfield AI Studio",
     shortDesc: "BYO generation for AI video, character sheets, and image creation.",
     description: "Connect your personal Higgsfield account. BYO generation bills Higgsfield directly and does not consume your Postora plan quota.",
@@ -396,8 +386,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "supabase",
     name: "supabase_product_catalog",
-    category: "database",
-    categoryLabel: "Database",
     title: "Supabase (PostgreSQL)",
     shortDesc: "Direct REST / RPC connection to your Supabase PostgreSQL tables.",
     description: "Direct REST / PostgREST connection to query your Supabase database tables for products, inventory, customer records, and custom RPC functions.",
@@ -412,8 +400,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "mysql_postgres",
     name: "sql_database_api",
-    category: "database",
-    categoryLabel: "Database",
     title: "PostgreSQL / MySQL API",
     shortDesc: "Query custom SQL databases via Prisma, Hasura, or PostgREST.",
     description: "Connect to custom SQL databases through Prisma, Hasura, Directus, or PostgREST for structured schema queries.",
@@ -427,8 +413,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "formula",
     name: "pricing_calculator",
-    category: "formula",
-    categoryLabel: "Formulas",
     title: "Formulas & Price Calculator",
     shortDesc: "Compute custom quotes, shipping costs, and volume discounts.",
     description: "Computes custom quotes, delivery fees, bulk tier discounts, or VAT calculations based on customer conversation parameters.",
@@ -442,8 +426,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "custom_rest",
     name: "custom_rest_webhook",
-    category: "automation",
-    categoryLabel: "Automation",
     title: "Custom REST / n8n Webhook",
     shortDesc: "Connect any external REST endpoint or n8n automation workflow.",
     description: "Connects to any external REST endpoint or n8n workflow to trigger background business logic and return live data.",
@@ -457,8 +439,6 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
   {
     id: "mcp_custom",
     name: "custom_mcp_service",
-    category: "automation",
-    categoryLabel: "MCP Native",
     title: "Custom MCP Server",
     shortDesc: "Model Context Protocol tools and external agent integrations.",
     description: "Connect any external Model Context Protocol (MCP) server directly into the Postora AI runtime with zero admin approval.",
@@ -490,7 +470,7 @@ const emptyForm = {
   enable_cache: true,
 };
 
-type CategoryFilter = "all" | "ecommerce" | "payments" | "database" | "automation" | "formula" | "mcp";
+type CategoryFilter = "all" | ConnectorCategory | "mcp";
 
 /** The registry's credential fields for a type, or [] should a row predate
  *  the registry — a legacy row must not crash the form, it must simply show
@@ -1086,13 +1066,15 @@ function DatabaseConnectorsEditor({
         searchQuery.trim() === "" ||
         item.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         item.shortDesc.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.categoryLabel.toLowerCase().includes(searchQuery.toLowerCase());
+        CONNECTOR_CATEGORY_LABELS[connectorDefinition(item.id).category]
+          .toLowerCase()
+          .includes(searchQuery.toLowerCase());
 
       if (!matchesSearch) return false;
 
       if (activeCategory === "all") return true;
       if (activeCategory === "mcp") return item.supportsMcp;
-      return item.category === activeCategory;
+      return connectorDefinition(item.id).category === activeCategory;
     });
   }, [searchQuery, activeCategory]);
 
@@ -1416,10 +1398,10 @@ function DatabaseConnectorsEditor({
             {(
               [
                 { id: "all", label: "All Connectors" },
-                { id: "ecommerce", label: "E-Commerce" },
-                { id: "payments", label: "Payments" },
-                { id: "database", label: "Databases" },
-                { id: "automation", label: "Automation" },
+                { id: "ecommerce_payments", label: CONNECTOR_CATEGORY_LABELS.ecommerce_payments },
+                { id: "productivity_crm", label: CONNECTOR_CATEGORY_LABELS.productivity_crm },
+                { id: "databases", label: CONNECTOR_CATEGORY_LABELS.databases },
+                { id: "automation", label: CONNECTOR_CATEGORY_LABELS.automation },
                 { id: "mcp", label: "⚡ MCP Ready" },
               ] as const
             ).map((cat) => {
@@ -1518,7 +1500,7 @@ function DatabaseConnectorsEditor({
 
                     <div className="flex items-center gap-1.5 mt-0.5 mb-1.5">
                       <span className="text-[11px] font-medium text-muted-foreground">
-                        {preset.categoryLabel}
+                        {CONNECTOR_CATEGORY_LABELS[connectorDefinition(preset.id).category]}
                       </span>
                       {isConnected && (
                         <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[9px] gap-1 py-0 h-4 shrink-0">

@@ -21,7 +21,7 @@
 - Every Composio path refuses with `connector_unavailable` when `COMPOSIO_API_KEY` is unset (spec D11).
 - Every refusal writes a `connector_call_logs` row with `status='refused'` and a stable `error_code` (spec §11).
 - Agent-side Composio execution budget `COMPOSIO_EXECUTE_TIMEOUT_MS = 6_000`; partner door 20 000; publish door 50 000 (spec §7.2, §8.2, §10.3).
-- New `connector_type` values enter `PENDING_DB_CONNECTOR_TYPES` in the same commit as the registry change and leave it only after the migration is live (spec D8).
+- `PENDING_DB_CONNECTOR_TYPES` stays **empty** on this branch: migration `20260903120000` (Slice A) rebuilt the CHECK with all nineteen types before the registry commit, so the seam test's exact-gap assertion requires `[]`. Production is protected by deploy order (migration before edge code, spec §13). The seam re-arms only if a future type is ever committed ahead of its migration.
 - Scope additions change five parity-tested places in one commit: `_shared/partnerScopes.ts`, `docs/api/openapi.yaml`, `src/features/partner-hub/domain/partnerScopes.ts`, `ACTION_SCOPES`, `ACTION_RISK_CLASSES` (spec D6).
 - Never log `COMPOSIO_API_KEY`, `COMPOSIO_STATE_SECRET`, signed URLs, or Composio bodies beyond a 300-char sanitized prefix.
 - Migrations are expand-only and idempotent; rehearse on the harness (an outer `BEGIN` does not rehearse a self-committing migration).
@@ -30,7 +30,7 @@
 **Gate commands (run from the worktree):**
 ```bash
 # Deno first, then bun install (the Deno node_modules flag breaks vitest).
-deno test --allow-env --allow-read --allow-net --no-check supabase/functions/_shared supabase/functions/composio-connect supabase/functions/ai-agent-reply supabase/functions/partner-api supabase/functions/process-post supabase/functions/messaging-api
+deno test --allow-env --allow-read --allow-write --allow-net --no-check supabase/functions/_shared supabase/functions/composio-connect supabase/functions/ai-agent-reply supabase/functions/partner-api supabase/functions/process-post supabase/functions/messaging-api
 bun install
 bunx tsc -b --noEmit
 bunx vitest run
@@ -387,14 +387,14 @@ export async function resolveWorkspaceForCall(client: any, input: { socialAccoun
 
 **Interfaces — Produces:** spec §5 types verbatim; `CONNECTOR_TYPES` += `"google_sheets" | "slack" | "google_calendar" | "hubspot" | "notion" | "airtable" | "youtube"`; `PENDING_DB_CONNECTOR_TYPES = [those seven]`; `isComposioType(type): boolean`; `composioBinding(type): ComposioBinding | undefined`; `CONNECTOR_CATEGORY_LABELS: Record<ConnectorCategory,string>`.
 
-- [ ] **Step 1: Write failing tests** in both test files:
+- [x] **Step 1: Write failing tests** in both test files:
   - every definition has `auth_strategy` and `category`;
   - `composio` present ⇔ `auth_strategy === "composio_oauth"`, and then `credentials.length === 0`;
   - `composio.tools` unique, non-empty, `mutating ⊆ tools`, `toolkitVersion` matches `/^\d{8}_\d{2}$|^latest$/` (use what Task 6 found);
   - `PENDING_DB_CONNECTOR_TYPES` equals the seven new types (this re-arms the seam);
   - the browser and Deno copies serialize identically (existing contract test, extend to new fields).
-- [ ] **Step 2: Run** both test commands — expected FAIL.
-- [ ] **Step 3: Implement.** Add the fields to all twelve existing entries (`auth_strategy: "manual_credentials"`, categories: `supabase/mysql_postgres → databases`, `woocommerce/shopify/salla/zid/myfatoorah/stripe → ecommerce_payments`, `formula/custom_rest/higgsfield/mcp_custom → automation`). Add the seven entries; example:
+- [x] **Step 2: Run** both test commands — expected FAIL.
+- [x] **Step 3: Implement.** Add the fields to all twelve existing entries (`auth_strategy: "manual_credentials"`, categories: `supabase/mysql_postgres → databases`, `woocommerce/shopify/salla/zid/myfatoorah/stripe → ecommerce_payments`, `formula/custom_rest/higgsfield/mcp_custom → automation`). Add the seven entries; example:
 
 ```ts
 google_sheets: {
@@ -415,9 +415,9 @@ google_sheets: {
 
 Do the same for `slack` (`SLACK_SEARCH_MESSAGES`, `SLACK_LIST_CONVERSATIONS`, `SLACK_SEND_MESSAGE` mutating), `google_calendar` (`GOOGLECALENDAR_EVENTS_LIST`, `GOOGLECALENDAR_FIND_FREE_SLOTS`, `GOOGLECALENDAR_CREATE_EVENT` mutating), `hubspot` (`HUBSPOT_SEARCH_CONTACTS`, `HUBSPOT_GET_CONTACT`, `HUBSPOT_CREATE_CONTACT` mutating), `notion` (`NOTION_SEARCH_NOTION_PAGE`, `NOTION_FETCH_DATA`, `NOTION_QUERY_DATABASE`), `airtable` (`AIRTABLE_LIST_RECORDS`, `AIRTABLE_GET_RECORD`, `AIRTABLE_CREATE_RECORD` mutating), `youtube` (`YOUTUBE_LIST_CHANNELS`, `YOUTUBE_UPLOAD_VIDEO`, `YOUTUBE_UPDATE_THUMBNAIL`; both upload slugs mutating; category `automation`). Confirm every slug exists via Task 6's `GET /tools` before committing; replace any that does not.
 
-- [ ] **Step 4:** In `DatabaseConnectorsManager.tsx`, delete `category`/`categoryLabel` from `ConnectorDirectoryItem` and the 12 literals; replace `item.category` reads with `connectorDefinition(item.id).category` and labels with `CONNECTOR_CATEGORY_LABELS`. Add directory entries for the seven new types (logo + tagline only).
-- [ ] **Step 5: Run** Deno + vitest registry tests and `bunx tsc -b --noEmit` — expected PASS.
-- [ ] **Step 6: Commit** `git commit -m "feat(registry): auth strategy, category and Composio bindings; seven pending types"` scoped to the five files.
+- [x] **Step 4:** In `DatabaseConnectorsManager.tsx`, delete `category`/`categoryLabel` from `ConnectorDirectoryItem` and the 12 literals; replace `item.category` reads with `connectorDefinition(item.id).category` and labels with `CONNECTOR_CATEGORY_LABELS`. Add directory entries for the seven new types (logo + tagline only).
+- [x] **Step 5: Run** Deno + vitest registry tests and `bunx tsc -b --noEmit` — expected PASS.
+- [x] **Step 6: Commit** `git commit -m "feat(registry): auth strategy, category and Composio bindings; seven pending types"` scoped to the five files.
 
 ### Task 8: `_shared/composioClient.ts`
 
@@ -444,9 +444,9 @@ export class ComposioClient {
 export const COMPOSIO_BODY_CAP = 64 * 1024;
 ```
 
-- [ ] **Step 1: Write failing tests** with a recording `fetch` stub: header `x-api-key` present and never in thrown messages; each method's path/method/body per Task 6; GET retried once on 503 and on `TypeError`; execute never retried; 4xx → `composio_rejected` with status; abort → `composio_timeout`; body > 64 KB → `composio_rejected`; `composioClientFromEnv` returns null without the key.
-- [ ] **Step 2: Run** — FAIL. **Step 3: Implement** (private `request<T>(method, path, body, signal, retry)`; `AbortSignal.timeout(5_000)` default; `response.text()` length-checked before `JSON.parse`).
-- [ ] **Step 4: Run** — PASS. **Step 5: Commit** `git commit -m "feat(composio): REST client with timeouts, single-retry reads and body cap"`.
+- [x] **Step 1: Write failing tests** with a recording `fetch` stub: header `x-api-key` present and never in thrown messages; each method's path/method/body per Task 6; GET retried once on 503 and on `TypeError`; execute never retried; 4xx → `composio_rejected` with status; abort → `composio_timeout`; body > 64 KB → `composio_rejected`; `composioClientFromEnv` returns null without the key.
+- [x] **Step 2: Run** — FAIL. **Step 3: Implement** (private `request<T>(method, path, body, signal, retry)`; `AbortSignal.timeout(5_000)` default; `response.text()` length-checked before `JSON.parse`).
+- [x] **Step 4: Run** — PASS. **Step 5: Commit** `git commit -m "feat(composio): REST client with timeouts, single-retry reads and body cap"`.
 
 ### Task 9: `_shared/composioState.ts`
 
@@ -461,9 +461,9 @@ export async function verifyConnectState(token: string, secret: string, now?: ()
 export function newNonce(): string;   // 16 random bytes, hex
 ```
 
-- [ ] **Step 1: Tests:** round-trip; tampered payload → null; wrong secret → null; `exp` in the past → null; malformed token → null (never throws).
-- [ ] **Step 2–4:** FAIL → implement with `crypto.subtle` HMAC → PASS.
-- [ ] **Step 5: Commit** `git commit -m "feat(composio): signed connect state"`.
+- [x] **Step 1: Tests:** round-trip; tampered payload → null; wrong secret → null; `exp` in the past → null; malformed token → null (never throws).
+- [x] **Step 2–4:** FAIL → implement with `crypto.subtle` HMAC → PASS.
+- [x] **Step 5: Commit** `git commit -m "feat(composio): signed connect state"`.
 
 ### Task 10: `_shared/composioConnections.ts`
 
@@ -479,7 +479,7 @@ export async function loadActiveConnection(client: any, connectionId: string, wo
 
 Queries `connector_connections` by `id` **and** `workspace_id`; a row found by id alone but in another workspace returns `tenancy_mismatch` (the second query exists only to name the refusal correctly; both are refusals). Tests cover all four outcomes.
 
-- [ ] Steps: test → FAIL → implement → PASS → commit `feat(composio): shared active-connection lookup`.
+- [x] Steps: test → FAIL → implement → PASS → commit `feat(composio): shared active-connection lookup`.
 
 ### Task 11: Edge function `composio-connect`
 
@@ -489,14 +489,14 @@ Queries `connector_connections` by `id` **and** `workspace_id`; a row found by i
 
 **Interfaces — Consumes:** Tasks 5, 8, 9, 10. **Produces:** routes per spec §6.2; env names `COMPOSIO_API_KEY`, `COMPOSIO_STATE_SECRET`, `COMPOSIO_CALLBACK_URL`, `COMPOSIO_AUTH_CONFIG_<TYPE_UPPER>` (e.g. `COMPOSIO_AUTH_CONFIG_GOOGLE_SHEETS`), `APP_RETURN_URL` (default `https://postora.cloud/settings?tab=integrations`; the callback appends `&connection=&result=`).
 
-- [ ] **Step 1: Failing tests for `initiate`** (`handler.test.ts`, fake admin client + fake `ComposioClient`):
+- [x] **Step 1: Failing tests for `initiate`** (`handler.test.ts`, fake admin client + fake `ComposioClient`):
   - caller not a `workspace_members` row → 403 `forbidden`, no Composio call;
   - `connector_type` not Composio → 400 `connector_type_not_connectable`;
   - missing `COMPOSIO_AUTH_CONFIG_*` → 503 `connector_unavailable` + refused log row;
   - happy path inserts `{status:'initiated', state_nonce, initiated_by}` then calls `initiateConnection({ workspaceId, authConfigId, callbackUrl: COMPOSIO_CALLBACK_URL + "?state=" + signed })` and returns `{ connection_id, redirect_url, expires_at }`;
   - Composio failure → row set `failed('composio_unavailable')`, 503.
-- [ ] **Step 2: Failing tests for `callback`** — each of spec §6.3 steps 1–6: bad/expired/replayed state (nonce already null) → `invalid_state`; missing connected-account query param → `connection_not_found`; `getConnectedAccount` returns a non-ACTIVE or different-auth-config account → `connection_not_found`; fetched account `userId !== state.workspaceId` → `failed('tenancy_mismatch')` + refused log row; success caches schemas via `listTools(toolkit, binding.tools, binding.toolkitVersion)` and 302s to `APP_RETURN_URL&connection=<id>&result=ok` (append with `&` because the default already carries `?tab=integrations`).
-- [ ] **Step 2b: JWT exemption.** Add to `supabase/config.toml`:
+- [x] **Step 2: Failing tests for `callback`** — each of spec §6.3 steps 1–6: bad/expired/replayed state (nonce already null) → `invalid_state`; missing connected-account query param → `connection_not_found`; `getConnectedAccount` returns a non-ACTIVE or different-auth-config account → `connection_not_found`; fetched account `userId !== state.workspaceId` → `failed('tenancy_mismatch')` + refused log row; success caches schemas via `listTools(toolkit, binding.tools, binding.toolkitVersion)` and 302s to `APP_RETURN_URL&connection=<id>&result=ok` (append with `&` because the default already carries `?tab=integrations`).
+- [x] **Step 2b: JWT exemption.** Add to `supabase/config.toml`:
 
 ```toml
 [functions.composio-connect]
@@ -504,9 +504,9 @@ verify_jwt = false
 ```
 
 and apply the same exemption wherever the self-hosted runtime configures it (check how `threads-webhook` is exempted on the Contabo functions volume / compose env and copy that mechanism; record the exact file in the deploy runbook). The function verifies user JWTs itself on `initiate`/`revoke`/`refresh-schema` via `_shared/auth-helper.ts`; only `callback` is anonymous.
-- [ ] **Step 3: Failing tests for `revoke`** — membership required; calls `deleteConnectedAccount` (failure logged, not fatal); calls RPC `revoke_connector_connection` under the **user's** JWT client (so the RPC's own gate applies), 200.
-- [ ] **Step 4: Run** — FAIL. **Step 5: Implement** — `index.ts` follows the §12 shape; routes by `new URL(req.url).pathname` suffix; user routes use `_shared/auth-helper.ts`; callback route is unauthenticated and returns 302 only. Never `console.log` the state token or the redirect URL.
-- [ ] **Step 6: Run** — PASS. **Step 7: Commit** `git commit -m "feat(composio-connect): initiate, callback, revoke, refresh-schema"`.
+- [x] **Step 3: Failing tests for `revoke`** — membership required; calls `deleteConnectedAccount` (failure logged, not fatal); calls RPC `revoke_connector_connection` under the **user's** JWT client (so the RPC's own gate applies), 200.
+- [x] **Step 4: Run** — FAIL. **Step 5: Implement** — `index.ts` follows the §12 shape; routes by `new URL(req.url).pathname` suffix; user routes use `_shared/auth-helper.ts`; callback route is unauthenticated and returns 302 only. Never `console.log` the state token or the redirect URL.
+- [x] **Step 6: Run** — PASS. **Step 7: Commit** `git commit -m "feat(composio-connect): initiate, callback, revoke, refresh-schema"`.
 
 ### Task 12: Tool writes accept a connection
 
@@ -516,9 +516,9 @@ and apply the same exemption wherever the self-hosted runtime configures it (che
 
 **Interfaces — Produces:** `ParsedUpsertToolInput.connectionId?: string`, `.authStrategy: "manual_credentials" | "composio_oauth"`; new `ToolWriteError` codes `connection_required`, `connection_inactive`, `connection_forbidden`.
 
-- [ ] **Step 1: Failing tests:** Composio type without `connection_id` → `connection_required`; with a connection not `active` → `connection_inactive`; with a connection in a workspace the caller is not a member of → `connection_forbidden`; native type with a `connection_id` → parse strips it and strategy is `manual_credentials`; happy path writes `auth_strategy='composio_oauth', connection_id` and no Vault call.
-- [ ] **Step 2–4:** FAIL → implement (`isComposioType` from Task 7; connection lookup via `loadActiveConnection` plus a `workspace_members` check on `parsed.userId`) → PASS.
-- [ ] **Step 5: Commit** `git commit -m "feat(messaging-api): connectors may bind a Composio connection"`.
+- [x] **Step 1: Failing tests:** Composio type without `connection_id` → `connection_required`; with a connection not `active` → `connection_inactive`; with a connection in a workspace the caller is not a member of → `connection_forbidden`; native type with a `connection_id` → parse strips it and strategy is `manual_credentials`; happy path writes `auth_strategy='composio_oauth', connection_id` and no Vault call.
+- [x] **Step 2–4:** FAIL → implement (`isComposioType` from Task 7; connection lookup via `loadActiveConnection` plus a `workspace_members` check on `parsed.userId`) → PASS.
+- [x] **Step 5: Commit** `git commit -m "feat(messaging-api): connectors may bind a Composio connection"`.
 
 ---
 
