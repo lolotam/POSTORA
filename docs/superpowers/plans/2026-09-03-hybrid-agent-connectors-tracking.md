@@ -772,7 +772,9 @@ export async function publishYouTubeViaComposio(account: SocialAccount, post: Po
 
 ### Task 31: Land Slice F
 
-- [ ] Guards, gates, harness; apply `20260903120100`; deploy `composio-connect`, `process-post`, `refresh-tokens`, `check-connection-health`; flip `COMPOSIO_YOUTUBE_ENABLED` / `VITE_COMPOSIO_YOUTUBE_ENABLED`; connect one channel, schedule one Short, confirm a `publish` ledger row and the video URL; mem0 summary; final report.
+- [x] Guards, gates, harness (2026-09-03: Deno all dirs green, tsc, vitest 1311, harness 21+17, e2e 10); migration `20260903120100` rehearsed on a fresh production-schema clone, then applied to production; 17-file deploy set (`composio-connect`, `process-post`, `refresh-tokens`, `check-connection-health`, `n8n-api`, six `_shared/*`) copied hash-verified and `functions` restarted; PR #134 merged as `13e90aad`.
+- [x] `VITE_COMPOSIO_YOUTUBE_ENABLED=true` set on the Dokploy frontend app (build-time flag; the server has no separate flag — the `youtube` auth config's presence is the server-side gate).
+- [ ] **Post-merge, needs a real channel:** connect one channel through "Composio Managed", schedule one Short, confirm one `publish` row in `connector_call_logs` for `YOUTUBE_MULTIPART_UPLOAD_VIDEO` and the `https://youtu.be/<id>` URL on the platform post. Raise `YOUTUBE_COMPOSIO_MAX_BYTES` only after that measured upload.
 
 ---
 
