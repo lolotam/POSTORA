@@ -6,7 +6,7 @@ import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, LayoutDashboard, Users, CreditCard, Package, Ticket, Settings, MessageSquare, ChevronLeft, Newspaper, Bell, Youtube, ScrollText, HeartPulse, BarChart3, Rocket, Gauge, Trash2, Sliders, Inbox, Activity, ToggleLeft, TrendingUp, KeyRound } from "lucide-react";
+import { Loader2, LayoutDashboard, Users, CreditCard, Package, Ticket, Settings, MessageSquare, ChevronLeft, Newspaper, Bell, Youtube, ScrollText, HeartPulse, BarChart3, Rocket, Gauge, Trash2, Sliders, Inbox, Activity, ToggleLeft, TrendingUp, KeyRound, Handshake } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface AdminLayoutProps {
@@ -28,6 +28,7 @@ const sidebarItems = [
   { icon: ScrollText, label: "System Logs", href: "/admin/logs" },
   { icon: Youtube, label: "OAuth Verification", href: "/admin/oauth-verification" },
   { icon: KeyRound, label: "OAuth Apps", href: "/admin/oauth-apps" },
+  { icon: Handshake, label: "Partner Hub", href: "/admin/partner-hub" },
   { icon: ToggleLeft, label: "Feature Flags", href: "/admin/feature-flags" },
   { icon: Settings, label: "Settings", href: "/admin/settings" },
   { icon: Inbox, label: "Email Inbox", href: "/admin/inbox" },
