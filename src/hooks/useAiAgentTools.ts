@@ -56,6 +56,12 @@ export interface AiAgentTool {
   is_enabled: boolean;
   admin_only: boolean;
   connector_type: ConnectorType;
+  /** How this connector authenticates: its own stored credentials, or a
+   *  workspace Composio connection. Derived server-side from the registry. */
+  auth_strategy?: "manual_credentials" | "composio_oauth";
+  /** The connector_connections row an OAuth-backed tool runs as; null for
+   *  every manual-credential row. */
+  connection_id?: string | null;
   permissions: ToolPermissions;
   read_only_mode: boolean;
   enable_cache: boolean;
@@ -93,6 +99,9 @@ export interface AiAgentToolInput {
   is_enabled?: boolean;
   admin_only?: boolean;
   connector_type?: ConnectorType;
+  /** Required for a Composio-backed connector type; the server refuses the
+   *  write with `connection_required` without it. Null for every other type. */
+  connection_id?: string | null;
   permissions?: ToolPermissions;
   read_only_mode?: boolean;
   enable_cache?: boolean;

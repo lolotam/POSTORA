@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assertEquals, assertRejects, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   type CredentialVault,
   deleteAccountScopedTool,
@@ -600,4 +600,30 @@ Deno.test("credential keys outside the connector's registry fields are refused b
     assertEquals(caught.status, 400);
     assertEquals(caught.message.includes("api_key"), true);
   }
+});
+
+Deno.test("a Composio tool needs no URL and records null for it", () => {
+  const parsed = parseUpsertToolInput(
+    toolPayload({
+      url: "",
+      connector_type: "google_sheets",
+      connection_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      credentials: {},
+    }),
+  );
+  assertEquals(parsed.url, null);
+  assertEquals(parsed.authStrategy, "composio_oauth");
+});
+
+Deno.test("a native tool still refuses a missing or private URL", () => {
+  assertThrows(
+    () => parseUpsertToolInput(toolPayload({ url: "" })),
+    ToolWriteError,
+    "https://",
+  );
+  assertThrows(
+    () => parseUpsertToolInput(toolPayload({ url: "https://10.0.0.5/hook" })),
+    ToolWriteError,
+    "public host",
+  );
 });

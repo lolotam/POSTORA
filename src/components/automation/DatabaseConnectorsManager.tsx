@@ -60,11 +60,17 @@ import type { AiAgentPlatform } from "@/hooks/useAiAgentConfig";
 import { callEdgeApi } from "@/lib/messagingApi";
 import {
   CONNECTOR_CATEGORY_LABELS,
+  CONNECTOR_TYPES,
   connectorDefinition,
+  isComposioType,
   shouldUseAdapter,
   type ConnectorCategory,
   type Field,
 } from "@/lib/connectorRegistry";
+import { CATEGORY_TABS, useConnectorWorkspace } from "@/features/connectors";
+import { ComposioConnectCard } from "@/components/automation/connectors/ComposioConnectCard";
+import { ConnectionPicker } from "@/components/automation/connectors/ConnectionPicker";
+import { ConnectorUsageLine, ToolUsageLine } from "@/components/automation/connectors/ConnectorUsageLine";
 import { SupabaseSchemaPicker } from "@/components/automation/SupabaseSchemaPicker";
 import {
   accountLabel,
@@ -463,6 +469,9 @@ const emptyForm = {
   is_enabled: true,
   admin_only: false,
   connector_type: "shopify" as ConnectorType,
+  // The Composio connection an OAuth-backed tool runs as; null for every
+  // manual-credential type (spec §9.1).
+  connection_id: null as string | null,
   permission_search_products: true,
   permission_check_stock: true,
   permission_lookup_orders: false,
@@ -471,6 +480,33 @@ const emptyForm = {
 };
 
 type CategoryFilter = "all" | ConnectorCategory | "mcp";
+
+/** The OAuth-backed types, which have connection cards instead of a directory
+ *  entry — their credentials live at Composio, not in this form. */
+const COMPOSIO_TYPES = CONNECTOR_TYPES.filter((type) => isComposioType(type));
+
+/** Enough of a directory item to drive the existing tool form for a Composio
+ *  type. Everything shown comes from the registry — there is no second
+ *  catalogue to keep in step. */
+function composioPreset(type: ConnectorType): ConnectorDirectoryItem {
+  const definition = connectorDefinition(type);
+  const guide = definition.usageGuide?.whenToUse ?? `${definition.label} tools for the AI agent.`;
+  return {
+    id: type,
+    name: `${type}_tools`,
+    title: definition.label,
+    shortDesc: guide,
+    description: guide,
+    // No endpoint: a Composio tool executes through its connection, and the
+    // server records null for it (toolWrites.ts).
+    defaultUrl: "",
+    suggestedPrompt: guide,
+    brandColor: "text-primary",
+    iconBg: "bg-primary/10 border-primary/20 text-primary",
+    supportsMcp: false,
+    defaultPermissions: { searchProducts: false, checkStock: false, lookupOrders: false },
+  };
+}
 
 /** The registry's credential fields for a type, or [] should a row predate
  *  the registry — a legacy row must not crash the form, it must simply show
@@ -673,6 +709,9 @@ function DatabaseConnectorsOverview({
     }
     return [...groups.entries()];
   }, [tools]);
+  // Connections are workspace-level, and this surface has no account
+  // selection, so they belong to the signed-in user's personal workspace.
+  const { workspaceId } = useConnectorWorkspace(null);
 
   if (isLoading) {
     return (
@@ -696,6 +735,20 @@ function DatabaseConnectorsOverview({
           Connector sharing could not be loaded, so account access is shown as unknown. Refresh to try again.
         </p>
       )}
+
+      {/* Connections are the credential, so they live here — one card per
+          OAuth-backed app, grouped by the registry's categories (spec §9.1).
+          readOnly hides the tool form, never the connection controls. */}
+      {CATEGORY_TABS.filter((tab) => COMPOSIO_TYPES.some((type) => connectorDefinition(type).category === tab.key)).map((tab) => (
+        <section key={tab.key} className="space-y-3">
+          <h4 className="font-semibold">{tab.label}</h4>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+            {COMPOSIO_TYPES.filter((type) => connectorDefinition(type).category === tab.key).map((type) => (
+              <ComposioConnectCard key={type} connectorType={type} workspaceId={workspaceId} />
+            ))}
+          </div>
+        </section>
+      ))}
 
       {groupedTools.length === 0 ? (
         <Card className="border-dashed">
@@ -749,6 +802,7 @@ function DatabaseConnectorsOverview({
                                 .join(", ") || "None"}
                         </p>
                         <ConnectorCredentialState tool={tool} />
+                        <ToolUsageLine accountId={tool.social_account_id} toolId={tool.id} />
                         {owner && (
                           <Link
                             className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
@@ -915,6 +969,10 @@ function DatabaseConnectorsEditor({
     [tools, accountId],
   );
 
+  // Composio connections and usage are workspace-level; the workspace is the
+  // selected account's, so switching accounts switches both.
+  const { workspaceId, isLoading: workspaceLoading } = useConnectorWorkspace(accountId);
+
   // Higgsfield OAuth State
   const [higgsfieldConnected, setHiggsfieldConnected] = useState(false);
   const [higgsfieldAccount, setHiggsfieldAccount] = useState<string | null>(null);
@@ -1078,6 +1136,24 @@ function DatabaseConnectorsEditor({
     });
   }, [searchQuery, activeCategory]);
 
+  // The OAuth-backed apps sit beside the directory under the same search and
+  // category filter. They have no directory entry: there is nothing to
+  // configure until a connection exists.
+  const filteredComposioTypes = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return COMPOSIO_TYPES.filter((type) => {
+      const definition = connectorDefinition(type);
+      const matchesSearch =
+        query === "" ||
+        definition.label.toLowerCase().includes(query) ||
+        CONNECTOR_CATEGORY_LABELS[definition.category].toLowerCase().includes(query);
+      if (!matchesSearch) return false;
+      if (activeCategory === "all") return true;
+      if (activeCategory === "mcp") return false;
+      return definition.category === activeCategory;
+    });
+  }, [searchQuery, activeCategory]);
+
   const handleCardClick = (preset: ConnectorDirectoryItem, tool?: AiAgentTool) => {
     if (preset.id === "higgsfield" && !higgsfieldConnected) {
       // Direct 1-click connect flow for Higgsfield
@@ -1110,6 +1186,7 @@ function DatabaseConnectorsEditor({
         is_enabled: existingTool.is_enabled,
         admin_only: existingTool.admin_only,
         connector_type: existingTool.connector_type,
+        connection_id: existingTool.connection_id ?? null,
         permission_search_products: existingTool.permissions?.search_products ?? false,
         permission_check_stock: existingTool.permissions?.check_stock ?? false,
         permission_lookup_orders: existingTool.permissions?.lookup_orders ?? false,
@@ -1127,6 +1204,7 @@ function DatabaseConnectorsEditor({
         is_enabled: true,
         admin_only: false,
         connector_type: preset.id,
+        connection_id: null,
         permission_search_products: preset.defaultPermissions.searchProducts,
         permission_check_stock: preset.defaultPermissions.checkStock,
         permission_lookup_orders: preset.defaultPermissions.lookupOrders,
@@ -1147,11 +1225,24 @@ function DatabaseConnectorsEditor({
       return;
     }
     const fields = safeCredentialFields(form.connector_type);
-    // The row's url column is still required by the server. When the registry
-    // declares a url credential field it IS the endpoint (one source of
-    // truth); otherwise the generic endpoint input supplies it.
+    const composio = isComposioType(form.connector_type);
+    // A Composio tool has no credentials to check; what it needs is a live
+    // connection, and the server refuses the write without one
+    // (`connection_required`). Say so here rather than letting a URL error
+    // stand in for it.
+    if (composio && !form.connection_id) {
+      setFormError(`Choose a connected ${safeConnectorLabel(form.connector_type)} account before saving this tool.`);
+      return;
+    }
+    // When the registry declares a url credential field it IS the endpoint
+    // (one source of truth); otherwise the generic endpoint input supplies it.
+    // A Composio tool has none — the server ignores the field and stores null.
     const rowUrlField = urlCredentialField(form.connector_type);
-    const rowUrl = (rowUrlField ? form.credentials[rowUrlField.key] ?? "" : form.url).trim();
+    const rowUrl = (composio
+      ? ""
+      : rowUrlField
+      ? form.credentials[rowUrlField.key] ?? ""
+      : form.url).trim();
 
     // Required-field check first, so a blank registry field names itself
     // ("Store URL is required.") instead of the derived url failing a generic
@@ -1168,7 +1259,7 @@ function DatabaseConnectorsEditor({
 
     const error =
       validateAiToolName(form.name) ||
-      validateAiToolUrl(rowUrl) ||
+      (composio ? null : validateAiToolUrl(rowUrl)) ||
       (form.description.trim() ? null : "Description is required — the AI uses it to decide when to call the tool.");
     if (error) {
       setFormError(error);
@@ -1191,6 +1282,7 @@ function DatabaseConnectorsEditor({
       is_enabled: form.is_enabled,
       admin_only: form.admin_only,
       connector_type: form.connector_type,
+      connection_id: composio ? form.connection_id : null,
       credentials,
       permissions: {
         search_products: form.permission_search_products,
@@ -1394,17 +1486,15 @@ function DatabaseConnectorsEditor({
         {/* Filter and Search Bar */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-1">
           {/* Category Pills */}
-          <div className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none">
-            {(
-              [
-                { id: "all", label: "All Connectors" },
-                { id: "ecommerce_payments", label: CONNECTOR_CATEGORY_LABELS.ecommerce_payments },
-                { id: "productivity_crm", label: CONNECTOR_CATEGORY_LABELS.productivity_crm },
-                { id: "databases", label: CONNECTOR_CATEGORY_LABELS.databases },
-                { id: "automation", label: CONNECTOR_CATEGORY_LABELS.automation },
-                { id: "mcp", label: "⚡ MCP Ready" },
-              ] as const
-            ).map((cat) => {
+          <div
+            data-testid="connector-category-tabs"
+            className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none"
+          >
+            {([
+              { id: "all" as CategoryFilter, label: "All Connectors" },
+              ...CATEGORY_TABS.map((tab) => ({ id: tab.key as CategoryFilter, label: tab.label })),
+              { id: "mcp" as CategoryFilter, label: "⚡ MCP Ready" },
+            ]).map((cat) => {
               const isActive = activeCategory === cat.id;
               return (
                 <button
@@ -1563,6 +1653,21 @@ function DatabaseConnectorsEditor({
             );
           })}
         </div>
+
+        {/* OAuth-backed apps: connect once per workspace, then expose the
+            connection to this account's agent as a tool (spec §9.1). */}
+        {filteredComposioTypes.length > 0 && (
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {filteredComposioTypes.map((type) => (
+              <ComposioConnectCard
+                key={type}
+                connectorType={type}
+                workspaceId={workspaceId}
+                onConfigureTool={(connectorType) => handleCardClick(composioPreset(connectorType))}
+              />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Connected Integrations & Active Servers Section (Below Directory) */}
@@ -1653,7 +1758,11 @@ function DatabaseConnectorsEditor({
             {/* Configured Database & E-Commerce Tools Cards */}
             {accountTools.map((toolRow) => {
               const tool = configuredToolsMap.get(toolRow.id) ?? toolRow;
-              const preset = CONNECTOR_DIRECTORY.find((p) => p.id === tool.connector_type) || CONNECTOR_DIRECTORY[0];
+              // A Composio type has no directory entry; falling through to
+              // CONNECTOR_DIRECTORY[0] would label the card Shopify and open
+              // Shopify's form.
+              const preset = CONNECTOR_DIRECTORY.find((p) => p.id === tool.connector_type)
+                ?? (isComposioType(tool.connector_type) ? composioPreset(tool.connector_type) : CONNECTOR_DIRECTORY[0]);
 
               return (
                 <Card
@@ -1728,6 +1837,7 @@ function DatabaseConnectorsEditor({
                       </div>
                     </div>
                     <ConnectorCredentialState tool={tool} />
+                    <ConnectorUsageLine workspaceId={workspaceId} toolId={tool.id} />
                     <ConnectorTestState
                       tool={tool}
                       testing={testingToolIds.includes(tool.id)}
@@ -2059,9 +2169,23 @@ function DatabaseConnectorsEditor({
                     />
                   )}
 
+                  {/* An OAuth-backed type has no credentials here at all: the
+                      credential is the connection, held at Composio and
+                      chosen by id (spec §9.1). */}
+                  {isComposioType(form.connector_type) && (
+                    <ConnectionPicker
+                      connectorType={form.connector_type}
+                      workspaceId={workspaceId}
+                      isWorkspaceLoading={workspaceLoading}
+                      value={form.connection_id}
+                      onChange={(connectionId) => setForm((prev) => ({ ...prev, connection_id: connectionId }))}
+                    />
+                  )}
+
                   {/* Generic endpoint input only for types whose registry
-                      declares no url credential field. */}
-                  {!urlCredentialField(form.connector_type) && (
+                      declares no url credential field, and never for a
+                      Composio type whose endpoint is Composio's own. */}
+                  {!urlCredentialField(form.connector_type) && !isComposioType(form.connector_type) && (
                     <div className="space-y-1.5">
                       <Label htmlFor="connector-endpoint-url" className="text-xs">
                         API Endpoint / Webhook URL

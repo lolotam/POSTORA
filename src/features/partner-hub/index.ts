@@ -1,5 +1,11 @@
 export {
+  useAdminRevokeConnection,
+  useConnectorConnections as useAdminConnectorConnections,
+  useConnectorOverview,
+  useConnectorUsageByKey,
+  useConnectorUsageByType,
   useCreatePartnerKey,
+  useKeyConnectorActivity,
   usePartnerHubOverview,
   usePartnerKeyActivity,
   usePartnerKeyDeliveries,
@@ -8,7 +14,12 @@ export {
   useRevokePartnerKey,
 } from "./ui/hooks/usePartnerHub";
 export type {
+  AdminConnectorConnectionRow,
+  ConnectorOverview,
+  ConnectorUsageByKeyRow,
+  ConnectorUsageByTypeRow,
   CreatePartnerKeyInput,
+  KeyConnectorActivityRow,
   CreatedPartnerKey,
   PartnerHubOverview,
   PartnerKeyActivityRow,

@@ -644,8 +644,8 @@ export function useConnectorUsage(workspaceId: string | null, days?: number);
 export function useInitiateConnection(); export function useRevokeConnection();
 ```
 
-- [ ] **Step 1: Failing tests:** `formatUsageLine` (three cases), `typesInCategory` covers every registry type exactly once, api adapters call the right function/RPC names and throw on `error` (mirror `partnerHubApi.test.ts`), hooks invalidate `connections` + `usage` keys on mutation success.
-- [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5: Commit** `feat(connectors-ui): feature module`.
+- [x] **Step 1: Failing tests:** `formatUsageLine` (three cases), `typesInCategory` covers every registry type exactly once, api adapters call the right function/RPC names and throw on `error` (mirror `partnerHubApi.test.ts`), hooks invalidate `connections` + `usage` keys on mutation success.
+- [x] **Step 2–4:** FAIL → implement → PASS. **Step 5: Commit** `feat(connectors-ui): feature module`.
 
 ### Task 20: Connector cards, tabs, picker, usage line
 
@@ -655,16 +655,16 @@ export function useInitiateConnection(); export function useRevokeConnection();
 - Modify: `src/pages/Settings.tsx:170-176` (Integrations tab reads `?connection=&result=` on mount, toasts the outcome, and strips the params)
 - Modify: `src/hooks/useAiAgentTools.ts` (upsert payload += `connection_id`)
 
-- [ ] **Step 1: Failing component tests** (render with `QueryClientProvider`, no `userEvent` — memory: clipboard breaks it; use `fireEvent`): card states `disconnected` (Connect button calls `initiateConnection` then sets `window.location.href`), `initiated` (spinner + "Waiting for authorisation"), `active` (label, badge, usage line, Disconnect → confirm → `revokeConnection`), `revoked`/`failed` (reason + Reconnect). `ConnectionPicker` lists only `active` connections of the selected account's workspace and shows the Task 1 message when the account has no workspace. Tool form submits `connection_id` and omits credential fields for Composio types.
-- [ ] **Step 2–4:** FAIL → implement → PASS (`bunx vitest run src/components/automation`).
-- [ ] **Step 5: Commit** `feat(connectors-ui): Composio cards, category tabs, connection picker, usage line`.
+- [x] **Step 1: Failing component tests** (render with `QueryClientProvider`, no `userEvent` — memory: clipboard breaks it; use `fireEvent`): card states `disconnected` (Connect button calls `initiateConnection` then sets `window.location.href`), `initiated` (spinner + "Waiting for authorisation"), `active` (label, badge, usage line, Disconnect → confirm → `revokeConnection`), `revoked`/`failed` (reason + Reconnect). `ConnectionPicker` lists only `active` connections of the selected account's workspace and shows the Task 1 message when the account has no workspace. Tool form submits `connection_id` and omits credential fields for Composio types.
+- [x] **Step 2–4:** FAIL → implement → PASS (`bunx vitest run src/components/automation`).
+- [x] **Step 5: Commit** `feat(connectors-ui): Composio cards, category tabs, connection picker, usage line`.
 
 ### Task 21: Partner Hub readers and hooks
 
 **Files:**
 - Modify: `src/features/partner-hub/infrastructure/partnerHubApi.ts` (+ `fetchConnectorOverview`, `fetchConnectorUsageByType(days)`, `fetchConnectorUsageByKey(days)`, `fetchConnectorConnections(workspaceId?)`, `fetchKeyConnectorActivity(keyId, limit)`, `revokeConnection(connectionId)`), `ui/hooks/usePartnerHub.ts` (+ matching hooks and query keys), tests alongside.
 
-- [ ] Steps: failing api tests (RPC names/args, error throws) → implement → PASS → commit `feat(partner-hub): connector readers`.
+- [x] Steps: failing api tests (RPC names/args, error throws) → implement → PASS → commit `feat(partner-hub): connector readers`.
 
 ### Task 22: Partner Hub components
 
@@ -672,14 +672,14 @@ export function useInitiateConnection(); export function useRevokeConnection();
 - Create: `src/components/admin/partner/ConnectorUsageTables.tsx`, `ConnectorConnectionsTable.tsx`, `__tests__/*.test.tsx`
 - Modify: `PartnerHubKpiCards.tsx` (+2 cards), `PartnerKeyActivitySheet.tsx` (third section "Connector calls"), `src/pages/admin/AdminPartnerHub.tsx` (mount the two tables under a "Connectors" heading)
 
-- [ ] **Step 1: Failing tests:** KPI cards render the two new numbers; usage tables render rows and a days selector (7/30/90) that refetches; connections table shows status badges and an admin Revoke dialog with confirmation; the activity sheet renders connector rows with latency and request id and "—" for nulls.
-- [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5: Commit** `feat(partner-hub): connector usage, connections and per-key activity`.
+- [x] **Step 1: Failing tests:** KPI cards render the two new numbers; usage tables render rows and a days selector (7/30/90) that refetches; connections table shows status badges and an admin Revoke dialog with confirmation; the activity sheet renders connector rows with latency and request id and "—" for nulls.
+- [x] **Step 2–4:** FAIL → implement → PASS. **Step 5: Commit** `feat(partner-hub): connector usage, connections and per-key activity`.
 
 ### Task 23: Mint dialog
 
 **Files:** `src/components/admin/partner/GeneratePartnerKeyDialog.tsx` (no code change expected — it reads `PARTNER_SCOPES`), test `__tests__/GeneratePartnerKeyDialog.test.tsx`
 
-- [ ] **Step 1:** Add a test asserting the three scopes render with their descriptions and are submitted when checked. **Step 2:** Run — PASS if Task 15's twin is in place. **Step 3:** Commit `test(partner-hub): mint dialog offers connector scopes`.
+- [x] **Step 1:** Add a test asserting the three scopes render with their descriptions and are submitted when checked. **Step 2:** Run — PASS if Task 15's twin is in place. **Step 3:** Commit `test(partner-hub): mint dialog offers connector scopes`.
 
 ---
 

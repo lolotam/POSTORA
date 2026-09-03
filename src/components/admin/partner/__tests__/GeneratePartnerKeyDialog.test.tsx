@@ -110,3 +110,41 @@ describe("GeneratePartnerKeyDialog", () => {
     expect(await screen.findByText(/Could not load workspaces and accounts: platform admin only/)).toBeInTheDocument();
   });
 });
+
+describe("GeneratePartnerKeyDialog connector scopes", () => {
+  beforeEach(() => {
+    rpc.mockReset();
+    rpc.mockImplementation((fn: string) => {
+      if (fn === "admin_partner_key_targets") return Promise.resolve({ data: TARGETS, error: null });
+      if (fn === "create_partner_key") return Promise.resolve({ data: "new-id", error: null });
+      return Promise.resolve({ data: null, error: null });
+    });
+  });
+
+  it("offers the three connector scopes with their descriptions", async () => {
+    wrap(<GeneratePartnerKeyDialog open onOpenChange={() => {}} />);
+    await screen.findByRole("option", { name: "Danat" });
+    expect(screen.getByLabelText("connectors:read")).toBeInTheDocument();
+    expect(screen.getByLabelText("connectors:manage")).toBeInTheDocument();
+    expect(screen.getByLabelText("tools:execute")).toBeInTheDocument();
+    expect(screen.getByText("List connected tools and their usage")).toBeInTheDocument();
+    expect(screen.getByText("Create connect links for Composio-backed tools")).toBeInTheDocument();
+    expect(screen.getByText("Execute connected tools headlessly (metered, not billed)")).toBeInTheDocument();
+  });
+
+  it("mints a key carrying the connector scopes that were ticked", async () => {
+    wrap(<GeneratePartnerKeyDialog open onOpenChange={() => {}} />);
+    await screen.findByRole("option", { name: "Danat" });
+    fireEvent.change(screen.getByLabelText(/^name/i), { target: { value: "Danat connectors" } });
+    fireEvent.change(screen.getByLabelText("Workspace"), { target: { value: "ws1" } });
+    fireEvent.change(screen.getByLabelText("Account (WhatsApp)"), { target: { value: "a1" } });
+    fireEvent.click(screen.getByLabelText("connectors:read"));
+    fireEvent.click(screen.getByLabelText("connectors:manage"));
+    fireEvent.click(screen.getByLabelText("tools:execute"));
+    fireEvent.click(screen.getByRole("button", { name: /generate key/i }));
+
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith("create_partner_key", expect.anything()));
+    const args = rpc.mock.calls.find((c) => c[0] === "create_partner_key")![1] as Record<string, unknown>;
+    expect(args.p_scopes).toEqual(["connectors:read", "connectors:manage", "tools:execute"]);
+  });
+});

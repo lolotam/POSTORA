@@ -94,3 +94,59 @@ export async function revokePartnerKey(keyId: string, reason: string): Promise<v
   if (error) throw error;
   if (data !== true) throw new Error("Key was not revoked (already revoked or not permitted)");
 }
+
+/**
+ * Connector reads for the Hub (migration 20260903120000). Same rule as every
+ * other reader here: a refused or failed read raises, so it can never be
+ * mistaken for "this platform has no connector traffic".
+ */
+
+export type ConnectorOverview = Fns["admin_connector_overview"]["Returns"][number];
+export type ConnectorUsageByTypeRow = Fns["admin_connector_usage_by_type"]["Returns"][number];
+export type ConnectorUsageByKeyRow = Fns["admin_connector_usage_by_key"]["Returns"][number];
+export type AdminConnectorConnectionRow = Fns["admin_connector_connections"]["Returns"][number];
+export type KeyConnectorActivityRow = Fns["admin_partner_key_connector_activity"]["Returns"][number];
+
+export async function fetchConnectorOverview(): Promise<ConnectorOverview> {
+  const { data, error } = await supabase.rpc("admin_connector_overview");
+  if (error) throw error;
+  const row = Array.isArray(data) ? data[0] : data;
+  if (!row) throw new Error("admin_connector_overview returned no row");
+  return row as ConnectorOverview;
+}
+
+export async function fetchConnectorUsageByType(days = 30): Promise<ConnectorUsageByTypeRow[]> {
+  const { data, error } = await supabase.rpc("admin_connector_usage_by_type", { p_days: days });
+  if (error) throw error;
+  return (data ?? []) as ConnectorUsageByTypeRow[];
+}
+
+export async function fetchConnectorUsageByKey(days = 30): Promise<ConnectorUsageByKeyRow[]> {
+  const { data, error } = await supabase.rpc("admin_connector_usage_by_key", { p_days: days });
+  if (error) throw error;
+  return (data ?? []) as ConnectorUsageByKeyRow[];
+}
+
+export async function fetchConnectorConnections(workspaceId?: string | null): Promise<AdminConnectorConnectionRow[]> {
+  const { data, error } = await supabase.rpc("admin_connector_connections", {
+    p_workspace_id: workspaceId ?? null,
+  });
+  if (error) throw error;
+  return (data ?? []) as AdminConnectorConnectionRow[];
+}
+
+export async function fetchKeyConnectorActivity(keyId: string, limit = 50): Promise<KeyConnectorActivityRow[]> {
+  const { data, error } = await supabase.rpc("admin_partner_key_connector_activity", {
+    p_key_id: keyId,
+    p_limit: limit,
+  });
+  if (error) throw error;
+  return (data ?? []) as KeyConnectorActivityRow[];
+}
+
+/** One-way, and run under the administrator's own JWT so the RPC's admin gate
+ *  and the audit actor are both the person who clicked. */
+export async function revokeConnection(connectionId: string): Promise<void> {
+  const { error } = await supabase.rpc("revoke_connector_connection", { p_connection_id: connectionId });
+  if (error) throw error;
+}

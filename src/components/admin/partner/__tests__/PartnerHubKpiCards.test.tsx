@@ -24,3 +24,39 @@ describe("PartnerHubKpiCards", () => {
     expect(screen.getByText(/platform admin only/)).toBeInTheDocument();
   });
 });
+
+const CONNECTORS = {
+  active_connections: 6, workspaces_with_connections: 3,
+  calls_30d: 4210, failures_30d: 17, refused_30d: 5, p95_latency_30d: 1900,
+};
+
+describe("PartnerHubKpiCards connector row", () => {
+  it("renders the 30-day connector call and failure counts", () => {
+    render(<PartnerHubKpiCards overview={OVERVIEW} connectorOverview={CONNECTORS} isLoading={false} error={null} />);
+    expect(screen.getByText("Connector calls (30 d)")).toBeInTheDocument();
+    expect(screen.getByText("4210")).toBeInTheDocument();
+    expect(screen.getByText("Connector failures (30 d)")).toBeInTheDocument();
+    expect(screen.getByText("17")).toBeInTheDocument();
+  });
+
+  it("keeps the connector cards blank rather than showing zero before the read lands", () => {
+    render(<PartnerHubKpiCards overview={OVERVIEW} connectorOverview={undefined} isLoading={false} error={null} />);
+    expect(screen.getByText("Connector calls (30 d)")).toBeInTheDocument();
+    expect(screen.queryByText("4210")).not.toBeInTheDocument();
+  });
+});
+
+describe("PartnerHubKpiCards connector read failure", () => {
+  it("says the connector read failed instead of showing a permanent skeleton", () => {
+    render(
+      <PartnerHubKpiCards
+        overview={OVERVIEW}
+        connectorOverview={undefined}
+        connectorError={new Error("platform admin only")}
+        isLoading={false}
+        error={null}
+      />,
+    );
+    expect(screen.getAllByText("Could not load: platform admin only").length).toBe(2);
+  });
+});

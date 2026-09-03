@@ -64,6 +64,37 @@ export default function Settings() {
   const { toast } = useToast();
   const { profile, refreshProfile } = useAuth();
 
+  // The composio-connect callback returns here with ?connection=&result=.
+  // The outcome is announced once and the params are dropped, so a refresh or
+  // a copied link never re-announces a stale one.
+  const connectionId = searchParams.get("connection");
+  const connectionResult = searchParams.get("result");
+
+  useEffect(() => {
+    if (connectionId === null && connectionResult === null) return;
+    if (connectionResult === "ok") {
+      toast({
+        title: "App connected",
+        description: "The connection is active and can now back an AI agent tool.",
+      });
+    } else {
+      toast({
+        title: "Connection not completed",
+        description: `The authorization did not complete (${connectionResult ?? "unknown error"}). Try connecting again.`,
+        variant: "destructive",
+      });
+    }
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("connection");
+        next.delete("result");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [connectionId, connectionResult, setSearchParams, toast]);
+
   useEffect(() => {
     if (profile) {
       setFullName(profile.full_name || "");

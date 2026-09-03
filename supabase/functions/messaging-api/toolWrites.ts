@@ -40,7 +40,9 @@ const RESERVED_TOOL_NAMES = [
 export interface ParsedUpsertToolInput {
   name: string;
   description: string;
-  url: string;
+  /** null for a Composio-backed tool: it executes against Composio through the
+   *  connection, so there is no customer endpoint to record (spec §4.2). */
+  url: string | null;
   socialAccountId: string;
   connectorType: ConnectorType;
   authStrategy: "manual_credentials" | "composio_oauth";
@@ -66,31 +68,15 @@ export interface ParsedUpsertToolInput {
   secretPatch: Record<string, string>;
 }
 
-export function parseUpsertToolInput(
-  body: Record<string, unknown> | null | undefined,
-): ParsedUpsertToolInput {
-  const tool = body?.tool;
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
-    throw new ToolWriteError("tool must be an object");
-  }
-  const record = tool as Record<string, unknown>;
-
-  const name = String(record.name || "").trim();
-  const description = String(record.description || "").trim();
-  const toolUrl = String(record.url || "").trim();
-
-  if (!/^[a-z][a-z0-9_]{2,40}$/.test(name)) {
-    throw new ToolWriteError("Tool name must be snake_case (3-41 chars, letters/digits/underscores)");
-  }
-  if (RESERVED_TOOL_NAMES.includes(name)) {
-    throw new ToolWriteError(`"${name}" is a reserved builtin tool name`);
-  }
-  if (!description) throw new ToolWriteError("Tool description is required");
+/**
+ * The https + public-host rule every native connector URL must pass at save
+ * time. SSRF defense in depth: ai-agent-reply re-validates (with DNS
+ * resolution) on every call.
+ */
+function validatePublicToolUrl(toolUrl: string): string {
   if (!/^https:\/\//.test(toolUrl)) {
     throw new ToolWriteError("Tool URL must start with https://");
   }
-  // SSRF defense in depth: refuse obviously internal targets at save time.
-  // ai-agent-reply re-validates (with DNS resolution) on every call.
   try {
     const parsedUrl = new URL(toolUrl);
     const host = parsedUrl.hostname.toLowerCase();
@@ -105,6 +91,28 @@ export function parseUpsertToolInput(
     if (error instanceof ToolWriteError) throw error;
     throw new ToolWriteError("Tool URL is not a valid URL");
   }
+  return toolUrl;
+}
+
+export function parseUpsertToolInput(
+  body: Record<string, unknown> | null | undefined,
+): ParsedUpsertToolInput {
+  const tool = body?.tool;
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+    throw new ToolWriteError("tool must be an object");
+  }
+  const record = tool as Record<string, unknown>;
+
+  const name = String(record.name || "").trim();
+  const description = String(record.description || "").trim();
+
+  if (!/^[a-z][a-z0-9_]{2,40}$/.test(name)) {
+    throw new ToolWriteError("Tool name must be snake_case (3-41 chars, letters/digits/underscores)");
+  }
+  if (RESERVED_TOOL_NAMES.includes(name)) {
+    throw new ToolWriteError(`"${name}" is a reserved builtin tool name`);
+  }
+  if (!description) throw new ToolWriteError("Tool description is required");
 
   // An unrecognised connector_type is refused BY NAME, never substituted.
   // The previous writer answered 200 with a custom_rest row, so a user who
@@ -122,6 +130,11 @@ export function parseUpsertToolInput(
   // Narrowed by the allow-list check above; the cast is earned, not assumed.
   const typedConnectorType = connectorType as ConnectorType;
   const authStrategy = isComposioType(typedConnectorType) ? "composio_oauth" : "manual_credentials";
+  // A Composio tool has no endpoint of its own — the connection is the target
+  // — so it records null rather than a decoy URL the runtime would never call.
+  const toolUrl = authStrategy === "composio_oauth"
+    ? null
+    : validatePublicToolUrl(String(record.url || "").trim());
   const rawConnectionId = record.connection_id;
   const connectionId = typeof rawConnectionId === "string" && rawConnectionId.trim()
     ? rawConnectionId.trim()

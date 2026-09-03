@@ -244,9 +244,16 @@ describe("DatabaseConnectorsManager read-only overview (Settings)", () => {
     links = [{ tool_id: "t-wa", social_account_id: "ig-1" }];
     const { container } = renderManager({ readOnly: true }) as { container: HTMLElement };
 
-    // The whole point of §14: no write control of any kind may render. Not
-    // hidden buttons — none in the tree.
-    expect(container.querySelector("button")).toBeNull();
+    // The whole point of §14: no *tool* write control may render. Not hidden
+    // buttons — none in the tree. Workspace connection controls are the one
+    // documented exception: the connection is the credential and Settings is
+    // where it lives, so readOnly hides the tool form, not those (spec §9.1).
+    for (const group of screen.getAllByTestId(/^overview-account-/)) {
+      expect(group.querySelector("button")).toBeNull();
+    }
+    for (const button of container.querySelectorAll("button")) {
+      expect(button.closest('[data-testid^="composio-card-"]')).not.toBeNull();
+    }
 
     // Grouped by owning account, with each account's connectors under it.
     const waGroup = screen.getByTestId("overview-account-wa-1");

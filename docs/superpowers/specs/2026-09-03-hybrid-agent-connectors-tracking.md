@@ -451,6 +451,11 @@ unreachable), `connection_inactive` (409), `connector_tool_not_allowed` (403),
   guide behave exactly as for native tools.
 - Every configured tool card, native or Composio, gains the usage line. Nothing else in the
   2 298-line file changes.
+- **Known limit (Slice D):** the callback always returns to Settings → Integrations, which
+  shows the signed-in user's *personal* workspace. A connection initiated from the agent Tools
+  tab for an account in a team workspace completes and toasts correctly, but its card is
+  listed only when that workspace is selected. A workspace selector on the Integrations tab,
+  or a `return_to` hint carried in the signed state, is the follow-up; neither is in this spec.
 
 Module `src/features/connectors/`:
 `domain/connectorCategories.ts` (tab order, pure), `domain/usageSummary.ts` (format the

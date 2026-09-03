@@ -3,18 +3,21 @@ import { AdminLayout } from "@/components/admin/AdminLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { usePartnerHubOverview, usePartnerKeys, useRevokePartnerKey, type PartnerKeyRow } from "@/features/partner-hub";
+import { useConnectorOverview, usePartnerHubOverview, usePartnerKeys, useRevokePartnerKey, type PartnerKeyRow } from "@/features/partner-hub";
 import { PartnerHubKpiCards } from "@/components/admin/partner/PartnerHubKpiCards";
 import { PartnerKeysTable } from "@/components/admin/partner/PartnerKeysTable";
 import { GeneratePartnerKeyDialog } from "@/components/admin/partner/GeneratePartnerKeyDialog";
 import { RevokePartnerKeyDialog } from "@/components/admin/partner/RevokePartnerKeyDialog";
 import { PartnerKeyActivitySheet } from "@/components/admin/partner/PartnerKeyActivitySheet";
+import { ConnectorUsageTables } from "@/components/admin/partner/ConnectorUsageTables";
+import { ConnectorConnectionsTable } from "@/components/admin/partner/ConnectorConnectionsTable";
 import { Plus, X } from "lucide-react";
 
 export default function AdminPartnerHub() {
   const { toast } = useToast();
   const overview = usePartnerHubOverview();
   const keys = usePartnerKeys();
+  const connectorOverview = useConnectorOverview();
   const revoke = useRevokePartnerKey();
 
   const [activeScope, setActiveScope] = useState<string | null>(null);
@@ -41,7 +44,7 @@ export default function AdminPartnerHub() {
           <Button onClick={() => setGenerateOpen(true)}><Plus className="mr-1 h-4 w-4" /> Generate partner key</Button>
         </div>
 
-        <PartnerHubKpiCards overview={overview.data} isLoading={overview.isLoading} error={overview.error as Error | null} />
+        <PartnerHubKpiCards overview={overview.data} connectorOverview={connectorOverview.data} connectorError={connectorOverview.error as Error | null} isLoading={overview.isLoading} error={overview.error as Error | null} />
 
         <Card>
           <CardHeader>
@@ -67,6 +70,17 @@ export default function AdminPartnerHub() {
             />
           </CardContent>
         </Card>
+
+        <section className="space-y-4">
+          <div>
+            <h2 className="text-xl font-bold">Connectors</h2>
+            <p className="text-sm text-muted-foreground">
+              Composio connections and metered tool executions across every door and workspace.
+            </p>
+          </div>
+          <ConnectorUsageTables />
+          <ConnectorConnectionsTable />
+        </section>
       </div>
 
       <GeneratePartnerKeyDialog open={generateOpen} onOpenChange={setGenerateOpen} />
