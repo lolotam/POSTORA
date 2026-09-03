@@ -278,10 +278,13 @@ const LEDGER_TELEMETRY_COLUMNS = ["request_id", "latency_ms"] as const;
  * and hides the cause.
  */
 function isMissingTelemetryColumn(error: { code?: string; message?: string }): boolean {
-  if (error.code === "PGRST204") return true;
+  // The message must name one of OUR columns. PGRST204 alone is not enough:
+  // the same code for `billable` would mean the ledger table itself is wrong,
+  // and retrying without request_id/latency_ms would not fix it.
   const message = error.message ?? "";
-  return message.includes("schema cache") &&
-    LEDGER_TELEMETRY_COLUMNS.some((column) => message.includes(`'${column}'`));
+  const namesTelemetryColumn = LEDGER_TELEMETRY_COLUMNS.some((column) => message.includes(`'${column}'`));
+  if (!namesTelemetryColumn) return false;
+  return error.code === "PGRST204" || message.includes("schema cache");
 }
 
 /**

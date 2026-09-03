@@ -421,3 +421,13 @@ Deno.test("recordUsage does not retry a schema-cache error about some other colu
   await recordUsage(client as any, USAGE_INPUT);
   assertEquals(attempts.length, 1);
 });
+
+Deno.test("recordUsage does not retry a PGRST204 about a column the retry would not remove", async () => {
+  const { attempts, client } = insertFailingOnceClient({
+    code: "PGRST204",
+    message: "Could not find the 'billable' column of 'partner_api_usage' in the schema cache",
+  });
+  // deno-lint-ignore no-explicit-any
+  await recordUsage(client as any, USAGE_INPUT);
+  assertEquals(attempts.length, 1);
+});
