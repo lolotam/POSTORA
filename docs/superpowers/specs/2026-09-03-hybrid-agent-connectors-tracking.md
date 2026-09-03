@@ -247,7 +247,10 @@ export interface ComposioBinding {
   toolkit: string;                    // Composio toolkit slug
   tools: readonly string[];           // the ONLY slugs the agent may call
   mutating: readonly string[];        // subset of tools that change vendor state (§7.2 gate)
-  toolkitVersion: string;             // pinned; required by /tools/execute
+  toolkitVersion: string;             // pinned; required by /tools/execute. "latest" ONLY until
+                                      // the Slice B spike (plan Task 6) records real versions —
+                                      // under "latest" a cached schema and an execution can
+                                      // silently disagree after Composio bumps a toolkit.
 }
 
 export interface ConnectorDefinition {

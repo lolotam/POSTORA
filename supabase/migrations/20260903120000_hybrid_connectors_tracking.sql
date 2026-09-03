@@ -38,11 +38,19 @@ ALTER TABLE public.ai_agent_tools ADD CONSTRAINT ai_agent_tools_connector_type_c
 ALTER TABLE public.ai_agent_tools
   ADD COLUMN IF NOT EXISTS auth_strategy TEXT NOT NULL DEFAULT 'manual_credentials',
   ADD COLUMN IF NOT EXISTS connection_id UUID REFERENCES public.connector_connections(id) ON DELETE RESTRICT;
+-- One block per constraint: two ADD CONSTRAINTs in a single ALTER roll back
+-- together, so a duplicate_object on the first would silently skip the second.
 DO $$ BEGIN
   ALTER TABLE public.ai_agent_tools
-    ADD CONSTRAINT ai_agent_tools_auth_strategy_check CHECK (auth_strategy IN ('manual_credentials','composio_oauth')),
+    ADD CONSTRAINT ai_agent_tools_auth_strategy_check CHECK (auth_strategy IN ('manual_credentials','composio_oauth'));
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN
+  ALTER TABLE public.ai_agent_tools
     ADD CONSTRAINT ai_agent_tools_connection_matches_strategy CHECK ((auth_strategy = 'composio_oauth') = (connection_id IS NOT NULL));
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+-- The RESTRICT FK, revoke_connector_connection and admin_connector_connections
+-- all look tools up by connection.
+CREATE INDEX IF NOT EXISTS ai_agent_tools_connection_idx ON public.ai_agent_tools (connection_id) WHERE connection_id IS NOT NULL;
 
 CREATE OR REPLACE FUNCTION public.ai_agent_tools_connection_workspace_matches()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$

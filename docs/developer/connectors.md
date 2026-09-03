@@ -54,6 +54,6 @@ Success is `200 {ok: true, data, request_id, latency_ms}`, where `data` is what 
 
 ## Metering
 
-Every call — including every refusal — is recorded against the workspace's connector usage and shows up in `usage_30d`. Tool execution consumes no monthly message quota, and its `partner_api_usage` row is non-billable.
+Every call is recorded against the workspace's connector usage, including every refusal against a tool the key can see; those show up in `usage_30d`. A `tool_not_found` refusal is recorded too but cannot be attributed to a listed tool, so it never appears there. Tool execution consumes no monthly message quota, and its `partner_api_usage` row is non-billable.
 
 Reference: `supabase/functions/partner-api/v1/connectors.ts`, `supabase/functions/partner-api/v1/tools.ts`, `docs/api/openapi.yaml`.

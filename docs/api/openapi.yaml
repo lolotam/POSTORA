@@ -390,12 +390,7 @@ paths:
             type: string
             pattern: '^[a-z0-9_]{1,64}$'
           description: The connector type to connect, for example `slack`.
-        - name: Idempotency-Key
-          in: header
-          required: true
-          schema:
-            type: string
-          description: Required caller-supplied key for idempotent minting.
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: false
         content:
@@ -448,18 +443,15 @@ paths:
         `Idempotency-Key` is required. A retry with the same key and body
         returns the stored 200 or 502 without executing again.
 
-        Every call — including every refusal — is metered against the
-        workspace's connector usage and appears in `usage_30d`. It consumes no
-        monthly message quota.
+        Every call is metered against the workspace's connector usage,
+        including every refusal against a tool the key can see; those appear
+        in `usage_30d`. A `tool_not_found` refusal is recorded too but is not
+        attributable to a listed tool, so it never appears there. Execution
+        consumes no monthly message quota.
 
         Scope `tools:execute`. D7 class C.
       parameters:
-        - name: Idempotency-Key
-          in: header
-          required: true
-          schema:
-            type: string
-          description: Required caller-supplied key for idempotent execution.
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:

@@ -11,6 +11,7 @@ import { ComposioError, composioClientFromEnv, type ComposioClient } from "../_s
 import { composioBinding } from "../_shared/connectorRegistry.ts";
 import {
   ConnectorRefusal,
+  isAbortError,
   withConnectorCall,
 } from "../_shared/connectorTelemetry.ts";
 import type { ToolContext, ToolResult } from "./tools.ts";
@@ -38,11 +39,6 @@ class ComposioToolFailure extends Error {
     super("tool_execution_failed");
     this.name = "ComposioToolFailure";
   }
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException &&
-    (error.name === "AbortError" || error.message === "AbortError");
 }
 
 /**

@@ -11,7 +11,7 @@
 // something tries to execute (composioExecution.ts).
 import type { ActiveConnection, ConnectionLookup } from "../_shared/composioConnections.ts";
 import { loadActiveConnection } from "../_shared/composioConnections.ts";
-import { composioBinding, type ComposioBinding } from "../_shared/connectorRegistry.ts";
+import type { ComposioBinding } from "../_shared/connectorRegistry.ts";
 import type { CustomTool } from "./tools.ts";
 
 export interface ComposioReadyTool extends CustomTool {
@@ -107,7 +107,7 @@ export function composioToolParameters(
   };
   required: ["capability"];
 } {
-  const schemas = tool.connection?.toolSchemaCache ?? [];
+  const schemas = tool.connection.toolSchemaCache ?? [];
   const bySlug = new Map(schemas.map((schema) => [schema.slug, schema]));
   return {
     type: "object",
@@ -218,11 +218,4 @@ export async function attachComposioTools(
     }
   }
   return ready;
-}
-
-/** The binding behind a Composio tool, when its type is one. */
-export function toolComposioBinding(tool: CustomTool): ComposioBinding | undefined {
-  return tool.auth_strategy === "composio_oauth"
-    ? composioBinding(tool.connector_type)
-    : undefined;
 }

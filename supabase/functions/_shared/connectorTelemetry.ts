@@ -78,6 +78,15 @@ function errorCode(error: unknown): string {
   return "connector_failure";
 }
 
+/**
+ * What counts as an abort, decided once for every door. `AbortController`
+ * aborts throw AbortError; `AbortSignal.timeout` throws TimeoutError.
+ */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException &&
+    (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
 function failureOutcome(
   error: unknown,
   latencyMs: number,
@@ -85,10 +94,7 @@ function failureOutcome(
   if (error instanceof ConnectorRefusal) {
     return { status: "refused", errorCode: error.code, latencyMs };
   }
-  if (
-    error instanceof DOMException &&
-    (error.name === "AbortError" || error.message === "AbortError")
-  ) {
+  if (isAbortError(error)) {
     return { status: "timeout", errorCode: "connector_timeout", latencyMs };
   }
   return { status: "failed", errorCode: errorCode(error), latencyMs };

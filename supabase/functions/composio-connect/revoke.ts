@@ -11,19 +11,13 @@ export async function revokeConnection(
     input.userId,
   );
   if (!connection) throw new ConnectError("forbidden", 403);
+  // The provider delete is best effort (spec §6.4): a missing client is logged
+  // like a failed delete, never a refusal. The kill switch (unset API key)
+  // must not also stop an owner from revoking a connection whose tools are
+  // still live — the RPC below is the source of truth for local state.
   if (!deps.composio) {
-    await deps.recordCall({
-      workspaceId: connection.workspaceId,
-      connectionId: connection.id,
-      connectorType: connection.connectorType,
-      authStrategy: "composio_oauth",
-      actionName: "revoke",
-      source: "test",
-    }, { status: "refused", errorCode: "connector_unavailable" });
-    throw new ConnectError("connector_unavailable", 503);
-  }
-
-  if (connection.composioConnectedAccountId) {
+    console.warn("[composio-connect] provider revoke skipped: no client configured");
+  } else if (connection.composioConnectedAccountId) {
     try {
       await deps.composio.deleteConnectedAccount(
         connection.composioConnectedAccountId,

@@ -5,10 +5,7 @@ import {
 
 import { ComposioError } from "../_shared/composioClient.ts";
 import type { ConnectorCallRow } from "./connectorExecution.ts";
-import {
-  COMPOSIO_EXECUTE_TIMEOUT_MS,
-  executeComposioTool,
-} from "./composioExecution.ts";
+import { executeComposioTool } from "./composioExecution.ts";
 import type { ComposioReadyTool } from "./composioTools.ts";
 import type { ToolContext } from "./tools.ts";
 
@@ -385,8 +382,4 @@ Deno.test("a failing ledger insert never changes the tool's outcome", async () =
 
   assertStringIncludes(result.output, '"ok":1');
   assertEquals(state.rows.length, 1);
-});
-
-Deno.test("the execution budget is the 6-second agent budget", () => {
-  assertEquals(COMPOSIO_EXECUTE_TIMEOUT_MS, 6_000);
 });

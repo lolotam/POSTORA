@@ -45,6 +45,7 @@ function dependencies(overrides: Partial<ComposioConnectDependencies> = {}) {
     isWorkspaceMember: async () => true,
     insertConnection: async (row) => inserted.push(row),
     updateConnection: async (id, values) => updated.push({ id, values }),
+    activateConnection: async () => true,
     loadPendingConnection: async () => null,
     loadConnectionForUser: async () => null,
     revokeRpc: async () => {},

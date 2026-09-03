@@ -12,7 +12,6 @@ const pending: PendingConnection = {
   id: "connection-1",
   workspaceId: "workspace-1",
   connectorType: "slack",
-  toolkit: "slack",
   authConfigId: "auth-config-1",
   stateNonce: "nonce-1",
   status: "initiated",
@@ -65,6 +64,10 @@ async function setup(overrides: Partial<ComposioConnectDependencies> = {}) {
     isWorkspaceMember: async () => true,
     insertConnection: async () => {},
     updateConnection: async (id, values) => updates.push({ id, values }),
+    activateConnection: async (id, _nonce, values) => {
+      updates.push({ id, values });
+      return true;
+    },
     loadPendingConnection: async () => pending,
     loadConnectionForUser: async () => null,
     revokeRpc: async () => {},
@@ -204,4 +207,15 @@ Deno.test("callback activates the connection and caches only registry schemas", 
     "ca-1",
   );
   assertEquals(state.updates.at(-1)?.values.state_nonce, null);
+});
+
+Deno.test("a callback that loses the activation race is a replay, not a second activation", async () => {
+  // The read passed (status initiated, nonce matches) but the compare-and-swap
+  // found the nonce already consumed by a concurrent callback.
+  const state = await setup({ activateConnection: async () => false });
+  const response = await composioCallbackResponse(state.deps, state.url);
+  const location = redirectResult(response);
+  assertEquals(location.searchParams.get("result"), "invalid_state");
+  assertEquals(state.calls.at(-1)?.status, "refused");
+  assertEquals(state.calls.at(-1)?.errorCode, "invalid_state");
 });

@@ -22,7 +22,6 @@ export interface PendingConnection {
   id: string;
   workspaceId: string;
   connectorType: string;
-  toolkit: string;
   authConfigId: string;
   stateNonce: string | null;
   status: string;
@@ -50,6 +49,16 @@ export interface ComposioConnectDependencies {
     id: string,
     values: Record<string, unknown>,
   ) => Promise<void>;
+  /**
+   * The activating write, as one compare-and-swap: it applies only while the
+   * row is still `initiated` AND still carries this nonce, and reports whether
+   * it did. Two callbacks replaying one signed state cannot both win.
+   */
+  activateConnection: (
+    id: string,
+    nonce: string,
+    values: Record<string, unknown>,
+  ) => Promise<boolean>;
   loadPendingConnection: (
     id: string,
     workspaceId: string,
@@ -118,11 +127,22 @@ export function createDependencies(): ComposioConnectDependencies {
       }).eq("id", id);
       if (error) throwDatabaseError(error);
     },
+    async activateConnection(id, nonce, values) {
+      const { data, error } = await admin
+        .from("connector_connections")
+        .update({ ...values, updated_at: new Date().toISOString() })
+        .eq("id", id)
+        .eq("status", "initiated")
+        .eq("state_nonce", nonce)
+        .select("id");
+      if (error) throwDatabaseError(error);
+      return Array.isArray(data) && data.length === 1;
+    },
     async loadPendingConnection(id, workspaceId) {
       const { data, error } = await admin
         .from("connector_connections")
         .select(
-          "id,workspace_id,connector_type,toolkit,composio_auth_config_id,state_nonce,status",
+          "id,workspace_id,connector_type,composio_auth_config_id,state_nonce,status",
         )
         .eq("id", id)
         .eq("workspace_id", workspaceId)
@@ -133,7 +153,6 @@ export function createDependencies(): ComposioConnectDependencies {
         id: data.id,
         workspaceId: data.workspace_id,
         connectorType: data.connector_type,
-        toolkit: data.toolkit,
         authConfigId: data.composio_auth_config_id,
         stateNonce: data.state_nonce,
         status: data.status,

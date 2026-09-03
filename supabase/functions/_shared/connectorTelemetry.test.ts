@@ -242,14 +242,14 @@ Deno.test("withConnectorCall records an AbortError as a timeout", async () => {
   assertEquals(harness.rows[0].error_code, "connector_timeout");
 });
 
-Deno.test("withConnectorCall accepts the one-argument DOMException abort shape", async () => {
+Deno.test("withConnectorCall records an AbortSignal.timeout TimeoutError as a timeout", async () => {
   const harness = recordingClient();
 
   await assertRejects(() =>
     withConnectorCall(
       harness.client,
       callMeta,
-      () => Promise.reject(new DOMException("AbortError")),
+      () => Promise.reject(new DOMException("signal timed out", "TimeoutError")),
       { timeoutMs: 1_000, now: () => 10 },
     )
   );

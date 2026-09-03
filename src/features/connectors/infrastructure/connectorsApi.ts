@@ -14,13 +14,22 @@ import type { ConnectorType } from "@/lib/connectorRegistry";
 
 type Fns = Database["public"]["Functions"];
 
-export type ConnectorConnectionRow = Tables<"connector_connections">;
+/** The browser-safe subset of a connection row. Composio ids, the state nonce
+ *  and the cached schemas stay on the server (spec §11); RLS is row-level and
+ *  would hand all of them to any workspace member on a `select("*")`. */
+export type ConnectorConnectionRow = Pick<
+  Tables<"connector_connections">,
+  "id" | "workspace_id" | "connector_type" | "status" | "external_account_label" | "failure_code" | "connected_at" | "created_at"
+>;
 export type WorkspaceUsageRow = Fns["workspace_connector_usage"]["Returns"][number];
+
+export const CONNECTION_COLUMNS =
+  "id, workspace_id, connector_type, status, external_account_label, failure_code, connected_at, created_at";
 
 export async function fetchConnections(workspaceId: string): Promise<ConnectorConnectionRow[]> {
   const { data, error } = await supabase
     .from("connector_connections")
-    .select("*")
+    .select(CONNECTION_COLUMNS)
     .eq("workspace_id", workspaceId)
     .order("created_at", { ascending: false });
   if (error) throw error;

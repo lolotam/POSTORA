@@ -128,7 +128,10 @@ export async function composioCallbackResponse(
     return await refuse(deps, connection, "connector_unavailable");
   }
   const external = externalAccountMetadata(account.metadata);
-  await deps.updateConnection(connection.id, {
+  // Compare-and-swap on (status, nonce): the read at the top proved the state
+  // matched, but two callbacks replaying one state could both have passed it.
+  // Only the write that still finds the nonce activates; the other is a replay.
+  const activated = await deps.activateConnection(connection.id, state.nonce, {
     status: "active",
     failure_code: null,
     state_nonce: null,
@@ -139,5 +142,16 @@ export async function composioCallbackResponse(
     tool_schema_cached_at: new Date(deps.now()).toISOString(),
     connected_at: new Date(deps.now()).toISOString(),
   });
+  if (!activated) {
+    await deps.recordCall({
+      workspaceId: connection.workspaceId,
+      connectionId: connection.id,
+      connectorType: connection.connectorType,
+      authStrategy: "composio_oauth",
+      actionName: "callback",
+      source: "test",
+    }, { status: "refused", errorCode: "invalid_state" });
+    return redirect(deps, "invalid_state", connection.id);
+  }
   return redirect(deps, "ok", connection.id);
 }

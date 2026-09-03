@@ -436,6 +436,11 @@ Deno.test("an adapter that answers ok:false is a 502 carrying the code and no ve
     assert(!raw.includes("secrets"), "the vendor's message must not pass through");
     const rows = ledgerRows(client);
     assertEquals(rows[0].status, "failed");
+    // The definite failure is SETTLED as a 502, so a retry with the same key
+    // replays it instead of executing the call again (connectors.md contract).
+    const settled = client.updates.find((u: any) => u.table === "partner_api_idempotency");
+    assertEquals(settled?.values.http_status, 502);
+    assertEquals(settled?.values.state, "completed");
   } finally {
     outbound.restore();
     restoreEnv();

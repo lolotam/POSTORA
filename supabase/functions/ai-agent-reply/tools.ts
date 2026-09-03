@@ -529,7 +529,7 @@ export function customToolDefinitions(tools: CustomTool[]) {
         // Typed connectors derive this schema from the same registry metadata
         // that opts them into adapter routing; Composio connectors from the
         // allow-list plus cached schemas. Both are flat object schemas.
-        parameters: composioParameters ?? (capabilities?.length ? typedParameters : legacyParameters),
+        parameters: composioParameters ?? typedParameters,
       },
     };
   });

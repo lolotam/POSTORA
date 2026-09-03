@@ -3,6 +3,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConnectorsManager";
 
+vi.mock("@/hooks/useAuth", () => ({
+  useAuth: () => ({ user: { id: "u1" }, session: { user: { id: "u1" } }, profile: { id: "u1", api_key: "pk" } }),
+}));
+
 vi.mock("@/hooks/useAiAgentTools", () => ({
   useAiAgentTools: () => ({
     tools: [

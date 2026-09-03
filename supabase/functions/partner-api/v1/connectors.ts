@@ -79,7 +79,7 @@ export const USAGE_ROW_CAP = 10_000;
  *  selects them. `settings` holds no secret (credentials live in Vault); it is
  *  read for `allow_writes`, which POST /v1/tools/execute gates on. */
 export const TOOL_COLUMNS =
-  "id, user_id, name, description, url, secret, admin_only, scope, social_account_id, " +
+  "id, user_id, name, description, url, admin_only, scope, social_account_id, " +
   "connector_type, settings, auth_strategy, connection_id";
 
 /** A tool row with the owning login, which `ResolvableTool` does not carry and
@@ -396,12 +396,18 @@ export async function createConnectLink(
   // the API is traceable to a person the way one minted in the app is. Read
   // here rather than carried on PartnerKeyRecord — the authentication record is
   // the smallest thing every route needs, and this is one route's need.
-  const { data: keyRow } = await admin
+  const { data: keyRow, error: keyError } = await admin
     .from("partner_api_keys")
     .select("created_by")
     .eq("id", record.id)
     .eq("workspace_id", record.workspaceId)
     .maybeSingle();
+  if (keyError) {
+    // Said, not swallowed: a failed read would otherwise write initiated_by
+    // null and look exactly like a key with no creator.
+    console.error(`[partner-api] connect-link key lookup failed (request ${requestId}):`, keyError);
+    return v1ErrorResponse("internal_error", requestId);
+  }
 
   try {
     const link = await initiateComposioConnection(
@@ -440,12 +446,9 @@ export async function createConnectLink(
       // partner needing a link sooner uses a new key. The connection row, if
       // one was created, is already `failed` with its nonce cleared, so nothing
       // half-created stays completable.
-      return v1ErrorResponse(
-        error.code === "connector_type_not_connectable"
-          ? "connector_type_not_connectable"
-          : "connector_unavailable",
-        requestId,
-      );
+      // The type was already proven connectable before the claim, so the only
+      // code that reaches here is connector_unavailable.
+      return v1ErrorResponse("connector_unavailable", requestId);
     }
     throw error;
   }

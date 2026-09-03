@@ -12,29 +12,10 @@ import { callMessagingApi } from "@/lib/messagingApi";
  * is what lets the UI render "Consumer secret ✓ set" without ever seeing a
  * decrypted credential.
  */
-export const CONNECTOR_TYPES = [
-  "supabase",
-  "mysql_postgres",
-  "woocommerce",
-  "shopify",
-  "salla",
-  "zid",
-  "myfatoorah",
-  "stripe",
-  "higgsfield",
-  "formula",
-  "custom_rest",
-  "mcp_custom",
-  "google_sheets",
-  "slack",
-  "google_calendar",
-  "hubspot",
-  "notion",
-  "airtable",
-  "youtube",
-] as const;
-
-export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
+// One list, not a third copy: the picker offers exactly the registry's types.
+import { CONNECTOR_TYPES, type ConnectorType } from "@/lib/connectorRegistry";
+export { CONNECTOR_TYPES };
+export type { ConnectorType };
 
 export interface ToolPermissions {
   search_products: boolean;

@@ -13,16 +13,6 @@ export interface ConnectorWorkspace {
   error: Error | null;
 }
 
-/** The two historical directory tests render the manager with no
- *  AuthProvider; a throwing hook there would take the whole tree down. */
-function useSafeUserId(): string | null {
-  try {
-    return useAuth()?.user?.id ?? null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Which workspace a connectors surface belongs to: the selected account's
  * workspace when the surface has an account, otherwise the signed-in user's
@@ -31,7 +21,7 @@ function useSafeUserId(): string | null {
  * quietly write connections somewhere else.
  */
 export function useConnectorWorkspace(accountId: string | null): ConnectorWorkspace {
-  const userId = useSafeUserId();
+  const userId = useAuth().user?.id ?? null;
   const query = useQuery({
     queryKey: ["connectors", "workspace", accountId ?? `personal:${userId ?? ""}`],
     queryFn: () =>

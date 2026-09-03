@@ -47,6 +47,7 @@ import {
   shouldUseAdapter,
 } from "../../_shared/connectorRegistry.ts";
 import {
+  isAbortError,
   recordConnectorCall,
   withConnectorCall,
   type ConnectorCallMeta,
@@ -103,11 +104,6 @@ class ToolExecutionFailure extends Error {
     super("tool_execution_failed");
     this.name = "ToolExecutionFailure";
   }
-}
-
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException &&
-    (error.name === "AbortError" || error.message === "AbortError");
 }
 
 // ---------------------------------------------------------------------------
