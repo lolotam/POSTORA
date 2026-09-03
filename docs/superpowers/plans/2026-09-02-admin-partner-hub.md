@@ -62,7 +62,7 @@ DB_URL='postgres://supabase_admin:postgres@localhost:5432/postgres' HARNESS_DB_N
 **Files:**
 - Create: `supabase/migrations/20260902200000_admin_partner_hub.sql`
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 ```sql
 -- Admin Partner Hub (spec: docs/superpowers/specs/2026-09-02-admin-partner-hub-design.md).
@@ -433,7 +433,7 @@ GRANT EXECUTE ON FUNCTION public.admin_partner_key_webhook_deliveries(UUID, INTE
 NOTIFY pgrst, 'reload schema';
 ```
 
-- [ ] **Step 2: Apply it on the PG17 harness and confirm it loads**
+- [x] **Step 2: Apply it on the PG17 harness and confirm it loads**
 
 Run: `DB_URL='postgres://supabase_admin:postgres@localhost:5432/postgres' HARNESS_DB_NAME=partner_api_harness bash scripts/db-harness.sh`
 Expected: the migration step succeeds (existing suites still pass; the new suite is added in Task 2).
@@ -445,7 +445,7 @@ Expected: the migration step succeeds (existing suites still pass; the new suite
 - Modify: `scripts/db-harness.sh` (SUITES array, after `partner_key_environment.sql`)
 - Modify: `supabase/tests/README.md` (suite table, one row)
 
-- [ ] **Step 1: Write the suite**
+- [x] **Step 1: Write the suite**
 
 ```sql
 -- ============================================================================
@@ -743,16 +743,16 @@ SELECT pg_temp.hub_cleanup();
 \echo '=== partner_hub_admin: done ==='
 ```
 
-- [ ] **Step 2: Register the suite**
+- [x] **Step 2: Register the suite**
 
 In `scripts/db-harness.sh`, add `partner_hub_admin.sql` after `partner_key_environment.sql` in `SUITES=(...)`. In `supabase/tests/README.md`, add a table row: `| partner_hub_admin.sql | Admin Partner Hub readers, admin key lifecycle in foreign workspaces, ledger columns; self-cleaning |`.
 
-- [ ] **Step 3: Run the harness**
+- [x] **Step 3: Run the harness**
 
 Run: `DB_URL='postgres://supabase_admin:postgres@localhost:5432/postgres' HARNESS_DB_NAME=partner_api_harness bash scripts/db-harness.sh`
 Expected: `PASS H1` … `PASS H6` notices and the script exits 0.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add supabase/migrations/20260902200000_admin_partner_hub.sql supabase/tests/partner_hub_admin.sql scripts/db-harness.sh supabase/tests/README.md
@@ -764,7 +764,7 @@ git commit -m "feat(partner-hub): admin readers, admin key management, ledger re
 **Files:**
 - Modify: `src/integrations/supabase/types.ts` (inside `public.Functions`, next to `revoke_partner_key`)
 
-- [ ] **Step 1: Add the entries** (hand-maintained until the next regeneration; shapes match what `supabase gen types` produces for `RETURNS TABLE`)
+- [x] **Step 1: Add the entries** (hand-maintained until the next regeneration; shapes match what `supabase gen types` produces for `RETURNS TABLE`)
 
 ```ts
       create_partner_key: {
@@ -871,7 +871,7 @@ git commit -m "feat(partner-hub): admin readers, admin key management, ledger re
       }
 ```
 
-- [ ] **Step 2: Typecheck and commit**
+- [x] **Step 2: Typecheck and commit**
 
 Run: `bunx tsc -b --noEmit` → Expected: no errors.
 ```bash
@@ -889,7 +889,7 @@ git commit -m "chore(types): partner hub RPC signatures"
 - Modify: `supabase/functions/_shared/partnerApiMetering.ts` (`UsageInput`, `recordUsage`)
 - Test: `supabase/functions/_shared/partnerApiMetering.test.ts`
 
-- [ ] **Step 1: Write the failing tests** (append)
+- [x] **Step 1: Write the failing tests** (append)
 
 ```ts
 Deno.test("recordUsage writes request_id and latency_ms when given", async () => {
@@ -939,12 +939,12 @@ Deno.test("recordUsage rounds latency to a non-negative integer", async () => {
 });
 ```
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `deno test --allow-env --allow-read --no-check supabase/functions/_shared/partnerApiMetering.test.ts`
 Expected: the three new tests FAIL (`undefined` instead of the values).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `UsageInput` add:
 ```ts
@@ -969,12 +969,12 @@ In `recordUsage`, the insert becomes:
     });
 ```
 
-- [ ] **Step 4: Run to see them pass**
+- [x] **Step 4: Run to see them pass**
 
 Run: `deno test --allow-env --allow-read --no-check supabase/functions/_shared/partnerApiMetering.test.ts`
 Expected: all PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add supabase/functions/_shared/partnerApiMetering.ts supabase/functions/_shared/partnerApiMetering.test.ts
@@ -988,7 +988,7 @@ git commit -m "feat(partner-api): usage ledger carries request_id and latency_ms
 - Modify: `supabase/functions/partner-api/index.ts` (`respond()` helper ~line 484 and its one call site ~line 186; request entry ~line 145)
 - Test: `supabase/functions/partner-api/v1/authenticated.test.ts`
 
-- [ ] **Step 1: Write the failing test** (append to `authenticated.test.ts`)
+- [x] **Step 1: Write the failing test** (append to `authenticated.test.ts`)
 
 ```ts
 Deno.test("every ledger row carries the request id and a non-negative integer latency", async () => {
@@ -1015,12 +1015,12 @@ function comparable(rows: Record<string, unknown>[]) {
 
 and change every `assertEquals(inserts, [...])` to `assertEquals(comparable(inserts), [...])`.
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `deno test --allow-env --allow-read --no-check supabase/functions/partner-api/v1/authenticated.test.ts`
 Expected: the new test FAILS (`request_id` undefined).
 
-- [ ] **Step 3: Implement in `authenticated.ts`**
+- [x] **Step 3: Implement in `authenticated.ts`**
 
 Inside the returned async function, first line after the signature:
 ```ts
@@ -1059,7 +1059,7 @@ async function usageRowFor(
 ```
 (Keep the existing comments.)
 
-- [ ] **Step 4: Implement in `index.ts` (alias door)**
+- [x] **Step 4: Implement in `index.ts` (alias door)**
 
 Right after `const requestId = crypto.randomUUID();` add `const startedAt = performance.now();`.
 Add a final parameter to `respond()`: `startedAt?: number`, and pass both into `recordUsage`:
@@ -1077,12 +1077,12 @@ Add a final parameter to `respond()`: `startedAt?: number`, and pass both into `
 ```
 At the one call site (the arrow around line 186) append `startedAt` after `requestId`.
 
-- [ ] **Step 5: Run the Deno suites**
+- [x] **Step 5: Run the Deno suites**
 
 Run: `deno test --allow-env --allow-read --no-check supabase/functions/partner-api/ supabase/functions/_shared/partnerApiMetering.test.ts`
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add supabase/functions/partner-api/v1/authenticated.ts supabase/functions/partner-api/v1/authenticated.test.ts supabase/functions/partner-api/index.ts
@@ -1105,7 +1105,7 @@ Conventions: shadcn/ui from `@/components/ui/*`, `useToast` from `@/hooks/use-to
 - Create: `src/features/partner-hub/domain/credentialsFile.ts`
 - Test: `src/features/partner-hub/domain/__tests__/quotaUsage.test.ts`, `partnerKeyMint.test.ts`, `partnerScopes.test.ts`, `activityEndpoints.test.ts`, `credentialsFile.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `quotaUsage.test.ts`
 ```ts
@@ -1250,11 +1250,11 @@ describe("buildCredentialsFile", () => {
 });
 ```
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `bunx vitest run src/features/partner-hub` → Expected: FAIL (modules not found).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `quotaUsage.ts`
 ```ts
@@ -1424,11 +1424,11 @@ export function buildCredentialsFile(input: CredentialsFileInput): string {
 }
 ```
 
-- [ ] **Step 4: Run to see them pass**
+- [x] **Step 4: Run to see them pass**
 
 Run: `bunx vitest run src/features/partner-hub` → Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/features/partner-hub/domain
@@ -1441,7 +1441,7 @@ git commit -m "feat(partner-hub): domain rules — quota tone, browser mint, sco
 - Create: `src/features/partner-hub/infrastructure/partnerHubApi.ts`
 - Test: `src/features/partner-hub/infrastructure/__tests__/partnerHubApi.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -1488,9 +1488,9 @@ describe("partnerHubApi", () => {
 });
 ```
 
-- [ ] **Step 2: Run to see it fail** — `bunx vitest run src/features/partner-hub/infrastructure` → FAIL.
+- [x] **Step 2: Run to see it fail** — `bunx vitest run src/features/partner-hub/infrastructure` → FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 import { supabase } from "@/integrations/supabase/client";
@@ -1591,9 +1591,9 @@ export async function revokePartnerKey(keyId: string, reason: string): Promise<v
 }
 ```
 
-- [ ] **Step 4: Run to see it pass** — `bunx vitest run src/features/partner-hub` → PASS. `bunx tsc -b --noEmit` → clean.
+- [x] **Step 4: Run to see it pass** — `bunx vitest run src/features/partner-hub` → PASS. `bunx tsc -b --noEmit` → clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/features/partner-hub/infrastructure
@@ -1606,7 +1606,7 @@ git commit -m "feat(partner-hub): RPC adapters"
 - Create: `src/features/partner-hub/ui/hooks/usePartnerHub.ts`
 - Create: `src/features/partner-hub/index.ts`
 
-- [ ] **Step 1: Implement the hooks**
+- [x] **Step 1: Implement the hooks**
 
 ```ts
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -1683,7 +1683,7 @@ export function useRevokePartnerKey() {
 }
 ```
 
-- [ ] **Step 2: Public surface** (`index.ts`)
+- [x] **Step 2: Public surface** (`index.ts`)
 
 ```ts
 export {
@@ -1711,7 +1711,7 @@ export { buildCredentialsFile } from "./domain/credentialsFile";
 export type { PartnerEnvironment } from "./domain/partnerKeyMint";
 ```
 
-- [ ] **Step 3: Typecheck and commit**
+- [x] **Step 3: Typecheck and commit**
 
 ```bash
 bunx tsc -b --noEmit
@@ -1725,7 +1725,7 @@ git commit -m "feat(partner-hub): react-query hooks and public surface"
 - Create: `src/components/admin/partner/QuotaUsageBar.tsx`, `ScopeBadges.tsx`, `PartnerHubKpiCards.tsx`
 - Test: `src/components/admin/partner/__tests__/QuotaUsageBar.test.tsx`, `ScopeBadges.test.tsx`, `PartnerHubKpiCards.test.tsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `QuotaUsageBar.test.tsx`
 ```tsx
@@ -1804,9 +1804,9 @@ describe("PartnerHubKpiCards", () => {
 });
 ```
 
-- [ ] **Step 2: Run to see them fail** — `bunx vitest run src/components/admin/partner` → FAIL.
+- [x] **Step 2: Run to see them fail** — `bunx vitest run src/components/admin/partner` → FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `QuotaUsageBar.tsx`
 ```tsx
@@ -1924,9 +1924,9 @@ export function PartnerHubKpiCards({ overview, isLoading, error }: PartnerHubKpi
 }
 ```
 
-- [ ] **Step 4: Run to see them pass** — `bunx vitest run src/components/admin/partner` → PASS.
+- [x] **Step 4: Run to see them pass** — `bunx vitest run src/components/admin/partner` → PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/admin/partner
@@ -1939,7 +1939,7 @@ git commit -m "feat(partner-hub): KPI cards, quota bar, scope badges"
 - Create: `src/components/admin/partner/PartnerKeysTable.tsx`, `RevokePartnerKeyDialog.tsx`
 - Test: `src/components/admin/partner/__tests__/PartnerKeysTable.test.tsx`, `RevokePartnerKeyDialog.test.tsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `PartnerKeysTable.test.tsx`
 ```tsx
@@ -2012,9 +2012,9 @@ describe("RevokePartnerKeyDialog", () => {
 });
 ```
 
-- [ ] **Step 2: Run to see them fail** — `bunx vitest run src/components/admin/partner` → FAIL.
+- [x] **Step 2: Run to see them fail** — `bunx vitest run src/components/admin/partner` → FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `RevokePartnerKeyDialog.tsx`
 ```tsx
@@ -2164,9 +2164,9 @@ export function PartnerKeysTable({ keys, isLoading, error, activeScope, onToggle
 }
 ```
 
-- [ ] **Step 4: Run to see them pass** — `bunx vitest run src/components/admin/partner` → PASS.
+- [x] **Step 4: Run to see them pass** — `bunx vitest run src/components/admin/partner` → PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/admin/partner
@@ -2179,7 +2179,7 @@ git commit -m "feat(partner-hub): keys table and revoke dialog"
 - Create: `src/components/admin/partner/GeneratePartnerKeyDialog.tsx`, `PartnerKeyCreatedView.tsx`
 - Test: `src/components/admin/partner/__tests__/GeneratePartnerKeyDialog.test.tsx`, `PartnerKeyCreatedView.test.tsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `PartnerKeyCreatedView.test.tsx`
 ```tsx
@@ -2285,9 +2285,9 @@ describe("GeneratePartnerKeyDialog", () => {
 });
 ```
 
-- [ ] **Step 2: Run to see them fail** — `bunx vitest run src/components/admin/partner` → FAIL.
+- [x] **Step 2: Run to see them fail** — `bunx vitest run src/components/admin/partner` → FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `PartnerKeyCreatedView.tsx`
 ```tsx
@@ -2527,9 +2527,9 @@ export function GeneratePartnerKeyDialog({ open, onOpenChange }: GeneratePartner
 ```
 Note for the test: the scope checkbox is a Radix button, so `getByLabelText("messages:send")` resolves via `aria-label` and `fireEvent.click` toggles it. If `@/components/ui/alert` does not exist, check `src/components/ui/` and use the existing alert component or a styled `div` with `role="alert"`.
 
-- [ ] **Step 4: Run to see them pass** — `bunx vitest run src/components/admin/partner` → PASS.
+- [x] **Step 4: Run to see them pass** — `bunx vitest run src/components/admin/partner` → PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/components/admin/partner
@@ -2542,7 +2542,7 @@ git commit -m "feat(partner-hub): generate-key dialog with one-time plaintext vi
 - Create: `src/components/admin/partner/PartnerKeyActivitySheet.tsx`
 - Test: `src/components/admin/partner/__tests__/PartnerKeyActivitySheet.test.tsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -2590,9 +2590,9 @@ describe("PartnerKeyActivitySheet", () => {
 });
 ```
 
-- [ ] **Step 2: Run to see it fail** — FAIL.
+- [x] **Step 2: Run to see it fail** — FAIL.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```tsx
 import { Badge } from "@/components/ui/badge";
@@ -2714,7 +2714,7 @@ export function PartnerKeyActivitySheet({ partnerKey, open, onOpenChange }: Part
 }
 ```
 
-- [ ] **Step 4: Run to see it pass**, then commit
+- [x] **Step 4: Run to see it pass**, then commit
 
 ```bash
 bunx vitest run src/components/admin/partner
@@ -2730,7 +2730,7 @@ git commit -m "feat(partner-hub): live activity and webhook delivery sheet"
 - Modify: `src/components/admin/AdminLayout.tsx` (icon import line 9; sidebar item after "OAuth Apps")
 - Test: `src/pages/admin/__tests__/AdminPartnerHub.test.tsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```tsx
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -2772,7 +2772,7 @@ describe("AdminPartnerHub", () => {
 });
 ```
 
-- [ ] **Step 2: Implement the page**
+- [x] **Step 2: Implement the page**
 
 ```tsx
 import { useState } from "react";
@@ -2860,7 +2860,7 @@ export default function AdminPartnerHub() {
 }
 ```
 
-- [ ] **Step 3: Route and sidebar**
+- [x] **Step 3: Route and sidebar**
 
 `AnimatedRoutes.tsx`: next to the other admin lazies add
 ```ts
@@ -2875,7 +2875,7 @@ and after the `/admin/scaling` route add
   { icon: Handshake, label: "Partner Hub", href: "/admin/partner-hub" },
 ```
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 ```bash
 bunx tsc -b --noEmit
@@ -2886,12 +2886,12 @@ git commit -m "feat(admin): Partner Hub page, route and sidebar entry"
 
 ### Task 14: Full gates
 
-- [ ] `bunx tsc -b --noEmit` → 0 errors
-- [ ] `bunx vitest run` → all green (baseline before this branch: 163 files, 1176 passed, 0 failed; expect that plus the new files)
-- [ ] `deno test --allow-env --allow-read --no-check supabase/functions/_shared/partnerApiMetering.test.ts supabase/functions/partner-api/` → green
-- [ ] `bash scripts/db-harness.sh` → green including `partner_hub_admin.sql`
-- [ ] `bunx eslint src/features/partner-hub src/components/admin/partner src/pages/admin/AdminPartnerHub.tsx` → clean
-- [ ] `clean-code-guard` over Slices B and C production code; `test-guard` over every test file touched.
+- [x] `bunx tsc -b --noEmit` → 0 errors
+- [x] `bunx vitest run` → all green (baseline before this branch: 163 files, 1176 passed, 0 failed; expect that plus the new files)
+- [x] `deno test --allow-env --allow-read --no-check supabase/functions/_shared/partnerApiMetering.test.ts supabase/functions/partner-api/` → green
+- [x] `bash scripts/db-harness.sh` → green including `partner_hub_admin.sql`
+- [x] `bunx eslint src/features/partner-hub src/components/admin/partner src/pages/admin/AdminPartnerHub.tsx` → clean
+- [x] `clean-code-guard` over Slices B and C production code; `test-guard` over every test file touched.
 
 ---
 
