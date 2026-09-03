@@ -124,6 +124,7 @@ const AdminTokenHealth = lazyWithRetry(() => import("@/pages/admin/AdminTokenHea
 const AdminAnalytics = lazyWithRetry(() => import("@/pages/admin/AdminAnalytics"), "AdminAnalytics");
 const AdminLaunchChecklist = lazyWithRetry(() => import("@/pages/admin/AdminLaunchChecklist"), "AdminLaunchChecklist");
 const AdminRateLimits = lazyWithRetry(() => import("@/pages/admin/AdminRateLimits"), "AdminRateLimits");
+const AdminPartnerHub = lazyWithRetry(() => import("@/pages/admin/AdminPartnerHub"), "AdminPartnerHub");
 const AdminMediaCleanup = lazyWithRetry(() => import("@/pages/admin/AdminMediaCleanup"), "AdminMediaCleanup");
 const AdminPlanQuotas = lazyWithRetry(() => import("@/pages/admin/AdminPlanQuotas"), "AdminPlanQuotas");
 const AdminInbox = lazyWithRetry(() => import("@/pages/admin/AdminInbox"), "AdminInbox");
@@ -523,6 +524,7 @@ export function AnimatedRoutes() {
         <Route path="/admin/observability" element={<AnimatedPage><AdminObservability /></AnimatedPage>} />
         <Route path="/admin/feature-flags" element={<AnimatedPage><AdminFeatureFlags /></AnimatedPage>} />
         <Route path="/admin/scaling" element={<AnimatedPage><AdminScaling /></AnimatedPage>} />
+        <Route path="/admin/partner-hub" element={<AnimatedPage><AdminPartnerHub /></AnimatedPage>} />
         
         {/* Catch-all route */}
         <Route path="*" element={<AnimatedPage><NotFound /></AnimatedPage>} />
