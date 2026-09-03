@@ -77,9 +77,10 @@ interface CountryMultiSelectProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  disabled?: boolean;
 }
 
-export function CountryMultiSelect({ value, onChange, placeholder = "Select countries..." }: CountryMultiSelectProps) {
+export function CountryMultiSelect({ value, onChange, placeholder = "Select countries...", disabled = false }: CountryMultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -121,7 +122,8 @@ export function CountryMultiSelect({ value, onChange, placeholder = "Select coun
           "flex flex-wrap gap-1 min-h-[40px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm cursor-pointer",
           isOpen && "ring-2 ring-ring ring-offset-2"
         )}
-        onClick={() => setIsOpen(!isOpen)}
+        aria-disabled={disabled}
+        onClick={() => { if (!disabled) setIsOpen(!isOpen); }}
       >
         {selectedCodes.length === 0 && (
           <span className="text-muted-foreground">{placeholder}</span>
@@ -131,6 +133,7 @@ export function CountryMultiSelect({ value, onChange, placeholder = "Select coun
             {code} - {getCountryName(code)}
             <button
               type="button"
+              disabled={disabled}
               onClick={(e) => { e.stopPropagation(); removeCountry(code); }}
               className="ml-0.5 hover:text-destructive"
             >

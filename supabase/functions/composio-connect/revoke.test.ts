@@ -54,6 +54,8 @@ function setup(overrides: Partial<ComposioConnectDependencies> = {}) {
       rpcCalls.push(args);
     },
     recordCall: async () => {},
+    loadSocialAccountProvider: async () => null,
+    upsertSocialAccount: async () => {},
     ...overrides,
   };
   return { deps, rpcCalls, deleted: () => deleted };

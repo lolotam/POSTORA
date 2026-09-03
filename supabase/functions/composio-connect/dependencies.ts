@@ -25,6 +25,8 @@ export interface PendingConnection {
   authConfigId: string;
   stateNonce: string | null;
   status: string;
+  initiatedBy: string;
+  createdAt: string;
 }
 
 export interface UserConnection {
@@ -68,6 +70,14 @@ export interface ComposioConnectDependencies {
     userId: string,
   ) => Promise<UserConnection | null>;
   revokeRpc: (userClient: any, connectionId: string) => Promise<void>;
+  loadSocialAccountProvider: (
+    userId: string,
+    platform: string,
+    platformUserId: string,
+  ) => Promise<string | null>;
+  /** Upsert on (user_id, platform, platform_user_id), the
+   *  social_accounts_user_platform_unique constraint. */
+  upsertSocialAccount: (row: Record<string, unknown>) => Promise<void>;
   recordCall: (
     meta: ConnectorCallMeta,
     outcome: ConnectorCallOutcome,
@@ -142,7 +152,7 @@ export function createDependencies(): ComposioConnectDependencies {
       const { data, error } = await admin
         .from("connector_connections")
         .select(
-          "id,workspace_id,connector_type,composio_auth_config_id,state_nonce,status",
+          "id,workspace_id,connector_type,composio_auth_config_id,state_nonce,status,initiated_by,created_at",
         )
         .eq("id", id)
         .eq("workspace_id", workspaceId)
@@ -156,6 +166,8 @@ export function createDependencies(): ComposioConnectDependencies {
         authConfigId: data.composio_auth_config_id,
         stateNonce: data.state_nonce,
         status: data.status,
+        initiatedBy: data.initiated_by,
+        createdAt: data.created_at,
       };
     },
     async loadConnectionForUser(id, userId) {
@@ -181,6 +193,22 @@ export function createDependencies(): ComposioConnectDependencies {
     async revokeRpc(userClient, connectionId) {
       const { error } = await userClient.rpc("revoke_connector_connection", {
         p_connection_id: connectionId,
+      });
+      if (error) throwDatabaseError(error);
+    },
+    async loadSocialAccountProvider(userId, platform, platformUserId) {
+      const { data, error } = await admin.from("social_accounts")
+        .select("auth_provider")
+        .eq("user_id", userId)
+        .eq("platform", platform)
+        .eq("platform_user_id", platformUserId)
+        .maybeSingle();
+      if (error) throwDatabaseError(error);
+      return data?.auth_provider ?? null;
+    },
+    async upsertSocialAccount(row) {
+      const { error } = await admin.from("social_accounts").upsert(row, {
+        onConflict: "user_id,platform,platform_user_id",
       });
       if (error) throwDatabaseError(error);
     },

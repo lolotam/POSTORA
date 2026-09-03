@@ -49,6 +49,8 @@ function dependencies(overrides: Partial<ComposioConnectDependencies> = {}) {
     loadPendingConnection: async () => null,
     loadConnectionForUser: async () => null,
     revokeRpc: async () => {},
+    loadSocialAccountProvider: async () => null,
+    upsertSocialAccount: async () => {},
     recordCall: async (meta, outcome) => calls.push({ ...meta, ...outcome }),
     ...overrides,
   };

@@ -228,7 +228,7 @@ Deno.test("success meters the call and caps the model-visible output", async () 
 
   assertStringIncludes(result.output, 'Connector "stock_sheet" returned: {"rows":[["a",1]]}');
   assertEquals(client.calls[0].slug, READ_SLUG);
-  assertEquals(client.calls[0].version, "latest");
+  assertEquals(client.calls[0].version, "20260902_00");
   assertEquals(client.calls[0].workspaceId, "ws-1");
   assertEquals(client.calls[0].connectedAccountId, "composio-account-1");
   assertEquals(client.calls[0].arguments, { spreadsheet_id: "s1" });

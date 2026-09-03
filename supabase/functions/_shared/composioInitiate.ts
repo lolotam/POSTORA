@@ -174,6 +174,9 @@ export async function initiateComposioConnection(
     /** The human this link is attributed to; null when a key mints it and the
      *  key has no creator on record. */
     initiatedBy: string | null;
+    /** Carried in the signed state so the callback can home a YouTube channel
+     *  on the profile tab the user started from. Only the app door sets it. */
+    socialProfileId?: string | null;
   },
   telemetry: InitiateTelemetry,
 ): Promise<ConnectLink> {
@@ -224,6 +227,7 @@ export async function initiateComposioConnection(
     workspaceId: input.workspaceId,
     nonce,
     exp: expiresAtSeconds,
+    ...(input.socialProfileId ? { socialProfileId: input.socialProfileId } : {}),
   }, deps.stateSecret);
   const callbackUrl = new URL(deps.callbackUrl);
   callbackUrl.searchParams.set("state", state);

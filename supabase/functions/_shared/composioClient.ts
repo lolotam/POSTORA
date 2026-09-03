@@ -1,7 +1,13 @@
 export const COMPOSIO_API_BASE_URL = "https://backend.composio.dev/api/v3.1";
 export const COMPOSIO_API_KEY_HEADER = "x-api-key";
-export const COMPOSIO_CONNECTED_ACCOUNTS_PATH = "/connected-accounts";
-export const COMPOSIO_CALLBACK_ACCOUNT_PARAM = "connectedAccountId";
+// Underscore, verified live 2026-09-03: the hyphenated path answers a Next.js
+// 404 page with HTTP 200, so the only symptom is a JSON parse failure.
+export const COMPOSIO_CONNECTED_ACCOUNTS_PATH = "/connected_accounts";
+export const COMPOSIO_FILE_UPLOAD_REQUEST_PATH = "/files/upload/request";
+/** Composio's docs show both spellings for the id it appends to the callback. */
+export const COMPOSIO_CALLBACK_ACCOUNT_PARAMS = ["connectedAccountId", "connected_account_id"] as const;
+export const COMPOSIO_CALLBACK_ACCOUNT_PARAM = COMPOSIO_CALLBACK_ACCOUNT_PARAMS[0];
+export const COMPOSIO_CALLBACK_STATUS_PARAM = "status";
 export const COMPOSIO_BODY_CAP = 64 * 1024;
 export const COMPOSIO_REQUEST_TIMEOUT_MS = 5_000;
 export const COMPOSIO_INITIATE_REQUEST_FORMAT = {
@@ -55,7 +61,18 @@ export interface ComposioConnectedAccount {
   authConfigId: string;
   toolkit: string;
   createdAt: string;
+  /** Composio's human alias for the account, when the provider supplied one. */
+  alias: string | null;
+  /** Composio's generated readable id (e.g. "googlesheets_talose-acyl"). */
+  wordId: string | null;
   metadata: Record<string, unknown>;
+}
+
+export interface ComposioFileUploadTicket {
+  /** The value a tool's file input takes as `s3key`. */
+  key: string;
+  /** Presigned PUT target; `Content-Type` is the only signed header. */
+  presignedUrl: string;
 }
 
 export interface ComposioToolSchema {
@@ -88,15 +105,28 @@ function stringValue(
   return "";
 }
 
+/** `auth_config` and `toolkit` arrive as nested objects (live shape, 2026-09-03);
+ *  the flat spellings are kept as fallbacks for older payloads. */
+function nestedId(row: Record<string, unknown>, key: string, idKey: string, ...flat: string[]): string {
+  const nested = row[key];
+  if (nested && typeof nested === "object" && !Array.isArray(nested)) {
+    const value = (nested as Record<string, unknown>)[idKey];
+    if (typeof value === "string") return value;
+  }
+  return stringValue(row, ...flat);
+}
+
 function connectedAccountFrom(payload: unknown): ComposioConnectedAccount {
   const row = objectValue(payload);
   return {
     id: stringValue(row, "id"),
     status: stringValue(row, "status") as ComposioConnectedAccount["status"],
     userId: stringValue(row, "user_id", "userId"),
-    authConfigId: stringValue(row, "auth_config_id", "authConfigId"),
-    toolkit: stringValue(row, "toolkit", "toolkit_slug"),
+    authConfigId: nestedId(row, "auth_config", "id", "auth_config_id", "authConfigId"),
+    toolkit: nestedId(row, "toolkit", "slug", "toolkit", "toolkit_slug"),
     createdAt: stringValue(row, "created_at", "createdAt"),
+    alias: stringValue(row, "alias") || null,
+    wordId: stringValue(row, "word_id", "wordId") || null,
     metadata: row.metadata && typeof row.metadata === "object"
       ? row.metadata as Record<string, unknown>
       : {},
@@ -182,6 +212,34 @@ export class ComposioClient {
       true,
     );
     return itemsFrom(payload).map(connectedAccountFrom);
+  }
+
+  /**
+   * A presigned upload slot for a tool's file input. `md5` is required by
+   * Composio's validation (a request without it is a 400) though the presign
+   * itself does not enforce it. The caller PUTs the bytes and then passes
+   * `{ name, mimetype, s3key: key }` to the tool.
+   */
+  async requestFileUpload(input: {
+    toolkit: string;
+    tool: string;
+    filename: string;
+    mimetype: string;
+    md5: string;
+  }): Promise<ComposioFileUploadTicket> {
+    const payload = objectValue(
+      await this.#request("POST", COMPOSIO_FILE_UPLOAD_REQUEST_PATH, {
+        toolkit_slug: input.toolkit,
+        tool_slug: input.tool,
+        filename: input.filename,
+        mimetype: input.mimetype,
+        md5: input.md5,
+      }),
+    );
+    const key = stringValue(payload, "key");
+    const presignedUrl = stringValue(payload, "new_presigned_url", "newPresignedUrl", "presigned_url");
+    if (!key || !presignedUrl) throw new ComposioError("composio_rejected");
+    return { key, presignedUrl };
   }
 
   async deleteConnectedAccount(id: string): Promise<void> {

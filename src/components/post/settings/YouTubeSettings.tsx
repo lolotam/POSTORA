@@ -90,6 +90,7 @@ interface SelectedAccount {
   id: string;
   platform_username: string | null;
   avatar_url: string | null;
+  auth_provider?: "native" | "composio";
 }
 
 interface YouTubeSettingsProps {
@@ -131,6 +132,7 @@ export function YouTubeSettings({
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isStockPickerOpen, setIsStockPickerOpen] = useState(false);
   const aiThumbnailRefInputRef = useRef<HTMLInputElement>(null);
+  const composioManaged = selectedAccounts.some((account) => account.auth_provider === "composio");
 
   const handleAiThumbnailRefSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -435,7 +437,7 @@ export function YouTubeSettings({
               </TooltipContent>
             </Tooltip>
           </Label>
-          <Select value={settings.license} onValueChange={(v) => onSettingsChange({ license: v as typeof settings.license })}>
+          <Select disabled={composioManaged} value={settings.license} onValueChange={(v) => onSettingsChange({ license: v as typeof settings.license })}>
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -453,6 +455,7 @@ export function YouTubeSettings({
           <Checkbox
             id="embeddable"
             checked={settings.allowEmbedding}
+            disabled={composioManaged}
             onCheckedChange={(checked) => onSettingsChange({ allowEmbedding: checked as boolean })}
           />
           <label htmlFor="embeddable" className="text-sm cursor-pointer flex items-center gap-1">
@@ -471,6 +474,7 @@ export function YouTubeSettings({
           <Checkbox
             id="publicStats"
             checked={settings.publicStatsViewable}
+            disabled={composioManaged}
             onCheckedChange={(checked) => onSettingsChange({ publicStatsViewable: checked as boolean })}
           />
           <label htmlFor="publicStats" className="text-sm cursor-pointer flex items-center gap-1">
@@ -489,6 +493,7 @@ export function YouTubeSettings({
           <Checkbox
             id="madeForKids"
             checked={settings.madeForKids}
+            disabled={composioManaged}
             onCheckedChange={(checked) => onSettingsChange({ madeForKids: checked as boolean })}
           />
           <label htmlFor="madeForKids" className="text-sm cursor-pointer flex items-center gap-1">
@@ -510,6 +515,7 @@ export function YouTubeSettings({
           <Checkbox
             id="syntheticMedia"
             checked={settings.containsSyntheticMedia}
+            disabled={composioManaged}
             onCheckedChange={(checked) => onSettingsChange({ containsSyntheticMedia: checked as boolean })}
           />
           <label htmlFor="syntheticMedia" className="text-sm cursor-pointer flex items-center gap-1">
@@ -528,6 +534,7 @@ export function YouTubeSettings({
           <Checkbox
             id="paidPromotion"
             checked={settings.hasPaidPromotion}
+            disabled={composioManaged}
             onCheckedChange={(checked) => onSettingsChange({ hasPaidPromotion: checked as boolean })}
           />
           <label htmlFor="paidPromotion" className="text-sm cursor-pointer flex items-center gap-1">
@@ -548,7 +555,7 @@ export function YouTubeSettings({
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label className="text-sm font-medium">Default language</Label>
-          <Select value={settings.videoLanguage || ""} onValueChange={(v) => onSettingsChange({ videoLanguage: v })}>
+          <Select disabled={composioManaged} value={settings.videoLanguage || ""} onValueChange={(v) => onSettingsChange({ videoLanguage: v })}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select language" />
             </SelectTrigger>
@@ -578,7 +585,7 @@ export function YouTubeSettings({
         </div>
         <div className="space-y-2">
           <Label className="text-sm font-medium">Default audio language</Label>
-          <Select value={settings.audioLanguage || ""} onValueChange={(v) => onSettingsChange({ audioLanguage: v })}>
+          <Select disabled={composioManaged} value={settings.audioLanguage || ""} onValueChange={(v) => onSettingsChange({ audioLanguage: v })}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select audio language" />
             </SelectTrigger>
@@ -616,6 +623,7 @@ export function YouTubeSettings({
             value={settings.allowedCountries}
             onChange={(val) => onSettingsChange({ allowedCountries: val })}
             placeholder="Select allowed countries..."
+            disabled={composioManaged}
           />
         </div>
         <div className="space-y-2">
@@ -624,6 +632,7 @@ export function YouTubeSettings({
             value={settings.blockedCountries}
             onChange={(val) => onSettingsChange({ blockedCountries: val })}
             placeholder="Select blocked countries..."
+            disabled={composioManaged}
           />
         </div>
       </div>
@@ -636,6 +645,7 @@ export function YouTubeSettings({
           placeholder="mm/dd/yyyy --:-- --"
           value={settings.recordingDate}
           onChange={(e) => onSettingsChange({ recordingDate: e.target.value })}
+          disabled={composioManaged}
         />
         <p className="text-xs text-muted-foreground">ISO 8601 format (e.g. "2024-01-15T14:30:00Z")</p>
       </div>
@@ -952,7 +962,7 @@ export function YouTubeSettings({
           <p className="text-sm font-medium">Notify subscribers</p>
           <p className="text-xs text-muted-foreground">Send notifications to your subscribers</p>
         </div>
-        <Switch checked={settings.notifySubscribers} onCheckedChange={(v) => onSettingsChange({ notifySubscribers: v })} />
+        <Switch disabled={composioManaged} checked={settings.notifySubscribers} onCheckedChange={(v) => onSettingsChange({ notifySubscribers: v })} />
       </div>
 
       {/* First Comment */}
@@ -964,6 +974,7 @@ export function YouTubeSettings({
           </div>
           <Switch 
             checked={settings.enableFirstComment} 
+            disabled={composioManaged}
             onCheckedChange={(v) => onSettingsChange({ enableFirstComment: v })} 
           />
         </div>
@@ -974,6 +985,7 @@ export function YouTubeSettings({
             onChange={(e) => onSettingsChange({ firstComment: e.target.value })}
             className="min-h-[80px]"
             maxLength={10000}
+            disabled={composioManaged}
           />
         )}
       </div>

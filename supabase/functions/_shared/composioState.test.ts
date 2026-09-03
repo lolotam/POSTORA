@@ -62,3 +62,17 @@ Deno.test("newNonce returns sixteen random bytes as lowercase hex", () => {
   assertMatch(second, /^[0-9a-f]{32}$/);
   assert(first !== second);
 });
+
+Deno.test("a profile id rides in the signed state only when the door set one", async () => {
+  const homed = { ...state, socialProfileId: "profile-1" };
+  const token = await signConnectState(homed, "state-secret");
+  assertEquals(
+    await verifyConnectState(token, "state-secret", () => 1_000_000),
+    homed,
+  );
+  const empty = await signConnectState(
+    { ...state, socialProfileId: "" },
+    "state-secret",
+  );
+  assertEquals(await verifyConnectState(empty, "state-secret", () => 1_000_000), null);
+});

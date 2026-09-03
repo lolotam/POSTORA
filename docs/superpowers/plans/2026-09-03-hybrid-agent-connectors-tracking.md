@@ -375,10 +375,12 @@ export async function resolveWorkspaceForCall(client: any, input: { socialAccoun
 
 **Files:** `docs/superpowers/specs/2026-09-03-hybrid-agent-connectors-tracking.md` §1 (update the Composio row if anything differs)
 
-- [ ] **Step 1:** With `COMPOSIO_API_KEY` in a local env only, `curl -H "x-api-key: $KEY" https://backend.composio.dev/api/v3.1/auth-configs` and record the `id` for each of `googlesheets, slack, googlecalendar, hubspot, notion, airtable, youtube`.
-- [ ] **Step 2:** `POST /connected-accounts` with `{ "auth_config": {"id": "<id>"}, "connection": {"user_id": "spike-ws", "callback_url": "https://example.invalid/cb"} }`; record the exact response keys for the redirect URL. Then open the redirect URL in a browser, complete the OAuth once, and **record the exact query parameters Composio appends to the callback** (the connected-account id parameter name is what Task 11's callback reads — spec §6.3 step 3).
-- [ ] **Step 3:** `GET /tools?toolkit_slug=googlesheets` and `GET /tools/GOOGLESHEETS_BATCH_GET`; record the version field name and the input schema location.
-- [ ] **Step 4:** Write the confirmed field names into `composioClient.ts`'s header comment (Task 8) and, if they differ from the spec table, edit spec §1. Delete every spike artefact; nothing from this task is committed except the two docs.
+- [x] **Step 1:** With `COMPOSIO_API_KEY` in a local env only, `curl -H "x-api-key: $KEY" https://backend.composio.dev/api/v3.1/auth-configs` and record the `id` for each of `googlesheets, slack, googlecalendar, hubspot, notion, airtable, youtube`.
+- [x] **Step 2:** `POST /connected-accounts` with `{ "auth_config": {"id": "<id>"}, "connection": {"user_id": "spike-ws", "callback_url": "https://example.invalid/cb"} }`; record the exact response keys for the redirect URL. Then open the redirect URL in a browser, complete the OAuth once, and **record the exact query parameters Composio appends to the callback** (the connected-account id parameter name is what Task 11's callback reads — spec §6.3 step 3).
+- [x] **Step 3:** `GET /tools?toolkit_slug=googlesheets` and `GET /tools/GOOGLESHEETS_BATCH_GET`; record the version field name and the input schema location.
+- [x] **Step 4:** Write the confirmed field names into `composioClient.ts`'s header comment (Task 8) and, if they differ from the spec table, edit spec §1. Delete every spike artefact; nothing from this task is committed except the two docs.
+
+**Result (2026-09-03, production key from the functions container):** paths are `/auth_configs`, `/connected_accounts`, `/files/upload/request` (underscores; the hyphen path is a 200 HTML 404). Initiate answers `{id, status, redirect_url}`; listed accounts nest `auth_config.id` and `toolkit.slug`. `tool_slugs` filters; versions pinned per toolkit (see spec §1) and written into both registries. Callback parameter documented as both `connectedAccountId` and `connected_account_id`; the callback accepts both and falls back to listing. Wrong slugs corrected: HubSpot search/read, YouTube upload.
 
 ### Task 7: Registry — strategies, categories, Composio bindings, seven new types
 
@@ -702,16 +704,18 @@ export function useInitiateConnection(); export function useRevokeConnection();
 
 ### Task 25: Spike — managed YouTube auth config and upload bound (≤ 1 hour)
 
-- [ ] **Step 1:** In Composio's dashboard confirm the YouTube auth config's scopes include `https://www.googleapis.com/auth/youtube.upload`; record whether it is the managed app or Postora's client.
-- [ ] **Step 2:** With a throwaway workspace id, connect a test channel, run `YOUTUBE_LIST_CHANNELS` and `YOUTUBE_UPLOAD_VIDEO` with a 50 MB and a 500 MB `videoFilePath` URL; record success/latency/size limit.
-- [ ] **Step 3:** Write the results into spec §10.6 and set `YOUTUBE_COMPOSIO_MAX_BYTES` in Task 28 accordingly. If `youtube.upload` is absent from the managed app, STOP Slice F and report — the rest of the slice is worthless without it.
+- [x] **Step 1:** In Composio's dashboard confirm the YouTube auth config's scopes include `https://www.googleapis.com/auth/youtube.upload`; record whether it is the managed app or Postora's client.
+- [x] **Step 2:** With a throwaway workspace id, connect a test channel, run `YOUTUBE_LIST_CHANNELS` and `YOUTUBE_UPLOAD_VIDEO` with a 50 MB and a 500 MB `videoFilePath` URL; record success/latency/size limit.
+- [x] **Step 3:** Write the results into spec §10.6 and set `YOUTUBE_COMPOSIO_MAX_BYTES` in Task 28 accordingly. If `youtube.upload` is absent from the managed app, STOP Slice F and report — the rest of the slice is worthless without it.
+
+**Result (2026-09-03):** `ac_ZZF6rPlq_i9_` is Composio-managed with `youtube.upload`. The upload tool is `YOUTUBE_MULTIPART_UPLOAD_VIDEO` taking a `videoFile {name, mimetype, s3key}` obtained through `/files/upload/request` + presigned PUT (`_shared/composioFiles.ts`); Composio does not fetch from a URL. No real video was uploaded (no test channel is connected yet), so `YOUTUBE_COMPOSIO_MAX_BYTES = 64 MB` is a provisional cap, to be raised after a measured production upload.
 
 ### Task 26: Migration `20260903120100_youtube_composio_provider.sql` + harness
 
 **Files:** Create the migration (spec §10.1 DDL, idempotent) and `supabase/tests/youtube_composio_provider.sql`; register in `scripts/db-harness.sh`; update `types.ts`.
 
-- [ ] **Step 1:** The migration adds the two columns and constraint (spec §10.1) and then `CREATE OR REPLACE FUNCTION public.revoke_connector_connection(p_connection_id UUID)` with Task 2's body plus `UPDATE public.social_accounts SET needs_reauth = true WHERE connection_id = p_connection_id;` before `END`. Suite proves: `auth_provider='composio'` without `connection_id` → `check_violation`; `revoke_connector_connection` now sets `needs_reauth` on the linked account and still disables dependent tools; RLS on `social_accounts` unchanged (existing suite still green).
-- [ ] **Step 2:** Harness green → commit `feat(youtube): composio publishing provider columns`.
+- [x] **Step 1:** The migration adds the two columns and constraint (spec §10.1) and then `CREATE OR REPLACE FUNCTION public.revoke_connector_connection(p_connection_id UUID)` with Task 2's body plus `UPDATE public.social_accounts SET needs_reauth = true WHERE connection_id = p_connection_id;` before `END`. Suite proves: `auth_provider='composio'` without `connection_id` → `check_violation`; `revoke_connector_connection` now sets `needs_reauth` on the linked account and still disables dependent tools; RLS on `social_accounts` unchanged (existing suite still green).
+- [x] **Step 2:** Harness green → commit `feat(youtube): composio publishing provider columns`.
 
 ### Task 27: `_shared/youtubeComposioOptions.ts` + create-time validation
 
@@ -726,8 +730,8 @@ export function youtubeOptionsUnsupportedOnComposio(metadata: PlatformMetadata |
 
 Offending conditions: `youtube_made_for_kids === true`, `youtube_notify_subscribers === false`, `youtube_allow_embedding === false`, `youtube_public_stats_viewable === false`, `youtube_contains_synthetic_media === true`, `youtube_has_paid_promotion === true`, `youtube_video_language`/`youtube_audio_language`/`youtube_recording_date`/`youtube_first_comment` non-empty, `youtube_license === "creativeCommon"`, `youtube_allowed_countries`/`youtube_blocked_countries` non-empty.
 
-- [ ] **Step 1: Tests:** each offending condition alone → its key; supported-only metadata (title, description, tags, category, visibility, thumbnail_url, video_type) → `[]`; `youtube_made_for_kids:false` and `youtube_notify_subscribers:true` are fine; `null`/`undefined` metadata → `[]`.
-- [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Server validator returns 400 `youtube_option_unsupported_on_composio` naming the keys when the target account is `auth_provider='composio'`; UI disables the controls with the same list. **Step 6:** Commit `feat(youtube): refuse options Composio cannot express`.
+- [x] **Step 1: Tests:** each offending condition alone → its key; supported-only metadata (title, description, tags, category, visibility, thumbnail_url, video_type) → `[]`; `youtube_made_for_kids:false` and `youtube_notify_subscribers:true` are fine; `null`/`undefined` metadata → `[]`.
+- [x] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Server validator returns 400 `youtube_option_unsupported_on_composio` naming the keys when the target account is `auth_provider='composio'`; UI disables the controls with the same list. **Step 6:** Commit `feat(youtube): refuse options Composio cannot express`.
 
 ### Task 28: `process-post/youtubeComposio.ts` + branch
 
@@ -738,22 +742,22 @@ Offending conditions: `youtube_made_for_kids === true`, `youtube_notify_subscrib
 **Interfaces — Produces:**
 
 ```ts
-export const YOUTUBE_COMPOSIO_MAX_BYTES = <from Task 25>;
-export interface YouTubeComposioDeps { admin: any; client: ComposioClient | null; signedUrlFor: (file: MediaFile) => Promise<string>; timeoutMs?: number; }
+export const YOUTUBE_COMPOSIO_MAX_BYTES = 64 * 1024 * 1024; // provisional (spec §10.6)
+export interface YouTubeComposioDeps { admin: any; client: ComposioClient | null; signedUrlFor: (file: MediaFile) => Promise<string>; fetch?: typeof fetch; uploadFile?: typeof uploadFileForTool; timeoutMs?: number; }
 export async function publishYouTubeViaComposio(account: SocialAccount, post: PostData, mediaFiles: MediaFile[], deps: YouTubeComposioDeps): Promise<PlatformPostResult>;
 ```
 
-- [ ] **Step 1: Failing tests:** no client → throws `Error("connector_unavailable")` and a `refused` publish row; connection inactive → sets `needs_reauth=true` and throws `connection_inactive`; no video file → throws the same message the native path uses; file above the bound → `youtube_file_too_large`; success → `YOUTUBE_UPLOAD_VIDEO` called with `{ title: metadata.youtube_title ?? caption first line, description, categoryId: metadata.youtube_category ?? "22", privacyStatus: metadata.youtube_visibility ?? "public", tags: metadata.youtube_tags ?? [], videoFilePath: <signed url> }`, result `{ id, url: "https://youtu.be/<id>" }`, `success` row with `source='publish'`; thumbnail present → `YOUTUBE_UPDATE_THUMBNAIL` called, its failure logged and the post still succeeds; abort at 50 000 ms → `timeout` row and thrown error.
-- [ ] **Step 2–4:** FAIL → implement → PASS.
-- [ ] **Step 5:** Branch in `index.ts` exactly as spec §10.3; the account select adds the three columns.
-- [ ] **Step 6: Run** `process-post` suite — PASS. **Step 7: Commit** `feat(process-post): publish to Composio-connected YouTube channels`.
+- [x] **Step 1: Failing tests:** no client → throws `Error("connector_unavailable")` and a `refused` publish row; connection inactive → sets `needs_reauth=true` and throws `connection_inactive`; no video file → throws the same message the native path uses; file above the bound → `youtube_file_too_large`; success → the bytes are read from the signed URL, staged with `uploadFileForTool`, and `YOUTUBE_MULTIPART_UPLOAD_VIDEO` is called with `{ title: metadata.youtube_title ?? caption first line, description, categoryId: metadata.youtube_category ?? "22", privacyStatus: metadata.youtube_visibility ?? "public", tags: metadata.youtube_tags ?? [], videoFile: { name, mimetype, s3key } }` (one `publish` ledger row for the upload, one for the thumbnail), result `{ id, url: "https://youtu.be/<id>" }`, `success` row with `source='publish'`; thumbnail present → `YOUTUBE_UPDATE_THUMBNAIL` called, its failure logged and the post still succeeds; abort at 50 000 ms → `timeout` row and thrown error.
+- [x] **Step 2–4:** FAIL → implement → PASS.
+- [x] **Step 5:** Branch in `index.ts` exactly as spec §10.3; the account select adds the three columns.
+- [x] **Step 6: Run** `process-post` suite — PASS. **Step 7: Commit** `feat(process-post): publish to Composio-connected YouTube channels`.
 
 ### Task 29: Skip Composio rows in refresh and health
 
 **Files:** `supabase/functions/refresh-tokens/index.ts:471-497` and `:1002-1020`; `supabase/functions/check-connection-health/index.ts:85-100, 190`; tests alongside (extend existing).
 
-- [ ] **Step 1: Tests:** a `youtube` row with `auth_provider='composio'` is never passed to `refreshYouTubeToken`; `refresh-tokens` instead calls `getConnectedAccount(connection.composio_connected_account_id)` and, when status is not `ACTIVE`, applies the same update its `invalid_grant` branch applies at `:494` (`needs_reauth = true` plus whatever health columns that branch writes today — read the branch, copy its column list, do not invent one); `check-connection-health` reports the row from `connector_connections.status` and never calls `channels?mine=true` for it.
-- [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Commit `feat(youtube): health and refresh understand the Composio provider`.
+- [x] **Step 1: Tests:** a `youtube` row with `auth_provider='composio'` is never passed to `refreshYouTubeToken`; `refresh-tokens` instead calls `getConnectedAccount(connection.composio_connected_account_id)` and, when status is not `ACTIVE`, applies the same update its `invalid_grant` branch applies at `:494` (`needs_reauth = true` plus whatever health columns that branch writes today — read the branch, copy its column list, do not invent one); `check-connection-health` reports the row from `connector_connections.status` and never calls `channels?mine=true` for it.
+- [x] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Commit `feat(youtube): health and refresh understand the Composio provider`.
 
 ### Task 30: Channel upsert on callback + Profiles button
 
@@ -761,10 +765,10 @@ export async function publishYouTubeViaComposio(account: SocialAccount, post: Po
 - Modify: `supabase/functions/composio-connect/callback.ts` (+ `upsertYouTubeChannels(deps, connection)` when `connector_type === "youtube"`), test
 - Create: `src/components/profiles/YouTubeConnectMethodDialog.tsx` + `__tests__/YouTubeConnectMethodDialog.test.tsx` — a modal opened by the existing YouTube "Connect" control on `/profiles` (find it with `grep -rn "youtube-oauth" src/`). It offers two explicit radio choices with one-line explanations: **Direct Google OAuth** ("Postora's own Google app; full option support") and **Composio Managed** ("Composio's managed OAuth; some upload options unavailable — see the list"), a Continue button, and the Composio choice only when `VITE_COMPOSIO_YOUTUBE_ENABLED === "true"` (otherwise the dialog is skipped and the native flow starts directly, exactly as today). The user's choice is remembered per browser in `localStorage` key `postora.youtubeConnectMethod` as a default, never as a bypass — the dialog always shows.
 
-- [ ] **Step 1: Tests:** `YOUTUBE_LIST_CHANNELS` returning two channels → two `social_accounts` upserts `ON CONFLICT ON CONSTRAINT social_accounts_user_platform_unique` (`user_id, platform, platform_user_id` — verify it exists with `\d social_accounts` on the harness first; memory `whatsapp-qr-repair-unique-collision` records a silent 23505 on this table) with `auth_provider='composio', connection_id, workspace_id, access_token=null`; zero channels → connection `failed('no_channel')`; an existing row for the same channel with `auth_provider='native'` is **not** overwritten (select first, refuse with `channel_already_native`).
-- [ ] **Step 2–4:** FAIL → implement → PASS.
-- [ ] **Step 5: Dialog tests** (`fireEvent`, no `userEvent`): with the flag off, clicking Connect starts the native flow and renders no dialog; with the flag on, the dialog renders both options, defaults to the stored choice, Continue with "Direct Google OAuth" calls the existing native handler, Continue with "Composio Managed" calls `initiateConnection({ connector_type: "youtube", workspace_id })` and sets `window.location.href`; the unsupported-options note lists the keys from `youtubeOptionsUnsupportedOnComposio`'s table.
-- [ ] **Step 6:** Implement the dialog; wire the `/profiles` control to open it. **Step 7:** Commit `feat(youtube): connection method selector and Composio channel connect`.
+- [x] **Step 1: Tests:** `YOUTUBE_LIST_CHANNELS` returning two channels → two `social_accounts` upserts `ON CONFLICT ON CONSTRAINT social_accounts_user_platform_unique` (`user_id, platform, platform_user_id` — verify it exists with `\d social_accounts` on the harness first; memory `whatsapp-qr-repair-unique-collision` records a silent 23505 on this table) with `auth_provider='composio', connection_id, workspace_id, access_token=null` and `social_profile_id` from the signed state when the app door sent one; zero channels → connection `failed('no_channel')`; an existing row for the same channel with `auth_provider='native'` is **not** overwritten (select first, refuse with `channel_already_native`).
+- [x] **Step 2–4:** FAIL → implement → PASS.
+- [x] **Step 5: Dialog tests** (`fireEvent`, no `userEvent`): with the flag off, clicking Connect starts the native flow and renders no dialog; with the flag on, the dialog renders both options, defaults to the stored choice, Continue with "Direct Google OAuth" calls the existing native handler, Continue with "Composio Managed" calls `initiateConnection({ connector_type: "youtube", workspace_id, social_profile_id })` and sets `window.location.href`; the unsupported-options note lists the keys from `youtubeOptionsUnsupportedOnComposio`'s table.
+- [x] **Step 6:** Implement the dialog; wire the `/profiles` control to open it. **Step 7:** Commit `feat(youtube): connection method selector and Composio channel connect`.
 
 ### Task 31: Land Slice F
 

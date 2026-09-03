@@ -18,6 +18,7 @@ import { TIKTOK_PHOTO_WARNING } from "@/lib/platformConstants";
 import { openExternalPostUrl } from "@/lib/openExternalPostUrl";
 import { TikTokSettingsState } from "@/components/post/settings/TikTokSettings";
 import { YouTubeSettingsState } from "@/components/post/settings/YouTubeSettings";
+import { youtubeOptionsUnsupportedOnComposio } from "@/lib/youtubeComposioOptions";
 import { useSavedFieldSuggestions } from "@/hooks/useSavedFieldSuggestions";
 import { useQuotas } from "@/hooks/useQuotas";
 
@@ -352,6 +353,21 @@ export default function CreatePost() {
   // Validate and post
   const handlePost = async () => {
     if (!validatePost(unsplashValidationError)) return;
+
+    const hasComposioYouTubeTarget = connectedAccounts.some((account) =>
+      selectedAccountIds.includes(account.id) && account.platform === "youtube" &&
+      (account as typeof account & { auth_provider?: string }).auth_provider === "composio"
+    );
+    if (hasComposioYouTubeTarget) {
+      const unsupported = youtubeOptionsUnsupportedOnComposio(platformSettings.buildPostMetadata());
+      if (unsupported.length > 0) {
+        showErrorToast(
+          "YouTube options unavailable",
+          `This Composio-managed channel cannot use: ${unsupported.join(", ")}`,
+        );
+        return;
+      }
+    }
 
     // Enforce daily/monthly post quotas on new posts (edits reuse existing row)
     if (!editPostId) {

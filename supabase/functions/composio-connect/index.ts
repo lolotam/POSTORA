@@ -66,6 +66,7 @@ Deno.serve(async (req) => {
           userId,
           workspaceId,
           connectorType,
+          socialProfileId: stringField(body, "social_profile_id"),
         }),
       );
     }
