@@ -18,6 +18,9 @@ export interface SocialAccount {
   social_profile_id: string | null;
   token_expires_at: string | null;
   needs_reauth: boolean | null;
+  // Declared because the select below already fetches it: a fetched-but-undeclared column
+  // reaches consumers as `undefined` and every guard built on it ships dead.
+  auth_provider: "native" | "composio";
   account_metadata?: {
     linkedin_pages?: LinkedInPage[];
     [key: string]: unknown;

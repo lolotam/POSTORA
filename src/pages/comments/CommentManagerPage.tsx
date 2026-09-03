@@ -11,7 +11,7 @@ import { PlatformIcon } from "@/components/PlatformIcon";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
-export type CommentPlatform = "facebook" | "instagram" | "threads";
+export type CommentPlatform = "facebook" | "instagram" | "threads" | "youtube";
 
 interface PlatformOption {
   id: CommentPlatform;
@@ -26,6 +26,8 @@ const PLATFORMS: PlatformOption[] = [
   { id: "instagram", label: "Instagram", colorPreset: "rose" },
   // Threads has its own dedicated page at /messaging/thread — redirect there
   { id: "threads", label: "Threads", colorPreset: "violet", externalPath: "/messaging/thread" },
+  // GradientRingCard has no red preset; rose is the nearest, and adding one is not this tile's job.
+  { id: "youtube", label: "YouTube", colorPreset: "rose" },
 ];
 
 export default function CommentManagerPage() {
@@ -34,10 +36,14 @@ export default function CommentManagerPage() {
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const { data: socialAccounts = [] } = useSocialAccounts();
 
-  const platformParam = searchParams.get("platform") as CommentPlatform;
-  const platform: CommentPlatform = PLATFORMS.some((p) => p.id === platformParam) ? platformParam : "facebook";
+  // The YouTube tile is flag-gated, and the flag stays off for admins too until the migration
+  // that admits youtube rows has been applied by hand (see VISIBILITY_FLAG_KEYS).
+  const platforms = PLATFORMS.filter((p) => p.id !== "youtube" || flags.youtubeComments);
 
-  const selectedPlatformMeta = PLATFORMS.find((p) => p.id === platform) || PLATFORMS[0];
+  const platformParam = searchParams.get("platform") as CommentPlatform;
+  const platform: CommentPlatform = platforms.some((p) => p.id === platformParam) ? platformParam : "facebook";
+
+  const selectedPlatformMeta = platforms.find((p) => p.id === platform) || platforms[0];
 
   const handlePlatformChange = (p: PlatformOption) => {
     if (p.externalPath) {
@@ -84,7 +90,7 @@ export default function CommentManagerPage() {
               role="tablist"
               aria-label="Comment Channels"
             >
-              {PLATFORMS.map((p) => {
+              {platforms.map((p) => {
                 const isSelected = platform === p.id;
                 return (
                   <button
@@ -163,6 +169,12 @@ export default function CommentManagerPage() {
               <>
                 <AutomationHandlerCard platform="instagram" surface="comments" />
                 <CommentManagerPanel platform="instagram" />
+              </>
+            )}
+            {platform === "youtube" && (
+              <>
+                <AutomationHandlerCard platform="youtube" surface="comments" />
+                <CommentManagerPanel platform="youtube" />
               </>
             )}
           </GradientRingCard>

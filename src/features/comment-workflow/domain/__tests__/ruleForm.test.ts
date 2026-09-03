@@ -72,15 +72,18 @@ describe("validateRuleForm", () => {
     expect(valid({ ...base, publicReplies: [""] }).public_replies).toEqual([]);
   });
 
-  it("drops the private message and the file for Threads instead of erroring", () => {
-    // Switching a workflow to Threads is a platform change, not a form to repair.
-    const input = valid({ ...base, platform: "threads", mediaFileId: "media-1" });
+  // Threads and YouTube have no private messages. The rule is `supportsPrivateReply`, not a
+  // platform literal: a new no-DM platform must fall into the same branch without the
+  // validator learning its name.
+  it.each(["threads", "youtube"] as const)("drops the private message and the file for %s instead of erroring", (platform) => {
+    // Switching a workflow to a no-DM platform is a platform change, not a form to repair.
+    const input = valid({ ...base, platform, mediaFileId: "media-1" });
     expect(input.dm_message).toBeNull();
     expect(input.media_file_id).toBeNull();
   });
 
-  it("tells a Threads workflow it needs a public reply, since it has no other way to act", () => {
-    const errors = invalid({ ...base, platform: "threads", publicReplies: [""] });
+  it.each(["threads", "youtube"] as const)("tells a %s workflow it needs a public reply, since it has no other way to act", (platform) => {
+    const errors = invalid({ ...base, platform, publicReplies: [""] });
     expect(errors.publicReplies).toBe("Add a public reply.");
   });
 

@@ -121,6 +121,7 @@ function RuleForm({
 //   Facebook/Instagram  -- DMs, plus public comments when the account's Comments handler is
 //                          set to the Postora AI Agent.
 //   Threads             -- public replies and mentions only; it has no DM API.
+//   YouTube             -- video comments only; it has no private messages at all.
 const COPY = {
   messageOnly: {
     subtitle: "Set up automatic responses for incoming messages",
@@ -138,7 +139,7 @@ const COPY = {
 
 function copyFor(platform?: MessengerPlatform) {
   if (!platform) return COPY.messageOnly;
-  return platform === "threads" ? COPY.commentOnly : COPY.messageAndComment;
+  return platform === "threads" || platform === "youtube" ? COPY.commentOnly : COPY.messageAndComment;
 }
 
 export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } = {}) {

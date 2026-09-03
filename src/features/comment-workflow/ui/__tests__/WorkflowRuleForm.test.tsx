@@ -22,6 +22,8 @@ vi.mock("@/hooks/useSocialAccounts", () => ({
       { id: "fb-2", platform: "facebook", platform_username: "Old Page", avatar_url: null, is_active: true, needs_reauth: true, token_expires_at: null },
       { id: "ig-1", platform: "instagram", platform_username: "shop_ig", avatar_url: null, is_active: true, needs_reauth: false, token_expires_at: null },
       { id: "th-1", platform: "threads", platform_username: "shop_th", avatar_url: null, is_active: true, needs_reauth: true, token_expires_at: null },
+      // Expired-looking on purpose: YouTube refreshes just-in-time, so expiry must not count.
+      { id: "yt-1", platform: "youtube", platform_username: "Shop Channel", platform_user_id: "UC1", avatar_url: null, is_active: true, needs_reauth: false, token_expires_at: "2020-01-01T00:00:00Z", auth_provider: "native", account_metadata: { granted_scopes: ["https://www.googleapis.com/auth/youtube.force-ssl"] } },
     ],
   }),
 }));
@@ -55,5 +57,18 @@ describe("WorkflowRuleForm platform picker", () => {
     expect(screen.getByLabelText("Account")).toHaveTextContent("Choose a Facebook page");
     // Silently dropping the stale page reads as data loss, and Profiles is where it is fixed.
     expect(screen.getByText(/1 more page needs reconnecting on Profiles/)).toBeInTheDocument();
+  });
+
+  it("calls a YouTube account a channel and says the funnel replies publicly only", () => {
+    render(<WorkflowRuleForm ruleId={null} onDone={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: /YouTube/ })).toHaveTextContent("1 channel connected");
+    fireEvent.click(screen.getByRole("button", { name: /YouTube/ }));
+
+    expect(screen.getByLabelText("Account")).toHaveTextContent("Choose a YouTube channel");
+    expect(
+      screen.getByText("YouTube has no private messages — this workflow replies publicly only."),
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText("Private message")).not.toBeInTheDocument();
   });
 });
