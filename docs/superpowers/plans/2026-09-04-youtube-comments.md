@@ -20,8 +20,9 @@
   ```
 - Deno tests: `deno test --allow-env --allow-net --allow-read --allow-write --no-check --node-modules-dir=auto <path>` (CI shape). Run `deno check <file>` on every new edge module too: `--no-check` hides type errors. Run Deno **before** `bun install`/vitest: `--node-modules-dir=auto` breaks vitest's `node_modules`.
 - Frontend gates: `bun run test` (vitest), `./node_modules/.bin/tsc --noEmit -p tsconfig.app.json`, `bun run lint`, `bun run build`. `userEvent` is unusable in this repo; use `fireEvent`. Radix `SelectContent` does not render in jsdom.
-- Scope string: `https://www.googleapis.com/auth/youtube.force-ssl`. Composio tool slugs (all exist at `20260721_00`, probed 2026-09-04): `YOUTUBE_LIST_COMMENT_THREADS`, `YOUTUBE_LIST_COMMENTS`, `YOUTUBE_CREATE_COMMENT_REPLY`, `YOUTUBE_SET_COMMENT_MODERATION_STATUS`, `YOUTUBE_DELETE_COMMENT`, `YOUTUBE_GET_VIDEO_DETAILS_BATCH`, `YOUTUBE_LIST_CHANNEL_VIDEOS`. Never invent another.
+- Scope string: `https://www.googleapis.com/auth/youtube.force-ssl`. Composio tool slugs (all exist at `20260721_00`, probed 2026-09-04): `YOUTUBE_LIST_COMMENT_THREADS`, `YOUTUBE_LIST_COMMENTS`, `YOUTUBE_CREATE_COMMENT_REPLY`, `YOUTUBE_SET_COMMENT_MODERATION_STATUS`, `YOUTUBE_DELETE_COMMENT`, `YOUTUBE_GET_VIDEO_DETAILS_BATCH`, `YOUTUBE_LIST_PLAYLIST_ITEMS`. Never invent another.
 - Poll cadence `*/5 * * * *`; one `commentThreads.list` per channel per run, `maxResults=50`.
+- Known sweep limits, to be stated in code comments where the sweep is built (Task 7) and in the runbook: only the ≤5 replies YouTube inlines per thread are ingested, and `order=time` sorts by the top-level comment's time, so a new reply on a thread older than the newest 50 is not seen by the sweep (the Comment Manager still shows it on demand).
 - Copy: account noun for YouTube is **channel**; reconnect line "Reconnect this channel on Profiles to enable comments"; delete refusal "YouTube only lets you delete your own comments — hide it instead."; no-DM line "YouTube has no private messages — this workflow replies publicly only."
 - Feature flag `feature_youtube_comments` ↔ `flags.youtubeComments`, default `false`.
 - Health columns (`needs_reauth`, `failure_count`, `last_refresh_error`) are written only on a failed token refresh (`invalid_grant`), never on a scope or quota error.
@@ -646,7 +647,7 @@ composio: {
     "YOUTUBE_LIST_CHANNELS", "YOUTUBE_MULTIPART_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL",
     "YOUTUBE_LIST_COMMENT_THREADS", "YOUTUBE_LIST_COMMENTS", "YOUTUBE_CREATE_COMMENT_REPLY",
     "YOUTUBE_SET_COMMENT_MODERATION_STATUS", "YOUTUBE_DELETE_COMMENT",
-    "YOUTUBE_GET_VIDEO_DETAILS_BATCH", "YOUTUBE_LIST_CHANNEL_VIDEOS",
+    "YOUTUBE_GET_VIDEO_DETAILS_BATCH", "YOUTUBE_LIST_PLAYLIST_ITEMS",
   ],
   mutating: ["YOUTUBE_MULTIPART_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL", "YOUTUBE_CREATE_COMMENT_REPLY", "YOUTUBE_SET_COMMENT_MODERATION_STATUS", "YOUTUBE_DELETE_COMMENT"],
 },
@@ -748,14 +749,24 @@ async function callNative(account: YouTubeCommentAccount, deps: YouTubeCommentsD
 
 // --- composio -----------------------------------------------------------------------------
 
+// A tool that ran but failed upstream. Thrown from inside withConnectorCall so the connector
+// ledger records the call as a failure — returning a value from the callback would log it as
+// a success — and converted back into a YouTubeResult by the caller.
+class YouTubeToolFailure extends Error {
+  constructor(readonly kind: YouTubeErrorClass, message: string) { super(message); }
+}
+
 async function callComposio(account: YouTubeCommentAccount, deps: YouTubeCommentsDeps, call: Call): Promise<YouTubeResult<any>> {
   const binding = composioBinding("youtube");
   if (!deps.composio || !binding) return fail("upstream", "Composio is not configured.");
   if (!account.connection_id || !account.workspace_id) return fail("unauthorized", "The Composio connection is inactive. Reconnect the channel in Profiles.");
   try {
-    return await withConnectorCall(
+    const data = await withConnectorCall(
       deps.admin,
-      { workspaceId: account.workspace_id, connectionId: account.connection_id, connectorType: "youtube", tool: call.composio.slug },
+      // Build this object with the same helper process-post/youtubeComposio.ts uses (its
+      // `meta(tool)`), so ConnectorCallMeta's required fields (workspaceId, connectorType,
+      // authStrategy, connectionId, socialAccountId, toolId) are filled the way the ledger expects.
+      connectorCallMeta(account, call.composio.slug),
       async (signal) => {
         const lookup = await loadActiveConnection(deps.admin, account.connection_id!, account.workspace_id!);
         if (!lookup.ok) throw new ConnectorRefusal(lookup.code);
@@ -764,20 +775,18 @@ async function callComposio(account: YouTubeCommentAccount, deps: YouTubeComment
           workspaceId: lookup.connection.workspaceId, connectedAccountId: lookup.connection.composioConnectedAccountId,
           arguments: call.composio.arguments, signal,
         });
-        if (!executed.successful) return fail(classifyComposioError(executed.error), executed.error || "Composio call failed.");
-        return { ok: true as const, value: executed.data };
+        if (!executed.successful) throw new YouTubeToolFailure(classifyComposioError(executed.error), executed.error || "Composio call failed.");
+        return executed.data;
       },
       { timeoutMs: COMPOSIO_TIMEOUT_MS },
     );
+    return { ok: true, value: data };
   } catch (error) {
+    if (error instanceof YouTubeToolFailure) return fail(error.kind, error.message);
     if (error instanceof ConnectorRefusal) return fail("unauthorized", `Composio connection: ${error.code}`);
     return fail("upstream", (error as Error)?.message || "Composio call failed.");
   }
 }
-
-// Read `meta`'s exact field names from connectorTelemetry.ts:ConnectorCallMeta before wiring
-// withConnectorCall; the object above is the shape process-post/youtubeComposio.ts's `meta()`
-// builds — copy that helper rather than guessing.
 
 async function callYouTube(account: YouTubeCommentAccount, deps: YouTubeCommentsDeps, call: Call): Promise<YouTubeResult<any>> {
   return account.auth_provider === "composio" ? callComposio(account, deps, call) : callNative(account, deps, call);
@@ -895,16 +904,23 @@ export async function videoTitles(account, deps, videoIds: string[]) {
   return { ok: true as const, value: titles };
 }
 
+// search.list costs 100 units per call; the channel's uploads playlist (id = "UU" + the
+// channel id without its "UC" prefix) lists the same videos, newest first, for 1 unit.
+export function uploadsPlaylistId(channelId: string): string {
+  return channelId.startsWith("UC") ? `UU${channelId.slice(2)}` : channelId;
+}
+
 export async function listChannelVideos(account, deps, channelId: string) {
+  const playlistId = uploadsPlaylistId(channelId);
   const result = await callYouTube(account, deps, {
-    method: "GET", path: "search", query: { part: "snippet", channelId, type: "video", order: "date", maxResults: "25" },
-    composio: { slug: "YOUTUBE_LIST_CHANNEL_VIDEOS", arguments: { channelId, maxResults: 25 } },
+    method: "GET", path: "playlistItems", query: { part: "snippet", playlistId, maxResults: "25" },
+    composio: { slug: "YOUTUBE_LIST_PLAYLIST_ITEMS", arguments: { playlistId, part: "snippet", maxResults: 25 } },
   });
   if (!result.ok) return result;
   return {
     ok: true as const,
     value: (Array.isArray(result.value?.items) ? result.value.items : []).map((item: any) => ({
-      id: String(item?.id?.videoId ?? item?.id ?? ""),
+      id: String(item?.snippet?.resourceId?.videoId ?? ""),
       title: String(item?.snippet?.title ?? ""),
       publishedAt: String(item?.snippet?.publishedAt ?? ""),
     })).filter((video: { id: string }) => video.id),
@@ -912,7 +928,7 @@ export async function listChannelVideos(account, deps, channelId: string) {
 }
 ```
 
-Before running: open `supabase/functions/_shared/connectorTelemetry.ts` and `process-post/youtubeComposio.ts`'s `meta()` helper and use their exact `ConnectorCallMeta` field names. Check `YOUTUBE_GET_VIDEO_DETAILS_BATCH`'s and `YOUTUBE_LIST_CHANNEL_VIDEOS`'s input parameter names with `GET /api/v3.1/tools/<slug>` (the orchestrator has the probe script) and correct the `arguments` objects if they differ from `videoIds`/`channelId`.
+Before running: open `supabase/functions/_shared/connectorTelemetry.ts` (`ConnectorCallMeta`: `workspaceId`, `connectorType`, `authStrategy`, optional `toolId`/`connectionId`/`socialAccountId`/`partnerKeyId`, …) and `process-post/youtubeComposio.ts`'s `meta` helper; write `connectorCallMeta(account, slug)` in the adapter the same way. Check `YOUTUBE_GET_VIDEO_DETAILS_BATCH`'s and `YOUTUBE_LIST_PLAYLIST_ITEMS`'s input parameter names with `GET https://backend.composio.dev/api/v3.1/tools/<slug>` (header `x-api-key`, key from the functions container env) and correct the `arguments` objects if they differ from `videoIds`/`playlistId`. Add a test that `uploadsPlaylistId("UCabc") === "UUabc"`.
 
 - [ ] **Step 4: Run the adapter tests; `deno check` the module. Expect PASS.**
 
@@ -1428,12 +1444,13 @@ git commit -m "feat(comment-manager): list YouTube comments per video and the ch
 
 - [ ] **Step 1:** `const supportedAiAgentPlatforms = ["whatsapp", "facebook", "instagram", "threads", "youtube"];` and update the comment above it: "Threads and YouTube have no DM API, so their agents only ever answer public comments."
 - [ ] **Step 2:** add `'comment.youtube'` after `'comment.threads'` in `ALLOWED_WEBHOOK_EVENTS`.
+- [ ] **Step 2b (ai-agent-reply):** `supabase/functions/ai-agent-reply/index.ts:290` `buildCommentReplySender` selects only `platform, access_token, platform_user_id, ig_auth_type, account_metadata`, so the youtube branch of `replyToComment` would receive a row that can authenticate neither provider. Widen it to `"id, user_id, platform, auth_provider, access_token, refresh_token, token_expires_at, platform_user_id, connection_id, workspace_id, ig_auth_type, account_metadata"`. It has no `access_token` guard (good — Composio rows have none); keep it that way. `deno check` the file.
 - [ ] **Step 3:** Run the two functions' existing test files (`ls supabase/functions/messaging-api/*.test.ts supabase/functions/n8n-api/*.test.ts`) — if a test enumerates the allowed events, extend it with `comment.youtube`.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add supabase/functions/messaging-api/index.ts supabase/functions/n8n-api/index.ts
-git commit -m "feat(api): admit youtube on the agent config door and comment.youtube on n8n subscriptions"
+git add supabase/functions/messaging-api/index.ts supabase/functions/n8n-api/index.ts supabase/functions/ai-agent-reply/index.ts
+git commit -m "feat(api): admit youtube on the agent config door, comment.youtube on n8n, full row for agent comment replies"
 ```
 
 ---
@@ -1474,15 +1491,18 @@ BEGIN
       ELSE '''whatsapp'', ''facebook'', ''instagram'', ''threads'', ''youtube'''
     END;
 
-    SELECT conname INTO v_conname
-    FROM pg_constraint
-    WHERE conrelid = format('public.%I', v_table)::regclass
-      AND contype = 'c'
-      AND pg_get_constraintdef(oid) ILIKE '%platform IN%';
-
-    IF v_conname IS NOT NULL THEN
+    -- Postgres renders `platform IN (...)` as `platform = ANY (ARRAY[...])`, and
+    -- comment_workflow_rules has a second CHECK mentioning platform (cwr_threads_has_no_dm),
+    -- so the match is on the ANY form and every match is dropped, not the first one found.
+    FOR v_conname IN
+      SELECT conname
+      FROM pg_constraint
+      WHERE conrelid = format('public.%I', v_table)::regclass
+        AND contype = 'c'
+        AND pg_get_constraintdef(oid) ILIKE '%platform = ANY%'
+    LOOP
       EXECUTE format('ALTER TABLE public.%I DROP CONSTRAINT %I', v_table, v_conname);
-    END IF;
+    END LOOP;
 
     EXECUTE format(
       'ALTER TABLE public.%I ADD CONSTRAINT %I CHECK (platform IN (%s))',
@@ -1529,7 +1549,7 @@ VALUES ('feature_youtube_comments', 'false'::jsonb, 'YouTube comments (Comment M
 ON CONFLICT (key) DO NOTHING;
 ```
 
-Check first that the `social_inbox_events` and `comment_workflow_rules` platform CHECK definitions contain the literal `platform IN` (they do in `20260822120000` and `20260904120000`); if `ILIKE '%platform IN%'` misses one on the harness, fall back to `ILIKE '%platform%'` for that table only and say so in a comment.
+Verified on production 2026-09-04: `comment_workflow_rules_platform_check` renders as `CHECK ((platform = ANY (ARRAY['facebook'::text, 'instagram'::text, 'threads'::text])))`, and `cwr_threads_has_no_dm` renders with `platform <> 'threads'` — only the first matches `'%platform = ANY%'`.
 
 - [ ] **Step 2: Rehearse on the harness** — `bash scripts/db-harness.sh` (needs PG17 + the psql shim; see memory `postora-db-harness-needs-pg17`). Expected: migration applies; existing suites green.
 
@@ -1551,6 +1571,7 @@ git commit -m "feat(db): admit youtube on the comment tables, schedule the polle
 - [ ] **Step 1: Write the suite** in the style of `supabase/tests/comment_workflow.sql` (`\set ON_ERROR_STOP on`, temp id table, `\echo` markers, cleans its rows). It must prove:
   1. an `INSERT` of a `platform = 'youtube'` row succeeds on each of the seven widened tables (minimal NOT NULL columns; copy each table's required columns from `comment_workflow.sql` and `20260822180000`'s tables);
   2. `INSERT INTO comment_workflow_rules (... platform='youtube', dm_message='x' ...)` fails with `cwr_youtube_has_no_dm` (use a `DO` block that catches `check_violation` and raises if it did NOT fail);
+  2b. after the migration, `comment_workflow_rules` still carries BOTH `cwr_threads_has_no_dm` and `comment_workflow_rules_platform_check` (`SELECT count(*) = 2 FROM pg_constraint WHERE conrelid = 'public.comment_workflow_rules'::regclass AND conname IN (...)`), and a `threads` row with `dm_message` is still rejected — the lookup must never have dropped the wrong constraint;
   3. `SELECT count(*) = 1 FROM cron.job WHERE jobname = 'poll-youtube-comments' AND schedule = '*/5 * * * *'`;
   4. `SELECT value = 'false'::jsonb FROM app_settings WHERE key = 'feature_youtube_comments'`.
 
@@ -1573,7 +1594,7 @@ git commit -m "test(db): harness suite for the youtube comment tables, constrain
 
 **Files:**
 - Modify: `src/hooks/useSocialAccounts.tsx:7-25`
-- Modify: `src/hooks/useFeatureFlags.tsx` (8 sites: L71, L149, L225, L296, L379, L451, L570, and the exposed list near L630 — `youtubeComments` is NOT a visibility flag, so do not add it to `VISIBILITY_FLAG_KEYS`)
+- Modify: `src/hooks/useFeatureFlags.tsx` (8 sites: L71, L149, L225, L296, L379, L451, L570, and `VISIBILITY_FLAG_KEYS` near L630 — `youtubeComments` DOES go into `VISIBILITY_FLAG_KEYS`, right after `"commentWorkflow"`, for the same reason that one is there: the frontend auto-deploys on merge while the migration and the poller are applied by hand, and an admin would otherwise see the tile before the CHECKs admit youtube rows. Copy the comment above `"commentWorkflow"` and name YouTube in it.)
 - Modify: `src/components/admin/FeatureFlagIndicator.tsx:64`
 
 - [ ] **Step 1:** add `auth_provider: "native" | "composio";` to `SocialAccount` (the select already fetches it — the Slice F trap).
@@ -1702,7 +1723,7 @@ export function parseYouTubeComments(data: any): Comment[] {
 }
 ```
 
-- In `useComments`: `const action = platform === "facebook" ? "get_page_comments" : platform === "instagram" ? "get_ig_comments" : "get_youtube_comments";`, parse with a three-way switch, and `enabled: enabled && !!socialAccountId && (platform === "youtube" || !!pageId || !!igUserId)`.
+- In `useComments`: `const action = platform === "facebook" ? "get_page_comments" : platform === "instagram" ? "get_ig_comments" : "get_youtube_comments";`, parse with a three-way switch, `enabled: enabled && !!socialAccountId && (platform === "youtube" || !!pageId || !!igUserId)`, and `refetchInterval: platform === "youtube" ? false : 30_000` — each YouTube read is 2 quota units (list + titles), so a 30 s poll from one open tab would burn ~5,800 of the 10,000 daily units; the poller's `social_inbox_events` writes already invalidate the query, and the Refresh button covers the rest. Add a vitest case asserting the youtube query is created with `refetchInterval: false` (mock `@tanstack/react-query`'s `useQuery` and inspect the options, the way the file's existing tests do).
 
 `CommentManagerPanel.tsx`:
 - prop union add `"youtube"`; import `Youtube` from `lucide-react` and `youtubeCommentCapability` from `@/lib/youtubeCommentCapability`.

@@ -12,9 +12,9 @@
 |---|---|
 | `commentThreads.list` with a Google API key | 401 `required` — API keys are not accepted by this endpoint |
 | `commentThreads.list` with a refreshed native token (`readonly` + `upload`) | 403 `insufficientPermissions` — listing needs `youtube.force-ssl` too |
-| Composio YouTube toolkit (`20260721_00`) | 51 tools incl. `YOUTUBE_LIST_COMMENT_THREADS`, `YOUTUBE_LIST_COMMENTS`, `YOUTUBE_CREATE_COMMENT_REPLY`, `YOUTUBE_SET_COMMENT_MODERATION_STATUS`, `YOUTUBE_DELETE_COMMENT`, `YOUTUBE_GET_VIDEO_DETAILS_BATCH`, `YOUTUBE_LIST_CHANNEL_VIDEOS` |
+| Composio YouTube toolkit (`20260721_00`) | 51 tools incl. `YOUTUBE_LIST_COMMENT_THREADS`, `YOUTUBE_LIST_COMMENTS`, `YOUTUBE_CREATE_COMMENT_REPLY`, `YOUTUBE_SET_COMMENT_MODERATION_STATUS`, `YOUTUBE_DELETE_COMMENT`, `YOUTUBE_GET_VIDEO_DETAILS_BATCH`, `YOUTUBE_LIST_PLAYLIST_ITEMS` |
 | Composio managed auth config `ac_ZZF6rPlq_i9_` | its scopes include `youtube.force-ssl`; the one live connected account has it granted; `YOUTUBE_LIST_COMMENT_THREADS` returned real threads |
-| `social_accounts` where platform = youtube | 4 native + 1 composio, all `is_active`, none `needs_reauth`; every native `token_expires_at` is in the past (YouTube is `cronExcluded`, refresh is just-in-time); `account_metadata = {}`; one channel (`UCGDSIW3C…`) exists as both a native and a composio row for the same user |
+| `social_accounts` where platform = youtube | 4 native + 1 composio, all `is_active`, none `needs_reauth`; every native `token_expires_at` is in the past (YouTube is `cronExcluded`, refresh is just-in-time); `account_metadata = {}`; one channel (`UCGDSIW3C…`) exists as three rows (2 composio, 1 native) under three different users — the unique index `(user_id, platform, platform_user_id)` forbids one user holding a channel twice |
 | Cron precedent | `poll-threads-replies` every 2 min (`20260823090000_threads_reply_poller_cron.sql`) |
 
 Consequence: **Composio channels can do comments today; native channels need the new scope and Google re-verification.** Both are in scope.
@@ -38,7 +38,7 @@ Consequence: **Composio channels can do comments today; native channels need the
 
 2.1 New edge function `supabase/functions/youtube-poll-comments/index.ts`, cron-authenticated with `verifyCronAuth` like `threads-poll-replies`. Scheduled by `pg_cron` as `poll-youtube-comments`, `*/5 * * * *`, via `net.http_post` with `get_cron_secret()` (copy of `20260823090000`).
 
-2.2 **Eligibility** (pure, `_shared/youtubePollEligibility.ts`): rows with `platform = 'youtube' AND is_active`, then in code: capability `"capable"`, `resolveCommentAutomationHandler(account_metadata) !== "off"`, and **one row per (user_id, platform_user_id)** — when a composio and a native row both qualify, the composio row is polled and the native row is skipped with a log line (no Google quota on Postora's project, no token to refresh).
+2.2 **Eligibility** (pure, `_shared/youtubePollEligibility.ts`): rows with `platform = 'youtube' AND is_active`, then in code: capability `"capable"`, `resolveCommentAutomationHandler(account_metadata) !== "off"`, and **one row per (user_id, platform_user_id)** — when a composio and a native row both qualify, the composio row is polled and the native row is skipped with a log line (no Google quota on Postora's project, no token to refresh). The unique index makes this pair impossible today; the rule is a guard, not a fix for live data. The same channel connected by different users is polled once per user: each user's automation is their own.
 
 2.3 **Per channel, one call:** `commentThreads.list` with `part=snippet,replies`, `allThreadsRelatedToChannelId=<platform_user_id>`, `order=time`, `maxResults=50`, `textFormat=plainText`. Cost 1 unit; at a 5-minute cadence ≈ 288 units per channel per day against the 10,000-unit daily default. No pagination on the sweep: the newest 50 threads per pass is the window, the same spirit as Threads' `MAX_POSTS_PER_ACCOUNT`.
 
@@ -64,7 +64,7 @@ Consequence: **Composio channels can do comments today; native channels need the
 | `setModeration(id, status)` with status `rejected`, `published` or `heldForReview` | `POST comments/setModerationStatus` (50 units) | `YOUTUBE_SET_COMMENT_MODERATION_STATUS {id,moderationStatus}` |
 | `remove(id)` | `DELETE comments` (50 units) | `YOUTUBE_DELETE_COMMENT {id}` |
 | `videoTitles(ids[])` | `GET videos?part=snippet` | `YOUTUBE_GET_VIDEO_DETAILS_BATCH` |
-| `listChannelVideos(channelId)` | `GET search?forMine=true&type=video&order=date` (100 units) | `YOUTUBE_LIST_CHANNEL_VIDEOS` |
+| `listChannelVideos(channelId)` | `GET playlistItems?playlistId=UU…` (the uploads playlist, 1 unit; `search.list` would be 100) | `YOUTUBE_LIST_PLAYLIST_ITEMS` |
 
 Native calls run a just-in-time refresh when `token_expires_at` is within 30 minutes (reuse `refreshYouTubeToken`) and persist `access_token`, `token_expires_at` and `granted_scopes`. Composio calls go through `withConnectorCall` + `loadActiveConnection` + `executeTool` exactly as `process-post/youtubeComposio.ts` does. The registry entry's `tools` list is extended by the seven slugs above and `mutating` by reply, moderation and delete. Existing Composio connections have a frozen `tool_schema_cache`; the rollout runbook calls `/refresh-schema` for them.
 
@@ -80,7 +80,7 @@ Native calls run a just-in-time refresh when `token_expires_at` is within 30 min
 - 401 → refresh once; if the refresh returns `invalid_grant` → `needs_reauth = true`, `last_refresh_error` set.
 - Composio `successful: false` maps through the same classifier using the embedded Google error when present, else `upstreamUnavailable`.
 
-3.4 `_shared/commentActions.ts` gains a `youtube` branch delegating to this adapter, and a **default branch that refuses unknown platforms** (`{ success: false, error: "Unsupported platform" }`) instead of falling into the Meta path. Known limit: the sweep ingests only the ≤5 replies YouTube inlines per thread; the Comment Manager fetches full replies on demand via `listReplies`.
+3.4 `_shared/commentActions.ts` gains a `youtube` branch delegating to this adapter, and a **default branch that refuses unknown platforms** (`{ success: false, error: "Unsupported platform" }`) instead of falling into the Meta path. Known limits: the sweep ingests only the ≤5 replies YouTube inlines per thread, and `order=time` sorts by the top-level comment's time, so a new reply on a thread older than the newest 50 is not seen by the sweep; the Comment Manager fetches full replies on demand via `listReplies`. The Comment Manager's YouTube query does not auto-refetch (each read is 2 quota units); the poller's inbox writes invalidate it, and the Refresh button covers the rest.
 
 ## 4. Comment Manager (`/comments`)
 
