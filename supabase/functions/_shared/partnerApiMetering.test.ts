@@ -305,48 +305,54 @@ Deno.test("checkRateLimit: remaining above the key's own limit is impossible, so
 
 // ---- ledger request_id / latency_ms (admin partner hub, spec D4) -----------
 
-Deno.test("recordUsage writes request_id and latency_ms when given", async () => {
+/** Captures the row recordUsage inserts. The Supabase client is the only
+ *  boundary here; everything else under test is real. */
+function insertCapturingClient(): { inserted: Record<string, unknown>[]; client: unknown } {
   const inserted: Record<string, unknown>[] = [];
   const client = {
     from() {
-      return { insert(row: Record<string, unknown>) { inserted.push(row); return Promise.resolve({ error: null }); } };
+      return {
+        insert(row: Record<string, unknown>) {
+          inserted.push(row);
+          return Promise.resolve({ error: null });
+        },
+      };
     },
-  // deno-lint-ignore no-explicit-any
-  } as any;
-  await recordUsage(client, {
-    keyId: "key-1", workspaceId: "ws-1", action: "list_accounts",
-    billable: false, httpStatus: 200, requestId: "req-42", latencyMs: 17,
-  });
-  assertEquals(inserted[0].request_id, "req-42");
-  assertEquals(inserted[0].latency_ms, 17);
-});
+  };
+  return { inserted, client };
+}
 
-Deno.test("recordUsage writes null for request_id and latency_ms when absent", async () => {
-  const inserted: Record<string, unknown>[] = [];
-  const client = {
-    from() {
-      return { insert(row: Record<string, unknown>) { inserted.push(row); return Promise.resolve({ error: null }); } };
-    },
-  // deno-lint-ignore no-explicit-any
-  } as any;
-  await recordUsage(client, {
-    keyId: "key-1", workspaceId: "ws-1", action: "list_accounts", billable: false, httpStatus: 200,
-  });
-  assertEquals(inserted[0].request_id, null);
-  assertEquals(inserted[0].latency_ms, null);
-});
+// The column CHECK refuses a negative latency and the type is INTEGER, so the
+// cases that matter are: both fields present, both absent, a fractional value
+// that must round, and a backwards clock that must floor at 0 rather than
+// fail the insert.
+const LEDGER_FIELD_CASES: {
+  name: string;
+  extra: { requestId?: string; latencyMs?: number };
+  expected: { request_id: string | null; latency_ms: number | null };
+}[] = [
+  { name: "both given", extra: { requestId: "req-42", latencyMs: 17 }, expected: { request_id: "req-42", latency_ms: 17 } },
+  { name: "both absent", extra: {}, expected: { request_id: null, latency_ms: null } },
+  { name: "fractional latency", extra: { requestId: "req-43", latencyMs: 17.6 }, expected: { request_id: "req-43", latency_ms: 18 } },
+  { name: "backwards clock", extra: { latencyMs: -0.4 }, expected: { request_id: null, latency_ms: 0 } },
+];
 
-Deno.test("recordUsage rounds latency to a non-negative integer", async () => {
-  const inserted: Record<string, unknown>[] = [];
-  const client = {
-    from() {
-      return { insert(row: Record<string, unknown>) { inserted.push(row); return Promise.resolve({ error: null }); } };
-    },
-  // deno-lint-ignore no-explicit-any
-  } as any;
-  await recordUsage(client, {
-    keyId: "key-1", workspaceId: "ws-1", action: "list_accounts",
-    billable: false, httpStatus: 200, latencyMs: -0.4,
+for (const testCase of LEDGER_FIELD_CASES) {
+  Deno.test(`recordUsage writes request_id and a non-negative integer latency_ms: ${testCase.name}`, async () => {
+    const { inserted, client } = insertCapturingClient();
+    await recordUsage(
+      // deno-lint-ignore no-explicit-any
+      client as any,
+      {
+        keyId: "key-1",
+        workspaceId: "ws-1",
+        action: "list_accounts",
+        billable: false,
+        httpStatus: 200,
+        ...testCase.extra,
+      },
+    );
+    assertEquals(inserted[0].request_id, testCase.expected.request_id);
+    assertEquals(inserted[0].latency_ms, testCase.expected.latency_ms);
   });
-  assertEquals(inserted[0].latency_ms, 0);
-});
+}
