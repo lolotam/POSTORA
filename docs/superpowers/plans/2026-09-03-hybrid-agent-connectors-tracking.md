@@ -567,10 +567,10 @@ export function composioToolParameters(tool: ComposioReadyTool, binding: Composi
 - Modify: `supabase/functions/_shared/partnerScopes.ts:47-63`, `docs/api/openapi.yaml:1276-1292`, `src/features/partner-hub/domain/partnerScopes.ts:11-26`, `supabase/functions/partner-api/router.ts:24-75` (`ACTION_SCOPES`) and `:80-140` (`ACTION_RISK_CLASSES`), `supabase/functions/partner-api/v1/errors.ts:33-180`
 - Tests already exist: `_shared/partnerScopes.test.ts`, `partner-api/router.test.ts`, `src/features/partner-hub/domain/__tests__/partnerScopes.test.ts`
 
-- [ ] **Step 1:** Add to `GENERIC_SCOPES`: `"connectors:manage", "connectors:read", "tools:execute"` (keep alphabetical order — the parity test compares arrays). Add the same three to the openapi enum and to `PARTNER_SCOPES` with descriptions: `connectors:read` "List connected tools and their usage"; `connectors:manage` "Create connect links for Composio-backed tools"; `tools:execute` "Execute connected tools headlessly (metered, not billed)".
-- [ ] **Step 2:** `ACTION_SCOPES`: `list_connectors: ["connectors:read"]`, `create_connect_link: ["connectors:manage"]`, `execute_tool: ["tools:execute"]`. `ACTION_RISK_CLASSES`: `"A"`, `"C"`, `"C"` with a comment naming why (outbound third-party + state).
-- [ ] **Step 3:** `V1_ERROR_POLICY` += `connector_unavailable {503, retryable:true}`, `connection_inactive {409,false}`, `connector_tool_not_allowed {403,false}`, `connector_write_not_allowed {403,false}`, `connector_type_not_connectable {400,false}`, `tool_not_found {404,false}`, `tool_execution_failed {502,true}`, `tool_execution_timeout {504,true}`, with the messages from spec §8.3 (no vendor text).
-- [ ] **Step 4: Run** the three parity suites + `router.test.ts` — PASS (they fail if any of the five places is missed). **Step 5: Commit** `git commit -m "feat(partner-api): connectors and tools scopes, actions, error codes"`.
+- [x] **Step 1:** Add to `GENERIC_SCOPES`: `"connectors:manage", "connectors:read", "tools:execute"` (keep alphabetical order — the parity test compares arrays). Add the same three to the openapi enum and to `PARTNER_SCOPES` with descriptions: `connectors:read` "List connected tools and their usage"; `connectors:manage` "Create connect links for Composio-backed tools"; `tools:execute` "Execute connected tools headlessly (metered, not billed)".
+- [x] **Step 2:** `ACTION_SCOPES`: `list_connectors: ["connectors:read"]`, `create_connect_link: ["connectors:manage"]`, `execute_tool: ["tools:execute"]`. `ACTION_RISK_CLASSES`: `"A"`, `"C"`, `"C"` with a comment naming why (outbound third-party + state).
+- [x] **Step 3:** `V1_ERROR_POLICY` += `connector_unavailable {503, retryable:true}`, `connection_inactive {409,false}`, `connector_tool_not_allowed {403,false}`, `connector_write_not_allowed {403,false}`, `connector_type_not_connectable {400,false}`, `tool_not_found {404,false}`, `tool_execution_failed {502,true}`, `tool_execution_timeout {504,true}`, with the messages from spec §8.3 (no vendor text).
+- [x] **Step 4: Run** the three parity suites + `router.test.ts` — PASS (they fail if any of the five places is missed). **Step 5: Commit** `git commit -m "feat(partner-api): connectors and tools scopes, actions, error codes"`.
 
 ### Task 16: `GET /v1/connectors` and `POST /v1/connectors/{type}/connect-link`
 
@@ -580,17 +580,17 @@ export function composioToolParameters(tool: ComposioReadyTool, binding: Composi
 
 **Interfaces — Consumes:** `boundAccountIds(authed)` (binding.ts), `resolveToolsForAccount`, `attachComposioTools`, `claimIdempotency`/`completeIdempotency`, the initiate logic from Task 11 (extract `initiateConnection(deps, { workspaceId, connectorType, initiatedBy })` into `_shared/composioInitiate.ts` in this task and reuse it from `composio-connect/handler.ts`). **Usage counts:** do not call `workspace_connector_usage` (its gate is `auth.uid()`, which is null under the service role). Read `connector_call_logs` directly under the admin client with `workspace_id = record.workspaceId AND created_at >= now() - 30 days`, grouped by `tool_id` in TypeScript — the partner door is service-role and structurally scoped, as every /v1 read is.
 
-- [ ] **Step 1: Failing tests for `listConnectors`:** unbound key → `{ data: [] }`; two bound accounts sharing one `all_accounts` tool → one entry; entries carry `{ tool_id, name, connector_type, auth_strategy, category, scope, social_account_id, connection: { status, external_account_label } | null, usage_30d: { calls, failures, p50_latency_ms, last_used_at } }` and **no** Composio ids; response shape follows `v1/respond.ts` + `pagination.ts` conventions.
-- [ ] **Step 2: Failing tests for `createConnectLink`:** missing `Idempotency-Key` → 400 (existing helper); non-Composio type → `connector_type_not_connectable`; replay returns the stored body; success returns `{ connection_id, redirect_url, expires_at }` and writes `partner_api_usage(action='create_connect_link', billable=false)` through the existing `withPartnerAuth` path (no extra code) and a `connector_call_logs(source='partner', action_name='connect_link', status='success', partner_key_id)` row.
-- [ ] **Step 3–5:** FAIL → implement → PASS.
-- [ ] **Step 6:** Register routes:
+- [x] **Step 1: Failing tests for `listConnectors`:** unbound key → `{ data: [] }`; two bound accounts sharing one `all_accounts` tool → one entry; entries carry `{ tool_id, name, connector_type, auth_strategy, category, scope, social_account_id, connection: { status, external_account_label } | null, usage_30d: { calls, failures, p50_latency_ms, last_used_at } }` and **no** Composio ids; response shape follows `v1/respond.ts` + `pagination.ts` conventions.
+- [x] **Step 2: Failing tests for `createConnectLink`:** missing `Idempotency-Key` → 400 (existing helper); non-Composio type → `connector_type_not_connectable`; replay returns the stored body; success returns `{ connection_id, redirect_url, expires_at }` and writes `partner_api_usage(action='create_connect_link', billable=false)` through the existing `withPartnerAuth` path (no extra code) and a `connector_call_logs(source='partner', action_name='connect_link', status='success', partner_key_id)` row.
+- [x] **Step 3–5:** FAIL → implement → PASS.
+- [x] **Step 6:** Register routes:
 
 ```ts
 { pattern: "/v1/connectors", methods: { GET: withPartnerAuth("list_connectors", "A", listConnectors) } },
 { pattern: "/v1/connectors/{type}/connect-link", methods: { POST: withPartnerAuth("create_connect_link", "C", createConnectLink) } },
 ```
 
-- [ ] **Step 7: Run** `router.test.ts` (non-enumerability, Allow headers) + new suite — PASS. **Step 8: Commit** `git commit -m "feat(partner-api): list connectors and mint connect links"`.
+- [x] **Step 7: Run** `router.test.ts` (non-enumerability, Allow headers) + new suite — PASS. **Step 8: Commit** `git commit -m "feat(partner-api): list connectors and mint connect links"`.
 
 ### Task 17: `POST /v1/tools/execute`
 
@@ -600,18 +600,18 @@ export function composioToolParameters(tool: ComposioReadyTool, binding: Composi
 
 **Interfaces — Consumes:** Task 14's `executeComposioTool`, `executeAdapterTool` (native, via the same internal call shape `connectorExecution.ts` uses), `withConnectorCall(source='partner', partnerKeyId, requestId)`, idempotency helpers. Body: `{ tool_id: uuid, social_account_id: uuid, capability: string, parameters: object }`.
 
-- [ ] **Step 1: Failing tests:** `social_account_id` not bound to the key → 404 `tool_not_found`; tool not resolvable for that account (`resolveToolsForAccount` with the account's links, `includeAdminOnly:false`) → 404 `tool_not_found`; native tool → adapter called with `tool_id, user_id = tool.user_id, capability, parameters`, 200 `{ ok:true, data, request_id, latency_ms }`; Composio tool → `executeComposioTool` with `dryRun:false`, budget 20 000; Composio refusals map to the 403/409/503 codes from Task 15; adapter `ok:false` → 502 `tool_execution_failed` with only `code`; abort → 504; every outcome writes `connector_call_logs(source='partner')` and the usual `partner_api_usage(billable=false)` row; idempotent replay returns the stored 200/502 body.
-- [ ] **Step 2–4:** FAIL → implement → PASS.
-- [ ] **Step 5:** Route `{ pattern: "/v1/tools/execute", methods: { POST: withPartnerAuth("execute_tool", "C", executeTool) } }`.
-- [ ] **Step 6:** e2e chain (memory `postora-e2e-postgrest-harness`): seed a `supabase` native tool + key bound to its account on the harness, call the real handler through PostgREST, assert a `connector_call_logs` row with `partner_key_id` and the response `request_id` equal. "ignored" counts as failure.
-- [ ] **Step 7: Commit** `git commit -m "feat(partner-api): headless tool execution with metering and idempotency"`.
+- [x] **Step 1: Failing tests:** `social_account_id` not bound to the key → 404 `tool_not_found`; tool not resolvable for that account (`resolveToolsForAccount` with the account's links, `includeAdminOnly:false`) → 404 `tool_not_found`; native tool → adapter called with `tool_id, user_id = tool.user_id, capability, parameters`, 200 `{ ok:true, data, request_id, latency_ms }`; Composio tool → `executeComposioTool` with `dryRun:false`, budget 20 000; Composio refusals map to the 403/409/503 codes from Task 15; adapter `ok:false` → 502 `tool_execution_failed` with only `code`; abort → 504; every outcome writes `connector_call_logs(source='partner')` and the usual `partner_api_usage(billable=false)` row; idempotent replay returns the stored 200/502 body.
+- [x] **Step 2–4:** FAIL → implement → PASS.
+- [x] **Step 5:** Route `{ pattern: "/v1/tools/execute", methods: { POST: withPartnerAuth("execute_tool", "C", executeTool) } }`.
+- [x] **Step 6:** e2e chain (memory `postora-e2e-postgrest-harness`): seed a `supabase` native tool + key bound to its account on the harness, call the real handler through PostgREST, assert a `connector_call_logs` row with `partner_key_id` and the response `request_id` equal. "ignored" counts as failure.
+- [x] **Step 7: Commit** `git commit -m "feat(partner-api): headless tool execution with metering and idempotency"`.
 
 ### Task 18: Partner docs
 
 **Files:**
 - Modify: `docs/api/openapi.yaml` (three paths + schemas `ConnectorSummary`, `ConnectLinkResponse`, `ToolExecuteRequest`, `ToolExecuteResponse`), `docs/developer/AGENT-CONTEXT.md` (connectors section), Postman collection if it is checked in
 
-- [ ] **Step 1:** Write the paths with the exact request/response shapes from Tasks 16–17 and the error codes from Task 15. **Step 2:** Run `docs-guard` against the handlers. **Step 3:** Commit `docs(partner-api): connectors and tools routes`.
+- [x] **Step 1:** Write the paths with the exact request/response shapes from Tasks 16–17 and the error codes from Task 15. **Step 2:** Run `docs-guard` against the handlers. **Step 3:** Commit `docs(partner-api): connectors and tools routes`.
 
 ---
 

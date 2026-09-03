@@ -1,12 +1,11 @@
+import { composioBinding } from "../_shared/connectorRegistry.ts";
 import {
-  composioBinding,
-  isComposioType,
-} from "../_shared/connectorRegistry.ts";
-import { ComposioError } from "../_shared/composioClient.ts";
-import { newNonce, signConnectState } from "../_shared/composioState.ts";
+  ComposioInitiateError,
+  initiateComposioConnection,
+} from "../_shared/composioInitiate.ts";
 import type { ComposioConnectDependencies } from "./dependencies.ts";
 
-export const COMPOSIO_CONNECT_STATE_TTL_SECONDS = 10 * 60;
+export { COMPOSIO_CONNECT_STATE_TTL_SECONDS } from "../_shared/composioInitiate.ts";
 
 export class ConnectError extends Error {
   constructor(public readonly code: string, public readonly status: number) {
@@ -31,6 +30,15 @@ async function recordRefusal(
   }, { status: "refused", errorCode: code });
 }
 
+/**
+ * The app door's initiate: prove MEMBERSHIP, then mint the link with the one
+ * shared implementation (`_shared/composioInitiate.ts`).
+ *
+ * The membership check stays here because it is this door's authorisation and
+ * nothing else's — the partner door proves its key's workspace instead. Every
+ * step after it is identical for both doors, which is why it lives in `_shared`
+ * and not in two places.
+ */
 export async function initiateConnection(
   deps: ComposioConnectDependencies,
   input: { userId: string; workspaceId: string; connectorType: string },
@@ -42,79 +50,23 @@ export async function initiateConnection(
   if (!(await deps.isWorkspaceMember(input.userId, input.workspaceId))) {
     throw new ConnectError("forbidden", 403);
   }
-  if (!isComposioType(input.connectorType)) {
-    throw new ConnectError("connector_type_not_connectable", 400);
-  }
-
-  const binding = composioBinding(input.connectorType)!;
-  const authConfigId = deps.authConfigFor(input.connectorType);
-  if (
-    !deps.composio || !authConfigId || !deps.stateSecret || !deps.callbackUrl
-  ) {
-    await recordRefusal(
-      deps,
-      input.workspaceId,
-      input.connectorType,
-      "connect_link",
-      "connector_unavailable",
-    );
-    throw new ConnectError("connector_unavailable", 503);
-  }
-
-  const connectionId = deps.newId();
-  const nonce = newNonce();
-  const expiresAtSeconds = Math.floor(deps.now() / 1_000) +
-    COMPOSIO_CONNECT_STATE_TTL_SECONDS;
-  await deps.insertConnection({
-    id: connectionId,
-    workspace_id: input.workspaceId,
-    connector_type: input.connectorType,
-    toolkit: binding.toolkit,
-    auth_strategy: "composio_oauth",
-    composio_auth_config_id: authConfigId,
-    status: "initiated",
-    state_nonce: nonce,
-    initiated_by: input.userId,
-  });
-
-  const state = await signConnectState({
-    connectionId,
-    workspaceId: input.workspaceId,
-    nonce,
-    exp: expiresAtSeconds,
-  }, deps.stateSecret);
-  const callbackUrl = new URL(deps.callbackUrl);
-  callbackUrl.searchParams.set("state", state);
-
   try {
-    const link = await deps.composio.initiateConnection({
-      workspaceId: input.workspaceId,
-      authConfigId,
-      callbackUrl: callbackUrl.toString(),
-    });
-    return {
-      connection_id: connectionId,
-      redirect_url: link.redirectUrl,
-      expires_at: new Date(expiresAtSeconds * 1_000).toISOString(),
-    };
+    return await initiateComposioConnection(
+      deps,
+      {
+        workspaceId: input.workspaceId,
+        connectorType: input.connectorType,
+        initiatedBy: input.userId,
+      },
+      // The source this door has written since Slice B. Kept verbatim so the
+      // extraction changes no row the Hub already renders.
+      { source: "test" },
+    );
   } catch (error) {
-    const errorCode = error instanceof ComposioError
-      ? error.code
-      : "composio_unavailable";
-    await deps.updateConnection(connectionId, {
-      status: "failed",
-      failure_code: errorCode,
-      state_nonce: null,
-    });
-    await deps.recordCall({
-      workspaceId: input.workspaceId,
-      connectionId,
-      connectorType: input.connectorType,
-      authStrategy: "composio_oauth",
-      actionName: "connect_link",
-      source: "test",
-    }, { status: "failed", errorCode });
-    throw new ConnectError("connector_unavailable", 503);
+    if (error instanceof ComposioInitiateError) {
+      throw new ConnectError(error.code, error.status);
+    }
+    throw error;
   }
 }
 

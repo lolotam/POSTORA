@@ -31,6 +31,7 @@ deno run --allow-read --allow-write scripts/generate-agent-context.ts
 - `messaging.md` — Sending messages, suspension, D13 guarantee.
 - `media.md` — Upload and reference.
 - `publishing.md` — Posts: create, schedule, status.
+- `connectors.md` — Connected tools: list, connect, execute.
 - `social-accounts.md` — Bound accounts.
 - `contacts.md` — Not available in v1 (stub).
 - `analytics.md` — Not available in v1 (stub).

@@ -28,6 +28,7 @@ DECLARE
   v_key_a  UUID := 'e2e00000-0000-4000-8000-000000000031';
   v_key_b  UUID := 'e2e00000-0000-4000-8000-000000000032';
   v_media_b UUID := 'e2e00000-0000-4000-8000-000000000041';
+  v_tool_a UUID := 'e2e00000-0000-4000-8000-000000000051';
   v_instance UUID := '00000000-0000-0000-0000-000000000000';
 BEGIN
   -- -------------------------------------------------------------------------
@@ -36,6 +37,12 @@ BEGIN
   -- fails on a leftover child row. All deletes are scoped to the fixed UUIDs
   -- this function owns — nothing outside e2e00000-... is touched.
   -- -------------------------------------------------------------------------
+  -- Connector rows first: connector_call_logs references ai_agent_tools, which
+  -- references social_accounts, which the block below deletes.
+  DELETE FROM public.connector_call_logs WHERE workspace_id IN (v_ws_a, v_ws_b);
+  DELETE FROM public.ai_agent_tool_accounts WHERE tool_id = v_tool_a OR user_id IN (v_user_a, v_user_b);
+  DELETE FROM public.ai_agent_tools WHERE id = v_tool_a OR user_id IN (v_user_a, v_user_b);
+  DELETE FROM public.connector_connections WHERE workspace_id IN (v_ws_a, v_ws_b);
   DELETE FROM public.partner_webhook_deliveries WHERE workspace_id IN (v_ws_a, v_ws_b);
   DELETE FROM public.partner_webhooks WHERE workspace_id IN (v_ws_a, v_ws_b);
   DELETE FROM public.partner_dispatch_intents WHERE workspace_id IN (v_ws_a, v_ws_b);
@@ -104,7 +111,7 @@ BEGIN
   INSERT INTO public.partner_api_keys (id, workspace_id, social_account_id, created_by, name, key_prefix, key_hash, scopes, environment, monthly_quota, rate_limit_per_min, current_usage_count, usage_reserved, usage_confirmed, usage_indeterminate)
   VALUES
     (v_key_a, v_ws_a, v_acct_a, v_user_a, 'e2e-key-a', p_key_prefix, p_key_hash, p_scopes, 'production', 5, 60, 0, 0, 0, 0),
-    (v_key_b, v_ws_b, v_acct_b, v_user_b, 'e2e-key-b', p_other_key_prefix, p_other_key_hash, ARRAY['messages:send','messages:read','accounts:read','conversations:read','media:read','media:write','webhooks:read','webhooks:manage','posts:read','posts:write','posts:schedule','templates:read','usage:read'], 'production', 5, 60, 0, 0, 0, 0);
+    (v_key_b, v_ws_b, v_acct_b, v_user_b, 'e2e-key-b', p_other_key_prefix, p_other_key_hash, ARRAY['messages:send','messages:read','accounts:read','conversations:read','media:read','media:write','webhooks:read','webhooks:manage','posts:read','posts:write','posts:schedule','templates:read','usage:read','connectors:read','connectors:manage','tools:execute'], 'production', 5, 60, 0, 0, 0, 0);
 
   INSERT INTO public.partner_api_key_accounts (key_id, social_account_id, workspace_id)
   VALUES
@@ -120,7 +127,26 @@ BEGIN
   VALUES
     (v_media_b, v_user_b, v_ws_b, v_key_b, v_ws_b::text || '/e2e-media-' || v_media_b::text || '.jpg', 'image', 1234, 'image/jpeg', 'partner-media', 'available', jsonb_build_object('source','partner_api','original_filename','e2e.jpg'));
 
+  -- -------------------------------------------------------------------------
+  -- One NATIVE connector for workspace A, scoped to account A. `platform` is
+  -- required to satisfy ai_agent_tools_account_same_owner_platform, the
+  -- composite FK that keeps a connector from naming one account's id with
+  -- another account's platform. Native (`manual_credentials`) on purpose: the
+  -- chain test proves the metering and the request-id correlation, which are
+  -- the same for both strategies, without needing a live connector service.
+  -- -------------------------------------------------------------------------
+  INSERT INTO public.ai_agent_tools (
+    id, user_id, name, description, tool_type, url, connector_type,
+    scope, social_account_id, platform, settings, auth_strategy, is_enabled, admin_only
+  )
+  VALUES (
+    v_tool_a, v_user_a, 'e2e-catalogue', 'the e2e shop database', 'n8n_webhook',
+    'https://e2e.invalid/tool', 'supabase',
+    'account', v_acct_a, 'whatsapp', '{}'::jsonb, 'manual_credentials', true, false
+  );
+
   RETURN jsonb_build_object(
+    'tool_a', v_tool_a,
     'workspace_a', v_ws_a,
     'workspace_b', v_ws_b,
     'account_a', v_acct_a,
@@ -143,3 +169,8 @@ GRANT EXECUTE ON FUNCTION public.partner_e2e_fixture(TEXT, TEXT, TEXT[], TEXT, T
 -- throwaway harness; it is not a migration and must never be applied to prod.
 GRANT SELECT ON public.partner_api_usage TO service_role;
 GRANT SELECT ON public.partner_api_rate_buckets TO service_role;
+-- The connector ledger: the chain test reads back the row POST /v1/tools/execute
+-- writes. Redundant with the public-schema default ACL (which already gives
+-- service_role SELECT on every new table, verified on the harness); kept so the
+-- fixture states the privilege the test depends on instead of inheriting it.
+GRANT SELECT ON public.connector_call_logs TO service_role;

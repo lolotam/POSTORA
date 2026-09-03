@@ -66,6 +66,18 @@ const UNREACHABLE_WHILE_SEND_IS_SUSPENDED: Record<string, string> = {
   invalid_recipient: "emitted by whatsappPartnerOps during a real send",
   meta_error: "emitted by whatsappPartnerOps from a Meta Graph response",
   unsupported_direct_qr: "emitted by whatsappPartnerOps for an evolution_qr account",
+  // The hybrid-connector codes. Same shape of reason as media_pending's: they
+  // are /v1 route codes, and the drives above exercise the ALIAS door plus the
+  // two /v1 paths that need no key. Each is covered by its own route suite
+  // (v1/connectors.test.ts, v1/tools.test.ts) rather than here.
+  connector_type_not_connectable: "emitted by POST /v1/connectors/{type}/connect-link; the alias has no connector surface",
+  connector_unavailable: "emitted by the /v1 connector paths when the connector service is unconfigured or unreachable",
+  connection_inactive: "emitted by POST /v1/tools/execute when the tool's connection is not active",
+  connector_tool_not_allowed: "emitted by POST /v1/tools/execute for a capability outside the registry allow-list",
+  connector_write_not_allowed: "emitted by POST /v1/tools/execute for a data-changing capability the owner has not enabled",
+  tool_not_found: "emitted by POST /v1/tools/execute for a tool or account outside the key's binding",
+  tool_execution_failed: "emitted by POST /v1/tools/execute when the downstream call reports failure",
+  tool_execution_timeout: "emitted by POST /v1/tools/execute when the 20 s execution budget expires",
 };
 
 const KEY_ROW = {
@@ -240,6 +252,8 @@ const PARTNER_SURFACE = [
   "./router.ts",
   "./v1/router.ts",
   "./v1/errors.ts",
+  "./v1/connectors.ts",
+  "./v1/tools.ts",
   "../_shared/partnerApiKeys.ts",
   "../_shared/partnerApiMetering.ts",
   "../_shared/partnerApiIdempotency.ts",

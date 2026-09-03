@@ -4,6 +4,7 @@ import {
   type ComposioClient,
   composioClientFromEnv,
 } from "../_shared/composioClient.ts";
+import { composioAuthConfigFor } from "../_shared/composioInitiate.ts";
 import {
   type ConnectorCallMeta,
   type ConnectorCallOutcome,
@@ -12,7 +13,10 @@ import {
 
 export const DEFAULT_APP_RETURN_URL =
   "https://postora.cloud/settings?tab=integrations";
-export const COMPOSIO_AUTH_CONFIG_PREFIX = "COMPOSIO_AUTH_CONFIG_";
+// Re-exported, not re-declared: the partner door reads the same variables, and
+// two spellings of the name would be a connector that connects from one door
+// and reports connector_unavailable from the other.
+export { COMPOSIO_AUTH_CONFIG_PREFIX } from "../_shared/composioInitiate.ts";
 
 export interface PendingConnection {
   id: string;
@@ -61,10 +65,6 @@ export interface ComposioConnectDependencies {
   ) => Promise<void>;
 }
 
-function envAuthConfigName(connectorType: string): string {
-  return `${COMPOSIO_AUTH_CONFIG_PREFIX}${connectorType.toUpperCase()}`;
-}
-
 function throwDatabaseError(error: unknown): never {
   if (error instanceof Error) throw error;
   throw new Error("connector_database_error");
@@ -105,7 +105,7 @@ export function createDependencies(): ComposioConnectDependencies {
     // "Illegal invocation" when called detached from its receiver.
     newId: () => crypto.randomUUID(),
     authConfigFor: (connectorType) =>
-      Deno.env.get(envAuthConfigName(connectorType))?.trim() || undefined,
+      composioAuthConfigFor(connectorType, (name) => Deno.env.get(name)),
     isWorkspaceMember,
     async insertConnection(row) {
       const { error } = await admin.from("connector_connections").insert(row);

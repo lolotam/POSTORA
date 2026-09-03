@@ -23,6 +23,7 @@ import {
   listConversationMessages,
   listConversations,
 } from "./conversations.ts";
+import { createConnectLink, listConnectors } from "./connectors.ts";
 import { getMedia, postMedia } from "./media.ts";
 import { postMessages } from "./messages.ts";
 import {
@@ -33,6 +34,7 @@ import {
   unschedulePost,
 } from "./posts.ts";
 import { getTemplates } from "./templates.ts";
+import { executeTool } from "./tools.ts";
 import { getUsage } from "./usage.ts";
 import {
   createWebhook,
@@ -143,6 +145,21 @@ export const V1_ROUTES: V1Route[] = [
       GET: withPartnerAuth("list_conversation_messages", "A", listConversationMessages),
     },
   },
+  // Hybrid connectors (spec §8.2). The sub-resource route is registered before
+  // the collection out of the same habit the webhook block names below; they
+  // cannot collide, because matchPattern compares segment counts first.
+  {
+    pattern: "/v1/connectors/{type}/connect-link",
+    methods: {
+      POST: withPartnerAuth("create_connect_link", "C", createConnectLink),
+    },
+  },
+  {
+    pattern: "/v1/connectors",
+    methods: {
+      GET: withPartnerAuth("list_connectors", "A", listConnectors),
+    },
+  },
   {
     pattern: "/v1/media",
     methods: {
@@ -165,6 +182,12 @@ export const V1_ROUTES: V1Route[] = [
     pattern: "/v1/messages/{id}",
     methods: {
       GET: withPartnerAuth("get_message", "A", getMessage),
+    },
+  },
+  {
+    pattern: "/v1/tools/execute",
+    methods: {
+      POST: withPartnerAuth("execute_tool", "C", executeTool),
     },
   },
   {

@@ -8,7 +8,15 @@ export interface ConnectorCallMeta {
   socialAccountId?: string | null;
   partnerKeyId?: string | null;
   connectorType: string;
-  authStrategy: "manual_credentials" | "composio_oauth";
+  /**
+   * How the tool authenticates. `"unknown"` is not a third strategy — it is
+   * the honest value for a refusal that happens BEFORE any tool is resolved
+   * (spec §11's "partner key not bound to the account" row): the column is NOT
+   * NULL, the tool is deliberately not looked up, and inventing
+   * `manual_credentials` there would put a fact in the ledger that nobody
+   * established.
+   */
+  authStrategy: "manual_credentials" | "composio_oauth" | "unknown";
   actionName: string;
   source: ConnectorCallSource;
   requestId?: string | null;

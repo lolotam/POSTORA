@@ -5,6 +5,9 @@ Format follows Keep a Changelog. Every entry that changes a partner's integratio
 ## Unreleased
 
 ### Added
+- `GET /v1/connectors`, `POST /v1/connectors/{type}/connect-link`, `POST /v1/tools/execute` — the connectors and tools surface (`supabase/functions/partner-api/v1/connectors.ts`, `tools.ts`; see `connectors.md`). **Must do:** scopes `connectors:read` / `connectors:manage` / `tools:execute`; send `Idempotency-Key` on both POSTs; treat `tool_not_found` as non-enumerable, and `tool_execution_timeout` (504) as an unknown outcome to reconcile, never to re-execute.
+- Generic scopes `connectors:read`, `connectors:manage`, `tools:execute`. **Must do:** ask the operator to reissue the key if you need them; no existing scope satisfies them.
+- Error codes `connection_inactive`, `connector_tool_not_allowed`, `connector_type_not_connectable`, `connector_unavailable`, `connector_write_not_allowed`, `tool_execution_failed`, `tool_execution_timeout`, `tool_not_found`. **Must do:** branch on `code` and honour `retryable`, as with every other code.
 - `GET /v1/usage` — monthly meters `reserved`/`confirmed`/`indeterminate`/`charged` (`supabase/functions/partner-api/v1/usage.ts`). **Must do:** scope `usage:read`.
 - Environment-bound keys (`pk_test_` staging prefix, `environment` on every key, a staging key never authenticates against production) (`supabase/functions/_shared/partnerApiKeys.ts:12`). **Must do:** use `pk_live_REPLACE_ME` against production only.
 - Developer documentation under `docs/developer/` — no contract change.

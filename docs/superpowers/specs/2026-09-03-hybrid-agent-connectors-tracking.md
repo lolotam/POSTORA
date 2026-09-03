@@ -203,6 +203,12 @@ CREATE INDEX connector_call_logs_key_time_idx  ON public.connector_call_logs (pa
   owner; a row is never silently dropped for want of a workspace.
 - **Failure definition**, used identically by every reader: `failures = status IN
   ('failed','timeout')`; `refused` is counted separately and never folded into failures.
+- **`auth_strategy = 'unknown'`** (added in Slice C2): a partner-door refusal that happens
+  *before* any tool is resolved (`tool_not_found` for an unbound account or unknown tool id)
+  still owes a `refused` row, and both `auth_strategy` and `connector_type` are NOT NULL. The
+  row is written with `'unknown'` in both rather than inventing a strategy nobody established.
+  Readers that group by type will show an `unknown` bucket for these probes; the Hub (Slice D)
+  labels it "unresolved requests".
 - `request_id` is the `X-Postora-Request-Id` on the partner door and the reply/publish
   correlation id on the others, so one id joins `partner_api_usage`, `connector_call_logs`
   and the edge logs.

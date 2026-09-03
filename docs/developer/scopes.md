@@ -24,6 +24,9 @@ New keys may hold only generic scopes. Legacy `whatsapp:*` scopes are accepted a
 | `GET /v1/posts/{id}` | `posts:read` |
 | `GET /v1/posts/{id}/status` | `posts:read` |
 | `POST /v1/posts/{id}/schedule`, `DELETE /v1/posts/{id}/schedule` | `posts:schedule` |
+| `GET /v1/connectors` | `connectors:read` |
+| `POST /v1/connectors/{type}/connect-link` | `connectors:manage` |
+| `POST /v1/tools/execute` | `tools:execute` |
 | `GET /v1/webhooks`, `GET /v1/webhooks/{id}` | `webhooks:read` |
 | `POST /v1/webhooks`, `PATCH /v1/webhooks/{id}`, `DELETE /v1/webhooks/{id}`, `POST /v1/webhooks/{id}/rotate-secret`, `POST /v1/webhooks/{id}/test` | `webhooks:manage` |
 
