@@ -124,6 +124,21 @@ export function initiateConnection(input: InitiateConnectionInput): Promise<Init
   });
 }
 
+export type FinalizeResult =
+  | { status: "active" }
+  | { status: "pending" }
+  | { status: "failed"; failure_code: string };
+
+/** Asks the edge function whether Composio has activated this connection yet,
+ *  completing it when so. Polled, because Composio's hosted page never sends
+ *  the browser back. */
+export function finalizeConnection(connectionId: string, socialProfileId?: string): Promise<FinalizeResult> {
+  return callComposioConnect<FinalizeResult>("finalize", {
+    connection_id: connectionId,
+    ...(socialProfileId ? { social_profile_id: socialProfileId } : {}),
+  });
+}
+
 export async function revokeConnection(connectionId: string): Promise<void> {
   await callComposioConnect<{ ok: true }>("revoke", { connection_id: connectionId });
 }

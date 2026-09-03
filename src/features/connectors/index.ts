@@ -5,10 +5,12 @@ export {
   fetchConnections,
   fetchPersonalWorkspaceId,
   fetchWorkspaceUsage,
+  finalizeConnection,
   initiateConnection,
   refreshConnectionSchema,
   revokeConnection,
   type ConnectorConnectionRow,
+  type FinalizeResult,
   type InitiateConnectionInput,
   type InitiatedConnection,
   type WorkspaceUsageRow,
@@ -20,4 +22,11 @@ export {
   useRevokeConnection,
 } from "./ui/hooks/useConnectorConnections";
 export { useConnectorUsage } from "./ui/hooks/useConnectorUsage";
+export {
+  CONNECTION_POLL_DEADLINE_MS,
+  CONNECTION_POLL_MS,
+  openAuthorisationTab,
+  useConnectionFinalizer,
+  type FinalizerState,
+} from "./ui/hooks/useConnectionFinalizer";
 export { useConnectorWorkspace, type ConnectorWorkspace } from "./ui/hooks/useConnectorWorkspace";

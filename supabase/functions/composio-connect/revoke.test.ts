@@ -49,6 +49,7 @@ function setup(overrides: Partial<ComposioConnectDependencies> = {}) {
       connectorType: "slack",
       composioConnectedAccountId: "ca-1",
       status: "active",
+      failureCode: null,
     }),
     revokeRpc: async (...args) => {
       rpcCalls.push(args);

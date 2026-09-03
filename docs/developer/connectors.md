@@ -26,7 +26,9 @@ Scope `connectors:manage`, D7 class C, `Idempotency-Key` required. Starts an aut
 
 The connection is created for the key's own workspace; there is no way to name another. The optional body field `social_account_id` records the account you intend it for — it does not change what is minted, and an account outside the key's binding answers `resource_not_found`.
 
-`connection_id` is not usable when it is returned. A human must open `redirect_url` and finish authorising before `expires_at`. There is nothing to poll: the connection appears with `status: "active"` in `GET /v1/connectors` once it is.
+`connection_id` is not usable when it is returned. A human must open `redirect_url` and finish authorising before `expires_at`. Composio's hosted page ends on its own "Successfully connected" screen and does not redirect anywhere, so nothing on the browser side signals completion.
+
+**Current limit:** a connection minted through this route is activated only when Postora reconciles it against Composio — today that happens when the same workspace's connection is completed from the Postora app (which polls `composio-connect/finalize`), not on a schedule. Until a partner-side finalize exists, treat a `connect-link` connection as complete only once `GET /v1/connectors` lists it with `status: "active"`; an `initiated` row that is never reconciled expires after one hour.
 
 A retry with the same key and body returns the stored link. A mint that **failed** is not stored, so the same key becomes usable again once its claim lease expires; until then a retry answers `idempotency_in_progress` (409, retryable). Use a new key if you need a link sooner.
 

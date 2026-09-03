@@ -351,6 +351,7 @@ export default function Profiles() {
         onOpenChange={(open) => { if (!open) setYoutubeConnectProfileId(null); }}
         workspaceId={youtubeWorkspace.workspaceId}
         socialProfileId={youtubeConnectProfileId}
+        onConnected={() => toast({ title: "YouTube channel connected", description: "Your channel now appears on this profile." })}
         onNativeConnect={() => {
           const profileId = youtubeConnectProfileId;
           setYoutubeConnectProfileId(null);
