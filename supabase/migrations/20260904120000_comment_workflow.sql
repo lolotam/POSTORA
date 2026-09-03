@@ -154,11 +154,12 @@ CREATE TABLE IF NOT EXISTS public.comment_workflow_events (
   author_key          TEXT NOT NULL,
   author_username     TEXT,
   comment_text        TEXT,
-  public_reply_status TEXT NOT NULL CHECK (public_reply_status IN ('pending', 'sent', 'failed', 'skipped')),
-  public_reply_id     TEXT,
   -- `indeterminate` is not a nicety: callGraph reports a timeout as an unreachable upstream,
-  -- and Meta may have accepted a private reply whose response never arrived. Recording that as
-  -- `failed` would invite a retry Meta can only refuse, or a second DM to the same person.
+  -- and Meta may have accepted a send whose response never arrived. Recording that as `failed`
+  -- would free the send-once claim and let the next comment produce a second DM for something
+  -- the person already received.
+  public_reply_status TEXT NOT NULL CHECK (public_reply_status IN ('pending', 'sent', 'failed', 'skipped', 'indeterminate')),
+  public_reply_id     TEXT,
   dm_status           TEXT NOT NULL CHECK (dm_status IN ('pending', 'sent', 'failed', 'skipped', 'indeterminate', 'not_applicable')),
   error_message       TEXT,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -234,7 +235,7 @@ SELECT
   count(*) FILTER (WHERE public_reply_status = 'sent')::int                           AS public_sent_count,
   count(*) FILTER (WHERE dm_status = 'sent')::int                                     AS dm_sent_count,
   count(*) FILTER (WHERE public_reply_status = 'failed' OR dm_status = 'failed')::int AS failed_count,
-  count(*) FILTER (WHERE dm_status = 'indeterminate')::int                            AS indeterminate_count,
+  count(*) FILTER (WHERE public_reply_status = 'indeterminate' OR dm_status = 'indeterminate')::int AS indeterminate_count,
   max(created_at)                                                                     AS last_triggered_at
 FROM public.comment_workflow_events
 GROUP BY rule_id;
