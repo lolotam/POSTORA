@@ -49,7 +49,8 @@ import {
   Headphones,
   ShoppingBag,
   Megaphone,
-  Inbox,
+  Inbox, 
+  Workflow,
 } from "lucide-react";
 import {
   Tooltip,
@@ -173,6 +174,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       { icon: Bot, label: "Agent Setup", path: "/automation/agents" },
       ...(hasMessagingFlags ? [{ icon: Inbox, label: "Unified Inboxes", path: "/messaging" }] : []),
       ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
+      ...(flags.commentWorkflow ? [{ icon: Workflow, label: "Comment Workflow", path: "/automation/comment-workflow" }] : []),
     ];
 
     entries.push({
