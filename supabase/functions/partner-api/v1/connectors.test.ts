@@ -229,14 +229,22 @@ function stub(opts: StubOpts = {}) {
           if (f.op === "eq") return row[f.col] === f.val;
           if (f.op === "in") return (Array.isArray(f.val) ? f.val : []).includes(row[f.col]);
           if (f.op === "gte") return String(row[f.col]) >= String(f.val);
+          if (f.op === "neq") return row[f.col] !== f.val;
           return true;
         })
       );
+    // Applied when the chain is awaited, as PostgREST does: filters chained
+    // after `.update()` must still narrow the rows it touches.
+    let pendingUpdate: Record<string, unknown> | null = null;
 
     const self: any = {
       select: () => self,
       eq: (col: string, val: unknown) => {
         filters.push({ col, op: "eq", val });
+        return self;
+      },
+      neq: (col: string, val: unknown) => {
+        filters.push({ col, op: "neq", val });
         return self;
       },
       in: (col: string, val: unknown) => {
@@ -255,16 +263,18 @@ function stub(opts: StubOpts = {}) {
         return Promise.resolve({ error: null });
       },
       update: (values: any) => {
-        const rows = matching();
-        for (const row of rows) Object.assign(row, values);
+        pendingUpdate = values;
         return self;
       },
       maybeSingle: () => {
         const rows = matching();
         return Promise.resolve({ data: rows[0] ? { ...rows[0] } : null, error: null });
       },
-      then: (resolve: (v: unknown) => unknown) =>
-        resolve({ data: matching().map((r) => ({ ...r })), error: null }),
+      then: (resolve: (v: unknown) => unknown) => {
+        const rows = matching();
+        if (pendingUpdate) for (const row of rows) Object.assign(row, pendingUpdate);
+        return resolve({ data: rows.map((r) => ({ ...r })), error: null });
+      },
     };
     return self;
   }
