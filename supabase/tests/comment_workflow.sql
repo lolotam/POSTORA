@@ -414,6 +414,31 @@ BEGIN
 END $cascade$;
 \echo 'PASS 7: deleting a rule cascades to its events and claims'
 
+-- (7b) Deleting an attached file detaches it and leaves the workflow standing. A bare
+--      ON DELETE SET NULL on the composite key would null user_id too and fail its NOT NULL,
+--      making the file undeletable while any workflow references it.
+DO $media_detach$
+DECLARE
+  v_rule UUID;
+BEGIN
+  INSERT INTO public.comment_workflow_rules
+    (user_id, social_account_id, platform, name, match_type, keywords, public_replies, dm_message, media_file_id)
+  VALUES ('88888888-8888-4888-8888-888888888801', '88888888-8888-4888-8888-888888888811',
+          'facebook', 'attachment funnel', 'any', '{}', '{hi}', 'here it is',
+          '88888888-8888-4888-8888-888888888831')
+  RETURNING id INTO v_rule;
+
+  DELETE FROM public.media_files WHERE id = '88888888-8888-4888-8888-888888888831';
+
+  PERFORM pg_temp.cw_must(
+    EXISTS (SELECT 1 FROM public.comment_workflow_rules WHERE id = v_rule AND media_file_id IS NULL),
+    'deleting a file detaches it and leaves the workflow');
+  PERFORM pg_temp.cw_must(
+    (SELECT user_id FROM public.comment_workflow_rules WHERE id = v_rule) = '88888888-8888-4888-8888-888888888801',
+    'detaching a file does not disturb the workflow owner');
+END $media_detach$;
+\echo 'PASS 7b: deleting an attached file detaches it rather than failing'
+
 
 -- (8) The feature ships off.
 DO $flag$

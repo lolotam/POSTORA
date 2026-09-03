@@ -37,7 +37,7 @@ interface WorkflowPoolProps {
 
 export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
   const { rules, isLoading, isError, remove, setActive } = useCommentWorkflowRules();
-  const { statsByRule } = useCommentWorkflowStats();
+  const { statsByRule, isError: statsFailed } = useCommentWorkflowStats();
   const { data: accounts = [] } = useSocialAccounts();
   const [filter, setFilter] = useState<"all" | CommentWorkflowPlatform>("all");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
@@ -55,6 +55,10 @@ export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
       dms: stats.reduce((sum, row) => sum + (row.dm_sent_count ?? 0), 0),
     };
   }, [rules, statsByRule]);
+
+  // A failed counter read leaves every number at zero, which reads as "none of your funnels
+  // has ever fired" -- the alarming interpretation, and the wrong one. Show a dash and say so.
+  const count = (value: number | null | undefined) => (statsFailed ? "—" : String(value ?? 0));
 
   const accountName = (id: string) =>
     accounts.find((account) => account.id === id)?.platform_username ?? "Disconnected account";
@@ -76,6 +80,12 @@ export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
 
   return (
     <div className="space-y-4">
+      {statsFailed && (
+        <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">
+          Activity counters could not be loaded, so they are shown as dashes. Your workflows are
+          unaffected and are still running.
+        </p>
+      )}
       <div className="grid gap-3 sm:grid-cols-3">
         <Card>
           <CardContent className="p-4">
@@ -86,13 +96,13 @@ export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
         <Card>
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">Comments claimed</p>
-            <p className="text-2xl font-semibold">{totals.claimed}</p>
+            <p className="text-2xl font-semibold">{count(totals.claimed)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
             <p className="text-xs text-muted-foreground">Messages sent</p>
-            <p className="text-2xl font-semibold">{totals.dms}</p>
+            <p className="text-2xl font-semibold">{count(totals.dms)}</p>
           </CardContent>
         </Card>
       </div>
@@ -148,19 +158,19 @@ export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
                     screen reader, and ambiguous to anyone hovering the wrong one. */}
                 <div className="flex gap-4 text-sm tabular-nums">
                   <span aria-label={`${rule.name}: comments claimed`} title="Comments claimed">
-                    {stats?.triggered_count ?? 0}
+                    {count(stats?.triggered_count)}
                   </span>
                   <span aria-label={`${rule.name}: public replies sent`} title="Public replies sent">
-                    {stats?.public_sent_count ?? 0}
+                    {count(stats?.public_sent_count)}
                   </span>
                   <span aria-label={`${rule.name}: private messages sent`} title="Private messages sent">
-                    {stats?.dm_sent_count ?? 0}
+                    {count(stats?.dm_sent_count)}
                   </span>
                 </div>
-                {(stats?.failed_count ?? 0) > 0 && (
+                {!statsFailed && (stats?.failed_count ?? 0) > 0 && (
                   <Badge variant="destructive">{stats?.failed_count} failed</Badge>
                 )}
-                {(stats?.indeterminate_count ?? 0) > 0 && (
+                {!statsFailed && (stats?.indeterminate_count ?? 0) > 0 && (
                   <Badge variant="outline" title="The platform never confirmed these. They may have been delivered.">
                     {stats?.indeterminate_count} unconfirmed
                   </Badge>

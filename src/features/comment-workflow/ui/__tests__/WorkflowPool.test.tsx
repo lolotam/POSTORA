@@ -47,7 +47,7 @@ const STATS = {
   },
 };
 
-const hooks = vi.hoisted(() => ({ isError: false }));
+const hooks = vi.hoisted(() => ({ isError: false, statsError: false }));
 
 vi.mock("../hooks/useCommentWorkflowRules", () => ({
   useCommentWorkflowRules: () => ({
@@ -57,7 +57,7 @@ vi.mock("../hooks/useCommentWorkflowRules", () => ({
     remove,
     setActive,
   }),
-  useCommentWorkflowStats: () => ({ statsByRule: STATS, isLoading: false }),
+  useCommentWorkflowStats: () => ({ statsByRule: hooks.statsError ? {} : STATS, isLoading: false, isError: hooks.statsError }),
 }));
 
 vi.mock("@/hooks/useSocialAccounts", () => ({
@@ -76,6 +76,7 @@ import { WorkflowPool } from "../WorkflowPool";
 describe("WorkflowPool", () => {
   beforeEach(() => {
     hooks.isError = false;
+    hooks.statsError = false;
     setActive.mutate.mockClear();
     remove.mutate.mockClear();
   });
@@ -122,6 +123,17 @@ describe("WorkflowPool", () => {
     expect(remove.mutate).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(remove.mutate).toHaveBeenCalledWith("r1");
+  });
+
+  it("shows dashes, not zeros, when the counters could not be read", () => {
+    // Zeros would say "none of your funnels has ever fired" — the alarming reading, and the
+    // wrong one. The workflows themselves are unaffected, so the list still renders.
+    hooks.statsError = true;
+    render(<WorkflowPool onCreate={vi.fn()} onEdit={vi.fn()} />);
+    expect(screen.getByText(/Activity counters could not be loaded/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Guide: comments claimed")).toHaveTextContent("—");
+    expect(screen.getByText("Guide")).toBeInTheDocument();
+    expect(screen.queryByText(/failed$/)).not.toBeInTheDocument();
   });
 
   it("says a load failed rather than showing an empty list", () => {

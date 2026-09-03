@@ -23,6 +23,7 @@ import {
 } from "../domain/rule";
 import {
   DM_MAX_CHARS,
+  dmCharacterBudget,
   EMPTY_RULE_FORM,
   MAX_PUBLIC_REPLIES,
   type RuleFormErrors,
@@ -46,7 +47,7 @@ interface WorkflowRuleFormProps {
 
 export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
   const { rules, create, update } = useCommentWorkflowRules();
-  const { data: accounts = [] } = useSocialAccounts();
+  const { data: accounts = [], isError: accountsFailed } = useSocialAccounts();
   const [values, setValues] = useState<RuleFormValues>(EMPTY_RULE_FORM);
   const [errors, setErrors] = useState<RuleFormErrors>({});
   const [keywordDraft, setKeywordDraft] = useState("");
@@ -203,10 +204,18 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
             ))}
           </SelectContent>
         </Select>
-        {eligibleAccounts.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            Connect a Facebook, Instagram or Threads account first.
+        {/* A failed account read also yields an empty list. Telling someone to connect an
+            account they already have is worse than saying the read failed. */}
+        {accountsFailed ? (
+          <p className="text-sm text-destructive">
+            Your connected accounts could not be loaded. Reload the page and try again.
           </p>
+        ) : (
+          eligibleAccounts.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              Connect a Facebook, Instagram or Threads account first.
+            </p>
+          )
         )}
         {errors.socialAccountId && <p className="text-sm text-destructive">{errors.socialAccountId}</p>}
       </div>
@@ -366,15 +375,17 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
           <Textarea
             id="cw-dm"
             aria-label="Private message"
-            maxLength={DM_MAX_CHARS}
+            maxLength={dmCharacterBudget(!!values.mediaFileId)}
             value={values.dmMessage}
             onChange={(event) => set("dmMessage", event.target.value)}
             placeholder="Thanks for commenting! Here is what you asked for:"
           />
           <p className="text-xs text-muted-foreground">
-            {values.dmMessage.length}/{DM_MAX_CHARS}. The platform allows one private message per
-            comment, within seven days of it. Attaching a file adds a download link that works
-            for seven days, and anyone the message is forwarded to can use it.
+            {values.dmMessage.length}/{dmCharacterBudget(!!values.mediaFileId)}
+            {values.mediaFileId ? " (the download link needs the rest)" : ""}. The platform
+            allows one private message per comment, within seven days of it. Attaching a file
+            adds a download link that works for seven days, and anyone the message is forwarded
+            to can use it.
           </p>
           <Select
             value={values.mediaFileId ?? NO_FILE}

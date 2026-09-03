@@ -39,6 +39,10 @@ const PRIVATE_REPLY_WINDOW_MS = 7 * 24 * 3600 * 1000;
 // A private reply is one-shot: there is no later message in which to refresh an expired link,
 // so the link outlives the window in which the person is likely to open it.
 const MEDIA_LINK_TTL_SECONDS = 7 * 24 * 3600;
+// Instagram's private-reply ceiling, the stricter of the two platforms. The form reserves room
+// for the link, but the form is not the only way a row can arrive, and Meta rejects an
+// over-limit body whole -- which would cost the whole lead rather than just the link.
+const PRIVATE_REPLY_MAX_CHARS = 1000;
 const UNIQUE_VIOLATION = "23505";
 
 type SendStatus = "pending" | "sent" | "failed" | "skipped" | "indeterminate" | "not_applicable";
@@ -221,7 +225,18 @@ async function composeDm(
     log("media_sign_failed", { rule_id: rule.id, account_id: account.id });
     return { text, mediaError: "media_sign_failed" };
   }
-  return { text: text ? `${text}\n\n${url}` : url, mediaError: null };
+  const composed = text ? `${text}\n\n${url}` : url;
+  if (composed.length > PRIVATE_REPLY_MAX_CHARS) {
+    // Sending the copy without the link beats sending nothing. Meta rejects an over-limit body
+    // whole, so keeping the link here would cost the message too.
+    log("media_link_would_exceed_limit", {
+      rule_id: rule.id,
+      account_id: account.id,
+      composed_length: composed.length,
+    });
+    return { text, mediaError: "media_link_would_exceed_limit" };
+  }
+  return { text: composed, mediaError: null };
 }
 
 function withinPrivateReplyWindow(input: CommentWorkflowInput, now: Date): boolean {

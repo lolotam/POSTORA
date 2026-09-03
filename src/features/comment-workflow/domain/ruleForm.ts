@@ -30,6 +30,20 @@ export interface RuleFormValues {
 
 /** Instagram's private-reply limit, the stricter of the two, so one number covers both. */
 export const DM_MAX_CHARS = 1000;
+/**
+ * Room held back for the download link when a file is attached.
+ *
+ * The link is appended to the message at send time, after two newlines, so a message written
+ * to the full limit would post an over-limit body and Meta would refuse every private reply the
+ * workflow ever made. A Supabase signed URL runs to roughly 250 characters and the origin is
+ * rewritten, so this reserves a generous margin rather than a measured one.
+ */
+export const DM_LINK_RESERVE_CHARS = 320;
+
+/** The characters actually available for copy, given whether a file rides along. */
+export function dmCharacterBudget(hasAttachment: boolean): number {
+  return hasAttachment ? DM_MAX_CHARS - DM_LINK_RESERVE_CHARS : DM_MAX_CHARS;
+}
 export const NAME_MAX_CHARS = 120;
 export const MAX_PUBLIC_REPLIES = 5;
 
@@ -92,8 +106,11 @@ export function validateRuleForm(values: RuleFormValues): ValidationResult {
       : "Add a public reply.";
   }
 
-  if (canDm && values.dmMessage.trim().length > DM_MAX_CHARS) {
-    errors.dmMessage = `Private messages are limited to ${DM_MAX_CHARS} characters.`;
+  const budget = dmCharacterBudget(canDm && !!values.mediaFileId);
+  if (canDm && values.dmMessage.trim().length > budget) {
+    errors.dmMessage = budget === DM_MAX_CHARS
+      ? `Private messages are limited to ${DM_MAX_CHARS} characters.`
+      : `With a file attached, keep the message under ${budget} characters — the download link needs the rest.`;
   }
 
   // Not merely tidiness: the file travels as a link inside the message text, so with no

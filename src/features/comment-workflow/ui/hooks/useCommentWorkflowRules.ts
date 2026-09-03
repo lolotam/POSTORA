@@ -68,7 +68,7 @@ export function useCommentWorkflowRules() {
 export function useCommentWorkflowStats() {
   // Counters move whenever a comment lands, and nothing pushes them, so the pool re-reads on a
   // slow interval rather than looking stale until a reload.
-  const { data = [], isLoading } = useQuery({
+  const { data = [], isLoading, isError } = useQuery({
     queryKey: commentWorkflowKeys.stats,
     queryFn: fetchStats,
     refetchInterval: 30_000,
@@ -78,5 +78,8 @@ export function useCommentWorkflowStats() {
     data.filter((row) => row.rule_id !== null).map((row) => [row.rule_id as string, row]),
   );
 
-  return { statsByRule, isLoading };
+  // isError is returned, not swallowed. A failed read leaves `data` empty, and rendering that
+  // as zeros would tell someone their live funnels had never fired -- indistinguishable from
+  // genuine inactivity, and the more alarming of the two readings.
+  return { statsByRule, isLoading, isError };
 }

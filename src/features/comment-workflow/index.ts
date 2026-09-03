@@ -10,7 +10,9 @@ export {
   type CommentWorkflowStats,
 } from "./domain/rule";
 export {
+  DM_LINK_RESERVE_CHARS,
   DM_MAX_CHARS,
+  dmCharacterBudget,
   EMPTY_RULE_FORM,
   MAX_PUBLIC_REPLIES,
   NAME_MAX_CHARS,

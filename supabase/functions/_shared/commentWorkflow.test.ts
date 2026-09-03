@@ -622,3 +622,34 @@ Deno.test("the release happens after the sends and before the final status write
     "db:comment_workflow_events:update",
   ]);
 });
+
+Deno.test("a link that would push the message over the platform limit is dropped, not the message", async () => {
+  // Meta rejects an over-limit body whole, so keeping the link would cost the copy as well.
+  const longCopy = "x".repeat(980);
+  const withMedia = { ...RULE, media_file_id: "media-1", dm_message: longCopy };
+  const { client, writes } = stubAdmin({
+    rules: [withMedia],
+    media: { file_path: "user-1/guide.pdf", storage_bucket: "media" },
+    signedUrl: `https://signed.example/${"y".repeat(200)}`,
+  });
+  const { fetcher, calls } = stubFetch();
+
+  await runCommentWorkflow(client, FACEBOOK, INPUT, { fetcher, now: NOW, pick: FIXED_PICK });
+
+  assertEquals(calls[1].body.message.text, longCopy);
+  assertEquals(writes.at(-1)!.row!.dm_status, "sent");
+  assertStringIncludes(String(writes.at(-1)!.row!.error_message), "media_link_would_exceed_limit");
+});
+
+Deno.test("a link that fits is still appended", async () => {
+  const withMedia = { ...RULE, media_file_id: "media-1" };
+  const { client } = stubAdmin({
+    rules: [withMedia],
+    media: { file_path: "user-1/guide.pdf", storage_bucket: "media" },
+    signedUrl: "https://signed.example/guide",
+  });
+  const { fetcher, calls } = stubFetch();
+
+  await runCommentWorkflow(client, FACEBOOK, INPUT, { fetcher, now: NOW, pick: FIXED_PICK });
+  assertEquals(calls[1].body.message.text, "Here you go\n\nhttps://signed.example/guide");
+});

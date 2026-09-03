@@ -89,8 +89,14 @@ CREATE TABLE IF NOT EXISTS public.comment_workflow_rules (
   CONSTRAINT cwr_account_owner FOREIGN KEY (social_account_id, user_id, platform)
     REFERENCES public.social_accounts (id, user_id, platform) ON DELETE CASCADE,
   -- A rule can only ever attach a file its own owner owns.
+  --
+  -- The column list on SET NULL is required, not decorative. A bare ON DELETE SET NULL on a
+  -- composite key nulls EVERY referencing column, so deleting an attached file would try to
+  -- null user_id as well and fail against its NOT NULL -- making a media row undeletable for
+  -- as long as any workflow points at it, and the Media Library deletes the storage object
+  -- before the row.
   CONSTRAINT cwr_media_owner FOREIGN KEY (media_file_id, user_id)
-    REFERENCES public.media_files (id, user_id) ON DELETE SET NULL,
+    REFERENCES public.media_files (id, user_id) ON DELETE SET NULL (media_file_id),
 
   CONSTRAINT cwr_name_present CHECK (btrim(name) <> '' AND length(name) <= 120),
   -- A keyword rule with no usable keywords matches nothing and reads as broken; 'any' is the

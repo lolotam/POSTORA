@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { describeScope, describeTrigger } from "../rule";
-import { DM_MAX_CHARS, MAX_PUBLIC_REPLIES, type RuleFormValues, validateRuleForm } from "../ruleForm";
+import {
+  DM_MAX_CHARS,
+  dmCharacterBudget,
+  MAX_PUBLIC_REPLIES,
+  type RuleFormValues,
+  validateRuleForm,
+} from "../ruleForm";
 
 const base: RuleFormValues = {
   socialAccountId: "acct-ig",
@@ -84,6 +90,17 @@ describe("validateRuleForm", () => {
 
   it("refuses a file with no message to carry it", () => {
     expect(invalid({ ...base, dmMessage: "", mediaFileId: "media-1" }).dmMessage).toBeTruthy();
+  });
+
+  it("reserves room for the download link when a file is attached", () => {
+    // The link is appended at send time. A message written to the full limit would post an
+    // over-limit body, and Meta refuses those whole — costing the message, not just the link.
+    const budget = dmCharacterBudget(true);
+    expect(budget).toBeLessThan(DM_MAX_CHARS);
+    expect(valid({ ...base, mediaFileId: "m1", dmMessage: "x".repeat(budget) }).media_file_id).toBe("m1");
+    expect(invalid({ ...base, mediaFileId: "m1", dmMessage: "x".repeat(budget + 1) }).dmMessage).toBeTruthy();
+    // Without a file the full limit is available.
+    expect(valid({ ...base, dmMessage: "x".repeat(DM_MAX_CHARS) }).dm_message).toHaveLength(DM_MAX_CHARS);
   });
 
   it("enforces the platform's message limit and the name length", () => {

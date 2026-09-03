@@ -623,6 +623,11 @@ export function useFeatureFlags() {
   // ADMIN OVERRIDE: Admins get all features EXCEPT "visibility" flags
   // Visibility flags control page-section visibility for ALL users including admins
   const VISIBILITY_FLAG_KEYS: Array<keyof FeatureFlags> = [
+    // Comment Workflow sits here because its page queries tables a migration creates.
+    // Admins otherwise receive every flag regardless of its stored value, so the page
+    // would mount during the window between a merge (which auto-deploys the frontend)
+    // and the migration being applied by hand, querying relations that do not exist yet.
+    "commentWorkflow",
     "platformAccess",
     "freePlatforms",
     "tiktokOAuthDebug",
