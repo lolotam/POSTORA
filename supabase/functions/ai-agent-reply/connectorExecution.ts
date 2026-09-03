@@ -1,10 +1,19 @@
 import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import {
+  recordConnectorCall,
+  resolveWorkspaceForCall,
+} from "../_shared/connectorTelemetry.ts";
+import {
   executeCustomTool,
   type CustomTool,
   type ToolContext,
   type ToolResult,
 } from "./tools.ts";
+import {
+  executeComposioTool,
+  type ComposioExecutionDependencies,
+} from "./composioExecution.ts";
+import type { ComposioReadyTool } from "./composioTools.ts";
 
 // The adapter gives its vendor 10s. At five tool iterations, a 6s reply-side
 // deadline caps adapter waiting at 30s of the 60s worker lifetime, leaving the
@@ -17,7 +26,24 @@ const ADAPTER_CALL_TIMEOUT_MS = 6_000;
 // larger allowance, and a truncated table is answered by the model FILLING THE
 // GAPS from stale indexed knowledge -- confidently, and wrong (2026-09-01).
 // The prompt already runs 4-13k tokens; this is a bounded, deliberate spend.
-const ADAPTER_OUTPUT_LIMIT = 8000;
+export const ADAPTER_OUTPUT_LIMIT = 8000;
+
+/** The snake_case row _shared/connectorTelemetry.ts inserts; asserted in tests. */
+export interface ConnectorCallRow {
+  workspace_id: string;
+  tool_id: string | null;
+  connection_id: string | null;
+  social_account_id: string | null;
+  partner_key_id: string | null;
+  connector_type: string;
+  auth_strategy: string;
+  action_name: string;
+  source: string;
+  status: string;
+  error_code: string | null;
+  request_id: string | null;
+  latency_ms: number | null;
+}
 
 interface AdapterCallDependencies {
   fetch?: typeof fetch;
@@ -28,6 +54,9 @@ interface AdapterCallDependencies {
 interface RoutedCustomToolDependencies {
   executeAdapter?: typeof executeAdapterTool;
   executeLegacy?: typeof executeCustomTool;
+  executeComposio?: typeof executeComposioTool;
+  /** Forwarded to the default executeComposioTool (client/admin injection). */
+  composio?: ComposioExecutionDependencies;
 }
 
 interface AdapterCallConfig {
@@ -47,15 +76,15 @@ function adapterFailure(toolName: string, detail: string): ToolResult {
   return { output: `Connector "${toolName}" failed via connector adapter: ${detail}` };
 }
 
-function redactKnownSecrets(text: string, secrets: Array<string | null>): string {
+function isRecord(candidate: unknown): candidate is Record<string, unknown> {
+  return candidate !== null && typeof candidate === "object" && !Array.isArray(candidate);
+}
+
+export function redactKnownSecrets(text: string, secrets: Array<string | null>): string {
   return secrets
     .filter((secret): secret is string => typeof secret === "string" && secret.length > 0)
     .sort((left, right) => right.length - left.length)
     .reduce((safe, secret) => safe.replaceAll(secret, "[REDACTED]"), text);
-}
-
-function isRecord(candidate: unknown): candidate is Record<string, unknown> {
-  return candidate !== null && typeof candidate === "object" && !Array.isArray(candidate);
 }
 
 function adapterCallConfig(
@@ -187,14 +216,83 @@ export async function executeAdapterTool(
   }
 }
 
+// The adapter and legacy executors report failure in the model-visible output
+// rather than by throwing (a thrown error would end the reply), so the ledger
+// status is read back from that text. The two prefixes are the ones
+// adapterFailure/structuredAdapterResult and executeCustomTool produce.
+function outcomeFromOutput(output: string): { status: "success" | "failed" | "timeout"; errorCode: string | null } {
+  if (!/^Connector ".*" failed/.test(output)) return { status: "success", errorCode: null };
+  if (/timed out/.test(output)) return { status: "timeout", errorCode: "connector_timeout" };
+  const bracketed = output.match(/\[([a-z0-9_]+)\]/);
+  return { status: "failed", errorCode: bracketed?.[1] ?? "connector_failure" };
+}
+
+/**
+ * Spec §7.2: native agent executions are metered HERE, where the conversation's
+ * account is known, never inside ai-agent-adapters (which meters only the
+ * test_connection probe). A workspace that cannot be resolved is said and the
+ * call still answers, unmetered — a customer reply must never fail over a
+ * ledger row.
+ */
+async function meterNativeExecution(
+  context: ToolContext,
+  tool: CustomTool,
+  actionName: string,
+  run: () => Promise<ToolResult>,
+): Promise<ToolResult> {
+  const startedAt = performance.now();
+  const result = await run();
+  let workspaceId: string;
+  try {
+    workspaceId = await resolveWorkspaceForCall(context.admin, {
+      socialAccountId: context.socialAccountId,
+      userId: context.userId,
+    });
+  } catch (error) {
+    console.error(
+      `[ai-agent-reply] connector call unmetered: tool=${tool.id} reason=${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return result;
+  }
+  const outcome = outcomeFromOutput(result.output);
+  await recordConnectorCall(context.admin, {
+    workspaceId,
+    toolId: tool.id,
+    connectionId: null,
+    socialAccountId: context.socialAccountId,
+    partnerKeyId: null,
+    connectorType: tool.connector_type ?? "custom_rest",
+    authStrategy: "manual_credentials",
+    actionName,
+    source: "agent",
+    requestId: context.requestId,
+  }, { ...outcome, latencyMs: performance.now() - startedAt });
+  return result;
+}
+
 export async function executeRoutedCustomTool(
   context: ToolContext,
   tool: CustomTool,
   args: Record<string, unknown>,
   dependencies: RoutedCustomToolDependencies = {},
 ): Promise<ToolResult> {
-  if (shouldUseAdapter(tool)) {
-    return await (dependencies.executeAdapter ?? executeAdapterTool)(context, tool, args);
+  // Composio first: executeComposioTool meters itself (refusals included), so
+  // wrapping it here would write every call twice.
+  if (tool.auth_strategy === "composio_oauth") {
+    return await (dependencies.executeComposio ?? executeComposioTool)(
+      context,
+      tool as ComposioReadyTool,
+      args,
+      dependencies.composio,
+    );
   }
-  return await (dependencies.executeLegacy ?? executeCustomTool)(context, tool, args);
+  const run = shouldUseAdapter(tool)
+    ? () => (dependencies.executeAdapter ?? executeAdapterTool)(context, tool, args)
+    : () => (dependencies.executeLegacy ?? executeCustomTool)(context, tool, args);
+  // The sandbox never touches the ledger, exactly as it never touches a vendor.
+  if (context.dryRun) return await run();
+  const actionName = typeof args.capability === "string" ? args.capability : "input";
+  return await meterNativeExecution(context, tool, actionName, run);
 }

@@ -21,6 +21,14 @@ export interface ResolvableTool {
   scope: "account" | "all_accounts";
   social_account_id: string | null;
   connector_type: string;
+  /**
+   * How this tool authenticates (20260903120000). Optional so callers and
+   * fixtures built before the column existed still type-check; absent behaves
+   * exactly like manual_credentials.
+   */
+  auth_strategy?: "manual_credentials" | "composio_oauth";
+  /** Set iff auth_strategy is composio_oauth; the workspace-scoped connection. */
+  connection_id?: string | null;
   /** Carried through so the emitted schema can name this instance's tables. */
   settings?: Record<string, unknown> | null;
 }

@@ -3,9 +3,10 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { executeConnector } from "./dispatcher.ts";
-import { handleAdapterRequest, type AdminClientFactory } from "./handler.ts";
+import { handleAdapterRequest, meterTestConnectionProbe, type AdminClientFactory } from "./handler.ts";
 import {
   type AdapterDependencies,
+  type ConnectorResult,
   type ConnectorTool,
   type ExecuteConnectorRequest,
 } from "./types.ts";
@@ -716,4 +717,177 @@ Deno.test("without the setting the model's select still works as before", async 
     }),
   );
   assertStringIncludes(requested, "select=name%2Cprice");
+});
+
+// ---------------------------------------------------------------------------
+// Spec §7.2: the adapter meters ONLY the test_connection probe
+// (source='test'); native execute calls are metered by the reply's
+// executeRoutedCustomTool, never twice. The probe's own outcome is the answer
+// the user sees — a failing ledger insert must not repaint it.
+// ---------------------------------------------------------------------------
+
+interface ProbeLedgerState {
+  rows: unknown[];
+  accountWorkspaceId: string | null;
+  personalWorkspaceId: string | null;
+  failInsert?: boolean;
+}
+
+function probeLedgerAdmin(state: ProbeLedgerState) {
+  return {
+    from(table: string) {
+      if (table === "connector_call_logs") {
+        return {
+          insert: (row: unknown) => {
+            state.rows.push(row);
+            return Promise.resolve(
+              state.failInsert ? { error: { message: "ledger down" } } : { error: null },
+            );
+          },
+        };
+      }
+      if (table === "social_accounts") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: state.accountWorkspaceId
+                      ? { workspace_id: state.accountWorkspaceId }
+                      : null,
+                    error: null,
+                  }),
+              }),
+            }),
+          }),
+        };
+      }
+      if (table === "workspaces") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: state.personalWorkspaceId ? { id: state.personalWorkspaceId } : null,
+                    error: null,
+                  }),
+              }),
+            }),
+          }),
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    },
+  };
+}
+
+const PROBE_INPUT = {
+  userId: "33333333-3333-4333-8333-333333333333",
+  toolId: "00000000-0000-0000-0000-000000000009",
+  connectorType: "woocommerce",
+  socialAccountId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+};
+
+const PROBE_SUCCESS: ConnectorResult = {
+  ok: true,
+  vendor: "woocommerce",
+  action: "test_connection",
+  capabilities: ["search_products", "check_stock", "lookup_orders"],
+  read_only: true,
+};
+
+const PROBE_FAILURE: ConnectorResult = {
+  ok: false,
+  vendor: "woocommerce",
+  error: { code: "woocommerce_http_error", message: "WooCommerce rejected the request.", vendor_status: 401 },
+};
+
+Deno.test("a successful probe writes exactly one source='test' ledger row", async () => {
+  const state: ProbeLedgerState = {
+    rows: [],
+    accountWorkspaceId: "ws-probe",
+    personalWorkspaceId: null,
+  };
+
+  const outcome = await meterTestConnectionProbe(
+    probeLedgerAdmin(state),
+    PROBE_INPUT,
+    () => Promise.resolve(PROBE_SUCCESS),
+  );
+
+  assertEquals(outcome, PROBE_SUCCESS);
+  assertEquals(state.rows.length, 1);
+  assertEquals(state.rows[0], {
+    workspace_id: "ws-probe",
+    tool_id: PROBE_INPUT.toolId,
+    connection_id: null,
+    social_account_id: PROBE_INPUT.socialAccountId,
+    partner_key_id: null,
+    connector_type: "woocommerce",
+    auth_strategy: "manual_credentials",
+    action_name: "test_connection",
+    source: "test",
+    status: "success",
+    error_code: null,
+    request_id: null,
+    latency_ms: (state.rows[0] as { latency_ms: number }).latency_ms,
+  });
+});
+
+Deno.test("a failed probe is metered as failed with its vendor error code", async () => {
+  const state: ProbeLedgerState = {
+    rows: [],
+    accountWorkspaceId: null,
+    personalWorkspaceId: "ws-personal",
+  };
+
+  const outcome = await meterTestConnectionProbe(
+    probeLedgerAdmin(state),
+    PROBE_INPUT,
+    () => Promise.resolve(PROBE_FAILURE),
+  );
+
+  assertEquals(outcome, PROBE_FAILURE);
+  const row = state.rows[0] as Record<string, unknown>;
+  assertEquals(row.status, "failed");
+  assertEquals(row.error_code, "woocommerce_http_error");
+  assertEquals(row.workspace_id, "ws-personal");
+});
+
+Deno.test("a failing ledger insert does not change the probe outcome", async () => {
+  const state: ProbeLedgerState = {
+    rows: [],
+    accountWorkspaceId: "ws-probe",
+    personalWorkspaceId: null,
+    failInsert: true,
+  };
+
+  const outcome = await meterTestConnectionProbe(
+    probeLedgerAdmin(state),
+    PROBE_INPUT,
+    () => Promise.resolve(PROBE_SUCCESS),
+  );
+
+  assertEquals(outcome, PROBE_SUCCESS);
+});
+
+Deno.test("an unresolvable workspace still runs the probe, unmetered", async () => {
+  const state: ProbeLedgerState = {
+    rows: [],
+    accountWorkspaceId: null,
+    personalWorkspaceId: null,
+  };
+
+  const outcome = await meterTestConnectionProbe(
+    probeLedgerAdmin(state),
+    PROBE_INPUT,
+    () => Promise.resolve(PROBE_SUCCESS),
+  );
+
+  // The backfill guarantees a personal workspace, so this is the defensive
+  // branch — but the probe's answer must survive even here.
+  assertEquals(outcome, PROBE_SUCCESS);
+  assertEquals(state.rows.length, 0);
 });

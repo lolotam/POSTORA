@@ -12,7 +12,9 @@ import {
 import {
   executeAdapterTool,
   executeRoutedCustomTool,
+  type ConnectorCallRow,
 } from "./connectorExecution.ts";
+import type { ComposioReadyTool } from "./composioTools.ts";
 
 const legacyTool: CustomTool = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -31,14 +33,76 @@ const wooTool: CustomTool = {
   connector_type: "woocommerce",
 };
 
+const composioTool: ComposioReadyTool = {
+  ...legacyTool,
+  id: "55555555-5555-4555-8555-555555555555",
+  name: "stock_sheet",
+  connector_type: "google_sheets",
+  auth_strategy: "composio_oauth",
+  connection_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  connection: {
+    id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    workspaceId: "ws-1",
+    connectorType: "google_sheets",
+    toolkit: "googlesheets",
+    composioConnectedAccountId: "composio-account-1",
+    toolSchemaCache: [],
+  },
+};
+
+interface LedgerState {
+  rows: unknown[];
+  accountWorkspaceId?: string | null;
+}
+
+// Serves both doors of the routed metering: the ledger insert and the
+// resolveWorkspaceForCall account lookup (social_accounts by id and user_id).
+function ledgerAdmin(state: LedgerState) {
+  return {
+    from(table: string) {
+      if (table === "connector_call_logs") {
+        return {
+          insert: (row: unknown) => {
+            state.rows.push(row);
+            return Promise.resolve({ error: null });
+          },
+        };
+      }
+      if (table === "social_accounts") {
+        return {
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () =>
+                  Promise.resolve({
+                    data: state.accountWorkspaceId === undefined
+                      ? { workspace_id: "ws-agent" }
+                      : state.accountWorkspaceId === null
+                        ? null
+                        : { workspace_id: state.accountWorkspaceId },
+                    error: null,
+                  }),
+              }),
+            }),
+          }),
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    },
+  };
+}
+
 const context = (dryRun = false): ToolContext => ({
-  admin: {},
+  admin: ledgerAdmin({ rows: [] }),
   userId: "33333333-3333-4333-8333-333333333333",
   platform: "whatsapp",
   conversationId: "conversation-1",
   customerName: "Customer",
   adminPhoneNumbers: [],
   dryRun,
+  socialAccountId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  requestId: "req-routing-1",
+  isAdmin: false,
   retrieveKnowledge: () => Promise.resolve([]),
   sendWhatsAppText: () => Promise.resolve(),
 });
@@ -392,4 +456,157 @@ Deno.test("a connector with no allow-list keeps the registry wording", () => {
     parameters.properties.parameters.properties.table.description,
     "Allowed PostgREST table to query. Omit to use the connector's first allowed table.",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Spec §7.2 / D5: every execution attempt from the agent door writes exactly
+// one connector_call_logs row; the sandbox (dryRun) writes none. The Composio
+// branch meters itself inside executeComposioTool — including its refusals —
+// so wrapping it again here would double-count every call.
+// ---------------------------------------------------------------------------
+
+Deno.test("the adapter branch meters through the context admin", async () => {
+  const state: LedgerState = { rows: [] };
+  const admin = ledgerAdmin(state);
+
+  const result = await executeRoutedCustomTool(
+    { ...context(), admin },
+    wooTool,
+    typedArgs,
+    {
+      executeAdapter: () =>
+        Promise.resolve({ output: 'Connector "woo_store" returned: [{"id":1}]' }),
+      executeLegacy: () => Promise.resolve({ output: "legacy result" }),
+    },
+  );
+
+  assertEquals(state.rows.length, 1);
+  const row = state.rows[0] as ConnectorCallRow;
+  assertEquals(row.source, "agent");
+  assertEquals(row.status, "success");
+  assertEquals(row.connector_type, "woocommerce");
+  assertEquals(row.auth_strategy, "manual_credentials");
+  assertEquals(row.tool_id, wooTool.id);
+  assertEquals(row.workspace_id, "ws-agent");
+  assertEquals(row.social_account_id, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  assertEquals(row.action_name, "search_products");
+  assertEquals(row.request_id, "req-routing-1");
+  assertStringIncludes(result.output, "returned");
+});
+
+Deno.test("the legacy branch writes exactly one agent ledger row", async () => {
+  const state: LedgerState = { rows: [] };
+  const admin = ledgerAdmin(state);
+
+  await executeRoutedCustomTool(
+    { ...context(), admin },
+    legacyTool,
+    { input: "hello" },
+    {
+      executeAdapter: () => Promise.resolve({ output: "adapter result" }),
+      executeLegacy: () => Promise.resolve({ output: "webhook said hi" }),
+    },
+  );
+
+  assertEquals(state.rows.length, 1);
+  const row = state.rows[0] as ConnectorCallRow;
+  assertEquals(row.source, "agent");
+  assertEquals(row.status, "success");
+  assertEquals(row.connector_type, "custom_rest");
+  assertEquals(row.action_name, "input");
+});
+
+Deno.test("a failed adapter outcome is metered as failed, not success", async () => {
+  const state: LedgerState = { rows: [] };
+  const admin = ledgerAdmin(state);
+
+  const result = await executeRoutedCustomTool(
+    { ...context(), admin },
+    wooTool,
+    typedArgs,
+    {
+      executeAdapter: () =>
+        Promise.resolve({
+          output: 'Connector "woo_store" failed via connector adapter: request timed out.',
+        }),
+      executeLegacy: () => Promise.resolve({ output: "legacy result" }),
+    },
+  );
+
+  // The model still sees the executor's own failure output.
+  assertStringIncludes(result.output, "timed out");
+  const row = state.rows[0] as ConnectorCallRow;
+  assertEquals(row.status, "timeout");
+});
+
+Deno.test("the composio branch writes exactly one agent ledger row", async () => {
+  const state: LedgerState = { rows: [] };
+  const admin = ledgerAdmin(state);
+  const composioLedger: LedgerState = { rows: [] };
+
+  const result = await executeRoutedCustomTool(
+    { ...context(), admin },
+    composioTool,
+    { capability: "GOOGLESHEETS_BATCH_GET", parameters: { spreadsheet_id: "s1" } },
+    {
+      composio: {
+        client: {
+          executeTool: () =>
+            Promise.resolve({ successful: true, data: { rows: [["a"]] } }),
+        },
+        admin: ledgerAdmin(composioLedger),
+      },
+    },
+  );
+
+  assertStringIncludes(result.output, "returned");
+  // Exactly one row for the whole routed call — the outer wrapper must not
+  // add a second one on top of executeComposioTool's own.
+  assertEquals(composioLedger.rows.length, 1);
+  assertEquals(state.rows.length, 0);
+  const row = composioLedger.rows[0] as ConnectorCallRow;
+  assertEquals(row.source, "agent");
+  assertEquals(row.auth_strategy, "composio_oauth");
+  assertEquals(row.connector_type, "google_sheets");
+  assertEquals(row.workspace_id, "ws-1");
+  assertEquals(row.action_name, "GOOGLESHEETS_BATCH_GET");
+});
+
+Deno.test("a dryRun context writes no ledger row on any branch", async () => {
+  const state: LedgerState = { rows: [] };
+  const composioLedger: LedgerState = { rows: [] };
+  const admin = ledgerAdmin(state);
+  const dry = context(true);
+
+  // Adapter branch: the real executor's dryRun path (no env access, no fetch).
+  const adapterResult = await executeRoutedCustomTool({ ...dry, admin }, wooTool, typedArgs);
+  assertStringIncludes(adapterResult.output, "test mode");
+
+  // Legacy branch.
+  const legacyResult = await executeRoutedCustomTool(
+    { ...dry, admin },
+    legacyTool,
+    { input: "hello" },
+  );
+  assertStringIncludes(legacyResult.output, "test mode");
+
+  // Composio branch.
+  const composioResult = await executeRoutedCustomTool(
+    { ...dry, admin: ledgerAdmin(composioLedger) },
+    composioTool,
+    { capability: "GOOGLESHEETS_BATCH_GET", parameters: {} },
+    {
+      composio: {
+        client: {
+          executeTool: () => {
+            throw new Error("client must not be called in dry run");
+          },
+        },
+      },
+    },
+  );
+  assertStringIncludes(composioResult.output, "test mode");
+
+  assertEquals(state.rows.length, 0);
+  assertEquals(composioLedger.rows.length, 0);
 });

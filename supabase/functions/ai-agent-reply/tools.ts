@@ -4,11 +4,13 @@ import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { composeToolDescription } from "../_shared/composeToolDescription.ts";
 import {
+  composioBinding,
   connectorCapabilities,
   type ConnectorCapabilityDefinition,
   type ConnectorParameterSchema,
   connectorUsageGuide,
 } from "../_shared/connectorRegistry.ts";
+import { composioToolParameters, type ComposioReadyTool } from "./composioTools.ts";
 
 export interface ToolContext {
   admin: any;
@@ -20,6 +22,21 @@ export interface ToolContext {
   // Test-sandbox runs: read-only tools work normally, but nothing is sent,
   // assigned, or written outside the test conversation.
   dryRun: boolean;
+  /**
+   * The conversation's account, when it names one (the sandbox's sentinel
+   * "test" is normalized to null). Connector telemetry resolves the ledger
+   * row's workspace from it, and Composio tenancy was checked against it at
+   * prompt assembly.
+   */
+  socialAccountId: string | null;
+  /** Joins connector_call_logs rows to this reply invocation's logs. */
+  requestId: string;
+  /**
+   * Whether the conversation's sender is a verified admin. Gates mutating
+   * Composio slugs (connector_write_not_allowed) the same way the prompt's
+   * admin_only filter does.
+   */
+  isAdmin: boolean;
   // Retrieve knowledge chunks for a query, using the primary embedding provider
   // and failing over to the configured fallback provider when it is down.
   retrieveKnowledge: (query: string, matchCount: number) => Promise<KnowledgeChunkMatch[]>;
@@ -342,6 +359,15 @@ export interface CustomTool {
    * table to query" left the model guessing a name it could not know.
    */
   settings?: Record<string, unknown> | null;
+  /**
+   * How this tool authenticates (20260903120000). A composio_oauth tool also
+   * carries `connection` once attachComposioTools has enriched it — the
+   * connection is deliberately NOT part of this interface because un-enriched
+   * Composio tools are never offered or executed.
+   */
+  auth_strategy?: "manual_credentials" | "composio_oauth";
+  /** Set iff auth_strategy is composio_oauth; the workspace-scoped connection. */
+  connection_id?: string | null;
 }
 
 /**
@@ -419,6 +445,16 @@ function mergeCapabilityParameters(
 export function customToolDefinitions(tools: CustomTool[]) {
   return tools.map((tool) => {
     const capabilities = connectorCapabilities(tool.connector_type);
+    // Spec §7.1: ONE branch, not a second builder. A composio_oauth tool has
+    // no native adapter and no legacy webhook — its schema comes from the
+    // registry allow-list plus the connection's cached Composio schemas, in
+    // the same flat shape the adapter branch emits.
+    const binding = tool.auth_strategy === "composio_oauth"
+      ? composioBinding(tool.connector_type)
+      : undefined;
+    const composioParameters = binding
+      ? composioToolParameters(tool as ComposioReadyTool, binding)
+      : null;
     const legacyParameters = {
       type: "object",
       properties: {
@@ -491,8 +527,9 @@ export function customToolDefinitions(tools: CustomTool[]) {
         ),
         // custom_rest and unknown historical types take the exact legacy branch.
         // Typed connectors derive this schema from the same registry metadata
-        // that opts them into adapter routing.
-        parameters: typedParameters,
+        // that opts them into adapter routing; Composio connectors from the
+        // allow-list plus cached schemas. Both are flat object schemas.
+        parameters: composioParameters ?? (capabilities?.length ? typedParameters : legacyParameters),
       },
     };
   });
