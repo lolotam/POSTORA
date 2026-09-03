@@ -63,8 +63,8 @@ describe("connectedAccountsFor", () => {
 });
 
 describe("connectedCountByPlatform", () => {
-  it("counts only working accounts, and only the three comment platforms", () => {
-    expect(connectedCountByPlatform(ACCOUNTS)).toEqual({ facebook: 1, instagram: 1, threads: 1 });
+  it("counts only working accounts, and only the comment platforms", () => {
+    expect(connectedCountByPlatform(ACCOUNTS)).toEqual({ facebook: 1, instagram: 1, threads: 1, youtube: 0 });
   });
 });
 
@@ -85,4 +85,21 @@ describe("copy", () => {
     expect(accountNoun("facebook", 2)).toBe("pages");
     expect(accountNoun("threads", 1)).toBe("account");
   });
+});
+
+// Production 2026-09-04: every native YouTube row has token_expires_at in the past because
+// YouTube refreshes just-in-time and is excluded from the refresh cron. Reading expiry as
+// "disconnected" would hide every channel; the scope is what actually decides.
+it("judges YouTube by the comments scope, not by token expiry", () => {
+  const scope = "https://www.googleapis.com/auth/youtube.force-ssl";
+  const rows = [
+    account({ id: "yt-capable", platform: "youtube", token_expires_at: YESTERDAY, auth_provider: "native", account_metadata: { granted_scopes: [scope] } }),
+    account({ id: "yt-old", platform: "youtube", token_expires_at: NEXT_YEAR, auth_provider: "native", account_metadata: {} }),
+    account({ id: "yt-composio", platform: "youtube", token_expires_at: null, auth_provider: "composio", account_metadata: {} }),
+  ];
+  expect(connectedAccountsFor(rows, "youtube").map((r) => r.id)).toEqual(["yt-capable", "yt-composio"]);
+  expect(reconnectNeededCount(rows, "youtube")).toBe(1);
+  expect(connectedCountByPlatform(rows).youtube).toBe(2);
+  expect(accountPlaceholder("youtube")).toBe("Choose a YouTube channel");
+  expect(accountNoun("youtube", 2)).toBe("channels");
 });

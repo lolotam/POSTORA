@@ -11,7 +11,7 @@ import {
 } from "@/hooks/useAutomationHandlers";
 
 interface AutomationHandlerCardProps {
-  platform: "facebook" | "instagram" | "threads" | "whatsapp";
+  platform: "facebook" | "instagram" | "threads" | "youtube" | "whatsapp";
   // When the host page already owns an account selection, pass it in so a handler change
   // can never be saved against a different account than the one on screen.
   accountId?: string | null;
@@ -83,7 +83,8 @@ export function AutomationHandlerCard({
   if (accounts.length === 0) return null;
 
   const busy = isLoading || save.isPending;
-  const showMessages = surface === "dms" || surface === "both";
+  // YouTube has no inbox, so its Messages handler would configure nothing.
+  const showMessages = (surface === "dms" || surface === "both") && platform !== "youtube";
   const showComments = (surface === "comments" || surface === "both") && platform !== "whatsapp";
 
   return (
@@ -93,6 +94,8 @@ export function AutomationHandlerCard({
         <CardDescription>
           {platform === "whatsapp"
             ? "Choose which engine automatically answers incoming messages for this account: the Postora AI Agent, an external n8n workflow, or nobody (Off)."
+            : platform === "youtube"
+            ? "Chooses which agent replies to comments on this channel's videos. Choosing n8n requires a Postora Trigger workflow in n8n."
             : "Chooses which agent replies. Choosing n8n requires a Postora Comment Trigger (or Postora Trigger) workflow in n8n."}
         </CardDescription>
       </CardHeader>
@@ -155,9 +158,13 @@ export function AutomationHandlerCard({
         ) : (
           <>
             <p className="text-xs text-muted-foreground">
-              Comments reach n8n only while Comments is set to n8n. Messages are always sent to any
-              subscribed n8n workflow so it can log or route them; this setting decides whether the
-              Postora AI agent also replies.
+              Comments reach n8n only while Comments is set to n8n.
+              {showMessages && (
+                <>
+                  {" "}Messages are always sent to any subscribed n8n workflow so it can log or route
+                  them; this setting decides whether the Postora AI agent also replies.
+                </>
+              )}
             </p>
             <p className="text-xs text-muted-foreground">
               Postora AI Agent on Comments replies <strong>publicly</strong>, using your Auto Replies

@@ -34,6 +34,10 @@ const PLATFORMS: PlatformOption[] = [
   { id: "facebook", label: "Facebook", supportsComments: true, colorPreset: "sky", description: "Messenger DMs and Page post comment automations" },
   { id: "instagram", label: "Instagram", supportsComments: true, colorPreset: "rose", description: "Direct Inbound messages and Reels/Post comment replies" },
   { id: "threads", label: "Threads", supportsComments: true, colorPreset: "violet", description: "Mentions, conversation threads and public replies", dmsLabel: "Mentions", commentsLabel: "Replies" },
+  // GradientRingCard has no red preset; rose is the nearest. YouTube is comments-only (no DM
+  // surface exists), which the page enforces below rather than resolveAgentSurface, whose
+  // model is "no comments" (WhatsApp).
+  { id: "youtube", label: "YouTube", supportsComments: true, colorPreset: "rose", description: "Video comment replies and moderation", commentsLabel: "Comments" },
 ];
 
 // Re-exported so existing importers of this page keep compiling; the type
@@ -45,7 +49,11 @@ const PLATFORM_FLAG: Record<AiAgentPlatform, keyof ReturnType<typeof useFeatureF
   facebook: "msgFacebook",
   instagram: "msgInstagram",
   threads: "msgThreads",
+  youtube: "youtubeComments",
 };
+
+/** Platforms with public comments but no private messages at all. */
+const COMMENTS_ONLY_PLATFORMS: ReadonlySet<AiAgentPlatform> = new Set(["youtube"]);
 
 export default function UnifiedAgentSetupPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -65,10 +73,13 @@ export default function UnifiedAgentSetupPage() {
   // The query parameter is the PREFERENCE; what is shown is that preference
   // narrowed to what the platform can serve. See src/lib/agentSurface.ts.
   const surfaceParam = searchParams.get("surface");
-  const { dmsActive, commentsActive, surface: effectiveSurface } = resolveAgentSurface(
-    surfaceParam,
-    selectedPlatformMeta.supportsComments,
-  );
+  const commentsOnly = COMMENTS_ONLY_PLATFORMS.has(platform);
+  // A comments-only platform ignores the preference entirely; it is left untouched in the URL
+  // for the same reason a hop through WhatsApp leaves it alone. These three feed the
+  // AiAgentManager key below, so they are settled before anything renders.
+  const { dmsActive, commentsActive, surface: effectiveSurface } = commentsOnly
+    ? { dmsActive: false, commentsActive: true, surface: "comments" as const }
+    : resolveAgentSurface(surfaceParam, selectedPlatformMeta.supportsComments);
 
   const tabParam = searchParams.get("tab") as AiAgentTab;
   const activeTab: AiAgentTab = AI_AGENT_TABS.includes(tabParam) ? tabParam : "settings";
@@ -278,21 +289,23 @@ export default function UnifiedAgentSetupPage() {
 
               {/* Right: Inline Surface Toggle Buttons */}
               <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-                {/* Direct Messaging Button */}
-                <button
-                  type="button"
-                  onClick={handleToggleDms}
-                  className={cn(
-                    "flex items-center justify-center gap-2 py-2 px-4 rounded-xl border text-xs sm:text-sm font-medium transition-all duration-200 cursor-pointer h-10 shadow-sm",
-                    dmsActive
-                      ? "bg-primary/15 border-primary text-foreground ring-1 ring-primary/40 font-semibold shadow-primary/10"
-                      : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50"
-                  )}
-                >
-                  <MessageSquare className="w-4 h-4 text-sky-400 shrink-0" />
-                  <span>{selectedPlatformMeta.dmsLabel ?? "Direct Messaging"}</span>
-                  {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
-                </button>
+                {/* Direct Messaging Button — absent where the platform has no DMs at all */}
+                {!commentsOnly && (
+                  <button
+                    type="button"
+                    onClick={handleToggleDms}
+                    className={cn(
+                      "flex items-center justify-center gap-2 py-2 px-4 rounded-xl border text-xs sm:text-sm font-medium transition-all duration-200 cursor-pointer h-10 shadow-sm",
+                      dmsActive
+                        ? "bg-primary/15 border-primary text-foreground ring-1 ring-primary/40 font-semibold shadow-primary/10"
+                        : "bg-background/50 border-border/60 text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                    )}
+                  >
+                    <MessageSquare className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span>{selectedPlatformMeta.dmsLabel ?? "Direct Messaging"}</span>
+                    {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
+                  </button>
+                )}
 
                 {/* Post Comments / Replies Button */}
                 {selectedPlatformMeta.supportsComments && (

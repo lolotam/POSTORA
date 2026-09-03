@@ -1,6 +1,6 @@
 import { useAutoReplyRules, type AutoReplyRuleInput } from "./useAutoReplyRules";
 
-export type MessengerPlatform = "facebook" | "instagram" | "threads";
+export type MessengerPlatform = "facebook" | "instagram" | "threads" | "youtube";
 
 export function useMessengerAutoReplies(platform: MessengerPlatform, enabled = true) {
   return useAutoReplyRules(

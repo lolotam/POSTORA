@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { MessageSquare } from "lucide-react";
+import { getPlatformName } from "@/components/PlatformIcon";
 import { CommentRow, type ReplyComposer } from "@/components/comments/CommentRow";
 import type { CommentThread } from "@/components/comments/commentTree";
 
@@ -25,8 +26,8 @@ export function CommentThreadCard({ thread, socialAccountId, composer }: Comment
     <Card className={root.is_hidden ? "border-dashed" : undefined}>
       <CardContent className="space-y-1 p-3 sm:p-4">
         <div className="flex flex-wrap items-center gap-2 pb-1">
-          <Badge variant="outline" className="text-xs capitalize">
-            {root.platform}
+          <Badge variant="outline" className="text-xs">
+            {getPlatformName(root.platform)}
           </Badge>
           {replyCount > 0 && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">

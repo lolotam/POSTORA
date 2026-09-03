@@ -108,6 +108,28 @@ describe("fetchRecentPosts", () => {
     });
   });
 
+  it("lists a YouTube channel's videos through the comment manager, titled or by id", async () => {
+    // YouTube has no comment-bearing post feed to reuse; the channel's uploads are the scope
+    // list, and `target_post_id` stores the video id.
+    invoke.mockClear();
+    invoke.mockResolvedValue({ data: { videos: [{ id: "v1", title: "Launch" }, { id: "abcdef123456", title: "" }] }, error: null });
+
+    const videos = await fetchRecentPosts("youtube", "acc", "UC1");
+
+    expect(invoke).toHaveBeenCalledWith("comment-manager", {
+      body: { action: "get_youtube_videos", social_account_id: "acc" },
+    });
+    expect(videos).toEqual([{ id: "v1", label: "Launch" }, { id: "abcdef123456", label: "Video 123456" }]);
+  });
+
+  it("surfaces the YouTube action's plain-string error, which is the reason the user needs", async () => {
+    // get_youtube_videos fails as { error_type, error: "<sentence>" }; reading it through Meta's
+    // nested shape would turn "Reconnect the channel" into a canned line.
+    invoke.mockClear();
+    invoke.mockResolvedValue({ data: { error_type: "MISSING_SCOPE", error: "Reconnect the channel in Profiles." }, error: null });
+    await expect(fetchRecentPosts("youtube", "acc", "UC1")).rejects.toThrow("Reconnect the channel in Profiles.");
+  });
+
   it("returns nothing for Threads, which has no post listing here", async () => {
     invoke.mockClear();
     expect(await fetchRecentPosts("threads", "acct-3", "th-1")).toEqual([]);

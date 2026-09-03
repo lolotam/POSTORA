@@ -214,7 +214,7 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
     >
       <fieldset className="space-y-3">
         <legend className="text-sm font-medium">Platform</legend>
-        <div className="grid gap-3 sm:grid-cols-3">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {COMMENT_WORKFLOW_PLATFORMS.map((platform) => {
             const selected = values.platform === platform;
             const count = connectedCounts[platform];
@@ -495,9 +495,10 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
           {errors.dmMessage && <p className="text-sm text-destructive">{errors.dmMessage}</p>}
         </fieldset>
       ) : (
-        values.platform === "threads" && (
+        values.platform && (
           <p className="text-sm text-muted-foreground">
-            Threads has no private messages — this workflow replies publicly only.
+            {getPlatformName(values.platform)} has no private messages — this workflow replies
+            publicly only.
           </p>
         )
       )}
