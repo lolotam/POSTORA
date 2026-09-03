@@ -215,8 +215,8 @@ BEGIN
     INSERT INTO public.comment_workflow_rules
       (user_id, social_account_id, platform, name, match_type, keywords, public_replies)
     VALUES ('88888888-8888-4888-8888-888888888801', '88888888-8888-4888-8888-888888888811',
-            'youtube', 'out of scope', 'any', '{}', '{hi}');
-    RAISE EXCEPTION 'unexpected success: youtube was accepted as a platform';
+            'tiktok', 'out of scope', 'any', '{}', '{hi}');
+    RAISE EXCEPTION 'unexpected success: tiktok was accepted as a platform';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
 END $checks$;
