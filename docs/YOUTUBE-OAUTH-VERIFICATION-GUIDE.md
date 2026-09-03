@@ -66,14 +66,15 @@ Before submitting for verification, ensure all items are complete:
 ### Current YouTube Scopes
 
 ```typescript
-// From supabase/functions/youtube-oauth/index.ts (lines 130-135)
+// From supabase/functions/youtube-oauth/index.ts (the `scopes` array in the authorize action)
 const scopes = [
-  "https://www.googleapis.com/auth/youtube.readonly",      // Read channel info
-  "https://www.googleapis.com/auth/youtube.upload",        // Upload videos
-  "https://www.googleapis.com/auth/youtube.force-ssl",     // Manage videos
-  "https://www.googleapis.com/auth/userinfo.profile",      // User profile info
+  "https://www.googleapis.com/auth/youtube.readonly",      // Read channel name, id, avatar (channels.list mine=true)
+  "https://www.googleapis.com/auth/youtube.upload",        // Upload videos, set the thumbnail on the just-uploaded video
+  "https://www.googleapis.com/auth/youtube.force-ssl",     // Read, reply to, moderate and delete comments on the user's own videos
 ].join(" ");
 ```
+
+The `scope` field Google returns on every token response is recorded as `account_metadata.granted_scopes` on the `social_accounts` row (connect and refresh). A channel connected before `youtube.force-ssl` was requested has no such record and shows "Reconnect this channel on Profiles to enable comments" on every comment surface until it is reconnected. Composio-managed channels are not affected: Composio's Google app already holds the scope.
 
 ### Scope Justification Template
 

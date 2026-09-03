@@ -279,12 +279,12 @@ async function refreshTikTokToken(account): Promise<{access_token, refresh_token
 2. GET callback - Handle redirect with code
 3. Action: "refresh" - Manual refresh
 
-// Scopes
+// Scopes (three; the granted set comes back on every token response and is stored as
+// account_metadata.granted_scopes so comment surfaces can tell an old connection from a new one)
 const scopes = [
   "https://www.googleapis.com/auth/youtube.readonly",
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube.force-ssl",
-  "https://www.googleapis.com/auth/userinfo.profile",
 ];
 
 // Critical: Must request offline access for refresh tokens

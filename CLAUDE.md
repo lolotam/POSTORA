@@ -365,6 +365,7 @@ All edge functions are in `supabase/functions/` and deployed to Supabase.
 | `refresh-tokens` | Refresh expired OAuth tokens |
 | `check-connection-health` | Verify social account connections |
 | `tiktok-webhook` | TikTok webhook handler |
+| `youtube-poll-comments` | Cron (every 5 min): reads new YouTube comments per channel and hands them to workflows / the agent |
 
 ---
 
