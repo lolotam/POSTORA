@@ -380,18 +380,19 @@ Deno.test("YouTube callback fails a connection with no channels", async () => {
   assertEquals(state.updates.at(-1)?.values.failure_code, "no_channel");
 });
 
-Deno.test("YouTube callback distinguishes a failed list action from no channels", async () => {
+Deno.test("YouTube callback stays active when the channel listing hiccups", async () => {
   const state = await setup(youtubeOverrides({
     async executeTool() {
       return { successful: false, data: null };
     },
   }));
-  assertEquals(await resultOf(state), "connector_unavailable");
-  assertEquals(state.updates.at(-1)?.values.failure_code, "connector_unavailable");
+  assertEquals(await resultOf(state), "ok");
+  assertEquals(state.updates.at(-1)?.values.status, "active");
+  assertEquals(state.updates.every((update) => update.values.status !== "failed"), true);
   assertEquals(state.calls.find((call) => call.actionName === "YOUTUBE_LIST_CHANNELS")?.status, "failed");
 });
 
-Deno.test("YouTube callback fails closed when channel provisioning fails", async () => {
+Deno.test("YouTube callback stays active when channel provisioning fails", async () => {
   const state = await setup({
     ...youtubeOverrides({
       async executeTool() {
@@ -402,8 +403,9 @@ Deno.test("YouTube callback fails closed when channel provisioning fails", async
       throw new Error("database unavailable");
     },
   });
-  assertEquals(await resultOf(state), "connector_unavailable");
-  assertEquals(state.updates.at(-1)?.values.failure_code, "connector_unavailable");
+  assertEquals(await resultOf(state), "ok");
+  assertEquals(state.updates.at(-1)?.values.status, "active");
+  assertEquals(state.updates.every((update) => update.values.status !== "failed"), true);
 });
 
 Deno.test("YouTube callback never replaces a native channel", async () => {
