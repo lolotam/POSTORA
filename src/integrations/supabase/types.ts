@@ -4072,11 +4072,13 @@ export type Database = {
       }
       social_accounts: {
         Row: {
-          access_token: string
+          access_token: string | null
           account_metadata: Json | null
           alerts_snoozed: boolean | null
+          auth_provider: string
           avatar_url: string | null
           connected_at: string | null
+          connection_id: string | null
           connection_mode: string | null
           failure_count: number | null
           id: string
@@ -4097,11 +4099,13 @@ export type Database = {
           workspace_id: string | null
         }
         Insert: {
-          access_token: string
+          access_token?: string | null
           account_metadata?: Json | null
           alerts_snoozed?: boolean | null
+          auth_provider?: string
           avatar_url?: string | null
           connected_at?: string | null
+          connection_id?: string | null
           connection_mode?: string | null
           failure_count?: number | null
           id?: string
@@ -4122,11 +4126,13 @@ export type Database = {
           workspace_id?: string | null
         }
         Update: {
-          access_token?: string
+          access_token?: string | null
           account_metadata?: Json | null
           alerts_snoozed?: boolean | null
+          auth_provider?: string
           avatar_url?: string | null
           connected_at?: string | null
+          connection_id?: string | null
           connection_mode?: string | null
           failure_count?: number | null
           id?: string
