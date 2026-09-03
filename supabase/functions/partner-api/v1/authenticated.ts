@@ -109,7 +109,7 @@ export function withPartnerAuth(
     // and writes nothing — that is the non-enumerability rule, not a gap.
     const ledgered = async (res: Response): Promise<Response> => {
       if (record) {
-        await recordUsage(admin, await usageRowFor(record, action, res, requestId, startedAt));
+        await recordUsage(admin, await usageRowFor(record, action, res, { requestId, startedAt }));
       }
       return res;
     };
@@ -179,12 +179,18 @@ export function withPartnerAuth(
   };
 }
 
+/** What the ledger needs about the request itself, as opposed to the key or
+ *  the response: the id the response carried and when the handler was entered. */
+interface RequestTiming {
+  requestId: string;
+  startedAt: number;
+}
+
 async function usageRowFor(
   record: PartnerKeyRecord,
   action: string,
   res: Response,
-  requestId: string,
-  startedAt: number,
+  timing: RequestTiming,
 ): Promise<UsageInput> {
   // A replay is the stored verdict handed back: no reservation, no provider
   // call, nothing to bill again. The handler already says so on the wire
@@ -198,8 +204,8 @@ async function usageRowFor(
     billable: QUOTA_RESERVING_ACTIONS.has(action) && res.status < 300 && !replayed,
     httpStatus: res.status,
     errorCode: res.status >= 400 ? await errorCodeOf(res) : undefined,
-    requestId,
-    latencyMs: performance.now() - startedAt,
+    requestId: timing.requestId,
+    latencyMs: performance.now() - timing.startedAt,
   };
 }
 
