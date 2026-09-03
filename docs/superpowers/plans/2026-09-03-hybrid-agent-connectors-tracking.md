@@ -79,7 +79,25 @@ SELECT platform, count(*) FILTER (WHERE workspace_id IS NULL) AS no_workspace, c
 FROM public.social_accounts GROUP BY platform ORDER BY platform;
 ```
 
-- [ ] **Step 2: Record the result** in `docs/superpowers/plans/2026-09-03-hybrid-agent-connectors-tracking.md` under this task. If `no_workspace > 0` for any platform, Task 19's `ConnectionPicker` must show "This account has no workspace; connect it from Profiles first" for those accounts (the trigger in Task 2 already refuses the write).
+- [x] **Step 2: Record the result** in `docs/superpowers/plans/2026-09-03-hybrid-agent-connectors-tracking.md` under this task. If `no_workspace > 0` for any platform, Task 19's `ConnectionPicker` must show "This account has no workspace; connect it from Profiles first" for those accounts (the trigger in Task 2 already refuses the write).
+
+**Result (production, 2026-09-03, read-only):**
+
+| platform | no_workspace | total |
+|---|---|---|
+| bluesky | 0 | 1 |
+| facebook | 2 | 13 |
+| instagram | 6 | 24 |
+| linkedin | 0 | 1 |
+| pinterest | 0 | 8 |
+| threads | 4 | 17 |
+| tiktok | 0 | 14 |
+| twitter | 0 | 2 |
+| whatsapp | 0 | 32 |
+| youtube | 1 | 4 |
+
+13 of 116 accounts have no workspace, so Task 19's picker message is required, and the telemetry
+fallback to the owner's personal workspace (Task 5) is exercised by real rows.
 
 ### Task 2: Migration `20260903120000_hybrid_connectors_tracking.sql`
 
