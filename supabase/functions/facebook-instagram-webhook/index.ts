@@ -21,6 +21,7 @@ import {
 import { matchAutoReplyRule } from "../_shared/autoReplyRules.ts";
 import { handleCommentInternally } from "../_shared/commentAutomation.ts";
 import { normalizeMetaCommentChange } from "./commentEvents.ts";
+import { routeComment } from "./commentRouting.ts";
 import {
   buildObservation,
   flushObservations,
@@ -367,19 +368,12 @@ Deno.serve(async (req) => {
           }
 
           const commentHandler = resolveCommentAutomationHandler(account.account_metadata);
-          if (commentHandler === "n8n") {
-            await runInBackground("facebook-instagram comment dispatch", () => dispatchN8nEvent(
-              adminClient,
-              account.user_id,
-              buildCommentPayload({ platform, socialAccountId: account.id, account, ...normalized }),
-            ));
-          } else if (commentHandler === "internal") {
-            await runInBackground("facebook-instagram comment automation", () => handleCommentInternally(
-              adminClient,
-              account,
-              { comment: normalized.comment, post: normalized.post, author: normalized.author },
-            ));
-          }
+          // One background task rather than two, because the funnel's verdict decides whether
+          // the handler runs at all, and reaching that verdict costs a database read and up to
+          // two Graph calls — none of which may sit on the path to Meta's 200. The precedence
+          // itself lives in commentRouting.ts, where it can be tested.
+          await runInBackground("facebook-instagram comment routing", () =>
+            routeComment(adminClient, account, platform, normalized, commentHandler));
         }
 
         // Meta delivering an event that yields no message is indistinguishable from Meta

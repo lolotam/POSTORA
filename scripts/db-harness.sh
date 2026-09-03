@@ -108,6 +108,7 @@ SUITES=(
   partner_webhook_phase6_events.sql
   publishing_seam.sql
   hybrid_connectors.sql
+  comment_workflow.sql
   youtube_composio_provider.sql
   partner_posts.sql
   partner_media_scan_state.sql

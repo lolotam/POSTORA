@@ -29,10 +29,31 @@ function fakeAdmin(options: {
   inserted?: unknown[];
   persistError?: { message: string };
   subscriptions?: unknown[];
+  /** Funnel rules the account has. Absent means none, which is the pre-feature behaviour. */
+  workflowRules?: unknown[];
 } = {}) {
   return {
     // deno-lint-ignore no-explicit-any
     from(table: string): any {
+      if (table === "comment_workflow_rules") {
+        return {
+          select: () => ({
+            eq: () => ({ eq: () => Promise.resolve({ data: options.workflowRules ?? [], error: null }) }),
+          }),
+        };
+      }
+      if (table === "comment_workflow_events") {
+        return {
+          upsert: () => ({ select: () => Promise.resolve({ data: [{ id: "cw-event-1" }], error: null }) }),
+          update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+        };
+      }
+      if (table === "comment_workflow_usage") {
+        return {
+          insert: () => Promise.resolve({ error: null }),
+          delete: () => ({ eq: () => ({ eq: () => ({ eq: () => Promise.resolve({ error: null }) }) }) }),
+        };
+      }
       if (table === "social_inbox_events") {
         return {
           upsert: () => ({
@@ -168,3 +189,74 @@ for (const { scenario, outcome, run } of suppressed) {
     }
   });
 }
+
+// A Threads funnel rule that claims the comment must stop BOTH the n8n dispatch and the
+// internal automation. The account below is on the n8n handler, so a delivery here would be
+// the double reply this precedence exists to prevent.
+const publicFunnelRule = {
+  id: "cw-rule-1",
+  social_account_id: "acc-1",
+  platform: "threads",
+  name: "price funnel",
+  target_post_id: null,
+  match_type: "contains",
+  keywords: ["hi"],
+  public_replies: ["DM us"],
+  dm_message: null,
+  media_file_id: null,
+  send_once_per_user: true,
+  is_active: true,
+  created_at: "2026-01-01T00:00:00Z",
+};
+
+Deno.test("a claimed Threads comment reaches neither n8n nor the internal automation", async () => {
+  const sent = captureDeliveries();
+  try {
+    await ingestThreadsComment(
+      fakeAdmin({ subscriptions: [commentSubscription], workflowRules: [publicFunnelRule] }),
+      account,
+      reply,
+      { rawPayload: reply },
+    );
+    // The only outbound call is the funnel's own public reply to Threads. The n8n
+    // subscription URL must not appear.
+    assertEquals(sent.urls.includes(SUBSCRIPTION_URL), false);
+    assertEquals(sent.urls.some((url) => url.includes("graph.threads.net")), true);
+  } finally {
+    sent.restore();
+  }
+});
+
+Deno.test("a Threads MENTION is never funnelled, and still reaches its n8n subscription", async () => {
+  // Mentions come through this same door (threads-webhook, threads-mentions). A mention is a
+  // stranger naming the account in their own thread, not a comment under the account's post.
+  const sent = captureDeliveries();
+  try {
+    const outcome = await ingestThreadsComment(
+      fakeAdmin({ subscriptions: [commentSubscription], workflowRules: [publicFunnelRule] }),
+      account,
+      { ...reply, comment: { ...reply.comment, kind: "mention" } },
+      { rawPayload: reply },
+    );
+    assertEquals(outcome, "dispatched_n8n");
+    assertEquals(sent.urls, [SUBSCRIPTION_URL]);
+  } finally {
+    sent.restore();
+  }
+});
+
+Deno.test("an account with no funnel rules behaves exactly as before", async () => {
+  const sent = captureDeliveries();
+  try {
+    const outcome = await ingestThreadsComment(
+      fakeAdmin({ subscriptions: [commentSubscription] }),
+      account,
+      reply,
+      { rawPayload: reply },
+    );
+    assertEquals(outcome, "dispatched_n8n");
+    assertEquals(sent.urls, [SUBSCRIPTION_URL]);
+  } finally {
+    sent.restore();
+  }
+});

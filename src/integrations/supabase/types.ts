@@ -1335,6 +1335,171 @@ export type Database = {
           },
         ]
       }
+      comment_workflow_events: {
+        Row: {
+          author_key: string
+          author_username: string | null
+          comment_text: string | null
+          created_at: string
+          dm_status: string
+          error_message: string | null
+          external_comment_id: string
+          external_post_id: string | null
+          id: string
+          platform: string
+          public_reply_id: string | null
+          public_reply_status: string
+          rule_id: string
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          author_key: string
+          author_username?: string | null
+          comment_text?: string | null
+          created_at?: string
+          dm_status: string
+          error_message?: string | null
+          external_comment_id: string
+          external_post_id?: string | null
+          id?: string
+          platform: string
+          public_reply_id?: string | null
+          public_reply_status: string
+          rule_id: string
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          author_key?: string
+          author_username?: string | null
+          comment_text?: string | null
+          created_at?: string
+          dm_status?: string
+          error_message?: string | null
+          external_comment_id?: string
+          external_post_id?: string | null
+          id?: string
+          platform?: string
+          public_reply_id?: string | null
+          public_reply_status?: string
+          rule_id?: string
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cwe_account_owner"
+            columns: ["social_account_id", "user_id", "platform"]
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+          {
+            foreignKeyName: "cwe_rule_owner"
+            columns: ["rule_id", "user_id"]
+            referencedRelation: "comment_workflow_rules"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      comment_workflow_rules: {
+        Row: {
+          created_at: string
+          dm_message: string | null
+          id: string
+          is_active: boolean
+          keywords: string[]
+          match_type: string
+          media_file_id: string | null
+          name: string
+          platform: string
+          public_replies: string[]
+          send_once_per_user: boolean
+          social_account_id: string
+          target_post_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          dm_message?: string | null
+          id?: string
+          is_active?: boolean
+          keywords?: string[]
+          match_type: string
+          media_file_id?: string | null
+          name: string
+          platform: string
+          public_replies?: string[]
+          send_once_per_user?: boolean
+          social_account_id: string
+          target_post_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          dm_message?: string | null
+          id?: string
+          is_active?: boolean
+          keywords?: string[]
+          match_type?: string
+          media_file_id?: string | null
+          name?: string
+          platform?: string
+          public_replies?: string[]
+          send_once_per_user?: boolean
+          social_account_id?: string
+          target_post_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cwr_account_owner"
+            columns: ["social_account_id", "user_id", "platform"]
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+          {
+            foreignKeyName: "cwr_media_owner"
+            columns: ["media_file_id", "user_id"]
+            referencedRelation: "media_files"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      comment_workflow_usage: {
+        Row: {
+          author_key: string
+          claimed_at: string
+          external_post_id: string
+          rule_id: string
+        }
+        Insert: {
+          author_key: string
+          claimed_at?: string
+          external_post_id?: string
+          rule_id: string
+        }
+        Update: {
+          author_key?: string
+          claimed_at?: string
+          external_post_id?: string
+          rule_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comment_workflow_usage_rule_id_fkey"
+            columns: ["rule_id"]
+            referencedRelation: "comment_workflow_rules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       connector_connections: {
         Row: {
           auth_strategy: string
@@ -7026,6 +7191,18 @@ export type Database = {
       }
     }
     Views: {
+      comment_workflow_rule_stats: {
+        Row: {
+          dm_sent_count: number | null
+          failed_count: number | null
+          indeterminate_count: number | null
+          last_triggered_at: string | null
+          public_sent_count: number | null
+          rule_id: string | null
+          triggered_count: number | null
+        }
+        Relationships: []
+      }
       higgsfield_connection_status: {
         Row: {
           account_email: string | null

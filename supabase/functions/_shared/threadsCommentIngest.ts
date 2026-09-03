@@ -7,6 +7,7 @@ import { resolveCommentAutomationHandler } from "./automationHandler.ts";
 import { runInBackground } from "./background.ts";
 import { isOwnComment } from "./commentAuthor.ts";
 import { handleCommentInternally, type CommentAutomationAccount } from "./commentAutomation.ts";
+import { runCommentWorkflow } from "./commentWorkflow.ts";
 import { buildCommentPayload, type CommentPayloadInput, dispatchN8nEvent } from "./n8nMessagingDispatch.ts";
 
 export type ThreadsCommentOutcome =
@@ -77,23 +78,46 @@ export async function ingestThreadsComment(
   if (options.dispatch === false) return "seeded";
 
   const handler = resolveCommentAutomationHandler(account.account_metadata);
-  if (handler === "n8n") {
-    await runInBackground("threads comment dispatch", () =>
-      dispatchN8nEvent(
+
+  // Everything from here is one background task rather than three, because the funnel's
+  // verdict decides whether the handler runs at all and that verdict needs a database read and
+  // up to two Graph calls. threads-webhook awaits this function on its HTTP response path, and
+  // a Threads public reply alone can spend nine seconds polling its container to FINISHED
+  // (commentActions.waitForThreadsContainer) — long enough for Meta to treat the delivery as
+  // failed and redeliver it.
+  //
+  // The returned outcome therefore names what was STARTED, not what finished. Whatever
+  // actually happened is in comment_workflow_events and the logs; the caller only needs to
+  // know the comment was claimed and routed.
+  await runInBackground("threads comment routing", async () => {
+    // Funnel rules first, for every handler value including "off": creating a rule is itself
+    // the per-account opt-in, and a claim means no other automation answers this comment.
+    const workflow = await runCommentWorkflow(admin, account, {
+      comment: { id: comment.comment.id, text: comment.comment.text, kind: comment.comment.kind },
+      post: { id: comment.post.id },
+      author: { id: comment.author.id, username: comment.author.username },
+      timestamp: comment.timestamp,
+    });
+    if (workflow === "claimed") return;
+
+    if (handler === "n8n") {
+      await dispatchN8nEvent(
         admin,
         account.user_id,
         buildCommentPayload({ platform: "threads", socialAccountId: account.id, account, ...comment }),
-      ));
-    return "dispatched_n8n";
-  }
-  if (handler === "internal") {
-    await runInBackground("threads comment automation", () =>
-      handleCommentInternally(admin, account, {
+      );
+      return;
+    }
+    if (handler === "internal") {
+      await handleCommentInternally(admin, account, {
         comment: { id: comment.comment.id, text: comment.comment.text },
         post: { id: comment.post.id },
         author: { id: comment.author.id, username: comment.author.username },
-      }));
-    return "automated_internally";
-  }
+      });
+    }
+  });
+
+  if (handler === "n8n") return "dispatched_n8n";
+  if (handler === "internal") return "automated_internally";
   return "no_handler";
 }

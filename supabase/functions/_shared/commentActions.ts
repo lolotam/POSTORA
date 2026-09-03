@@ -51,7 +51,7 @@ async function readJson(response: Response): Promise<any> {
 // error_user_msg first: Meta writes it for humans ("This comment was deleted") while
 // message is the developer string ("(#100) Object does not exist"). The comment manager
 // surfaces whichever one lands here straight to the user.
-function failure(data: any, fallback: string): CommentActionResult {
+export function failure(data: any, fallback: string): CommentActionResult {
   return {
     success: false,
     error: data?.error?.error_user_msg || data?.error?.message || data?.error || fallback,
@@ -62,7 +62,7 @@ type GraphOutcome = { ok: true; data: any } | { ok: false; failure: CommentActio
 
 // Every platform call goes through here so the timeout, and the split between a rejection and
 // an unreachable upstream, are stated once instead of at each of the five call sites.
-async function callGraph(fetcher: Fetcher, url: string, init: RequestInit, fallback: string): Promise<GraphOutcome> {
+export async function callGraph(fetcher: Fetcher, url: string, init: RequestInit, fallback: string): Promise<GraphOutcome> {
   let response: Response;
   try {
     response = await fetcher(url, { ...init, signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS) });
