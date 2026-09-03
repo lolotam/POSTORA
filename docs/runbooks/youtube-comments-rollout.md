@@ -70,6 +70,8 @@ select platform, count(*) from social_inbox_events where platform = 'youtube' gr
 
 Post a fresh comment on one of the channel's videos, wait for the next 5-minute tick (or call again): `dispatched 1`, and a `comment_workflow_events` row if a funnel rule matched.
 
+Caveat: the "first pass seeds" rule keys on whether the channel already has inbox rows. A channel with **no comments at all** when it is enabled will have its first-ever comment seeded, not dispatched (same as the Threads poller); verify on a channel that already has comments, or post one before enabling the handler.
+
 ## 8. Live checks
 
 - `/comments` → YouTube tile → the Composio channel lists comments grouped by video; an un-reconnected native channel shows the reconnect banner.

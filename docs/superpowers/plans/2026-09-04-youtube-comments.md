@@ -846,7 +846,12 @@ export async function listReplies(account, deps, parentId: string) {
   return { ok: true as const, value: (Array.isArray(result.value?.items) ? result.value.items : []).map(parseComment) };
 }
 
-export async function replyToThread(account, deps, parentId: string, text: string) {
+// YouTube nests one level: a reply is always posted against the thread's top-level comment, so
+// replying to a reply first reads that reply's own parentId (one comments.list call, 1 unit).
+export async function replyToThread(account, deps, commentId: string, text: string) {
+  const snippet = await commentSnippet(account, deps, commentId);   // { authorChannelId, parentId }, shared with deleteOwnComment
+  if (!snippet.ok) return snippet;
+  const parentId = snippet.value.parentId ?? commentId;
   const result = await callYouTube(account, deps, {
     method: "POST", path: "comments", query: { part: "snippet" }, body: { snippet: { parentId, textOriginal: text } },
     composio: { slug: "YOUTUBE_CREATE_COMMENT_REPLY", arguments: { parentId, textOriginal: text } },
