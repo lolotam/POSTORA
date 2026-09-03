@@ -9,7 +9,58 @@ import {
 import { persistConnectionTestOutcome } from "./connectionTestOutcome.ts";
 import { createAdapterDependencies } from "./dependencies.ts";
 import { executeConnector } from "./dispatcher.ts";
-import { CAPABILITIES, type ConnectorTool } from "./types.ts";
+import { CAPABILITIES, type ConnectorResult, type ConnectorTool } from "./types.ts";
+import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
+
+export interface TestConnectionProbeInput {
+  userId: string;
+  toolId: string;
+  connectorType: string;
+  socialAccountId: string | null;
+}
+
+/**
+ * Spec §7.2: the adapter meters ONLY the test_connection probe (source
+ * 'test'); execute calls are metered by the reply's executeRoutedCustomTool,
+ * never twice. The probe's own outcome is the answer the user sees, so a
+ * failing ledger insert or an unresolvable workspace never repaints it.
+ */
+export async function meterTestConnectionProbe(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  input: TestConnectionProbeInput,
+  run: () => Promise<ConnectorResult>,
+): Promise<ConnectorResult> {
+  const startedAt = performance.now();
+  const outcome = await run();
+  let workspaceId: string;
+  try {
+    workspaceId = await resolveWorkspaceForCall(admin, {
+      socialAccountId: input.socialAccountId,
+      userId: input.userId,
+    });
+  } catch {
+    boundaryLog("connector_failure", "probe_unmetered", { user_id: input.userId, tool_id: input.toolId });
+    return outcome;
+  }
+  await recordConnectorCall(admin, {
+    workspaceId,
+    toolId: input.toolId,
+    connectionId: null,
+    socialAccountId: input.socialAccountId,
+    partnerKeyId: null,
+    connectorType: input.connectorType,
+    authStrategy: "manual_credentials",
+    actionName: "test_connection",
+    source: "test",
+    requestId: null,
+  }, {
+    status: outcome.ok ? "success" : "failed",
+    errorCode: outcome.ok ? null : outcome.error.code,
+    latencyMs: performance.now() - startedAt,
+  });
+  return outcome;
+}
 
 const RequestSchema = z.object({
   tool_id: z.string().uuid(),
@@ -110,7 +161,7 @@ async function executeAdapterRequest(
   const toolId = parsedRequest.data.tool_id;
   const { data: toolRecord, error: toolError } = await admin
     .from("ai_agent_tools")
-    .select("id, connector_type, settings, permissions, read_only_mode, is_enabled")
+    .select("id, connector_type, settings, permissions, read_only_mode, is_enabled, social_account_id")
     .eq("id", toolId)
     .eq("user_id", userId)
     .maybeSingle();
@@ -146,19 +197,28 @@ async function executeAdapterRequest(
     return restrictedErrorResponse(req, "Connector credentials are not configured.", 409);
   }
 
-  const connectorOutcome = await executeConnector(
-    {
-      tool: toolRecord as ConnectorTool,
-      credentials: credentialBlob as Record<string, unknown>,
-      request: {
-        action: parsedRequest.data.action,
-        capability: parsedRequest.data.capability,
-        method: parsedRequest.data.method,
-        parameters: parsedRequest.data.parameters,
+  const runConnector = () =>
+    executeConnector(
+      {
+        tool: toolRecord as ConnectorTool,
+        credentials: credentialBlob as Record<string, unknown>,
+        request: {
+          action: parsedRequest.data.action,
+          capability: parsedRequest.data.capability,
+          method: parsedRequest.data.method,
+          parameters: parsedRequest.data.parameters,
+        },
       },
-    },
-    createAdapterDependencies(),
-  );
+      createAdapterDependencies(),
+    );
+  const connectorOutcome = parsedRequest.data.action === "test_connection"
+    ? await meterTestConnectionProbe(admin, {
+      userId,
+      toolId,
+      connectorType: String(toolRecord.connector_type),
+      socialAccountId: typeof toolRecord.social_account_id === "string" ? toolRecord.social_account_id : null,
+    }, runConnector)
+    : await runConnector();
 
   // The adapter — not the browser — records the probe on the row (see
   // connectionTestOutcome.ts). Deliberately after the outcome exists and

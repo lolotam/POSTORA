@@ -303,6 +303,174 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/connectors:
+    get:
+      operationId: listConnectors
+      summary: List the connected tools this key can reach
+      description: |
+        Every tool resolvable by ANY account bound to this key, de-duplicated
+        by `tool_id`: a tool shared with two bound accounts is listed once.
+        Visibility is decided by the same resolver the Postora AI agent uses,
+        so what is listed here is exactly what `POST /v1/tools/execute` will
+        accept. Tools marked admin-only in Postora are never listed — a key is
+        not a person, and cannot be the verified admin those require.
+
+        `connection` is present only for tools authenticated through a
+        connected third-party account, and carries its state and its human
+        label. Provider account identifiers are never returned.
+
+        `usage_30d` counts calls from every door — the agent, this API, the
+        connector test button and publishing — over the last 30 days in the
+        key's workspace. `failures` counts failed and timed-out calls, not
+        refusals (a refusal is Postora declining to call, not the connector
+        failing). `p50_latency_ms` is the median over calls that recorded one,
+        and is null when none did. Workspaces past 10 000 calls in the window
+        are summarised over their 10 000 most recent calls.
+
+        The listing is never paginated — it is bounded by the key's own
+        bindings — but `next_cursor` is still returned, always null, so one
+        paging loop works against every listing.
+
+        Scope `connectors:read`. D7 class A.
+      responses:
+        '200':
+          description: The connectors this key can reach.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CollectionEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/ConnectorSummary'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/connectors/{type}/connect-link:
+    post:
+      operationId: createConnectLink
+      summary: Mint a link that connects a third-party account
+      description: |
+        Starts an authorisation flow for one connector type and returns the URL
+        a human must open to complete it. The connection is created for the
+        key's own workspace; there is no way to name another one.
+
+        `{type}` must be a connector type that authenticates through a
+        connected third-party account. A native connector type — one configured
+        with credentials in Postora — and an unknown type both answer
+        `connector_type_not_connectable` (400).
+
+        The returned `connection_id` identifies a connection that is not usable
+        yet: it becomes usable only after someone opens `redirect_url` and
+        completes the authorisation before `expires_at`. Nothing needs to be
+        polled; the connection appears as `active` in `GET /v1/connectors` once
+        it is.
+
+        `Idempotency-Key` is required. A retry with the same key and body
+        returns the stored link rather than minting a second one. A mint that
+        FAILED is not stored: the same key becomes usable again once its claim
+        lease expires, and until then a retry answers `idempotency_in_progress`
+        (409, retryable) — use a new key if a link is needed sooner.
+
+        `connector_unavailable` (503) means the connector service is not
+        configured for this deployment or could not be reached.
+
+        Scope `connectors:manage`. D7 class C.
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: '^[a-z0-9_]{1,64}$'
+          description: The connector type to connect, for example `slack`.
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ConnectLinkRequest'
+      responses:
+        '201':
+          description: The connection was created and its authorisation link minted.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectLinkResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/tools/execute:
+    post:
+      operationId: executeTool
+      summary: Execute one capability of a connected tool
+      description: |
+        Runs one capability of one tool on behalf of one bound account, and
+        returns what the connector returned.
+
+        Authorisation is the same rule the Postora AI agent applies: the tool
+        must resolve for `social_account_id`, and that account must be bound to
+        this key. An unbound account, an unknown `tool_id`, a tool that does not
+        resolve for that account, a malformed id, and a tool whose connection
+        belongs to another workspace all answer `tool_not_found` (404) — the
+        same answer, so a caller learns nothing about which it hit.
+
+        `capability` must be one the connector declares. Anything else answers
+        `connector_tool_not_allowed` (403). A capability that CHANGES data in
+        the connected account additionally requires the tool's owner to have
+        enabled writes in Postora; a key can never widen that, and answers
+        `connector_write_not_allowed` (403). Connectors configured as plain
+        webhooks have no typed capability contract and are not executable here.
+
+        The execution budget is 20 seconds. Exceeding it answers
+        `tool_execution_timeout` (504) and the outcome is UNKNOWN: the call may
+        have taken effect. Retrying it with the same `Idempotency-Key` answers
+        `idempotency_indeterminate` (409) on purpose — reconcile in the
+        connected system rather than executing again. A connector that ran and
+        reported failure answers `tool_execution_failed` (502) with the code
+        only; provider messages never pass through.
+
+        `Idempotency-Key` is required. A retry with the same key and body
+        returns the stored 200 or 502 without executing again.
+
+        Every call is metered against the workspace's connector usage,
+        including every refusal against a tool the key can see; those appear
+        in `usage_30d`. A `tool_not_found` refusal is recorded too but is not
+        attributable to a listed tool, so it never appears there. Execution
+        consumes no monthly message quota.
+
+        Scope `tools:execute`. D7 class C.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolExecuteRequest'
+      responses:
+        '200':
+          description: The connector ran and returned a result.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolExecuteResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/media:
     post:
       operationId: uploadMedia
@@ -1170,6 +1338,18 @@ components:
           `media_rejected` (422, permanent) when the `media_id`'s scan_state
           is not `available`
         <!-- END Phase 9 rich-media block -->
+        - `partner-api/v1/connectors.ts` and `partner-api/v1/tools.ts` (hybrid
+          connectors): `connector_type_not_connectable` when the `{type}` in a
+          connect-link request is not a connectable connector type,
+          `connector_unavailable` when the connector service is not configured
+          or unreachable, `tool_not_found` for a tool or account outside the
+          key's binding (non-enumerable, like `resource_not_found`),
+          `connection_inactive` when the tool's connection is not active,
+          `connector_tool_not_allowed` for a capability outside the connector's
+          allow-list, `connector_write_not_allowed` for a data-changing
+          capability the tool's owner has not enabled, `tool_execution_failed`
+          for a sanitized downstream failure and `tool_execution_timeout` when
+          the execution budget expires
         - `partner-api/v1/` (the /v1 router and D2 envelope, 2.1/2.2): all of
           the above remain expressible through `v1/errors.ts`'s single policy
           table (statuses and retryable verdicts agreed with the alias), plus
@@ -1189,6 +1369,11 @@ components:
       enum:
         - account_needs_reauth
         - account_not_connected
+        - connection_inactive
+        - connector_tool_not_allowed
+        - connector_type_not_connectable
+        - connector_unavailable
+        - connector_write_not_allowed
         - idempotency_conflict
         - idempotency_in_progress
         - idempotency_indeterminate
@@ -1214,6 +1399,9 @@ components:
         - resource_not_found
         - template_not_approved
         - temporarily_unavailable
+        - tool_execution_failed
+        - tool_execution_timeout
+        - tool_not_found
         - unknown_action
         - unsupported_capability
         - unsupported_direct_qr
@@ -1275,6 +1463,8 @@ components:
         would turn zero capability into full webhook CRUD + SSRF amplifier).
       enum:
         - accounts:read
+        - connectors:manage
+        - connectors:read
         - conversations:read
         - media:read
         - media:write
@@ -1285,6 +1475,7 @@ components:
         - posts:schedule
         - posts:write
         - templates:read
+        - tools:execute
         - usage:read
         - webhooks:manage
         - webhooks:read
@@ -2172,6 +2363,175 @@ components:
               minimum: 1
         request_id:
           type: string
+
+    ConnectorSummary:
+      type: object
+      description: |
+        One tool this key can reach, with the state of the third-party
+        connection behind it (when there is one) and its 30-day usage.
+      required:
+        - tool_id
+        - name
+        - connector_type
+        - auth_strategy
+        - category
+        - scope
+        - social_account_id
+        - connection
+        - usage_30d
+      properties:
+        tool_id:
+          type: string
+          format: uuid
+          description: Pass this to `POST /v1/tools/execute`.
+        name:
+          type: string
+          description: The name the tool is configured under in Postora.
+        connector_type:
+          type: string
+          description: The kind of system this tool talks to, for example `supabase` or `slack`.
+        auth_strategy:
+          type: string
+          enum: [manual_credentials, composio_oauth]
+          description: |
+            `manual_credentials` — configured with credentials held in Postora.
+            `composio_oauth` — authenticated through a connected third-party
+            account; `connection` describes it.
+        category:
+          type: [string, 'null']
+          enum: [ecommerce_payments, productivity_crm, databases, automation, null]
+          description: Grouping for display; null for a connector type Postora no longer lists.
+        scope:
+          type: string
+          enum: [account, all_accounts]
+          description: |
+            `account` — configured for one account. `all_accounts` — available
+            to every account of its owner, which is why one entry can be
+            reachable through several bound accounts.
+        social_account_id:
+          type: [string, 'null']
+          format: uuid
+          description: |
+            The account this tool is configured for, or null when it is shared
+            across accounts. Null does NOT mean "omit it when executing":
+            `POST /v1/tools/execute` always names the account to act for.
+        connection:
+          oneOf:
+            - type: 'null'
+            - type: object
+              required: [status, external_account_label]
+              properties:
+                status:
+                  type: string
+                  enum: [initiated, active, failed, revoked]
+                  description: Only `active` connections can execute; the rest answer `connection_inactive`.
+                external_account_label:
+                  type: [string, 'null']
+                  description: The connected account as the provider names it, for display.
+          description: Null for tools that do not use a connected third-party account.
+        usage_30d:
+          $ref: '#/components/schemas/ConnectorUsage'
+
+    ConnectorUsage:
+      type: object
+      description: |
+        Connector calls in the key's workspace over the last 30 days, from every
+        door — the Postora AI agent, this API, the connector test button and
+        publishing — not only this key's own calls.
+      required: [calls, failures, p50_latency_ms, last_used_at]
+      properties:
+        calls:
+          type: integer
+          minimum: 0
+        failures:
+          type: integer
+          minimum: 0
+          description: Calls that failed or timed out. Refusals are not failures.
+        p50_latency_ms:
+          type: [integer, 'null']
+          description: Median latency over calls that recorded one; null when none did.
+        last_used_at:
+          type: [string, 'null']
+          format: date-time
+
+    ConnectLinkRequest:
+      type: object
+      description: |
+        The body of a connect-link request. Every field is optional; the
+        connection is always created for the key's own workspace.
+      properties:
+        social_account_id:
+          type: string
+          format: uuid
+          description: |
+            An account this connection is intended for. It does not change what
+            is minted — connections are workspace-wide — but it must be an
+            account bound to this key; anything else answers
+            `resource_not_found`.
+
+    ConnectLinkResponse:
+      type: object
+      required: [connection_id, redirect_url, expires_at]
+      properties:
+        connection_id:
+          type: string
+          format: uuid
+          description: |
+            The connection this link will complete. It is not usable until
+            someone finishes the authorisation; watch for it becoming `active`
+            in `GET /v1/connectors`.
+        redirect_url:
+          type: string
+          format: uri
+          description: Open this in a browser to authorise the connection.
+        expires_at:
+          type: string
+          format: date-time
+          description: After this instant the link no longer completes anything.
+
+    ToolExecuteRequest:
+      type: object
+      required: [tool_id, social_account_id, capability]
+      properties:
+        tool_id:
+          type: string
+          format: uuid
+          description: From `GET /v1/connectors`.
+        social_account_id:
+          type: string
+          format: uuid
+          description: |
+            The bound account to act for. Required even for a tool shared
+            across accounts — it is what authorises the call.
+        capability:
+          type: string
+          description: |
+            One of the capabilities the connector declares. For a connector
+            authenticated through a third-party account this is the provider's
+            own action name, for example `SLACK_SEARCH_MESSAGES`.
+        parameters:
+          type: object
+          additionalProperties: true
+          description: Arguments for the chosen capability. Defaults to an empty object.
+
+    ToolExecuteResponse:
+      type: object
+      required: [ok, data, request_id, latency_ms]
+      properties:
+        ok:
+          type: boolean
+          const: true
+          description: |
+            Always true on a 200. A failed execution is an error envelope with
+            `tool_execution_failed`, not this shape with `ok: false`.
+        data:
+          description: Whatever the connector returned, unchanged. Shape depends on the capability.
+        request_id:
+          type: string
+        latency_ms:
+          type: integer
+          minimum: 0
+          description: How long the connector call took, measured by Postora.
 
     CollectionEnvelope:
       type: object

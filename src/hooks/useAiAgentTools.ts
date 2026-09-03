@@ -12,22 +12,10 @@ import { callMessagingApi } from "@/lib/messagingApi";
  * is what lets the UI render "Consumer secret ✓ set" without ever seeing a
  * decrypted credential.
  */
-export const CONNECTOR_TYPES = [
-  "supabase",
-  "mysql_postgres",
-  "woocommerce",
-  "shopify",
-  "salla",
-  "zid",
-  "myfatoorah",
-  "stripe",
-  "higgsfield",
-  "formula",
-  "custom_rest",
-  "mcp_custom",
-] as const;
-
-export type ConnectorType = (typeof CONNECTOR_TYPES)[number];
+// One list, not a third copy: the picker offers exactly the registry's types.
+import { CONNECTOR_TYPES, type ConnectorType } from "@/lib/connectorRegistry";
+export { CONNECTOR_TYPES };
+export type { ConnectorType };
 
 export interface ToolPermissions {
   search_products: boolean;
@@ -49,6 +37,12 @@ export interface AiAgentTool {
   is_enabled: boolean;
   admin_only: boolean;
   connector_type: ConnectorType;
+  /** How this connector authenticates: its own stored credentials, or a
+   *  workspace Composio connection. Derived server-side from the registry. */
+  auth_strategy?: "manual_credentials" | "composio_oauth";
+  /** The connector_connections row an OAuth-backed tool runs as; null for
+   *  every manual-credential row. */
+  connection_id?: string | null;
   permissions: ToolPermissions;
   read_only_mode: boolean;
   enable_cache: boolean;
@@ -86,6 +80,9 @@ export interface AiAgentToolInput {
   is_enabled?: boolean;
   admin_only?: boolean;
   connector_type?: ConnectorType;
+  /** Required for a Composio-backed connector type; the server refuses the
+   *  write with `connection_required` without it. Null for every other type. */
+  connection_id?: string | null;
   permissions?: ToolPermissions;
   read_only_mode?: boolean;
   enable_cache?: boolean;

@@ -39,6 +39,7 @@ import {
 import { executeRoutedCustomTool } from "./connectorExecution.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
 import { resolveAgentAccountId } from "./accountScope.ts";
+import { attachComposioTools } from "./composioTools.ts";
 import {
   cancelOutboxRow,
   deliverGeneratedReply,
@@ -816,6 +817,13 @@ Deno.serve(async (req) => {
       customerName: cachedConversation?.participant_name || request.recipient_phone,
       adminPhoneNumbers: config.admin_phone_numbers || [],
       dryRun,
+      // The sandbox's "test" sentinel is not a uuid; connector telemetry then
+      // falls back to the owner's personal workspace (spec §4.3).
+      socialAccountId: UUID_PATTERN.test(request.social_account_id) ? request.social_account_id : null,
+      // One id per reply, so every connector row this reply writes can be
+      // joined back to it; nothing upstream hands us a correlation id.
+      requestId: crypto.randomUUID(),
+      isAdmin,
       // Same scope as the initial lookup. Fixing only the first retrieval path
       // would leave the model able to reach every source by calling the tool.
       retrieveKnowledge: (query: string, matchCount: number) =>
@@ -847,7 +855,9 @@ Deno.serve(async (req) => {
       .from("ai_agent_tools")
       // `settings` is read only to tell the model which tables this connector
       // may reach; it holds no secret (credentials live in Vault).
-      .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, settings")
+      // `auth_strategy`/`connection_id` decide whether the tool is Composio-
+      // backed, whose connection attachComposioTools resolves below.
+      .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, settings, auth_strategy, connection_id")
       .eq("user_id", request.user_id)
       .eq("is_enabled", true);
 
@@ -896,7 +906,41 @@ Deno.serve(async (req) => {
       scopedAccountId,
       { includeAdminOnly: isAdmin },
     );
-    const customTools: CustomTool[] = toolResolution.tools;
+
+    // Spec §7.1: Composio tools are only offerable when their connection is
+    // active, in the conversation account's workspace, and schema-cached. The
+    // workspace is read here (one select by id AND user_id — the structural
+    // tenancy check under the service role) rather than inside
+    // attachComposioTools so the lookup happens once per reply, and only when
+    // this account actually resolved a Composio tool.
+    const hasComposioTools = toolResolution.tools.some(
+      (tool: ResolvableTool) => tool.auth_strategy === "composio_oauth",
+    );
+    let accountWorkspaceId: string | null = null;
+    if (hasComposioTools && scopedAccountId) {
+      const { data: accountRow, error: accountError } = await admin
+        .from("social_accounts")
+        .select("workspace_id")
+        .eq("id", scopedAccountId)
+        .eq("user_id", request.user_id)
+        .maybeSingle();
+      if (accountError) {
+        // Said, not swallowed: a failed read must not look like "no
+        // workspace". attachComposioTools then omits the Composio tools.
+        console.error(
+          "[ai-agent-reply] account workspace read failed:",
+          accountError.message,
+        );
+      } else {
+        accountWorkspaceId = accountRow?.workspace_id ?? null;
+      }
+    }
+    const customTools: CustomTool[] = hasComposioTools
+      ? await attachComposioTools(admin, toolResolution.tools, {
+        workspaceId: accountWorkspaceId,
+        id: scopedAccountId,
+      })
+      : toolResolution.tools;
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
 
     // Built HERE, not where the knowledge was gathered, because the prompt now

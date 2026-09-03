@@ -61,6 +61,9 @@ const FULL_SCOPES = [
   "posts:read",
   "posts:write",
   "posts:schedule",
+  "connectors:read",
+  "connectors:manage",
+  "tools:execute",
 ];
 
 interface SetupIds {
@@ -71,6 +74,7 @@ interface SetupIds {
   key_a: string;
   key_b: string;
   media_b: string;
+  tool_a: string;
   user_a: string;
   user_b: string;
 }
@@ -758,5 +762,156 @@ e2eTest("quota exhaustion is concurrency-safe → one succeeds", async () => {
     if (providerCalls - preCalls !== 1) throw new Error(`provider calls ${providerCalls - preCalls} expected 1`);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// 10. tool execution → one metered ledger row, bound to the key
+//
+// The chain this proves is the one nothing below the /v1 handler can prove on
+// its own: a real POST /v1/tools/execute, authorised through the real resolver
+// against real rows in Postgres, reaching the adapter, and leaving ONE
+// connector_call_logs row that carries the key that made the call and the same
+// request id the response returned. A unit test can assert the row it stubbed;
+// only this can assert the row the database actually holds.
+//
+// The adapter is stubbed at fetch (there is no ai-agent-adapters function in
+// the harness) — the same boundary the provider is stubbed at above. Nothing
+// else is faked: the tool, the account, the binding and the key are rows.
+// ---------------------------------------------------------------------------
+e2eTest("tool execution → one metered ledger row, bound to the key", async () => {
+  const { client, keyA, keyB, ids } = await setupE2E();
+  const originalFetch = globalThis.fetch;
+  const postgrestOrigin = new URL(postgrestUrl).origin;
+  const adapterOrigin = "https://adapter-e2e.invalid";
+  const previousUrl = Deno.env.get("SUPABASE_URL");
+  const previousKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+  const adapterCalls: unknown[] = [];
+
+  // deno-lint-ignore no-explicit-any
+  const stub: any = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const urlStr = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : (input as Request).url;
+    if (urlStr.startsWith(adapterOrigin)) {
+      adapterCalls.push(init?.body ? JSON.parse(String(init.body)) : null);
+      return new Response(JSON.stringify({ ok: true, data: { rows: [{ sku: "E2E-1" }] } }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    const rewritten = rewritePostgrestUrl(urlStr);
+    if (rewritten.startsWith(postgrestOrigin)) {
+      if (rewritten !== urlStr) {
+        if (typeof input === "string" || input instanceof URL) return originalFetch(rewritten, init);
+        const req = input as Request;
+        return originalFetch(
+          new Request(rewritten, { method: req.method, headers: req.headers, body: req.body as BodyInit | null }),
+          init,
+        );
+      }
+      return originalFetch(input as RequestInfo, init);
+    }
+    throw new Error(`unexpected fetch to ${urlStr} — test must not reach internet`);
+  };
+
+  try {
+    Deno.env.set("SUPABASE_URL", adapterOrigin);
+    Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", "e2e-service-role-key");
+    globalThis.fetch = stub as typeof fetch;
+
+    const res = await callPartnerApi(client, {
+      method: "POST",
+      path: "/v1/tools/execute",
+      key: keyA.key,
+      headers: { "Idempotency-Key": `idem-tool-${crypto.randomUUID()}` },
+      body: {
+        tool_id: ids.tool_a,
+        social_account_id: ids.account_a,
+        capability: "search_products",
+        parameters: { table: "products" },
+      },
+    });
+    if (res.status !== 200) throw new Error(`execute status ${res.status} ${JSON.stringify(res.json)}`);
+    const body = res.json as Record<string, unknown>;
+    if (body.ok !== true) throw new Error(`execute body ${JSON.stringify(body)}`);
+    if (adapterCalls.length !== 1) throw new Error(`adapter calls ${adapterCalls.length}`);
+
+    const requestId = res.headers.get("X-Postora-Request-Id");
+    if (!requestId) throw new Error("no X-Postora-Request-Id on the response");
+    if (body.request_id !== requestId) {
+      throw new Error(`body request_id ${body.request_id} != header ${requestId}`);
+    }
+
+    const { data: ledger, error: ledgerError } = await client
+      .from("connector_call_logs")
+      .select("workspace_id, tool_id, partner_key_id, source, status, action_name, request_id")
+      .eq("request_id", requestId);
+    if (ledgerError) throw new Error(`ledger read failed: ${JSON.stringify(ledgerError)}`);
+    if (!ledger || ledger.length !== 1) throw new Error(`ledger rows ${JSON.stringify(ledger)}`);
+    const row = ledger[0];
+    if (row.partner_key_id !== ids.key_a) throw new Error(`partner_key_id ${row.partner_key_id}`);
+    if (row.workspace_id !== ids.workspace_a) throw new Error(`workspace_id ${row.workspace_id}`);
+    if (row.tool_id !== ids.tool_a) throw new Error(`tool_id ${row.tool_id}`);
+    if (row.source !== "partner") throw new Error(`source ${row.source}`);
+    if (row.status !== "success") throw new Error(`status ${row.status}`);
+    if (row.action_name !== "search_products") throw new Error(`action_name ${row.action_name}`);
+
+    // The other tenant's key cannot execute this tool, and learns nothing.
+    const denied = await callPartnerApi(client, {
+      method: "POST",
+      path: "/v1/tools/execute",
+      key: keyB.key,
+      headers: { "Idempotency-Key": `idem-tool-${crypto.randomUUID()}` },
+      body: {
+        tool_id: ids.tool_a,
+        social_account_id: ids.account_a,
+        capability: "search_products",
+        parameters: {},
+      },
+    });
+    if (denied.status !== 404) throw new Error(`cross-tenant status ${denied.status}`);
+    const deniedCode = ((denied.json as Record<string, unknown>).error as Record<string, unknown>).code;
+    if (deniedCode !== "tool_not_found") throw new Error(`cross-tenant code ${deniedCode}`);
+    if (adapterCalls.length !== 1) throw new Error("a cross-tenant call reached the adapter");
+
+    // Spec §11: the refusal itself leaves a row, written against REAL Postgres
+    // rather than a stub — recordConnectorCall swallows its own insert errors,
+    // so a column constraint that rejected the pre-resolution `unknown`
+    // placeholders would be invisible everywhere else.
+    const { data: refused, error: refusedError } = await client
+      .from("connector_call_logs")
+      .select("status, error_code, connector_type, auth_strategy, tool_id, partner_key_id")
+      .eq("partner_key_id", ids.key_b);
+    if (refusedError) throw new Error(`refused ledger read failed: ${JSON.stringify(refusedError)}`);
+    if (!refused || refused.length !== 1) throw new Error(`refused rows ${JSON.stringify(refused)}`);
+    if (refused[0].status !== "refused") throw new Error(`refused status ${refused[0].status}`);
+    if (refused[0].error_code !== "tool_not_found") throw new Error(`refused code ${refused[0].error_code}`);
+    if (refused[0].tool_id !== null) throw new Error(`refused tool_id ${refused[0].tool_id}`);
+    if (refused[0].connector_type !== "unknown" || refused[0].auth_strategy !== "unknown") {
+      throw new Error(`refused placeholders ${JSON.stringify(refused[0])}`);
+    }
+
+    // GET /v1/connectors sees the tool once, with the call it just made.
+    const listed = await callPartnerApi(client, {
+      method: "GET",
+      path: "/v1/connectors",
+      key: keyA.key,
+    });
+    if (listed.status !== 200) throw new Error(`list status ${listed.status} ${JSON.stringify(listed.json)}`);
+    const entries = (listed.json as Record<string, unknown>).data as Record<string, unknown>[];
+    const entry = entries.find((e) => e.tool_id === ids.tool_a);
+    if (!entry) throw new Error(`tool missing from listing: ${JSON.stringify(entries)}`);
+    if ((entry.usage_30d as Record<string, unknown>).calls !== 1) {
+      throw new Error(`usage_30d ${JSON.stringify(entry.usage_30d)}`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (previousUrl === undefined) Deno.env.delete("SUPABASE_URL");
+    else Deno.env.set("SUPABASE_URL", previousUrl);
+    if (previousKey === undefined) Deno.env.delete("SUPABASE_SERVICE_ROLE_KEY");
+    else Deno.env.set("SUPABASE_SERVICE_ROLE_KEY", previousKey);
   }
 });

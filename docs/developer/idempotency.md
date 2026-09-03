@@ -2,7 +2,9 @@
 
 Every side-effecting POST requires `Idempotency-Key`. Missing key → `missing_idempotency_key` 400.
 
-Covered routes: `POST /v1/messages`, `POST /v1/media`, `POST /v1/posts`. `POST /v1/posts/{id}/schedule` and every webhook route do not require it — setting the same schedule twice is the same state; a duplicate subscription is harmless. Webhook routes deliberately do not require it.
+Covered routes: `POST /v1/messages`, `POST /v1/media`, `POST /v1/posts`, `POST /v1/connectors/{type}/connect-link`, `POST /v1/tools/execute`. `POST /v1/posts/{id}/schedule` and every webhook route do not require it — setting the same schedule twice is the same state; a duplicate subscription is harmless. Webhook routes deliberately do not require it.
+
+A refusal that happens *before* the request reaches a connector never consumes the key: on `POST /v1/tools/execute` every authorisation and capability refusal (`tool_not_found`, `connector_tool_not_allowed`, `connector_write_not_allowed`, `connection_inactive`, `connector_unavailable`) is deterministic and is answered without claiming, so the same key still works on the next attempt.
 
 ## Same key + same body → replay
 
@@ -18,6 +20,6 @@ Concurrent retry while the first attempt is still processing returns `idempotenc
 
 ## Indeterminate
 
-`idempotency_indeterminate` 409, `retryable: false`. Means the outcome is unknown and may have been delivered. **Do not retry.** Reconcile by listing the conversation's messages (`GET /v1/conversations/{id}/messages`) and matching `provider_message_id` to the wamid you received on the accepted send, or wait for `message.accepted` (payload `message_id` = wamid). Contact support with `X-Postora-Request-Id` if needed. A taken-over `intended` dispatch never re-calls the provider (see `messaging.md`).
+`idempotency_indeterminate` 409, `retryable: false`. Means the outcome is unknown and may have been delivered. **Do not retry.** A `POST /v1/tools/execute` that answered `tool_execution_timeout` (504) lands here on the next attempt with the same key, deliberately: the connector call may already have taken effect, so reconcile in the connected system rather than executing again. For a send, reconcile by listing the conversation's messages (`GET /v1/conversations/{id}/messages`) and matching `provider_message_id` to the wamid you received on the accepted send, or wait for `message.accepted` (payload `message_id` = wamid). Contact support with `X-Postora-Request-Id` if needed. A taken-over `intended` dispatch never re-calls the provider (see `messaging.md`).
 
 Reference: `supabase/functions/_shared/partnerApiIdempotency.ts` header comment and `docs/api/openapi.yaml` `components.parameters.IdempotencyKey`.

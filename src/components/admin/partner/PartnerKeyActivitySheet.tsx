@@ -4,7 +4,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { format } from "date-fns";
-import { endpointForAction, usePartnerKeyActivity, usePartnerKeyDeliveries } from "@/features/partner-hub";
+import { endpointForAction, useKeyConnectorActivity, usePartnerKeyActivity, usePartnerKeyDeliveries } from "@/features/partner-hub";
 
 interface PartnerKeyActivitySheetProps {
   partnerKey: { id: string; name: string; workspace_name: string | null } | null;
@@ -21,6 +21,12 @@ function statusVariant(status: number): "default" | "secondary" | "destructive" 
   return "default";
 }
 
+function connectorVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
+  if (status === "success") return "default";
+  if (status === "failed" || status === "timeout") return "destructive";
+  return "secondary";
+}
+
 function deliveryVariant(status: string): "default" | "secondary" | "destructive" | "outline" {
   if (status === "delivered") return "default";
   if (status === "exhausted") return "destructive";
@@ -32,6 +38,7 @@ export function PartnerKeyActivitySheet({ partnerKey, open, onOpenChange }: Part
   const keyId = open && partnerKey ? partnerKey.id : null;
   const activity = usePartnerKeyActivity(keyId);
   const deliveries = usePartnerKeyDeliveries(keyId);
+  const connectorCalls = useKeyConnectorActivity(keyId);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -104,6 +111,41 @@ export function PartnerKeyActivitySheet({ partnerKey, open, onOpenChange }: Part
                       <TableCell className="max-w-[200px] truncate text-xs" title={d.last_error ?? undefined}>
                         {d.last_status_code ?? DASH}{d.last_error ? ` · ${d.last_error}` : ""}
                       </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </section>
+
+          <section className="mt-6 space-y-2">
+            <h3 className="text-sm font-semibold">Connector calls</h3>
+            {connectorCalls.error ? (
+              <p className="text-sm text-destructive">Could not load connector calls: {connectorCalls.error.message}</p>
+            ) : connectorCalls.isLoading ? (
+              <Skeleton className="h-24 w-full" />
+            ) : (connectorCalls.data ?? []).length === 0 ? (
+              <p className="text-sm text-muted-foreground">No connector calls recorded for this key.</p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Time</TableHead><TableHead>Connector</TableHead><TableHead>Action</TableHead>
+                    <TableHead>Status</TableHead><TableHead>Latency</TableHead><TableHead>Request ID</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(connectorCalls.data ?? []).map((row) => (
+                    <TableRow key={row.id}>
+                      <TableCell className="text-xs">{stamp(row.created_at)}</TableCell>
+                      <TableCell className="font-mono text-xs">{row.connector_type}</TableCell>
+                      <TableCell className="font-mono text-xs">{row.action_name}</TableCell>
+                      <TableCell>
+                        <Badge variant={connectorVariant(row.status)}>{row.status}</Badge>
+                        {row.error_code && <span className="ml-1 text-xs text-muted-foreground">{row.error_code}</span>}
+                      </TableCell>
+                      <TableCell className="text-xs">{row.latency_ms === null ? DASH : `${row.latency_ms} ms`}</TableCell>
+                      <TableCell className="font-mono text-xs">{row.request_id ?? DASH}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

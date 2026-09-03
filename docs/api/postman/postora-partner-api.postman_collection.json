@@ -862,6 +862,137 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "connectors",
+      "item": [
+        {
+          "name": "List the connected tools this key can reach",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/connectors",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "connectors"
+              ]
+            },
+            "description": "Every tool resolvable by ANY account bound to this key, de-duplicated\nby `tool_id`: a tool shared with two bound accounts is listed once.\nVisibility is decided by the same resolver the Postora AI agent uses,\nso what is listed here is exactly what `POST /v1/tools/execute` will\naccept. Tools marked admin-only in Postora are never listed — a key is\nnot a person, and cannot be the verified admin those require.\n\n`connection` is present only for tools authenticated through a\nconnected third-party acco"
+          },
+          "response": []
+        },
+        {
+          "name": "Mint a link that connects a third-party account",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/connectors/:type/connect-link",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "connectors",
+                ":type",
+                "connect-link"
+              ],
+              "variable": [
+                {
+                  "key": "type",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Starts an authorisation flow for one connector type and returns the URL\na human must open to complete it. The connection is created for the\nkey's own workspace; there is no way to name another one.\n\n`{type}` must be a connector type that authenticates through a\nconnected third-party account. A native connector type — one configured\nwith credentials in Postora — and an unknown type both answer\n`connector_type_not_connectable` (400).\n\nThe returned `connection_id` identifies a connection that is no",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"social_account_id\": \"550e8400-e29b-41d4-a716-446655440000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "tools",
+      "item": [
+        {
+          "name": "Execute one capability of a connected tool",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/tools/execute",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "tools",
+                "execute"
+              ]
+            },
+            "description": "Runs one capability of one tool on behalf of one bound account, and\nreturns what the connector returned.\n\nAuthorisation is the same rule the Postora AI agent applies: the tool\nmust resolve for `social_account_id`, and that account must be bound to\nthis key. An unbound account, an unknown `tool_id`, a tool that does not\nresolve for that account, a malformed id, and a tool whose connection\nbelongs to another workspace all answer `tool_not_found` (404) — the\nsame answer, so a caller learns nothing ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"tool_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"social_account_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"capability\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "variable": [

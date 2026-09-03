@@ -72,6 +72,14 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   schedule_post: ["posts:schedule"],
   unschedule_post: ["posts:schedule"],
   get_usage: ["usage:read"],
+  // Hybrid connectors (spec D6). Generic scopes only, like every /v1 route:
+  // no legacy scope predates connectors, so none may satisfy them. The three
+  // are separate grants because they are three different powers — seeing what
+  // is connected, creating an authorisation link a human then completes, and
+  // making a connected third-party system do something.
+  list_connectors: ["connectors:read"],
+  create_connect_link: ["connectors:manage"],
+  execute_tool: ["tools:execute"],
 };
 
 /** D7 limiter-failure risk class per action, next to ACTION_SCOPES so an
@@ -133,6 +141,18 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   schedule_post: "C",
   unschedule_post: "C",
   get_usage: "A",
+  // Hybrid connectors (spec D6). Listing is a bounded local read of this
+  // key's own bindings and its workspace's ledger — class A, so it survives a
+  // limiter outage like every other read.
+  list_connectors: "A",
+  // Class C: minting a connect link calls the connector service outbound AND
+  // writes durable state (an `initiated` connection row plus a signed,
+  // time-boxed authorisation URL). Either half alone would already be C.
+  create_connect_link: "C",
+  // Class C: an outbound call into a third-party system that may mutate the
+  // customer's data there. A limiter outage must refuse it rather than let an
+  // unmetered write reach someone's CRM.
+  execute_tool: "C",
 };
 
 /**

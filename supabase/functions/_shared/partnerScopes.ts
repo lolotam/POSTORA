@@ -43,6 +43,8 @@
  *  one is a capability grant and a deliberate review, never a convenience. */
 export const GENERIC_SCOPES = [
   "accounts:read",
+  "connectors:manage",
+  "connectors:read",
   "conversations:read",
   "media:read",
   "media:write",
@@ -53,6 +55,7 @@ export const GENERIC_SCOPES = [
   "posts:schedule",
   "posts:write",
   "templates:read",
+  "tools:execute",
   "usage:read",
   "webhooks:manage",
   "webhooks:read",

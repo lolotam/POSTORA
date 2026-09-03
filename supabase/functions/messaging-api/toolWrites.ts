@@ -12,9 +12,11 @@
 
 import {
   connectorDefinition,
+  isComposioType,
   type ConnectorType,
   SERVER_CONNECTOR_TYPES,
 } from "../_shared/connectorRegistry.ts";
+import { loadActiveConnection } from "../_shared/composioConnections.ts";
 
 // Carries the HTTP status the Edge Function should answer with. Expected
 // business refusals must not surface as opaque 500s.
@@ -38,9 +40,13 @@ const RESERVED_TOOL_NAMES = [
 export interface ParsedUpsertToolInput {
   name: string;
   description: string;
-  url: string;
+  /** null for a Composio-backed tool: it executes against Composio through the
+   *  connection, so there is no customer endpoint to record (spec §4.2). */
+  url: string | null;
   socialAccountId: string;
   connectorType: ConnectorType;
+  authStrategy: "manual_credentials" | "composio_oauth";
+  connectionId?: string;
   permissions: {
     search_products: boolean;
     check_stock: boolean;
@@ -62,31 +68,15 @@ export interface ParsedUpsertToolInput {
   secretPatch: Record<string, string>;
 }
 
-export function parseUpsertToolInput(
-  body: Record<string, unknown> | null | undefined,
-): ParsedUpsertToolInput {
-  const tool = body?.tool;
-  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
-    throw new ToolWriteError("tool must be an object");
-  }
-  const record = tool as Record<string, unknown>;
-
-  const name = String(record.name || "").trim();
-  const description = String(record.description || "").trim();
-  const toolUrl = String(record.url || "").trim();
-
-  if (!/^[a-z][a-z0-9_]{2,40}$/.test(name)) {
-    throw new ToolWriteError("Tool name must be snake_case (3-41 chars, letters/digits/underscores)");
-  }
-  if (RESERVED_TOOL_NAMES.includes(name)) {
-    throw new ToolWriteError(`"${name}" is a reserved builtin tool name`);
-  }
-  if (!description) throw new ToolWriteError("Tool description is required");
+/**
+ * The https + public-host rule every native connector URL must pass at save
+ * time. SSRF defense in depth: ai-agent-reply re-validates (with DNS
+ * resolution) on every call.
+ */
+function validatePublicToolUrl(toolUrl: string): string {
   if (!/^https:\/\//.test(toolUrl)) {
     throw new ToolWriteError("Tool URL must start with https://");
   }
-  // SSRF defense in depth: refuse obviously internal targets at save time.
-  // ai-agent-reply re-validates (with DNS resolution) on every call.
   try {
     const parsedUrl = new URL(toolUrl);
     const host = parsedUrl.hostname.toLowerCase();
@@ -101,6 +91,28 @@ export function parseUpsertToolInput(
     if (error instanceof ToolWriteError) throw error;
     throw new ToolWriteError("Tool URL is not a valid URL");
   }
+  return toolUrl;
+}
+
+export function parseUpsertToolInput(
+  body: Record<string, unknown> | null | undefined,
+): ParsedUpsertToolInput {
+  const tool = body?.tool;
+  if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+    throw new ToolWriteError("tool must be an object");
+  }
+  const record = tool as Record<string, unknown>;
+
+  const name = String(record.name || "").trim();
+  const description = String(record.description || "").trim();
+
+  if (!/^[a-z][a-z0-9_]{2,40}$/.test(name)) {
+    throw new ToolWriteError("Tool name must be snake_case (3-41 chars, letters/digits/underscores)");
+  }
+  if (RESERVED_TOOL_NAMES.includes(name)) {
+    throw new ToolWriteError(`"${name}" is a reserved builtin tool name`);
+  }
+  if (!description) throw new ToolWriteError("Tool description is required");
 
   // An unrecognised connector_type is refused BY NAME, never substituted.
   // The previous writer answered 200 with a custom_rest row, so a user who
@@ -117,6 +129,19 @@ export function parseUpsertToolInput(
   }
   // Narrowed by the allow-list check above; the cast is earned, not assumed.
   const typedConnectorType = connectorType as ConnectorType;
+  const authStrategy = isComposioType(typedConnectorType) ? "composio_oauth" : "manual_credentials";
+  // A Composio tool has no endpoint of its own — the connection is the target
+  // — so it records null rather than a decoy URL the runtime would never call.
+  const toolUrl = authStrategy === "composio_oauth"
+    ? null
+    : validatePublicToolUrl(String(record.url || "").trim());
+  const rawConnectionId = record.connection_id;
+  const connectionId = typeof rawConnectionId === "string" && rawConnectionId.trim()
+    ? rawConnectionId.trim()
+    : undefined;
+  if (authStrategy === "composio_oauth" && !connectionId) {
+    throw new ToolWriteError("connection_required");
+  }
 
   // A save with no owning account is refused, never written unscoped: an
   // account-less row against an account-scoped table is the defect this
@@ -175,6 +200,8 @@ export function parseUpsertToolInput(
     url: toolUrl,
     socialAccountId: socialAccountId.trim(),
     connectorType: typedConnectorType,
+    authStrategy,
+    connectionId: authStrategy === "composio_oauth" ? connectionId : undefined,
     permissions: {
       search_products: rawPermissions.search_products === true,
       check_stock: rawPermissions.check_stock === true,
@@ -232,6 +259,7 @@ interface AccountRow {
   id: string;
   user_id: string;
   platform: string;
+  workspace_id: string | null;
 }
 
 async function resolveToolAccount(
@@ -241,7 +269,7 @@ async function resolveToolAccount(
 ): Promise<AccountRow> {
   const { data, error } = await admin
     .from("social_accounts")
-    .select("id, user_id, platform")
+    .select("id, user_id, platform, workspace_id")
     .eq("id", socialAccountId)
     .maybeSingle();
   if (error) throw error;
@@ -291,6 +319,31 @@ export async function upsertAccountScopedTool(
 ): Promise<Record<string, unknown>> {
   const account = await resolveToolAccount(admin, userId, input.socialAccountId);
 
+  if (input.authStrategy === "composio_oauth") {
+    if (!account.workspace_id || !input.connectionId) {
+      throw new ToolWriteError("connection_forbidden", 403);
+    }
+    const { data: membership, error: membershipError } = await admin
+      .from("workspace_members")
+      .select("workspace_id")
+      .eq("workspace_id", account.workspace_id)
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (membershipError) throw membershipError;
+    if (!membership) throw new ToolWriteError("connection_forbidden", 403);
+
+    const lookup = await loadActiveConnection(admin, input.connectionId, account.workspace_id);
+    if (!lookup.ok) {
+      if (lookup.code === "connection_inactive") {
+        throw new ToolWriteError("connection_inactive", 409);
+      }
+      throw new ToolWriteError("connection_forbidden", 403);
+    }
+    if (lookup.connection.connectorType !== input.connectorType) {
+      throw new ToolWriteError("connection_forbidden", 403);
+    }
+  }
+
   const { data: toolRows, error: readError } = await admin
     .from("ai_agent_tools")
     .select("id, name, settings, credentials_secret_id")
@@ -303,7 +356,7 @@ export async function upsertAccountScopedTool(
   // Vault first. configured_secret_fields is derived from the blob on every
   // write (the SQL returns the merged key list) -- never accepted from the
   // client and never set independently (§4.3).
-  const credentials = Object.keys(input.secretPatch).length > 0
+  const credentials = input.authStrategy === "manual_credentials" && Object.keys(input.secretPatch).length > 0
     ? await vault.upsertCredentials(existing?.credentials_secret_id ?? null, input.secretPatch)
     : null;
 
@@ -316,6 +369,8 @@ export async function upsertAccountScopedTool(
     is_enabled: input.isEnabled,
     admin_only: input.adminOnly,
     connector_type: input.connectorType,
+    auth_strategy: input.authStrategy,
+    connection_id: input.connectionId ?? null,
     permissions: input.permissions,
     read_only_mode: input.readOnlyMode,
     enable_cache: input.enableCache,

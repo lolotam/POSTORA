@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
-import { escalateConversation, executeTool, type ToolContext } from "./tools.ts";
+import { customToolDefinitions, escalateConversation, executeTool, type CustomTool, type ToolContext } from "./tools.ts";
+import { composioBinding } from "../_shared/connectorRegistry.ts";
 
 function context(overrides: Partial<ToolContext>): ToolContext {
   return {
@@ -11,6 +12,9 @@ function context(overrides: Partial<ToolContext>): ToolContext {
     customerName: "Test customer",
     adminPhoneNumbers: [],
     dryRun: true,
+    socialAccountId: null,
+    requestId: "req-tools-1",
+    isAdmin: false,
     retrieveKnowledge: () => Promise.resolve([]),
     sendWhatsAppText: () => Promise.resolve(),
     ...overrides,
@@ -398,4 +402,74 @@ Deno.test("a DM is told chat apps render no markdown at all", async () => {
   });
   assertEquals(prompt.includes("pipe tables"), true);
   assertEquals(prompt.includes("*single asterisks*"), true);
+});
+
+// ---------------------------------------------------------------------------
+// Composio exposure (spec §7.1): customToolDefinitions gains ONE branch, the
+// same flat {capability enum + parameters} shape the adapter path uses.
+// ---------------------------------------------------------------------------
+
+const SHEETS_CONNECTION = {
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  workspaceId: "ws-1",
+  connectorType: "google_sheets",
+  toolkit: "googlesheets",
+  composioConnectedAccountId: "composio-account-1",
+  toolSchemaCache: [
+    {
+      slug: "GOOGLESHEETS_BATCH_GET",
+      description: "Reads one or more ranges.",
+      inputParameters: {
+        properties: { spreadsheet_id: { type: "string" }, range: { type: "string" } },
+        required: ["spreadsheet_id"],
+      },
+      version: "latest",
+    },
+  ],
+} as const;
+
+const composioSheetTool = {
+  id: "11111111-1111-4111-8111-111111111111",
+  name: "stock_sheet",
+  description: "Our stock sheet.",
+  url: "",
+  secret: null,
+  admin_only: false,
+  connector_type: "google_sheets",
+  auth_strategy: "composio_oauth" as const,
+  connection_id: SHEETS_CONNECTION.id,
+  connection: SHEETS_CONNECTION,
+};
+
+Deno.test("a composio tool is exposed through the same flat schema branch", () => {
+  const binding = composioBinding("google_sheets")!;
+  const parameters = customToolDefinitions([composioSheetTool as CustomTool])[0].function
+    .parameters as unknown as {
+      type: string;
+      properties: {
+        capability: { type: string; enum: string[] };
+        parameters: { type: string; properties: Record<string, unknown> };
+      };
+      required: string[];
+      oneOf?: unknown;
+    };
+
+  assertEquals(parameters.type, "object");
+  assertEquals(parameters.properties.capability.enum, [...binding.tools]);
+  assertEquals(parameters.properties.parameters.type, "object");
+  assertEquals(
+    Object.hasOwn(parameters.properties.parameters.properties, "spreadsheet_id"),
+    true,
+  );
+  assertEquals(parameters.required, ["capability"]);
+  assertEquals(parameters.oneOf, undefined);
+});
+
+Deno.test("a composio tool's description still carries the registry usage guide", () => {
+  const description = customToolDefinitions([composioSheetTool as CustomTool])[0].function
+    .description;
+
+  assertEquals(description.length <= 600, true);
+  assertEquals(description.includes("Our stock sheet."), true);
+  assertEquals(description.includes("stock lists, bookings, price tables"), true);
 });

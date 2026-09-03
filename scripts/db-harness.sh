@@ -107,6 +107,7 @@ SUITES=(
   partner_webhook_outbox.sql
   partner_webhook_phase6_events.sql
   publishing_seam.sql
+  hybrid_connectors.sql
   partner_posts.sql
   partner_media_scan_state.sql
   partner_usage_counters.sql

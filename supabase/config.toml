@@ -23,6 +23,9 @@ port = 55437
 [functions.threads-webhook]
 verify_jwt = false
 
+[functions.composio-connect]
+verify_jwt = false
+
 [functions.mcp]
 verify_jwt = false
 

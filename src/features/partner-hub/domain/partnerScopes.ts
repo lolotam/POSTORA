@@ -10,6 +10,8 @@ export interface PartnerScopeOption {
 
 export const PARTNER_SCOPES: readonly PartnerScopeOption[] = [
   { value: "accounts:read", description: "List and read bound social accounts" },
+  { value: "connectors:manage", description: "Create connect links for Composio-backed tools" },
+  { value: "connectors:read", description: "List connected tools and their usage" },
   { value: "conversations:read", description: "List conversations" },
   { value: "media:read", description: "Read uploaded media" },
   { value: "media:write", description: "Upload media (billed storage)" },
@@ -20,6 +22,7 @@ export const PARTNER_SCOPES: readonly PartnerScopeOption[] = [
   { value: "posts:schedule", description: "Schedule and unschedule posts" },
   { value: "posts:write", description: "Create posts" },
   { value: "templates:read", description: "List approved WhatsApp templates" },
+  { value: "tools:execute", description: "Execute connected tools headlessly (metered, not billed)" },
   { value: "usage:read", description: "Read this key's usage meters" },
   { value: "webhooks:manage", description: "Create, update, delete and test webhooks" },
   { value: "webhooks:read", description: "List webhooks" },

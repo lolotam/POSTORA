@@ -41,3 +41,27 @@ describe("PartnerKeyActivitySheet", () => {
     expect(screen.getByText("https://partner.example/hook")).toBeInTheDocument();
   });
 });
+
+describe("PartnerKeyActivitySheet connector section", () => {
+  beforeEach(() => {
+    rpc.mockReset();
+    rpc.mockImplementation((fn: string) => {
+      if (fn === "admin_partner_key_connector_activity") return Promise.resolve({ data: [
+        { id: "c1", created_at: "2026-09-02T09:20:00Z", connector_type: "google_sheets", action_name: "GOOGLESHEETS_GET_ROWS", status: "success", error_code: null, latency_ms: 420, request_id: "req-9" },
+        { id: "c2", created_at: "2026-09-02T09:21:00Z", connector_type: "slack", action_name: "SLACK_POST", status: "refused", error_code: "connector_unavailable", latency_ms: null, request_id: null },
+      ], error: null });
+      return Promise.resolve({ data: [], error: null });
+    });
+  });
+
+  it("lists the key's connector calls with latency, request id and dashes for nulls", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={qc}><PartnerKeyActivitySheet partnerKey={KEY} open onOpenChange={() => {}} /></QueryClientProvider>);
+    expect(await screen.findByText("Connector calls")).toBeInTheDocument();
+    expect(await screen.findByText("GOOGLESHEETS_GET_ROWS")).toBeInTheDocument();
+    expect(screen.getByText("420 ms")).toBeInTheDocument();
+    expect(screen.getByText("req-9")).toBeInTheDocument();
+    expect(screen.getByText("connector_unavailable")).toBeInTheDocument();
+    expect(rpc).toHaveBeenCalledWith("admin_partner_key_connector_activity", { p_key_id: "k1", p_limit: 50 });
+  });
+});

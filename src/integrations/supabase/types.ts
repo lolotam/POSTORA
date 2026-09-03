@@ -323,6 +323,8 @@ export type Database = {
       ai_agent_tools: {
         Row: {
           admin_only: boolean | null
+          auth_strategy: string
+          connection_id: string | null
           created_at: string | null
           description: string
           id: string
@@ -336,6 +338,8 @@ export type Database = {
         }
         Insert: {
           admin_only?: boolean | null
+          auth_strategy?: string
+          connection_id?: string | null
           created_at?: string | null
           description: string
           id?: string
@@ -349,6 +353,8 @@ export type Database = {
         }
         Update: {
           admin_only?: boolean | null
+          auth_strategy?: string
+          connection_id?: string | null
           created_at?: string | null
           description?: string
           id?: string
@@ -360,7 +366,14 @@ export type Database = {
           url?: string | null
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "ai_agent_tools_connection_id_fkey"
+            columns: ["connection_id"]
+            referencedRelation: "connector_connections"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       ai_conversation_modes: {
         Row: {
@@ -1248,6 +1261,155 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      connector_call_logs: {
+        Row: {
+          action_name: string
+          auth_strategy: string
+          connection_id: string | null
+          connector_type: string
+          created_at: string
+          error_code: string | null
+          id: string
+          latency_ms: number | null
+          partner_key_id: string | null
+          request_id: string | null
+          social_account_id: string | null
+          source: string
+          status: string
+          tool_id: string | null
+          workspace_id: string
+        }
+        Insert: {
+          action_name: string
+          auth_strategy: string
+          connection_id?: string | null
+          connector_type: string
+          created_at?: string
+          error_code?: string | null
+          id?: string
+          latency_ms?: number | null
+          partner_key_id?: string | null
+          request_id?: string | null
+          social_account_id?: string | null
+          source: string
+          status: string
+          tool_id?: string | null
+          workspace_id: string
+        }
+        Update: {
+          action_name?: string
+          auth_strategy?: string
+          connection_id?: string | null
+          connector_type?: string
+          created_at?: string
+          error_code?: string | null
+          id?: string
+          latency_ms?: number | null
+          partner_key_id?: string | null
+          request_id?: string | null
+          social_account_id?: string | null
+          source?: string
+          status?: string
+          tool_id?: string | null
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "connector_call_logs_connection_id_fkey"
+            columns: ["connection_id"]
+            referencedRelation: "connector_connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "connector_call_logs_tool_id_fkey"
+            columns: ["tool_id"]
+            referencedRelation: "ai_agent_tools"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "connector_call_logs_workspace_id_fkey"
+            columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      connector_connections: {
+        Row: {
+          auth_strategy: string
+          composio_auth_config_id: string
+          composio_connected_account_id: string | null
+          connected_at: string | null
+          connector_type: string
+          created_at: string
+          external_account_id: string | null
+          external_account_label: string | null
+          failure_code: string | null
+          id: string
+          initiated_by: string | null
+          last_used_at: string | null
+          revoked_at: string | null
+          state_nonce: string | null
+          status: string
+          tool_schema_cache: Json | null
+          tool_schema_cached_at: string | null
+          toolkit: string
+          updated_at: string
+          workspace_id: string
+        }
+        Insert: {
+          auth_strategy?: string
+          composio_auth_config_id: string
+          composio_connected_account_id?: string | null
+          connected_at?: string | null
+          connector_type: string
+          created_at?: string
+          external_account_id?: string | null
+          external_account_label?: string | null
+          failure_code?: string | null
+          id?: string
+          initiated_by?: string | null
+          last_used_at?: string | null
+          revoked_at?: string | null
+          state_nonce?: string | null
+          status?: string
+          tool_schema_cache?: Json | null
+          tool_schema_cached_at?: string | null
+          toolkit: string
+          updated_at?: string
+          workspace_id: string
+        }
+        Update: {
+          auth_strategy?: string
+          composio_auth_config_id?: string
+          composio_connected_account_id?: string | null
+          connected_at?: string | null
+          connector_type?: string
+          created_at?: string
+          external_account_id?: string | null
+          external_account_label?: string | null
+          failure_code?: string | null
+          id?: string
+          initiated_by?: string | null
+          last_used_at?: string | null
+          revoked_at?: string | null
+          state_nonce?: string | null
+          status?: string
+          tool_schema_cache?: Json | null
+          tool_schema_cached_at?: string | null
+          toolkit?: string
+          updated_at?: string
+          workspace_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "connector_connections_workspace_id_fkey"
+            columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       coupon_redemptions: {
         Row: {
@@ -7601,6 +7763,10 @@ export type Database = {
         Args: { p_key_id: string; p_reason: string }
         Returns: boolean
       }
+      revoke_connector_connection: {
+        Args: { p_connection_id: string }
+        Returns: undefined
+      }
       create_partner_key: {
         Args: {
           p_workspace_id: string
@@ -7616,6 +7782,71 @@ export type Database = {
           p_environment?: string
         }
         Returns: string
+      }
+      admin_connector_connections: {
+        Args: { p_workspace_id?: string | null }
+        Returns: {
+          id: string
+          workspace_id: string
+          workspace_name: string
+          connector_type: string
+          toolkit: string
+          external_account_label: string | null
+          status: string
+          failure_code: string | null
+          dependent_tools: number
+          connected_at: string | null
+          last_used_at: string | null
+          revoked_at: string | null
+        }[]
+      }
+      admin_connector_overview: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          active_connections: number
+          workspaces_with_connections: number
+          calls_30d: number
+          failures_30d: number
+          refused_30d: number
+          p95_latency_30d: number | null
+        }[]
+      }
+      admin_connector_usage_by_key: {
+        Args: { p_days?: number }
+        Returns: {
+          partner_key_id: string
+          key_name: string | null
+          key_prefix: string | null
+          workspace_id: string
+          workspace_name: string | null
+          calls: number
+          failures: number
+          p95_latency_ms: number | null
+        }[]
+      }
+      admin_connector_usage_by_type: {
+        Args: { p_days?: number }
+        Returns: {
+          connector_type: string
+          auth_strategy: string
+          calls: number
+          failures: number
+          p50_latency_ms: number | null
+          p95_latency_ms: number | null
+        }[]
+      }
+      admin_partner_key_connector_activity: {
+        Args: { p_key_id: string; p_limit?: number }
+        Returns: {
+          id: string
+          created_at: string
+          connector_type: string
+          action_name: string
+          status: string
+          error_code: string | null
+          latency_ms: number | null
+          request_id: string | null
+        }[]
       }
       admin_partner_hub_overview: {
         Args: Record<PropertyKey, never>
@@ -7828,6 +8059,18 @@ export type Database = {
           payload: Json
           valid: boolean
           header: Json
+        }[]
+      }
+      workspace_connector_usage: {
+        Args: { p_workspace_id: string; p_days?: number }
+        Returns: {
+          tool_id: string
+          connector_type: string
+          calls: number
+          failures: number
+          refused: number
+          p50_latency_ms: number | null
+          last_used_at: string
         }[]
       }
       workspace_role: {

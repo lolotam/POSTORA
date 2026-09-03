@@ -9,7 +9,7 @@ Links below are relative to this file (`docs/developer/`). The complete hand-off
 Read these before the reference. Each one is a mistake an implementation makes when it has the contract and nothing else.
 
 1. **Authenticate with the `x-postora-key` header, nothing else.** Not `Authorization`, not a query string. A `pk_test_` key never works against production and a `pk_live_` key never works against staging; both answer the same 401 `invalid_key` as an unknown key would.
-2. **Every `POST /v1/messages`, `POST /v1/media` and `POST /v1/posts` carries an `Idempotency-Key`.** Generate one UUID per logical operation, store it with the operation, and reuse it on every retry of that operation. A new key on retry is a duplicate send. `POST /v1/posts/{id}/schedule` and the webhook routes do not take one.
+2. **Every `POST /v1/messages`, `POST /v1/media`, `POST /v1/posts`, `POST /v1/connectors/{type}/connect-link` and `POST /v1/tools/execute` carries an `Idempotency-Key`.** Generate one UUID per logical operation, store it with the operation, and reuse it on every retry of that operation. A new key on retry is a duplicate send. `POST /v1/posts/{id}/schedule` and the webhook routes do not take one.
 3. **Retry only when `error.retryable` is `true`.** Never decide from the HTTP status family: `temporarily_unavailable` is a 503 that is NOT retryable, `idempotency_in_progress` is a 409 that IS. Back off exponentially and honour `Retry-After` when present.
 4. **`idempotency_indeterminate` means "may have been delivered". Do not resend.** Not with the same key (it will answer the same 409) and not with a new one (that is a second real message to a real customer). Reconcile: wait for the `message.accepted` webhook, or list the conversation's messages and match `provider_message_id`.
 5. **A replay is not a new send.** The same key and the same body return the stored response with `Idempotency-Replayed: true`. The same key with a different body is `idempotency_conflict`; that is a bug in the caller, not a transient.
@@ -19,7 +19,7 @@ Read these before the reference. Each one is a mistake an implementation makes w
 9. **Only what this key created through the API is addressable.** A post made in the Postora UI answers 404 on every `/v1/posts` route, permanently. There is no `POST /v1/posts/{id}/publish`: schedule it and the scheduler publishes.
 10. **Reference media by `media_id`, never by URL.** Upload first (`POST /v1/media`), then send. `media_pending` (409, retryable) means retry the SAME request later; `media_rejected` (422) means that file will never send.
 11. **`type: template` sends are suspended** (503 `temporarily_unavailable`, not retryable) as a policy state. Text and media sends are live. Build the template path against the contract, but do not treat its 503 as an outage to poll.
-12. **Treat every id as opaque.** Ids are prefixed (`acc_`, `conv_`, `msg_`, `media_`, `post_`, `wh_`); never parse or construct them. `message_id` returned by a send is the provider's id (a WhatsApp `wamid`), which is a different thing from a `msg_` id.
+12. **Treat every id as opaque.** Ids are prefixed (`acc_`, `conv_`, `msg_`, `media_`, `post_`, `wh_`); never parse or construct them. `message_id` returned by a send is the provider's id (a WhatsApp `wamid`), which is a different thing from a `msg_` id. The connector routes are the one exception: `tool_id`, `social_account_id` and `connection_id` there are bare UUIDs, still opaque — take them from `GET /v1/connectors` and pass them back unchanged.
 13. **Page with `next_cursor` until it is `null`.** It is always present on a listing; `null` is the only terminator.
 14. **Tolerate unknown fields and enum values.** The contract is additive-only; a client that fails on a new optional field will break on the next release. Breaking changes only ever arrive under a new path prefix.
 15. **Log `X-Postora-Request-Id` with every call** (it is also `request_id` in every body, success or error). It is the only handle support has for "this call returned the wrong thing".
@@ -40,6 +40,7 @@ Read these before the reference. Each one is a mistake an implementation makes w
 - [Messaging](messaging.md)
 - [Media](media.md)
 - [Publishing](publishing.md)
+- [Connectors and tools](connectors.md)
 - [Social Accounts](social-accounts.md)
 - [Integration Guide — End-to-End](integration-guides.md)
 - [Versioning and Compatibility](versioning.md)
