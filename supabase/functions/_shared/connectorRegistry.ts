@@ -642,7 +642,29 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   },
   youtube: {
     type: "youtube", label: "YouTube", auth_strategy: "composio_oauth", category: "automation", credentials: [],
-    composio: { toolkit: "youtube", toolkitVersion: "20260721_00", tools: ["YOUTUBE_LIST_CHANNELS", "YOUTUBE_MULTIPART_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"], mutating: ["YOUTUBE_MULTIPART_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"] },
+    composio: {
+      toolkit: "youtube",
+      toolkitVersion: "20260721_00",
+      tools: [
+        "YOUTUBE_LIST_CHANNELS",
+        "YOUTUBE_MULTIPART_UPLOAD_VIDEO",
+        "YOUTUBE_UPDATE_THUMBNAIL",
+        "YOUTUBE_LIST_COMMENT_THREADS",
+        "YOUTUBE_LIST_COMMENTS",
+        "YOUTUBE_CREATE_COMMENT_REPLY",
+        "YOUTUBE_SET_COMMENT_MODERATION_STATUS",
+        "YOUTUBE_DELETE_COMMENT",
+        "YOUTUBE_GET_VIDEO_DETAILS_BATCH",
+        "YOUTUBE_LIST_PLAYLIST_ITEMS",
+      ],
+      mutating: [
+        "YOUTUBE_MULTIPART_UPLOAD_VIDEO",
+        "YOUTUBE_UPDATE_THUMBNAIL",
+        "YOUTUBE_CREATE_COMMENT_REPLY",
+        "YOUTUBE_SET_COMMENT_MODERATION_STATUS",
+        "YOUTUBE_DELETE_COMMENT",
+      ],
+    },
     usageGuide: {
       whenToUse: "The connected YouTube channel and supported publishing actions.",
       requestExamples: ["list the connected channels", "upload this approved video"],

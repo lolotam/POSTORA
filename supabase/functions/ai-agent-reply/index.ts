@@ -38,7 +38,10 @@ import {
 } from "./tools.ts";
 import { executeRoutedCustomTool } from "./connectorExecution.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
-import { resolveAgentAccountId } from "./accountScope.ts";
+import {
+  type AdminClient as AccountScopeAdminClient,
+  resolveAgentAccountId,
+} from "./accountScope.ts";
 import { attachComposioTools } from "./composioTools.ts";
 import {
   cancelOutboxRow,
@@ -287,7 +290,7 @@ async function buildWhatsAppTextSender(admin: any, account: any, fallbackPhoneNu
 async function buildCommentReplySender(admin: any, request: ReplyRequest): Promise<TextSender> {
   const { data: account, error } = await admin
     .from("social_accounts")
-    .select("platform, access_token, platform_user_id, ig_auth_type, account_metadata")
+    .select("id, user_id, platform, auth_provider, access_token, refresh_token, token_expires_at, platform_user_id, connection_id, workspace_id, ig_auth_type, account_metadata")
     .eq("id", request.social_account_id)
     .eq("user_id", request.user_id)
     // The platform has to match the request, not merely the owner. Without
@@ -553,7 +556,10 @@ Deno.serve(async (req) => {
   let sideEffectsHappened = false;
 
   try {
-    const knowledgeAccountId = await resolveAgentAccountId(admin, request);
+    const knowledgeAccountId = await resolveAgentAccountId(
+      admin as unknown as AccountScopeAdminClient,
+      request,
+    );
     const config = await loadAgentConfigForAccount(admin, {
       userId: request.user_id,
       platform: request.platform,

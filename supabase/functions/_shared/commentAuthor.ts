@@ -21,6 +21,7 @@ function metadataString(metadata: unknown, key: string): string | null {
 // reopens the self-reply loop this check exists to close.
 function ownIds(account: CommentAccountRef): Set<string> {
   const ids = new Set<string>();
+  // YouTube: snippet.authorChannelId.value is compared to platform_user_id here.
   if (account.platform_user_id) ids.add(account.platform_user_id);
   if (account.platform === "instagram") {
     for (const key of ["ig_igid", "ig_user_id"]) {

@@ -5,7 +5,7 @@ type Call = { url: string; init?: RequestInit };
 function fakeFetch(calls: Call[], body: unknown = { id: "new-1" }, status = 200) {
   return async (url: RequestInfo | URL, init?: RequestInit) => {
     calls.push({ url: String(url), init });
-    return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+    return new Response(status === 204 ? null : JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
   };
 }
 
@@ -136,4 +136,57 @@ Deno.test("graph errors are surfaced, not thrown", async () => {
   const result = await replyToComment(fbAccount, "c1", "x", fakeFetch(calls, { error: { message: "(#10) Permission denied", code: 10 } }, 400));
   assertEquals(result.success, false);
   assertEquals(result.error, "(#10) Permission denied");
+});
+
+Deno.test("an unknown platform is refused, not sent to Meta", async () => {
+  const calls: Call[] = [];
+  const result = await replyToComment(
+    { platform: "bluesky", access_token: "tok", platform_user_id: "x", ig_auth_type: null, account_metadata: {} },
+    "c1",
+    "hi",
+    fakeFetch(calls),
+  );
+  assertEquals(result.success, false);
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("youtube reply goes through the adapter with the account's provider", async () => {
+  const calls: Call[] = [];
+  const ytAccount = {
+    id: "acc", user_id: "u", platform: "youtube", auth_provider: "native",
+    access_token: "tok", refresh_token: "rt",
+    token_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    platform_user_id: "UC-me", ig_auth_type: null, account_metadata: {},
+  };
+  const admin = { from: () => ({
+    select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { account_metadata: {} }, error: null }) }) }),
+    update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+  }) };
+  const result = await replyToComment(
+    ytAccount,
+    "t1",
+    "hi",
+    fakeFetch(calls, { id: "new-yt" }),
+    { admin },
+  );
+  assertEquals(result, { success: true, platform_comment_id: "new-yt" });
+  assertEquals(calls[0].url.startsWith("https://www.googleapis.com/youtube/v3/comments"), true);
+});
+
+Deno.test("youtube hide maps to moderation rejected, unhide to published", async () => {
+  const calls: Call[] = [];
+  const admin = { from: () => ({
+    select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { account_metadata: {} }, error: null }) }) }),
+    update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+  }) };
+  const ytAccount = {
+    id: "acc", user_id: "u", platform: "youtube", auth_provider: "native",
+    access_token: "tok", refresh_token: "rt",
+    token_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    platform_user_id: "UC-me", ig_auth_type: null, account_metadata: {},
+  };
+  await hideComment(ytAccount, "t1", true, fakeFetch(calls, null, 204), { admin });
+  await hideComment(ytAccount, "t1", false, fakeFetch(calls, null, 204), { admin });
+  assertEquals(new URL(calls[0].url).searchParams.get("moderationStatus"), "rejected");
+  assertEquals(new URL(calls[1].url).searchParams.get("moderationStatus"), "published");
 });

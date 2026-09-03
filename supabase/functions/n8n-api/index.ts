@@ -34,7 +34,7 @@ import { restrictedCorsHeaders } from "../_shared/cors.ts";
 const ALLOWED_WEBHOOK_EVENTS = new Set([
   'post.completed', 'post.failed', 'post.published',
   'message.received', 'message.whatsapp', 'message.instagram', 'message.facebook',
-  'comment.received', 'comment.facebook', 'comment.instagram', 'comment.threads',
+  'comment.received', 'comment.facebook', 'comment.instagram', 'comment.threads', 'comment.youtube',
   'threads.mention.created', 'threads.mention.replied',
   '*',
 ]);
