@@ -737,10 +737,12 @@ export async function publishYouTubeViaComposio(account: SocialAccount, post: Po
 
 **Files:**
 - Modify: `supabase/functions/composio-connect/callback.ts` (+ `upsertYouTubeChannels(deps, connection)` when `connector_type === "youtube"`), test
-- Modify: the YouTube connect control on `/profiles` (find with `grep -rn "youtube-oauth" src/`), gated by `VITE_COMPOSIO_YOUTUBE_ENABLED === "true"`
+- Create: `src/components/profiles/YouTubeConnectMethodDialog.tsx` + `__tests__/YouTubeConnectMethodDialog.test.tsx` — a modal opened by the existing YouTube "Connect" control on `/profiles` (find it with `grep -rn "youtube-oauth" src/`). It offers two explicit radio choices with one-line explanations: **Direct Google OAuth** ("Postora's own Google app; full option support") and **Composio Managed** ("Composio's managed OAuth; some upload options unavailable — see the list"), a Continue button, and the Composio choice only when `VITE_COMPOSIO_YOUTUBE_ENABLED === "true"` (otherwise the dialog is skipped and the native flow starts directly, exactly as today). The user's choice is remembered per browser in `localStorage` key `postora.youtubeConnectMethod` as a default, never as a bypass — the dialog always shows.
 
 - [ ] **Step 1: Tests:** `YOUTUBE_LIST_CHANNELS` returning two channels → two `social_accounts` upserts `ON CONFLICT ON CONSTRAINT social_accounts_user_platform_unique` (`user_id, platform, platform_user_id` — verify it exists with `\d social_accounts` on the harness first; memory `whatsapp-qr-repair-unique-collision` records a silent 23505 on this table) with `auth_provider='composio', connection_id, workspace_id, access_token=null`; zero channels → connection `failed('no_channel')`; an existing row for the same channel with `auth_provider='native'` is **not** overwritten (select first, refuse with `channel_already_native`).
-- [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Button "Connect via Composio" calls `initiateConnection({ connector_type: "youtube", workspace_id })`. **Step 6:** Commit `feat(youtube): connect channels through Composio`.
+- [ ] **Step 2–4:** FAIL → implement → PASS.
+- [ ] **Step 5: Dialog tests** (`fireEvent`, no `userEvent`): with the flag off, clicking Connect starts the native flow and renders no dialog; with the flag on, the dialog renders both options, defaults to the stored choice, Continue with "Direct Google OAuth" calls the existing native handler, Continue with "Composio Managed" calls `initiateConnection({ connector_type: "youtube", workspace_id })` and sets `window.location.href`; the unsupported-options note lists the keys from `youtubeOptionsUnsupportedOnComposio`'s table.
+- [ ] **Step 6:** Implement the dialog; wire the `/profiles` control to open it. **Step 7:** Commit `feat(youtube): connection method selector and Composio channel connect`.
 
 ### Task 31: Land Slice F
 
