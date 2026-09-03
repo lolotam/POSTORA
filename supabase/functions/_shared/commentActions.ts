@@ -28,7 +28,7 @@ type Fetcher = typeof fetch;
 
 // A hung Graph call would otherwise sit until the edge isolate's wall-clock limit kills it,
 // which reaches the caller as a bare gateway error with no body at all.
-export const GRAPH_TIMEOUT_MS = 15_000;
+const GRAPH_TIMEOUT_MS = 15_000;
 
 function metaBase(account: CommentActionAccount): string {
   return isDirectInstagramAccount(account) ? INSTAGRAM_GRAPH : FACEBOOK_GRAPH;
@@ -58,7 +58,7 @@ export function failure(data: any, fallback: string): CommentActionResult {
   };
 }
 
-export type GraphOutcome = { ok: true; data: any } | { ok: false; failure: CommentActionResult };
+type GraphOutcome = { ok: true; data: any } | { ok: false; failure: CommentActionResult };
 
 // Every platform call goes through here so the timeout, and the split between a rejection and
 // an unreachable upstream, are stated once instead of at each of the five call sites.

@@ -232,6 +232,145 @@ function withinPrivateReplyWindow(input: CommentWorkflowInput, now: Date): boole
   return now.getTime() - writtenAt <= PRIVATE_REPLY_WINDOW_MS;
 }
 
+/** What one funnel run needs to know about the rule and the comment, resolved once. */
+interface WorkflowTarget {
+  rule: CommentWorkflowRule;
+  authorKey: string;
+  postKey: string;
+  wantsDm: boolean;
+  wantsPublicReply: boolean;
+}
+
+function resolveTarget(
+  rule: CommentWorkflowRule,
+  account: CommentAutomationAccount,
+  input: CommentWorkflowInput,
+): WorkflowTarget {
+  return {
+    rule,
+    // Threads mentions arrive without a root post and Threads replies without an author id, so
+    // both fall back to the comment's own id — the same fallback handleCommentInternally uses,
+    // and the reason external_post_id can be ''.
+    authorKey: input.author.id || input.author.username || input.comment.id,
+    postKey: input.post.id || "",
+    // The account's platform decides this, never the presence of the column: a Threads rule can
+    // only carry DM copy through a bug, and it must still send nothing.
+    wantsDm: account.platform !== "threads" && !!rule.dm_message,
+    wantsPublicReply: (rule.public_replies || []).length > 0,
+  };
+}
+
+interface SendReport {
+  publicStatus: SendStatus;
+  publicReplyId: string | null;
+  dmStatus: SendStatus;
+  errors: string[];
+}
+
+/**
+ * A timeout is not a non-delivery. callGraph flags an unreachable upstream separately precisely
+ * because Meta may have accepted the request before the response was lost, and calling that
+ * `failed` would free the send-once claim for a message that may already have arrived.
+ */
+function statusOf(result: { success: boolean; upstreamUnavailable?: boolean }): SendStatus {
+  if (result.success) return "sent";
+  return result.upstreamUnavailable ? "indeterminate" : "failed";
+}
+
+/**
+ * Both legs of one funnel hit. They are independent — neither failure cancels the other — and
+ * each is attempted exactly once. Meta allows one private reply per comment, so a retry can
+ * only be refused, and that refusal is indistinguishable from the original failure.
+ */
+async function performSends(
+  admin: any,
+  account: CommentAutomationAccount,
+  target: WorkflowTarget,
+  input: CommentWorkflowInput,
+  runtime: { fetcher: typeof fetch; now: Date; pick: (replies: string[]) => string },
+): Promise<SendReport> {
+  const report: SendReport = {
+    publicStatus: target.wantsPublicReply ? "pending" : "skipped",
+    publicReplyId: null,
+    dmStatus: target.wantsDm ? "pending" : "not_applicable",
+    errors: [],
+  };
+
+  // Public reply first: it is the visible half, and the DM's own copy usually points at it
+  // ("check your DM").
+  if (target.wantsPublicReply) {
+    const replies = target.rule.public_replies as string[];
+    const result = await replyToComment(account, input.comment.id, runtime.pick(replies), runtime.fetcher);
+    report.publicStatus = statusOf(result);
+    report.publicReplyId = result.platform_comment_id ?? null;
+    if (!result.success && result.error) report.errors.push(result.error);
+  }
+
+  if (!target.wantsDm) return report;
+
+  if (!withinPrivateReplyWindow(input, runtime.now)) {
+    report.dmStatus = "skipped";
+    report.errors.push("private_reply_window_elapsed");
+    log("private_reply_window_elapsed", {
+      account_id: account.id,
+      rule_id: target.rule.id,
+      comment_id: input.comment.id,
+    });
+    return report;
+  }
+
+  const { text, mediaError } = await composeDm(admin, target.rule, account);
+  if (mediaError) report.errors.push(mediaError);
+  const result = await sendPrivateReply(
+    admin,
+    account as PrivateReplyAccount,
+    input.comment.id,
+    text,
+    runtime.fetcher,
+  );
+  report.dmStatus = statusOf(result);
+  if (!result.success && result.error) report.errors.push(result.error);
+  return report;
+}
+
+/**
+ * The send-once claim, and what to record when it cannot be taken.
+ *
+ * "stop" means the comment is settled and nothing should be sent: either this person was
+ * already served on this post, or the claim table itself failed and sending without a claim
+ * could message them twice. Either way the funnel still owns the comment.
+ */
+async function takeSendOnceClaim(
+  admin: any,
+  target: WorkflowTarget,
+  eventId: string,
+  trace: Record<string, unknown>,
+): Promise<"held" | "not_needed" | "stop"> {
+  if (!target.rule.send_once_per_user) return "not_needed";
+
+  try {
+    if (await claimUsage(admin, target.rule, target.authorKey, target.postKey) === "already_served") {
+      await finalizeEvent(admin, eventId, {
+        public_reply_status: "skipped",
+        dm_status: target.wantsDm ? "skipped" : "not_applicable",
+        error_message: "already_served",
+      });
+      log("already_served", trace);
+      return "stop";
+    }
+    return "held";
+  } catch (error) {
+    console.error("[comment-workflow] usage claim failed:", (error as Error).message);
+    log("usage_claim_failed", trace);
+    await finalizeEvent(admin, eventId, {
+      public_reply_status: "failed",
+      dm_status: target.wantsDm ? "failed" : "not_applicable",
+      error_message: "usage_claim_failed",
+    });
+    return "stop";
+  }
+}
+
 /**
  * Runs the account's funnel rules against one public comment.
  *
@@ -244,9 +383,11 @@ export async function runCommentWorkflow(
   input: CommentWorkflowInput,
   deps: CommentWorkflowDeps = {},
 ): Promise<CommentWorkflowOutcome> {
-  const fetcher = deps.fetcher ?? fetch;
-  const now = deps.now ?? new Date();
-  const pick = deps.pick ?? uniformPick;
+  const runtime = {
+    fetcher: deps.fetcher ?? fetch,
+    now: deps.now ?? new Date(),
+    pick: deps.pick ?? uniformPick,
+  };
 
   // Threads routes mentions through the same ingest door as replies (threads-webhook,
   // threads-mentions), and a mention carries no post of the account's own. A funnel is written
@@ -268,113 +409,54 @@ export async function runCommentWorkflow(
   const rule = matchCommentWorkflowRule(rules, input.comment.text, input.post.id);
   if (!rule) return "unclaimed";
 
-  // Threads mentions arrive without a root post, so the comment's own id stands in — the same
-  // fallback handleCommentInternally uses, and the reason external_post_id can be ''.
-  const authorKey = input.author.id || input.author.username || input.comment.id;
-  const postKey = input.post.id || "";
-  const wantsDm = account.platform !== "threads" && !!rule.dm_message;
-  const wantsPublicReply = (rule.public_replies || []).length > 0;
+  const target = resolveTarget(rule, account, input);
+  const trace = { account_id: account.id, rule_id: rule.id, comment_id: input.comment.id };
+  const idleDmStatus: SendStatus = target.wantsDm ? "pending" : "not_applicable";
 
   let eventId: string | null;
   try {
-    eventId = await recordEvent(admin, account, rule, input, authorKey, wantsDm ? "pending" : "not_applicable");
+    eventId = await recordEvent(admin, account, rule, input, target.authorKey, idleDmStatus);
   } catch (error) {
     // The rule matched, so this comment belongs to the funnel. Returning "unclaimed" here would
-    // hand it to the AI agent, which would answer a comment the user configured a fixed reply
-    // for. Refusing to act is the smaller wrong.
+    // hand it to the AI agent, which would answer a comment the user wrote a fixed reply for.
+    // Refusing to act is the smaller wrong.
     console.error("[comment-workflow] event insert failed:", (error as Error).message);
-    log("event_write_failed", { account_id: account.id, rule_id: rule.id, comment_id: input.comment.id });
+    log("event_write_failed", trace);
     return "claimed";
   }
   if (!eventId) {
-    log("already_claimed", { account_id: account.id, rule_id: rule.id, comment_id: input.comment.id });
+    log("already_claimed", trace);
     return "claimed";
   }
 
-  let holdsUsageClaim = false;
-  if (rule.send_once_per_user) {
-    try {
-      if (await claimUsage(admin, rule, authorKey, postKey) === "already_served") {
-        await finalizeEvent(admin, eventId, {
-          public_reply_status: "skipped",
-          dm_status: wantsDm ? "skipped" : "not_applicable",
-          error_message: "already_served",
-        });
-        log("already_served", { account_id: account.id, rule_id: rule.id, comment_id: input.comment.id });
-        return "claimed";
-      }
-      holdsUsageClaim = true;
-    } catch (error) {
-      console.error("[comment-workflow] usage claim failed:", (error as Error).message);
-      log("usage_claim_failed", { account_id: account.id, rule_id: rule.id, comment_id: input.comment.id });
-      await finalizeEvent(admin, eventId, {
-        public_reply_status: "failed",
-        dm_status: wantsDm ? "failed" : "not_applicable",
-        error_message: "usage_claim_failed",
-      });
-      return "claimed";
-    }
-  }
+  const claim = await takeSendOnceClaim(admin, target, eventId, trace);
+  if (claim === "stop") return "claimed";
 
-  let publicStatus: SendStatus = wantsPublicReply ? "pending" : "skipped";
-  let publicReplyId: string | null = null;
-  let dmStatus: SendStatus = wantsDm ? "pending" : "not_applicable";
-  const errors: string[] = [];
+  const report = await performSends(admin, account, target, input, runtime);
 
-  // Public reply first: it is the visible half, and the DM's own copy usually points at it
-  // ("check your DM"). The two legs are independent — neither failure cancels the other.
-  if (wantsPublicReply) {
-    const result = await replyToComment(account, input.comment.id, pick(rule.public_replies as string[]), fetcher);
-    publicStatus = result.success ? "sent" : result.upstreamUnavailable ? "indeterminate" : "failed";
-    publicReplyId = result.platform_comment_id ?? null;
-    if (!result.success && result.error) errors.push(result.error);
-  }
-
-  if (wantsDm) {
-    if (!withinPrivateReplyWindow(input, now)) {
-      dmStatus = "skipped";
-      errors.push("private_reply_window_elapsed");
-      log("private_reply_window_elapsed", { account_id: account.id, rule_id: rule.id, comment_id: input.comment.id });
-    } else {
-      const { text, mediaError } = await composeDm(admin, rule, account);
-      if (mediaError) errors.push(mediaError);
-      // Exactly one attempt, ever. Meta allows one private reply per comment, so a retry can
-      // only be refused — and its refusal is indistinguishable from the original failure.
-      const result = await sendPrivateReply(admin, account as PrivateReplyAccount, input.comment.id, text, fetcher);
-      // A timeout is not a non-delivery. callGraph flags an unreachable upstream separately
-      // precisely because Meta may have accepted the request before the response was lost.
-      dmStatus = result.success ? "sent" : result.upstreamUnavailable ? "indeterminate" : "failed";
-      if (!result.success && result.error) errors.push(result.error);
-    }
-  }
-
-  // The claim is released ONLY when every attempt is known not to have been delivered.
-  //
-  // An `indeterminate` leg keeps it: Meta may have accepted the send whose answer never
-  // arrived, and freeing the claim would let this person's next comment produce a second DM
-  // for something they already received. The existing DM automation makes the same choice for
-  // the same reason — commentAutomation.ts records usage in a `finally`, so a failed send
-  // still throttles.
-  const anythingDelivered = publicStatus === "sent" || dmStatus === "sent";
-  const anythingUnknown = publicStatus === "indeterminate" || dmStatus === "indeterminate";
-  if (holdsUsageClaim && !anythingDelivered && !anythingUnknown) {
-    await releaseUsage(admin, rule, authorKey, postKey);
+  // The claim is released ONLY when every attempt is known not to have been delivered. An
+  // `indeterminate` leg keeps it: freeing the claim would let this person's next comment
+  // produce a second DM for something they may already have received. The existing DM
+  // automation makes the same choice — commentAutomation.ts records usage in a `finally`, so a
+  // failed send still throttles.
+  const delivered = report.publicStatus === "sent" || report.dmStatus === "sent";
+  const unknown = report.publicStatus === "indeterminate" || report.dmStatus === "indeterminate";
+  if (claim === "held" && !delivered && !unknown) {
+    await releaseUsage(admin, rule, target.authorKey, target.postKey);
   }
 
   await finalizeEvent(admin, eventId, {
-    public_reply_status: publicStatus,
-    dm_status: dmStatus,
-    public_reply_id: publicReplyId,
-    error_message: errors.length ? errors.join("; ") : null,
+    public_reply_status: report.publicStatus,
+    dm_status: report.dmStatus,
+    public_reply_id: report.publicReplyId,
+    error_message: report.errors.length > 0 ? report.errors.join("; ") : null,
   });
 
   log("handled", {
-    account_id: account.id,
+    ...trace,
     platform: account.platform,
-    rule_id: rule.id,
-    comment_id: input.comment.id,
-    public_reply_status: publicStatus,
-    dm_status: dmStatus,
+    public_reply_status: report.publicStatus,
+    dm_status: report.dmStatus,
   });
   return "claimed";
 }
