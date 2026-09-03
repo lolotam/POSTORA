@@ -110,6 +110,7 @@ SUITES=(
   hybrid_connectors.sql
   comment_workflow.sql
   youtube_composio_provider.sql
+  youtube_comments.sql
   partner_posts.sql
   partner_media_scan_state.sql
   partner_usage_counters.sql
