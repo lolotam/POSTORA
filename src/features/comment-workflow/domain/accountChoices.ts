@@ -1,3 +1,4 @@
+import { isTokenExpired } from "@/lib/tokenUtils";
 import { COMMENT_WORKFLOW_PLATFORMS, type CommentWorkflowPlatform } from "./rule";
 
 /**
@@ -18,11 +19,18 @@ export interface SelectableAccount {
   avatar_url: string | null;
   is_active: boolean;
   needs_reauth: boolean | null;
+  token_expires_at: string | null;
 }
 
-/** The same test the partner-key picker applies (`GeneratePartnerKeyDialog`). */
+/**
+ * `is_active && !needs_reauth` is the test the partner-key picker applies
+ * (`GeneratePartnerKeyDialog`), and expiry is checked alongside it because `needs_reauth` is set
+ * by the health cron, not at the moment a token dies: between the two an account is unusable and
+ * unflagged. A null expiry means the token does not expire (Facebook page tokens), and
+ * `isTokenExpired` already reads it that way.
+ */
 export function isAccountConnected(account: SelectableAccount): boolean {
-  return account.is_active && !account.needs_reauth;
+  return account.is_active && !account.needs_reauth && !isTokenExpired(account.token_expires_at);
 }
 
 /**

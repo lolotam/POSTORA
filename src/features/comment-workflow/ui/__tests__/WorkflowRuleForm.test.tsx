@@ -18,10 +18,10 @@ vi.mock("@/hooks/useSocialAccounts", () => ({
   useSocialAccounts: () => ({
     isError: false,
     data: [
-      { id: "fb-1", platform: "facebook", platform_username: "Shop Page", avatar_url: null, is_active: true, needs_reauth: false },
-      { id: "fb-2", platform: "facebook", platform_username: "Old Page", avatar_url: null, is_active: true, needs_reauth: true },
-      { id: "ig-1", platform: "instagram", platform_username: "shop_ig", avatar_url: null, is_active: true, needs_reauth: false },
-      { id: "th-1", platform: "threads", platform_username: "shop_th", avatar_url: null, is_active: true, needs_reauth: true },
+      { id: "fb-1", platform: "facebook", platform_username: "Shop Page", avatar_url: null, is_active: true, needs_reauth: false, token_expires_at: null },
+      { id: "fb-2", platform: "facebook", platform_username: "Old Page", avatar_url: null, is_active: true, needs_reauth: true, token_expires_at: null },
+      { id: "ig-1", platform: "instagram", platform_username: "shop_ig", avatar_url: null, is_active: true, needs_reauth: false, token_expires_at: null },
+      { id: "th-1", platform: "threads", platform_username: "shop_th", avatar_url: null, is_active: true, needs_reauth: true, token_expires_at: null },
     ],
   }),
 }));

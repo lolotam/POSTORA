@@ -8,6 +8,9 @@ import {
   type SelectableAccount,
 } from "../accountChoices";
 
+const YESTERDAY = new Date(Date.now() - 86_400_000).toISOString();
+const NEXT_YEAR = new Date(Date.now() + 365 * 86_400_000).toISOString();
+
 function account(overrides: Partial<SelectableAccount> & { id: string }): SelectableAccount {
   return {
     platform: "facebook",
@@ -15,6 +18,7 @@ function account(overrides: Partial<SelectableAccount> & { id: string }): Select
     avatar_url: null,
     is_active: true,
     needs_reauth: false,
+    token_expires_at: NEXT_YEAR,
     ...overrides,
   };
 }
@@ -24,7 +28,11 @@ const ACCOUNTS: SelectableAccount[] = [
   account({ id: "fb-page" }),
   account({ id: "fb-stale", needs_reauth: true }),
   account({ id: "fb-off", is_active: false }),
-  account({ id: "ig-live", platform: "instagram" }),
+  // Expired but not yet flagged: `needs_reauth` is written by the health cron, so this is what
+  // an account looks like between its token dying and the cron next running.
+  account({ id: "fb-expired", token_expires_at: YESTERDAY }),
+  // Facebook page tokens do not expire, and a null column means exactly that -- not "unknown".
+  account({ id: "ig-live", platform: "instagram", token_expires_at: null }),
   account({ id: "th-live", platform: "threads" }),
   account({ id: "th-stale", platform: "threads", needs_reauth: true }),
   account({ id: "tiktok", platform: "tiktok" }),
@@ -35,6 +43,8 @@ describe("connectedAccountsFor", () => {
     // The reported bug: picking Facebook listed Threads accounts, and listed ones whose token
     // had died -- a funnel bound to those matches comments and then fails every send.
     expect(connectedAccountsFor(ACCOUNTS, "facebook").map((row) => row.id)).toEqual(["fb-page"]);
+    // A never-expiring token is offered; a null column is not treated as unknown.
+    expect(connectedAccountsFor(ACCOUNTS, "instagram").map((row) => row.id)).toEqual(["ig-live"]);
     expect(connectedAccountsFor(ACCOUNTS, "threads").map((row) => row.id)).toEqual(["th-live"]);
   });
 
@@ -62,8 +72,8 @@ describe("reconnectNeededCount", () => {
   it("counts what was left out, excluding one still shown for editing", () => {
     expect(reconnectNeededCount(ACCOUNTS, "threads")).toBe(1);
     expect(reconnectNeededCount(ACCOUNTS, "threads", "th-stale")).toBe(0);
-    // Deactivated as well as reauth-flagged: both are unusable, and both were listed before.
-    expect(reconnectNeededCount(ACCOUNTS, "facebook")).toBe(2);
+    // Deactivated, reauth-flagged and expired: all three are unusable, and all were listed before.
+    expect(reconnectNeededCount(ACCOUNTS, "facebook")).toBe(3);
     expect(reconnectNeededCount(ACCOUNTS, "")).toBe(0);
   });
 });
