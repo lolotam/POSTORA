@@ -91,6 +91,15 @@ FROM public.social_accounts GROUP BY platform ORDER BY platform;
 - [ ] **Step 1: Write the migration.** Tables exactly as spec §4.1 and §4.3 (copy the DDL verbatim, wrapped in `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`). Then:
 
 ```sql
+-- 4.2 (pre) rebuild the connector_type CHECK with all nineteen registry types.
+-- Migration A section E did this for twelve; without it every new type fails check_violation.
+ALTER TABLE public.ai_agent_tools DROP CONSTRAINT IF EXISTS ai_agent_tools_connector_type_check;
+ALTER TABLE public.ai_agent_tools ADD CONSTRAINT ai_agent_tools_connector_type_check
+  CHECK (connector_type IN (
+    'supabase','mysql_postgres','woocommerce','shopify','salla','zid','formula','custom_rest',
+    'myfatoorah','stripe','higgsfield','mcp_custom',
+    'google_sheets','slack','google_calendar','hubspot','notion','airtable','youtube'));
+
 -- 4.2 ai_agent_tools
 ALTER TABLE public.ai_agent_tools
   ADD COLUMN IF NOT EXISTS auth_strategy TEXT NOT NULL DEFAULT 'manual_credentials',
@@ -143,9 +152,11 @@ RPCs (each `SECURITY DEFINER SET search_path = public`; admin ones start with `P
 
 ```sql
 CREATE OR REPLACE FUNCTION public.workspace_connector_usage(p_workspace_id UUID, p_days INT DEFAULT 30)
-RETURNS TABLE (tool_id UUID, connector_type TEXT, calls BIGINT, failures BIGINT, p50_latency_ms INT, last_used_at TIMESTAMPTZ)
+RETURNS TABLE (tool_id UUID, connector_type TEXT, calls BIGINT, failures BIGINT, refused BIGINT, p50_latency_ms INT, last_used_at TIMESTAMPTZ)
 LANGUAGE sql SECURITY DEFINER SET search_path = public AS $$
-  SELECT l.tool_id, l.connector_type, count(*), count(*) FILTER (WHERE l.status <> 'success'),
+  -- failures = failed|timeout everywhere; refused is its own count (spec §4.3).
+  SELECT l.tool_id, l.connector_type, count(*), count(*) FILTER (WHERE l.status IN ('failed','timeout')),
+         count(*) FILTER (WHERE l.status = 'refused'),
          percentile_cont(0.5) WITHIN GROUP (ORDER BY l.latency_ms)::INT, max(l.created_at)
   FROM public.connector_call_logs l
   WHERE l.workspace_id = p_workspace_id
@@ -172,7 +183,7 @@ RETURNS TABLE (connector_type TEXT, auth_strategy TEXT, calls BIGINT, failures B
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   PERFORM public.partner_hub_assert_admin();
-  RETURN QUERY SELECT l.connector_type, l.auth_strategy, count(*), count(*) FILTER (WHERE l.status <> 'success'),
+  RETURN QUERY SELECT l.connector_type, l.auth_strategy, count(*), count(*) FILTER (WHERE l.status IN ('failed','timeout')),
     percentile_cont(0.5) WITHIN GROUP (ORDER BY l.latency_ms)::INT, percentile_cont(0.95) WITHIN GROUP (ORDER BY l.latency_ms)::INT
   FROM public.connector_call_logs l WHERE l.created_at >= now() - make_interval(days => LEAST(GREATEST(p_days,1),90))
   GROUP BY l.connector_type, l.auth_strategy ORDER BY count(*) DESC;
@@ -184,7 +195,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   PERFORM public.partner_hub_assert_admin();
   RETURN QUERY SELECT l.partner_key_id, k.name, k.key_prefix, l.workspace_id, w.name, count(*),
-    count(*) FILTER (WHERE l.status <> 'success'), percentile_cont(0.95) WITHIN GROUP (ORDER BY l.latency_ms)::INT
+    count(*) FILTER (WHERE l.status IN ('failed','timeout')), percentile_cont(0.95) WITHIN GROUP (ORDER BY l.latency_ms)::INT
   FROM public.connector_call_logs l
   LEFT JOIN public.partner_api_keys k ON k.id = l.partner_key_id
   LEFT JOIN public.workspaces w ON w.id = l.workspace_id
@@ -229,11 +240,11 @@ BEGIN
   END IF;
   UPDATE public.connector_connections SET status = 'revoked', revoked_at = now(), updated_at = now() WHERE id = p_connection_id;
   UPDATE public.ai_agent_tools SET is_enabled = false WHERE connection_id = p_connection_id;
-  UPDATE public.social_accounts SET needs_reauth = true WHERE connection_id = p_connection_id;  -- column exists after 20260903120100; guarded below
+  -- social_accounts.needs_reauth is added by Slice F's migration, which CREATE OR REPLACEs this function (no dynamic SQL here).
 END $$;
 ```
 
-The last `UPDATE` must be wrapped: `IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='social_accounts' AND column_name='connection_id') THEN EXECUTE '...' ; END IF;` so this migration applies before Slice F's. Grants and crons:
+Grants and crons:
 
 ```sql
 DO $$ DECLARE f TEXT; BEGIN
@@ -280,6 +291,7 @@ EXCEPTION WHEN check_violation THEN NULL; END $$;
 -- (7) admin_partner_key_connector_activity raises no_data_found for a random uuid, clamps p_limit
 -- (8) latency_ms rejects -1; status rejects 'weird'
 -- (9) cron.job has both jobnames
+-- (10) an ai_agent_tools row with each of the seven new connector_type values (manual_credentials, no connection) INSERTs; 'daftra' is refused by the CHECK
 ```
 
 Write each block fully (no elision) — copy the assertion pattern from `partner_hub_admin.sql` lines 40–120.
@@ -318,9 +330,12 @@ export interface ConnectorCallOutcome { status: ConnectorCallStatus; errorCode?:
 export async function recordConnectorCall(client: any, meta: ConnectorCallMeta, outcome: ConnectorCallOutcome): Promise<void>;
 export async function withConnectorCall<T>(client: any, meta: ConnectorCallMeta, fn: (signal: AbortSignal) => Promise<T>, opts: { timeoutMs: number; now?: () => number }): Promise<T>;
 export class ConnectorRefusal extends Error { constructor(public readonly code: string, message?: string) { super(message ?? code); } }
+/** Spec §4.3 workspace rule: the account's workspace when known, else the owner's personal workspace. Never null: throws only if the owner has no personal workspace, which the 2026-07-26 backfill guarantees exists. */
+export async function resolveWorkspaceForCall(client: any, input: { socialAccountId?: string | null; userId: string }): Promise<string>;
 ```
 
 - [ ] **Step 1: Write failing tests** (`Deno.test` + a fake client whose `.from("connector_call_logs").insert(row)` records `row`):
+  - `resolveWorkspaceForCall`: account with `workspace_id` → it; account with NULL `workspace_id` or no account → `workspaces` row where `owner_id = userId AND is_personal`; neither → throws `Error("workspace_unresolved")`.
   - `recordConnectorCall` maps camelCase → snake_case and floors `latency_ms` at 0.
   - insert error → `console.error` called, promise resolves.
   - `withConnectorCall` resolves → row `status='success'`, `latency_ms` = `now()` delta.
@@ -341,7 +356,7 @@ export class ConnectorRefusal extends Error { constructor(public readonly code: 
 **Files:** `docs/superpowers/specs/2026-09-03-hybrid-agent-connectors-tracking.md` §1 (update the Composio row if anything differs)
 
 - [ ] **Step 1:** With `COMPOSIO_API_KEY` in a local env only, `curl -H "x-api-key: $KEY" https://backend.composio.dev/api/v3.1/auth-configs` and record the `id` for each of `googlesheets, slack, googlecalendar, hubspot, notion, airtable, youtube`.
-- [ ] **Step 2:** `POST /connected-accounts` with `{ "auth_config": {"id": "<id>"}, "connection": {"user_id": "spike-ws", "callback_url": "https://example.invalid/cb"} }`; record the exact response keys for the redirect URL.
+- [ ] **Step 2:** `POST /connected-accounts` with `{ "auth_config": {"id": "<id>"}, "connection": {"user_id": "spike-ws", "callback_url": "https://example.invalid/cb"} }`; record the exact response keys for the redirect URL. Then open the redirect URL in a browser, complete the OAuth once, and **record the exact query parameters Composio appends to the callback** (the connected-account id parameter name is what Task 11's callback reads — spec §6.3 step 3).
 - [ ] **Step 3:** `GET /tools?toolkit_slug=googlesheets` and `GET /tools/GOOGLESHEETS_BATCH_GET`; record the version field name and the input schema location.
 - [ ] **Step 4:** Write the confirmed field names into `composioClient.ts`'s header comment (Task 8) and, if they differ from the spec table, edit spec §1. Delete every spike artefact; nothing from this task is committed except the two docs.
 
@@ -462,7 +477,15 @@ Queries `connector_connections` by `id` **and** `workspace_id`; a row found by i
   - missing `COMPOSIO_AUTH_CONFIG_*` → 503 `connector_unavailable` + refused log row;
   - happy path inserts `{status:'initiated', state_nonce, initiated_by}` then calls `initiateConnection({ workspaceId, authConfigId, callbackUrl: COMPOSIO_CALLBACK_URL + "?state=" + signed })` and returns `{ connection_id, redirect_url, expires_at }`;
   - Composio failure → row set `failed('composio_unavailable')`, 503.
-- [ ] **Step 2: Failing tests for `callback`** — each of spec §6.3 steps 1–6, including replay (nonce already null → `invalid_state`), `tenancy_mismatch` sets `failed` and logs, success caches schemas via `listTools(toolkit, binding.tools, binding.toolkitVersion)` and redirects to `APP_RETURN_URL?connection=<id>&result=ok`.
+- [ ] **Step 2: Failing tests for `callback`** — each of spec §6.3 steps 1–6: bad/expired/replayed state (nonce already null) → `invalid_state`; missing connected-account query param → `connection_not_found`; `getConnectedAccount` returns a non-ACTIVE or different-auth-config account → `connection_not_found`; fetched account `userId !== state.workspaceId` → `failed('tenancy_mismatch')` + refused log row; success caches schemas via `listTools(toolkit, binding.tools, binding.toolkitVersion)` and 302s to `APP_RETURN_URL&connection=<id>&result=ok` (append with `&` because the default already carries `?tab=integrations`).
+- [ ] **Step 2b: JWT exemption.** Add to `supabase/config.toml`:
+
+```toml
+[functions.composio-connect]
+verify_jwt = false
+```
+
+and apply the same exemption wherever the self-hosted runtime configures it (check how `threads-webhook` is exempted on the Contabo functions volume / compose env and copy that mechanism; record the exact file in the deploy runbook). The function verifies user JWTs itself on `initiate`/`revoke`/`refresh-schema` via `_shared/auth-helper.ts`; only `callback` is anonymous.
 - [ ] **Step 3: Failing tests for `revoke`** — membership required; calls `deleteConnectedAccount` (failure logged, not fatal); calls RPC `revoke_connector_connection` under the **user's** JWT client (so the RPC's own gate applies), 200.
 - [ ] **Step 4: Run** — FAIL. **Step 5: Implement** — `index.ts` follows the §12 shape; routes by `new URL(req.url).pathname` suffix; user routes use `_shared/auth-helper.ts`; callback route is unauthenticated and returns 302 only. Never `console.log` the state token or the redirect URL.
 - [ ] **Step 6: Run** — PASS. **Step 7: Commit** `git commit -m "feat(composio-connect): initiate, callback, revoke, refresh-schema"`.
@@ -494,11 +517,11 @@ Queries `connector_connections` by `id` **and** `workspace_id`; a row found by i
 
 ```ts
 export interface ComposioReadyTool extends CustomTool { auth_strategy: "composio_oauth"; connection: ActiveConnection; }
-export async function attachComposioTools(admin: any, tools: CustomTool[], account: { workspaceId: string | null; id: string | null }, log: (meta: ConnectorCallMeta, outcome: ConnectorCallOutcome) => Promise<void>): Promise<CustomTool[]>;
+export async function attachComposioTools(admin: any, tools: CustomTool[], account: { workspaceId: string | null; id: string | null }, warn?: (message: string) => void): Promise<CustomTool[]>;
 export function composioToolParameters(tool: ComposioReadyTool, binding: ComposioBinding): { type: "object"; properties: {...}; required: ["capability"] };
 ```
 
-- [ ] **Step 1: Failing tests:** account with `workspaceId: null` → every Composio tool omitted with `refused/connection_not_found`; inactive → omitted + `connection_inactive`; other workspace → `tenancy_mismatch`; empty cache → `schema_missing`; active + cached → tool returned with `connection`; native tools pass through untouched; one connection referenced by two tools is loaded once. `composioToolParameters` restricts `capability.enum` to `binding.tools` and merges cached `inputParameters` under `parameters` (same flat shape the adapter path uses, no `oneOf`); descriptions go through `composeToolDescription` with the 600-char budget.
+- [ ] **Step 1: Failing tests:** account with `workspaceId: null` → every Composio tool omitted and `console.warn` called with `connection_not_found`; inactive → omitted + `connection_inactive`; other workspace → `tenancy_mismatch`; empty cache → `schema_missing`; **no `connector_call_logs` insert in any omission case** (spec §7.1: prompt-assembly omissions are console-only); active + cached → tool returned with `connection`; native tools pass through untouched; one connection referenced by two tools is loaded once. Drop the `log` parameter from `attachComposioTools`; take `warn: (msg: string) => void` instead (default `console.warn`). `composioToolParameters` restricts `capability.enum` to `binding.tools` and merges cached `inputParameters` under `parameters` (same flat shape the adapter path uses, no `oneOf`); descriptions go through `composeToolDescription` with the 600-char budget.
 - [ ] **Step 2–4:** FAIL → implement → PASS.
 - [ ] **Step 5:** In `index.ts`, after `resolveToolsForAccount`, load the account's `workspace_id` (one `social_accounts` select by id + `user_id`) and call `attachComposioTools`; `customToolDefinitions` uses `composioToolParameters` when `tool.auth_strategy === "composio_oauth"`.
 - [ ] **Step 6: Run** the whole `ai-agent-reply` Deno suite — PASS. **Step 7: Commit** `git commit -m "feat(ai-agent-reply): offer Composio tools with enum-restricted slugs"`.
@@ -508,14 +531,14 @@ export function composioToolParameters(tool: ComposioReadyTool, binding: Composi
 **Files:**
 - Create: `supabase/functions/ai-agent-reply/composioExecution.ts`, test `composioExecution.test.ts`
 - Modify: `ai-agent-reply/connectorExecution.ts:200-215` (third branch), `connectorRouting.test.ts` (extend); `ai-agent-reply/index.ts:1040-1060` (pass `requestId`/account into `ToolContext` if not already there)
-- Modify: `ai-agent-adapters/handler.ts` — wrap `execute` and `test_connection` in `withConnectorCall(source='agent'|'test')` so **native** calls are metered too (the request already carries `tool_id` and `user_id`; resolve `workspace_id` from the tool's account or the owner's personal workspace).
+- Modify: `ai-agent-adapters/handler.ts` — wrap only `test_connection` in `withConnectorCall(source='test')` (workspace via `resolveWorkspaceForCall({ socialAccountId: tool.social_account_id, userId })`). **Native `execute` calls are metered in `executeRoutedCustomTool`** (below), which holds the `ToolContext` with the conversation's account — never in the adapter, or every native call would be counted twice.
 
 **Interfaces — Produces:** `export async function executeComposioTool(context: ToolContext, tool: ComposioReadyTool, args: Record<string, unknown>, deps?: { client?: ComposioClient; admin?: any; timeoutMs?: number }): Promise<ToolResult>`; `COMPOSIO_EXECUTE_TIMEOUT_MS = 6_000`.
 
 - [ ] **Step 1: Failing tests:** `dryRun` → no fetch, sandbox message; `capability` not in `binding.tools` → `ConnectorRefusal("connector_tool_not_allowed")` logged, model-visible "not allowed"; mutating slug, non-admin, `settings.allow_writes !== true` → `connector_write_not_allowed`; no client (`composioClientFromEnv` null) → `connector_unavailable`; success → output `Connector "<name>" returned: <json ≤ 8000 chars>` with `status='success'` row carrying `tool_id, connection_id, social_account_id, workspace_id, action_name=<slug>`; `successful:false` → `failed` with sanitized message (no Composio body beyond 300 chars); abort → `timeout` and "timed out".
 - [ ] **Step 2–4:** FAIL → implement using `withConnectorCall` (Task 5) around `client.executeTool` → PASS.
-- [ ] **Step 5:** `executeRoutedCustomTool`: `if (tool.auth_strategy === "composio_oauth") return executeComposioTool(...)` before the adapter check. Extend `connectorRouting.test.ts` for the new branch.
-- [ ] **Step 6:** Adapter handler wrapping + a test that `execute` writes a `connector_call_logs` row and that a failing insert does not change the adapter response.
+- [ ] **Step 5:** `executeRoutedCustomTool`: `if (tool.auth_strategy === "composio_oauth") return executeComposioTool(...)` before the adapter check; wrap the **adapter and legacy branches** in `withConnectorCall(admin, { source: "agent", workspaceId: await resolveWorkspaceForCall(admin, { socialAccountId: context.socialAccountId, userId: context.userId }), toolId: tool.id, connectorType: tool.connector_type ?? "custom_rest", authStrategy: "manual_credentials", actionName: String(args.capability ?? "input"), socialAccountId: context.socialAccountId, requestId: context.requestId }, ...)`. `ToolContext` (`tools.ts:13-27`) has neither today; add `socialAccountId: string | null` and `requestId: string` and fill them where the context is built in `index.ts` (`request.social_account_id` when it is a UUID, else null; the reply's correlation id). Extend `connectorRouting.test.ts`: each branch writes exactly one row; a `dryRun` context writes none.
+- [ ] **Step 6:** Adapter `test_connection` wrapping + a test that it writes a `source='test'` row and that a failing insert does not change the adapter response.
 - [ ] **Step 7: Run** suites — PASS. **Step 8: Commit** `git commit -m "feat(connectors): meter every agent and test execution; execute Composio tools"`.
 
 ### Task 15: Scopes, actions, error codes
@@ -535,7 +558,7 @@ export function composioToolParameters(tool: ComposioReadyTool, binding: Composi
 - Create: `supabase/functions/partner-api/v1/connectors.ts`, test `connectors.test.ts`
 - Modify: `partner-api/v1/router.ts:109` (`V1_ROUTES` entries)
 
-**Interfaces — Consumes:** `boundAccountIds(authed)` (binding.ts), `resolveToolsForAccount`, `attachComposioTools`, `workspace_connector_usage` (call it with the service client using `p_workspace_id = record.workspaceId`; it filters by `auth.uid()` membership, so instead read `connector_call_logs` directly under the admin client with `workspace_id = record.workspaceId` — the partner door is service-role and structurally scoped, as every /v1 read is), `claimIdempotency`/`completeIdempotency`, the initiate logic from Task 11 (extract `initiateConnection(deps, { workspaceId, connectorType, initiatedBy })` into `_shared/composioInitiate.ts` in this task and reuse it from `composio-connect/handler.ts`).
+**Interfaces — Consumes:** `boundAccountIds(authed)` (binding.ts), `resolveToolsForAccount`, `attachComposioTools`, `claimIdempotency`/`completeIdempotency`, the initiate logic from Task 11 (extract `initiateConnection(deps, { workspaceId, connectorType, initiatedBy })` into `_shared/composioInitiate.ts` in this task and reuse it from `composio-connect/handler.ts`). **Usage counts:** do not call `workspace_connector_usage` (its gate is `auth.uid()`, which is null under the service role). Read `connector_call_logs` directly under the admin client with `workspace_id = record.workspaceId AND created_at >= now() - 30 days`, grouped by `tool_id` in TypeScript — the partner door is service-role and structurally scoped, as every /v1 read is.
 
 - [ ] **Step 1: Failing tests for `listConnectors`:** unbound key → `{ data: [] }`; two bound accounts sharing one `all_accounts` tool → one entry; entries carry `{ tool_id, name, connector_type, auth_strategy, category, scope, social_account_id, connection: { status, external_account_label } | null, usage_30d: { calls, failures, p50_latency_ms, last_used_at } }` and **no** Composio ids; response shape follows `v1/respond.ts` + `pagination.ts` conventions.
 - [ ] **Step 2: Failing tests for `createConnectLink`:** missing `Idempotency-Key` → 400 (existing helper); non-Composio type → `connector_type_not_connectable`; replay returns the stored body; success returns `{ connection_id, redirect_url, expires_at }` and writes `partner_api_usage(action='create_connect_link', billable=false)` through the existing `withPartnerAuth` path (no extra code) and a `connector_call_logs(source='partner', action_name='connect_link', status='success', partner_key_id)` row.
@@ -566,7 +589,7 @@ export function composioToolParameters(tool: ComposioReadyTool, binding: Composi
 ### Task 18: Partner docs
 
 **Files:**
-- Modify: `docs/api/openapi.yaml` (three paths + schemas `ConnectorSummary`, `ConnectLinkResponse`, `ToolExecuteRequest`, `ToolExecuteResponse`), `AGENT-CONTEXT.md` (connectors section), Postman collection if it is checked in
+- Modify: `docs/api/openapi.yaml` (three paths + schemas `ConnectorSummary`, `ConnectLinkResponse`, `ToolExecuteRequest`, `ToolExecuteResponse`), `docs/developer/AGENT-CONTEXT.md` (connectors section), Postman collection if it is checked in
 
 - [ ] **Step 1:** Write the paths with the exact request/response shapes from Tasks 16–17 and the error codes from Task 15. **Step 2:** Run `docs-guard` against the handlers. **Step 3:** Commit `docs(partner-api): connectors and tools routes`.
 
@@ -592,8 +615,8 @@ export function formatUsageLine(row: UsageRow | undefined, days: number): string
 export type ConnectorConnectionRow = Tables<"connector_connections">;
 export async function fetchConnections(workspaceId: string): Promise<ConnectorConnectionRow[]>;         // select via RLS
 export async function fetchWorkspaceUsage(workspaceId: string, days?: number): Promise<UsageRow[]>;      // rpc workspace_connector_usage
-export async function initiateConnection(input: { connector_type: ConnectorType; workspace_id: string }): Promise<{ connection_id: string; redirect_url: string; expires_at: string }>;  // supabase.functions.invoke("composio-connect/initiate")
-export async function revokeConnection(connectionId: string): Promise<void>;                             // invoke("composio-connect/revoke")
+export async function initiateConnection(input: { connector_type: ConnectorType; workspace_id: string }): Promise<{ connection_id: string; redirect_url: string; expires_at: string }>;  // fetch `${supabaseUrl}/functions/v1/composio-connect/initiate` with the session JWT, mirroring ConversationDetail.tsx:35
+export async function revokeConnection(connectionId: string): Promise<void>;                             // same, path /revoke
 export async function refreshConnectionSchema(connectionId: string): Promise<void>;
 // hooks
 export function useConnectorConnections(workspaceId: string | null);
@@ -608,7 +631,8 @@ export function useInitiateConnection(); export function useRevokeConnection();
 
 **Files:**
 - Create: `src/components/automation/connectors/ComposioConnectCard.tsx`, `ConnectorUsageLine.tsx`, `ConnectionPicker.tsx`, `__tests__/*.test.tsx`
-- Modify: `src/components/automation/DatabaseConnectorsManager.tsx` (tabs from `CATEGORY_TABS`; render `ComposioConnectCard` for `isComposioType`; tool form: hide credentials + show `ConnectionPicker` for Composio types; pass `connection_id`; show `ConnectorUsageLine` on every configured tool card; read `?connection=&result=` on mount and toast)
+- Modify: `src/components/automation/DatabaseConnectorsManager.tsx` (tabs from `CATEGORY_TABS`; render `ComposioConnectCard` for `isComposioType` **in both mounts** — the `readOnly` prop hides the tool form, not connection controls (spec §9.1); tool form: hide credentials + show `ConnectionPicker` for Composio types; pass `connection_id`; show `ConnectorUsageLine` on every configured tool card)
+- Modify: `src/pages/Settings.tsx:170-176` (Integrations tab reads `?connection=&result=` on mount, toasts the outcome, and strips the params)
 - Modify: `src/hooks/useAiAgentTools.ts` (upsert payload += `connection_id`)
 
 - [ ] **Step 1: Failing component tests** (render with `QueryClientProvider`, no `userEvent` — memory: clipboard breaks it; use `fireEvent`): card states `disconnected` (Connect button calls `initiateConnection` then sets `window.location.href`), `initiated` (spinner + "Waiting for authorisation"), `active` (label, badge, usage line, Disconnect → confirm → `revokeConnection`), `revoked`/`failed` (reason + Reconnect). `ConnectionPicker` lists only `active` connections of the selected account's workspace and shows the Task 1 message when the account has no workspace. Tool form submits `connection_id` and omits credential fields for Composio types.
@@ -646,7 +670,7 @@ export function useInitiateConnection(); export function useRevokeConnection();
 - [ ] **Step 1:** `clean-code-guard` on every changed production file; `test-guard` on every test file; `docs-guard` on openapi + AGENT-CONTEXT + both spec/plan docs.
 - [ ] **Step 2:** Full gate block from the header; SQL harness green; `graphify update .`.
 - [ ] **Step 3:** Rehearse migration `20260903120000` on the Contabo throwaway DB (memory `postora-migration-rehearsal-on-contabo`).
-- [ ] **Step 4:** Apply the migration to production, then deploy edge functions via the runtime checkout in this order: `composio-connect`, `ai-agent-adapters`, `ai-agent-reply`, `messaging-api`, `partner-api`. Verify hashes. Set Dokploy secrets first (spec §13 step 1) and confirm the container was recreated.
+- [ ] **Step 4:** Apply the migration to production, then deploy edge functions via the runtime checkout in this order: `composio-connect`, `ai-agent-adapters`, `ai-agent-reply`, `messaging-api`, `partner-api`. Verify hashes. Set Dokploy secrets first (spec §13 step 1) and confirm the container was recreated. Apply the `composio-connect` JWT exemption from Task 11 step 2b on the self-hosted runtime and prove it with an unauthenticated `curl -I .../composio-connect/callback?state=bogus` returning 302 (not 401).
 - [ ] **Step 5:** Commit that empties `PENDING_DB_CONNECTOR_TYPES` (registry test re-arms to expect `[]`), run gates, push, open the PR with the Task 1 evidence and the spec link; one bot review round (memory `postora-pr-bot-review-rounds`), merge.
 - [ ] **Step 6:** Post-merge: connect one Google Sheets account on production, run one agent query and one `/v1/tools/execute`, confirm three `connector_call_logs` rows (`test`, `agent`, `partner`) and the Hub KPI moves. Save the mem0 summary.
 
@@ -664,7 +688,7 @@ export function useInitiateConnection(); export function useRevokeConnection();
 
 **Files:** Create the migration (spec §10.1 DDL, idempotent) and `supabase/tests/youtube_composio_provider.sql`; register in `scripts/db-harness.sh`; update `types.ts`.
 
-- [ ] **Step 1:** Suite proves: `auth_provider='composio'` without `connection_id` → `check_violation`; `revoke_connector_connection` now sets `needs_reauth` on the linked account; RLS on `social_accounts` unchanged (existing suite still green).
+- [ ] **Step 1:** The migration adds the two columns and constraint (spec §10.1) and then `CREATE OR REPLACE FUNCTION public.revoke_connector_connection(p_connection_id UUID)` with Task 2's body plus `UPDATE public.social_accounts SET needs_reauth = true WHERE connection_id = p_connection_id;` before `END`. Suite proves: `auth_provider='composio'` without `connection_id` → `check_violation`; `revoke_connector_connection` now sets `needs_reauth` on the linked account and still disables dependent tools; RLS on `social_accounts` unchanged (existing suite still green).
 - [ ] **Step 2:** Harness green → commit `feat(youtube): composio publishing provider columns`.
 
 ### Task 27: `_shared/youtubeComposioOptions.ts` + create-time validation
@@ -674,11 +698,13 @@ export function useInitiateConnection(); export function useRevokeConnection();
 **Interfaces — Produces:**
 
 ```ts
-export const YOUTUBE_COMPOSIO_UNSUPPORTED = ["youtube_made_for_kids", "youtube_notify_subscribers_off", "youtube_publish_at", "youtube_allow_embedding_off", "youtube_recording_details"] as const;
+/** Keys are the PlatformMetadata fields in process-post/index.ts:356-376. A key is offending only when set to a value Composio's upload cannot express (spec §10.4 table). */
 export function youtubeOptionsUnsupportedOnComposio(metadata: PlatformMetadata | null | undefined): string[];   // returns offending keys; [] when fine
 ```
 
-- [ ] **Step 1: Tests:** each unsupported option alone → its key; supported-only metadata → `[]`; `made_for_kids:false` and `notifySubscribers:true` are fine.
+Offending conditions: `youtube_made_for_kids === true`, `youtube_notify_subscribers === false`, `youtube_allow_embedding === false`, `youtube_public_stats_viewable === false`, `youtube_contains_synthetic_media === true`, `youtube_has_paid_promotion === true`, `youtube_video_language`/`youtube_audio_language`/`youtube_recording_date`/`youtube_first_comment` non-empty, `youtube_license === "creativeCommon"`, `youtube_allowed_countries`/`youtube_blocked_countries` non-empty.
+
+- [ ] **Step 1: Tests:** each offending condition alone → its key; supported-only metadata (title, description, tags, category, visibility, thumbnail_url, video_type) → `[]`; `youtube_made_for_kids:false` and `youtube_notify_subscribers:true` are fine; `null`/`undefined` metadata → `[]`.
 - [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Server validator returns 400 `youtube_option_unsupported_on_composio` naming the keys when the target account is `auth_provider='composio'`; UI disables the controls with the same list. **Step 6:** Commit `feat(youtube): refuse options Composio cannot express`.
 
 ### Task 28: `process-post/youtubeComposio.ts` + branch
@@ -704,7 +730,7 @@ export async function publishYouTubeViaComposio(account: SocialAccount, post: Po
 
 **Files:** `supabase/functions/refresh-tokens/index.ts:471-497` and `:1002-1020`; `supabase/functions/check-connection-health/index.ts:85-100, 190`; tests alongside (extend existing).
 
-- [ ] **Step 1: Tests:** a `youtube` row with `auth_provider='composio'` is never passed to `refreshYouTubeToken`; health for it calls `getConnectedAccount` and sets `needs_reauth = status !== "ACTIVE"`, `last_health_check` stamped.
+- [ ] **Step 1: Tests:** a `youtube` row with `auth_provider='composio'` is never passed to `refreshYouTubeToken`; `refresh-tokens` instead calls `getConnectedAccount(connection.composio_connected_account_id)` and, when status is not `ACTIVE`, applies the same update its `invalid_grant` branch applies at `:494` (`needs_reauth = true` plus whatever health columns that branch writes today — read the branch, copy its column list, do not invent one); `check-connection-health` reports the row from `connector_connections.status` and never calls `channels?mine=true` for it.
 - [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Commit `feat(youtube): health and refresh understand the Composio provider`.
 
 ### Task 30: Channel upsert on callback + Profiles button
@@ -713,7 +739,7 @@ export async function publishYouTubeViaComposio(account: SocialAccount, post: Po
 - Modify: `supabase/functions/composio-connect/callback.ts` (+ `upsertYouTubeChannels(deps, connection)` when `connector_type === "youtube"`), test
 - Modify: the YouTube connect control on `/profiles` (find with `grep -rn "youtube-oauth" src/`), gated by `VITE_COMPOSIO_YOUTUBE_ENABLED === "true"`
 
-- [ ] **Step 1: Tests:** `YOUTUBE_LIST_CHANNELS` returning two channels → two `social_accounts` upserts keyed on `(platform, platform_user_id, user_id)` with `auth_provider='composio', connection_id, workspace_id, access_token=null`; zero channels → connection `failed('no_channel')`; an existing native row for the same channel is **not** overwritten (refuse with `channel_already_native`).
+- [ ] **Step 1: Tests:** `YOUTUBE_LIST_CHANNELS` returning two channels → two `social_accounts` upserts `ON CONFLICT ON CONSTRAINT social_accounts_user_platform_unique` (`user_id, platform, platform_user_id` — verify it exists with `\d social_accounts` on the harness first; memory `whatsapp-qr-repair-unique-collision` records a silent 23505 on this table) with `auth_provider='composio', connection_id, workspace_id, access_token=null`; zero channels → connection `failed('no_channel')`; an existing row for the same channel with `auth_provider='native'` is **not** overwritten (select first, refuse with `channel_already_native`).
 - [ ] **Step 2–4:** FAIL → implement → PASS. **Step 5:** Button "Connect via Composio" calls `initiateConnection({ connector_type: "youtube", workspace_id })`. **Step 6:** Commit `feat(youtube): connect channels through Composio`.
 
 ### Task 31: Land Slice F

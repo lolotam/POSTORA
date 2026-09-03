@@ -148,6 +148,9 @@ ALTER TABLE public.ai_agent_tools
     CHECK ((auth_strategy = 'composio_oauth') = (connection_id IS NOT NULL));
 ```
 
+- The same migration drops and recreates `ai_agent_tools_connector_type_check` with all
+  nineteen registry types (Migration A's section E did this for twelve). Without it every
+  save of a new type fails with `check_violation` even after the registry seam is emptied.
 - The default keeps every existing row meaning what it meant (the August spec's argument for
   `'all_accounts'` applies unchanged).
 - `ON DELETE RESTRICT`: a connection is revoked, not deleted, while tools reference it.
@@ -192,6 +195,14 @@ CREATE INDEX connector_call_logs_key_time_idx  ON public.connector_call_logs (pa
 
 - Written only by the service role through `_shared/connectorTelemetry.ts` (§7.2). A failed
   insert is logged and never fails the call it describes.
+- **`workspace_id` resolution rule** (one rule, in `connectorTelemetry.ts`, used by every
+  door): the account's `social_accounts.workspace_id` when the door knows the account;
+  otherwise the tool owner's personal workspace (`workspaces.owner_id = user_id AND
+  is_personal`). An `all_accounts` tool called through the agent uses the *conversation's*
+  account. If neither resolves, the row is written with the personal workspace of the
+  owner; a row is never silently dropped for want of a workspace.
+- **Failure definition**, used identically by every reader: `failures = status IN
+  ('failed','timeout')`; `refused` is counted separately and never folded into failures.
 - `request_id` is the `X-Postora-Request-Id` on the partner door and the reply/publish
   correlation id on the others, so one id joins `partner_api_usage`, `connector_call_logs`
   and the edge logs.
@@ -205,7 +216,7 @@ anon; GRANT EXECUTE TO authenticated`, and `NOTIFY pgrst, 'reload schema'` at th
 
 | RPC | Gate | Returns |
 |---|---|---|
-| `workspace_connector_usage(p_workspace_id, p_days int default 30)` | caller is a workspace member | per `tool_id`: `calls, failures, p50_latency_ms, last_used_at` — feeds the "142 calls this month" badge |
+| `workspace_connector_usage(p_workspace_id, p_days int default 30)` | caller is a workspace member | per `tool_id`: `calls, failures, refused, p50_latency_ms, last_used_at` — feeds the "142 calls this month" badge |
 | `admin_connector_overview()` | `partner_hub_assert_admin()` | `active_connections, workspaces_with_connections, calls_30d, failures_30d, refused_30d, p95_latency_30d` |
 | `admin_connector_usage_by_type(p_days)` | admin | per `connector_type, auth_strategy`: `calls, failures, p50, p95` |
 | `admin_connector_usage_by_key(p_days)` | admin | per `partner_key_id` with key name/prefix/workspace: `calls, failures, p95` |
@@ -288,7 +299,7 @@ New function, shape per ARCHITECTURE §12. Routes:
 | Route | Auth | Does |
 |---|---|---|
 | `POST /composio-connect/initiate` `{ connector_type, workspace_id }` | user JWT; caller must be a member of the workspace (`workspace_members`) | Inserts `connector_connections(status='initiated')`, calls `initiateConnection` with `callbackUrl = COMPOSIO_CALLBACK_URL?state=<signed>`, returns `{ connection_id, redirect_url, expires_at }` |
-| `GET /composio-connect/callback?state=` | none (browser redirect from Composio) | §6.3; ends in a 302 to `/automation/connectors?connection=<id>&result=ok|error_code` |
+| `GET /composio-connect/callback?state=&connectedAccountId=` | none (browser redirect from Composio; `verify_jwt = false` in `supabase/config.toml` like `threads-webhook`, and the same exemption in the self-hosted runtime's function config) | §6.3; ends in a 302 to `/settings?tab=integrations&connection=<id>&result=ok|error_code` |
 | `POST /composio-connect/revoke` `{ connection_id }` | user JWT + membership | §6.4 |
 | `POST /composio-connect/refresh-schema` `{ connection_id }` | user JWT + membership | Re-fetches the allow-listed tool schemas into `tool_schema_cache` |
 
@@ -301,12 +312,15 @@ cleared on use, so a replayed callback is refused.
 1. Verify the HMAC and expiry; refuse with `invalid_state`.
 2. Load the connection by id **and** `workspace_id` from the state; refuse if missing or not
    `initiated` (`connection_not_pending`).
-3. `listConnectedAccounts(workspace_id)` and pick the account whose auth config equals the
-   row's `composio_auth_config_id` and status is `ACTIVE`, created after the row. Refuse with
-   `connection_not_found` if none.
-4. **Tenancy check:** the Composio account's `user_id` must equal the row's `workspace_id`.
-   A mismatch is `tenancy_mismatch`: status `failed`, audit row, no redirect parameters
-   beyond the code.
+3. Read the connected-account id Composio appends to the redirect (the exact query
+   parameter name is recorded by Slice B's spike) and `getConnectedAccount(id)`. Refuse with
+   `connection_not_found` if missing, not `ACTIVE`, or its auth config differs from the row's
+   `composio_auth_config_id`.
+4. **Tenancy check:** the fetched account's `user_id` must equal the **state's**
+   `workspace_id`. This compares two independent sources (Composio's record vs the signed
+   state) — listing accounts by `user_ids=workspace_id` and comparing would be a tautology. A
+   mismatch is `tenancy_mismatch`: status `failed`, audit row, no redirect parameters beyond
+   the code.
 5. Resolve `external_account_id/label` from the account metadata; for `youtube` call
    `YOUTUBE_LIST_CHANNELS(mine=true)` (§10.2).
 6. Set `active`, `connected_at`, `composio_connected_account_id`, fetch and cache schemas.
@@ -316,10 +330,11 @@ Every refusal writes `connector_call_logs(source='test', action_name='callback',
 ### 6.4 Revoke
 
 `deleteConnectedAccount` at Composio (best effort, logged) → `status='revoked'`,
-`revoked_at` → `UPDATE ai_agent_tools SET is_enabled=false WHERE connection_id=…` → for
-§10 accounts, `social_accounts.needs_reauth=true`. One transaction via an RPC
-`revoke_connector_connection(p_connection_id)` that carries the membership check, so the
-edge function cannot half-apply it.
+`revoked_at` → `UPDATE ai_agent_tools SET is_enabled=false WHERE connection_id=…`. One
+transaction via an RPC `revoke_connector_connection(p_connection_id)` that carries the
+membership check, so the edge function cannot half-apply it. Slice F's migration
+`CREATE OR REPLACE`s the same function to add `social_accounts.needs_reauth=true` for §10
+accounts (no dynamic SQL, no `information_schema` guard).
 
 ---
 
@@ -332,11 +347,13 @@ After `resolveToolsForAccount` (unchanged), for each tool with
 
 1. Load its connection **by `connection_id` and `workspace_id = account.workspace_id`**
    (the second predicate is the structural tenancy check under the service role). Missing,
-   not `active`, or a different workspace → the tool is omitted from the prompt and a
-   `refused` log row (`error_code='connection_inactive' | 'tenancy_mismatch'`) is written.
+   not `active`, or a different workspace → the tool is omitted from the prompt with a
+   sanitized `console.warn` naming the tool id and reason. **No ledger row**: an omission at
+   prompt assembly is not an execution attempt, and one row per reply per dead connection
+   would swamp `refused_30d`. Ledger rows are written only when something tries to execute.
 2. Take `tool_schema_cache`. A reply never calls Composio for schemas: the cache is filled by
-   the callback and by `refresh-schema` (§6.2), and an empty cache omits the tool with a
-   `refused` row (`error_code='schema_missing'`). Emit one function per tool exactly as native
+   the callback and by `refresh-schema` (§6.2), and an empty cache omits the tool with the
+   same `console.warn` (`schema_missing`). Emit one function per tool exactly as native
    adapters do:
    `{ capability: <slug>, parameters: <object> }`, with `capability` enum-restricted to the
    registry's allow-list and descriptions composed by `composeToolDescription.ts` from the
@@ -364,7 +381,9 @@ Native tools are untouched. `customToolDefinitions` gains one branch, not a seco
 `recordConnectorCall(client, row)` and `withConnectorCall(client, meta, fn)` — the wrapper
 measures `performance.now()`, maps a thrown `ComposioError` / `AbortError` to
 `failed` / `timeout`, writes the row, and rethrows or returns. All four doors use it; no door
-writes the table directly.
+writes the table directly. **Native agent calls are metered in `executeRoutedCustomTool`**
+(it holds the `ToolContext` with the conversation's account); `ai-agent-adapters` meters
+only `test_connection` (`source='test'`), so no execution is counted twice.
 
 ---
 
@@ -405,19 +424,27 @@ unreachable), `connection_inactive` (409), `connector_tool_not_allowed` (403),
 
 ## 9. Frontend
 
-### 9.1 Connectors Manager (`/automation/connectors`)
+### 9.1 Connectors Manager
 
-- Tabs from the registry category: **E-Commerce & Payments** (native cards), **Productivity &
-  Apps** (Composio cards), **Databases**, **Automation**.
-- Composio card: `Connect` → `POST composio-connect/initiate` → `window.location = redirect_url`.
-  On return the page reads `?connection=&result=` and shows the outcome. A connected card
-  shows the external account label, a `Connected` badge, a usage line ("142 calls · 30 d ·
-  p50 640 ms") from `workspace_connector_usage`, and `Disconnect`.
-- Exposing a connection to agents reuses the existing tool form: choosing a Composio type
-  hides the credential fields, requires an active connection (picker), and writes
+`DatabaseConnectorsManager` is mounted twice today: read-only on **Settings → Integrations**
+(`/settings?tab=integrations`) and editable on the agent page's **Tools** tab
+(`/automation/agents`, `AiAgentManager`). The split maps onto D1:
+
+- **Connections live on Settings → Integrations** (workspace-level, like the credential they
+  are). Tabs from the registry category: **E-Commerce & Payments**, **Productivity & Apps**
+  (Composio cards), **Databases**, **Automation**. A Composio card's `Connect` →
+  `POST composio-connect/initiate` → `window.location = redirect_url`; the callback returns
+  here and the tab reads `?connection=&result=` to show the outcome. A connected card shows
+  the external account label, a `Connected` badge, a usage line ("142 calls · 30 d · p50
+  640 ms") from `workspace_connector_usage`, and `Disconnect`. The `readOnly` prop keeps
+  hiding the *tool* form here; it does not hide connection controls.
+- **Exposure lives on the agent Tools tab** and reuses the existing tool form: choosing a
+  Composio type hides the credential fields, requires an active connection
+  (`ConnectionPicker`, scoped to the selected account's workspace), and writes
   `auth_strategy='composio_oauth', connection_id`. Scope, account, sharing and the usage
   guide behave exactly as for native tools.
-- Native cards gain the same usage line. Nothing else in the 2 298-line file changes.
+- Every configured tool card, native or Composio, gains the usage line. Nothing else in the
+  2 298-line file changes.
 
 Module `src/features/connectors/`:
 `domain/connectorCategories.ts` (tab order, pure), `domain/usageSummary.ts` (format the
@@ -464,7 +491,10 @@ connected through §6 like any other. The callback's step 5 runs `YOUTUBE_LIST_C
 `mine=true`; for each channel returned it upserts a `social_accounts` row
 (`auth_provider='composio'`, `connection_id`, `platform_user_id=channel id`,
 `platform_username=title`, `avatar_url`, `workspace_id` = the connection's) under the
-connection's `initiated_by` user, or refuses with `no_channel` if none. Entry point in the UI:
+connection's `initiated_by` user, `ON CONFLICT ON CONSTRAINT social_accounts_user_platform_unique`
+(`user_id, platform, platform_user_id`), or refuses with `no_channel` if none. A conflicting
+row that is `auth_provider='native'` is **not** overwritten: the callback refuses with
+`channel_already_native` so a working native channel is never silently re-homed. Entry point in the UI:
 the existing YouTube "Connect" on `/profiles` gets a second button, **Connect via Composio**,
 behind `COMPOSIO_YOUTUBE_ENABLED`.
 
@@ -491,15 +521,20 @@ result = account.auth_provider === "composio"
 
 ### 10.4 Capability parity (D10, fail-closed)
 
-| Native option | Composio | Rule |
+The metadata keys are the `PlatformMetadata` fields in `process-post/index.ts:356-376`.
+
+| Native option (`PlatformMetadata` key) | Composio | Rule |
 |---|---|---|
-| title, description, tags, category, visibility | supported | mapped |
-| thumbnail | `YOUTUBE_UPDATE_THUMBNAIL` | second call |
+| `youtube_title`, `youtube_description`, `youtube_tags`, `youtube_category`, `youtube_visibility` | `YOUTUBE_UPLOAD_VIDEO` inputs | mapped |
+| `youtube_thumbnail_url` | `YOUTUBE_UPDATE_THUMBNAIL` | second call, best effort |
+| `youtube_video_type = 'short'` | same upload | no change |
 | `youtube_made_for_kids = true` | not supported | **refused at create** (`youtube_option_unsupported_on_composio`) |
-| `notifySubscribers = false` | not supported | refused at create |
-| scheduled `publishAt` (private-then-public) | not supported | Postora's own scheduler still controls *when* the upload happens; the option to upload private and flip later is refused |
-| `recordingDetails`, `allow_embedding = false` | not supported | refused at create |
-| video type `short` | same upload endpoint | no change |
+| `youtube_notify_subscribers = false` | not supported | refused at create |
+| `youtube_allow_embedding = false`, `youtube_public_stats_viewable = false` | not supported | refused at create |
+| `youtube_contains_synthetic_media = true`, `youtube_has_paid_promotion = true` | not supported | refused at create |
+| `youtube_video_language`, `youtube_audio_language`, `youtube_recording_date`, `youtube_license = 'creativeCommon'` | not supported | refused at create |
+| `youtube_allowed_countries`, `youtube_blocked_countries` | not supported | refused at create |
+| `youtube_first_comment` | no Composio comment slug is allow-listed | refused at create |
 
 "Refused at create" means `messaging-api`/post creation validates the target account's
 provider and returns a 400 the composer shows, so a user never schedules something that will
@@ -508,9 +543,11 @@ shared with the UI's disabled-state logic.
 
 ### 10.5 Health and refresh
 
-`refresh-tokens` and `check-connection-health` skip `auth_provider='composio'` rows for
-token work; health for those rows is `getConnectedAccount(status === 'ACTIVE')`, mapped to
-`needs_reauth` the same way as today. `refreshYouTubeToken` is never called for them.
+`refresh-tokens` skips `auth_provider='composio'` rows for token work and instead probes
+`getConnectedAccount`; a status other than `ACTIVE` sets `needs_reauth = true` through the
+same code path its `invalid_grant` branch uses today (`refresh-tokens/index.ts:494`).
+`check-connection-health` reports those rows from `connector_connections.status` without
+calling Google. `refreshYouTubeToken` is never called for them.
 
 ### 10.6 Known limits (recorded, not solved)
 
@@ -532,8 +569,8 @@ token work; health for those rows is `getConnectedAccount(status === 'ACTIVE')`,
 | `COMPOSIO_API_KEY` unset | every Composio path `connector_unavailable`; native unaffected | `refused` |
 | Callback state invalid / replayed / expired | 302 with `result=invalid_state` | `refused` |
 | Composio account `user_id ≠ workspace_id` | connection `failed('tenancy_mismatch')` | `refused` |
-| Tool's connection not `active` | tool omitted from prompt; partner 409 | `refused` |
-| Tool's connection in another workspace than the account | omitted; partner 404 | `refused` |
+| Tool's connection not `active` | tool omitted from prompt (`console.warn`, no row); partner 409 | `refused` (partner/execute only) |
+| Tool's connection in another workspace than the account | omitted (`console.warn`); partner 404 | `refused` (partner/execute only) |
 | Slug not in the registry allow-list | 403 / model-visible refusal | `refused` |
 | Mutating slug without `allow_writes` and not admin | same | `refused` |
 | Partner key not bound to the account | 404 `tool_not_found` (non-enumerable) | `refused` |
@@ -569,6 +606,7 @@ workspace.
 
 1. Dokploy secrets: `COMPOSIO_API_KEY`, `COMPOSIO_STATE_SECRET` (32 random bytes),
    `COMPOSIO_CALLBACK_URL=https://api.postora.cloud/functions/v1/composio-connect/callback`,
+   `APP_RETURN_URL=https://postora.cloud/settings?tab=integrations`,
    `COMPOSIO_AUTH_CONFIG_<TYPE>` per connector type, `COMPOSIO_YOUTUBE_ENABLED=false`.
    (`=` not `:`; verify the container was recreated — memory `postora-cron-secret-unset-503`.)
 2. Migration `20260903120000` (harness-rehearsed first; outer BEGIN does not rehearse it).
