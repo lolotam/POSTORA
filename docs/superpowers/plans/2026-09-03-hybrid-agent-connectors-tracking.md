@@ -506,6 +506,8 @@ verify_jwt = false
 ```
 
 and apply the same exemption wherever the self-hosted runtime configures it (check how `threads-webhook` is exempted on the Contabo functions volume / compose env and copy that mechanism; record the exact file in the deploy runbook). The function verifies user JWTs itself on `initiate`/`revoke`/`refresh-schema` via `_shared/auth-helper.ts`; only `callback` is anonymous.
+
+  **Verified 2026-09-03 on Contabo:** the runtime's `main/index.ts` gates on `VERIFY_JWT`, which the compose file sets from `FUNCTIONS_VERIFY_JWT`, and that is `false` in the stack's `.env`. No function is JWT-checked at the gateway (that is how `threads-webhook` works today), so the callback needs **no runtime change**; the `config.toml` entry only documents intent and keeps the CLI honest.
 - [x] **Step 3: Failing tests for `revoke`** — membership required; calls `deleteConnectedAccount` (failure logged, not fatal); calls RPC `revoke_connector_connection` under the **user's** JWT client (so the RPC's own gate applies), 200.
 - [x] **Step 4: Run** — FAIL. **Step 5: Implement** — `index.ts` follows the §12 shape; routes by `new URL(req.url).pathname` suffix; user routes use `_shared/auth-helper.ts`; callback route is unauthenticated and returns 302 only. Never `console.log` the state token or the redirect URL.
 - [x] **Step 6: Run** — PASS. **Step 7: Commit** `git commit -m "feat(composio-connect): initiate, callback, revoke, refresh-schema"`.
