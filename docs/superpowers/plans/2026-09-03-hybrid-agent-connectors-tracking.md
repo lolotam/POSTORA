@@ -106,7 +106,7 @@ fallback to the owner's personal workspace (Task 5) is exercised by real rows.
 
 **Interfaces — Produces:** tables `connector_connections`, `connector_call_logs`; columns `ai_agent_tools.auth_strategy`, `ai_agent_tools.connection_id`; trigger `ai_agent_tools_connection_workspace_matches`; RPCs `workspace_connector_usage(p_workspace_id uuid, p_days int)`, `admin_connector_overview()`, `admin_connector_usage_by_type(p_days int)`, `admin_connector_usage_by_key(p_days int)`, `admin_connector_connections(p_workspace_id uuid)`, `admin_partner_key_connector_activity(p_key_id uuid, p_limit int)`, `revoke_connector_connection(p_connection_id uuid)`; crons `connector_logs_retention`, `connector_connections_sweep`.
 
-- [ ] **Step 1: Write the migration.** Tables exactly as spec §4.1 and §4.3 (copy the DDL verbatim, wrapped in `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`). Then:
+- [x] **Step 1: Write the migration.** Tables exactly as spec §4.1 and §4.3 (copy the DDL verbatim, wrapped in `CREATE TABLE IF NOT EXISTS` and `ADD COLUMN IF NOT EXISTS`). Then:
 
 ```sql
 -- 4.2 (pre) rebuild the connector_type CHECK with all nineteen registry types.
@@ -280,8 +280,8 @@ SELECT cron.schedule('connector_connections_sweep', '*/15 * * * *',
 NOTIFY pgrst, 'reload schema';
 ```
 
-- [ ] **Step 2: Apply on the harness** (`bash scripts/db-harness.sh` with the suite from Task 3 registered) — expected: no error, `\df admin_connector_*` lists six functions.
-- [ ] **Step 3: Commit** `git add supabase/migrations/20260903120000_hybrid_connectors_tracking.sql && git commit -m "feat(connectors): connection registry, call ledger, admin readers"`
+- [x] **Step 2: Apply on the harness** (`bash scripts/db-harness.sh` with the suite from Task 3 registered) — expected: no error, `\df admin_connector_*` lists six functions.
+- [x] **Step 3: Commit** `git add supabase/migrations/20260903120000_hybrid_connectors_tracking.sql && git commit -m "feat(connectors): connection registry, call ledger, admin readers"`
 
 ### Task 3: Harness suite `supabase/tests/hybrid_connectors.sql`
 
@@ -289,7 +289,7 @@ NOTIFY pgrst, 'reload schema';
 - Create: `supabase/tests/hybrid_connectors.sql`
 - Modify: `scripts/db-harness.sh:101-110` (add `hybrid_connectors.sql` to `SUITES`)
 
-- [ ] **Step 1: Write the suite** in the `partner_hub_admin.sql` style (temp id table, `pg_temp.cleanup()`, `\set ON_ERROR_STOP on`). Prove, in order:
+- [x] **Step 1: Write the suite** in the `partner_hub_admin.sql` style (temp id table, `pg_temp.cleanup()`, `\set ON_ERROR_STOP on`). Prove, in order:
 
 ```sql
 -- (1) a member of ws_a inserting a tool whose connection is in ws_b -> check_violation
@@ -314,18 +314,18 @@ EXCEPTION WHEN check_violation THEN NULL; END $$;
 
 Write each block fully (no elision) — copy the assertion pattern from `partner_hub_admin.sql` lines 40–120.
 
-- [ ] **Step 2: Register** the suite in `SUITES=(...)` after `publishing_seam.sql`.
-- [ ] **Step 3: Run** `DB_URL=... HARNESS_DB_NAME=connectors_harness bash scripts/db-harness.sh` — expected: `=== hybrid_connectors: ok ===` and every prior suite still green.
-- [ ] **Step 4: Commit** `git add supabase/tests/hybrid_connectors.sql scripts/db-harness.sh && git commit -m "test(connectors): harness suite for connection registry and ledger"`
+- [x] **Step 2: Register** the suite in `SUITES=(...)` after `publishing_seam.sql`.
+- [x] **Step 3: Run** `DB_URL=... HARNESS_DB_NAME=connectors_harness bash scripts/db-harness.sh` — expected: `=== hybrid_connectors: ok ===` and every prior suite still green.
+- [x] **Step 4: Commit** `git add supabase/tests/hybrid_connectors.sql scripts/db-harness.sh && git commit -m "test(connectors): harness suite for connection registry and ledger"`
 
 ### Task 4: Generated types
 
 **Files:**
 - Modify: `src/integrations/supabase/types.ts`
 
-- [ ] **Step 1: Regenerate** on the harness DB (memory: rehearsal on Contabo or local PG17) with `supabase gen types typescript --db-url "$DB_URL" > /tmp/types.ts`, then copy only the `connector_connections`, `connector_call_logs`, `ai_agent_tools` (two new columns) and the seven `Functions` entries into `types.ts` (do not overwrite unrelated drift).
-- [ ] **Step 2: Verify** `bunx tsc -b --noEmit` passes.
-- [ ] **Step 3: Commit** `git commit -m "chore(types): connector registry, ledger and readers" -- src/integrations/supabase/types.ts`
+- [x] **Step 1: Regenerate** on the harness DB (memory: rehearsal on Contabo or local PG17) with `supabase gen types typescript --db-url "$DB_URL" > /tmp/types.ts`, then copy only the `connector_connections`, `connector_call_logs`, `ai_agent_tools` (two new columns) and the seven `Functions` entries into `types.ts` (do not overwrite unrelated drift).
+- [x] **Step 2: Verify** `bunx tsc -b --noEmit` passes.
+- [x] **Step 3: Commit** `git commit -m "chore(types): connector registry, ledger and readers" -- src/integrations/supabase/types.ts`
 
 ### Task 5: `_shared/connectorTelemetry.ts`
 
@@ -352,7 +352,7 @@ export class ConnectorRefusal extends Error { constructor(public readonly code: 
 export async function resolveWorkspaceForCall(client: any, input: { socialAccountId?: string | null; userId: string }): Promise<string>;
 ```
 
-- [ ] **Step 1: Write failing tests** (`Deno.test` + a fake client whose `.from("connector_call_logs").insert(row)` records `row`):
+- [x] **Step 1: Write failing tests** (`Deno.test` + a fake client whose `.from("connector_call_logs").insert(row)` records `row`):
   - `resolveWorkspaceForCall`: account with `workspace_id` → it; account with NULL `workspace_id` or no account → `workspaces` row where `owner_id = userId AND is_personal`; neither → throws `Error("workspace_unresolved")`.
   - `recordConnectorCall` maps camelCase → snake_case and floors `latency_ms` at 0.
   - insert error → `console.error` called, promise resolves.
@@ -360,10 +360,10 @@ export async function resolveWorkspaceForCall(client: any, input: { socialAccoun
   - fn throws `ConnectorRefusal("connector_tool_not_allowed")` → row `status='refused', error_code=…`, rethrown.
   - fn throws `DOMException("AbortError")` (or aborts on the signal) → `status='timeout'`.
   - other error → `status='failed', error_code = error.code ?? "connector_failure"`.
-- [ ] **Step 2: Run** `deno test --no-check supabase/functions/_shared/connectorTelemetry.test.ts` — expected FAIL (module missing).
-- [ ] **Step 3: Implement** — `withConnectorCall` creates `AbortController`, `setTimeout(abort, timeoutMs)`, measures with `opts.now ?? performance.now`, classifies in `finally`-style try/catch, always calls `recordConnectorCall`, never lets the insert throw.
-- [ ] **Step 4: Run** — expected PASS.
-- [ ] **Step 5: Commit** `git commit -m "feat(connectors): shared call telemetry wrapper" -- supabase/functions/_shared/connectorTelemetry.ts supabase/functions/_shared/connectorTelemetry.test.ts`
+- [x] **Step 2: Run** `deno test --no-check supabase/functions/_shared/connectorTelemetry.test.ts` — expected FAIL (module missing).
+- [x] **Step 3: Implement** — `withConnectorCall` creates `AbortController`, `setTimeout(abort, timeoutMs)`, measures with `opts.now ?? performance.now`, classifies in `finally`-style try/catch, always calls `recordConnectorCall`, never lets the insert throw.
+- [x] **Step 4: Run** — expected PASS.
+- [x] **Step 5: Commit** `git commit -m "feat(connectors): shared call telemetry wrapper" -- supabase/functions/_shared/connectorTelemetry.ts supabase/functions/_shared/connectorTelemetry.test.ts`
 
 ---
 
