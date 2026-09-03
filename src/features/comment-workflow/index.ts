@@ -1,4 +1,13 @@
 export {
+  accountNoun,
+  accountPlaceholder,
+  connectedAccountsFor,
+  connectedCountByPlatform,
+  isAccountConnected,
+  reconnectNeededCount,
+  type SelectableAccount,
+} from "./domain/accountChoices";
+export {
   COMMENT_WORKFLOW_PLATFORMS,
   describeScope,
   describeTrigger,

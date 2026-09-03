@@ -84,6 +84,15 @@ describe("validateRuleForm", () => {
     expect(errors.publicReplies).toBe("Add a public reply.");
   });
 
+  it("names the platform, not the account, when no platform is chosen", () => {
+    // The platform is picked first and the account picker only appears after it, so "Choose an
+    // account." would point at a control that is not on screen yet.
+    const errors = invalid({ ...base, platform: "", socialAccountId: "" });
+    expect(errors.platform).toBe("Choose a platform.");
+    expect(errors.socialAccountId).toBeUndefined();
+    expect(invalid({ ...base, socialAccountId: "" }).socialAccountId).toBe("Choose an account.");
+  });
+
   it("needs a post id when the scope is one post", () => {
     expect(invalid({ ...base, scope: "post", targetPostId: "  " }).targetPostId).toBeTruthy();
   });
