@@ -469,7 +469,7 @@ Queries `connector_connections` by `id` **and** `workspace_id`; a row found by i
 - Create: `supabase/functions/composio-connect/index.ts` (adapter only: CORS, auth, route, sanitized error), `handler.ts` (initiate + refresh-schema), `callback.ts`, `revoke.ts`, `dependencies.ts` (constructs `ComposioClient`, admin client, env)
 - Test: `supabase/functions/composio-connect/handler.test.ts`, `callback.test.ts`, `revoke.test.ts`
 
-**Interfaces — Consumes:** Tasks 5, 8, 9, 10. **Produces:** routes per spec §6.2; env names `COMPOSIO_API_KEY`, `COMPOSIO_STATE_SECRET`, `COMPOSIO_CALLBACK_URL`, `COMPOSIO_AUTH_CONFIG_<TYPE_UPPER>` (e.g. `COMPOSIO_AUTH_CONFIG_GOOGLE_SHEETS`), `APP_RETURN_URL` (default `https://postora.cloud/automation/connectors`).
+**Interfaces — Consumes:** Tasks 5, 8, 9, 10. **Produces:** routes per spec §6.2; env names `COMPOSIO_API_KEY`, `COMPOSIO_STATE_SECRET`, `COMPOSIO_CALLBACK_URL`, `COMPOSIO_AUTH_CONFIG_<TYPE_UPPER>` (e.g. `COMPOSIO_AUTH_CONFIG_GOOGLE_SHEETS`), `APP_RETURN_URL` (default `https://postora.cloud/settings?tab=integrations`; the callback appends `&connection=&result=`).
 
 - [ ] **Step 1: Failing tests for `initiate`** (`handler.test.ts`, fake admin client + fake `ComposioClient`):
   - caller not a `workspace_members` row → 403 `forbidden`, no Composio call;
