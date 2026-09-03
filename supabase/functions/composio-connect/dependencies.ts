@@ -35,6 +35,7 @@ export interface UserConnection {
   connectorType: string;
   composioConnectedAccountId: string | null;
   status: string;
+  failureCode: string | null;
 }
 
 export interface ComposioConnectDependencies {
@@ -174,7 +175,7 @@ export function createDependencies(): ComposioConnectDependencies {
       const { data, error } = await admin
         .from("connector_connections")
         .select(
-          "id,workspace_id,connector_type,composio_connected_account_id,status",
+          "id,workspace_id,connector_type,composio_connected_account_id,status,failure_code",
         )
         .eq("id", id)
         .maybeSingle();
@@ -188,6 +189,7 @@ export function createDependencies(): ComposioConnectDependencies {
         connectorType: data.connector_type,
         composioConnectedAccountId: data.composio_connected_account_id,
         status: data.status,
+        failureCode: data.failure_code ?? null,
       };
     },
     async revokeRpc(userClient, connectionId) {

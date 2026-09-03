@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -11,7 +12,12 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { initiateConnection } from "@/features/connectors";
+import {
+  finalizeConnection,
+  initiateConnection,
+  openAuthorisationTab,
+  useConnectionFinalizer,
+} from "@/features/connectors";
 import { YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS } from "@/lib/youtubeComposioOptions";
 
 const STORAGE_KEY = "postora.youtubeConnectMethod";
@@ -33,7 +39,10 @@ interface YouTubeConnectMethodDialogProps {
   /** The profile tab the connected channel should appear on. */
   socialProfileId: string | null;
   onNativeConnect: () => void;
+  /** Called once the channel is connected and homed on the profile. */
+  onConnected?: () => void;
   initiateConnectionFn?: typeof initiateConnection;
+  finalizeConnectionFn?: typeof finalizeConnection;
   navigate?: (url: string) => void;
 }
 
@@ -48,7 +57,9 @@ export function YouTubeConnectMethodDialog({
   workspaceId,
   socialProfileId,
   onNativeConnect,
+  onConnected,
   initiateConnectionFn = initiateConnection,
+  finalizeConnectionFn = finalizeConnection,
   navigate = (url) => window.location.assign(url),
 }: YouTubeConnectMethodDialogProps) {
   const composioEnabled =
@@ -56,13 +67,38 @@ export function YouTubeConnectMethodDialog({
   const [method, setMethod] = useState<ConnectMethod>(rememberedMethod);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null);
 
   useEffect(() => {
     if (open) {
       setMethod(rememberedMethod());
       setError(null);
+    } else {
+      setPendingConnectionId(null);
     }
   }, [open]);
+
+  const finalizer = useConnectionFinalizer({
+    connectionId: pendingConnectionId,
+    socialProfileId,
+    finalize: finalizeConnectionFn,
+    onActive: () => {
+      setPendingConnectionId(null);
+      setBusy(false);
+      onConnected?.();
+      onOpenChange(false);
+    },
+    onFailed: (code) => {
+      setPendingConnectionId(null);
+      setBusy(false);
+      setError(
+        code === "timeout"
+          ? "The authorisation was not completed in time. Try again."
+          : `The connection did not complete (${code}).`,
+      );
+    },
+  });
+  const waiting = finalizer.status === "waiting";
 
   if (!composioEnabled) return null;
 
@@ -77,6 +113,9 @@ export function YouTubeConnectMethodDialog({
       setError("A workspace is required to connect through Composio.");
       return;
     }
+    // Opened inside the click so popup blockers allow it; Composio's page
+    // loads there while this dialog polls for the outcome.
+    const authorisationTab = openAuthorisationTab();
     setBusy(true);
     setError(null);
     try {
@@ -85,8 +124,11 @@ export function YouTubeConnectMethodDialog({
         workspace_id: workspaceId,
         ...(socialProfileId ? { social_profile_id: socialProfileId } : {}),
       });
-      navigate(connected.redirect_url);
+      setPendingConnectionId(connected.connection_id);
+      if (authorisationTab) authorisationTab.location.href = connected.redirect_url;
+      else navigate(connected.redirect_url);
     } catch (cause) {
+      authorisationTab?.close();
       setError(
         cause instanceof Error
           ? cause.message
@@ -109,6 +151,7 @@ export function YouTubeConnectMethodDialog({
           value={method}
           onValueChange={(value) => setMethod(value as ConnectMethod)}
           className="space-y-3"
+          disabled={waiting}
         >
           <div className="flex items-start gap-3 rounded-lg border p-3">
             <RadioGroupItem id="youtube-native" value="native" />
@@ -140,15 +183,27 @@ export function YouTubeConnectMethodDialog({
           Unavailable with Composio:{" "}
           {YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS.join(", ")}.
         </p>
+        {waiting && (
+          <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Waiting for authorisation — finish signing in on the Composio tab; this dialog closes by itself.
+          </p>
+        )}
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}
           </p>
         )}
         <DialogFooter>
-          <Button onClick={continueConnection} disabled={busy}>
-            {busy ? "Connecting…" : "Continue"}
-          </Button>
+          {waiting ? (
+            <Button variant="outline" onClick={() => { setPendingConnectionId(null); setBusy(false); }}>
+              Cancel
+            </Button>
+          ) : (
+            <Button onClick={continueConnection} disabled={busy}>
+              {busy ? "Connecting…" : "Continue"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

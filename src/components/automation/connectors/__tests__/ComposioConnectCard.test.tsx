@@ -43,6 +43,18 @@ const BASE: Connection = {
 
 const fetchMock = vi.fn();
 const assign = vi.fn();
+const openTab = vi.fn();
+
+/** fetch answers by route: initiate → the link; finalize → the given sequence. */
+function routeFetch(finalizeReplies: Array<Record<string, unknown>>) {
+  const replies = [...finalizeReplies];
+  fetchMock.mockImplementation((url: string) => {
+    const body = url.endsWith("/initiate")
+      ? { connection_id: "conn-9", redirect_url: "https://composio.example/oauth", expires_at: "" }
+      : replies.length > 1 ? replies.shift() : replies[0];
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(body) });
+  });
+}
 
 function wrap(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -55,7 +67,9 @@ describe("ComposioConnectCard", () => {
     from.mockReset().mockReturnValue(connectionsChain([]));
     fetchMock.mockReset();
     assign.mockReset();
+    openTab.mockReset().mockReturnValue(null);
     vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("open", openTab);
     Object.defineProperty(window, "location", {
       value: { ...window.location, assign },
       writable: true,
@@ -70,11 +84,8 @@ describe("ComposioConnectCard", () => {
     expect(screen.getByRole("button", { name: /^connect$/i })).toBeEnabled();
   });
 
-  it("sends the browser to the authorisation page the edge function returns", async () => {
-    fetchMock.mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ connection_id: "conn-9", redirect_url: "https://composio.example/oauth", expires_at: "" }),
-    });
+  it("falls back to navigating this tab to the authorisation page when a popup is blocked", async () => {
+    routeFetch([{ status: "pending" }]);
     wrap(<ComposioConnectCard connectorType="google_sheets" workspaceId="ws-1" />);
     fireEvent.click(await screen.findByRole("button", { name: /^connect$/i }));
     await waitFor(() => expect(assign).toHaveBeenCalledWith("https://composio.example/oauth"));
@@ -89,10 +100,30 @@ describe("ComposioConnectCard", () => {
     expect(screen.getByRole("button", { name: /^connect$/i })).toBeDisabled();
   });
 
-  it("waits visibly while an authorisation is outstanding", async () => {
+  it("loads the authorisation page in a fresh tab and completes the connection by polling", async () => {
+    const tab = { location: { href: "" }, close: vi.fn() };
+    openTab.mockReturnValue(tab);
+    routeFetch([{ status: "pending" }, { status: "active" }]);
+    wrap(<ComposioConnectCard connectorType="google_sheets" workspaceId="ws-1" />);
+    fireEvent.click(await screen.findByRole("button", { name: /^connect$/i }));
+    await waitFor(() => expect(tab.location.href).toBe("https://composio.example/oauth"));
+    expect(assign).not.toHaveBeenCalled();
+    expect(await screen.findByText(/waiting for authorisation/i)).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/finalize"))).toBe(true));
+    const [, init] = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/finalize")) as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ connection_id: "conn-9" });
+  });
+
+  it("resumes polling for a row left initiated by an earlier attempt, and Cancel stops it", async () => {
     from.mockReturnValue(connectionsChain([{ ...BASE, status: "initiated", external_account_label: null }]));
+    routeFetch([{ status: "pending" }]);
     wrap(<ComposioConnectCard connectorType="google_sheets" workspaceId="ws-1" />);
     expect(await screen.findByText(/waiting for authorisation/i)).toBeInTheDocument();
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(String(fetchMock.mock.calls[0][0])).toMatch(/\/composio-connect\/finalize$/);
+    expect(JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string)).toEqual({ connection_id: "conn-1" });
+    fireEvent.click(screen.getByRole("button", { name: /cancel/i }));
+    expect(await screen.findByRole("button", { name: /^connect$/i })).toBeEnabled();
   });
 
   it("shows the external account, a Connected badge and the usage line once active", async () => {

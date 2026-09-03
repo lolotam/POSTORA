@@ -6,6 +6,7 @@ import {
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { composioCallbackResponse } from "./callback.ts";
 import { createDependencies, createUserClient } from "./dependencies.ts";
+import { finalizeConnection } from "./finalize.ts";
 import {
   ConnectError,
   initiateConnection,
@@ -74,6 +75,16 @@ Deno.serve(async (req) => {
     const connectionId = stringField(body, "connection_id");
     if (!connectionId) throw new ConnectError("invalid_request", 400);
 
+    if (url.pathname.endsWith("/finalize")) {
+      return restrictedJsonResponse(
+        req,
+        await finalizeConnection(deps, {
+          userId,
+          connectionId,
+          socialProfileId: stringField(body, "social_profile_id"),
+        }),
+      );
+    }
     if (url.pathname.endsWith("/revoke")) {
       return restrictedJsonResponse(
         req,

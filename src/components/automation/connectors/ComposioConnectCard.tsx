@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, Link2, Unlink, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -9,6 +9,8 @@ import {
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import {
+  openAuthorisationTab,
+  useConnectionFinalizer,
   useConnectorConnections,
   useInitiateConnection,
   useRevokeConnection,
@@ -45,21 +47,65 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
   const initiate = useInitiateConnection();
   const revoke = useRevokeConnection();
   const [confirmingDisconnect, setConfirmingDisconnect] = useState(false);
+  const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null);
+  // Cancel withdraws the poll for a row that stays "initiated" until the
+  // sweep expires it; remembering it keeps the resume below from re-adopting it.
+  const [dismissedConnectionId, setDismissedConnectionId] = useState<string | null>(null);
 
   const connection = currentConnection(connections.data, connectorType);
   const status = connection?.status ?? "disconnected";
   const isActive = status === "active";
-  const isInitiated = status === "initiated";
+
+  // A row still "initiated" after a reload (or a tab closed mid-flow) is
+  // resumed here: the poll completes it as soon as Composio has the account.
+  useEffect(() => {
+    if (
+      status === "initiated" && connection && pendingConnectionId === null &&
+      connection.id !== dismissedConnectionId
+    ) {
+      setPendingConnectionId(connection.id);
+    }
+  }, [status, connection, pendingConnectionId, dismissedConnectionId]);
+
+  const cancelWaiting = () => {
+    setDismissedConnectionId(pendingConnectionId);
+    setPendingConnectionId(null);
+  };
+
+  const finalizer = useConnectionFinalizer({
+    connectionId: pendingConnectionId,
+    onActive: () => {
+      setPendingConnectionId(null);
+      toast.success(`${label} connected`);
+    },
+    onFailed: (code) => {
+      setPendingConnectionId(null);
+      toast.error(
+        code === "timeout"
+          ? `The ${label} authorisation was not completed in time. Connect again to retry.`
+          : `The ${label} connection did not complete (${code}).`,
+      );
+    },
+  });
+  const isWaiting = finalizer.status === "waiting";
 
   const connect = () => {
     if (workspaceId === null) return;
+    // Opened inside the click so popup blockers allow it; Composio's page
+    // loads there while this card polls for the outcome.
+    const authorisationTab = openAuthorisationTab();
     initiate.mutate(
       { connector_type: connectorType, workspace_id: workspaceId },
       {
-        // The authorisation happens on the provider's own page; the callback
-        // brings the browser back to Settings → Integrations with the result.
-        onSuccess: (result) => window.location.assign(result.redirect_url),
-        onError: (error) => toast.error(error instanceof Error ? error.message : `Could not start the ${label} connection`),
+        onSuccess: (result) => {
+          setPendingConnectionId(result.connection_id);
+          if (authorisationTab) authorisationTab.location.href = result.redirect_url;
+          else window.location.assign(result.redirect_url);
+        },
+        onError: (error) => {
+          authorisationTab?.close();
+          toast.error(error instanceof Error ? error.message : `Could not start the ${label} connection`);
+        },
       },
     );
   };
@@ -103,14 +149,14 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
           </p>
         )}
 
-        {isInitiated && (
+        {isWaiting && (
           <p className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Waiting for authorisation…
+            Waiting for authorisation — finish signing in on the Composio tab; this card updates by itself.
           </p>
         )}
 
-        {(status === "failed" || status === "revoked") && (
+        {!isWaiting && (status === "failed" || status === "revoked") && (
           <p className="text-xs text-muted-foreground">
             {status === "failed"
               ? `Last attempt failed — ${connection?.failure_code ?? "unknown reason"}.`
@@ -143,15 +189,19 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
                 </Button>
               )}
             </>
+          ) : isWaiting ? (
+            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={cancelWaiting}>
+              Cancel
+            </Button>
           ) : (
             <Button
               size="sm"
               className="h-8 gap-1.5 text-xs"
-              disabled={workspaceId === null || isInitiated || initiate.isPending}
+              disabled={workspaceId === null || initiate.isPending}
               onClick={connect}
             >
               {initiate.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
-              <span>{status === "disconnected" || isInitiated ? "Connect" : "Reconnect"}</span>
+              <span>{status === "disconnected" || status === "initiated" ? "Connect" : "Reconnect"}</span>
             </Button>
           )}
         </div>

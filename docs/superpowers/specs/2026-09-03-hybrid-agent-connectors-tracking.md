@@ -340,6 +340,27 @@ cleared on use, so a replayed callback is refused.
 
 Every refusal writes `connector_call_logs(source='test', action_name='callback', status='refused', error_code=…)`.
 
+**6.3.1 Finalize — the path the app actually relies on (2026-09-03).** Composio's hosted Link
+page (`connect.composio.dev/link/lk_…`, the `redirect_url` every initiate returns) ends on its
+own "Successfully connected — you can close this window" screen and never sends the browser
+to the callback URL it was given, even though it records that URL (verified against two real
+sessions and a headless-browser load of the success page). The callback above therefore stays
+as the path Composio *may* take; completion is something the app asks for:
+
+- `POST composio-connect/finalize { connection_id, social_profile_id? }` (user JWT, workspace
+  membership via `loadConnectionForUser`) answers `{status:"active"}` for an active row,
+  `{status:"failed", failure_code}` for a failed/revoked one, and for an `initiated` row runs
+  step 3's listing fallback, step 4's checks and steps 5–6 (`composio-connect/activation.ts`,
+  shared with the callback). No matching account yet, or a Composio outage mid-poll, answers
+  `{status:"pending"}`; a row older than the state TTL is failed `expired` here rather than
+  adopting a later account.
+- The app opens Composio in a new tab from inside the click (popup-blocker safe; falls back to
+  navigating the current tab) and polls `finalize` every 3 s for at most the state TTL
+  (`useConnectionFinalizer`), resuming for a row it finds still `initiated` after a reload. The
+  YouTube dialog sends the profile id with each poll so the channel is homed correctly.
+- Not covered: connections minted through the partner door (`connect-link`) have no poller and
+  activate only when something calls the same resolution; see `docs/developer/connectors.md`.
+
 ### 6.4 Revoke
 
 `deleteConnectedAccount` at Composio (best effort, logged) → `status='revoked'`,
@@ -458,11 +479,11 @@ unreachable), `connection_inactive` (409), `connector_tool_not_allowed` (403),
   guide behave exactly as for native tools.
 - Every configured tool card, native or Composio, gains the usage line. Nothing else in the
   2 298-line file changes.
-- **Known limit (Slice D):** the callback always returns to Settings → Integrations, which
-  shows the signed-in user's *personal* workspace. A connection initiated from the agent Tools
-  tab for an account in a team workspace completes and toasts correctly, but its card is
-  listed only when that workspace is selected. A workspace selector on the Integrations tab,
-  or a `return_to` hint carried in the signed state, is the follow-up; neither is in this spec.
+- **Known limit (Slice D, narrowed 2026-09-03):** Composio's page does not return the browser
+  at all (§6.3.1), so the surface that started the connection is the one that completes it by
+  polling; a connection started from the agent Tools tab for a team workspace completes on that
+  tab. The Settings → Integrations `?connection=&result=` handling remains for the callback
+  path and still assumes the personal workspace.
 
 Module `src/features/connectors/`:
 `domain/connectorCategories.ts` (tab order, pure), `domain/usageSummary.ts` (format the
