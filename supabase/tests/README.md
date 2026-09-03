@@ -22,6 +22,7 @@ below). So the harness does not replay history. It:
 | `partner_api_tenancy_negative.sql` | 32 negative-tenancy assertions; must run as superuser (it `SET ROLE`s away to make its grant checks meaningful); self-cleaning |
 | `partner_api_credential_lifecycle.sql` | key lifecycle RPCs (create/rotate/revoke) and their audit trail; self-cleaning |
 | `partner_api_dispatch_intents.sql` | D13 dispatch-intent state machine: tenancy, CHECKs, natural key, transition guard, key-survival, grant surface; must run as superuser (SET ROLE grant checks); self-cleaning |
+| `partner_hub_admin.sql` | Admin Partner Hub readers, admin key lifecycle in foreign workspaces, ledger columns; self-cleaning |
 | `whatsapp_workspace_crm.sql` | pgTAP; rolls itself back |
 | `import_whatsapp_contacts_to_workspace.sql` | pgTAP; rolls itself back |
 
