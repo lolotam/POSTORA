@@ -32,7 +32,9 @@ export const CONNECTOR_CATEGORY_LABELS: Record<ConnectorCategory, string> = {
   automation: "Automation",
 };
 
-export const COMPOSIO_TOOLKIT_VERSION = "latest";
+// Pinned per toolkit from the live spike of 2026-09-03 (spec §1): under "latest" a
+// cached schema and an execution could silently disagree after Composio bumps a toolkit.
+// Bump deliberately, with the callback re-run so tool_schema_cache follows.
 
 export const CONNECTOR_CAPABILITY_NAMES = [
   "search_products",
@@ -568,7 +570,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   google_sheets: {
     type: "google_sheets", label: "Google Sheets", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
     composio: {
-      toolkit: "googlesheets", toolkitVersion: COMPOSIO_TOOLKIT_VERSION,
+      toolkit: "googlesheets", toolkitVersion: "20260902_00",
       tools: ["GOOGLESHEETS_BATCH_GET", "GOOGLESHEETS_LOOKUP_SPREADSHEET_ROW", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_BATCH_UPDATE"],
       mutating: ["GOOGLESHEETS_BATCH_UPDATE"],
     },
@@ -580,7 +582,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   },
   slack: {
     type: "slack", label: "Slack", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
-    composio: { toolkit: "slack", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["SLACK_SEARCH_MESSAGES", "SLACK_LIST_CONVERSATIONS", "SLACK_SEND_MESSAGE"], mutating: ["SLACK_SEND_MESSAGE"] },
+    composio: { toolkit: "slack", toolkitVersion: "20260826_00", tools: ["SLACK_SEARCH_MESSAGES", "SLACK_LIST_CONVERSATIONS", "SLACK_SEND_MESSAGE"], mutating: ["SLACK_SEND_MESSAGE"] },
     usageGuide: {
       whenToUse: "Messages and channels in the connected Slack workspace.",
       requestExamples: ["find the latest message about order 10432", "which channel discussed the launch"],
@@ -589,7 +591,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   },
   google_calendar: {
     type: "google_calendar", label: "Google Calendar", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
-    composio: { toolkit: "googlecalendar", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_FIND_FREE_SLOTS", "GOOGLECALENDAR_CREATE_EVENT"], mutating: ["GOOGLECALENDAR_CREATE_EVENT"] },
+    composio: { toolkit: "googlecalendar", toolkitVersion: "20260902_00", tools: ["GOOGLECALENDAR_EVENTS_LIST", "GOOGLECALENDAR_FIND_FREE_SLOTS", "GOOGLECALENDAR_CREATE_EVENT"], mutating: ["GOOGLECALENDAR_CREATE_EVENT"] },
     usageGuide: {
       whenToUse: "Events and availability in the connected Google Calendar.",
       requestExamples: ["what appointments are tomorrow", "find a free slot next Tuesday"],
@@ -598,7 +600,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   },
   hubspot: {
     type: "hubspot", label: "HubSpot", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
-    composio: { toolkit: "hubspot", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["HUBSPOT_SEARCH_CONTACTS", "HUBSPOT_GET_CONTACT", "HUBSPOT_CREATE_CONTACT"], mutating: ["HUBSPOT_CREATE_CONTACT"] },
+    composio: { toolkit: "hubspot", toolkitVersion: "20260826_00", tools: ["HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA", "HUBSPOT_READ_CONTACT", "HUBSPOT_CREATE_CONTACT"], mutating: ["HUBSPOT_CREATE_CONTACT"] },
     usageGuide: {
       whenToUse: "Contacts and customer records in the connected HubSpot account.",
       requestExamples: ["find the contact for this email", "show the CRM record for this customer"],
@@ -607,7 +609,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   },
   notion: {
     type: "notion", label: "Notion", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
-    composio: { toolkit: "notion", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["NOTION_SEARCH_NOTION_PAGE", "NOTION_FETCH_DATA", "NOTION_QUERY_DATABASE"], mutating: [] },
+    composio: { toolkit: "notion", toolkitVersion: "20260819_00", tools: ["NOTION_SEARCH_NOTION_PAGE", "NOTION_FETCH_DATA", "NOTION_QUERY_DATABASE"], mutating: [] },
     usageGuide: {
       whenToUse: "Pages and database records shared with the connected Notion integration.",
       requestExamples: ["find the returns policy page", "look up this item in the product database"],
@@ -616,7 +618,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   },
   airtable: {
     type: "airtable", label: "Airtable", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
-    composio: { toolkit: "airtable", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["AIRTABLE_LIST_RECORDS", "AIRTABLE_GET_RECORD", "AIRTABLE_CREATE_RECORD"], mutating: ["AIRTABLE_CREATE_RECORD"] },
+    composio: { toolkit: "airtable", toolkitVersion: "20260902_00", tools: ["AIRTABLE_LIST_RECORDS", "AIRTABLE_GET_RECORD", "AIRTABLE_CREATE_RECORD"], mutating: ["AIRTABLE_CREATE_RECORD"] },
     usageGuide: {
       whenToUse: "Records in the connected Airtable bases.",
       requestExamples: ["list open bookings", "find the record for customer 402"],
@@ -625,7 +627,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   },
   youtube: {
     type: "youtube", label: "YouTube", auth_strategy: "composio_oauth", category: "automation", credentials: [],
-    composio: { toolkit: "youtube", toolkitVersion: COMPOSIO_TOOLKIT_VERSION, tools: ["YOUTUBE_LIST_CHANNELS", "YOUTUBE_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"], mutating: ["YOUTUBE_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"] },
+    composio: { toolkit: "youtube", toolkitVersion: "20260721_00", tools: ["YOUTUBE_LIST_CHANNELS", "YOUTUBE_MULTIPART_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"], mutating: ["YOUTUBE_MULTIPART_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"] },
     usageGuide: {
       whenToUse: "The connected YouTube channel and supported publishing actions.",
       requestExamples: ["list the connected channels", "upload this approved video"],

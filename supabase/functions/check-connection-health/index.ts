@@ -6,6 +6,7 @@ import {
   badRequestResponse,
   unauthorizedResponse,
 } from "../_shared/cors.ts";
+import { checkYouTubeProviderHealth } from "./youtubeProviderHealth.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
@@ -15,6 +16,20 @@ interface HealthCheckResult {
   message: string;
   tokenStatus?: "valid" | "expired";
   daysUntilExpiry?: number;
+}
+
+async function connectorConnectionStatus(
+  supabase: any,
+  connectionId: string,
+  workspaceId: string,
+): Promise<string | null> {
+  const { data, error } = await supabase.from("connector_connections")
+    .select("status")
+    .eq("id", connectionId)
+    .eq("workspace_id", workspaceId)
+    .maybeSingle();
+  if (error) throw new Error("Connection lookup failed");
+  return data?.status ?? null;
 }
 
 async function testTikTokConnection(accessToken: string): Promise<HealthCheckResult> {
@@ -152,7 +167,7 @@ Deno.serve(async (req) => {
     // Get the account
     const { data: account, error: fetchError } = await supabase
       .from("social_accounts")
-      .select("id, user_id, platform, access_token, token_expires_at, account_metadata")
+      .select("id, user_id, platform, access_token, token_expires_at, account_metadata, auth_provider, connection_id, workspace_id")
       .eq("id", account_id)
       .maybeSingle();
 
@@ -188,7 +203,11 @@ Deno.serve(async (req) => {
           result = await testPinterestConnection(account.access_token);
           break;
         case "youtube":
-          result = await testYouTubeConnection(account.access_token);
+          result = await checkYouTubeProviderHealth(account, {
+            testNative: () => testYouTubeConnection(account.access_token),
+            loadConnectionStatus: (connectionId, workspaceId) =>
+              connectorConnectionStatus(supabase, connectionId, workspaceId),
+          });
           break;
         default:
           result = { success: false, message: `Testing not supported for ${account.platform}` };
@@ -199,6 +218,13 @@ Deno.serve(async (req) => {
 
     // Get health status
     if (action === "status") {
+      if (account.platform === "youtube" && account.auth_provider === "composio") {
+        return jsonResponse(await checkYouTubeProviderHealth(account, {
+          testNative: () => testYouTubeConnection(account.access_token),
+          loadConnectionStatus: (connectionId, workspaceId) =>
+            connectorConnectionStatus(supabase, connectionId, workspaceId),
+        }));
+      }
       let tokenStatus: "valid" | "expired" = "valid";
       let daysUntilExpiry: number | undefined;
 

@@ -21,6 +21,8 @@ import {
   listLinkedInDestinations,
   normalizeLinkedInDestinationSelections,
 } from "../_shared/linkedinDestinations.ts";
+import { youtubeOptionsUnsupportedOnComposio } from "../_shared/youtubeComposioOptions.ts";
+import { recordConnectorCall } from "../_shared/connectorTelemetry.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -754,7 +756,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
 
     const query = supabase
       .from('social_accounts')
-      .select('id, platform, platform_user_id, platform_username')
+      .select('id, platform, platform_user_id, platform_username, auth_provider')
       .eq('user_id', userId)
       .eq('is_active', true)
       .ilike('platform_username', username);
@@ -779,7 +781,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // First try to find by internal UUID id
     const { data: accountsById, error: byIdError } = await supabase
       .from('social_accounts')
-      .select('id, platform, platform_user_id, account_metadata')
+      .select('id, platform, platform_user_id, account_metadata, auth_provider, connection_id, workspace_id')
       .eq('user_id', userId)
       .eq('is_active', true)
       .in('id', accountIdsArray);
@@ -791,7 +793,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // Also try to find by platform_user_id (Instagram/Facebook uses numeric IDs)
     const { data: accountsByPlatformId, error: byPlatformIdError } = await supabase
       .from('social_accounts')
-      .select('id, platform, platform_user_id, account_metadata')
+      .select('id, platform, platform_user_id, account_metadata, auth_provider, connection_id, workspace_id')
       .eq('user_id', userId)
       .eq('is_active', true)
       .in('platform_user_id', accountIdsArray);
@@ -886,6 +888,43 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     metadata.youtube_recording_date = youtube_recording_date || null;
     // YouTube Shorts support - video_type can be 'video' or 'short'
     metadata.youtube_video_type = body.youtube_video_type || 'video';
+
+    let youtubeTargets = selectedAccounts.filter((account: any) => account.platform === 'youtube');
+    if (youtubeTargets.length === 0) {
+      const { data, error } = await supabase.from('social_accounts')
+        .select('id, auth_provider, connection_id, workspace_id')
+        .eq('user_id', userId)
+        .eq('platform', 'youtube')
+        .eq('is_active', true);
+      if (error) {
+        return new Response(
+          JSON.stringify({ error: 'Failed to validate YouTube accounts.' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+      youtubeTargets = data || [];
+    }
+    if (youtubeTargets.some((account: any) => account.auth_provider === 'composio')) {
+      const unsupportedKeys = youtubeOptionsUnsupportedOnComposio(metadata);
+      if (unsupportedKeys.length > 0) {
+        await Promise.all(youtubeTargets
+          .filter((account: any) => account.auth_provider === 'composio')
+          .map((account: any) => recordConnectorCall(supabase, {
+            workspaceId: account.workspace_id,
+            connectionId: account.connection_id,
+            socialAccountId: account.id,
+            connectorType: 'youtube',
+            authStrategy: 'composio_oauth',
+            actionName: 'validate_options',
+            source: 'publish',
+          }, { status: 'refused', errorCode: 'youtube_option_unsupported_on_composio' })));
+        return new Response(JSON.stringify({
+          error: 'youtube_option_unsupported_on_composio',
+          code: 'youtube_option_unsupported_on_composio',
+          unsupported_keys: unsupportedKeys,
+        }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+    }
   }
 
   // TikTok metadata

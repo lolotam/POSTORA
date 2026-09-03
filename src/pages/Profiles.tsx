@@ -35,7 +35,10 @@ import {
   BlueskyConnectDialog,
   ConnectionTroubleshooter,
   PlatformAccountsTab,
+  YouTubeConnectMethodDialog,
 } from "@/components/profiles";
+import { requestYouTubeConnection } from "@/components/profiles/YouTubeConnectMethodDialog";
+import { useConnectorWorkspace } from "@/features/connectors";
 import { InstagramConnectDialog, type InstagramFlow } from "@/components/profiles/InstagramConnectDialog";
 import { InstagramSelectionDialog } from "@/components/profiles/InstagramSelectionDialog";
 import { TikTokDebugPanel } from "@/components/profiles/TikTokDebugPanel";
@@ -58,6 +61,7 @@ export default function Profiles() {
     max?: number;
   }>({ open: false, type: "social_account" });
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
+  const [youtubeConnectProfileId, setYoutubeConnectProfileId] = useState<string | null>(null);
   const { toast } = useToast();
   const { user } = useAuth();
   const { isAdmin } = useUserRole();
@@ -70,6 +74,7 @@ export default function Profiles() {
   const ensureDefaultProfile = useEnsureDefaultProfile();
   const disconnectAccountMutation = useDisconnectAccountFromProfile();
   const { canConnectSocialAccount, planLimits } = useQuotas();
+  const youtubeWorkspace = useConnectorWorkspace(null);
 
   useRealtimeSocialAccounts();
 
@@ -153,6 +158,14 @@ export default function Profiles() {
     }
     // Instagram raises a flow-choice request inside useProfileOAuth (Direct vs
     // Facebook Business), so both connect and reconnect open the same dialog.
+    if (platform === "youtube") {
+      requestYouTubeConnection(
+        import.meta.env.VITE_COMPOSIO_YOUTUBE_ENABLED === "true",
+        () => originalHandleConnectPlatform(profileId, platform),
+        () => setYoutubeConnectProfileId(profileId),
+      );
+      return;
+    }
     originalHandleConnectPlatform(profileId, platform);
   };
 
@@ -331,6 +344,18 @@ export default function Profiles() {
         account={disconnectAccount}
         onOpenChange={() => setDisconnectAccount(null)}
         onDisconnect={handleDisconnectAccount}
+      />
+
+      <YouTubeConnectMethodDialog
+        open={youtubeConnectProfileId !== null}
+        onOpenChange={(open) => { if (!open) setYoutubeConnectProfileId(null); }}
+        workspaceId={youtubeWorkspace.workspaceId}
+        socialProfileId={youtubeConnectProfileId}
+        onNativeConnect={() => {
+          const profileId = youtubeConnectProfileId;
+          setYoutubeConnectProfileId(null);
+          if (profileId) originalHandleConnectPlatform(profileId, "youtube");
+        }}
       />
 
       <PageSelectionDialog

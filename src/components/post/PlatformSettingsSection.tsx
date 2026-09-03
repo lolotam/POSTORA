@@ -50,6 +50,7 @@ interface ConnectedAccount {
   platform_user_id: string;
   avatar_url: string | null;
   account_metadata?: Record<string, unknown>;
+  auth_provider?: "native" | "composio";
 }
 
 interface PlatformSettingsSectionProps {
@@ -142,6 +143,7 @@ export function PlatformSettingsSection({
         platform_username: a.platform_username,
         avatar_url: a.avatar_url,
         platform_user_id: a.platform_user_id,
+        auth_provider: a.auth_provider,
       }));
 
   const getAccountForPlatform = (platform: Platform) =>

@@ -76,6 +76,8 @@ export async function fetchPersonalWorkspaceId(userId: string): Promise<string |
 export interface InitiateConnectionInput {
   connector_type: ConnectorType;
   workspace_id: string;
+  /** YouTube only: the profile tab the connected channel should appear on. */
+  social_profile_id?: string;
 }
 
 export interface InitiatedConnection {
@@ -118,6 +120,7 @@ export function initiateConnection(input: InitiateConnectionInput): Promise<Init
   return callComposioConnect<InitiatedConnection>("initiate", {
     connector_type: input.connector_type,
     workspace_id: input.workspace_id,
+    ...(input.social_profile_id ? { social_profile_id: input.social_profile_id } : {}),
   });
 }
 

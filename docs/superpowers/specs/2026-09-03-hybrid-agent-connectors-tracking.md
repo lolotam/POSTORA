@@ -51,6 +51,7 @@ replacing anything that works today.
 | No Composio code, SDK, or skill exists in this repository. | `grep -ri composio` → nothing |
 | Composio facts (docs, 2026-09-03): REST base `https://backend.composio.dev/api/v3.1`, header `x-api-key`; `POST /connected-accounts` (auth config id + user id + callback) returns a redirect URL; `GET /connected-accounts?user_ids=`; `DELETE /connected-accounts/{id}`; `GET /tools?toolkit_slug=` and `GET /tools/{slug}` return schemas; `POST /tools/execute/{slug}` takes `user_id`, `connected_account_id`, `arguments`, `version`; a toolkit **version is required** for direct execution. Only the API key is a runtime parameter; the project id is not. | docs.composio.dev |
 | Composio `YOUTUBE_UPLOAD_VIDEO` inputs: `title, description, categoryId, privacyStatus, tags, videoFilePath`. **No** made-for-kids, publishAt, notifySubscribers, or thumbnail (thumbnail is `YOUTUBE_UPDATE_THUMBNAIL`). `YOUTUBE_LIST_CHANNELS` resolves the channel. The managed Google app shares API quota across Composio users. | docs.composio.dev/toolkits/youtube |
+| **Live spike, 2026-09-03 (Task 6 + Task 25, production key):** paths use underscores — `/auth_configs`, `/connected_accounts` (`/connected-accounts` is a 404 page); `/tools?toolkit_slug=&tool_slugs=a,b` filters as expected; every tool carries a pinned `version` (`YYYYMMDD_NN`) and `available_versions`; `GET /tools/{slug}?version=latest` is accepted. Toolkit versions today: googlesheets `20260902_00`, slack `20260826_00`, googlecalendar `20260902_00`, hubspot `20260826_00`, notion `20260819_00`, airtable `20260902_00`, youtube `20260721_00`. `POST /connected_accounts` answers `{ id: "ca_…", status: "INITIATED", redirect_url, redirect_uri, connectionData }`; a listed account carries `user_id`, `status`, `auth_config: { id, auth_scheme, is_composio_managed }`, `toolkit: { slug }`, `word_id`, `alias`, `created_at` — `auth_config.id` is **nested**, and there is no `metadata` object. The docs name the callback parameter both `connected_account_id` and `connectedAccountId`, plus `status=success|failed`. **`YOUTUBE_UPLOAD_VIDEO` does not exist**: the upload tool is `YOUTUBE_MULTIPART_UPLOAD_VIDEO` (required `title, description, categoryId, privacyStatus, videoFile`; optional `tags`) whose `videoFile` is `{ name, mimetype, s3key }` obtained by `POST /files/upload/request { toolkit_slug, tool_slug, filename, mimetype, md5 }` → `{ id, key, new_presigned_url }` then a `PUT` of the bytes to that URL. `YOUTUBE_UPDATE_THUMBNAIL` takes `{ videoId, thumbnailUrl }` (public URL, ≤ 2 MB). `HUBSPOT_SEARCH_CONTACTS` / `HUBSPOT_GET_CONTACT` do not exist; the real slugs are `HUBSPOT_SEARCH_CONTACTS_BY_CRITERIA` and `HUBSPOT_READ_CONTACT`. The YouTube auth config `ac_ZZF6rPlq_i9_` is Composio-managed and its scopes include `youtube.upload`. | this session, `curl` from the functions container |
 | **Unverified (blocked by a DB timeout today):** the count of `social_accounts` rows with `workspace_id IS NULL`. | Slice A precondition |
 
 ---
@@ -321,10 +322,13 @@ cleared on use, so a replayed callback is refused.
 1. Verify the HMAC and expiry; refuse with `invalid_state`.
 2. Load the connection by id **and** `workspace_id` from the state; refuse if missing or not
    `initiated` (`connection_not_pending`).
-3. Read the connected-account id Composio appends to the redirect (the exact query
-   parameter name is recorded by Slice B's spike) and `getConnectedAccount(id)`. Refuse with
-   `connection_not_found` if missing, not `ACTIVE`, or its auth config differs from the row's
-   `composio_auth_config_id`.
+3. Read the connected-account id Composio appends to the redirect — the docs show it as both
+   `connectedAccountId` and `connected_account_id`, so both are accepted, and `status=failed`
+   is refused outright. When neither spelling is present, fall back to
+   `listConnectedAccounts(workspace_id)` and pick the `ACTIVE` account whose `auth_config.id`
+   equals the row's `composio_auth_config_id`, created after the row. Then
+   `getConnectedAccount(id)`. Refuse with `connection_not_found` if missing, not `ACTIVE`, or
+   its auth config differs from the row's `composio_auth_config_id`.
 4. **Tenancy check:** the fetched account's `user_id` must equal the **state's**
    `workspace_id`. This compares two independent sources (Composio's record vs the signed
    state) — listing accounts by `user_ids=workspace_id` and comparing would be a tautology. A
@@ -500,17 +504,24 @@ calendar, history, analytics and partner bindings work unchanged. Its `access_to
 ### 10.2 Connect
 
 The registry type `youtube` (`composio_oauth`, category `automation`, toolkit `youtube`,
-tools `['YOUTUBE_UPLOAD_VIDEO','YOUTUBE_UPDATE_THUMBNAIL','YOUTUBE_LIST_CHANNELS']`) is
-connected through §6 like any other. The callback's step 5 runs `YOUTUBE_LIST_CHANNELS`
+tools `['YOUTUBE_LIST_CHANNELS','YOUTUBE_MULTIPART_UPLOAD_VIDEO','YOUTUBE_UPDATE_THUMBNAIL']`,
+pinned `20260721_00`) is connected through §6 like any other. The app door's `initiate` accepts an
+optional `social_profile_id`; it rides in the signed state (`ConnectState.socialProfileId`) so the
+callback can home the channel on the `/profiles` tab the user started from, and a YouTube callback
+redirects to `/profiles?connection=…&result=…` instead of the integrations tab. The callback's step 5 runs `YOUTUBE_LIST_CHANNELS`
 `mine=true`; for each channel returned it upserts a `social_accounts` row
 (`auth_provider='composio'`, `connection_id`, `platform_user_id=channel id`,
 `platform_username=title`, `avatar_url`, `workspace_id` = the connection's) under the
 connection's `initiated_by` user, `ON CONFLICT ON CONSTRAINT social_accounts_user_platform_unique`
-(`user_id, platform, platform_user_id`), or refuses with `no_channel` if none. A conflicting
-row that is `auth_provider='native'` is **not** overwritten: the callback refuses with
-`channel_already_native` so a working native channel is never silently re-homed. Entry point in the UI:
-the existing YouTube "Connect" on `/profiles` gets a second button, **Connect via Composio**,
-behind `COMPOSIO_YOUTUBE_ENABLED`.
+(`user_id, platform, platform_user_id`), setting `social_profile_id` only when the state carries
+one, or refuses with `no_channel` if none. A conflicting row that is `auth_provider='native'` is
+**not** overwritten: the callback refuses with `channel_already_native` so a working native channel
+is never silently re-homed. Entry point in the UI: the existing YouTube "Connect" on `/profiles`
+opens `YouTubeConnectMethodDialog` (two explicit choices, **Direct Google OAuth** and **Composio
+Managed**, default remembered per browser in `localStorage` `postora.youtubeConnectMethod`) when
+`VITE_COMPOSIO_YOUTUBE_ENABLED === "true"`; otherwise the native flow starts directly as before.
+A channel-upsert failure after activation marks the row `failed` while the Composio account stays
+ACTIVE upstream; that is the existing failed-connection shape and fails closed at publish time.
 
 ### 10.3 Publish
 
@@ -526,8 +537,12 @@ result = account.auth_provider === "composio"
 
 1. Resolve the connection (`connection_id`, `workspace_id = account.workspace_id`, `active`);
    otherwise fail the platform post with `connection_inactive` and set `needs_reauth`.
-2. Mint a signed media URL (existing storage helper, 1 h) for the single video file.
-3. `executeTool('YOUTUBE_UPLOAD_VIDEO', { title, description, categoryId, privacyStatus, tags, videoFilePath: <url> })`
+2. Read the single video file from storage (signed URL, existing helper) into memory; refuse
+   above `YOUTUBE_COMPOSIO_MAX_BYTES` before reading. Push it into Composio with
+   `_shared/composioFiles.ts` (`POST /files/upload/request` with the MD5, then a `PUT` to the
+   presigned URL) and keep the returned `s3key`. The bytes cross the edge worker twice, which
+   is why the cap exists.
+3. `executeTool('YOUTUBE_MULTIPART_UPLOAD_VIDEO', { title, description, categoryId, privacyStatus, tags, videoFile: { name, mimetype, s3key } })`
    with a 50 s budget inside the worker ceiling; the result's `data.id` is the video id.
 4. If the post has a thumbnail, `YOUTUBE_UPDATE_THUMBNAIL` (best effort, logged).
 5. `platform_post_id = video id`, URL `https://youtu.be/<id>` (Shorts and videos share it).
@@ -568,11 +583,13 @@ calling Google. `refreshYouTubeToken` is never called for them.
 - Composio's managed Google app shares YouTube API quota across all Composio customers. If
   uploads start failing on quota, the auth config must switch to Postora's own Google client,
   which brings the verification question back. Recorded as the operational trade-off.
-- Whether the managed app's scope set includes `youtube.upload` is confirmed only by a real
-  connection; Slice F task 1 does that before any code depends on it.
-- Video size: Composio fetches from the signed URL server-side. The upper bound is unverified;
-  the spike records it and `publishYouTubeViaComposio` refuses files above it with a clear
-  error rather than timing out.
+- **Confirmed 2026-09-03:** auth config `ac_ZZF6rPlq_i9_` is Composio-managed and its scope
+  set includes `youtube.upload`.
+- Video size: Composio does **not** fetch from a URL; the edge function must read the file and
+  PUT it to Composio's presigned slot inside the worker budget. `YOUTUBE_COMPOSIO_MAX_BYTES`
+  starts at 64 MB (Shorts and short videos) and is raised only after a measured production
+  upload; `publishYouTubeViaComposio` refuses larger files with a clear error rather than
+  timing out.
 
 ---
 

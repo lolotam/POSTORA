@@ -41,7 +41,12 @@ async function recordRefusal(
  */
 export async function initiateConnection(
   deps: ComposioConnectDependencies,
-  input: { userId: string; workspaceId: string; connectorType: string },
+  input: {
+    userId: string;
+    workspaceId: string;
+    connectorType: string;
+    socialProfileId?: string | null;
+  },
 ): Promise<{
   connection_id: string;
   redirect_url: string;
@@ -57,6 +62,7 @@ export async function initiateConnection(
         workspaceId: input.workspaceId,
         connectorType: input.connectorType,
         initiatedBy: input.userId,
+        socialProfileId: input.socialProfileId ?? null,
       },
       // The source this door has written since Slice B. Kept verbatim so the
       // extraction changes no row the Hub already renders.

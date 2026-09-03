@@ -4,8 +4,8 @@
  * ============================================================================
  * 
  * This function processes posts and publishes content to multiple social media
- * platforms. Due to Supabase Edge Function limitations, all code must be in
- * this single file - imports from other files are not supported.
+ * platforms. Provider-specific additions belong in imported adapters so this
+ * legacy coordinator can continue shrinking.
  * 
  * TABLE OF CONTENTS
  * ═════════════════
@@ -92,6 +92,8 @@ import { claimPostForProcessing } from "../_shared/postProcessingClaim.ts";
 import { mediaSendability } from "../_shared/partnerMediaStore.ts";
 import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
+import { composioClientFromEnv } from "../_shared/composioClient.ts";
+import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -399,6 +401,9 @@ interface SocialAccount {
   refresh_token: string | null;
   account_metadata: Record<string, unknown> | null;
   ig_auth_type?: string | null;
+  auth_provider?: "native" | "composio";
+  connection_id?: string | null;
+  workspace_id?: string | null;
 }
 
 /**
@@ -411,6 +416,7 @@ interface MediaFile {
   storage_bucket: string;
   mime_type?: string | null;
   current_object_version?: number | null;
+  file_size?: number | null;
 }
 
 /**
@@ -1510,7 +1516,7 @@ Deno.serve(async (req) => {
     console.log(`[JIT] Checking YouTube tokens for post ${post_id} (source: ${postSource}, platforms: ${post.platforms?.join(',')})`);
 
     for (const account of (accounts || [])) {
-      if (account.platform !== 'youtube') continue;
+      if (account.platform !== 'youtube' || account.auth_provider === 'composio') continue;
 
       const expiresAt = account.token_expires_at ? new Date(account.token_expires_at).getTime() : 0;
       const now = Date.now();
@@ -1644,7 +1650,19 @@ Deno.serve(async (req) => {
             result = await postToTwitter(account, post, mediaUrls, supabase);
             break;
           case "youtube":
-            result = await postToYouTube(account, post, mediaUrls, mediaFiles);
+            result = account.auth_provider === "composio"
+              ? await publishYouTubeViaComposio(account, post, mediaFiles, {
+                admin: supabase,
+                client: composioClientFromEnv(),
+                signedUrlFor: async (file) => {
+                  const { data, error } = await supabase.storage
+                    .from(file.storage_bucket)
+                    .createSignedUrl(file.file_path, 3600);
+                  if (error || !data?.signedUrl) throw new Error("youtube_media_sign_failed");
+                  return data.signedUrl;
+                },
+              })
+              : await postToYouTube(account, post, mediaUrls, mediaFiles);
             break;
           default:
             throw new Error(`Unsupported platform: ${account.platform}`);

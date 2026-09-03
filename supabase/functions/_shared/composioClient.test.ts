@@ -21,7 +21,7 @@ function json(payload: unknown, status = 200): Response {
   });
 }
 
-Deno.test("initiateConnection uses the assumed v3.1 shape and redirect parser", async () => {
+Deno.test("initiateConnection uses the live-verified v3.1 shape and redirect parser", async () => {
   let request: Request | undefined;
   const client = new ComposioClient({
     apiKey: "test-key",
@@ -40,7 +40,7 @@ Deno.test("initiateConnection uses the assumed v3.1 shape and redirect parser", 
     callbackUrl: "https://callback.invalid",
   });
 
-  assertEquals(request?.url, `${COMPOSIO_API_BASE_URL}/connected-accounts`);
+  assertEquals(request?.url, `${COMPOSIO_API_BASE_URL}/connected_accounts`);
   assertEquals(request?.method, "POST");
   assertEquals(request?.headers.get(COMPOSIO_API_KEY_HEADER), "test-key");
   assertEquals(await request?.json(), {
@@ -117,9 +117,9 @@ Deno.test("connected-account and tool methods use their exact paths and shapes",
       request.method,
     ]),
     [
-      ["/api/v3.1/connected-accounts/ca-1", "GET"],
-      ["/api/v3.1/connected-accounts?user_ids=workspace+1", "GET"],
-      ["/api/v3.1/connected-accounts/ca-1", "DELETE"],
+      ["/api/v3.1/connected_accounts/ca-1", "GET"],
+      ["/api/v3.1/connected_accounts?user_ids=workspace+1", "GET"],
+      ["/api/v3.1/connected_accounts/ca-1", "DELETE"],
       [
         "/api/v3.1/tools?toolkit_slug=slack&tool_slugs=SLACK_SEARCH_MESSAGES&version=latest",
         "GET",
@@ -229,4 +229,76 @@ Deno.test("composioClientFromEnv fails closed when the key is absent", () => {
       name === "COMPOSIO_API_KEY" ? "key" : undefined
     ) instanceof ComposioClient,
   );
+});
+
+Deno.test("a listed connected account is read from Composio's live nested shape", async () => {
+  const client = new ComposioClient({
+    apiKey: "test-key",
+    fetch: () =>
+      Promise.resolve(json({
+        items: [{
+          id: "ca_live",
+          user_id: "workspace-1",
+          status: "ACTIVE",
+          auth_config: { id: "ac_HPEDCbqyWtqr", auth_scheme: "OAUTH2", is_composio_managed: true },
+          toolkit: { slug: "googlesheets" },
+          word_id: "googlesheets_talose-acyl",
+          alias: null,
+          created_at: "2026-09-03T13:13:11.175Z",
+        }],
+      })),
+  });
+  const [account] = await client.listConnectedAccounts("workspace-1");
+  assertEquals(account.authConfigId, "ac_HPEDCbqyWtqr");
+  assertEquals(account.toolkit, "googlesheets");
+  assertEquals(account.userId, "workspace-1");
+  assertEquals(account.wordId, "googlesheets_talose-acyl");
+  assertEquals(account.alias, null);
+  assertEquals(account.metadata, {});
+});
+
+Deno.test("requestFileUpload posts the md5-bearing request and returns the key and presigned URL", async () => {
+  let request: Request | undefined;
+  const client = new ComposioClient({
+    apiKey: "test-key",
+    fetch: async (input, init) => {
+      request = new Request(input, init);
+      return json({
+        id: "703b5008",
+        key: "250199/youtube/YOUTUBE_MULTIPART_UPLOAD_VIDEO/request/abc",
+        new_presigned_url: "https://r2.example/put?X-Amz-Signature=s",
+        newPresignedUrl: "https://r2.example/put?X-Amz-Signature=s",
+        type: "request",
+        metadata: {},
+      });
+    },
+  });
+  const ticket = await client.requestFileUpload({
+    toolkit: "youtube",
+    tool: "YOUTUBE_MULTIPART_UPLOAD_VIDEO",
+    filename: "short.mp4",
+    mimetype: "video/mp4",
+    md5: "d41d8cd98f00b204e9800998ecf8427e",
+  });
+  assertEquals(request?.url, `${COMPOSIO_API_BASE_URL}/files/upload/request`);
+  assertEquals(await request?.json(), {
+    toolkit_slug: "youtube",
+    tool_slug: "YOUTUBE_MULTIPART_UPLOAD_VIDEO",
+    filename: "short.mp4",
+    mimetype: "video/mp4",
+    md5: "d41d8cd98f00b204e9800998ecf8427e",
+  });
+  assertEquals(ticket, {
+    key: "250199/youtube/YOUTUBE_MULTIPART_UPLOAD_VIDEO/request/abc",
+    presignedUrl: "https://r2.example/put?X-Amz-Signature=s",
+  });
+});
+
+Deno.test("a file upload request without a key is a rejection, not an empty ticket", async () => {
+  const client = new ComposioClient({ apiKey: "k", fetch: () => Promise.resolve(json({ id: "x" })) });
+  const error = await assertRejects(
+    () => client.requestFileUpload({ toolkit: "youtube", tool: "T", filename: "f", mimetype: "video/mp4", md5: "0" }),
+    ComposioError,
+  );
+  assertEquals(error.code, "composio_rejected");
 });

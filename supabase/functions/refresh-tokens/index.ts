@@ -17,6 +17,11 @@ import {
   TIME_CONSTANTS,
 } from '../_shared/tokenExpiryConstants.ts';
 import { createLogger, logTokenEvent } from '../_shared/logging.ts';
+import { composioClientFromEnv } from '../_shared/composioClient.ts';
+import {
+  COMPOSIO_YOUTUBE_REAUTH_MESSAGE,
+  probeYouTubeProvider,
+} from './youtubeProviderRefresh.ts';
 
 import {
   SocialAccount,
@@ -57,6 +62,9 @@ interface SocialAccountWithDetails extends SocialAccount {
   last_alert_sent_at?: string;
   alerts_snoozed?: boolean;
   last_refresh_attempt_at?: string;
+  auth_provider?: "native" | "composio";
+  connection_id?: string | null;
+  workspace_id?: string | null;
 }
 
 interface RefreshResult {
@@ -376,6 +384,45 @@ async function handleRefreshFailure(
   return { needsReauth, shouldAlert };
 }
 
+async function probeComposioYouTubeAccount(
+  supabaseAdmin: AnySupabase,
+  account: SocialAccountWithDetails,
+): Promise<{ result: RefreshResult; shouldAlert: boolean } | null> {
+  if (account.platform !== 'youtube' || account.auth_provider !== 'composio') return null;
+  let failure = { needsReauth: false, shouldAlert: false };
+  try {
+    const probe = await probeYouTubeProvider(account, {
+      admin: supabaseAdmin,
+      client: composioClientFromEnv(),
+      refreshNative: async () => null,
+      markInactive: async () => {
+        failure = await handleRefreshFailure(
+          supabaseAdmin,
+          account,
+          COMPOSIO_YOUTUBE_REAUTH_MESSAGE,
+        );
+      },
+    });
+    return probe.provider === 'composio' && probe.active
+      ? { result: { id: account.id, platform: account.platform, status: 'skipped' }, shouldAlert: false }
+      : {
+        result: {
+          id: account.id,
+          platform: account.platform,
+          status: failure.needsReauth ? 'needs_reauth' : 'failed',
+          error: COMPOSIO_YOUTUBE_REAUTH_MESSAGE,
+        },
+        shouldAlert: failure.shouldAlert,
+      };
+  } catch (error) {
+    const code = error instanceof Error ? error.message : 'connector_unavailable';
+    return {
+      result: { id: account.id, platform: account.platform, status: 'failed', error: code },
+      shouldAlert: false,
+    };
+  }
+}
+
 // Single account refresh helper (used for force refresh)
 async function refreshSingleAccount(
   supabaseAdmin: AnySupabase,
@@ -383,6 +430,9 @@ async function refreshSingleAccount(
   _force: boolean = false
 ): Promise<RefreshResult> {
   const oldRefreshToken = account.refresh_token;
+
+  const composioProbe = await probeComposioYouTubeAccount(supabaseAdmin, account);
+  if (composioProbe) return composioProbe.result;
 
   // Meta platforms exchange their access token in place and never hold a refresh
   // token; only platforms that genuinely need one are failed here.
@@ -812,7 +862,7 @@ Deno.serve(async (req) => {
       .select('*')
       .eq('is_active', true)
       .or('needs_reauth.is.null,needs_reauth.eq.false') // Skip accounts marked as needs_reauth
-      .not('token_expires_at', 'is', null)
+      .or('token_expires_at.not.is.null,auth_provider.eq.composio')
       // Oldest attempt first, never-attempted before everything. The sweep always stops
       // at the same budget, so without this rotation the same head-of-list accounts
       // would be refreshed every run and the tail would starve forever.
@@ -920,6 +970,13 @@ Deno.serve(async (req) => {
       if (metaTokenTooYoungToRefresh(account)) {
         console.log(`[refresh-skip] Account ${account.id} (${account.platform}): token too young for provider refresh`);
         results.push({ id: account.id, platform: account.platform, status: 'skipped', error: 'Token too new to refresh' });
+        continue;
+      }
+
+      const composioProbe = await probeComposioYouTubeAccount(supabaseAdmin, account);
+      if (composioProbe) {
+        results.push(composioProbe.result);
+        if (composioProbe.shouldAlert) accountsToAlert.push(account);
         continue;
       }
 

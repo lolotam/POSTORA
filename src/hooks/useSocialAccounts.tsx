@@ -36,7 +36,7 @@ export function useSocialAccounts() {
       const { data, error } = await supabase
         .from("social_accounts")
         .select(`
-          id, user_id, platform, platform_user_id, platform_username, avatar_url, is_active, connected_at, connection_mode, updated_at, social_profile_id, account_metadata, token_expires_at, needs_reauth,
+          id, user_id, platform, platform_user_id, platform_username, avatar_url, is_active, connected_at, connection_mode, updated_at, social_profile_id, account_metadata, token_expires_at, needs_reauth, auth_provider,
           social_profiles!social_accounts_social_profile_id_fkey(id, user_id)
         `)
         .eq("user_id", user.id)

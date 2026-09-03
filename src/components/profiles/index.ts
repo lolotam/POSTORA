@@ -8,3 +8,4 @@ export { DeleteProfileDialog, DisconnectAccountDialog } from "./ProfileDialogs";
 export { QuotaIndicators } from "./QuotaIndicators";
 export { ConnectionTroubleshooter, recordBlueskyOAuthError } from "./ConnectionTroubleshooter";
 export { InstagramConnectMethodDialog } from "./InstagramConnectMethodDialog";
+export { YouTubeConnectMethodDialog } from "./YouTubeConnectMethodDialog";

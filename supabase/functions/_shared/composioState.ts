@@ -3,6 +3,8 @@ export interface ConnectState {
   workspaceId: string;
   nonce: string;
   exp: number;
+  /** The `/profiles` tab a YouTube channel lands on; absent for every other door. */
+  socialProfileId?: string;
 }
 
 export const COMPOSIO_STATE_NONCE_BYTES = 16;
@@ -50,7 +52,10 @@ function isConnectState(value: unknown): value is ConnectState {
     state.connectionId.length > 0 &&
     typeof state.workspaceId === "string" && state.workspaceId.length > 0 &&
     typeof state.nonce === "string" && state.nonce.length > 0 &&
-    typeof state.exp === "number" && Number.isFinite(state.exp);
+    typeof state.exp === "number" && Number.isFinite(state.exp) &&
+    (state.socialProfileId === undefined ||
+      (typeof state.socialProfileId === "string" &&
+        state.socialProfileId.length > 0));
 }
 
 export async function signConnectState(
