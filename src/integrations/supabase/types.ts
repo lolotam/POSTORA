@@ -7601,6 +7601,108 @@ export type Database = {
         Args: { p_key_id: string; p_reason: string }
         Returns: boolean
       }
+      create_partner_key: {
+        Args: {
+          p_workspace_id: string
+          p_social_account_id: string
+          p_name: string
+          p_key_prefix: string
+          p_key_hash: string
+          p_scopes: string[]
+          p_rate_limit_per_min?: number
+          p_monthly_quota?: number | null
+          p_expires_at?: string | null
+          p_request_id?: string | null
+          p_environment?: string
+        }
+        Returns: string
+      }
+      admin_partner_hub_overview: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          active_keys: number
+          revoked_keys: number
+          month_billable: number
+          month_posts: number
+          requests_30d: number
+          success_30d: number
+          deliveries_30d: number
+          delivered_30d: number
+          exhausted_30d: number
+          pending_deliveries: number
+        }[]
+      }
+      admin_partner_keys: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          id: string
+          name: string
+          environment: string
+          key_prefix: string
+          workspace_id: string
+          workspace_name: string | null
+          social_account_id: string
+          account_platform: string | null
+          account_username: string | null
+          scopes: string[]
+          rate_limit_per_min: number
+          monthly_quota: number | null
+          usage_charged: number
+          usage_reserved: number
+          usage_confirmed: number
+          usage_indeterminate: number
+          period_start: string
+          status: string
+          created_at: string
+          last_used_at: string | null
+          expires_at: string | null
+          revoked_at: string | null
+          revoked_reason: string | null
+          superseded_by_key_id: string | null
+        }[]
+      }
+      admin_partner_key_targets: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          workspace_id: string
+          workspace_name: string
+          social_account_id: string
+          platform: string
+          platform_username: string | null
+          is_active: boolean
+          needs_reauth: boolean
+        }[]
+      }
+      admin_partner_key_activity: {
+        Args: { p_key_id: string; p_limit?: number }
+        Returns: {
+          id: string
+          created_at: string
+          action: string
+          http_status: number
+          error_code: string | null
+          billable: boolean
+          request_id: string | null
+          latency_ms: number | null
+        }[]
+      }
+      admin_partner_key_webhook_deliveries: {
+        Args: { p_key_id: string; p_limit?: number }
+        Returns: {
+          id: string
+          occurred_at: string
+          event_type: string
+          status: string
+          attempts: number
+          next_attempt_at: string
+          last_status_code: number | null
+          last_error: string | null
+          delivered_at: string | null
+          webhook_id: string
+          webhook_url: string
+          webhook_is_active: boolean
+        }[]
+      }
       list_my_webhook_subscriptions: {
         Args: Record<PropertyKey, never>
         Returns: {

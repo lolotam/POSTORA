@@ -25,6 +25,12 @@ const KEY_ROW = {
   revoked_at: null,
 };
 
+/** The ledger row without the fields this suite does not assert on
+ *  (latency is wall-clock; request_id is asserted in its own test). */
+function comparable(rows: Record<string, unknown>[]) {
+  return rows.map(({ latency_ms: _l, request_id: _r, ...rest }) => rest);
+}
+
 interface StubOpts {
   keyRow?: unknown;
   limiter?: { data: unknown; error: unknown };
@@ -75,7 +81,7 @@ Deno.test("a 200 from a class-A read leaves one non-billable row with no error c
   const wrapped = withPartnerAuth("list_accounts", "A", ok, () => admin);
   const res = await wrapped(get("pk_live_test"), "req-1", {}, () => admin);
   assertEquals(res.status, 200);
-  assertEquals(inserts, [{
+  assertEquals(comparable(inserts), [{
     key_id: KEY_ROW.id,
     workspace_id: KEY_ROW.workspace_id,
     action: "list_accounts",
@@ -190,4 +196,15 @@ Deno.test("a handler that throws is answered internal_error and still recorded",
   assertEquals(res.status, 500);
   assertEquals(inserts.length, 1);
   assertEquals(inserts[0].error_code, "internal_error");
+});
+
+Deno.test("every ledger row carries the request id and a non-negative integer latency", async () => {
+  const { admin, inserts } = ledgerStub();
+  const wrapped = withPartnerAuth("list_accounts", "A", ok, () => admin);
+  await wrapped(get("pk_live_test"), "req-77", {}, () => admin);
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].request_id, "req-77");
+  const latency = inserts[0].latency_ms;
+  assertEquals(typeof latency, "number");
+  assertEquals(Number.isInteger(latency) && (latency as number) >= 0, true);
 });

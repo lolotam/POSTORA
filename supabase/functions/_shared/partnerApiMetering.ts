@@ -13,6 +13,10 @@ export interface UsageInput {
   billable: boolean;
   httpStatus: number;
   errorCode?: string;
+  /** The X-Postora-Request-Id the response carried; the operator's only correlation handle. */
+  requestId?: string;
+  /** Wall-clock ms from request entry to response. Rounded and floored at 0 on write. */
+  latencyMs?: number;
 }
 
 /**
@@ -263,25 +267,74 @@ export async function checkRateLimit(
   return unexpected();
 }
 
+/** The two columns migration 20260902200000 adds. A deploy that reaches
+ *  production before that migration is applied must still write the row. */
+const LEDGER_TELEMETRY_COLUMNS = ["request_id", "latency_ms"] as const;
+
+/**
+ * True when PostgREST refused the insert because it does not know one of the
+ * telemetry columns yet (PGRST204). Any other error is a real failure and is
+ * reported, not retried — a retry loop over an unknown fault writes nothing
+ * and hides the cause.
+ */
+function isMissingTelemetryColumn(error: { code?: string; message?: string }): boolean {
+  // The message must name one of OUR columns. PGRST204 alone is not enough:
+  // the same code for `billable` would mean the ledger table itself is wrong,
+  // and retrying without request_id/latency_ms would not fix it.
+  const message = error.message ?? "";
+  const namesTelemetryColumn = LEDGER_TELEMETRY_COLUMNS.some((column) => message.includes(`'${column}'`));
+  if (!namesTelemetryColumn) return false;
+  return error.code === "PGRST204" || message.includes("schema cache");
+}
+
 /**
  * Append to the usage ledger. Swallows its own errors on purpose: losing an
  * audit row must never turn a delivered message into a reported failure.
+ *
+ * Merging deploys this function while migrations are applied by hand, so this
+ * code can reach production before the columns it writes exist. PostgREST
+ * rejects the WHOLE insert when it does not know a column, which would drop
+ * the billing row entirely rather than just its telemetry — so a refusal for
+ * exactly that reason is retried without the two new fields, leaving them
+ * NULL, which is what they are for every row written before this change.
  */
 export async function recordUsage(
   // deno-lint-ignore no-explicit-any
   client: any,
   input: UsageInput,
 ): Promise<void> {
+  const row: Record<string, unknown> = {
+    key_id: input.keyId,
+    workspace_id: input.workspaceId,
+    action: input.action,
+    billable: input.billable,
+    http_status: input.httpStatus,
+    error_code: input.errorCode ?? null,
+    request_id: input.requestId ?? null,
+    // The column CHECK refuses a negative; a clock that ran backwards must
+    // not cost the row.
+    latency_ms: input.latencyMs === undefined ? null : Math.max(0, Math.round(input.latencyMs)),
+  };
+
   try {
-    const { error } = await client.from("partner_api_usage").insert({
-      key_id: input.keyId,
-      workspace_id: input.workspaceId,
-      action: input.action,
-      billable: input.billable,
-      http_status: input.httpStatus,
-      error_code: input.errorCode ?? null,
-    });
-    if (error) console.error("[partner-api] usage ledger write failed:", error.message);
+    const { error } = await client.from("partner_api_usage").insert(row);
+    if (!error) return;
+
+    if (!isMissingTelemetryColumn(error)) {
+      console.error("[partner-api] usage ledger write failed:", error.message);
+      return;
+    }
+
+    console.warn(
+      "[partner-api] usage ledger: telemetry columns are missing, writing without them —",
+      "apply migration 20260902200000_admin_partner_hub.sql",
+    );
+    const legacyRow = { ...row };
+    for (const column of LEDGER_TELEMETRY_COLUMNS) delete legacyRow[column];
+    const retry = await client.from("partner_api_usage").insert(legacyRow);
+    if (retry.error) {
+      console.error("[partner-api] usage ledger write failed:", retry.error.message);
+    }
   } catch (err) {
     console.error("[partner-api] usage ledger threw:", err);
   }

@@ -302,3 +302,132 @@ Deno.test("checkRateLimit: remaining above the key's own limit is impossible, so
   assertEquals(error.code, "limiter_unavailable");
   assertEquals(error.status, 503);
 });
+
+// ---- ledger request_id / latency_ms (admin partner hub, spec D4) -----------
+
+/** Captures the row recordUsage inserts. The Supabase client is the only
+ *  boundary here; everything else under test is real. */
+function insertCapturingClient(): { inserted: Record<string, unknown>[]; client: unknown } {
+  const inserted: Record<string, unknown>[] = [];
+  const client = {
+    from() {
+      return {
+        insert(row: Record<string, unknown>) {
+          inserted.push(row);
+          return Promise.resolve({ error: null });
+        },
+      };
+    },
+  };
+  return { inserted, client };
+}
+
+// The column CHECK refuses a negative latency and the type is INTEGER, so the
+// cases that matter are: both fields present, both absent, a fractional value
+// that must round, and a backwards clock that must floor at 0 rather than
+// fail the insert.
+const LEDGER_FIELD_CASES: {
+  name: string;
+  extra: { requestId?: string; latencyMs?: number };
+  expected: { request_id: string | null; latency_ms: number | null };
+}[] = [
+  { name: "both given", extra: { requestId: "req-42", latencyMs: 17 }, expected: { request_id: "req-42", latency_ms: 17 } },
+  { name: "both absent", extra: {}, expected: { request_id: null, latency_ms: null } },
+  { name: "fractional latency", extra: { requestId: "req-43", latencyMs: 17.6 }, expected: { request_id: "req-43", latency_ms: 18 } },
+  { name: "backwards clock", extra: { latencyMs: -0.4 }, expected: { request_id: null, latency_ms: 0 } },
+];
+
+for (const testCase of LEDGER_FIELD_CASES) {
+  Deno.test(`recordUsage writes request_id and a non-negative integer latency_ms: ${testCase.name}`, async () => {
+    const { inserted, client } = insertCapturingClient();
+    await recordUsage(
+      // deno-lint-ignore no-explicit-any
+      client as any,
+      {
+        keyId: "key-1",
+        workspaceId: "ws-1",
+        action: "list_accounts",
+        billable: false,
+        httpStatus: 200,
+        ...testCase.extra,
+      },
+    );
+    assertEquals(inserted[0].request_id, testCase.expected.request_id);
+    assertEquals(inserted[0].latency_ms, testCase.expected.latency_ms);
+  });
+}
+
+// Merging deploys the edge function while migrations are applied by hand, so
+// this code can run against a database that predates the telemetry columns.
+// PostgREST rejects the whole insert then, which would drop the billing row.
+
+/** Fails the first insert with `firstError`, accepts every later one. */
+function insertFailingOnceClient(firstError: { code?: string; message: string }) {
+  const attempts: Record<string, unknown>[] = [];
+  const client = {
+    from() {
+      return {
+        insert(row: Record<string, unknown>) {
+          attempts.push(row);
+          return Promise.resolve({ error: attempts.length === 1 ? firstError : null });
+        },
+      };
+    },
+  };
+  return { attempts, client };
+}
+
+const USAGE_INPUT = {
+  keyId: "key-1",
+  workspaceId: "ws-1",
+  action: "send_template",
+  billable: true,
+  httpStatus: 200,
+  requestId: "req-7",
+  latencyMs: 12,
+};
+
+Deno.test("recordUsage retries without the telemetry columns when the schema predates them", async () => {
+  const { attempts, client } = insertFailingOnceClient({
+    code: "PGRST204",
+    message: "Could not find the 'latency_ms' column of 'partner_api_usage' in the schema cache",
+  });
+  // deno-lint-ignore no-explicit-any
+  await recordUsage(client as any, USAGE_INPUT);
+  assertEquals(attempts.length, 2);
+  // The billing facts survive; only the telemetry is dropped.
+  assertEquals(attempts[1].key_id, "key-1");
+  assertEquals(attempts[1].billable, true);
+  assertEquals(attempts[1].http_status, 200);
+  assertEquals("request_id" in attempts[1], false);
+  assertEquals("latency_ms" in attempts[1], false);
+});
+
+Deno.test("recordUsage does not retry an error that is not a missing telemetry column", async () => {
+  const { attempts, client } = insertFailingOnceClient({
+    code: "23503",
+    message: 'insert violates foreign key constraint "partner_api_usage_key_id_fkey"',
+  });
+  // deno-lint-ignore no-explicit-any
+  await recordUsage(client as any, USAGE_INPUT);
+  assertEquals(attempts.length, 1);
+});
+
+Deno.test("recordUsage does not retry a schema-cache error about some other column", async () => {
+  const { attempts, client } = insertFailingOnceClient({
+    message: "Could not find the 'billable' column of 'partner_api_usage' in the schema cache",
+  });
+  // deno-lint-ignore no-explicit-any
+  await recordUsage(client as any, USAGE_INPUT);
+  assertEquals(attempts.length, 1);
+});
+
+Deno.test("recordUsage does not retry a PGRST204 about a column the retry would not remove", async () => {
+  const { attempts, client } = insertFailingOnceClient({
+    code: "PGRST204",
+    message: "Could not find the 'billable' column of 'partner_api_usage' in the schema cache",
+  });
+  // deno-lint-ignore no-explicit-any
+  await recordUsage(client as any, USAGE_INPUT);
+  assertEquals(attempts.length, 1);
+});
