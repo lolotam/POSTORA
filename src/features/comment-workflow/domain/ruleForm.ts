@@ -86,7 +86,10 @@ export function validateRuleForm(values: RuleFormValues): ValidationResult {
   const dmMessage = canDm ? values.dmMessage.trim() || null : null;
   const mediaFileId = canDm && dmMessage ? values.mediaFileId : null;
 
-  if (!values.socialAccountId || !values.platform) errors.socialAccountId = "Choose an account.";
+  // Two errors, not one: the platform is picked before the account picker exists, so "Choose an
+  // account." next to a form with no account picker on it names nothing the reader can act on.
+  if (!values.platform) errors.platform = "Choose a platform.";
+  else if (!values.socialAccountId) errors.socialAccountId = "Choose an account.";
   if (!name) errors.name = "Give the workflow a name.";
   else if (name.length > NAME_MAX_CHARS) errors.name = `Keep the name under ${NAME_MAX_CHARS} characters.`;
 

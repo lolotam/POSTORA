@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { AccountAvatar } from "@/components/AccountAvatar";
+import { getPlatformName, PlatformIcon } from "@/components/PlatformIcon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +17,15 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
+import { cn } from "@/lib/utils";
+import {
+  accountNoun,
+  accountPlaceholder,
+  connectedAccountsFor,
+  connectedCountByPlatform,
+  isAccountConnected,
+  reconnectNeededCount,
+} from "../domain/accountChoices";
 import {
   COMMENT_WORKFLOW_PLATFORMS,
   type CommentWorkflowMatchType,
@@ -55,20 +66,20 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
   const [postsFailed, setPostsFailed] = useState(false);
   const [media, setMedia] = useState<MediaOption[]>([]);
 
-  const eligibleAccounts = useMemo(
-    () =>
-      accounts.filter(
-        (account) =>
-          COMMENT_WORKFLOW_PLATFORMS.includes(account.platform as CommentWorkflowPlatform) &&
-          account.is_active !== false,
-      ),
-    [accounts],
-  );
+  const connectedCounts = useMemo(() => connectedCountByPlatform(accounts), [accounts]);
+
+  // The row being edited, or null in create mode.
+  //
+  // The effect below depends on this rather than on `rules`, and the difference is not cosmetic:
+  // `useCommentWorkflowRules` defaults `data` to a fresh `[]` while the query is in flight, so an
+  // effect keyed on the array re-ran on every render and reset the form under whatever the user
+  // had just done. `find` returns the same object across renders once the query is cached, and
+  // `null` is stable, so hydration now happens when the rule actually arrives.
+  const rule = ruleId ? rules.find((candidate) => candidate.id === ruleId) ?? null : null;
 
   // Edit mode hydrates from the row. is_active comes along so saving a paused workflow does not
   // quietly restart it.
   useEffect(() => {
-    const rule = ruleId ? rules.find((candidate) => candidate.id === ruleId) : null;
     if (!rule) {
       setValues(EMPTY_RULE_FORM);
       return;
@@ -87,9 +98,18 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
       sendOncePerUser: rule.send_once_per_user,
       isActive: rule.is_active,
     });
-  }, [ruleId, rules]);
+  }, [rule]);
 
-  const account = eligibleAccounts.find((candidate) => candidate.id === values.socialAccountId);
+  const accountOptions = useMemo(
+    () => connectedAccountsFor(accounts, values.platform, values.socialAccountId),
+    [accounts, values.platform, values.socialAccountId],
+  );
+  const hiddenForReconnect = useMemo(
+    () => reconnectNeededCount(accounts, values.platform, values.socialAccountId),
+    [accounts, values.platform, values.socialAccountId],
+  );
+
+  const account = accountOptions.find((candidate) => candidate.id === values.socialAccountId);
   const canDm = supportsPrivateReply(values.platform);
 
   // The three primitives the post lookup needs, pulled out of `account` before the effect.
@@ -154,17 +174,19 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
     setKeywordDraft("");
   };
 
-  const chooseAccount = (id: string) => {
-    const chosen = eligibleAccounts.find((candidate) => candidate.id === id);
-    setValues((current) => ({
-      ...current,
-      socialAccountId: id,
-      platform: (chosen?.platform as CommentWorkflowPlatform) ?? "",
-      // The account decides the post list and whether a private message exists at all, so a
-      // post picked for the previous account cannot stay selected.
-      targetPostId: "",
-    }));
-  };
+  // The platform decides which accounts exist and whether a private message exists at all, so
+  // both the account and the post picked under the previous platform have to go.
+  const choosePlatform = (platform: CommentWorkflowPlatform) =>
+    setValues((current) =>
+      current.platform === platform
+        ? current
+        : { ...current, platform, socialAccountId: "", targetPostId: "" },
+    );
+
+  // The post list is per account, so a post picked for the previous account cannot stay
+  // selected. The platform is already fixed by the tile above and is not re-derived here.
+  const chooseAccount = (id: string) =>
+    setValues((current) => ({ ...current, socialAccountId: id, targetPostId: "" }));
 
   const save = async () => {
     const result = validateRuleForm(values);
@@ -190,35 +212,102 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
         void save();
       }}
     >
-      <div className="space-y-2">
-        <Label htmlFor="cw-account">Account</Label>
-        <Select value={values.socialAccountId} onValueChange={chooseAccount}>
-          <SelectTrigger id="cw-account" aria-label="Account">
-            <SelectValue placeholder="Choose a connected account" />
-          </SelectTrigger>
-          <SelectContent>
-            {eligibleAccounts.map((option) => (
-              <SelectItem key={option.id} value={option.id}>
-                {option.platform_username ?? option.platform}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {/* A failed account read also yields an empty list. Telling someone to connect an
+      <fieldset className="space-y-3">
+        <legend className="text-sm font-medium">Platform</legend>
+        <div className="grid gap-3 sm:grid-cols-3">
+          {COMMENT_WORKFLOW_PLATFORMS.map((platform) => {
+            const selected = values.platform === platform;
+            const count = connectedCounts[platform];
+            return (
+              <button
+                key={platform}
+                type="button"
+                aria-pressed={selected}
+                // The tile for the platform a funnel is already on stays usable even at zero,
+                // so editing a rule whose only account went stale is still possible.
+                disabled={count === 0 && !selected}
+                onClick={() => choosePlatform(platform)}
+                className={cn(
+                  "flex items-center gap-3 rounded-lg border p-3 text-left transition-colors",
+                  selected ? "border-primary bg-primary/5" : "hover:bg-muted/50",
+                  count === 0 && !selected && "cursor-not-allowed opacity-50",
+                )}
+              >
+                <PlatformIcon platform={platform} size="lg" />
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-medium">
+                    {getPlatformName(platform)}
+                  </span>
+                  <span className="block text-xs text-muted-foreground">
+                    {count === 0
+                      ? "None connected"
+                      : `${count} ${accountNoun(platform, count)} connected`}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {/* A failed account read also yields three empty tiles. Telling someone to connect an
             account they already have is worse than saying the read failed. */}
-        {accountsFailed ? (
+        {accountsFailed && (
           <p className="text-sm text-destructive">
             Your connected accounts could not be loaded. Reload the page and try again.
           </p>
-        ) : (
-          eligibleAccounts.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              Connect a Facebook, Instagram or Threads account first.
-            </p>
-          )
         )}
-        {errors.socialAccountId && <p className="text-sm text-destructive">{errors.socialAccountId}</p>}
-      </div>
+        {errors.platform && <p className="text-sm text-destructive">{errors.platform}</p>}
+      </fieldset>
+
+      {values.platform && (
+        <div className="space-y-2">
+          <Label htmlFor="cw-account">
+            {`${getPlatformName(values.platform)} ${accountNoun(values.platform, 1)}`}
+          </Label>
+          <Select value={values.socialAccountId} onValueChange={chooseAccount}>
+            <SelectTrigger id="cw-account" aria-label="Account">
+              <SelectValue placeholder={accountPlaceholder(values.platform)} />
+            </SelectTrigger>
+            <SelectContent>
+              {accountOptions.map((option) => (
+                <SelectItem key={option.id} value={option.id}>
+                  <span className="flex items-center gap-2">
+                    <AccountAvatar
+                      platform={option.platform}
+                      avatarUrl={option.avatar_url}
+                      name={option.platform_username}
+                      size="sm"
+                    />
+                    <span className="truncate">{option.platform_username ?? option.platform}</span>
+                    {!isAccountConnected(option) && (
+                      <Badge variant="outline" className="text-xs">
+                        needs reconnect
+                      </Badge>
+                    )}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {accountOptions.length === 0 && !accountsFailed && (
+            <p className="text-sm text-muted-foreground">
+              Connect a {getPlatformName(values.platform)}{" "}
+              {accountNoun(values.platform, 1)} on Profiles first.
+            </p>
+          )}
+          {/* An account disappearing with no reason reads as data loss, and reconnecting it on
+              Profiles is not guessable from a short list. */}
+          {hiddenForReconnect > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {hiddenForReconnect} more {accountNoun(values.platform, hiddenForReconnect)}{" "}
+              {hiddenForReconnect === 1 ? "needs" : "need"} reconnecting on Profiles before a
+              workflow can use {hiddenForReconnect === 1 ? "it" : "them"}.
+            </p>
+          )}
+          {errors.socialAccountId && (
+            <p className="text-sm text-destructive">{errors.socialAccountId}</p>
+          )}
+        </div>
+      )}
 
       <div className="space-y-2">
         <Label htmlFor="cw-name">Name</Label>
