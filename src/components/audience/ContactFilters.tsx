@@ -3,9 +3,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import type { ContactFilters as Filters, ContactPlatform, ContactSource } from "@/features/audience";
 
-const PLATFORMS: Array<{ value: ContactPlatform | "all"; label: string }> = [
+export const PLATFORMS: Array<{ value: ContactPlatform | "all"; label: string }> = [
   { value: "all", label: "All platforms" }, { value: "facebook", label: "Facebook" },
   { value: "instagram", label: "Instagram" }, { value: "threads", label: "Threads" },
+  // YouTube ingest landed while this page was being built, and it is already the
+  // largest source of captured contacts. Without this option those rows can be
+  // read but never filtered to.
+  { value: "youtube", label: "YouTube" },
 ];
 const SOURCES: Array<{ value: ContactSource | "all"; label: string }> = [
   { value: "all", label: "All sources" }, { value: "organic_comment", label: "Organic" }, { value: "workflow_lead", label: "Workflow leads" },
