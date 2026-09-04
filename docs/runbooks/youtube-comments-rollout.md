@@ -92,5 +92,5 @@ Test user signs in → Profiles → Connect YouTube → consent shows the three 
 
 ## Known limits
 
-- The sweep reads the newest 50 threads per channel per run and only the ≤5 replies YouTube inlines per thread; a new reply on an older thread is visible in the Comment Manager but is not ingested.
+- The sweep reads the newest 50 threads (native) or 20 threads (Composio: the relayed body must stay under the client's 64 KB cap) per channel per run, and only the ≤5 replies YouTube inlines per thread; a new reply on an older thread is visible in the Comment Manager but is not ingested.
 - Quota: 1 unit per poll per channel (≈288/channel/day at 5 min), 2 per Comment Manager read, 50 per reply/moderation/delete, against Google's 10,000/day default. `quotaExceeded` skips the channel for that run and never touches health columns.

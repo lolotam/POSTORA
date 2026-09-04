@@ -455,6 +455,9 @@ Deno.test("composio listThreads executes the pinned tool and parses Google's sha
   assertEquals(executed[0].slug, "YOUTUBE_LIST_COMMENT_THREADS");
   assertEquals(executed[0].version, "20260721_00");
   assertEquals(executed[0].connectedAccountId, "ca_1");
+  // Production 2026-09-04: the first live sweep of a Composio channel failed with
+  // composio_rejected — 50 threads with replies is 72 KB, over the client's 64 KB body cap.
+  assertEquals((executed[0].arguments as Record<string, unknown>).maxResults, 20);
   assertEquals(result.value.items[0].id, "t1");
 });
 
