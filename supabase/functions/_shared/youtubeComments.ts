@@ -33,6 +33,10 @@ const DATA_API = "https://www.googleapis.com/youtube/v3";
 const REFRESH_WINDOW_MS = 30 * 60 * 1000;
 const CALL_TIMEOUT_MS = 15_000;
 const COMPOSIO_TIMEOUT_MS = 20_000;
+const NATIVE_THREAD_PAGE = 50;
+// Composio relays Google's body verbatim and the client refuses anything over COMPOSIO_BODY_CAP
+// (64 KB). Measured 2026-09-04 on a live channel: 50 threads with replies is 72 KB, 20 is 33 KB.
+const COMPOSIO_THREAD_PAGE = 20;
 
 export interface YouTubeCommentAccount {
   id: string;
@@ -390,11 +394,13 @@ export async function listThreads(
 ): Promise<
   YouTubeResult<{ items: YouTubeThreadItem[]; nextPageToken: string | null }>
 > {
+  const maxResults = args.maxResults ??
+    (account.auth_provider === "composio" ? COMPOSIO_THREAD_PAGE : NATIVE_THREAD_PAGE);
   const query: Record<string, string> = {
     part: "snippet,replies",
     order: "time",
     textFormat: "plainText",
-    maxResults: String(args.maxResults ?? 50),
+    maxResults: String(maxResults),
   };
   if (args.channelId) query.allThreadsRelatedToChannelId = args.channelId;
   if (args.videoId) query.videoId = args.videoId;
@@ -404,7 +410,7 @@ export async function listThreads(
     part: "snippet,replies",
     order: "time",
     textFormat: "plainText",
-    maxResults: args.maxResults ?? 50,
+    maxResults,
   };
   if (args.channelId) {
     composioArguments.allThreadsRelatedToChannelId = args.channelId;
