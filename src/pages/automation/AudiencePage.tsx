@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Navigate } from "react-router-dom";
 
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { useUserRole } from "@/hooks/useUserRole";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,11 @@ import {
 
 export default function AudiencePage() {
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
+  // useFeatureFlags reports only its own query's loading state, and an admin's
+  // flags come from isAdmin, which is false while the role query is still in
+  // flight. Without waiting for that too, an admin opening this URL directly is
+  // redirected away from a page they are entitled to see.
+  const { isLoading: roleLoading } = useUserRole();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<SocialContact | null>(null);
@@ -28,7 +34,7 @@ export default function AudiencePage() {
 
   // The nav entry hides with the flag, but a URL is still a URL. Every other flagged
   // page redirects the same way, and the flag is the whole rollout control.
-  if (!flagsLoading && !flags.audienceHub) return <Navigate to="/automation" replace />;
+  if (!flagsLoading && !roleLoading && !flags.audienceHub) return <Navigate to="/automation" replace />;
 
   const rows = contacts.data?.rows ?? [];
   const total = contacts.data?.total ?? 0;
