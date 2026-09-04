@@ -152,9 +152,16 @@ GRANT EXECUTE ON FUNCTION public.get_social_contacts_stats() TO authenticated;
 
 -- Search. The term is a bound parameter; wildcard characters are escaped here so the frontend
 -- never assembles a PostgREST filter string. row_count is the unpaged total for pagination.
+-- `contact` is jsonb, not social_contacts. Returning the table's composite type from a
+-- RETURNS TABLE function segfaults PostgreSQL 17.6 at CREATE time -- reproduced on a stock
+-- supabase/postgres:17.6.1.138 with a two-column table and no Postora code:
+--   CREATE FUNCTION f() RETURNS TABLE(n bigint, rec t) LANGUAGE sql STABLE AS
+--     $x$ WITH m AS (SELECT * FROM t) SELECT (SELECT count(*) FROM m), x FROM m x; $x$;
+--   -> server process was terminated by signal 11: Segmentation fault
+-- to_jsonb() also spares supabase-js a nested composite it decodes awkwardly.
 CREATE OR REPLACE FUNCTION public.search_social_contacts(
   p_query text, p_platform text, p_source text, p_tags text[], p_limit int, p_offset int
-) RETURNS TABLE (row_count bigint, contact public.social_contacts)
+) RETURNS TABLE (row_count bigint, contact jsonb)
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public AS $$
   WITH term AS (
     SELECT CASE WHEN nullif(btrim(p_query), '') IS NULL THEN NULL
@@ -170,7 +177,7 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public AS $$
            OR c.display_name ILIKE term.pattern OR c.username ILIKE term.pattern
            OR c.email ILIKE term.pattern OR c.phone_number ILIKE term.pattern)
   )
-  SELECT (SELECT count(*) FROM matched), m
+  SELECT (SELECT count(*) FROM matched), to_jsonb(m)
   FROM matched m
   ORDER BY m.last_interacted_at DESC
   LIMIT greatest(1, least(coalesce(p_limit, 50), 200)) OFFSET greatest(0, coalesce(p_offset, 0));

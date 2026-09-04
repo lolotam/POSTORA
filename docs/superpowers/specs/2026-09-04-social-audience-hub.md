@@ -305,7 +305,7 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public AS $$ ... $$;
 
 CREATE OR REPLACE FUNCTION public.search_social_contacts(
   p_query text, p_platform text, p_source text, p_tags text[], p_limit int, p_offset int
-) RETURNS TABLE (row_count bigint, contact public.social_contacts)
+) RETURNS TABLE (row_count bigint, contact jsonb)
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public AS $$ ... $$;
 ```
 
@@ -315,7 +315,7 @@ escaping of `\`, `%`, `_` happens inside SQL (`replace` chain), so the frontend 
 as a bound argument. This replaces the first draft's client-built `or=(...ilike...)` clause, which
 the existing WhatsApp contact search (`src/components/messaging/contacts/useContacts.ts`,
 `escapeIlike`) already shows to be fragile. PostgREST returns set-returning functions as arrays;
-the frontend reads `data[0]` for stats and maps rows for search.
+the frontend reads `data[0]` for stats and maps each search row's `contact` object. `contact` is jsonb rather than the table's composite type because returning that composite from a `RETURNS TABLE` function segfaults PostgreSQL 17.6 at CREATE time.
 
 ---
 

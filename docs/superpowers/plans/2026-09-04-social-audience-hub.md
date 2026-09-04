@@ -64,7 +64,7 @@
   - table `public.social_contacts` (spec §3.2)
   - `public.touch_social_contact(p_social_account_id uuid, p_platform text, p_author_id text, p_author_name text, p_author_username text, p_comment_text text, p_post_id text) RETURNS uuid` — `service_role` only
   - `public.get_social_contacts_stats() RETURNS TABLE(total bigint, workflow_leads bigint, enriched bigint, top_platform text)` — `authenticated`
-  - `public.search_social_contacts(p_query text, p_platform text, p_source text, p_tags text[], p_limit int, p_offset int) RETURNS TABLE(row_count bigint, contact public.social_contacts)` — `authenticated`
+  - `public.search_social_contacts(p_query text, p_platform text, p_source text, p_tags text[], p_limit int, p_offset int) RETURNS TABLE(row_count bigint, contact jsonb)` — `authenticated`
   - `app_settings` row `feature_audience_hub`
 
 - [ ] **Step 1: Write the harness suite first**
@@ -358,7 +358,7 @@ GRANT EXECUTE ON FUNCTION public.get_social_contacts_stats() TO authenticated;
 -- never assembles a PostgREST filter string. row_count is the unpaged total for pagination.
 CREATE OR REPLACE FUNCTION public.search_social_contacts(
   p_query text, p_platform text, p_source text, p_tags text[], p_limit int, p_offset int
-) RETURNS TABLE (row_count bigint, contact public.social_contacts)
+) RETURNS TABLE (row_count bigint, contact jsonb)
 LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public AS $$
   WITH term AS (
     SELECT CASE WHEN nullif(btrim(p_query), '') IS NULL THEN NULL
@@ -374,7 +374,7 @@ LANGUAGE sql STABLE SECURITY INVOKER SET search_path = public AS $$
            OR c.display_name ILIKE term.pattern OR c.username ILIKE term.pattern
            OR c.email ILIKE term.pattern OR c.phone_number ILIKE term.pattern)
   )
-  SELECT (SELECT count(*) FROM matched), m
+  SELECT (SELECT count(*) FROM matched), to_jsonb(m)
   FROM matched m
   ORDER BY m.last_interacted_at DESC
   LIMIT greatest(1, least(coalesce(p_limit, 50), 200)) OFFSET greatest(0, coalesce(p_offset, 0));
@@ -988,6 +988,7 @@ export interface ContactsPage { rows: SocialContact[]; total: number; }
 export interface ContactStats { total: number; workflow_leads: number; enriched: number; top_platform: string | null; }
 export type ContactPatch = Partial<Pick<SocialContact, "display_name" | "email" | "phone_number" | "company" | "notes" | "tags" | "whatsapp_contact_id">>;
 
+// `contact` arrives as jsonb: the composite return form segfaults PostgreSQL 17.6.
 interface SearchRow { row_count: number; contact: SocialContact; }
 
 function searchArgs(filters: ContactFilters, limit: number, offset: number) {
