@@ -140,7 +140,12 @@ export async function syncContactsToSheet(
     source: "audience",
   };
 
-  if (!connectionRow?.workspace_id) return await refuseWith(meta, "connection_not_found");
+  if (!connectionRow?.workspace_id) {
+    // connector_call_logs.connection_id references connector_connections, so logging
+    // the guessed id would fail the foreign key and recordConnectorCall would swallow
+    // it -- leaving exactly the silent refusal this row exists to prevent.
+    return await refuseWith({ ...meta, connectionId: null }, "connection_not_found");
+  }
 
   const { data: isMember, error: memberError } = await deps.admin.rpc(
     "is_workspace_member",

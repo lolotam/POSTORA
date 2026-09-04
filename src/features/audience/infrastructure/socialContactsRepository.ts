@@ -79,14 +79,21 @@ export async function fetchContactStats(): Promise<ContactStats> {
 
 const TAG_PAGE = 1000;
 
-/** Every tag the caller has, not the tags of an arbitrary first page: the filter
- *  offers no free-text entry, so a tag missed here cannot be selected at all. */
-export async function fetchDistinctTags(): Promise<string[]> {
+/** Every tag the caller has. The filter offers no free-text entry, so a tag missed
+ *  here cannot be selected at all -- which is why this pages to exhaustion rather
+ *  than stopping at a round number.
+ *
+ *  Scoped to `userId` explicitly: unlike the search and stats RPCs, which filter on
+ *  auth.uid() inside the function, this is a direct table read, and the table's
+ *  admin SELECT policy admits every tenant's rows. Without the predicate an admin
+ *  would see other people's tag labels and get chips that match nothing. */
+export async function fetchDistinctTags(userId: string): Promise<string[]> {
   const set = new Set<string>();
-  for (let from = 0; from < EXPORT_CAP; from += TAG_PAGE) {
+  for (let from = 0; ; from += TAG_PAGE) {
     const { data, error } = await supabase
       .from("social_contacts")
       .select("tags")
+      .eq("user_id", userId)
       .not("tags", "eq", "{}")
       .range(from, from + TAG_PAGE - 1);
     if (error) throw error;

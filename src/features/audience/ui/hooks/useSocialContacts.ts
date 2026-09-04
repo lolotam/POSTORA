@@ -25,7 +25,11 @@ export function useSocialContactStats() {
 
 export function useSocialContactTags() {
   const { user } = useAuth();
-  return useQuery({ queryKey: [ROOT, "tags", user?.id], queryFn: fetchDistinctTags, enabled: !!user });
+  return useQuery({
+    queryKey: [ROOT, "tags", user?.id],
+    queryFn: () => fetchDistinctTags(user!.id),
+    enabled: !!user,
+  });
 }
 
 function useInvalidateContacts() {
