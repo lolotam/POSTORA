@@ -64,6 +64,7 @@ const FLAG_LABELS: Record<keyof FeatureFlags, string> = {
   commentWorkflow: "Comment Workflow",
   youtubeComments: "YouTube Comments",
   leadsCrm: "Leads CRM",
+  audienceHub: "Audience & Contacts",
   adAnalytics: "Ad Analytics",
   smartScheduling: "Smart Scheduling",
   humanAgent: "Human Agent",
