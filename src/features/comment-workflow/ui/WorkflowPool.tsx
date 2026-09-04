@@ -28,6 +28,7 @@ const FILTERS: Array<{ id: "all" | CommentWorkflowPlatform; label: string }> = [
   { id: "facebook", label: "Facebook" },
   { id: "instagram", label: "Instagram" },
   { id: "threads", label: "Threads" },
+  { id: "youtube", label: "YouTube" },
 ];
 
 interface WorkflowPoolProps {

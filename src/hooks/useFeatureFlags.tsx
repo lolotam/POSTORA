@@ -69,6 +69,7 @@ export interface FeatureFlags {
   // Monetization features
   commentManager: boolean;
   commentWorkflow: boolean;
+  youtubeComments: boolean;
   leadsCrm: boolean;
   adAnalytics: boolean;
   smartScheduling: boolean;
@@ -147,6 +148,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   msgThreadsAssignment: false,
   commentManager: false,
   commentWorkflow: false,
+  youtubeComments: false,
   leadsCrm: false,
   adAnalytics: false,
   smartScheduling: false,
@@ -223,6 +225,7 @@ export const FLAG_KEYS = [
   "feature_msg_threads_assignment",
   "feature_comment_manager",
   "feature_comment_workflow",
+  "feature_youtube_comments",
   "feature_leads_crm",
   "feature_ad_analytics",
   "feature_smart_scheduling",
@@ -294,6 +297,7 @@ export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
   feature_msg_threads_assignment: "msgThreadsAssignment",
   feature_comment_manager: "commentManager",
   feature_comment_workflow: "commentWorkflow",
+  feature_youtube_comments: "youtubeComments",
   feature_leads_crm: "leadsCrm",
   feature_ad_analytics: "adAnalytics",
   feature_smart_scheduling: "smartScheduling",
@@ -377,6 +381,7 @@ const FEATURE_DISPLAY_NAMES: Record<keyof FeatureFlags, string> = {
   msgThreadsAssignment: "Threads Assignment",
   commentManager: "Messaging Comments Inbox",
   commentWorkflow: "Comment Workflow",
+  youtubeComments: "YouTube Comments",
   leadsCrm: "Leads CRM",
   adAnalytics: "Ad Analytics",
   smartScheduling: "Smart Scheduling",
@@ -449,6 +454,7 @@ const ALL_FLAGS_ENABLED: FeatureFlags = {
   msgThreadsAssignment: true,
   commentManager: true,
   commentWorkflow: true,
+  youtubeComments: true,
   leadsCrm: true,
   adAnalytics: true,
   smartScheduling: true,
@@ -568,6 +574,7 @@ export function useFeatureFlags() {
         msgThreadsAssignment: globalFlagMap["feature_msg_threads_assignment"] ?? DEFAULT_FLAGS.msgThreadsAssignment,
         commentManager: globalFlagMap["feature_comment_manager"] ?? DEFAULT_FLAGS.commentManager,
         commentWorkflow: globalFlagMap["feature_comment_workflow"] ?? DEFAULT_FLAGS.commentWorkflow,
+        youtubeComments: globalFlagMap["feature_youtube_comments"] ?? DEFAULT_FLAGS.youtubeComments,
         leadsCrm: globalFlagMap["feature_leads_crm"] ?? DEFAULT_FLAGS.leadsCrm,
         adAnalytics: globalFlagMap["feature_ad_analytics"] ?? DEFAULT_FLAGS.adAnalytics,
         smartScheduling: globalFlagMap["feature_smart_scheduling"] ?? DEFAULT_FLAGS.smartScheduling,
@@ -628,6 +635,10 @@ export function useFeatureFlags() {
     // would mount during the window between a merge (which auto-deploys the frontend)
     // and the migration being applied by hand, querying relations that do not exist yet.
     "commentWorkflow",
+    // YouTube Comments sits here for the same reason: its tile, agent surface and workflow
+    // platform write youtube rows that the CHECK constraints admit only once the migration is
+    // applied by hand, while the merge auto-deploys this frontend.
+    "youtubeComments",
     "platformAccess",
     "freePlatforms",
     "tiktokOAuthDebug",

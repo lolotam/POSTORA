@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
+import { recordGrantedScopes } from "../_shared/youtubeGrantedScopes.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -150,6 +151,8 @@ Deno.serve(async (req) => {
       const scopes = [
         "https://www.googleapis.com/auth/youtube.readonly",
         "https://www.googleapis.com/auth/youtube.upload",
+        // Comment reads, replies, moderation, and deletion all require this scope.
+        "https://www.googleapis.com/auth/youtube.force-ssl",
       ].join(" ");
 
       const state = await buildSignedState({
@@ -273,6 +276,8 @@ Deno.serve(async (req) => {
         throw new Error("Failed to save refreshed token");
       }
 
+      await recordGrantedScopes(supabase, accountId, tokenData.scope);
+
       console.log("YouTube token refreshed successfully");
       return new Response(JSON.stringify({ success: true }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -361,10 +366,11 @@ async function completeOAuth(params: {
     throw new Error(tokenData.error_description || tokenData.error || "Failed to get access token");
   }
 
-  const { access_token, refresh_token, expires_in } = tokenData as {
+  const { access_token, refresh_token, expires_in, scope } = tokenData as {
     access_token: string;
     refresh_token?: string;
     expires_in: number;
+    scope?: string;
   };
 
   const channelResponse = await fetch(
@@ -401,7 +407,7 @@ async function completeOAuth(params: {
   // Cache avatar to Cloudinary for permanent storage
   const avatarUrl = await cacheAvatarToCloudinary(rawAvatarUrl, params.user_id, "youtube", channelId);
 
-  const { error: dbError } = await supabase
+  const { data: savedAccount, error: dbError } = await supabase
     .from("social_accounts")
     .upsert(
       {
@@ -425,12 +431,16 @@ async function completeOAuth(params: {
       {
         onConflict: "user_id,platform,platform_user_id",
       },
-    );
+    )
+    .select("id")
+    .single();
 
   if (dbError) {
     console.error("Database error:", dbError);
     throw new Error("Failed to save account");
   }
+
+  await recordGrantedScopes(supabase, savedAccount.id, scope);
 
   console.log("YouTube account saved successfully");
   return { channelTitle };

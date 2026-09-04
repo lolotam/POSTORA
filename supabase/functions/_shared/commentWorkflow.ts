@@ -9,6 +9,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { matchCommentWorkflowRule, type CommentWorkflowRule } from "./commentWorkflowRules.ts";
 import { replyToComment } from "./commentActions.ts";
+import { platformSupportsPrivateReply } from "./commentPlatforms.ts";
 import { sendPrivateReply, type PrivateReplyAccount } from "./metaPrivateReply.ts";
 import { ownedStoragePath, signMediaPath } from "./whatsappMediaResolver.ts";
 import type { CommentAutomationAccount } from "./commentAutomation.ts";
@@ -270,7 +271,7 @@ function resolveTarget(
     postKey: input.post.id || "",
     // The account's platform decides this, never the presence of the column: a Threads rule can
     // only carry DM copy through a bug, and it must still send nothing.
-    wantsDm: account.platform !== "threads" && !!rule.dm_message,
+    wantsDm: platformSupportsPrivateReply(account.platform) && !!rule.dm_message,
     wantsPublicReply: (rule.public_replies || []).length > 0,
   };
 }

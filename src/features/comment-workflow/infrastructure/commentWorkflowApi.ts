@@ -1,3 +1,4 @@
+import { videoLabel } from "@/lib/youtubeVideos";
 import { supabase } from "@/integrations/supabase/client";
 import type {
   CommentWorkflowPlatform,
@@ -94,6 +95,7 @@ export async function fetchRecentPosts(
   platformUserId: string,
 ): Promise<PostOption[]> {
   if (platform === "threads") return [];
+  if (platform === "youtube") return fetchChannelVideos(socialAccountId);
 
   const body = platform === "facebook"
     ? { action: "get_page_comments", social_account_id: socialAccountId, page_id: platformUserId }
@@ -114,4 +116,26 @@ export async function fetchRecentPosts(
         label: caption ? caption.slice(0, 80) : `Post ${String(row.id).slice(-8)}`,
       };
     });
+}
+
+/**
+ * A YouTube channel's uploads, the scope list for a one-video funnel. There is no
+ * comment-bearing feed to reuse as on Meta; the comment manager lists the uploads playlist
+ * (1 quota unit, where a search would cost 100). `target_post_id` stores the video id.
+ */
+async function fetchChannelVideos(socialAccountId: string): Promise<PostOption[]> {
+  const { data, error } = await supabase.functions.invoke("comment-manager", {
+    body: { action: "get_youtube_videos", social_account_id: socialAccountId },
+  });
+  if (error) throw error;
+  // The YouTube actions answer failures as `{ error_type, error: string }` — a sentence that says
+  // reconnect or wait — unlike the Meta actions, whose `error` is Graph's nested object.
+  if (data?.error) {
+    throw new Error(typeof data.error === "string" ? data.error : data.error?.message ?? "YouTube refused the video list.");
+  }
+
+  const rows: Array<Record<string, unknown>> = Array.isArray(data?.videos) ? data.videos : [];
+  return rows
+    .filter((row): row is Record<string, unknown> & { id: string } => typeof row.id === "string")
+    .map((row) => ({ id: row.id, label: videoLabel(row.id, typeof row.title === "string" ? row.title : null) }));
 }

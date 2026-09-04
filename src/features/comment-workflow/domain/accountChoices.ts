@@ -1,4 +1,5 @@
 import { isTokenExpired } from "@/lib/tokenUtils";
+import { youtubeCommentCapability } from "@/lib/youtubeCommentCapability";
 import { COMMENT_WORKFLOW_PLATFORMS, type CommentWorkflowPlatform } from "./rule";
 
 /**
@@ -20,6 +21,9 @@ export interface SelectableAccount {
   is_active: boolean;
   needs_reauth: boolean | null;
   token_expires_at: string | null;
+  /** YouTube only: which provider holds the token, and whether the comments scope was granted. */
+  auth_provider?: string | null;
+  account_metadata?: unknown;
 }
 
 /**
@@ -30,7 +34,11 @@ export interface SelectableAccount {
  * `isTokenExpired` already reads it that way.
  */
 export function isAccountConnected(account: SelectableAccount): boolean {
-  return account.is_active && !account.needs_reauth && !isTokenExpired(account.token_expires_at);
+  if (!account.is_active || account.needs_reauth) return false;
+  // YouTube tokens refresh just-in-time (the platform is excluded from the refresh cron), so
+  // expiry says nothing; what a funnel needs there is the comments scope.
+  if (account.platform === "youtube") return youtubeCommentCapability(account) === "capable";
+  return !isTokenExpired(account.token_expires_at);
 }
 
 /**
@@ -56,7 +64,7 @@ export function connectedAccountsFor<T extends SelectableAccount>(
 export function connectedCountByPlatform(
   accounts: readonly SelectableAccount[],
 ): Record<CommentWorkflowPlatform, number> {
-  const counts = { facebook: 0, instagram: 0, threads: 0 };
+  const counts: Record<CommentWorkflowPlatform, number> = { facebook: 0, instagram: 0, threads: 0, youtube: 0 };
   for (const account of accounts) {
     const platform = account.platform as CommentWorkflowPlatform;
     if (COMMENT_WORKFLOW_PLATFORMS.includes(platform) && isAccountConnected(account)) {
@@ -90,6 +98,7 @@ const ACCOUNT_NOUN: Record<CommentWorkflowPlatform, string> = {
   facebook: "page",
   instagram: "account",
   threads: "account",
+  youtube: "channel",
 };
 
 /** Spelled out rather than assembled, so the article and the noun stay right together. */
@@ -97,6 +106,7 @@ const ACCOUNT_PLACEHOLDER: Record<CommentWorkflowPlatform, string> = {
   facebook: "Choose a Facebook page",
   instagram: "Choose an Instagram account",
   threads: "Choose a Threads account",
+  youtube: "Choose a YouTube channel",
 };
 
 export function accountPlaceholder(platform: CommentWorkflowPlatform): string {

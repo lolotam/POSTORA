@@ -7,16 +7,17 @@ import type { Tables } from "@/integrations/supabase/types";
  * account. The database binds it to the account's own platform through a composite foreign
  * key, so the two cannot disagree — the form never asks for it, it derives it.
  */
-export type CommentWorkflowPlatform = "facebook" | "instagram" | "threads";
+export type CommentWorkflowPlatform = "facebook" | "instagram" | "threads" | "youtube";
 export type CommentWorkflowMatchType = "exact" | "contains" | "any";
 
 export const COMMENT_WORKFLOW_PLATFORMS: readonly CommentWorkflowPlatform[] = [
   "facebook",
   "instagram",
   "threads",
+  "youtube",
 ] as const;
 
-/** Threads has no private messages, so a Threads funnel is public-reply-only. */
+/** Threads and YouTube have no private messages, so their funnels are public-reply-only. */
 export function supportsPrivateReply(platform: CommentWorkflowPlatform | ""): boolean {
   return platform === "facebook" || platform === "instagram";
 }

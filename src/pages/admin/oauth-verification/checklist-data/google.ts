@@ -66,9 +66,16 @@ export const googleChecklistItems: ChecklistItem[] = [
     required: true,
   },
   {
+    id: "scope_youtube_force_ssl",
+    title: "youtube.force-ssl Scope Justification",
+    description: "Sensitive scope (https://www.googleapis.com/auth/youtube.force-ssl) used to read comments on the user's own videos (commentThreads.list), reply to them (comments.insert), hide or unhide them (comments.setModerationStatus) and delete the user's own comments (comments.delete) from Postora's Comment Manager, auto-reply rules and AI agent — all on the user's own channel only.",
+    category: "scopes",
+    required: true,
+  },
+  {
     id: "minimum_scopes",
     title: "Minimum Scopes Principle",
-    description: "Exactly two narrow YouTube scopes requested (youtube.readonly, youtube.upload) — matching the OAuth request in code byte-for-byte. The broad youtube scope is intentionally not requested.",
+    description: "Exactly three narrow YouTube scopes requested (youtube.readonly, youtube.upload, youtube.force-ssl) — matching the OAuth request in code byte-for-byte. The broad youtube scope is intentionally not requested.",
     category: "scopes",
     link: "https://support.google.com/cloud/answer/13807380",
     required: true,

@@ -1,6 +1,16 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
 import { isDirectInstagramAccount } from "../_shared/messengerCredentials.ts";
+import {
+  defaultYouTubeDeps,
+  listChannelVideos,
+  listThreads,
+  videoTitles,
+} from "../_shared/youtubeComments.ts";
+import {
+  errorTypeFor,
+  groupThreadsByVideo,
+} from "./youtubeCommentsView.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -65,7 +75,8 @@ function collectCommenterIds(mediaList: any[]): string[] {
 }
 
 async function fetchDmOverlapAvatars(
-  supabase: ReturnType<typeof createClient>,
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
   userId: string,
   commenterIds: string[]
 ): Promise<Map<string, string>> {
@@ -91,6 +102,13 @@ function applyCommenterAvatars(mediaList: any[], avatarByParticipant: Map<string
       }
     }
   }
+}
+
+function json400(message: string): Response {
+  return new Response(JSON.stringify({ error: message }), {
+    status: 400,
+    headers: { ...corsHeaders, "Content-Type": "application/json" },
+  });
 }
 
 Deno.serve(async (req) => {
@@ -126,16 +144,29 @@ Deno.serve(async (req) => {
 
     // Get access token for the social account
     let accessToken: string | null = null;
-    let socialAccount: { access_token: string; platform: string; platform_user_id?: string | null; ig_auth_type?: string | null; account_metadata?: Record<string, unknown> | null } | null = null;
+    let socialAccount: {
+      id: string;
+      user_id: string;
+      access_token: string | null;
+      refresh_token?: string | null;
+      token_expires_at?: string | null;
+      platform: string;
+      platform_user_id?: string | null;
+      auth_provider?: string | null;
+      connection_id?: string | null;
+      workspace_id?: string | null;
+      ig_auth_type?: string | null;
+      account_metadata?: Record<string, unknown> | null;
+    } | null = null;
     if (social_account_id) {
       const { data: account } = await supabase
         .from("social_accounts")
-        .select("access_token, platform, platform_user_id, ig_auth_type, account_metadata")
+        .select("id, user_id, access_token, refresh_token, token_expires_at, platform, platform_user_id, auth_provider, connection_id, workspace_id, ig_auth_type, account_metadata")
         .eq("id", social_account_id)
         .eq("user_id", user.id)
         .single();
 
-      if (!account?.access_token) {
+      if (!account || (account.auth_provider !== "composio" && !account.access_token)) {
         return new Response(JSON.stringify({ error: "Social account not found or no access token" }), {
           status: 404,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -217,8 +248,64 @@ Deno.serve(async (req) => {
         break;
       }
 
+      case "get_youtube_comments": {
+        if (!socialAccount || socialAccount.platform !== "youtube") {
+          return json400("a youtube social_account_id is required");
+        }
+        const deps = defaultYouTubeDeps();
+        const threads = await listThreads(socialAccount, deps, {
+          channelId: socialAccount.platform_user_id!,
+          pageToken: body.page_token || undefined,
+        });
+        if (!threads.ok) {
+          result = {
+            error_type: errorTypeFor(threads.kind),
+            error: threads.message,
+          };
+          break;
+        }
+        const titles = await videoTitles(
+          socialAccount,
+          deps,
+          [...new Set(threads.value.items.map((thread) => thread.videoId))],
+        );
+        result = {
+          videos: groupThreadsByVideo(
+            threads.value.items,
+            titles.ok ? titles.value : new Map(),
+            socialAccount.platform_user_id ?? null,
+          ),
+          next_page_token: threads.value.nextPageToken,
+        };
+        break;
+      }
+
+      case "get_youtube_videos": {
+        if (!socialAccount || socialAccount.platform !== "youtube") {
+          return json400("a youtube social_account_id is required");
+        }
+        const videos = await listChannelVideos(
+          socialAccount,
+          defaultYouTubeDeps(),
+          socialAccount.platform_user_id!,
+        );
+        result = videos.ok
+          ? {
+            videos: videos.value.map((video) => ({
+              id: video.id,
+              title: video.title,
+              published_at: video.publishedAt,
+            })),
+          }
+          : {
+            error_type: errorTypeFor(videos.kind),
+            error: videos.message,
+          };
+        break;
+      }
+
       case "reply_comment": {
-        if (!comment_id || !message || !accessToken) {
+        if (!comment_id || !message || !socialAccount) {
           return new Response(JSON.stringify({ error: "comment_id, message, and social_account_id required" }), {
             status: 400,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -235,7 +322,7 @@ Deno.serve(async (req) => {
       }
 
       case "hide_comment": {
-        if (!comment_id || !accessToken) {
+        if (!comment_id || !socialAccount) {
           return new Response(JSON.stringify({ error: "comment_id and social_account_id required" }), {
             status: 400,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -247,7 +334,7 @@ Deno.serve(async (req) => {
       }
 
       case "delete_comment": {
-        if (!comment_id || !accessToken) {
+        if (!comment_id || !socialAccount) {
           return new Response(JSON.stringify({ error: "comment_id and social_account_id required" }), {
             status: 400,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
