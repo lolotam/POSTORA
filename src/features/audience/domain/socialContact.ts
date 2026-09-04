@@ -41,6 +41,23 @@ export interface ContactFilters {
 
 export const EMPTY_FILTERS: ContactFilters = { search: "", platform: "all", source: "all", tags: [] };
 
+/** Filter options. Every platform social_contacts accepts needs an entry: a
+ *  platform with no option here yields rows that can be read but never filtered
+ *  to, which is what happened to YouTube when its ingest landed mid-build. */
+export const PLATFORM_OPTIONS: Array<{ value: ContactPlatform | "all"; label: string }> = [
+  { value: "all", label: "All platforms" },
+  { value: "facebook", label: "Facebook" },
+  { value: "instagram", label: "Instagram" },
+  { value: "threads", label: "Threads" },
+  { value: "youtube", label: "YouTube" },
+];
+
+export const SOURCE_OPTIONS: Array<{ value: ContactSource | "all"; label: string }> = [
+  { value: "all", label: "All sources" },
+  { value: "organic_comment", label: "Organic" },
+  { value: "workflow_lead", label: "Workflow leads" },
+];
+
 export function contactLabel(row: Pick<SocialContact, "display_name" | "username" | "platform_user_id">): string {
   return row.display_name || row.username || row.platform_user_id;
 }
