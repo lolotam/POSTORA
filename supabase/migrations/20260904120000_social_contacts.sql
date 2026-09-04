@@ -189,12 +189,50 @@ INSERT INTO public.app_settings (key, value, description)
 VALUES ('feature_audience_hub', 'false'::jsonb, 'Show Audience & Contacts under Automation for non-admin users')
 ON CONFLICT (key) DO NOTHING;
 
--- Seed from the comment history already on disk. Three payload shapes reach this table:
---   Meta          -- the whole `change`, so the author is at value.from
---   Threads webhook -- `change.value`, so a mention's author is at from.id and a reply carries
---                      only a top-level username (replyEvents.ts sets the id to null)
---   Threads poller  -- the raw mention, whose author is at user.id
+-- Seed from the comment history already on disk. Four payload shapes reach this table, because
+-- each ingest caller stores whatever it received verbatim:
+--   Meta webhook      -- the whole `change`, so the author is at value.from
+--   Threads webhook   -- `change.value`: a mention's author is at from.id, while a reply carries
+--                        only a top-level username (replyEvents.ts sets the id to null)
+--   Threads poller    -- the raw mention, whose author is at user.id
+--   threads-mentions  -- a MinimalMention row, whose author is at mention_author_id
 -- Idempotent: a rerun only re-counts.
+WITH events AS (
+  SELECT s.user_id, s.social_account_id, s.platform, s.created_at,
+         nullif(coalesce(s.payload->'value'->'from'->>'id',
+                         s.payload->'from'->>'id',
+                         s.payload->'user'->>'id',
+                         s.payload->>'mention_author_id'), '')                                   AS author_id,
+         nullif(coalesce(s.payload->'value'->'from'->>'username',
+                         s.payload->>'username',
+                         s.payload->'from'->>'username',
+                         s.payload->'user'->>'username',
+                         s.payload->>'mention_author_username'), '')                             AS author_username,
+         nullif(s.payload->'value'->'from'->>'name', '')                                         AS author_name
+  FROM public.social_inbox_events s
+  WHERE s.event_type = 'comment'
+),
+-- The same Threads person appears as a handle-only reply and as an id-bearing mention. Keying
+-- each shape separately would start the audience with two rows per commenter and split counts,
+-- and the writer's promotion only fires on new traffic, so it would never heal them. Resolve a
+-- handle to its id here, exactly as the writer does live.
+threads_identity AS (
+  SELECT DISTINCT ON (user_id, author_username)
+         user_id, author_username, author_id
+  FROM events
+  WHERE platform = 'threads' AND author_id IS NOT NULL AND author_username IS NOT NULL
+  ORDER BY user_id, author_username, author_id
+),
+resolved AS (
+  SELECT e.*,
+         coalesce(e.author_id, ti.author_id) AS resolved_id,
+         coalesce(e.author_id, ti.author_id, e.author_username) AS identity
+  FROM events e
+  LEFT JOIN threads_identity ti
+    ON e.platform = 'threads'
+   AND ti.user_id = e.user_id
+   AND ti.author_username = e.author_username
+)
 INSERT INTO public.social_contacts
   (user_id, workspace_id, social_account_id, platform, platform_user_id, identity_kind,
    display_name, username, total_comments_count, first_interacted_at, last_interacted_at)
@@ -202,30 +240,18 @@ SELECT a.user_id,
        (array_agg(a.workspace_id) FILTER (WHERE a.workspace_id IS NOT NULL))[1],
        (array_agg(e.social_account_id) FILTER (WHERE e.social_account_id IS NOT NULL))[1],
        e.platform,
-       coalesce(e.author_id, e.author_username),
-       CASE WHEN e.author_id IS NULL THEN 'username' ELSE 'id' END,
+       e.identity,
+       CASE WHEN e.resolved_id IS NULL THEN 'username' ELSE 'id' END,
        coalesce(max(e.author_name), max(e.author_username), ''),
        max(e.author_username),
        count(*), min(e.created_at), max(e.created_at)
-FROM (
-  SELECT s.user_id, s.social_account_id, s.platform, s.created_at,
-         nullif(coalesce(s.payload->'value'->'from'->>'id',
-                         s.payload->'from'->>'id',
-                         s.payload->'user'->>'id'), '')                                            AS author_id,
-         nullif(coalesce(s.payload->'value'->'from'->>'username',
-                         s.payload->>'username',
-                         s.payload->'from'->>'username',
-                         s.payload->'user'->>'username'), '')                                    AS author_username,
-         nullif(s.payload->'value'->'from'->>'name', '')                                         AS author_name
-  FROM public.social_inbox_events s
-  WHERE s.event_type = 'comment'
-) e
+FROM resolved e
 JOIN public.social_accounts a ON a.id = e.social_account_id
-WHERE coalesce(e.author_id, e.author_username) IS NOT NULL
+WHERE e.identity IS NOT NULL
   -- The account's own comments are excluded at ingest by isOwnComment; do the same here.
   AND (e.author_id IS NULL OR e.author_id IS DISTINCT FROM a.platform_user_id)
   AND (e.author_username IS NULL OR lower(e.author_username) IS DISTINCT FROM lower(a.platform_username))
 -- Group by the unique key only. The same commenter reached through two of the owner's accounts
 -- is one row; grouping by account would make the second group collide and DO NOTHING drop it.
-GROUP BY a.user_id, e.platform, coalesce(e.author_id, e.author_username), (e.author_id IS NULL)
+GROUP BY a.user_id, e.platform, e.identity, (e.resolved_id IS NULL)
 ON CONFLICT (user_id, platform, platform_user_id) DO NOTHING;
