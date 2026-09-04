@@ -1,0 +1,98 @@
+import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  BusinessProfileError,
+  parseBusinessProfile,
+  renderBusinessProfileText,
+} from "./businessProfileText.ts";
+
+Deno.test("an empty profile renders to the empty string", () => {
+  assertEquals(renderBusinessProfileText({}), "");
+});
+
+Deno.test("blank-only fields still render to the empty string", () => {
+  // This is what makes confirm_clear fire. A profile the user emptied field by
+  // field has to look exactly like a cleared textarea to blankedFields, or the
+  // 2026-08-30 blanking guard stops protecting the column it was written for.
+  assertEquals(renderBusinessProfileText({ products: "   ", notes: "\n" }), "");
+});
+
+Deno.test("sections are labelled and separated by blank lines", () => {
+  const text = renderBusinessProfileText({
+    industry: "ecommerce",
+    products: "Running shoes, trainers",
+    policies: { returns: "14 days", shipping: "Free over 20 KWD" },
+    faqs: [{ q: "Do you ship abroad?", a: "Yes, GCC only." }],
+    notes: "Family business since 1998",
+  });
+  assertEquals(text.split("\n\n"), [
+    "Business type: E-commerce store",
+    "Products and services:\nRunning shoes, trainers",
+    "Returns policy:\n14 days",
+    "Shipping policy:\nFree over 20 KWD",
+    "FAQ: Do you ship abroad?\nYes, GCC only.",
+    "Additional notes:\nFamily business since 1998",
+  ]);
+});
+
+Deno.test("each FAQ is its own paragraph so chunkProfileText can split on them", () => {
+  // chunkProfileText splits on blank lines. One FAQ per paragraph means a
+  // retrieval hit returns that answer, not a window across three unrelated ones.
+  assertEquals(
+    renderBusinessProfileText({ faqs: [{ q: "A?", a: "1" }, { q: "B?", a: "2" }] }),
+    "FAQ: A?\n1\n\nFAQ: B?\n2",
+  );
+});
+
+Deno.test("a FAQ missing either half is dropped rather than rendered half-empty", () => {
+  assertEquals(renderBusinessProfileText({ faqs: [{ q: "A?", a: "  " }] }), "");
+});
+
+Deno.test("parse rejects an unknown key by name", () => {
+  const error = assertThrows(
+    () => parseBusinessProfile({ industry: "clinic", sneaky: 1 }),
+    BusinessProfileError,
+  );
+  assertEquals(error.message, "Unknown business_profile key: sneaky");
+});
+
+Deno.test("parse rejects an industry outside the enum", () => {
+  assertThrows(() => parseBusinessProfile({ industry: "bakery" }), BusinessProfileError);
+});
+
+Deno.test("parse rejects an unknown policies key", () => {
+  assertThrows(
+    () => parseBusinessProfile({ policies: { refunds: "x" } }),
+    BusinessProfileError,
+  );
+});
+
+Deno.test("parse rejects a FAQ entry missing an answer", () => {
+  assertThrows(() => parseBusinessProfile({ faqs: [{ q: "A?" }] }), BusinessProfileError);
+});
+
+Deno.test("parse rejects more than fifty FAQs", () => {
+  const faqs = Array.from({ length: 51 }, (_, index) => ({ q: `q${index}`, a: "a" }));
+  assertThrows(() => parseBusinessProfile({ faqs }), BusinessProfileError);
+});
+
+Deno.test("parse rejects a non-object", () => {
+  assertThrows(() => parseBusinessProfile("shoes"), BusinessProfileError);
+  assertThrows(() => parseBusinessProfile([{ products: "x" }]), BusinessProfileError);
+});
+
+Deno.test("parse accepts an empty object, null and undefined", () => {
+  assertEquals(parseBusinessProfile({}), {});
+  assertEquals(parseBusinessProfile(null), {});
+  assertEquals(parseBusinessProfile(undefined), {});
+});
+
+Deno.test("parse round-trips a full profile unchanged", () => {
+  const input = {
+    industry: "clinic",
+    products: "Dermatology consultations",
+    policies: { returns: "No refunds", shipping: "N/A", warranty: "None" },
+    faqs: [{ q: "Do you take walk-ins?", a: "Mornings only." }],
+    notes: "Two branches",
+  };
+  assertEquals(parseBusinessProfile(input), input);
+});
