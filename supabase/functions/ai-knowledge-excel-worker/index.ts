@@ -12,6 +12,14 @@ import {
 } from "../_shared/knowledgeEmbeddings.ts";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import { chunkProfileText } from "../ai-knowledge-ingest/chunking.ts";
+import {
+  firecrawlCrawlStatus,
+  firecrawlScrape,
+  resolveFirecrawlKey,
+  type CrawlStatus,
+  type FirecrawlPage,
+} from "../_shared/firecrawl.ts";
 import { downloadKnowledgeFile, locateKnowledgeFile } from "../_shared/knowledgeSourceFiles.ts";
 
 const POLL_MS = 15_000;
@@ -35,6 +43,9 @@ type Source = {
   // email-derived folder, so the owner-scope check needs it; sources already
   // migrated to the private bucket do not.
   owner_email?: string | null;
+  // Website sources carry their crawl state here; every other type leaves it {}.
+  metadata?: Record<string, unknown> | null;
+  created_at?: string | null;
 };
 
 function message(error: unknown) {
@@ -45,12 +56,19 @@ export type WorkerDependencies = {
   embed: (texts: string[], config: DualEmbeddingConfig) => Promise<{ primary: number[][]; fallback: number[][] | null }>;
   resolveConfig: (admin: any) => Promise<DualEmbeddingConfig>;
   now: () => number;
+  // Injected so the website path can be tested without reaching Firecrawl.
+  firecrawlKey: (admin: any) => Promise<string>;
+  crawlStatus: (key: string, jobId: string) => Promise<CrawlStatus>;
+  scrapePage: (key: string, url: string) => Promise<FirecrawlPage>;
 };
 
 const defaultDependencies: WorkerDependencies = {
   embed: embedKnowledgeDual,
   resolveConfig: (admin) => resolveDualEmbeddingConfigFromDb(admin),
   now: () => Date.now(),
+  firecrawlKey: resolveFirecrawlKey,
+  crawlStatus: firecrawlCrawlStatus,
+  scrapePage: firecrawlScrape,
 };
 
 function workbookToChunks(bytes: ArrayBuffer): KnowledgeChunk[] {
@@ -117,31 +135,23 @@ export type SourceOutcome = {
 };
 
 // Process one claimed source resumably:
-//   * ai_knowledge_sources.chunk_count is the durable checkpoint, advanced only
-//     after the batch it counts has landed; status stays `processing` between
-//     batches so a crash never loses already-embedded work.
-//   * Resuming at chunk_count N deletes chunks with chunk_index >= N (the crash
-//     window between an insert and its checkpoint) and continues from N.
-//   * A fresh claim at chunk_count 0 deletes all existing chunks first.
-// `deadline` bounds the HTTP-driven mode; the standalone poller omits it.
-export async function processSource(
+/**
+ * Embed `chunks` for `source`, checkpointing as it goes, and mark it ready.
+ *
+ * Extracted so the website path reuses the SAME resumability the spreadsheet
+ * path has: chunk_count is the durable checkpoint, a resume deletes only the
+ * chunks at or past it, and a run that hits the deadline leaves the row
+ * `processing` for the next tick rather than losing the work already embedded.
+ * A second implementation of this loop would be a second set of crash windows.
+ */
+async function embedChunksResumably(
   admin: any,
   source: Source,
-  deps: WorkerDependencies = defaultDependencies,
+  chunks: KnowledgeChunk[],
+  deps: WorkerDependencies,
   deadline?: number,
 ): Promise<SourceOutcome> {
   const resumedFrom = source.chunk_count ?? 0;
-  try {
-    const file = await downloadSource(admin, source);
-    // Every source type the inline path understands, not just the tabular two.
-    // A large markdown or PDF used to have no queue at all: it ran inline and
-    // was killed by the 60s edge ceiling with its row stranded in `processing`.
-    const chunks = await parseSourceFile(
-      source.source_type || "doc",
-      source.file_name || source.file_path,
-      file,
-    );
-    if (!chunks.length) throw new Error("This file contains no indexable content");
     const embeddingConfig = await deps.resolveConfig(admin);
 
     // A source whose file shrank below its checkpoint cannot be resumed — the
@@ -199,6 +209,167 @@ export async function processSource(
     if (updateError) throw updateError;
     console.log(`[ai-knowledge-excel-worker] ready source=${source.id} chunks=${chunks.length} resumed=${resumedFrom > 0}`);
     return { sourceId: source.id, status: "ready", chunkCount: chunks.length, resumed: resumedFrom > 0 };
+}
+
+//   * ai_knowledge_sources.chunk_count is the durable checkpoint, advanced only
+//     after the batch it counts has landed; status stays `processing` between
+//     batches so a crash never loses already-embedded work.
+//   * Resuming at chunk_count N deletes chunks with chunk_index >= N (the crash
+//     window between an insert and its checkpoint) and continues from N.
+//   * A fresh claim at chunk_count 0 deletes all existing chunks first.
+// `deadline` bounds the HTTP-driven mode; the standalone poller omits it.
+// A crawl that has not finished in this long is not going to. The row keeps
+// its metadata so the Firecrawl job id is still available to support.
+const CRAWL_TIMEOUT_MS = 30 * 60_000;
+
+async function failSource(admin: any, sourceId: string, detail: string): Promise<SourceOutcome> {
+  const reason = detail.slice(0, 500);
+  await admin.from("ai_knowledge_sources").update({ status: "failed", error: reason }).eq("id", sourceId);
+  console.error(`[ai-knowledge-excel-worker] website failed source=${sourceId}: ${reason}`);
+  return { sourceId, status: "failed", chunkCount: 0, resumed: false, reason };
+}
+
+/** One page becomes one chunk sequence, led by its title and URL so a hit says where it came from. */
+function pagesToChunks(pages: FirecrawlPage[]): KnowledgeChunk[] {
+  const chunks: KnowledgeChunk[] = [];
+  for (const page of pages) {
+    const parts = chunkProfileText(
+      `${page.title}\n${page.url}\n\n${page.markdown}`,
+    );
+    for (const part of parts) {
+      chunks.push({ ...part, metadata: { ...part.metadata, source_url: page.url } });
+    }
+  }
+  return chunks;
+}
+
+/**
+ * A claimed website source: poll its crawl, or re-scrape its single page.
+ *
+ * A crawl still running is returned to `pending`, NOT left `processing`. The
+ * claim already flipped it to processing, and only the 10-minute stale reclaim
+ * would touch it again -- so a twenty-page crawl would advance in ten-minute
+ * steps instead of on the two-minute cron.
+ */
+export async function processWebsiteSource(
+  admin: any,
+  source: Source,
+  deps: WorkerDependencies = defaultDependencies,
+  deadline?: number,
+): Promise<SourceOutcome> {
+  const metadata = (source.metadata ?? {}) as Record<string, unknown>;
+  const mode = metadata.mode === "site" ? "site" : "page";
+  const url = String(metadata.url || source.file_path || "");
+
+  const writeMeta = (patch: Record<string, unknown>, columns: Record<string, unknown> = {}) =>
+    admin.from("ai_knowledge_sources")
+      .update({ metadata: { ...metadata, ...patch }, ...columns })
+      .eq("id", source.id);
+
+  let key: string;
+  try {
+    key = await deps.firecrawlKey(admin);
+  } catch (error) {
+    return await failSource(admin, source.id, message(error));
+  }
+
+  if (mode === "page") {
+    // The page path reaches the queue only when one page produced more chunks
+    // than fit inline. Re-scraping is one cheap call; storing the markdown on
+    // the row would put a whole page into a jsonb column that every list query
+    // reads.
+    if (!url) return await failSource(admin, source.id, "This source has no address to scrape");
+    try {
+      await writeMeta({ stage: "embedding", pages_done: 1, pages_total: 1 });
+      const page = await deps.scrapePage(key, url);
+      const chunks = pagesToChunks([page]);
+      if (!chunks.length) {
+        return await failSource(admin, source.id, "That page had no readable text");
+      }
+      return await embedChunksResumably(admin, source, chunks, deps, deadline);
+    } catch (error) {
+      return await failSource(admin, source.id, message(error));
+    }
+  }
+
+  const jobId = typeof metadata.crawl_job_id === "string" ? metadata.crawl_job_id : "";
+  if (!jobId) {
+    return await failSource(admin, source.id, "This crawl has no job id and cannot be resumed");
+  }
+
+  let status: CrawlStatus;
+  try {
+    status = await deps.crawlStatus(key, jobId);
+  } catch (error) {
+    return await failSource(admin, source.id, message(error));
+  }
+
+  if (status.state === "failed") {
+    return await failSource(admin, source.id, status.error || "The crawl failed");
+  }
+
+  if (status.state === "running") {
+    const startedAt = source.created_at ? Date.parse(source.created_at) : NaN;
+    if (Number.isFinite(startedAt) && deps.now() - startedAt > CRAWL_TIMEOUT_MS) {
+      return await failSource(admin, source.id, "Crawl timed out after 30 minutes");
+    }
+    await writeMeta(
+      { stage: "crawling", pages_done: status.completed, pages_total: status.total },
+      // Back to pending so the NEXT cron tick can claim it. Left processing, it
+      // would wait for the ten-minute stale reclaim instead.
+      { status: "pending", error: null },
+    );
+    return {
+      sourceId: source.id,
+      status: "processing",
+      chunkCount: source.chunk_count ?? 0,
+      resumed: false,
+      reason: `crawl in progress (${status.completed}/${status.total})`,
+    };
+  }
+
+  const chunks = pagesToChunks(status.pages);
+  if (!chunks.length) {
+    // "Ready, 0 chunks" would tell the user their site was read and the agent
+    // knows nothing about it.
+    return await failSource(admin, source.id, "The crawl returned no readable pages");
+  }
+  try {
+    await writeMeta({
+      stage: "embedding",
+      pages_done: status.pages.length,
+      pages_total: status.total || status.pages.length,
+    });
+    return await embedChunksResumably(admin, source, chunks, deps, deadline);
+  } catch (error) {
+    return await failSource(admin, source.id, message(error));
+  }
+}
+
+export async function processSource(
+  admin: any,
+  source: Source,
+  deps: WorkerDependencies = defaultDependencies,
+  deadline?: number,
+): Promise<SourceOutcome> {
+  // A website source is not a file: there is nothing to download, and its work
+  // is a crawl to poll or a page to re-scrape.
+  if (source.source_type === "website") {
+    return await processWebsiteSource(admin, source, deps, deadline);
+  }
+  const resumedFrom = source.chunk_count ?? 0;
+  try {
+    const file = await downloadSource(admin, source);
+    // Every source type the inline path understands, not just the tabular two.
+    // A large markdown or PDF used to have no queue at all: it ran inline and
+    // was killed by the 60s edge ceiling with its row stranded in `processing`.
+    const chunks = await parseSourceFile(
+      source.source_type || "doc",
+      source.file_name || source.file_path,
+      file,
+    );
+    if (!chunks.length) throw new Error("This file contains no indexable content");
+    return await embedChunksResumably(admin, source, chunks, deps, deadline);
   } catch (error) {
     const detail = message(error).slice(0, 500);
     await admin.from("ai_knowledge_sources").update({ status: "failed", error: detail }).eq("id", source.id);
