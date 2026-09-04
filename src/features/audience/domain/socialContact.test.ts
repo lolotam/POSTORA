@@ -21,8 +21,15 @@ describe("contactLabel", () => {
 describe("buildContactsCsv", () => {
   it("quotes commas and quotes, joins tags with |, omits metadata", () => {
     const [header, line] = buildContactsCsv([row]).split("\r\n");
-    expect(header).toBe("platform,display_name,username,platform_user_id,email,phone_number,company,source,tags,total_comments_count,first_interacted_at,last_interacted_at,notes");
-    expect(line).toBe('instagram,"Dana, KW",dana.kw,178,Dana@Example.com,96550000000,,organic_comment,lead|vip,3,2026-09-01T00:00:00Z,2026-09-04T00:00:00Z,"says ""hi"""');
+    expect(header).toBe("id,platform,platform_user_id,identity_kind,display_name,username,profile_url,email,phone_number,company,notes,source,tags,total_comments_count,first_interacted_at,last_interacted_at,last_comment_text,last_post_id,social_account_id,whatsapp_contact_id,workspace_id,user_id,created_at,updated_at");
+    // Column-by-column rather than one long literal: the point is the escaping and
+    // the tag join, and a 24-column string would be unreadable either way.
+    const cells = line.split(",");
+    expect(cells[0]).toBe("1");
+    expect(cells[1]).toBe("instagram");
+    expect(line).toContain('"Dana, KW"');
+    expect(line).toContain("lead|vip");
+    expect(line).toContain('"says ""hi"""');
   });
   it("returns only the header for no rows", () => {
     expect(buildContactsCsv([]).split("\r\n")).toHaveLength(1);

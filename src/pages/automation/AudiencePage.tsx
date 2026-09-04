@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { Navigate } from "react-router-dom";
+
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +16,7 @@ import {
 } from "@/features/audience";
 
 export default function AudiencePage() {
+  const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [page, setPage] = useState(0);
   const [selected, setSelected] = useState<SocialContact | null>(null);
@@ -22,15 +26,20 @@ export default function AudiencePage() {
   const tags = useSocialContactTags();
   const remove = useDeleteSocialContact();
 
+  // The nav entry hides with the flag, but a URL is still a URL. Every other flagged
+  // page redirects the same way, and the flag is the whole rollout control.
+  if (!flagsLoading && !flags.audienceHub) return <Navigate to="/automation" replace />;
+
   const rows = contacts.data?.rows ?? [];
   const total = contacts.data?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / CONTACTS_PAGE_SIZE));
 
+  const statsFailed = Boolean(stats.error);
   const kpis = [
-    { label: "Total contacts", value: stats.data?.total ?? 0 },
-    { label: "Workflow leads", value: stats.data?.workflow_leads ?? 0 },
-    { label: "Enriched contacts", value: stats.data?.enriched ?? 0 },
-    { label: "Top platform", value: stats.data?.top_platform ?? "—" },
+    { label: "Total contacts", value: statsFailed ? "—" : stats.data?.total ?? 0 },
+    { label: "Workflow leads", value: statsFailed ? "—" : stats.data?.workflow_leads ?? 0 },
+    { label: "Enriched contacts", value: statsFailed ? "—" : stats.data?.enriched ?? 0 },
+    { label: "Top platform", value: statsFailed ? "—" : stats.data?.top_platform ?? "—" },
   ];
 
   return (

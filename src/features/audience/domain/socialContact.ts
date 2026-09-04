@@ -45,20 +45,32 @@ export function contactLabel(row: Pick<SocialContact, "display_name" | "username
   return row.display_name || row.username || row.platform_user_id;
 }
 
+// Every column except metadata, which the spec excludes as an internal blob.
 const CSV_COLUMNS = [
-  "platform", "display_name", "username", "platform_user_id", "email", "phone_number", "company",
-  "source", "tags", "total_comments_count", "first_interacted_at", "last_interacted_at", "notes",
+  "id", "platform", "platform_user_id", "identity_kind", "display_name", "username", "profile_url",
+  "email", "phone_number", "company", "notes", "source", "tags", "total_comments_count",
+  "first_interacted_at", "last_interacted_at", "last_comment_text", "last_post_id",
+  "social_account_id", "whatsapp_contact_id", "workspace_id", "user_id", "created_at", "updated_at",
 ] as const;
 
-export function csvCell(value: unknown): string {
+// A display name or comment is whatever a stranger typed on a social platform, and a cell that
+// starts with one of these is a formula to Excel, Numbers and Sheets alike. Quoting stops the
+// value breaking the CSV grammar; it does nothing to stop the spreadsheet evaluating it. The
+// leading apostrophe is the standard neutraliser and is not shown as part of the value.
+function neutralizeFormula(text: string): string {
+  return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+}
+
+export function csvCell(value: unknown, guardFormulas = false): string {
   if (value === null || value === undefined) return "";
-  const text = Array.isArray(value) ? value.join("|") : String(value);
+  const raw = Array.isArray(value) ? value.join("|") : String(value);
+  const text = guardFormulas ? neutralizeFormula(raw) : raw;
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
 export function buildContactsCsv(rows: SocialContact[]): string {
   const lines = [CSV_COLUMNS.join(",")];
-  for (const row of rows) lines.push(CSV_COLUMNS.map((c) => csvCell(row[c])).join(","));
+  for (const row of rows) lines.push(CSV_COLUMNS.map((c) => csvCell(row[c], true)).join(","));
   return lines.join("\r\n");
 }
 
@@ -83,7 +95,9 @@ export function buildMetaAudienceCsv(rows: SocialContact[]): string {
     // Meta matches on the name itself, so trailing punctuation from a display
     // name like "Dana, KW" would be hashed into the identifier and never match.
     const [first = "", ...rest] = row.display_name.trim().split(/\s+/).map(stripNamePunctuation);
-    lines.push([email, phone, first, rest.filter(Boolean).join(" "), pageuid].map(csvCell).join(","));
+    // Deliberately NOT formula-guarded: this file is uploaded to Meta for hashing and matching,
+    // never opened in a spreadsheet, and a prepended apostrophe would change the hash.
+    lines.push([email, phone, first, rest.filter(Boolean).join(" "), pageuid].map((v) => csvCell(v)).join(","));
   }
   return lines.join("\r\n");
 }

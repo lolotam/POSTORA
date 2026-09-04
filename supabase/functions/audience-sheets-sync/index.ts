@@ -16,6 +16,12 @@ import { loadActiveConnection } from "../_shared/composioConnections.ts";
 import { composioBinding } from "../_shared/connectorRegistry.ts";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
+import {
+  type ConnectorCallMeta,
+  ConnectorRefusal,
+  recordConnectorCall,
+  withConnectorCall,
+} from "../_shared/connectorTelemetry.ts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -97,7 +103,20 @@ export async function syncContactsToSheet(
     contactIds: string[];
   },
 ): Promise<SyncResult> {
-  const refuse = (error: string): SyncResult => ({ ok: false, error });
+  // AGENTS.md rule 4: an early return that refuses work writes a ledger row, or an
+  // operator debugging "the sync does nothing" has nothing to read. workspaceId is
+  // only known after the connection lookup, and the column is NOT NULL, so the one
+  // refusal above it (an unknown connection) is logged to the console alone.
+  const refuseWith = async (
+    meta: ConnectorCallMeta | null,
+    error: string,
+  ): Promise<SyncResult> => {
+    if (meta) {
+      await recordConnectorCall(deps.admin, meta, { status: "refused", errorCode: error });
+    }
+    console.error(`[audience-sheets-sync] refused for user ${input.userId}: ${error}`);
+    return { ok: false, error };
+  };
 
   // Workspace is derived from the connection row. The caller never supplies it,
   // so a guessed connection id from another workspace fails the membership
@@ -109,25 +128,34 @@ export async function syncContactsToSheet(
     .maybeSingle();
   if (connectionError) throw connectionError;
   const workspaceId = connectionRow?.workspace_id ?? null;
-  if (!workspaceId) return refuse("connection_not_found");
+  if (!workspaceId) return await refuseWith(null, "connection_not_found");
+
+  const meta: ConnectorCallMeta = {
+    workspaceId,
+    connectionId: input.connectionId,
+    connectorType: "google_sheets",
+    authStrategy: "composio_oauth",
+    actionName: SHEETS_APPEND_SLUG,
+    source: "audience",
+  };
 
   const { data: isMember, error: memberError } = await deps.admin.rpc(
     "is_workspace_member",
     { p_user_id: input.userId, p_workspace_id: workspaceId },
   );
   if (memberError) throw memberError;
-  if (isMember !== true) return refuse("forbidden");
+  if (isMember !== true) return await refuseWith(meta, "forbidden");
 
   const binding = composioBinding("google_sheets");
   if (!binding || !binding.mutating.includes(SHEETS_APPEND_SLUG)) {
-    return refuse("connector_tool_not_allowed");
+    return await refuseWith(meta, "connector_tool_not_allowed");
   }
 
   const lookup = await loadActiveConnection(deps.admin, input.connectionId, workspaceId);
-  if (!lookup.ok) return refuse(lookup.code);
+  if (!lookup.ok) return await refuseWith(meta, lookup.code);
   const connection = lookup.connection;
 
-  if (!deps.composio) return refuse("composio_unconfigured");
+  if (!deps.composio) return await refuseWith(meta, "composio_unconfigured");
 
   // Ownership is enforced in the query, not in the caller: the service role
   // bypasses RLS, so `.eq("user_id", userId)` is the tenancy check.
@@ -162,14 +190,26 @@ export async function syncContactsToSheet(
   // Every requested id belonged to someone else, so there is nothing to append.
   // Calling the tool with an empty values array would still spend a Composio
   // execution and could clear nothing at best.
-  if (values.length === 0) return { ok: true, appended: 0 };
+  // Nothing to append is not an error -- every requested id simply belonged to
+  // someone else -- but it still ends the request early, so it leaves a row.
+  if (values.length === 0) {
+    await recordConnectorCall(deps.admin, meta, { status: "refused", errorCode: "no_owned_contacts" });
+    return { ok: true, appended: 0 };
+  }
 
-  const executed = await deps.composio.executeTool({
-    slug: SHEETS_APPEND_SLUG,
-    version: binding.toolkitVersion,
-    workspaceId,
-    connectedAccountId: connection.composioConnectedAccountId,
-    arguments: {
+  // Through the shared wrapper so success, failure and timeout each land in
+  // connector_call_logs alongside every other connector call. Composio answers a
+  // refused tool with successful:false rather than by rejecting, so that has to be
+  // turned into a throw here or the wrapper would file a failure as a success --
+  // the same 200-carrying-an-error shape that has bitten this codebase before.
+  try {
+    await withConnectorCall(deps.admin, meta, async (signal) => {
+      const executed = await deps.composio!.executeTool({
+        slug: SHEETS_APPEND_SLUG,
+        version: binding.toolkitVersion,
+        workspaceId,
+        connectedAccountId: connection.composioConnectedAccountId,
+        arguments: {
       spreadsheetId: input.spreadsheetId,
       // A1 notation needs the title quoted whenever it holds a space, punctuation
       // or a leading digit, and quoting is always legal -- 'Sheet1'!A:H parses the
@@ -177,22 +217,29 @@ export async function syncContactsToSheet(
       // as an unparseable range, which the user only ever sees as composio_failed.
       // A literal apostrophe in a title is escaped by doubling it.
       range: `'${input.sheetName.replace(/'/g, "''")}'!A:H`,
-      valueInputOption: "USER_ENTERED",
+      // RAW, never USER_ENTERED: a display name or comment is whatever a stranger
+      // typed, and USER_ENTERED makes Sheets evaluate a leading = + - or @ as a
+      // formula in the owner's spreadsheet.
+      valueInputOption: "RAW",
       majorDimension: "ROWS",
       values,
     },
-    signal: AbortSignal.timeout(TOOL_TIMEOUT_MS),
-  });
-
-  if (!executed.successful) {
+        signal,
+      });
+      if (!executed.successful) {
+        throw new ConnectorRefusal("composio_failed", executed.error ?? "composio_failed");
+      }
+      return executed;
+    }, { timeoutMs: TOOL_TIMEOUT_MS });
+  } catch (error) {
     // Sanitized operational event per ARCHITECTURE.md §17: user and code, never
-    // contact data or Composio credentials.
+    // contact data or Composio credentials. The ledger row is already written.
     console.error(
       `[audience-sheets-sync] append failed for user ${input.userId}: ${
-        executed.error ?? "composio_failed"
+        error instanceof Error ? error.message : String(error)
       }`,
     );
-    return refuse("composio_failed");
+    return { ok: false, error: "composio_failed" };
   }
 
   return { ok: true, appended: values.length };

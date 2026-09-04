@@ -70,12 +70,14 @@ interface AdminOptions {
 
 function fakeAdmin(options: AdminOptions = {}) {
   const rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+  const ledger: Array<Record<string, unknown>> = [];
   const filters: Record<string, QueryRecorder> = {
     connector_connections: { eq: [], in: [] },
     social_contacts: { eq: [], in: [] },
   };
   return {
     rpcCalls,
+    ledger,
     filters,
     from(table: string) {
       if (table === "connector_connections") {
@@ -83,6 +85,9 @@ function fakeAdmin(options: AdminOptions = {}) {
       }
       if (table === "social_contacts") {
         return queryable(options.contacts ?? { data: CONTACTS, error: null }, filters.social_contacts);
+      }
+      if (table === "connector_call_logs") {
+        return { insert: (row: Record<string, unknown>) => { ledger.push(row); return Promise.resolve({ error: null }); } };
       }
       throw new Error(`unexpected table: ${table}`);
     },
@@ -167,7 +172,7 @@ Deno.test("appends one row per contact in caller order with the Composio append 
   assertEquals(execution.connectedAccountId, "composio-ca-1");
   assertEquals(execution.arguments.spreadsheetId, "1AbC_spreadsheet");
   assertEquals(execution.arguments.range, "'Sheet1'!A:H");
-  assertEquals(execution.arguments.valueInputOption, "USER_ENTERED");
+  assertEquals(execution.arguments.valueInputOption, "RAW");
   assertEquals(execution.arguments.majorDimension, "ROWS");
 
   const values = execution.arguments.values as string[][];
@@ -324,4 +329,45 @@ Deno.test("no owned contacts appends nothing and never calls the tool", async ()
   });
   assertEquals(result, { ok: true, appended: 0 });
   assertEquals(composio.executions.length, 0);
+});
+
+// AGENTS.md rule 4: two silent early exits in ai-agent-reply once turned hours of
+// no replies into an afternoon of blind debugging. Every outcome writes a row.
+Deno.test("a successful append is recorded in the connector ledger", async () => {
+  const admin = fakeAdmin();
+  await syncContactsToSheet(dependencies(admin, fakeComposio()), {
+    userId: USER, connectionId: CONNECTION, spreadsheetId: "s", sheetName: "Sheet1",
+    contactIds: [CONTACT_A],
+  });
+  assertEquals(admin.ledger.length, 1);
+  assertEquals(admin.ledger[0].status, "success");
+  assertEquals(admin.ledger[0].source, "audience");
+  assertEquals(admin.ledger[0].connector_type, "google_sheets");
+  assertEquals(admin.ledger[0].action_name, "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND");
+  assertEquals(admin.ledger[0].workspace_id, WS);
+});
+
+Deno.test("a refusal for a non-member is recorded, not just returned", async () => {
+  const admin = fakeAdmin({ member: false });
+  const composio = fakeComposio();
+  const result = await syncContactsToSheet(dependencies(admin, composio), {
+    userId: USER, connectionId: CONNECTION, spreadsheetId: "s", sheetName: "Sheet1",
+    contactIds: [CONTACT_A],
+  });
+  assertEquals(result, { ok: false, error: "forbidden" });
+  assertEquals(composio.executions.length, 0);
+  assertEquals(admin.ledger.length, 1);
+  assertEquals(admin.ledger[0].status, "refused");
+  assertEquals(admin.ledger[0].error_code, "forbidden");
+});
+
+Deno.test("a failed append is recorded as failed", async () => {
+  const admin = fakeAdmin();
+  await syncContactsToSheet(dependencies(admin, fakeComposio({ successful: false, error: "quota" })), {
+    userId: USER, connectionId: CONNECTION, spreadsheetId: "s", sheetName: "Sheet1",
+    contactIds: [CONTACT_A],
+  });
+  assertEquals(admin.ledger.length, 1);
+  assertEquals(admin.ledger[0].status, "refused");
+  assertEquals(admin.ledger[0].error_code, "composio_failed");
 });

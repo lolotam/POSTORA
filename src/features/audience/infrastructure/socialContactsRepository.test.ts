@@ -42,8 +42,9 @@ describe("fetchAllContacts", () => {
     rpc
       .mockResolvedValueOnce({ data: Array.from({ length: 200 }, (_, i) => ({ row_count: 201, contact: { id: String(i) } })), error: null })
       .mockResolvedValueOnce({ data: [{ row_count: 201, contact: { id: "200" } }], error: null });
-    const rows = await fetchAllContacts(EMPTY_FILTERS);
+    const { rows, truncated } = await fetchAllContacts(EMPTY_FILTERS);
     expect(rows).toHaveLength(201);
+    expect(truncated).toBe(false);
     expect(rpc).toHaveBeenNthCalledWith(2, "search_social_contacts", expect.objectContaining({ p_limit: 200, p_offset: 200 }));
   });
 });

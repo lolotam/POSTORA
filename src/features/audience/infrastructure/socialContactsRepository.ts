@@ -42,14 +42,27 @@ export function listContacts(filters: ContactFilters, page: number): Promise<Con
   return search(filters, CONTACTS_PAGE_SIZE, page * CONTACTS_PAGE_SIZE);
 }
 
-export async function fetchAllContacts(filters: ContactFilters): Promise<SocialContact[]> {
+export interface ContactExport {
+  rows: SocialContact[];
+  /** True when the filter matched more rows than EXPORT_CAP. The caller must say
+   *  so: a silently short file looks exactly like a complete one. */
+  truncated: boolean;
+  cap: number;
+}
+
+export async function fetchAllContacts(filters: ContactFilters): Promise<ContactExport> {
   const all: SocialContact[] = [];
+  let truncated = false;
   for (let offset = 0; offset < EXPORT_CAP; offset += EXPORT_PAGE) {
-    const { rows } = await search(filters, EXPORT_PAGE, offset);
+    const { rows, total } = await search(filters, EXPORT_PAGE, offset);
     all.push(...rows);
     if (rows.length < EXPORT_PAGE) break;
+    if (all.length >= EXPORT_CAP) {
+      truncated = total > all.length;
+      break;
+    }
   }
-  return all;
+  return { rows: all, truncated, cap: EXPORT_CAP };
 }
 
 export async function fetchContactStats(): Promise<ContactStats> {
