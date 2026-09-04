@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +36,8 @@ export function SheetsSyncDialog({ contactIds, onClose }: { contactIds: string[]
   const [spreadsheetTitle, setSpreadsheetTitle] = useState<string | null>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
   const [lookupError, setLookupError] = useState<string | null>(null);
+  // Identifies the lookup whose answer the dialog is still willing to show.
+  const lookupKey = useRef("");
 
   useEffect(() => {
     let cancelled = false;
@@ -53,8 +55,13 @@ export function SheetsSyncDialog({ contactIds, onClose }: { contactIds: string[]
   }, []);
 
   // Tabs belong to one spreadsheet read through one connection; editing either
-  // invalidates them, and the chosen tab with them.
+  // invalidates them, and the chosen tab with them. Bumping the request key
+  // here is what makes an in-flight lookup superseded rather than merely stale:
+  // without it, a reply that lands after the user retyped the id would fill the
+  // tab list from the OLD spreadsheet, and Sync would then append to a tab the
+  // current id was never checked against.
   useEffect(() => {
+    lookupKey.current = `${selectedId}|${spreadsheetId.trim()}`;
     setTabs(null);
     setSpreadsheetTitle(null);
     setLookupError(null);
@@ -63,6 +70,8 @@ export function SheetsSyncDialog({ contactIds, onClose }: { contactIds: string[]
 
   const checkSpreadsheet = async () => {
     if (!selectedId || !spreadsheetId.trim() || lookupBusy) return;
+    const requested = `${selectedId}|${spreadsheetId.trim()}`;
+    lookupKey.current = requested;
     setLookupBusy(true);
     setLookupError(null);
     try {
@@ -70,14 +79,17 @@ export function SheetsSyncDialog({ contactIds, onClose }: { contactIds: string[]
         connection_id: selectedId,
         spreadsheet_id: spreadsheetId.trim(),
       });
+      if (lookupKey.current !== requested) return;
       setTabs(info.sheets);
       setSpreadsheetTitle(info.spreadsheet_title);
       setSheetName((current) => (info.sheets.includes(current) ? current : info.sheets[0] ?? ""));
     } catch (error) {
       // A failed lookup must never render like a spreadsheet with no tabs
       // (AGENTS.md rule 3): the error stays until retried or the id changes.
+      if (lookupKey.current !== requested) return;
       setLookupError((error as Error).message);
     } finally {
+      // Cleared either way: a superseded request leaves nothing else in flight.
       setLookupBusy(false);
     }
   };

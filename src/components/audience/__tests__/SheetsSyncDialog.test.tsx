@@ -47,6 +47,28 @@ async function chooseTab(name: string) {
 }
 
 describe("SheetsSyncDialog", () => {
+  // Codex review on PR #146: a lookup that resolves after the id was retyped
+  // used to fill the tab list from the OLD spreadsheet, and Sync would then
+  // append to a tab the current id had never been checked against.
+  it("ignores a lookup that resolves after the spreadsheet id changed", async () => {
+    listGoogleSheetsConnections.mockResolvedValue([{ id: "conn-1", external_account_label: "Growth sheets" }]);
+    let resolveFirst: (v: typeof TABS) => void = () => {};
+    fetchSpreadsheetInfo.mockReturnValueOnce(new Promise((r) => { resolveFirst = r; }));
+    render(<SheetsSyncDialog contactIds={["a"]} onClose={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Growth sheets")).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText("Spreadsheet ID"), { target: { value: "old-id" } });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    fireEvent.change(screen.getByLabelText("Spreadsheet ID"), { target: { value: "new-id" } });
+    resolveFirst(TABS);
+
+    await waitFor(() =>
+      expect(screen.getByText("Enter the spreadsheet id, then press Check to load its tabs."))
+        .toBeInTheDocument());
+    expect(screen.queryByRole("combobox")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sync" })).toBeDisabled();
+  });
+
   it("syncs through the selected connection with a tab chosen from the real spreadsheet", async () => {
     listGoogleSheetsConnections.mockResolvedValue([
       { id: "conn-1", external_account_label: "Growth sheets" },
