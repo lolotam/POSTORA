@@ -139,10 +139,11 @@ Deno.test("a crawl older than thirty minutes fails rather than polling forever",
   const updates: Record<string, unknown>[] = [];
   const outcome = await processWebsiteSource(
     fakeAdmin(updates),
-    websiteSource(
-      { crawl_job_id: "j", mode: "site" },
-      { created_at: new Date(Date.now() - 31 * 60_000).toISOString() },
-    ),
+    websiteSource({
+      crawl_job_id: "j",
+      mode: "site",
+      crawl_started_at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    }),
     deps({
       crawlStatus: () =>
         Promise.resolve({ state: "running", completed: 1, total: 9, pages: [] }),
@@ -188,6 +189,45 @@ Deno.test("a page source with no usable URL fails rather than scraping nothing",
     fakeAdmin(updates),
     websiteSource({ mode: "page" }, { file_path: null }),
     deps(),
+  );
+  assertEquals(outcome.status, "failed");
+});
+
+Deno.test("the timeout runs from the crawl, not from when the row was created", async () => {
+  // A source queued behind other work can sit for a long time before its job is
+  // polled once. Timing from created_at would spend the whole 30-minute budget
+  // waiting in the queue and fail a crawl that had barely started.
+  const updates: Record<string, unknown>[] = [];
+  const outcome = await processWebsiteSource(
+    fakeAdmin(updates),
+    websiteSource(
+      {
+        crawl_job_id: "j",
+        mode: "site",
+        crawl_started_at: new Date(Date.now() - 60_000).toISOString(),
+      },
+      { created_at: new Date(Date.now() - 90 * 60_000).toISOString() },
+    ),
+    deps({
+      crawlStatus: () =>
+        Promise.resolve({ state: "running", completed: 1, total: 9, pages: [] }),
+    }),
+  );
+  assertEquals(outcome.status, "processing");
+});
+
+Deno.test("a source predating crawl_started_at still times out on created_at", async () => {
+  const updates: Record<string, unknown>[] = [];
+  const outcome = await processWebsiteSource(
+    fakeAdmin(updates),
+    websiteSource(
+      { crawl_job_id: "j", mode: "site" },
+      { created_at: new Date(Date.now() - 31 * 60_000).toISOString() },
+    ),
+    deps({
+      crawlStatus: () =>
+        Promise.resolve({ state: "running", completed: 1, total: 9, pages: [] }),
+    }),
   );
   assertEquals(outcome.status, "failed");
 });

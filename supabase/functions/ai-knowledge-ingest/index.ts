@@ -832,7 +832,17 @@ async function handleRequest(req: Request): Promise<Response> {
           // source without it, which is what stops the worker picking this row
           // up before the job id exists.
           await setMeta(
-            { crawl_job_id: jobId, stage: "crawling", pages_done: 0, pages_total: limit },
+            {
+              crawl_job_id: jobId,
+              // When the CRAWL started, not when the row was created. The
+              // worker times a crawl out after 30 minutes, and a source that
+              // sat behind other queued work would otherwise burn that budget
+              // before its job was polled once.
+              crawl_started_at: new Date().toISOString(),
+              stage: "crawling",
+              pages_done: 0,
+              pages_total: limit,
+            },
             { status: "pending", chunk_count: 0, error: null, queued_at: new Date().toISOString() },
           );
           await logKnowledgeEvent(admin, user.id, "ingest_website", true, {

@@ -314,7 +314,14 @@ export async function processWebsiteSource(
   }
 
   if (status.state === "running") {
-    const startedAt = source.created_at ? Date.parse(source.created_at) : NaN;
+    // From when the CRAWL started, falling back to the row for sources queued
+    // before crawl_started_at existed. Timing from created_at alone would let
+    // a source that waited behind other work exhaust the budget before its
+    // job was polled once.
+    const startedRaw = typeof metadata.crawl_started_at === "string"
+      ? metadata.crawl_started_at
+      : source.created_at;
+    const startedAt = startedRaw ? Date.parse(startedRaw) : NaN;
     if (Number.isFinite(startedAt) && deps.now() - startedAt > CRAWL_TIMEOUT_MS) {
       return await failSource(admin, source.id, "Crawl timed out after 30 minutes");
     }
