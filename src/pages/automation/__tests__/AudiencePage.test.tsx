@@ -86,13 +86,17 @@ describe("AudiencePage", () => {
 
   // An admin's flags come from isAdmin, which is false while the role query is in
   // flight. Redirecting on that transient false threw admins off their own page.
-  it("waits for the role query before deciding to redirect", () => {
+  it("neither redirects nor renders the page while the role is still loading", () => {
     useSocialContacts.mockReturnValue({ data: { rows, total: 2 }, isLoading: false });
     flagState.flags = { audienceHub: false };
     roleState.isLoading = true;
     try {
       render(<MemoryRouter><AudiencePage /></MemoryRouter>);
-      expect(screen.getByText("Audience & Contacts")).toBeInTheDocument();
+      // Not redirected away, and not showing the controls of a feature that may
+      // yet turn out to be disabled for this viewer.
+      expect(screen.getByText("Loading…")).toBeInTheDocument();
+      expect(screen.queryByText("Audience & Contacts")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Export" })).not.toBeInTheDocument();
     } finally {
       flagState.flags = { audienceHub: true };
       roleState.isLoading = false;
