@@ -1,19 +1,8 @@
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import type { ContactFilters as Filters, ContactPlatform, ContactSource } from "@/features/audience";
+import { PLATFORM_OPTIONS, SOURCE_OPTIONS, type ContactFilters as Filters } from "@/features/audience";
 
-export const PLATFORMS: Array<{ value: ContactPlatform | "all"; label: string }> = [
-  { value: "all", label: "All platforms" }, { value: "facebook", label: "Facebook" },
-  { value: "instagram", label: "Instagram" }, { value: "threads", label: "Threads" },
-  // YouTube ingest landed while this page was being built, and it is already the
-  // largest source of captured contacts. Without this option those rows can be
-  // read but never filtered to.
-  { value: "youtube", label: "YouTube" },
-];
-const SOURCES: Array<{ value: ContactSource | "all"; label: string }> = [
-  { value: "all", label: "All sources" }, { value: "organic_comment", label: "Organic" }, { value: "workflow_lead", label: "Workflow leads" },
-];
 
 export function ContactFilters({ value, tags, onChange }: { value: Filters; tags: string[]; onChange: (next: Filters) => void }) {
   const toggleTag = (tag: string) =>
@@ -28,11 +17,11 @@ export function ContactFilters({ value, tags, onChange }: { value: Filters; tags
       />
       <Select value={value.platform} onValueChange={(v) => onChange({ ...value, platform: v as Filters["platform"] })}>
         <SelectTrigger className="md:w-44"><SelectValue /></SelectTrigger>
-        <SelectContent>{PLATFORMS.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
+        <SelectContent>{PLATFORM_OPTIONS.map((p) => <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>)}</SelectContent>
       </Select>
       <Select value={value.source} onValueChange={(v) => onChange({ ...value, source: v as Filters["source"] })}>
         <SelectTrigger className="md:w-44"><SelectValue /></SelectTrigger>
-        <SelectContent>{SOURCES.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
+        <SelectContent>{SOURCE_OPTIONS.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}</SelectContent>
       </Select>
       {tags.length > 0 && (
         <div className="flex flex-wrap gap-1">

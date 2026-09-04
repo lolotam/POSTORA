@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import { PLATFORMS } from "../ContactFilters";
+import { PLATFORM_OPTIONS as PLATFORMS } from "@/features/audience";
 
 describe("ContactFilters platform options", () => {
   // social_contacts.platform accepts these four, and a platform with no option
