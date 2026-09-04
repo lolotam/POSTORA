@@ -1,4 +1,4 @@
-import { Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Circle, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,50 @@ interface NamedAccount {
   platform: string;
   platform_username?: string | null;
   platform_user_id?: string | null;
+}
+
+/**
+ * The stages a website source moves through, in order.
+ *
+ * Driven entirely by `metadata.stage`, which the ingest action and the worker
+ * both write. No new transport: the sources query already polls every 5s while
+ * a source is pending or processing, which is exactly the window this is shown
+ * in.
+ */
+const CRAWL_STAGES = [
+  { key: "crawling", label: "Reading pages" },
+  { key: "extracting", label: "Extracting text" },
+  { key: "embedding", label: "Indexing into the vector database" },
+] as const;
+
+function CrawlProgress({ metadata }: { metadata: Record<string, unknown> | null | undefined }) {
+  const stage = String(metadata?.stage ?? "crawling");
+  const current = CRAWL_STAGES.findIndex((entry) => entry.key === stage);
+  const done = Number(metadata?.pages_done ?? NaN);
+  const total = Number(metadata?.pages_total ?? NaN);
+  const showCount = Number.isFinite(done) && Number.isFinite(total) && total > 0;
+
+  return (
+    <div className="mt-2 space-y-1">
+      {CRAWL_STAGES.map((entry, index) => (
+        <div key={entry.key} className="flex items-center gap-2 text-xs">
+          {/* An unknown stage puts `current` at -1, which renders every step as
+              still ahead rather than claiming progress nobody reported. */}
+          {index < current ? (
+            <Check className="h-3 w-3 text-emerald-500" />
+          ) : index === current ? (
+            <Loader2 className="h-3 w-3 animate-spin text-primary" />
+          ) : (
+            <Circle className="h-3 w-3 text-muted-foreground/40" />
+          )}
+          <span className={index <= current ? "text-foreground" : "text-muted-foreground"}>
+            {entry.label}
+            {index === current && showCount ? ` (${done}/${total})` : ""}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export interface KnowledgeSourcesPanelProps {
@@ -129,6 +173,10 @@ export function KnowledgeSourcesPanel({
                     {source.status === "ready" ? ` · ${source.chunk_count} chunks` : ""}
                   </Badge>
                 </div>
+                {source.source_type === "website" &&
+                  ["pending", "processing"].includes(source.status) && (
+                    <CrawlProgress metadata={source.metadata} />
+                  )}
                 {source.error && <p className="mt-1 text-xs text-destructive">{source.error}</p>}
               </div>
               <div className="flex gap-2">

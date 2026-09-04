@@ -388,7 +388,20 @@ export function AiKnowledgeManager({
           />
         </TabsContent>
         <TabsContent value="website" className="mt-4">
-          <WebsitePanel />
+          <WebsitePanel
+            accountId={accountId ?? null}
+            selectedAccountLabel={selectedAccountLabel}
+            submitting={invoke.isPending}
+            onSubmit={(input) =>
+              run(
+                "ingest_website",
+                { ...input, social_account_id: accountId ?? undefined },
+                input.mode === "site"
+                  ? "Crawl started — watch the sources list below"
+                  : "Page indexed",
+              )
+            }
+          />
         </TabsContent>
       </Tabs>
       <KnowledgeSourcesPanel

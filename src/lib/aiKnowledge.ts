@@ -1,3 +1,6 @@
+// Upload-able types only. `website`, `catalog` and `profile_text` are source
+// types too, but they are created by their own actions rather than by a file
+// the user picks, so they have no extension to map.
 export type AiKnowledgeSourceType = "csv" | "excel" | "pdf" | "doc" | "image";
 
 const SOURCE_TYPE_BY_EXTENSION: Record<string, AiKnowledgeSourceType> = {

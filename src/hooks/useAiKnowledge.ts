@@ -13,6 +13,9 @@ export interface AiKnowledgeSource {
   error: string | null;
   chunk_count: number;
   visibility: "shared" | "restricted";
+  /** Source-type specific state. Website sources carry their crawl progress here.
+   *  The query selects *, so this arrives without a read-site change. */
+  metadata?: Record<string, unknown> | null;
   created_at: string;
 }
 export interface AiKnowledgeGraphExport {
