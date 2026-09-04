@@ -94,7 +94,7 @@ Native calls run a just-in-time refresh when `token_expires_at` is within 30 min
 
 ## 5. AI agent setup (`/automation/agents`)
 
-5.1 `UnifiedAgentSetupPage` `PLATFORMS` gains `{ id: "youtube", label: "YouTube", supportsComments: true, colorPreset: "red", description: "Video comment replies and moderation", commentsLabel: "Comments" }` with **no DM surface**: `src/lib/agentSurface.ts` treats youtube as comments-only. `PLATFORM_FLAG.youtube = "youtubeComments"`.
+5.1 `UnifiedAgentSetupPage` `PLATFORMS` gains `{ id: "youtube", label: "YouTube", supportsComments: true, colorPreset: "red", description: "Video comment replies and moderation", commentsLabel: "Comments" }` with **no DM surface**: the page forces `surface="comments"` for youtube and hides the DM toggle (`src/lib/agentSurface.ts` is unchanged — it models "no comments", not "no DMs"). `PLATFORM_FLAG.youtube = "youtubeComments"`.
 
 5.2 `useAiAgentConfig` `AiAgentPlatform`, the `AutomationHandlerCard` platform union (comments surface only: message options hidden), `AiAgentManager`, `AutoReplyManager` `copyFor` (comment-only copy, as threads), `AiAgentTestChat` and `AiAgentLogsView` all accept `youtube`.
 

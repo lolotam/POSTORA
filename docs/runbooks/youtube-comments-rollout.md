@@ -27,9 +27,16 @@ Expected: three constraints, the platform one listing `youtube`; one job at `*/5
 
 Frontend deploys automatically (Dokploy). The tile stays hidden: `youtubeComments` is a visibility flag, so even admins do not see it until step 5.
 
-## 3. Deploy the edge functions
+## 3. Verify the edge-function deploy
 
-Follow `docs/runbooks/deploy-edge-function.md` (runtime checkout + restart; never `npx supabase functions deploy`). Changed: the new directory `supabase/functions/youtube-poll-comments/`, `comment-manager/`, `youtube-oauth/`, `messaging-api/`, `n8n-api/`, `ai-agent-reply/`, and every `_shared/` file the PR touched. Compare SHA256 of each copied file against the repo.
+The merge triggers `.github/workflows/deploy-edge-functions.yml`, which fetches `main` into `/root/postora-runtime`, rsyncs `supabase/functions/` into the functions volume (new directories included) and runs `docker compose restart functions`. Watch that run go green, then confirm on the host:
+
+```bash
+ls /etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/youtube-poll-comments/
+cd /root/postora-runtime && git log --oneline -1
+```
+
+If the workflow is blocked (GitHub Actions billing has blocked it before), follow `docs/runbooks/deploy-edge-function.md` by hand: fetch `main` in the runtime checkout, rsync, verify SHA256 per file, `docker compose restart functions`. Never `npx supabase functions deploy`, never `up -d`. Between steps 1 and 3 the cron job 404s every five minutes (visible in `net._http_response`); harmless, so keep the two steps close together.
 
 ## 4. Refresh the existing Composio YouTube connection
 
