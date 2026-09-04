@@ -7196,6 +7196,8 @@ export type Database = {
           dm_sent_count: number | null
           failed_count: number | null
           indeterminate_count: number | null
+          last_error_at: string | null
+          last_error_message: string | null
           last_triggered_at: string | null
           public_sent_count: number | null
           rule_id: string | null

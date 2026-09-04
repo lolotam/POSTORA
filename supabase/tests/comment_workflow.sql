@@ -325,8 +325,39 @@ BEGIN
   PERFORM pg_temp.cw_must(v_stats.failed_count = 0, 'an indeterminate send is not counted as a failure');
   PERFORM pg_temp.cw_must(v_stats.indeterminate_count = 1, 'stats surface indeterminate sends separately');
   PERFORM pg_temp.cw_must(v_stats.last_triggered_at IS NOT NULL, 'stats carry a last-triggered time');
+  PERFORM pg_temp.cw_must(v_stats.last_error_message IS NULL AND v_stats.last_error_at IS NULL,
+    'a rule with no failed send carries no last error');
+
+  -- Two failures, then a success. The card must show the NEWEST failure's reason, and a later
+  -- success must not erase it: the user still needs to know why the earlier one failed.
+  INSERT INTO public.comment_workflow_events
+    (rule_id, user_id, social_account_id, platform, external_post_id, external_comment_id,
+     author_key, public_reply_status, dm_status, error_message, created_at)
+  VALUES
+    ('88888888-8888-4888-8888-888888888821', '88888888-8888-4888-8888-888888888801',
+     '88888888-8888-4888-8888-888888888811', 'facebook', 'post-1', 'comment-4', 'author-2',
+     'skipped', 'failed', 'older failure', now() - interval '2 hours'),
+    ('88888888-8888-4888-8888-888888888821', '88888888-8888-4888-8888-888888888801',
+     '88888888-8888-4888-8888-888888888811', 'facebook', 'post-1', 'comment-5', 'author-3',
+     'failed', 'not_applicable', 'Private replies to Facebook Pages are not allowed.', now() - interval '1 hour'),
+    ('88888888-8888-4888-8888-888888888821', '88888888-8888-4888-8888-888888888801',
+     '88888888-8888-4888-8888-888888888811', 'facebook', 'post-1', 'comment-6', 'author-4',
+     'sent', 'sent', NULL, now());
+
+  SELECT * INTO v_stats FROM public.comment_workflow_rule_stats
+  WHERE rule_id = '88888888-8888-4888-8888-888888888821';
+  PERFORM pg_temp.cw_must(v_stats.triggered_count = 6, 'stats still count every claimed comment');
+  PERFORM pg_temp.cw_must(v_stats.failed_count = 2, 'stats count a failure on either leg');
+  PERFORM pg_temp.cw_must(v_stats.last_error_message = 'Private replies to Facebook Pages are not allowed.',
+    'the last error is the newest failed event''s message, not the oldest and not the latest success');
+  PERFORM pg_temp.cw_must(
+    v_stats.last_error_at = (SELECT created_at FROM public.comment_workflow_events WHERE external_comment_id = 'comment-5'),
+    'the last error carries the time of the event it came from');
+  PERFORM pg_temp.cw_must(
+    v_stats.last_triggered_at = (SELECT created_at FROM public.comment_workflow_events WHERE external_comment_id = 'comment-6'),
+    'last triggered still tracks the newest event of any outcome');
 END $stats$;
-\echo 'PASS 5: the stats view aggregates events per rule and keeps indeterminate apart from failed'
+\echo 'PASS 5: the stats view aggregates events per rule, keeps indeterminate apart from failed, and carries the newest failure reason'
 
 
 -- (6) RLS.
