@@ -1,29 +1,61 @@
+import { ShieldCheck } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { AgentCardProps } from "./types";
+import type { BehaviorCardProps } from "./types";
 
 /**
- * What the assistant is told about itself, and what it is never allowed to do.
+ * Two of these rows are NOT switches, and that is the point.
  *
- * The locked guard rows arrive with the behavior slice. They are deliberately
- * NOT switches: `knowledgeOnlyRule` and the escalate-on-unknown rule in
- * ai-agent-reply are unconditional, and were tightened after the 2026-09-01
- * incident where an agent answered from a persona fallback instead of the
- * connector. A toggle here would promise control the prompt does not honour.
+ * `knowledgeOnlyRule` and the escalate-on-unknown rule are unconditional in
+ * ai-agent-reply, and were tightened after the 2026-09-01 incident where an
+ * agent answered from a persona fallback instead of calling the connector. A
+ * toggle here would promise control the prompt does not honour.
+ *
+ * The contrast with the handoff switches next door is deliberate: those two
+ * genuinely gate both the prompt rule and whether escalate_to_human is offered
+ * to the model at all, so they are real switches.
  */
-export function GuardrailsCard({ form, update }: AgentCardProps) {
+const LOCKED_GUARDS = [
+  {
+    testId: "guard-strict-knowledge",
+    title: "Answers only from your knowledge",
+    detail: "The assistant never invents prices, stock levels or policies.",
+  },
+  {
+    testId: "guard-admits-unknown",
+    title: "Admits what it does not know",
+    detail: "It says it will check with the team rather than guessing.",
+  },
+] as const;
+
+export function GuardrailsCard({ form, update, behavior, updateBehavior }: BehaviorCardProps) {
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-base">Behaviour and guardrails</CardTitle>
         <CardDescription>
-          How the assistant presents itself, and the limits it always works within.
+          How the assistant opens a conversation, and the limits it always works within.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
-        <div className="space-y-2">
-          <Label htmlFor="persona-instructions">Persona and instructions</Label>
+        <div className="space-y-1.5">
+          <Label htmlFor="agent-greeting">Opening message</Label>
+          <Input
+            id="agent-greeting"
+            value={behavior.greeting ?? ""}
+            onChange={(event) => updateBehavior("greeting", event.target.value)}
+            placeholder="Hi! Welcome to Xsellpoint — how can I help?"
+          />
+          <p className="text-xs text-muted-foreground">
+            Used on the assistant&apos;s first reply in a conversation only.
+          </p>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="persona-instructions">Additional instructions (free text)</Label>
           <Textarea
             id="persona-instructions"
             value={form.persona_instructions || ""}
@@ -31,6 +63,28 @@ export function GuardrailsCard({ form, update }: AgentCardProps) {
             placeholder="Describe your tone, policies, and how the assistant should help customers."
             rows={5}
           />
+        </div>
+
+        <div className="space-y-2">
+          {LOCKED_GUARDS.map((guard) => (
+            <div
+              key={guard.testId}
+              data-testid={guard.testId}
+              className="flex items-start gap-3 rounded-md border bg-muted/30 p-3"
+            >
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+              <div className="flex-1">
+                <p className="text-sm font-medium">{guard.title}</p>
+                <p className="text-xs text-muted-foreground">{guard.detail}</p>
+              </div>
+              <Badge variant="outline" className="shrink-0">
+                Always on
+              </Badge>
+            </div>
+          ))}
+          <p className="text-xs text-muted-foreground">
+            These two cannot be turned off. They are what stops the assistant inventing an answer.
+          </p>
         </div>
       </CardContent>
     </Card>

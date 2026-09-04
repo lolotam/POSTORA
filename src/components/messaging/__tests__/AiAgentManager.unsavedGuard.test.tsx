@@ -80,7 +80,7 @@ describe("AiAgentManager unsaved-changes guard", () => {
   it("switching account with unsaved edits opens the dialog", async () => {
     render(<AiAgentManager platform="instagram" />);
 
-    fireEvent.change(await screen.findByLabelText(/persona and instructions/i), {
+    fireEvent.change(await screen.findByLabelText(/additional instructions/i), {
       target: { value: "a brand new persona" },
     });
     fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" });
@@ -91,7 +91,7 @@ describe("AiAgentManager unsaved-changes guard", () => {
 
   it("Keep editing keeps the text and does NOT switch account", async () => {
     render(<AiAgentManager platform="instagram" />);
-    const field = await screen.findByLabelText(/persona and instructions/i);
+    const field = await screen.findByLabelText(/additional instructions/i);
     fireEvent.change(field, { target: { value: "a brand new persona" } });
     fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: "Brand B" }));
@@ -103,7 +103,7 @@ describe("AiAgentManager unsaved-changes guard", () => {
 
   it("Discard changes switches account and loads its values", async () => {
     render(<AiAgentManager platform="instagram" />);
-    fireEvent.change(await screen.findByLabelText(/persona and instructions/i), {
+    fireEvent.change(await screen.findByLabelText(/additional instructions/i), {
       target: { value: "a brand new persona" },
     });
     fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" });
@@ -114,7 +114,7 @@ describe("AiAgentManager unsaved-changes guard", () => {
     // Assert the positive, not merely "not the old text": a blank or default-filled
     // field would also satisfy not.toBe(...), and a discard that loses the target
     // account's persona is exactly the failure this guard exists to prevent.
-    expect((await screen.findByLabelText(/persona and instructions/i) as HTMLTextAreaElement).value)
+    expect((await screen.findByLabelText(/additional instructions/i) as HTMLTextAreaElement).value)
       .toBe("Brand B persona");
   });
 

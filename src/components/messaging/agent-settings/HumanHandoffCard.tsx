@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import type { AgentCardProps } from "./types";
 
 export interface HumanHandoffCardProps extends AgentCardProps {
@@ -33,6 +34,34 @@ export function HumanHandoffCard({
         <CardDescription>Who takes over when the assistant cannot answer.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
+        {/* Real switches, unlike the locked guard rows next door: each of these
+            gates both its prompt rule AND whether escalate_to_human is offered
+            to the model at all. Turning both off removes the tool. */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+            <Label htmlFor="handoff-on-request" className="font-normal">
+              Hand off when the customer asks for a person
+            </Label>
+            <Switch
+              id="handoff-on-request"
+              aria-label="Hand off when the customer asks for a person"
+              checked={form.handoff_on_request ?? true}
+              onCheckedChange={(checked) => update("handoff_on_request", checked)}
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 rounded-md border p-3">
+            <Label htmlFor="handoff-on-low-confidence" className="font-normal">
+              Hand off when the assistant cannot answer
+            </Label>
+            <Switch
+              id="handoff-on-low-confidence"
+              aria-label="Hand off when the assistant cannot answer"
+              checked={form.handoff_on_low_confidence ?? true}
+              onCheckedChange={(checked) => update("handoff_on_low_confidence", checked)}
+            />
+          </div>
+        </div>
+
         <div className="space-y-2">
           <Label>Admin phone numbers</Label>
           <div className="flex flex-wrap gap-2 rounded-md border p-3">
@@ -70,7 +99,8 @@ export function HumanHandoffCard({
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">
-            These numbers receive access to operational tools during customer conversations.
+            These numbers receive access to operational tools during customer conversations, and
+            are notified when a conversation is handed off.
           </p>
           {phoneError && <p className="text-sm text-destructive">{phoneError}</p>}
         </div>

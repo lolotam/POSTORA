@@ -51,7 +51,7 @@ vi.mock("@/components/automation/DatabaseConnectorsManager", () => ({
 import { AiAgentManager } from "@/components/messaging/AiAgentManager";
 
 const persona = () =>
-  screen.getByLabelText("Persona and instructions") as HTMLTextAreaElement;
+  screen.getByLabelText("Additional instructions (free text)") as HTMLTextAreaElement;
 
 describe("AiAgentManager blank-save regression", () => {
   beforeEach(() => {

@@ -19,7 +19,9 @@ import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
 import type { AgentBehavior } from "@/lib/agentProfile";
 import { AgentIdentityCard } from "@/components/messaging/agent-settings/AgentIdentityCard";
 import { AdvancedCard } from "@/components/messaging/agent-settings/AdvancedCard";
+import { BusinessGoalsCard } from "@/components/messaging/agent-settings/BusinessGoalsCard";
 import { GuardrailsCard } from "@/components/messaging/agent-settings/GuardrailsCard";
+import { InstructionBlocksCard } from "@/components/messaging/agent-settings/InstructionBlocksCard";
 import { HumanHandoffCard } from "@/components/messaging/agent-settings/HumanHandoffCard";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
@@ -207,6 +209,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
   // Merges rather than replaces. agent_behavior is ONE column written by four
   // different cards; a replacing setter would make whichever card the user
   // touched last silently erase the other three.
+  const behavior = form.agent_behavior ?? {};
   const updateBehavior = <K extends keyof AgentBehavior>(key: K, value: AgentBehavior[K]) => {
     setForm((current) => ({
       ...current,
@@ -318,8 +321,9 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
               guard nor beforeunload protected them. `contents` keeps the fieldset out of
               the layout; the disabled state still propagates down the DOM tree. */}
           <fieldset disabled={!configLoaded} className="contents" data-testid="agent-form-fields">
-          <AgentIdentityCard form={form} update={update} />
-          <GuardrailsCard form={form} update={update} />
+          <AgentIdentityCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
+          <BusinessGoalsCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
+          <GuardrailsCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
           <HumanHandoffCard
             form={form}
             update={update}
@@ -331,6 +335,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
               update("admin_phone_numbers", (form.admin_phone_numbers || []).filter((number) => number !== phone))
             }
           />
+          <InstructionBlocksCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
           <AdvancedCard form={form} update={update} />
           </fieldset>
 

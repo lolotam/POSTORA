@@ -61,7 +61,7 @@ describe("AiAgentManager", () => {
   it("saves the persona and sends no model fields", () => {
     render(<AiAgentManager platform="threads" />);
 
-    fireEvent.change(screen.getByLabelText("Persona and instructions"), {
+    fireEvent.change(screen.getByLabelText("Additional instructions (free text)"), {
       target: { value: "Answer in Arabic, keep it short." },
     });
     fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
@@ -189,7 +189,7 @@ describe("AiAgentManager", () => {
     };
     const view = render(<AiAgentManager platform="instagram" />);
 
-    expect(screen.getByLabelText("Persona and instructions")).toHaveValue("Brand A voice");
+    expect(screen.getByLabelText("Additional instructions (free text)")).toHaveValue("Brand A voice");
 
     // Brand B has never been configured: its read settles with null.
     config = null;
@@ -197,7 +197,7 @@ describe("AiAgentManager", () => {
     fireEvent.click(await screen.findByRole("option", { name: "Brand B" }));
     view.rerender(<AiAgentManager platform="instagram" />);
 
-    expect(screen.getByLabelText("Persona and instructions")).toHaveValue("");
+    expect(screen.getByLabelText("Additional instructions (free text)")).toHaveValue("");
 
     fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
     expect(savedPayload().persona_instructions).not.toBe("Brand A voice");

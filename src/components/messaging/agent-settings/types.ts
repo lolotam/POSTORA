@@ -1,4 +1,5 @@
 import type { AiAgentConfigInput } from "@/hooks/useAiAgentConfig";
+import type { AgentBehavior } from "@/lib/agentProfile";
 
 /**
  * The shape every settings card takes.
@@ -13,4 +14,16 @@ import type { AiAgentConfigInput } from "@/hooks/useAiAgentConfig";
 export interface AgentCardProps {
   form: AiAgentConfigInput;
   update: <K extends keyof AiAgentConfigInput>(key: K, value: AiAgentConfigInput[K]) => void;
+}
+
+/**
+ * A card that writes into agent_behavior.
+ *
+ * `updateBehavior` MERGES. Four cards share that one jsonb column, so a setter
+ * that replaced the object would make whichever card the user touched last
+ * silently erase the other three.
+ */
+export interface BehaviorCardProps extends AgentCardProps {
+  behavior: AgentBehavior;
+  updateBehavior: <K extends keyof AgentBehavior>(key: K, value: AgentBehavior[K]) => void;
 }
