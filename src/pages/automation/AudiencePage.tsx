@@ -49,7 +49,16 @@ export default function AudiencePage() {
           <h1 className="text-2xl font-semibold">Audience & Contacts</h1>
           <div className="flex items-center gap-2">
             <ExportMenu filters={filters} />
-            <Button variant="outline" onClick={() => setSyncOpen(true)}>Sync to Sheets</Button>
+            <Button
+              variant="outline"
+              onClick={() => setSyncOpen(true)}
+              // The list keeps the previous page's rows on screen while a new query
+              // is in flight, which is right for reading and wrong for a side effect:
+              // syncing mid-fetch would append the rows the user just filtered away.
+              disabled={contacts.isFetching}
+            >
+              Sync to Sheets
+            </Button>
           </div>
         </div>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -60,7 +69,14 @@ export default function AudiencePage() {
             </Card>
           ))}
         </div>
-        <ContactFilters value={filters} tags={tags.data ?? []} onChange={(next) => { setFilters(next); setPage(0); }} />
+        <div className="space-y-1">
+          <ContactFilters value={filters} tags={tags.data ?? []} onChange={(next) => { setFilters(next); setPage(0); }} />
+          {tags.error && (
+            // Without this, a failed tag read is indistinguishable from an account
+            // that has never tagged anyone, and the filter simply vanishes.
+            <p className="text-xs text-destructive">Tag filters unavailable: {(tags.error as Error).message}</p>
+          )}
+        </div>
         <Card>
           <CardContent className="p-0">
             {contacts.error

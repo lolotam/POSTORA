@@ -20,6 +20,7 @@ import {
   type ConnectorCallMeta,
   ConnectorRefusal,
   recordConnectorCall,
+  resolveWorkspaceForCall,
   withConnectorCall,
 } from "../_shared/connectorTelemetry.ts";
 
@@ -104,16 +105,12 @@ export async function syncContactsToSheet(
   },
 ): Promise<SyncResult> {
   // AGENTS.md rule 4: an early return that refuses work writes a ledger row, or an
-  // operator debugging "the sync does nothing" has nothing to read. workspaceId is
-  // only known after the connection lookup, and the column is NOT NULL, so the one
-  // refusal above it (an unknown connection) is logged to the console alone.
+  // operator debugging "the sync does nothing" has nothing to read.
   const refuseWith = async (
-    meta: ConnectorCallMeta | null,
+    meta: ConnectorCallMeta,
     error: string,
   ): Promise<SyncResult> => {
-    if (meta) {
-      await recordConnectorCall(deps.admin, meta, { status: "refused", errorCode: error });
-    }
+    await recordConnectorCall(deps.admin, meta, { status: "refused", errorCode: error });
     console.error(`[audience-sheets-sync] refused for user ${input.userId}: ${error}`);
     return { ok: false, error };
   };
@@ -127,8 +124,12 @@ export async function syncContactsToSheet(
     .eq("id", input.connectionId)
     .maybeSingle();
   if (connectionError) throw connectionError;
-  const workspaceId = connectionRow?.workspace_id ?? null;
-  if (!workspaceId) return await refuseWith(null, "connection_not_found");
+
+  // An unknown connection id is still a connector attempt worth a ledger row, and
+  // workspace_id is NOT NULL, so it is attributed to the caller's own workspace
+  // rather than to a workspace this request never proved anything about.
+  const workspaceId: string = connectionRow?.workspace_id ??
+    await resolveWorkspaceForCall(deps.admin, { userId: input.userId });
 
   const meta: ConnectorCallMeta = {
     workspaceId,
@@ -138,6 +139,8 @@ export async function syncContactsToSheet(
     actionName: SHEETS_APPEND_SLUG,
     source: "audience",
   };
+
+  if (!connectionRow?.workspace_id) return await refuseWith(meta, "connection_not_found");
 
   const { data: isMember, error: memberError } = await deps.admin.rpc(
     "is_workspace_member",
@@ -154,6 +157,13 @@ export async function syncContactsToSheet(
   const lookup = await loadActiveConnection(deps.admin, input.connectionId, workspaceId);
   if (!lookup.ok) return await refuseWith(meta, lookup.code);
   const connection = lookup.connection;
+
+  // An active Slack or Calendar connection in the caller's own workspace would
+  // otherwise pass every check above and have its connected-account id handed to
+  // the Sheets append tool, sending contact data at the wrong provider entirely.
+  if (connection.connectorType !== "google_sheets") {
+    return await refuseWith(meta, "connector_type_mismatch");
+  }
 
   if (!deps.composio) return await refuseWith(meta, "composio_unconfigured");
 

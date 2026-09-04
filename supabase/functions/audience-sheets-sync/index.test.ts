@@ -86,6 +86,11 @@ function fakeAdmin(options: AdminOptions = {}) {
       if (table === "social_contacts") {
         return queryable(options.contacts ?? { data: CONTACTS, error: null }, filters.social_contacts);
       }
+      if (table === "workspaces") {
+        // resolveWorkspaceForCall falls back here when the connection is unknown,
+        // so an unattributable refusal still lands in the ledger.
+        return queryable({ data: { id: WS }, error: null });
+      }
       if (table === "connector_call_logs") {
         return { insert: (row: Record<string, unknown>) => { ledger.push(row); return Promise.resolve({ error: null }); } };
       }
@@ -370,4 +375,22 @@ Deno.test("a failed append is recorded as failed", async () => {
   assertEquals(admin.ledger.length, 1);
   assertEquals(admin.ledger[0].status, "refused");
   assertEquals(admin.ledger[0].error_code, "composio_failed");
+});
+
+// An active connection of another kind in the caller's own workspace passes every
+// other check; without this guard its connected-account id reaches the Sheets tool.
+Deno.test("a connection of another connector type is refused before the tool runs", async () => {
+  // A complete, active row -- it passes loadActiveConnection; only its type differs.
+  const admin = fakeAdmin({
+    connection: { data: { ...CONNECTION_ROW, connector_type: "slack", toolkit: "slack" }, error: null },
+  });
+  const composio = fakeComposio();
+  const result = await syncContactsToSheet(dependencies(admin, composio), {
+    userId: USER, connectionId: CONNECTION, spreadsheetId: "s", sheetName: "Sheet1",
+    contactIds: [CONTACT_A],
+  });
+  assertEquals(result, { ok: false, error: "connector_type_mismatch" });
+  assertEquals(composio.executions.length, 0);
+  assertEquals(admin.ledger.at(-1)?.status, "refused");
+  assertEquals(admin.ledger.at(-1)?.error_code, "connector_type_mismatch");
 });

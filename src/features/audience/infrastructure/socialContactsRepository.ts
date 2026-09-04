@@ -77,11 +77,23 @@ export async function fetchContactStats(): Promise<ContactStats> {
   };
 }
 
+const TAG_PAGE = 1000;
+
+/** Every tag the caller has, not the tags of an arbitrary first page: the filter
+ *  offers no free-text entry, so a tag missed here cannot be selected at all. */
 export async function fetchDistinctTags(): Promise<string[]> {
-  const { data, error } = await supabase.from("social_contacts").select("tags").not("tags", "eq", "{}").limit(1000);
-  if (error) throw error;
   const set = new Set<string>();
-  for (const row of data ?? []) for (const t of row.tags ?? []) set.add(t);
+  for (let from = 0; from < EXPORT_CAP; from += TAG_PAGE) {
+    const { data, error } = await supabase
+      .from("social_contacts")
+      .select("tags")
+      .not("tags", "eq", "{}")
+      .range(from, from + TAG_PAGE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    for (const row of rows) for (const tag of row.tags ?? []) set.add(tag);
+    if (rows.length < TAG_PAGE) break;
+  }
   return [...set].sort();
 }
 
