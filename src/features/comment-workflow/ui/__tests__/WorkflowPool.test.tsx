@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const setActive = { mutate: vi.fn() };
@@ -43,7 +43,10 @@ const STATS = {
     dm_sent_count: 6,
     failed_count: 1,
     indeterminate_count: 2,
-    last_triggered_at: null,
+    last_triggered_at: "2026-09-04T06:32:16Z",
+    last_error_message:
+      "Private replies to Facebook Pages are not allowed. Please refer to the developer docs: https://developers.facebook.com/docs/messenger-platform/discovery/private-replies",
+    last_error_at: "2026-09-04T06:32:16Z",
   },
 };
 
@@ -100,6 +103,32 @@ describe("WorkflowPool", () => {
     expect(screen.getByText("2 unconfirmed")).toBeInTheDocument();
   });
 
+  it("shows when a workflow last fired and why its last send failed", () => {
+    // A "1 failed" badge with no reason sent the user to the server logs. The card carries the
+    // reason in plain words, and Meta's own message stays reachable in the tooltip.
+    render(<WorkflowPool onCreate={vi.fn()} onEdit={vi.fn()} />);
+    expect(screen.getByText(/^Last triggered .* ago$/)).toBeInTheDocument();
+    const error = screen.getByText(/The commenter is a Facebook Page/);
+    expect(error).toHaveTextContent(/^Last error .* ago: The commenter is a Facebook Page/);
+    expect(error).toHaveAttribute("title", expect.stringContaining("Private replies to Facebook Pages are not allowed"));
+    // Price has never fired, so it carries neither line.
+    expect(screen.getAllByText(/^Last triggered/)).toHaveLength(1);
+    expect(screen.getAllByText(/^Last error/)).toHaveLength(1);
+  });
+
+  it("keeps relative times moving while the tab stays open", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-04T06:33:16Z"));
+      render(<WorkflowPool onCreate={vi.fn()} onEdit={vi.fn()} />);
+      expect(screen.getByText("Last triggered 1 minute ago")).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(60_000));
+      expect(screen.getByText("Last triggered 2 minutes ago")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("filters by platform", () => {
     render(<WorkflowPool onCreate={vi.fn()} onEdit={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Facebook" }));
@@ -134,6 +163,8 @@ describe("WorkflowPool", () => {
     expect(screen.getByLabelText("Guide: comments claimed")).toHaveTextContent("—");
     expect(screen.getByText("Guide")).toBeInTheDocument();
     expect(screen.queryByText(/failed$/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Last triggered/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Last error/)).not.toBeInTheDocument();
   });
 
   it("says a load failed rather than showing an empty list", () => {

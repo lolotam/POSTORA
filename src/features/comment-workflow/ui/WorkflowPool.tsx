@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { formatDistance } from "date-fns";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import {
   AlertDialog,
@@ -16,6 +17,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
+import { explainWorkflowError } from "../domain/eventErrors";
 import {
   type CommentWorkflowPlatform,
   describeScope,
@@ -60,6 +62,16 @@ export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
   // A failed counter read leaves every number at zero, which reads as "none of your funnels
   // has ever fired" -- the alarming interpretation, and the wrong one. Show a dash and say so.
   const count = (value: number | null | undefined) => (statsFailed ? "—" : String(value ?? 0));
+
+  // Re-rendered once a minute: the stats query refetches, but unchanged rows come back as the
+  // same reference and nothing re-renders, so "2 minutes ago" would otherwise stay put for an
+  // hour on an open tab.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(tick);
+  }, []);
+  const ago = (iso: string) => formatDistance(new Date(iso), now, { addSuffix: true });
 
   const accountName = (id: string) =>
     accounts.find((account) => account.id === id)?.platform_username ?? "Disconnected account";
@@ -144,6 +156,8 @@ export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
       <div className="space-y-3">
         {visible.map((rule) => {
           const stats = statsByRule[rule.id];
+          const lastTriggeredAt = statsFailed ? null : stats?.last_triggered_at;
+          const lastError = statsFailed ? null : explainWorkflowError(stats?.last_error_message);
           return (
             <Card key={rule.id}>
               <CardContent className="flex flex-wrap items-center gap-4 p-4">
@@ -192,6 +206,20 @@ export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
                 >
                   <Trash2 className="h-4 w-4" />
                 </Button>
+                {/* Full-width footer: the reason a send failed is the one thing a "failed" badge
+                    cannot say, and the only way to learn it otherwise is the server logs. */}
+                {(lastTriggeredAt || lastError) && (
+                  <div className="basis-full space-y-1 text-sm">
+                    {lastTriggeredAt && (
+                      <p className="text-muted-foreground">Last triggered {ago(lastTriggeredAt)}</p>
+                    )}
+                    {lastError && stats?.last_error_at && (
+                      <p className="text-destructive" title={stats.last_error_message ?? undefined}>
+                        Last error {ago(stats.last_error_at)}: {lastError}
+                      </p>
+                    )}
+                  </div>
+                )}
               </CardContent>
             </Card>
           );
