@@ -44,6 +44,12 @@ import {
   locateKnowledgeFile,
   type KnowledgeFileOwner,
 } from "../_shared/knowledgeSourceFiles.ts";
+import { validateKnowledgeUrl } from "../_shared/knowledgeUrl.ts";
+import {
+  firecrawlScrape,
+  firecrawlStartCrawl,
+  resolveFirecrawlKey,
+} from "../_shared/firecrawl.ts";
 import {
   listSourceAccounts,
   parseSetSourceVisibilityInput,
@@ -499,7 +505,38 @@ async function logKnowledgeEvent(
 }
 
 
-Deno.serve(async (req) => {
+/** Page limits for a whole-site crawl. Matched by the UI's number input. */
+const MIN_CRAWL_PAGES = 1;
+const MAX_CRAWL_PAGES = 200;
+const DEFAULT_CRAWL_PAGES = 50;
+/** file_name is what the sources list shows; a full URL would push the row wide. */
+const MAX_SOURCE_NAME = 120;
+
+/**
+ * A readable name for a scraped source.
+ *
+ * Never throws. The caller validates the URL first, so an unparseable one
+ * cannot normally reach here -- but a naming helper that could throw would turn
+ * a cosmetic problem into a failed ingest.
+ */
+export function buildWebsiteSourceName(url: string, mode: "page" | "site"): string {
+  let host = url;
+  let path = "";
+  try {
+    const parsed = new URL(url);
+    host = parsed.hostname;
+    path = parsed.pathname === "/" ? "" : parsed.pathname;
+  } catch {
+    // Fall through with the raw string.
+  }
+  const name = mode === "site" ? `${host} (whole site)` : `${host}${path}`;
+  return name.length > MAX_SOURCE_NAME ? `${name.slice(0, MAX_SOURCE_NAME - 1)}…` : name;
+}
+
+// Named rather than passed inline so the module can be imported by a test
+// without starting a server -- the same convention n8n-api and the knowledge
+// worker already use.
+async function handleRequest(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return handleCorsOptions();
   try {
     const authHeader = req.headers.get("Authorization");
@@ -744,6 +781,125 @@ Deno.serve(async (req) => {
         return errorResponse(message(error));
       }
     }
+    if (action === "ingest_website") {
+      // Validated BEFORE anything is created. A rejected URL must never leave a
+      // source row behind, or the list shows a site that was never read.
+      const check = validateKnowledgeUrl(body.url);
+      if (!check.ok) return errorResponse(check.reason, 400);
+      const mode: "page" | "site" = body.mode === "site" ? "site" : "page";
+      const requested = Number(body.limit);
+      const limit = Number.isFinite(requested)
+        ? Math.min(Math.max(Math.trunc(requested), MIN_CRAWL_PAGES), MAX_CRAWL_PAGES)
+        : DEFAULT_CRAWL_PAGES;
+
+      let key: string;
+      try {
+        key = await resolveFirecrawlKey(admin);
+      } catch (error) {
+        // 400, never 5xx: Cloudflare replaces an origin 5xx body with its own
+        // page, so the sentence naming the admin setting would never arrive.
+        return errorResponse(message(error), 400);
+      }
+
+      const scopeToAccount = body.scope === "account" &&
+        typeof body.social_account_id === "string" && body.social_account_id.trim() !== "";
+      const { data: sourceId, error: createError } = await (admin as any).rpc(
+        "create_ai_knowledge_source",
+        {
+          p_source_type: "website",
+          p_file_name: buildWebsiteSourceName(check.url, mode),
+          // The URL IS the file path for a website source; there is no object.
+          p_file_path: check.url,
+          p_social_account_ids: scopeToAccount ? [body.social_account_id] : [],
+          p_visibility: scopeToAccount ? "restricted" : "shared",
+        },
+      );
+      if (createError) throw createError;
+
+      const setMeta = (
+        patch: Record<string, unknown>,
+        columns: Record<string, unknown> = {},
+      ) =>
+        (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ metadata: { url: check.url, mode, ...patch }, ...columns })
+          .eq("id", sourceId);
+
+      if (mode === "site") {
+        try {
+          const jobId = await firecrawlStartCrawl(key, check.url, limit);
+          // queued_at is the handoff. The claim function refuses a website
+          // source without it, which is what stops the worker picking this row
+          // up before the job id exists.
+          await setMeta(
+            { crawl_job_id: jobId, stage: "crawling", pages_done: 0, pages_total: limit },
+            { status: "pending", chunk_count: 0, error: null, queued_at: new Date().toISOString() },
+          );
+          await logKnowledgeEvent(admin, user.id, "ingest_website", true, {
+            source_id: sourceId,
+            mode,
+            url: check.url,
+            crawl_job_id: jobId,
+            limit,
+          });
+          return jsonResponse({ ok: true, queued: true, source_id: sourceId }, 202);
+        } catch (error) {
+          await setFailed(admin, sourceId, error);
+          await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+            source_id: sourceId,
+            mode,
+            error: message(error).slice(0, 500),
+          });
+          return errorResponse(message(error), 400);
+        }
+      }
+
+      try {
+        await setMeta({ stage: "crawling" }, { status: "processing", error: null });
+        const page = await firecrawlScrape(key, check.url);
+        await setMeta({ stage: "embedding", pages_done: 1, pages_total: 1 });
+        // Title and URL lead the text so a retrieved chunk still says which page
+        // it came from.
+        const chunks = chunkProfileText(`${page.title}\n${page.url}\n\n${page.markdown}`);
+        if (chunks.length > MAX_INLINE_CHUNKS) {
+          // The same handoff the document path makes: parsing is cheap,
+          // embedding is what runs out of the ~60s budget.
+          await setMeta(
+            { stage: "embedding", pages_done: 1, pages_total: 1 },
+            { status: "pending", chunk_count: 0, error: null, queued_at: new Date().toISOString() },
+          );
+          await logKnowledgeEvent(admin, user.id, "ingest_website", true, {
+            source_id: sourceId,
+            mode,
+            url: check.url,
+            chunk_count: chunks.length,
+            queued: true,
+          });
+          return jsonResponse({ ok: true, queued: true, chunks: chunks.length }, 202);
+        }
+        const stored = await replaceChunks(admin, sourceId, user.id, chunks);
+        await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "ready", chunk_count: chunks.length, error: null })
+          .eq("id", sourceId);
+        await updateKnowledgeGraph(admin, user.id, stored);
+        await logKnowledgeEvent(admin, user.id, "ingest_website", true, {
+          source_id: sourceId,
+          mode,
+          url: check.url,
+          chunk_count: chunks.length,
+        });
+        return jsonResponse({ ok: true, chunk_count: chunks.length });
+      } catch (error) {
+        await setFailed(admin, sourceId, error);
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          source_id: sourceId,
+          mode,
+          error: message(error).slice(0, 500),
+        });
+        return errorResponse(message(error), 400);
+      }
+    }
     if (action === "ingest_profile_text") {
       const platform = String(body.platform || "whatsapp");
       // Scoped to the account when one is named, because the empty result of
@@ -969,4 +1125,6 @@ Deno.serve(async (req) => {
   } catch (error) {
     return errorResponse(message(error));
   }
-});
+}
+
+if (import.meta.main) Deno.serve(handleRequest);
