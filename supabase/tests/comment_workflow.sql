@@ -328,8 +328,9 @@ BEGIN
   PERFORM pg_temp.cw_must(v_stats.last_error_message IS NULL AND v_stats.last_error_at IS NULL,
     'a rule with no failed send carries no last error');
 
-  -- Two failures, then a success. The card must show the NEWEST failure's reason, and a later
-  -- success must not erase it: the user still needs to know why the earlier one failed.
+  -- Two failures, then a send-once decline, then a success. The card must show the NEWEST
+  -- real reason: a later success must not erase it, and 'already_served' is a decision, not
+  -- a problem, so it must not displace it either.
   INSERT INTO public.comment_workflow_events
     (rule_id, user_id, social_account_id, platform, external_post_id, external_comment_id,
      author_key, public_reply_status, dm_status, error_message, created_at)
@@ -341,15 +342,18 @@ BEGIN
      '88888888-8888-4888-8888-888888888811', 'facebook', 'post-1', 'comment-5', 'author-3',
      'failed', 'not_applicable', 'Private replies to Facebook Pages are not allowed.', now() - interval '1 hour'),
     ('88888888-8888-4888-8888-888888888821', '88888888-8888-4888-8888-888888888801',
+     '88888888-8888-4888-8888-888888888811', 'facebook', 'post-1', 'comment-7', 'author-2',
+     'skipped', 'skipped', 'already_served', now() - interval '30 minutes'),
+    ('88888888-8888-4888-8888-888888888821', '88888888-8888-4888-8888-888888888801',
      '88888888-8888-4888-8888-888888888811', 'facebook', 'post-1', 'comment-6', 'author-4',
      'sent', 'sent', NULL, now());
 
   SELECT * INTO v_stats FROM public.comment_workflow_rule_stats
   WHERE rule_id = '88888888-8888-4888-8888-888888888821';
-  PERFORM pg_temp.cw_must(v_stats.triggered_count = 6, 'stats still count every claimed comment');
+  PERFORM pg_temp.cw_must(v_stats.triggered_count = 7, 'stats still count every claimed comment');
   PERFORM pg_temp.cw_must(v_stats.failed_count = 2, 'stats count a failure on either leg');
   PERFORM pg_temp.cw_must(v_stats.last_error_message = 'Private replies to Facebook Pages are not allowed.',
-    'the last error is the newest failed event''s message, not the oldest and not the latest success');
+    'the last error is the newest event with a real reason: not the oldest, not the later success, not the send-once decline');
   PERFORM pg_temp.cw_must(
     v_stats.last_error_at = (SELECT created_at FROM public.comment_workflow_events WHERE external_comment_id = 'comment-5'),
     'the last error carries the time of the event it came from');
@@ -367,7 +371,7 @@ DO $rls_owner$
 BEGIN
   PERFORM pg_temp.cw_must((SELECT count(*) FROM public.comment_workflow_rules) = 2,
     'the owner sees their own rules');
-  PERFORM pg_temp.cw_must((SELECT count(*) FROM public.comment_workflow_events) = 6,
+  PERFORM pg_temp.cw_must((SELECT count(*) FROM public.comment_workflow_events) = 7,
     'the owner sees their own events');
   PERFORM pg_temp.cw_must((SELECT count(*) FROM public.comment_workflow_rule_stats) = 1,
     'the owner sees their own stats row');

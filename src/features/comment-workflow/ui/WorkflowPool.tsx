@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { formatDistanceToNow } from "date-fns";
+import { useEffect, useMemo, useState } from "react";
+import { formatDistance } from "date-fns";
 import { Pencil, Plus, Trash2 } from "lucide-react";
 import {
   AlertDialog,
@@ -63,7 +63,15 @@ export function WorkflowPool({ onCreate, onEdit }: WorkflowPoolProps) {
   // has ever fired" -- the alarming interpretation, and the wrong one. Show a dash and say so.
   const count = (value: number | null | undefined) => (statsFailed ? "—" : String(value ?? 0));
 
-  const ago = (iso: string) => formatDistanceToNow(new Date(iso), { addSuffix: true });
+  // Re-rendered once a minute: the stats query refetches, but unchanged rows come back as the
+  // same reference and nothing re-renders, so "2 minutes ago" would otherwise stay put for an
+  // hour on an open tab.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const tick = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(tick);
+  }, []);
+  const ago = (iso: string) => formatDistance(new Date(iso), now, { addSuffix: true });
 
   const accountName = (id: string) =>
     accounts.find((account) => account.id === id)?.platform_username ?? "Disconnected account";

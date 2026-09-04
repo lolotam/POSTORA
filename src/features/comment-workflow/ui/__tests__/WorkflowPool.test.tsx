@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const setActive = { mutate: vi.fn() };
@@ -114,6 +114,19 @@ describe("WorkflowPool", () => {
     // Price has never fired, so it carries neither line.
     expect(screen.getAllByText(/^Last triggered/)).toHaveLength(1);
     expect(screen.getAllByText(/^Last error/)).toHaveLength(1);
+  });
+
+  it("keeps relative times moving while the tab stays open", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-09-04T06:33:16Z"));
+      render(<WorkflowPool onCreate={vi.fn()} onEdit={vi.fn()} />);
+      expect(screen.getByText("Last triggered 1 minute ago")).toBeInTheDocument();
+      act(() => vi.advanceTimersByTime(60_000));
+      expect(screen.getByText("Last triggered 2 minutes ago")).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("filters by platform", () => {

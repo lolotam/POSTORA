@@ -3,7 +3,7 @@
 --
 -- The pool card showed "1 failed" and nothing else. The first real failure (Meta refusing a
 -- private reply because the commenter was a Facebook Page) was diagnosable only from the edge
--- function logs. The card now gets the newest failed event's error_message and its time, so
+-- function logs. The card now gets the newest event's error_message and its time, so
 -- the reason is one glance away, and a later successful send does not erase it.
 --
 -- DROP + CREATE rather than CREATE OR REPLACE: the original migration set the precedent, and it
@@ -28,10 +28,13 @@ WITH counts AS (
   GROUP BY rule_id
 ),
 last_failure AS (
-  -- Newest failed event per rule. Failure on either leg counts, matching failed_count above.
+  -- Newest event per rule that recorded a reason. That is wider than failed_count: a private
+  -- reply refused for being older than 7 days is `skipped` with a reason, and a DM sent
+  -- without its file is `sent` with one. 'already_served' is the send-once claim declining
+  -- on purpose, and the one reason that is not a problem.
   SELECT DISTINCT ON (rule_id) rule_id, error_message, created_at
   FROM public.comment_workflow_events
-  WHERE public_reply_status = 'failed' OR dm_status = 'failed'
+  WHERE error_message IS NOT NULL AND error_message <> 'already_served'
   ORDER BY rule_id, created_at DESC, id DESC
 )
 SELECT
