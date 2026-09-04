@@ -1,4 +1,6 @@
-export type ConnectorCallSource = "agent" | "partner" | "test" | "publish";
+// "audience" is the Audience Hub's Sheets sync: neither the agent, a partner key, a
+// connection test, nor a publish. Widened alongside connector_call_logs' CHECK.
+export type ConnectorCallSource = "agent" | "partner" | "test" | "publish" | "audience";
 export type ConnectorCallStatus = "success" | "failed" | "refused" | "timeout";
 
 export interface ConnectorCallMeta {

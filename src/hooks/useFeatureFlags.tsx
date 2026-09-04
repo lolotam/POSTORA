@@ -71,6 +71,7 @@ export interface FeatureFlags {
   commentWorkflow: boolean;
   youtubeComments: boolean;
   leadsCrm: boolean;
+  audienceHub: boolean;
   adAnalytics: boolean;
   smartScheduling: boolean;
   humanAgent: boolean;
@@ -150,6 +151,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   commentWorkflow: false,
   youtubeComments: false,
   leadsCrm: false,
+  audienceHub: false,
   adAnalytics: false,
   smartScheduling: false,
   humanAgent: false,
@@ -227,6 +229,7 @@ export const FLAG_KEYS = [
   "feature_comment_workflow",
   "feature_youtube_comments",
   "feature_leads_crm",
+  "feature_audience_hub",
   "feature_ad_analytics",
   "feature_smart_scheduling",
   "feature_human_agent",
@@ -299,6 +302,7 @@ export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
   feature_comment_workflow: "commentWorkflow",
   feature_youtube_comments: "youtubeComments",
   feature_leads_crm: "leadsCrm",
+  feature_audience_hub: "audienceHub",
   feature_ad_analytics: "adAnalytics",
   feature_smart_scheduling: "smartScheduling",
   feature_human_agent: "humanAgent",
@@ -383,6 +387,7 @@ const FEATURE_DISPLAY_NAMES: Record<keyof FeatureFlags, string> = {
   commentWorkflow: "Comment Workflow",
   youtubeComments: "YouTube Comments",
   leadsCrm: "Leads CRM",
+  audienceHub: "Audience & Contacts",
   adAnalytics: "Ad Analytics",
   smartScheduling: "Smart Scheduling",
   humanAgent: "Human Agent",
@@ -456,6 +461,7 @@ const ALL_FLAGS_ENABLED: FeatureFlags = {
   commentWorkflow: true,
   youtubeComments: true,
   leadsCrm: true,
+  audienceHub: true,
   adAnalytics: true,
   smartScheduling: true,
   humanAgent: true,
@@ -576,6 +582,7 @@ export function useFeatureFlags() {
         commentWorkflow: globalFlagMap["feature_comment_workflow"] ?? DEFAULT_FLAGS.commentWorkflow,
         youtubeComments: globalFlagMap["feature_youtube_comments"] ?? DEFAULT_FLAGS.youtubeComments,
         leadsCrm: globalFlagMap["feature_leads_crm"] ?? DEFAULT_FLAGS.leadsCrm,
+        audienceHub: globalFlagMap["feature_audience_hub"] ?? DEFAULT_FLAGS.audienceHub,
         adAnalytics: globalFlagMap["feature_ad_analytics"] ?? DEFAULT_FLAGS.adAnalytics,
         smartScheduling: globalFlagMap["feature_smart_scheduling"] ?? DEFAULT_FLAGS.smartScheduling,
         humanAgent: globalFlagMap["feature_human_agent"] ?? DEFAULT_FLAGS.humanAgent,

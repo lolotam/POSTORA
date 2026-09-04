@@ -4332,6 +4332,112 @@ export type Database = {
           },
         ]
       }
+      social_contacts: {
+        Row: {
+          company: string | null
+          created_at: string
+          display_name: string
+          email: string | null
+          first_interacted_at: string
+          id: string
+          identity_kind: string
+          last_comment_text: string | null
+          last_interacted_at: string
+          last_post_id: string | null
+          metadata: Json
+          notes: string | null
+          phone_number: string | null
+          platform: string
+          platform_user_id: string
+          profile_url: string | null
+          social_account_id: string | null
+          source: string
+          tags: string[]
+          total_comments_count: number
+          updated_at: string
+          user_id: string
+          username: string | null
+          whatsapp_contact_id: string | null
+          workspace_id: string | null
+        }
+        Insert: {
+          company?: string | null
+          created_at?: string
+          display_name?: string
+          email?: string | null
+          first_interacted_at?: string
+          id?: string
+          identity_kind?: string
+          last_comment_text?: string | null
+          last_interacted_at?: string
+          last_post_id?: string | null
+          metadata?: Json
+          notes?: string | null
+          phone_number?: string | null
+          platform: string
+          platform_user_id: string
+          profile_url?: string | null
+          social_account_id?: string | null
+          source?: string
+          tags?: string[]
+          total_comments_count?: number
+          updated_at?: string
+          user_id: string
+          username?: string | null
+          whatsapp_contact_id?: string | null
+          workspace_id?: string | null
+        }
+        Update: {
+          company?: string | null
+          created_at?: string
+          display_name?: string
+          email?: string | null
+          first_interacted_at?: string
+          id?: string
+          identity_kind?: string
+          last_comment_text?: string | null
+          last_interacted_at?: string
+          last_post_id?: string | null
+          metadata?: Json
+          notes?: string | null
+          phone_number?: string | null
+          platform?: string
+          platform_user_id?: string
+          profile_url?: string | null
+          social_account_id?: string | null
+          source?: string
+          tags?: string[]
+          total_comments_count?: number
+          updated_at?: string
+          user_id?: string
+          username?: string | null
+          whatsapp_contact_id?: string | null
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "social_contacts_social_account_tenant_fk"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "social_contacts_whatsapp_contact_tenant_fk"
+            columns: ["whatsapp_contact_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_contacts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "social_contacts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       social_profiles: {
         Row: {
           created_at: string | null
@@ -7685,6 +7791,15 @@ export type Database = {
         Args: { "": unknown[] }
         Returns: number
       }
+      get_social_contacts_stats: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          total: number
+          workflow_leads: number
+          enriched: number
+          top_platform: string
+        }[]
+      }
       has_role: {
         Args: {
           _user_id: string
@@ -8161,6 +8276,32 @@ export type Database = {
           last_event_at: string
           events_7d: number
         }[]
+      }
+      search_social_contacts: {
+        Args: {
+          p_query: string | null
+          p_platform: string | null
+          p_source: string | null
+          p_tags: string[] | null
+          p_limit: number
+          p_offset: number
+        }
+        Returns: {
+          row_count: number
+          contact: Json
+        }[]
+      }
+      touch_social_contact: {
+        Args: {
+          p_social_account_id: string
+          p_platform: string
+          p_author_id: string | null
+          p_author_name: string | null
+          p_author_username: string | null
+          p_comment_text: string | null
+          p_post_id: string | null
+        }
+        Returns: string
       }
       sparsevec_out: {
         Args: { "": unknown }

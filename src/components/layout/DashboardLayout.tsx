@@ -174,6 +174,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       { icon: Bot, label: "Agent Setup", path: "/automation/agents" },
       ...(hasMessagingFlags ? [{ icon: Inbox, label: "Unified Inboxes", path: "/messaging" }] : []),
       ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
+      ...(flags.audienceHub ? [{ icon: Users, label: "Audience & Contacts", path: "/automation/audience" }] : []),
       ...(flags.commentWorkflow ? [{ icon: Workflow, label: "Comment Workflow", path: "/automation/comment-workflow" }] : []),
     ];
 
@@ -214,7 +215,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
     }
 
     return entries;
-  }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, flagsLoading]);
+  }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, flagsLoading]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);

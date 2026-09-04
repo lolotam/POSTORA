@@ -423,9 +423,18 @@ Required work before sync can exist:
    connection row** (`connector_connections.workspace_id`) and the caller must satisfy
    `is_workspace_member(workspace_id, userId)`; multi-workspace users are therefore unambiguous.
    Appends one row per contact: `Date, Name, Platform, Handle, Phone, Email, Source, Last comment`.
-3. UI: a dialog listing the caller's active `google_sheets` connections and a spreadsheet picker
-   that uses `GOOGLESHEETS_GET_SPREADSHEET_INFO`. Sync is user-triggered on the current table page
+3. UI: a dialog listing the caller's active `google_sheets` connections, with the target
+   spreadsheet id and tab name entered by hand. Sync is user-triggered on the current table page
    (up to 50 rows) or on an explicit selection once bulk selection lands.
+
+   An earlier draft promised a spreadsheet **picker**. That is not buildable with the approved
+   tools: `GOOGLESHEETS_GET_SPREADSHEET_INFO` takes a `spreadsheet_id` and returns that one
+   spreadsheet, and the `googlesheets` toolkit has no list, search or find tool at
+   `toolkitVersion 20260902_00` — enumerating a user's files is a Drive capability, and Drive is
+   not in the connector allow-list. **[deferred]** The achievable half is validating a pasted id
+   with `GET_SPREADSHEET_INFO` and turning the free-text tab name into a dropdown of that
+   spreadsheet's real sheets; that needs a read path through the edge function and is follow-up
+   work, not part of this slice.
 
 ### 5.3 WhatsApp
 

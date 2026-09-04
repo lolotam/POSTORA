@@ -571,8 +571,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
     type: "google_sheets", label: "Google Sheets", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
     composio: {
       toolkit: "googlesheets", toolkitVersion: "20260902_00",
-      tools: ["GOOGLESHEETS_BATCH_GET", "GOOGLESHEETS_LOOKUP_SPREADSHEET_ROW", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_BATCH_UPDATE"],
-      mutating: ["GOOGLESHEETS_BATCH_UPDATE"],
+      tools: ["GOOGLESHEETS_BATCH_GET", "GOOGLESHEETS_LOOKUP_SPREADSHEET_ROW", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_BATCH_UPDATE", "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND"],
+      mutating: ["GOOGLESHEETS_BATCH_UPDATE", "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND"],
     },
     usageGuide: {
       whenToUse: "Rows in the connected Google Sheets spreadsheet — stock lists, bookings, price tables the business keeps in a sheet.",
