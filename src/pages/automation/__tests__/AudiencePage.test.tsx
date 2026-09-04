@@ -20,6 +20,9 @@ vi.mock("@/features/audience", async () => {
     useSocialContactTags: () => ({ data: ["lead"] }),
     useUpdateSocialContact: () => ({ mutate: vi.fn(), isPending: false }),
     useDeleteSocialContact: () => ({ mutate: vi.fn(), isPending: false }),
+    // The drawer mounts before a contact is chosen; the match query itself is
+    // covered by the drawer and hook suites, not by the page.
+    useWhatsAppContactMatch: () => ({ data: null }),
   };
 });
 

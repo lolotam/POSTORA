@@ -59,7 +59,7 @@ function fakeAdmin() {
 
 const IN_AN_HOUR = new Date(Date.now() + 3_600_000).toISOString();
 const native = {
-  id: "acc",
+  id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   user_id: "u",
   platform: "youtube",
   auth_provider: "native",
@@ -405,6 +405,7 @@ function composioHarness() {
       return Promise.resolve({ successful: true, data: { items: [] } });
     },
   };
+  const ledger: Array<Record<string, unknown>> = [];
   const admin = {
     from: (table: string) => ({
       select: () => ({
@@ -414,21 +415,27 @@ function composioHarness() {
               Promise.resolve({
                 data: table === "connector_connections"
                   ? {
-                    id: "conn",
-                    workspace_id: "ws",
+                    id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                    workspace_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
                     connector_type: "youtube",
                     toolkit: "youtube",
                     composio_connected_account_id: "ca_1",
                     tool_schema_cache: null,
                     status: "active",
                   }
+                  : table === "workspaces"
+                  // resolveWorkspaceForCall's personal-workspace fallback.
+                  ? { id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }
                   : null,
                 error: null,
               }),
           }),
         }),
       }),
-      insert: () => Promise.resolve({ error: null }),
+      insert: (row: Record<string, unknown>) => {
+        ledger.push(row);
+        return Promise.resolve({ error: null });
+      },
       update: () => ({ eq: () => Promise.resolve({ error: null }) }),
     }),
   };
@@ -437,10 +444,10 @@ function composioHarness() {
     auth_provider: "composio",
     access_token: null,
     refresh_token: null,
-    connection_id: "conn",
-    workspace_id: "ws",
+    connection_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    workspace_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   };
-  return { account, admin, composio, executed };
+  return { account, admin, composio, executed, ledger };
 }
 
 Deno.test("composio listThreads executes the pinned tool and parses Google's shape", async () => {
@@ -459,6 +466,43 @@ Deno.test("composio listThreads executes the pinned tool and parses Google's sha
   // composio_rejected — 50 threads with replies is 72 KB, over the client's 64 KB body cap.
   assertEquals((executed[0].arguments as Record<string, unknown>).maxResults, 20);
   assertEquals(result.value.items[0].id, "t1");
+});
+
+// connector_call_logs.workspace_id is a NOT NULL uuid: a null account
+// workspace_id must resolve to the owner's personal workspace, never the
+// empty string whose insert threw `invalid input syntax for type uuid: ""`
+// on every Composio comment call from 2026-09-03.
+Deno.test("a composio call with a null workspace_id ledgeres the owner's personal workspace", async () => {
+  const harness = composioHarness();
+  const result = await listThreads(
+    { ...harness.account, workspace_id: null },
+    // deno-lint-ignore no-explicit-any
+    { admin: harness.admin, composio: harness.composio as any },
+    { channelId: "UC-me" },
+  );
+  if (!result.ok) throw new Error(result.message);
+  assertEquals(harness.ledger.length, 1);
+  assertEquals(harness.ledger[0].workspace_id, "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+});
+
+// The bug that actually blinded the ledger: connector_call_logs.tool_id is a
+// uuid FK to ai_agent_tools, and this path passed the Composio slug into it, so
+// every insert died with `invalid input syntax for type uuid:
+// "YOUTUBE_LIST_COMMENT_THREADS"`. The slug belongs in action_name, which is
+// text. The old harness could not catch this because its fake insert accepted
+// anything -- so this asserts the column values, not just that a row was built.
+Deno.test("a composio comment call ledgers the slug as action_name and no tool_id", async () => {
+  const harness = composioHarness();
+  const result = await listThreads(
+    harness.account,
+    // deno-lint-ignore no-explicit-any
+    { admin: harness.admin, composio: harness.composio as any },
+    { channelId: "UC-me" },
+  );
+  if (!result.ok) throw new Error(result.message);
+  assertEquals(harness.ledger.length, 1);
+  assertEquals(harness.ledger[0].tool_id, null);
+  assertEquals(harness.ledger[0].action_name, "YOUTUBE_LIST_COMMENT_THREADS");
 });
 
 Deno.test("Composio batch and playlist calls use the verified argument names", async () => {

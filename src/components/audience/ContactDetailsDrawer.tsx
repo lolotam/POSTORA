@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -6,7 +7,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { normalizePhone } from "@/components/messaging/contacts/contactCodecs";
-import { contactLabel, useUpdateSocialContact, type SocialContact } from "@/features/audience";
+import {
+  contactLabel, useUpdateSocialContact, useWhatsAppContactMatch, type SocialContact,
+} from "@/features/audience";
 
 interface Draft { display_name: string; email: string; phone_number: string; company: string; notes: string; tags: string[]; }
 
@@ -21,6 +24,16 @@ export function ContactDetailsDrawer({ contact, onClose }: { contact: SocialCont
   const [draft, setDraft] = useState<Draft | null>(null);
   const [tagInput, setTagInput] = useState("");
   const update = useUpdateSocialContact();
+  // The saved phone, not the draft: a match only becomes linkable once it is
+  // persisted, which is also when the composite FK (whatsapp_contact_id, user_id)
+  // can accept it. Query must run before the early return below.
+  // Normalised here, not trusted from the row: whatsapp_contacts.phone_number is
+  // stored digits-only, and while the drawer's own save normalises before
+  // writing, a row that reached social_contacts by any other route would
+  // silently never match.
+  const waMatch = useWhatsAppContactMatch(
+    contact?.phone_number ? normalizePhone(contact.phone_number) || null : null,
+  );
 
   useEffect(() => { setDraft(contact ? toDraft(contact) : null); setTagInput(""); }, [contact]);
   if (!contact || !draft) return null;
@@ -75,6 +88,30 @@ export function ContactDetailsDrawer({ contact, onClose }: { contact: SocialCont
             <Input id="tag" placeholder="Add tag" value={tagInput} onChange={(e) => setTagInput(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addTag(); } }} />
           </div>
+          {contact.whatsapp_contact_id ? (
+            // Spec §3.4: the link is a row reference only; "Open on WhatsApp"
+            // lands on the existing WhatsApp contacts page (deep links into a
+            // conversation are Phase 3).
+            <div className="flex items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Linked to a WhatsApp contact.</span>
+              <Button asChild size="sm" variant="outline">
+                <Link to="/messaging/whatsapp/contacts">Open on WhatsApp</Link>
+              </Button>
+            </div>
+          ) : contact.phone_number && waMatch.data ? (
+            <div>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={update.isPending}
+                onClick={() =>
+                  update.mutate({ id: contact.id, patch: { whatsapp_contact_id: waMatch.data.id } })
+                }
+              >
+                Link WhatsApp contact "{waMatch.data.display_name || contact.phone_number}"
+              </Button>
+            </div>
+          ) : null}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={onClose}>Cancel</Button>
             <Button onClick={save} disabled={update.isPending}>Save</Button>

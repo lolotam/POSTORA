@@ -22,7 +22,7 @@ import {
   normalizeLinkedInDestinationSelections,
 } from "../_shared/linkedinDestinations.ts";
 import { youtubeOptionsUnsupportedOnComposio } from "../_shared/youtubeComposioOptions.ts";
-import { recordConnectorCall } from "../_shared/connectorTelemetry.ts";
+import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -907,17 +907,36 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     if (youtubeTargets.some((account: any) => account.auth_provider === 'composio')) {
       const unsupportedKeys = youtubeOptionsUnsupportedOnComposio(metadata);
       if (unsupportedKeys.length > 0) {
+        // social_accounts.workspace_id is nullable but the ledger's is a NOT
+        // NULL uuid: resolve a missing one to the owner's personal workspace
+        // (spec §4.3). Resolved once and guarded: telemetry must never break
+        // the call it records, so an unresolvable owner logs the skipped row
+        // instead of failing the validation response with an invalid id.
+        let fallbackWorkspaceId: string | null = null;
+        try {
+          fallbackWorkspaceId = await resolveWorkspaceForCall(supabase, { userId });
+        } catch (error) {
+          console.error(
+            `[n8n-api] youtube_options refusal unledgered for user ${userId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
         await Promise.all(youtubeTargets
           .filter((account: any) => account.auth_provider === 'composio')
-          .map((account: any) => recordConnectorCall(supabase, {
-            workspaceId: account.workspace_id,
-            connectionId: account.connection_id,
-            socialAccountId: account.id,
-            connectorType: 'youtube',
-            authStrategy: 'composio_oauth',
-            actionName: 'validate_options',
-            source: 'publish',
-          }, { status: 'refused', errorCode: 'youtube_option_unsupported_on_composio' })));
+          .map(async (account: any) => {
+            const workspaceId = account.workspace_id ?? fallbackWorkspaceId;
+            if (!workspaceId) return;
+            await recordConnectorCall(supabase, {
+              workspaceId,
+              connectionId: account.connection_id,
+              socialAccountId: account.id,
+              connectorType: 'youtube',
+              authStrategy: 'composio_oauth',
+              actionName: 'validate_options',
+              source: 'publish',
+            }, { status: 'refused', errorCode: 'youtube_option_unsupported_on_composio' });
+          }));
         return new Response(JSON.stringify({
           error: 'youtube_option_unsupported_on_composio',
           code: 'youtube_option_unsupported_on_composio',

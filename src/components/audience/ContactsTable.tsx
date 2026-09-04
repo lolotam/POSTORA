@@ -1,4 +1,5 @@
 import { formatDistanceToNow } from "date-fns";
+import { Link } from "react-router-dom";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,13 @@ export function ContactsTable({ rows, onOpen, onDelete }: {
               </TableCell>
               <TableCell><div className="flex flex-wrap gap-1">{row.tags.map((t) => <Badge key={t} variant="outline">{t}</Badge>)}</div></TableCell>
               <TableCell className="text-right">
+                {row.whatsapp_contact_id && (
+                  // Same destination as the drawer's link (spec §3.4): the
+                  // existing WhatsApp contacts page.
+                  <Button asChild size="sm" variant="ghost">
+                    <Link to="/messaging/whatsapp/contacts">Open on WhatsApp</Link>
+                  </Button>
+                )}
                 <Button size="sm" variant="ghost" onClick={() => onOpen(row)}>Details</Button>
                 <Button size="sm" variant="ghost" onClick={() => onDelete(row)}>Delete</Button>
               </TableCell>

@@ -3,7 +3,8 @@ import { useAuth } from "@/hooks/useAuth";
 import { toast } from "@/hooks/use-toast";
 import type { ContactFilters } from "../../domain/socialContact";
 import {
-  deleteContact, fetchContactStats, fetchDistinctTags, listContacts, updateContact, type ContactPatch,
+  deleteContact, fetchContactStats, fetchDistinctTags, findWhatsAppContactByPhone, listContacts,
+  updateContact, type ContactPatch,
 } from "../../infrastructure/socialContactsRepository";
 
 const ROOT = "social-contacts";
@@ -29,6 +30,17 @@ export function useSocialContactTags() {
     queryKey: [ROOT, "tags", user?.id],
     queryFn: () => fetchDistinctTags(user!.id),
     enabled: !!user,
+  });
+}
+
+/** Looks up the caller's WhatsApp contact by the social contact's digits-only
+ *  phone. Enabled only when a phone exists; spec §3.4 links by phone match. */
+export function useWhatsAppContactMatch(phone: string | null) {
+  const { user } = useAuth();
+  return useQuery({
+    queryKey: [ROOT, "wa-match", user?.id, phone],
+    queryFn: () => findWhatsAppContactByPhone(user!.id, phone!),
+    enabled: !!user && !!phone,
   });
 }
 
