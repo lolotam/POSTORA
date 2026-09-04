@@ -3,9 +3,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 // The page gates itself on the flag, and useFeatureFlags reads useAuth.
-vi.mock("@/hooks/useFeatureFlags", () => ({
-  useFeatureFlags: () => ({ flags: { audienceHub: true }, isLoading: false }),
-}));
+const flagState = { flags: { audienceHub: true }, isLoading: false };
+const roleState = { isLoading: false, isAdmin: true };
+vi.mock("@/hooks/useFeatureFlags", () => ({ useFeatureFlags: () => flagState }));
+vi.mock("@/hooks/useUserRole", () => ({ useUserRole: () => roleState }));
 vi.mock("@/components/layout/DashboardLayout", () => ({
   DashboardLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
@@ -81,5 +82,35 @@ describe("AudiencePage", () => {
     expect(screen.getByText(/Could not load contacts/)).toBeInTheDocument();
     expect(screen.getByText(/permission denied/)).toBeInTheDocument();
     expect(screen.queryByText("No contacts yet")).not.toBeInTheDocument();
+  });
+
+  // An admin's flags come from isAdmin, which is false while the role query is in
+  // flight. Redirecting on that transient false threw admins off their own page.
+  it("neither redirects nor renders the page while the role is still loading", () => {
+    useSocialContacts.mockReturnValue({ data: { rows, total: 2 }, isLoading: false });
+    flagState.flags = { audienceHub: false };
+    roleState.isLoading = true;
+    try {
+      render(<MemoryRouter><AudiencePage /></MemoryRouter>);
+      // Not redirected away, and not showing the controls of a feature that may
+      // yet turn out to be disabled for this viewer.
+      expect(screen.getByText("Loading…")).toBeInTheDocument();
+      expect(screen.queryByText("Audience & Contacts")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Export" })).not.toBeInTheDocument();
+    } finally {
+      flagState.flags = { audienceHub: true };
+      roleState.isLoading = false;
+    }
+  });
+
+  it("redirects once both the flag and the role have resolved false", () => {
+    useSocialContacts.mockReturnValue({ data: { rows, total: 2 }, isLoading: false });
+    flagState.flags = { audienceHub: false };
+    try {
+      render(<MemoryRouter><AudiencePage /></MemoryRouter>);
+      expect(screen.queryByText("Audience & Contacts")).not.toBeInTheDocument();
+    } finally {
+      flagState.flags = { audienceHub: true };
+    }
   });
 });
