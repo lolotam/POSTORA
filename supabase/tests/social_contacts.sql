@@ -66,7 +66,7 @@ END $t$;
 DO $t$
 BEGIN
   PERFORM pg_temp.must(public.touch_social_contact((SELECT id FROM sc_ids WHERE k='acct_a'), 'facebook', NULL, 'Someone', NULL, 'x', 'p') IS NULL, 'no identity returns null');
-  PERFORM pg_temp.must((SELECT count(*) FROM public.social_contacts WHERE platform='facebook') = 0, 'no identity wrote nothing');
+  PERFORM pg_temp.must((SELECT count(*) FROM public.social_contacts WHERE user_id = (SELECT id FROM sc_ids WHERE k='owner_a') AND platform='facebook') = 0, 'no identity wrote nothing');
   BEGIN
     PERFORM public.touch_social_contact('00000000-0000-4000-8000-000000000000', 'facebook', '1', 'A', NULL, 'x', 'p');
     RAISE EXCEPTION 'ASSERTION FAILED: unknown account accepted';
@@ -88,8 +88,8 @@ BEGIN
   -- twin: that was the bug where one Threads commenter became two permanent rows.
   PERFORM public.touch_social_contact((SELECT id FROM sc_ids WHERE k='acct_t'), 'threads', NULL, NULL, 'vigrox.kw', 'x', 'th-3');
   PERFORM public.touch_social_contact((SELECT id FROM sc_ids WHERE k='acct_t'), 'threads', '28097456199906', NULL, 'vigrox.kw', 'y', 'th-4');
-  PERFORM pg_temp.must((SELECT count(*) FROM public.social_contacts WHERE platform='threads' AND username='vigrox.kw') = 1, 'reply and mention stay one row');
-  PERFORM pg_temp.must((SELECT total_comments_count FROM public.social_contacts WHERE platform='threads' AND username='vigrox.kw') = 4, 'all four Threads touches counted on that row');
+  PERFORM pg_temp.must((SELECT count(*) FROM public.social_contacts WHERE user_id = (SELECT id FROM sc_ids WHERE k='owner_a') AND platform='threads' AND username='vigrox.kw') = 1, 'reply and mention stay one row');
+  PERFORM pg_temp.must((SELECT total_comments_count FROM public.social_contacts WHERE user_id = (SELECT id FROM sc_ids WHERE k='owner_a') AND platform='threads' AND username='vigrox.kw') = 4, 'all four Threads touches counted on that row');
 END $t$;
 RESET ROLE;
 
@@ -122,10 +122,11 @@ SELECT pg_temp.must((SELECT count(*) FROM public.social_contacts WHERE platform_
 UPDATE public.social_contacts SET notes = 'stolen' WHERE platform_user_id='17841400000001';
 DELETE FROM public.social_contacts WHERE platform_user_id='17841400000001';
 RESET ROLE;
-SELECT pg_temp.must((SELECT notes IS NULL FROM public.social_contacts WHERE platform_user_id='17841400000001'), 'other user update was a no-op');
-SELECT pg_temp.must((SELECT count(*) FROM public.social_contacts WHERE platform_user_id='17841400000001') = 1, 'other user delete was a no-op');
+SELECT pg_temp.must((SELECT notes IS NULL FROM public.social_contacts WHERE user_id = (SELECT id FROM sc_ids WHERE k='owner_a') AND platform_user_id='17841400000001'), 'other user update was a no-op');
+SELECT pg_temp.must((SELECT count(*) FROM public.social_contacts WHERE user_id = (SELECT id FROM sc_ids WHERE k='owner_a') AND platform_user_id='17841400000001') = 1, 'other user delete was a no-op');
 
--- (6) read RPCs under RLS
+-- (6) read RPCs under RLS. These run as authenticated after act_as, so RLS scopes them to
+-- the acting owner and they need no explicit user_id predicate.
 SET ROLE authenticated;
 SELECT pg_temp.act_as((SELECT id FROM sc_ids WHERE k='owner_a'));
 SELECT pg_temp.must((SELECT total FROM public.get_social_contacts_stats()) = 2, 'stats total counts owner rows only');
@@ -149,7 +150,8 @@ DECLARE v_owner UUID; v_acct UUID;
 BEGIN
   DELETE FROM public.social_accounts WHERE id = (SELECT id FROM sc_ids WHERE k='acct_a');
   SELECT user_id, social_account_id INTO v_owner, v_acct
-    FROM public.social_contacts WHERE platform_user_id='17841400000001';
+    FROM public.social_contacts
+   WHERE user_id = (SELECT id FROM sc_ids WHERE k='owner_a') AND platform_user_id='17841400000001';
   PERFORM pg_temp.must(v_acct IS NULL, 'social_account_id nulled by the account delete');
   PERFORM pg_temp.must(v_owner = (SELECT id FROM sc_ids WHERE k='owner_a'), 'user_id survived the account delete');
 END $t$;
