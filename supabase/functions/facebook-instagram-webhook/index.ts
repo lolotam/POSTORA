@@ -4,6 +4,7 @@ import { resolveAutomationHandler, resolveCommentAutomationHandler } from "../_s
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
 import { buildCommentPayload, buildMessagePayload, buildMessagingSender, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 import { isOwnComment } from "../_shared/commentAuthor.ts";
+import { touchSocialContact } from "../_shared/socialContactIngest.ts";
 import {
   logSkippedUnderstanding,
   runInboundMediaUnderstanding,
@@ -366,6 +367,17 @@ Deno.serve(async (req) => {
             console.log(`[fb-ig-webhook] skipped own ${platform} comment ${normalized.comment.id}`);
             continue;
           }
+
+          await runInBackground("facebook-instagram audience touch", () => touchSocialContact(
+            adminClient,
+            account.id,
+            {
+              platform,
+              author: normalized.author,
+              comment: { id: normalized.comment.id, text: normalized.comment.text },
+              post: { id: normalized.post.id },
+            },
+          ));
 
           const commentHandler = resolveCommentAutomationHandler(account.account_metadata);
           // One background task rather than two, because the funnel's verdict decides whether

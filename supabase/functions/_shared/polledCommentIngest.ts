@@ -7,6 +7,7 @@
 import { resolveCommentAutomationHandler } from "./automationHandler.ts";
 import { runInBackground } from "./background.ts";
 import { isOwnComment } from "./commentAuthor.ts";
+import { touchSocialContact } from "./socialContactIngest.ts";
 import {
   type CommentAutomationAccount,
   handleCommentInternally,
@@ -90,6 +91,17 @@ export async function ingestPolledComment(
     );
     return "own_comment";
   }
+
+  // Capturing who commented is not automation, so it runs even for seeded history and for an
+  // account whose handler is "off". This is the one door every polled platform passes through,
+  // so Threads and YouTube are both covered by this single call.
+  await runInBackground(`${platform} audience touch`, () =>
+    touchSocialContact(admin, account.id, {
+      platform,
+      author: comment.author,
+      comment: { id: comment.comment.id, text: comment.comment.text },
+      post: { id: comment.post.id },
+    }));
 
   // A poller's first pass over an account sees a page of history all at once. Recording it is
   // what lets the next pass tell new from old; dispatching it would replay weeks of other
