@@ -473,3 +473,114 @@ Deno.test("a composio tool's description still carries the registry usage guide"
   assertEquals(description.includes("Our stock sheet."), true);
   assertEquals(description.includes("stock lists, bookings, price tables"), true);
 });
+
+// --- agent_behavior: the business's own configuration, in the prompt --------
+//
+// Every case below also proves the same thing from a different angle: behavior
+// is ADDITIVE. An account that never opens the new settings cards has an empty
+// agent_behavior and must get exactly the prompt it had before the column
+// existed.
+
+const promptBase = {
+  persona: "",
+  knowledgeBlocks: [] as string[],
+  nowIso: "2026-09-05T00:00:00Z",
+  language: "en" as const,
+  languageForced: false,
+};
+
+Deno.test("a configured tone and response length reach the prompt", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    ...promptBase,
+    behavior: { tone: "formal", response_length: "short" },
+  });
+  assertEquals(prompt.includes("formal, courteous tone"), true);
+  assertEquals(prompt.includes("one or two sentences"), true);
+});
+
+Deno.test("goals render as objectives the model can act on", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({ ...promptBase, behavior: { goals: ["capture_leads"] } });
+  assertEquals(prompt.includes("Your objectives in this conversation:"), true);
+  assertEquals(prompt.includes("contact details"), true);
+});
+
+Deno.test("a greeting is scoped to the first reply, not every reply", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({ ...promptBase, behavior: { greeting: "Welcome to Xsellpoint." } });
+  assertEquals(prompt.includes("first reply in the conversation"), true);
+  assertEquals(prompt.includes("Welcome to Xsellpoint."), true);
+});
+
+Deno.test("instruction blocks render with their titles", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    ...promptBase,
+    behavior: { instruction_blocks: [{ title: "Pricing", body: "Always check the connector." }] },
+  });
+  assertEquals(prompt.includes("Pricing:"), true);
+  assertEquals(prompt.includes("Always check the connector."), true);
+});
+
+Deno.test("a half-empty instruction block is dropped rather than rendered", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    ...promptBase,
+    behavior: { instruction_blocks: [{ title: "Pricing", body: "   " }] },
+  });
+  assertEquals(prompt.includes("Pricing:"), false);
+});
+
+Deno.test("the hallucination guard survives every shape of empty behavior", async () => {
+  // Regression lock on the 2026-09-01 incident. knowledgeOnlyRule is
+  // unconditional and stays that way; no behavior value may remove it.
+  const { buildSystemPrompt } = await import("./logic.ts");
+  for (const behavior of [undefined, null, {}]) {
+    const prompt = buildSystemPrompt({ ...promptBase, behavior });
+    assertEquals(prompt.includes("Never invent prices, availability, or policies."), true);
+  }
+});
+
+Deno.test("handoff rules default to on, matching the column defaults", async () => {
+  // Every existing config has both booleans true and no behavior at all. This
+  // is the "nothing changed for anyone" case.
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt(promptBase);
+  assertEquals(prompt.includes("use the escalate_to_human tool"), true);
+});
+
+Deno.test("switching off low-confidence handoff stops promising a follow-up", async () => {
+  // With the switch off nobody is notified, so the replacement wording must not
+  // claim someone will follow up -- escalateConversation is the only thing that
+  // reaches a human, and it is exactly what this branch skips.
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({ ...promptBase, handoffOnLowConfidence: false });
+  assertEquals(prompt.includes("do not have that information"), true);
+  assertEquals(prompt.includes("say you will check with the team"), false);
+});
+
+Deno.test("both handoff switches off removes every escalation instruction", async () => {
+  const { buildSystemPrompt } = await import("./logic.ts");
+  const prompt = buildSystemPrompt({
+    ...promptBase,
+    handoffOnRequest: false,
+    handoffOnLowConfidence: false,
+  });
+  assertEquals(prompt.includes("escalate_to_human"), false);
+});
+
+Deno.test("both handoff switches off also removes the tool, not just the instruction", async () => {
+  // A switch that only edits the prompt is a suggestion. The tool has to leave
+  // the model's function list too, or the agent can still hand off after being
+  // told the business does not want handoffs.
+  const { agentToolDefinitions } = await import("./tools.ts");
+  const names = (canEscalate: boolean) =>
+    agentToolDefinitions({ canEscalate }).map((tool) => tool.function.name);
+
+  assertEquals(names(true).includes("escalate_to_human"), true);
+  assertEquals(names(false).includes("escalate_to_human"), false);
+  // Nothing else is removed with it.
+  assertEquals(names(false).includes("search_knowledge"), true);
+  assertEquals(names(false).includes("notify_admin"), true);
+});

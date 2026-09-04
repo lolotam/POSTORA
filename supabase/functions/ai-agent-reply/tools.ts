@@ -98,6 +98,23 @@ export const toolDefinitions = [
   },
 ];
 
+/**
+ * The base tools for this account, honouring the stored handoff switches.
+ *
+ * A switch that only edits the system prompt is a suggestion: the model can
+ * still call a tool it was merely told not to use. Removing escalate_to_human
+ * from the function list is what makes "no handoffs" mean it.
+ *
+ * The model-outage escalation is deliberately unaffected. That path runs in
+ * index.ts when every model in the chain has failed, and it is not a
+ * user-configurable behaviour -- a business that switched off handoffs did not
+ * ask to have its customers silently ignored during an outage.
+ */
+export function agentToolDefinitions({ canEscalate }: { canEscalate: boolean }) {
+  if (canEscalate) return toolDefinitions;
+  return toolDefinitions.filter((tool) => tool.function.name !== "escalate_to_human");
+}
+
 async function searchKnowledge(context: ToolContext, query: string): Promise<ToolResult> {
   // retrieveKnowledge already fails over to the fallback embedding provider; if
   // every provider is down, degrade to a "no results" tool answer instead of

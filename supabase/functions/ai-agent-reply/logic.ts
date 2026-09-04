@@ -1,4 +1,10 @@
 // Pure decision logic for the AI agent reply pipeline. No Deno or network
+import type {
+  AgentBehavior,
+  AgentGoal,
+  AgentResponseLength,
+  AgentTone,
+} from "../_shared/agentBehavior.ts";
 // imports here — this module is unit-tested from the frontend vitest suite.
 
 export type EngagementMode = "ai_first" | "human_first" | "human_then_ai";
@@ -160,6 +166,19 @@ export interface SystemPromptParams {
    * to a persona that already has an answer ready.
    */
   connectorNames?: string[];
+  /**
+   * The business's own configuration of tone, length, goals, greeting and
+   * instruction blocks. Additive: an absent or empty behavior contributes
+   * nothing, so a config predating the column gets the prompt it always had.
+   */
+  behavior?: AgentBehavior | null;
+  /**
+   * The two stored handoff switches. They default to true wherever they are
+   * read, because that is the column default every existing row carries -- an
+   * undefined must never read as "off" and strip escalation from live agents.
+   */
+  handoffOnRequest?: boolean;
+  handoffOnLowConfidence?: boolean;
 }
 
 const SURFACE_INSTRUCTIONS: Record<ReplySurface, { intro: string; rules: string[] }> = {
@@ -252,6 +271,68 @@ function connectorRules(connectorNames?: string[]): string[] {
   ];
 }
 
+const TONE_RULES: Record<AgentTone, string> = {
+  friendly_professional:
+    "Write in a warm but professional tone -- helpful, never so casual that it reads as careless.",
+  formal: "Write in a formal, courteous tone. No slang and no emoji.",
+  enthusiastic:
+    "Write with genuine energy about the products, without overpromising or inventing benefits.",
+  concise: "Write plainly and get to the point. No filler, and do not restate the question.",
+};
+
+const LENGTH_RULES: Record<AgentResponseLength, string> = {
+  short: "Keep replies to one or two sentences unless the customer asks for more detail.",
+  medium: "Keep replies to a short paragraph.",
+  detailed: "Give a complete answer, using steps or a short list when that is clearer.",
+};
+
+const GOAL_RULES: Record<AgentGoal, string> = {
+  recommend_products:
+    "Suggest the products that fit what the customer described, and help them choose between them.",
+  answer_pricing:
+    "Answer price, stock and availability questions from the business knowledge or a connector -- never from memory.",
+  handle_complaints:
+    "Acknowledge a complaint before answering it, and never argue with the customer.",
+  capture_leads:
+    "When the conversation is going well, ask for the customer's name and contact details so the team can follow up.",
+};
+
+/**
+ * The business's configuration, rendered as prompt lines.
+ *
+ * Additive by construction: an empty behavior returns an empty list, so every
+ * rule that existed before this function is unchanged for every existing
+ * config. Nothing here can REMOVE a rule -- the guards that must not be
+ * switchable are written directly into buildSystemPrompt below.
+ */
+export function behaviorRules(behavior?: AgentBehavior | null): string[] {
+  if (!behavior) return [];
+  const lines: string[] = [];
+  if (behavior.tone) lines.push(TONE_RULES[behavior.tone]);
+  if (behavior.response_length) lines.push(LENGTH_RULES[behavior.response_length]);
+  if (behavior.goals?.length) {
+    lines.push(
+      [
+        "Your objectives in this conversation:",
+        ...behavior.goals.map((goal) => `- ${GOAL_RULES[goal]}`),
+      ].join("\n"),
+    );
+  }
+  const greeting = behavior.greeting?.trim();
+  if (greeting) {
+    // Scoped to the opening turn. Unscoped, the model repeats the greeting on
+    // every reply, which reads as a bot that has forgotten the conversation.
+    lines.push(`If this is your first reply in the conversation, open with: ${greeting}`);
+  }
+  for (const block of behavior.instruction_blocks ?? []) {
+    const title = block.title.trim();
+    const body = block.body.trim();
+    // Half a block is a heading the model may feel obliged to complete.
+    if (title && body) lines.push(`${title}:\n${body}`);
+  }
+  return lines;
+}
+
 export function buildSystemPrompt(params: SystemPromptParams): string {
   const surface = params.surface ?? "dm";
   const languageName = params.language === "ar" ? "Arabic (العربية)" : "English";
@@ -282,12 +363,21 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     surfaceInstructions.intro,
     adminInstruction,
     params.persona ? `Business persona and instructions:\n${params.persona}` : "",
+    ...behaviorRules(params.behavior),
     languageInstruction,
     "Rules:",
     knowledgeOnlyRule(params.connectorNames),
     ...connectorRules(params.connectorNames),
-    "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool.",
-    "- If the customer asks for a person/human/agent, use the escalate_to_human tool and tell them someone will follow up.",
+    // Both default to true, matching the column default every existing row
+    // carries. With a switch off nobody is notified, so the replacement
+    // wording must not promise a follow-up -- escalateConversation is the only
+    // thing that reaches a human, and it is exactly what the off branch skips.
+    (params.handoffOnLowConfidence ?? true)
+      ? "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool."
+      : "- If the knowledge does not contain the answer, say plainly that you do not have that information. Do not promise that anyone will follow up.",
+    (params.handoffOnRequest ?? true)
+      ? "- If the customer asks for a person/human/agent, use the escalate_to_human tool and tell them someone will follow up."
+      : "",
     "- Use the search_knowledge tool to look up product or policy details before saying something is unavailable.",
     ...LINK_RULES,
     ...surfaceInstructions.rules,
