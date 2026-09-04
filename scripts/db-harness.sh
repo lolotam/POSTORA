@@ -118,6 +118,7 @@ SUITES=(
   partner_hub_admin.sql
   whatsapp_workspace_crm.sql
   import_whatsapp_contacts_to_workspace.sql
+  social_contacts.sql
 )
 SEED_USER_ID="0e5eeee1-0000-4000-8000-000000000001"
 SEED_USER_EMAIL="harness-seed@example.invalid"
