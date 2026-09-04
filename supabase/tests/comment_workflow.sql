@@ -367,7 +367,7 @@ DO $rls_owner$
 BEGIN
   PERFORM pg_temp.cw_must((SELECT count(*) FROM public.comment_workflow_rules) = 2,
     'the owner sees their own rules');
-  PERFORM pg_temp.cw_must((SELECT count(*) FROM public.comment_workflow_events) = 3,
+  PERFORM pg_temp.cw_must((SELECT count(*) FROM public.comment_workflow_events) = 6,
     'the owner sees their own events');
   PERFORM pg_temp.cw_must((SELECT count(*) FROM public.comment_workflow_rule_stats) = 1,
     'the owner sees their own stats row');
