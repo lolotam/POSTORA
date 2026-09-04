@@ -1,8 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, FileArchive, Loader2, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -21,10 +20,6 @@ import {
 import { useAiKnowledge } from "@/hooks/useAiKnowledge";
 import { useWhatsAppCatalog } from "@/hooks/useWhatsAppCatalog";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
-import { Checkbox } from "@/components/ui/checkbox";
-import type { Platform } from "@/lib/types";
-import { PlatformIcon } from "@/components/PlatformIcon";
-import { displaySourceTitle } from "@/lib/knowledgeSourceDisplay";
 import { visibleToAccount } from "@/lib/knowledgeVisibility";
 import {
   accountLabel,
@@ -42,6 +37,8 @@ import {
   getKnowledgeSourceType,
 } from "@/lib/aiKnowledge";
 import { supabase } from "@/integrations/supabase/client";
+import { KnowledgeSourcesPanel } from "@/components/messaging/knowledge/KnowledgeSourcesPanel";
+import { KnowledgeGraphCard } from "@/components/messaging/knowledge/KnowledgeGraphCard";
 
 export function AiKnowledgeManager({
   platform,
@@ -448,231 +445,42 @@ export function AiKnowledgeManager({
           </CardContent>
         </Card>
       )}
-      <Card>
-        <CardHeader>
-          <CardTitle>Sources</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {isLoading ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : linksError ? (
-            // Say the list is unreliable rather than render an unfiltered or
-            // over-filtered one, either of which reads as fact.
-            <p className="text-sm text-destructive">
-              Could not check which sources this account can use. Refresh to try again.
-            </p>
-          ) : visibleSources.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {sources.length === 0
-                ? "No knowledge sources yet."
-                : "No sources are available to this account yet."}
-            </p>
-          ) : (
-            visibleSources.map((source) => (
-              <div
-                key={source.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
-              >
-                <div>
-                  <p className="font-medium">
-                    {displaySourceTitle(source.file_name, socialAccounts)}
-                  </p>
-                  <div className="mt-1 flex gap-2">
-                    <Badge variant="secondary">{source.source_type}</Badge>
-                    {/* How many OTHER accounts can read this, stated rather than
-                        inferred from the fact that it appears in this account's
-                        list. Counted from the effective set, not from
-                        `visibility` alone: once a source is shared with three of
-                        five accounts it is neither "all accounts" nor "this
-                        account", and calling it either would be a lie the
-                        checkbox strip below immediately contradicts. */}
-                    <Badge variant={source.visibility === "shared" ? "outline" : "secondary"}>
-                      {source.visibility === "shared"
-                        ? "All accounts"
-                        : accountsReady
-                          ? `${(sharedBySource.get(source.id) ?? []).length} account${
-                              (sharedBySource.get(source.id) ?? []).length === 1 ? "" : "s"
-                            }`
-                          : // The count is derived from the accounts list; without
-                            // it, "0 accounts" would be a claim rather than a
-                            // reading. Say only what is still known.
-                            "Some accounts"}
-                    </Badge>
-                    <Badge
-                      variant={
-                        source.status === "failed"
-                          ? "destructive"
-                          : source.status === "ready"
-                            ? "default"
-                            : "secondary"
-                      }
-                    >
-                      {["pending", "processing"].includes(source.status) && (
-                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      )}
-                      {source.status}
-                      {source.status === "ready"
-                        ? ` · ${source.chunk_count} chunks`
-                        : ""}
-                    </Badge>
-                  </div>
-                  {source.error && (
-                    <p className="mt-1 text-xs text-destructive">
-                      {source.error}
-                    </p>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    aria-label="Re-ingest source"
-                    disabled={
-                      source.source_type === "catalog" || invoke.isPending
-                    }
-                    title={
-                      source.source_type === "catalog"
-                        ? "Use Sync catalog"
-                        : "Re-ingest"
-                    }
-                    onClick={() =>
-                      run(
-                        source.source_type === "profile_text"
-                          ? "ingest_profile_text"
-                          : "ingest_source",
-                        source.source_type === "profile_text"
-                          ? { platform, social_account_id: accountId ?? undefined }
-                          : { source_id: source.id },
-                        "Source indexing started",
-                      )
-                    }
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="destructive"
-                    aria-label="Delete source"
-                    disabled={invoke.isPending}
-                    onClick={() =>
-                      run(
-                        "delete_source",
-                        { source_id: source.id },
-                        "Source deleted",
-                      )
-                    }
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                {/* Which agents can read this file. Ticking a box links the
-                    ALREADY-INDEXED chunks to that account, so a price list
-                    uploaded under Facebook answers Instagram customers with no
-                    second upload and no second embedding bill; unticking hides
-                    it from that agent again without touching the chunks.
-
-                    `w-full` inside the flex-wrap row above puts the strip on
-                    its own line. Drawn only once the links have loaded: an
-                    unsettled read renders every box unchecked, and a click on
-                    that would write the wrong state back as if it were chosen. */}
-                {accountsError ? (
-                  // Named, not hidden. Silently dropping the strip on a failed
-                  // account read tells the user sharing is unavailable, when in
-                  // fact the page simply does not know who to offer.
-                  <p className="mt-3 w-full border-t pt-3 text-xs text-destructive">
-                    Could not load your connected accounts, so sharing cannot be
-                    changed here. Refresh to try again.
-                  </p>
-                ) : (
-                  linksReady && accountsReady && shareAccounts.length > 1 && (
-                  <div className="mt-3 w-full border-t pt-3">
-                    <p className="mb-2 text-xs font-medium text-muted-foreground">
-                      Agents that can read this
-                    </p>
-                    <div className="flex flex-wrap gap-x-4 gap-y-2">
-                      {shareAccounts.map((account) => (
-                        <label
-                          key={account.id}
-                          className="flex cursor-pointer items-center gap-2 text-sm"
-                        >
-                          <Checkbox
-                            checked={(sharedBySource.get(source.id) ?? []).includes(account.id)}
-                            disabled={sharingSourceIds.includes(source.id)}
-                            onCheckedChange={(value) =>
-                              toggleShare(source, account, value === true)
-                            }
-                            aria-label={`Share ${displaySourceTitle(source.file_name, socialAccounts)} with ${accountLabel(account)}`}
-                          />
-                          {/* Safe narrowing: agentAccounts already filtered to
-                              the four agent platforms, all of which are members
-                              of Platform. */}
-                          <PlatformIcon
-                            platform={account.platform as Platform}
-                            size="xs"
-                          />
-                          <span>{accountLabel(account)}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                  )
-                )}
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Knowledge graph</CardTitle>
-          <CardDescription>
-            Generate inspection exports from the knowledge currently indexed for this business.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={invoke.isPending}
-            onClick={async () => {
-              await run("export_graph", {}, "Knowledge graph exports generated");
-              setUnresolvable({ html: false, vault: false });
-            }}
-          >
-            {invoke.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Generate exports
-          </Button>
-          {graphExport?.html_url && (
-            <Button
-              variant="secondary"
-              disabled={unresolvable.html || resolveExportUrls.isPending}
-              title={unresolvable.html ? "Regenerate exports to refresh this link" : undefined}
-              onClick={() => openExport("html")}
-            >
-              {resolveExportUrls.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <ExternalLink className="mr-2 h-4 w-4" />
-              )}
-              Open graph
-            </Button>
-          )}
-          {graphExport?.vault_url && (
-            <Button
-              variant="secondary"
-              disabled={unresolvable.vault || resolveExportUrls.isPending}
-              title={unresolvable.vault ? "Regenerate exports to refresh this link" : undefined}
-              onClick={() => openExport("vault")}
-            >
-              {resolveExportUrls.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <FileArchive className="mr-2 h-4 w-4" />
-              )}
-              Download vault
-            </Button>
-          )}
-        </CardContent>
-      </Card>
+      <KnowledgeSourcesPanel
+        sources={visibleSources}
+        allSourcesCount={sources.length}
+        isLoading={isLoading}
+        linksError={linksError}
+        accountsError={accountsError}
+        linksReady={linksReady}
+        accountsReady={accountsReady}
+        shareAccounts={shareAccounts}
+        sharedBySource={sharedBySource}
+        sharingSourceIds={sharingSourceIds}
+        socialAccounts={socialAccounts}
+        busy={invoke.isPending}
+        onReingest={(source) =>
+          run(
+            source.source_type === "profile_text" ? "ingest_profile_text" : "ingest_source",
+            source.source_type === "profile_text"
+              ? { platform, social_account_id: accountId ?? undefined }
+              : { source_id: source.id },
+            "Source indexing started",
+          )
+        }
+        onDelete={(source) => run("delete_source", { source_id: source.id }, "Source deleted")}
+        onToggleShare={toggleShare}
+      />
+      <KnowledgeGraphCard
+        graphExport={graphExport}
+        busy={invoke.isPending}
+        resolving={resolveExportUrls.isPending}
+        unresolvable={unresolvable}
+        onGenerate={async () => {
+          await run("export_graph", {}, "Knowledge graph exports generated");
+          setUnresolvable({ html: false, vault: false });
+        }}
+        onOpen={openExport}
+      />
     </div>
   );
 }
