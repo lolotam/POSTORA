@@ -1,5 +1,8 @@
-// The single door every polled comment goes through. The inbox insert is the cross-source
-// idempotency claim; first-pass seeding and own-comment suppression apply to every provider.
+// The single door every inbound comment goes through for a platform Postora polls: for
+// Threads the `replies` webhook, the reply poller, and the mentions refresh alike; for YouTube
+// the comment sweep. A platform may have more than one source for the same comment (Threads
+// has three), so the two invariants below have to hold across sources rather than within one
+// handler — which is why they live here and not in the callers.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { resolveCommentAutomationHandler } from "./automationHandler.ts";
 import { runInBackground } from "./background.ts";
@@ -25,19 +28,30 @@ export type PolledCommentOutcome =
   | "automated_internally"
   | "no_handler";
 
+// Everything buildCommentPayload needs except the three fields this module already knows.
 export type PolledCommentInput = Omit<
   CommentPayloadInput,
   "platform" | "socialAccountId" | "account"
 >;
 
 export interface PolledIngestOptions {
-  // Stored verbatim so a delivery can be replayed from what arrived, not its normalized view.
+  // Stored verbatim on the inbox row so a delivery can be replayed from what actually arrived
+  // rather than from the normalized shape.
   rawPayload: unknown;
   // False on a poller's first pass over an account. See the seeding note below.
   dispatch?: boolean;
 }
 
-/** The inbox insert is the idempotency claim. Only its first writer may run automation. */
+/**
+ * Records one comment from the platform and runs whatever automation the account asked for.
+ *
+ * The `social_inbox_events` insert IS the idempotency claim, and that is the whole reason
+ * this function exists: Meta retries webhook deliveries, and a poller re-reads the same
+ * conversation every run, so the same reply arrives repeatedly and — on Threads — from two
+ * directions at once. Only the first writer of a `(social_account_id, external_event_id)`
+ * pair may run the user's workflow. A mention that is also a reply collapses to a single fire
+ * for the same reason, which is deliberate — it is one event to the person who wrote it.
+ */
 export async function ingestPolledComment(
   admin: any,
   account: CommentAutomationAccount,
@@ -68,8 +82,8 @@ export async function ingestPolledComment(
   }
   if (!inserted?.length) return "duplicate";
 
-  // This stays ahead of every handler: a reply emitted below comes back as another comment,
-  // and only this check ends that cycle.
+  // Has to stay ahead of both handler branches: whatever replies below comes back as another
+  // reply on the same post, and only this check ends that cycle.
   if (isOwnComment(account, comment.author)) {
     console.log(
       `[${platform}-ingest] skipped own comment ${comment.comment.id}`,
@@ -77,13 +91,27 @@ export async function ingestPolledComment(
     return "own_comment";
   }
 
-  // A first pass sees history. Record it so the next pass can identify new comments, but do
-  // not replay that history into a live workflow or AI agent.
+  // A poller's first pass over an account sees a page of history all at once. Recording it is
+  // what lets the next pass tell new from old; dispatching it would replay weeks of other
+  // people's comments into a live workflow — or, on the `internal` handler, have the AI agent
+  // answer all of them.
   if (options.dispatch === false) return "seeded";
 
   const handler = resolveCommentAutomationHandler(account.account_metadata);
 
+  // Everything from here is one background task rather than three, because the funnel's
+  // verdict decides whether the handler runs at all and that verdict needs a database read and
+  // up to two platform calls. threads-webhook awaits this function on its HTTP response path,
+  // and a Threads public reply alone can spend nine seconds polling its container to FINISHED
+  // (commentActions.waitForThreadsContainer) — long enough for Meta to treat the delivery as
+  // failed and redeliver it.
+  //
+  // The returned outcome therefore names what was STARTED, not what finished. Whatever
+  // actually happened is in comment_workflow_events and the logs; the caller only needs to
+  // know the comment was claimed and routed.
   await runInBackground(`${platform} comment routing`, async () => {
+    // Funnel rules first, for every handler value including "off": creating a rule is itself
+    // the per-account opt-in, and a claim means no other automation answers this comment.
     const workflow = await runCommentWorkflow(admin, account, {
       comment: {
         id: comment.comment.id,
@@ -118,7 +146,6 @@ export async function ingestPolledComment(
     }
   });
 
-  // Outcomes name the route that was started; durable workflow rows and logs hold completion.
   if (handler === "n8n") return "dispatched_n8n";
   if (handler === "internal") return "automated_internally";
   return "no_handler";

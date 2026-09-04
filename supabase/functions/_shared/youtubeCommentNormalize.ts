@@ -34,12 +34,22 @@ function toInput(
   };
 }
 
+export interface PolledYouTubeComment {
+  input: PolledCommentInput;
+  // The Google item for this comment alone: the commentThread for the top level, the
+  // reply item for a reply. It is what the inbox row stores.
+  raw: unknown;
+}
+
 /** Top-level first so a reply never reaches the door before the comment it answers. */
 export function threadToInputs(
   thread: YouTubeThreadItem,
-): PolledCommentInput[] {
+): PolledYouTubeComment[] {
   return [
-    toInput(thread, "comment"),
-    ...thread.replies.map((reply) => toInput(reply, "reply")),
+    { input: toInput(thread, "comment"), raw: thread.raw },
+    ...thread.replies.map((reply) => ({
+      input: toInput(reply, "reply"),
+      raw: reply.raw,
+    })),
   ];
 }

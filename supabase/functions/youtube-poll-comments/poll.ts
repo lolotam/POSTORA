@@ -62,13 +62,13 @@ async function pollChannel(
   // top-level time. A new reply on a thread older than the newest 50 is fetched only when the
   // Comment Manager asks for that thread's full replies.
   for (const thread of threads.value.items) {
-    for (const input of threadToInputs(thread)) {
+    for (const { input, raw } of threadToInputs(thread)) {
       const outcome = await ingest(
         admin,
         account as any,
         "youtube",
         input,
-        { rawPayload: thread, dispatch },
+        { rawPayload: raw, dispatch },
       );
       if (
         outcome === "dispatched_n8n" || outcome === "automated_internally"

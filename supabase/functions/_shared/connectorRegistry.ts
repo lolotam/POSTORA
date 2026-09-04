@@ -666,9 +666,9 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
       ],
     },
     usageGuide: {
-      whenToUse: "The connected YouTube channel and supported publishing actions.",
-      requestExamples: ["list the connected channels", "upload this approved video"],
-      limits: "Uploads and thumbnail updates change the channel and are off unless the connector allows writes.",
+      whenToUse: "The connected YouTube channel: publishing, and the comments on its videos. Use it to list comment threads and their replies, reply to a comment, hide or unhide a comment, or delete one of the channel's own comments.",
+      requestExamples: ["list the connected channels", "upload this approved video", "show the latest comment threads on this video", "reply to this comment", "hide this comment", "unhide this comment", "delete our own comment"],
+      limits: "Uploads, thumbnail updates, comment replies, moderation changes and comment deletion change the channel and are off unless the connector allows writes. A reply always attaches to the thread's top-level comment. Hiding is reversible (unhide restores it); deletion only works on comments the channel wrote — hide anyone else's instead.",
     },
   },
 };

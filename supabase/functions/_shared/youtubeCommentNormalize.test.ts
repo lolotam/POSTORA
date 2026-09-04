@@ -1,8 +1,12 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { threadToInputs } from "./youtubeCommentNormalize.ts";
 
+const rawThread = { kind: "youtube#commentThread", id: "t1" };
+const rawReply = { kind: "youtube#comment", id: "r1" };
+
 const thread = {
   id: "t1",
+  raw: rawThread,
   videoId: "v1",
   parentId: null,
   text: "hello",
@@ -15,6 +19,7 @@ const thread = {
   totalReplyCount: 1,
   replies: [{
     id: "r1",
+    raw: rawReply,
     videoId: "v1",
     parentId: "t1",
     text: "hi",
@@ -28,7 +33,7 @@ const thread = {
 };
 
 Deno.test("a thread becomes one comment input plus one per inlined reply", () => {
-  const inputs = threadToInputs(thread);
+  const inputs = threadToInputs(thread).map((pair) => pair.input);
   assertEquals(
     inputs.map((input) => [
       input.comment.id,
@@ -48,4 +53,9 @@ Deno.test("a thread becomes one comment input plus one per inlined reply", () =>
     username: null,
   });
   assertEquals(inputs[0].timestamp, "2026-09-01T00:00:00Z");
+});
+
+Deno.test("each input carries its own Google item: the thread for the top level, the reply for a reply", () => {
+  const raws = threadToInputs(thread).map((pair) => pair.raw);
+  assertEquals(raws, [rawThread, rawReply]);
 });

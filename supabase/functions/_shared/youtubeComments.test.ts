@@ -126,11 +126,23 @@ Deno.test("native listThreads asks for the whole channel, newest first, and flat
   assertEquals(result.value.items[0].replies[0].parentId, "t1");
 });
 
-Deno.test("replyToThread posts comments.insert with the parent id", async () => {
-  const { calls, fetcher } = fakeFetch(() => ({
-    status: 200,
-    body: { id: "new" },
-  }));
+// comments.list?id= answers the reply target's snippet; comments.insert answers with the new id.
+function replyFetch(target: { id: string; parentId?: string }) {
+  return fakeFetch((_url, init) =>
+    init?.method === "POST" ? { status: 200, body: { id: "new" } } : {
+      status: 200,
+      body: {
+        items: [{
+          id: target.id,
+          snippet: target.parentId ? { parentId: target.parentId } : {},
+        }],
+      },
+    }
+  );
+}
+
+Deno.test("replyToThread posts comments.insert against a top-level comment's own id", async () => {
+  const { calls, fetcher } = replyFetch({ id: "t1" });
   const result = await replyToThread(
     native,
     { admin: fakeAdmin(), fetcher },
@@ -138,9 +150,38 @@ Deno.test("replyToThread posts comments.insert with the parent id", async () => 
     "thanks",
   );
   assertEquals(result, { ok: true, value: { id: "new" } });
-  assertEquals(JSON.parse(String(calls[0].init?.body)), {
+  assertEquals(new URL(calls[0].url).searchParams.get("id"), "t1");
+  assertEquals(JSON.parse(String(calls[1].init?.body)), {
     snippet: { parentId: "t1", textOriginal: "thanks" },
   });
+});
+
+Deno.test("a reply to a reply is posted against the thread's top-level comment", async () => {
+  const { calls, fetcher } = replyFetch({ id: "r1", parentId: "t1" });
+  const result = await replyToThread(
+    native,
+    { admin: fakeAdmin(), fetcher },
+    "r1",
+    "thanks",
+  );
+  assertEquals(result, { ok: true, value: { id: "new" } });
+  assertEquals(calls.length, 2);
+  assertEquals(JSON.parse(String(calls[1].init?.body)), {
+    snippet: { parentId: "t1", textOriginal: "thanks" },
+  });
+});
+
+Deno.test("a reply target that no longer exists is not_found and nothing is posted", async () => {
+  const { calls, fetcher } = fakeFetch(() => ({ status: 200, body: { items: [] } }));
+  const result = await replyToThread(
+    native,
+    { admin: fakeAdmin(), fetcher },
+    "gone",
+    "thanks",
+  );
+  if (result.ok) throw new Error("expected failure");
+  assertEquals(result.kind, "not_found");
+  assertEquals(calls.length, 1);
 });
 
 Deno.test("hide is setModerationStatus=rejected, unhide is published", async () => {
@@ -223,44 +264,126 @@ Deno.test("a quota 403 reports quota and writes nothing", async () => {
   assertEquals(admin.updates, []);
 });
 
-Deno.test("only invalid_grant marks token health; a transient refresh failure writes nothing", async () => {
-  const originalFetch = globalThis.fetch;
+const EXPIRED = { ...native, token_expires_at: new Date(0).toISOString() };
+
+function stubGlobalFetch(status: number, body: unknown): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = (() =>
+    Promise.resolve(
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )) as typeof fetch;
+  return () => {
+    globalThis.fetch = original;
+  };
+}
+
+function touchedReauth(admin: ReturnType<typeof fakeAdmin>): boolean {
+  return admin.updates.some((update) => "needs_reauth" in update);
+}
+
+Deno.test("a transient refresh failure is upstream and leaves token health alone", async () => {
+  const restore = stubGlobalFetch(503, { error: "temporarily_unavailable" });
   try {
-    const expired = { ...native, token_expires_at: new Date(0).toISOString() };
+    const admin = fakeAdmin();
+    const result = await listThreads(EXPIRED, { admin }, { channelId: "UC-me" });
+    if (result.ok) throw new Error("expected failure");
+    assertEquals(result.kind, "upstream");
+    assertEquals(touchedReauth(admin), false);
+  } finally {
+    restore();
+  }
+});
 
-    const transientAdmin = fakeAdmin();
-    globalThis.fetch = (() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ error: "temporarily_unavailable" }), {
-          status: 503,
-          headers: { "Content-Type": "application/json" },
-        }),
-      )) as typeof fetch;
-    const transient = await listThreads(expired, { admin: transientAdmin }, {
-      channelId: "UC-me",
-    });
-    assertEquals(transient.ok, false);
-    assertEquals(transientAdmin.updates, []);
-
-    const invalidAdmin = fakeAdmin();
-    globalThis.fetch = (() =>
-      Promise.resolve(
-        new Response(JSON.stringify({ error: "invalid_grant" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }),
-      )) as typeof fetch;
-    const invalid = await listThreads(expired, { admin: invalidAdmin }, {
-      channelId: "UC-me",
-    });
-    assertEquals(invalid.ok, false);
-    assertEquals(invalidAdmin.updates[0].needs_reauth, true);
+Deno.test("an invalid_grant refresh marks the row for reconnect", async () => {
+  const restore = stubGlobalFetch(400, { error: "invalid_grant" });
+  try {
+    const admin = fakeAdmin();
+    const result = await listThreads(EXPIRED, { admin }, { channelId: "UC-me" });
+    if (result.ok) throw new Error("expected failure");
+    assertEquals(result.kind, "unauthorized");
+    assertEquals(admin.updates[0].needs_reauth, true);
     assertEquals(
-      invalidAdmin.updates[0].last_refresh_error,
+      admin.updates[0].last_refresh_error,
       "YouTube refresh failed: invalid_grant",
     );
   } finally {
-    globalThis.fetch = originalFetch;
+    restore();
+  }
+});
+
+Deno.test("a missing refresh token is unauthorized without calling Google", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (() => {
+    throw new Error("the oauth2 endpoint must not be called");
+  }) as typeof fetch;
+  try {
+    const admin = fakeAdmin();
+    const { calls, fetcher } = fakeFetch(() => ({ status: 200, body: {} }));
+    const result = await listThreads(
+      { ...EXPIRED, refresh_token: null },
+      { admin, fetcher },
+      { channelId: "UC-me" },
+    );
+    if (result.ok) throw new Error("expected failure");
+    assertEquals(result.kind, "unauthorized");
+    assertEquals(calls.length, 0);
+    assertEquals(touchedReauth(admin), false);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("a 401 refreshes the token once and retries the same call", async () => {
+  const restore = stubGlobalFetch(200, {
+    access_token: "fresh",
+    expires_in: 3600,
+  });
+  try {
+    const admin = fakeAdmin();
+    let attempts = 0;
+    const { calls, fetcher } = fakeFetch(() => {
+      attempts += 1;
+      return attempts === 1
+        ? { status: 401, body: { error: { message: "Invalid Credentials" } } }
+        : { status: 200, body: { items: [thread] } };
+    });
+    const result = await listThreads(native, { admin, fetcher }, {
+      channelId: "UC-me",
+    });
+    if (!result.ok) throw new Error(result.message);
+    assertEquals(result.value.items[0].id, "t1");
+    assertEquals(calls.length, 2);
+    assertEquals(
+      (calls[1].init?.headers as Record<string, string>).Authorization,
+      "Bearer fresh",
+    );
+    assertEquals(admin.updates[0].access_token, "fresh");
+  } finally {
+    restore();
+  }
+});
+
+Deno.test("a second 401 after the refresh is reported as unauthorized", async () => {
+  const restore = stubGlobalFetch(200, {
+    access_token: "fresh",
+    expires_in: 3600,
+  });
+  try {
+    const { calls, fetcher } = fakeFetch(() => ({
+      status: 401,
+      body: { error: { message: "Invalid Credentials" } },
+    }));
+    const result = await listThreads(native, { admin: fakeAdmin(), fetcher }, {
+      channelId: "UC-me",
+    });
+    if (result.ok) throw new Error("expected failure");
+    assertEquals(result.kind, "unauthorized");
+    assertEquals(calls.length, 2);
+  } finally {
+    restore();
   }
 });
 

@@ -61,6 +61,9 @@ export type YouTubeResult<T> =
 
 export interface YouTubeCommentItem {
   id: string;
+  // The Google item this was parsed from (a comment, or the whole commentThread for a thread),
+  // kept so the inbox stores what arrived rather than this normalized view.
+  raw: unknown;
   videoId: string;
   parentId: string | null;
   text: string;
@@ -102,16 +105,39 @@ function fail(
   return { ok: false, kind, message };
 }
 
+interface NativeToken {
+  token: string;
+  // True when this call minted the token, so a 401 that follows is not retried with another refresh.
+  refreshed: boolean;
+}
+
 async function nativeToken(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
-): Promise<YouTubeResult<string>> {
+  options: { force?: boolean } = {},
+): Promise<YouTubeResult<NativeToken>> {
   const now = deps.now?.() ?? Date.now();
   const expiresAt = account.token_expires_at
     ? new Date(account.token_expires_at).getTime()
     : 0;
-  if (account.access_token && expiresAt - now > REFRESH_WINDOW_MS) {
-    return { ok: true, value: account.access_token };
+  if (
+    !options.force && account.access_token &&
+    expiresAt - now > REFRESH_WINDOW_MS
+  ) {
+    return {
+      ok: true,
+      value: { token: account.access_token, refreshed: false },
+    };
+  }
+
+  // No refresh token is a permanent state, not a transient one: refreshYouTubeToken would
+  // return null here, which reads as "temporarily unavailable" and would keep the poller
+  // counting failures instead of telling the user to reconnect.
+  if (!account.refresh_token) {
+    return fail(
+      "unauthorized",
+      "The YouTube connection has no refresh token. Reconnect the channel in Profiles.",
+    );
   }
 
   let refreshed;
@@ -146,24 +172,24 @@ async function nativeToken(
   }).eq("id", account.id);
   await recordGrantedScopes(deps.admin, account.id, refreshed.scope);
   account.access_token = refreshed.access_token;
-  return { ok: true, value: refreshed.access_token };
+  return {
+    ok: true,
+    value: { token: refreshed.access_token, refreshed: true },
+  };
 }
 
-async function callNative(
-  account: YouTubeCommentAccount,
-  deps: YouTubeCommentsDeps,
+async function sendNative(
+  fetcher: typeof fetch,
   call: Call,
-): Promise<YouTubeResult<any>> {
-  const token = await nativeToken(account, deps);
-  if (!token.ok) return token;
-  const fetcher = deps.fetcher ?? fetch;
+  token: string,
+): Promise<YouTubeResult<{ status: number; body: any }>> {
   const url = `${DATA_API}/${call.path}?${new URLSearchParams(call.query)}`;
   let response: Response;
   try {
     response = await fetcher(url, {
       method: call.method,
       headers: {
-        Authorization: `Bearer ${token.value}`,
+        Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
       body: call.body === undefined ? undefined : JSON.stringify(call.body),
@@ -173,18 +199,43 @@ async function callNative(
     const message = error instanceof Error ? error.message : "network error";
     return fail("upstream", `Could not reach YouTube: ${message}`);
   }
-
   const body = response.status === 204
     ? null
     : await response.json().catch(() => null);
-  if (response.ok) return { ok: true, value: body };
-  const kind = classifyGoogleError(response.status, body);
+  return { ok: true, value: { status: response.status, body } };
+}
+
+async function callNative(
+  account: YouTubeCommentAccount,
+  deps: YouTubeCommentsDeps,
+  call: Call,
+): Promise<YouTubeResult<any>> {
+  const fetcher = deps.fetcher ?? fetch;
+  let token = await nativeToken(account, deps);
+  if (!token.ok) return token;
+  let sent = await sendNative(fetcher, call, token.value.token);
+  if (!sent.ok) return sent;
+
+  // A 401 on a token this call did not just mint means the stored token was revoked or
+  // expired early: refresh once and retry the same request. Retrying is safe for mutating
+  // calls too, since a 401 is rejected at Google's auth gate before anything executes. A
+  // second 401 falls through to the classifier as unauthorized.
+  if (sent.value.status === 401 && !token.value.refreshed) {
+    token = await nativeToken(account, deps, { force: true });
+    if (!token.ok) return token;
+    sent = await sendNative(fetcher, call, token.value.token);
+    if (!sent.ok) return sent;
+  }
+
+  const { status, body } = sent.value;
+  if (status >= 200 && status < 300) return { ok: true, value: body };
+  const kind = classifyGoogleError(status, body);
   if (kind === "scope_missing") {
     await dropGrantedScope(deps.admin, account.id, YOUTUBE_COMMENT_SCOPE);
   }
   const message = typeof body?.error?.message === "string"
     ? body.error.message
-    : `YouTube returned ${response.status}.`;
+    : `YouTube returned ${status}.`;
   return fail(kind, message);
 }
 
@@ -292,6 +343,7 @@ function parseComment(item: any): YouTubeCommentItem {
   const snippet = item?.snippet ?? {};
   return {
     id: String(item?.id ?? ""),
+    raw: item,
     videoId: String(snippet.videoId ?? ""),
     parentId: snippet.parentId ? String(snippet.parentId) : null,
     text: String(snippet.textOriginal ?? snippet.textDisplay ?? ""),
@@ -317,6 +369,7 @@ function parseThread(item: any): YouTubeThreadItem {
   return {
     ...top,
     id: String(item?.id ?? top.id),
+    raw: item,
     videoId: String(item?.snippet?.videoId ?? top.videoId),
     totalReplyCount: Number(item?.snippet?.totalReplyCount ?? 0),
     replies: Array.isArray(item?.replies?.comments)
@@ -416,12 +469,18 @@ export async function listReplies(
   };
 }
 
+// YouTube nests one level: comments.insert accepts only a top-level comment as parentId, so a
+// reply aimed at a reply is posted against that reply's parent. The lookup costs 1 quota unit
+// on top of the insert's 50.
 export async function replyToThread(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
-  parentId: string,
+  commentId: string,
   text: string,
 ): Promise<YouTubeResult<{ id: string }>> {
+  const snippet = await commentSnippet(account, deps, commentId);
+  if (!snippet.ok) return snippet;
+  const parentId = snippet.value.parentId ?? commentId;
   const result = await callYouTube(account, deps, {
     method: "POST",
     path: "comments",
@@ -457,11 +516,15 @@ export async function setModerationStatus(
   return result.ok ? { ok: true, value: undefined } : result;
 }
 
-async function commentAuthor(
+// One comments.list?id= call (1 unit) answering the two facts an action needs about its
+// target: who wrote it, and whether it is itself a reply.
+async function commentSnippet(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
   commentId: string,
-): Promise<YouTubeResult<string | null>> {
+): Promise<
+  YouTubeResult<{ authorChannelId: string | null; parentId: string | null }>
+> {
   const result = await callYouTube(account, deps, {
     method: "GET",
     path: "comments",
@@ -475,9 +538,12 @@ async function commentAuthor(
   const item = Array.isArray(result.value?.items)
     ? result.value.items[0]
     : null;
-  return item
-    ? { ok: true, value: parseComment(item).authorChannelId }
-    : fail("not_found", "That comment no longer exists.");
+  if (!item) return fail("not_found", "That comment no longer exists.");
+  const parsed = parseComment(item);
+  return {
+    ok: true,
+    value: { authorChannelId: parsed.authorChannelId, parentId: parsed.parentId },
+  };
 }
 
 // comments.delete only works on the authenticated channel's own comments. For anyone else's
@@ -487,9 +553,10 @@ export async function deleteOwnComment(
   deps: YouTubeCommentsDeps,
   commentId: string,
 ): Promise<YouTubeResult<void>> {
-  const author = await commentAuthor(account, deps, commentId);
-  if (!author.ok) return author;
-  if (!author.value || author.value !== account.platform_user_id) {
+  const snippet = await commentSnippet(account, deps, commentId);
+  if (!snippet.ok) return snippet;
+  const author = snippet.value.authorChannelId;
+  if (!author || author !== account.platform_user_id) {
     return fail(
       "forbidden",
       "YouTube only lets you delete your own comments — hide it instead.",

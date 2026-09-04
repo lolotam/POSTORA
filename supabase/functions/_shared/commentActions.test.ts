@@ -162,15 +162,18 @@ Deno.test("youtube reply goes through the adapter with the account's provider", 
     select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: { account_metadata: {} }, error: null }) }) }),
     update: () => ({ eq: () => Promise.resolve({ error: null }) }),
   }) };
-  const result = await replyToComment(
-    ytAccount,
-    "t1",
-    "hi",
-    fakeFetch(calls, { id: "new-yt" }),
-    { admin },
-  );
+  // The adapter first reads the target's snippet (GET) to find the thread's top-level id,
+  // then inserts the reply (POST).
+  const fetcher = async (url: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(url), init });
+    const body = init?.method === "POST" ? { id: "new-yt" } : { items: [{ id: "t1", snippet: {} }] };
+    return new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } });
+  };
+  const result = await replyToComment(ytAccount, "t1", "hi", fetcher, { admin });
   assertEquals(result, { success: true, platform_comment_id: "new-yt" });
-  assertEquals(calls[0].url.startsWith("https://www.googleapis.com/youtube/v3/comments"), true);
+  assertEquals(calls.length, 2);
+  assertEquals(calls[1].init?.method, "POST");
+  assertEquals(calls[1].url.startsWith("https://www.googleapis.com/youtube/v3/comments"), true);
 });
 
 Deno.test("youtube hide maps to moderation rejected, unhide to published", async () => {

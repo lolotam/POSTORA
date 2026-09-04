@@ -3,6 +3,7 @@ import { errorTypeFor, groupThreadsByVideo } from "./youtubeCommentsView.ts";
 
 const item = (id: string, videoId: string, author = "UC-ann") => ({
   id,
+  raw: { id },
   videoId,
   parentId: null,
   text: id,
