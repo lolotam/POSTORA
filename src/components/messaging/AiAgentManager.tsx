@@ -16,6 +16,7 @@ import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConne
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useDirtyForm } from "@/hooks/useDirtyForm";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
+import type { AgentBehavior } from "@/lib/agentProfile";
 import { AgentIdentityCard } from "@/components/messaging/agent-settings/AgentIdentityCard";
 import { AdvancedCard } from "@/components/messaging/agent-settings/AdvancedCard";
 import { GuardrailsCard } from "@/components/messaging/agent-settings/GuardrailsCard";
@@ -30,7 +31,7 @@ const defaultConfig: Required<Pick<AiAgentConfigInput,
   daily_message_cap: 50,
   reply_cooldown_seconds: 0,
   persona_instructions: "",
-  business_profile_text: "",
+  agent_behavior: {},
   admin_phone_numbers: [],
 };
 
@@ -41,7 +42,7 @@ function toFormValues(config: NonNullable<ReturnType<typeof useAiAgentConfig>["c
     is_enabled: config.is_enabled,
     default_mode: config.default_mode,
     persona_instructions: config.persona_instructions || "",
-    business_profile_text: config.business_profile_text || "",
+    agent_behavior: config.agent_behavior ?? {},
     language_mode: config.language_mode,
     temperature: config.temperature,
     admin_phone_numbers: config.admin_phone_numbers || [],
@@ -61,8 +62,9 @@ function toFormValues(config: NonNullable<ReturnType<typeof useAiAgentConfig>["c
  * the user's own changes survive a refresh and everything else follows the
  * server. Both extremes are lossy: replacing the whole form discards what they
  * typed (the 2026-08-30 outage), and keeping the whole form carries a stale
- * business_profile_text that the next save would write back over the value the
- * knowledge tab had just stored.
+ * server value that the next save would write back over a fresher one -- the
+ * hazard that made this function necessary, when this form still echoed the
+ * knowledge tab's business_profile_text back on every save.
  *
  * Compared with JSON.stringify to match useDirtyForm exactly -- admin_phone_numbers
  * is an array, and two definitions of "changed" in one component would eventually
@@ -141,8 +143,8 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
     // edited ones alone. Resetting everything is how a typed persona became a
     // blank save on 2026-08-30; freezing everything is the opposite mistake, and
     // just as lossy -- the knowledge tab's save refreshes this same query, so a
-    // frozen form would carry a stale business_profile_text and the next Settings
-    // save would silently revert the profile that was just written.
+    // frozen form would carry stale server values and the next Settings save
+    // would silently revert what another surface had just written.
     //
     // A field counts as edited when it has diverged from the baseline, so the
     // user's own changes always win and everything else takes the server's value.
@@ -202,6 +204,16 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
     setForm((current) => ({ ...current, [key]: value }));
   };
 
+  // Merges rather than replaces. agent_behavior is ONE column written by four
+  // different cards; a replacing setter would make whichever card the user
+  // touched last silently erase the other three.
+  const updateBehavior = <K extends keyof AgentBehavior>(key: K, value: AgentBehavior[K]) => {
+    setForm((current) => ({
+      ...current,
+      agent_behavior: { ...(current.agent_behavior ?? {}), [key]: value },
+    }));
+  };
+
   const addPhone = () => {
     const phone = normalizeE164Phone(phoneInput);
     if (!phone) {
@@ -234,7 +246,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
     // blank too and this comparison is false. Only a user who saw a value and
     // deleted it produces a non-empty baseline against an empty form -- which is
     // what makes the flag a real signal rather than a rubber stamp.
-    const clearedAField = (["persona_instructions", "business_profile_text"] as const).some(
+    const clearedAField = (["persona_instructions"] as const).some(
       (field) =>
         String(form[field] ?? "").trim() === "" &&
         String(baseline?.[field] ?? "").trim() !== "",

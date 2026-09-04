@@ -26,6 +26,7 @@ import {
   getKnowledgeSourceType,
 } from "@/lib/aiKnowledge";
 import { supabase } from "@/integrations/supabase/client";
+import { renderBusinessProfileText, type BusinessProfile } from "@/lib/agentProfile";
 import { KnowledgeSourcesPanel } from "@/components/messaging/knowledge/KnowledgeSourcesPanel";
 import { KnowledgeGraphCard } from "@/components/messaging/knowledge/KnowledgeGraphCard";
 import { ManualProfilePanel } from "@/components/messaging/knowledge/ManualProfilePanel";
@@ -59,7 +60,7 @@ export function AiKnowledgeManager({
   const catalogHook = useWhatsAppCatalog();
   const waAccount = isWhatsApp ? catalogHook.waAccount : null;
   const catalog = isWhatsApp ? catalogHook.catalog : null;
-  const [profile, setProfile] = useState("");
+  const [profile, setProfile] = useState<BusinessProfile>({});
   const [uploading, setUploading] = useState(false);
   // Where a NEW upload lands. Defaults to the selected account, because a file
   // added while looking at one page is almost always that page's -- and until
@@ -89,14 +90,24 @@ export function AiKnowledgeManager({
   // re-derived from `profileText` whenever the config changes, and the query key
   // already contains the account, so a settled non-error read is this account's.
   const configLoaded = config !== undefined && !error;
-  const profileText = config?.business_profile_text || "";
-  useEffect(() => setProfile(profileText), [profileText]);
+  const storedText = config?.business_profile_text || "";
+  // Keyed on the SERIALISED structure, not the object: the config query hands
+  // back a fresh object identity on every render, and depending on that would
+  // reset the editor under the user's cursor on each one.
+  const storedProfileKey = JSON.stringify(config?.business_profile ?? {});
+  useEffect(() => setProfile(JSON.parse(storedProfileKey) as BusinessProfile), [storedProfileKey]);
   // An empty box over a stored value is the user having deleted it -- the same
   // asymmetry the settings form relies on, since the loaded config IS the
   // baseline here. Declared to the server rather than refused: refusing would
   // leave a business profile unclearable, because no other surface edits this
   // field, and would make the ingest delete branch unreachable.
-  const wouldBlankStoredProfile = profile.trim() === "" && profileText.trim() !== "";
+  // The client's verdict has to match the server's exactly. renderBusinessProfileText
+  // here is a verbatim port of the server module for that reason: if the client
+  // under-reports "this renders to empty", it omits confirm_clear, the server
+  // renders "" anyway and refuses with a 409 -- and the profile becomes
+  // impossible to clear, however many times the user retries.
+  const renderedText = renderBusinessProfileText(profile);
+  const wouldBlankStoredProfile = renderedText.trim() === "" && storedText.trim() !== "";
   // The same predicate the retrieval RPCs use, so the list cannot promise the
   // agent a document it will not read, or hide one it will.
   // Filtering only once the links have actually arrived. An empty link set from
@@ -202,8 +213,11 @@ export function AiKnowledgeManager({
   };
   const saveProfile = async () => {
     try {
+      // The STRUCTURE is sent; the server renders business_profile_text from it.
+      // Sending the text too would be a second, conflicting claim about the same
+      // column.
       await upsertConfig.mutateAsync({
-        business_profile_text: profile,
+        business_profile: profile,
         confirm_clear: wouldBlankStoredProfile || undefined,
       });
       await run(

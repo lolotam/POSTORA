@@ -67,8 +67,16 @@ describe("AiKnowledgeManager write guards", () => {
     expect(saveButton()).toBeDisabled();
   });
 
-  it("declares an empty profile over a stored one as a deliberate clear", () => {
-    configValue = { business_profile_text: "We sell day-old chicks." };
+  it("declares an emptied profile over a stored one as a deliberate clear", () => {
+    // The payload is now the STRUCTURE; the server renders the text from it. The
+    // guard has to reach the same verdict the server will, so it compares the
+    // locally rendered text against what is stored -- if it under-reports the
+    // clear, the server refuses with a 409 and the profile becomes impossible
+    // to empty.
+    configValue = {
+      business_profile: { notes: "We sell day-old chicks." },
+      business_profile_text: "Additional notes:\nWe sell day-old chicks.",
+    };
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
 
     // fireEvent.change, NOT `box().value = ""`. Assigning to .value mutates the
@@ -78,7 +86,22 @@ describe("AiKnowledgeManager write guards", () => {
     fireEvent.click(saveButton());
 
     expect(upsertConfig.mutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ business_profile_text: "", confirm_clear: true }),
+      expect.objectContaining({ business_profile: { notes: "" }, confirm_clear: true }),
+    );
+  });
+
+  it("declares the clear even when only the derived text is stored", () => {
+    // The state the backfill leaves behind for a config saved before this
+    // feature: text present, structure empty. The panel opens blank, so a save
+    // WOULD blank the stored text -- and that has to be declared, or the server
+    // refuses it.
+    configValue = { business_profile: {}, business_profile_text: "We sell day-old chicks." };
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+
+    fireEvent.click(saveButton());
+
+    expect(upsertConfig.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({ confirm_clear: true }),
     );
   });
 

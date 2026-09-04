@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/hooks/useAuth";
 import { callMessagingApi } from "@/lib/messagingApi";
 import { normalizeE164Phone } from "@/lib/phone";
+import type { AgentBehavior, BusinessProfile } from "@/lib/agentProfile";
 
 export type AiAgentPlatform = "whatsapp" | "facebook" | "instagram" | "threads";
 export type AiAgentMode = "ai_first" | "human_first" | "human_then_ai";
@@ -15,6 +16,10 @@ export interface AiAgentConfig {
   default_mode: AiAgentMode;
   persona_instructions: string | null;
   business_profile_text: string | null;
+  /** Structured input. The server renders business_profile_text from it. */
+  business_profile: BusinessProfile;
+  /** Tone, length, goals, greeting, instruction blocks. Read by buildSystemPrompt. */
+  agent_behavior: AgentBehavior;
   language_mode: AiAgentLanguageMode;
   model: string;
   fallback_model_1: string | null;
@@ -37,6 +42,8 @@ const CONFIG_FIELDS = [
   "default_mode",
   "persona_instructions",
   "business_profile_text",
+  "business_profile",
+  "agent_behavior",
   "language_mode",
   "model",
   "fallback_model_1",
