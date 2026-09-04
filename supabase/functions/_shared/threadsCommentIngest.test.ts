@@ -33,6 +33,11 @@ function fakeAdmin(options: {
   workflowRules?: unknown[];
 } = {}) {
   return {
+    rpcCalls: [] as Array<{ fn: string; args: Record<string, unknown> }>,
+    rpc(fn: string, args: Record<string, unknown>) {
+      this.rpcCalls.push({ fn, args });
+      return Promise.resolve({ data: "row-1", error: null });
+    },
     // deno-lint-ignore no-explicit-any
     from(table: string): any {
       if (table === "comment_workflow_rules") {
@@ -259,4 +264,43 @@ Deno.test("an account with no funnel rules behaves exactly as before", async () 
   } finally {
     sent.restore();
   }
+});
+
+// The audience touch lives in the shared polled door, so these cover Threads and YouTube alike.
+Deno.test("an ingested comment touches the audience contact with the account id", async () => {
+  const sent = captureDeliveries();
+  try {
+    const admin = fakeAdmin({ subscriptions: [commentSubscription] });
+    await ingestThreadsComment(admin, account, reply, { rawPayload: {} });
+    const touch = admin.rpcCalls.find((c) => c.fn === "touch_social_contact");
+    assertEquals(touch?.args.p_social_account_id, "acc-1");
+    assertEquals(touch?.args.p_platform, "threads");
+    assertEquals(touch?.args.p_author_username, "vigrox.kw");
+  } finally {
+    sent.restore();
+  }
+});
+
+// Seeding suppresses automation, not capture: a poller's first pass is exactly when the
+// audience that already exists should be recorded.
+Deno.test("seeded history (dispatch=false) still records the contact", async () => {
+  const admin = fakeAdmin();
+  const outcome = await ingestThreadsComment(admin, account, reply, { rawPayload: {}, dispatch: false });
+  assertEquals(outcome, "seeded");
+  assertEquals(admin.rpcCalls.filter((c) => c.fn === "touch_social_contact").length, 1);
+});
+
+Deno.test("an own comment never touches the audience contact", async () => {
+  const admin = fakeAdmin();
+  await ingestThreadsComment(admin, account, { ...reply, author: { id: null, name: null, username: "danatfuture" } }, { rawPayload: {} });
+  assertEquals(admin.rpcCalls.length, 0);
+});
+
+// The touch sits behind the social_inbox_events insert, which is the idempotency claim, so a
+// redelivery must not increment anyone's count.
+Deno.test("a duplicate comment never touches the audience contact", async () => {
+  const admin = fakeAdmin({ inserted: [] });
+  const outcome = await ingestThreadsComment(admin, account, reply, { rawPayload: {} });
+  assertEquals(outcome, "duplicate");
+  assertEquals(admin.rpcCalls.length, 0);
 });

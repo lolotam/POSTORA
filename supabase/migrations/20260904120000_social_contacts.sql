@@ -196,18 +196,23 @@ ON CONFLICT (key) DO NOTHING;
 --                        only a top-level username (replyEvents.ts sets the id to null)
 --   Threads poller    -- the raw mention, whose author is at user.id
 --   threads-mentions  -- a MinimalMention row, whose author is at mention_author_id
+--   YouTube poller    -- a youtube#commentThread, whose author is under
+--                        snippet.topLevelComment.snippet.authorChannelId.value
 -- Idempotent: a rerun only re-counts.
 WITH events AS (
   SELECT s.user_id, s.social_account_id, s.platform, s.created_at,
          nullif(coalesce(s.payload->'value'->'from'->>'id',
                          s.payload->'from'->>'id',
                          s.payload->'user'->>'id',
-                         s.payload->>'mention_author_id'), '')                                   AS author_id,
+                         s.payload->>'mention_author_id',
+                         s.payload->'snippet'->'topLevelComment'->'snippet'->'authorChannelId'->>'value'), '')
+                                                                                                 AS author_id,
          nullif(coalesce(s.payload->'value'->'from'->>'username',
                          s.payload->>'username',
                          s.payload->'from'->>'username',
                          s.payload->'user'->>'username',
                          s.payload->>'mention_author_username'), '')                             AS author_username,
+         nullif(s.payload->'snippet'->'topLevelComment'->'snippet'->>'authorDisplayName', '')    AS author_display,
          nullif(s.payload->'value'->'from'->>'name', '')                                         AS author_name
   FROM public.social_inbox_events s
   WHERE s.event_type = 'comment'
@@ -242,7 +247,7 @@ SELECT a.user_id,
        e.platform,
        e.identity,
        CASE WHEN e.resolved_id IS NULL THEN 'username' ELSE 'id' END,
-       coalesce(max(e.author_name), max(e.author_username), ''),
+       coalesce(max(e.author_name), max(e.author_display), max(e.author_username), ''),
        max(e.author_username),
        count(*), min(e.created_at), max(e.created_at)
 FROM resolved e
