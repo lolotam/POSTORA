@@ -1,18 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Upload } from "lucide-react";
+import { Globe, PencilLine, Upload } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   useAiAgentConfig,
   type AiAgentPlatform,
@@ -29,7 +19,6 @@ import {
   type SharingAccount,
 } from "@/lib/knowledgeSharing";
 import {
-  AI_KNOWLEDGE_ACCEPT,
   AI_KNOWLEDGE_BUCKET,
   aiKnowledgeContentType,
   aiKnowledgeObjectPath,
@@ -39,6 +28,12 @@ import {
 import { supabase } from "@/integrations/supabase/client";
 import { KnowledgeSourcesPanel } from "@/components/messaging/knowledge/KnowledgeSourcesPanel";
 import { KnowledgeGraphCard } from "@/components/messaging/knowledge/KnowledgeGraphCard";
+import { ManualProfilePanel } from "@/components/messaging/knowledge/ManualProfilePanel";
+import { UploadPanel } from "@/components/messaging/knowledge/UploadPanel";
+import { WebsitePanel } from "@/components/messaging/knowledge/WebsitePanel";
+
+/** How knowledge gets in. Alternatives, so they are tabs. */
+type KnowledgeMethod = "manual" | "upload" | "website";
 
 export function AiKnowledgeManager({
   platform,
@@ -71,6 +66,7 @@ export function AiKnowledgeManager({
   // this existed every upload was hardcoded shared, so a WhatsApp price list
   // answered Instagram customers too. "All accounts" stays one click away.
   const [uploadScope, setUploadScope] = useState<"account" | "all">("account");
+  const [method, setMethod] = useState<KnowledgeMethod>("manual");
   const selectedAccountLabel = socialAccounts.find((account) => account.id === accountId)
     ?.platform_username ?? null;
   // Set when a stored export link cannot be resolved (e.g. the object is gone
@@ -330,121 +326,57 @@ export function AiKnowledgeManager({
   };
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Business profile</CardTitle>
-          <CardDescription>
-            This is included in what the AI knows.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Textarea
-            value={profile}
-            onChange={(event) => setProfile(event.target.value)}
-            rows={6}
-            placeholder="Describe your business, products, policies, and FAQs."
+      {/* How knowledge gets IN. The three methods are alternatives, so they are
+          tabs -- but the sources panel below is not one of them: it is the
+          answer to "did that work", and that answer is the same whichever
+          method produced it. It therefore lives outside <Tabs> and stays
+          mounted. */}
+      <Tabs value={method} onValueChange={(value) => setMethod(value as KnowledgeMethod)}>
+        <TabsList className="h-auto flex-wrap justify-start">
+          <TabsTrigger value="manual">
+            <PencilLine className="mr-1.5 h-4 w-4" /> Manual profile
+          </TabsTrigger>
+          <TabsTrigger value="upload">
+            <Upload className="mr-1.5 h-4 w-4" /> Upload files
+          </TabsTrigger>
+          <TabsTrigger value="website">
+            <Globe className="mr-1.5 h-4 w-4" /> Website scraping
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="manual" className="mt-4">
+          <ManualProfilePanel
+            profile={profile}
+            onProfileChange={setProfile}
+            onSave={saveProfile}
+            saveDisabled={!configLoaded || upsertConfig.isPending || invoke.isPending}
+            saving={upsertConfig.isPending || invoke.isPending}
+            showCatalog={isWhatsApp}
+            catalog={catalog}
+            hasCatalogAccount={!!waAccount}
+            catalogBusy={invoke.isPending}
+            onSyncCatalog={() =>
+              run(
+                "sync_catalog",
+                { social_account_id: waAccount!.id, catalog_id: catalog!.catalog_id },
+                "Catalog synced",
+              )
+            }
           />
-          <Button
-            onClick={saveProfile}
-            disabled={!configLoaded || upsertConfig.isPending || invoke.isPending}
-          >
-            {(upsertConfig.isPending || invoke.isPending) && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            Save & index
-          </Button>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Upload knowledge file</CardTitle>
-          <CardDescription>
-            Spreadsheets (CSV/XLSX/XLS), PDFs, text files (TXT/MD), and images
-            (PNG/JPG/WEBP — text is extracted automatically).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {accountId && (
-            <div className="space-y-1.5">
-              <Label htmlFor="upload-scope">Available to</Label>
-              <Select
-                value={uploadScope}
-                onValueChange={(value) => setUploadScope(value as "account" | "all")}
-              >
-                <SelectTrigger id="upload-scope" className="w-full max-w-xs" data-testid="upload-scope">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="account">
-                    {selectedAccountLabel ? `Only ${selectedAccountLabel}` : "Only this account"}
-                  </SelectItem>
-                  <SelectItem value="all">All accounts</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Applies to the next file you upload. Existing files keep the scope they were
-                given.
-              </p>
-            </div>
-          )}
-          <label className="flex cursor-pointer items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={uploading}
-              asChild
-            >
-              <span>
-                {uploading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="mr-2 h-4 w-4" />
-                )}
-                Upload file
-              </span>
-            </Button>
-            <input
-              className="sr-only"
-              type="file"
-              accept={AI_KNOWLEDGE_ACCEPT}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                upload(file);
-              }}
-            />
-          </label>
-        </CardContent>
-      </Card>
-      {isWhatsApp && (
-        <Card>
-          <CardHeader>
-            <CardTitle>WhatsApp catalog</CardTitle>
-            <CardDescription>
-              {waAccount && catalog?.catalog_id
-                ? "Sync products for AI product answers."
-                : "Connect a WhatsApp account with a catalog to sync products."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              onClick={() =>
-                run(
-                  "sync_catalog",
-                  {
-                    social_account_id: waAccount!.id,
-                    catalog_id: catalog!.catalog_id,
-                  },
-                  "Catalog synced",
-                )
-              }
-              disabled={!waAccount || !catalog?.catalog_id || invoke.isPending}
-            >
-              Sync catalog
-            </Button>
-          </CardContent>
-        </Card>
-      )}
+        </TabsContent>
+        <TabsContent value="upload" className="mt-4">
+          <UploadPanel
+            accountId={accountId ?? null}
+            selectedAccountLabel={selectedAccountLabel}
+            uploadScope={uploadScope}
+            onUploadScopeChange={setUploadScope}
+            uploading={uploading}
+            onFileSelected={upload}
+          />
+        </TabsContent>
+        <TabsContent value="website" className="mt-4">
+          <WebsitePanel />
+        </TabsContent>
+      </Tabs>
       <KnowledgeSourcesPanel
         sources={visibleSources}
         allSourcesCount={sources.length}
