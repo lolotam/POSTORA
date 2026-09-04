@@ -57,9 +57,14 @@ export type WorkerDependencies = {
   resolveConfig: (admin: any) => Promise<DualEmbeddingConfig>;
   now: () => number;
   // Injected so the website path can be tested without reaching Firecrawl.
-  firecrawlKey: (admin: any) => Promise<string>;
-  crawlStatus: (key: string, jobId: string) => Promise<CrawlStatus>;
-  scrapePage: (key: string, url: string) => Promise<FirecrawlPage>;
+  //
+  // Optional because the spreadsheet and document paths never touch them, and
+  // requiring them would make every existing construction of this type -- the
+  // ones in index.test.ts included -- a type error that `--no-check` would hide
+  // until something called an undefined function at runtime.
+  firecrawlKey?: (admin: any) => Promise<string>;
+  crawlStatus?: (key: string, jobId: string) => Promise<CrawlStatus>;
+  scrapePage?: (key: string, url: string) => Promise<FirecrawlPage>;
 };
 
 const defaultDependencies: WorkerDependencies = {
@@ -268,7 +273,7 @@ export async function processWebsiteSource(
 
   let key: string;
   try {
-    key = await deps.firecrawlKey(admin);
+    key = await (deps.firecrawlKey ?? resolveFirecrawlKey)(admin);
   } catch (error) {
     return await failSource(admin, source.id, message(error));
   }
@@ -281,7 +286,7 @@ export async function processWebsiteSource(
     if (!url) return await failSource(admin, source.id, "This source has no address to scrape");
     try {
       await writeMeta({ stage: "embedding", pages_done: 1, pages_total: 1 });
-      const page = await deps.scrapePage(key, url);
+      const page = await (deps.scrapePage ?? firecrawlScrape)(key, url);
       const chunks = pagesToChunks([page]);
       if (!chunks.length) {
         return await failSource(admin, source.id, "That page had no readable text");
@@ -299,7 +304,7 @@ export async function processWebsiteSource(
 
   let status: CrawlStatus;
   try {
-    status = await deps.crawlStatus(key, jobId);
+    status = await (deps.crawlStatus ?? firecrawlCrawlStatus)(key, jobId);
   } catch (error) {
     return await failSource(admin, source.id, message(error));
   }
