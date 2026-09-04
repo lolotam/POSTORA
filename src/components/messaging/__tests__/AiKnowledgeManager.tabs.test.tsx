@@ -105,4 +105,45 @@ describe("AiKnowledgeManager input methods", () => {
     selectTab(/upload/i);
     expect(screen.getByText(/^Upload file$/)).toBeInTheDocument();
   });
+  it("does not offer re-ingest on a website source", () => {
+    // Codex P2. ingest_source accepts only the uploaded file types, so the
+    // refresh button on a website row would return "Source type not supported".
+    knowledge.sources = [
+      {
+        id: "w1",
+        file_name: "x.com (whole site)",
+        file_path: "https://x.com",
+        source_type: "website",
+        status: "ready",
+        error: null,
+        chunk_count: 12,
+        visibility: "shared",
+        metadata: { url: "https://x.com", mode: "site" },
+        created_at: "2026-09-05T00:00:00Z",
+      },
+    ];
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    expect(screen.getByRole("button", { name: /re-ingest source/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /delete source/i })).toBeEnabled();
+  });
+
+  it("shows the crawl checklist while a website source is still working", () => {
+    knowledge.sources = [
+      {
+        id: "w2",
+        file_name: "x.com (whole site)",
+        file_path: "https://x.com",
+        source_type: "website",
+        status: "pending",
+        error: null,
+        chunk_count: 0,
+        visibility: "shared",
+        metadata: { url: "https://x.com", mode: "site", stage: "crawling", pages_done: 3, pages_total: 9 },
+        created_at: "2026-09-05T00:00:00Z",
+      },
+    ];
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    expect(screen.getByText(/reading pages \(3\/9\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/indexing into the vector database/i)).toBeInTheDocument();
+  });
 });

@@ -948,10 +948,14 @@ Deno.serve(async (req) => {
     // merely alludes to "a connector" loses to a persona holding a ready
     // answer -- a configured Supabase price table went unqueried that way
     // (2026-09-01). systemPrompt is read once, at the messages array below.
-    // A business that turned BOTH handoff switches off gets no escalate_to_human
-    // tool at all, not merely a prompt that stops mentioning it.
-    const canEscalate =
-      (config.handoff_on_request ?? true) || (config.handoff_on_low_confidence ?? true);
+    // Both off removes escalate_to_human entirely; one off narrows its
+    // description to the trigger that is still allowed. Passing a single boolean
+    // here was not enough -- the stock description names BOTH reasons, so
+    // turning one switch off changed nothing the model could act on.
+    const handoff = {
+      onRequest: config.handoff_on_request ?? true,
+      onLowConfidence: config.handoff_on_low_confidence ?? true,
+    };
     const systemPrompt = buildSystemPrompt({
       persona: config.persona_instructions,
       behavior: config.agent_behavior,
@@ -1050,7 +1054,7 @@ Deno.serve(async (req) => {
             temperature: config.temperature ?? 0.4,
             messages,
             tools: [
-              ...agentToolDefinitions({ canEscalate }),
+              ...agentToolDefinitions(handoff),
               ...(isAdmin ? adminToolDefinitions : []),
               ...customToolDefinitions(customTools),
             ],

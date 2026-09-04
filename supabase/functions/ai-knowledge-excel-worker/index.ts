@@ -137,6 +137,14 @@ export type SourceOutcome = {
   chunkCount: number;
   resumed: boolean;
   reason?: string;
+  /**
+   * Set when the source was handed BACK to the queue on purpose (a crawl still
+   * running upstream). It is `pending` again and the claim orders by created_at,
+   * so without this the same row would be re-claimed immediately and polled for
+   * the rest of the 45s budget -- hammering the provider and starving every
+   * later item. The drain loop stops on it and the next cron tick continues.
+   */
+  deferred?: boolean;
 };
 
 // Process one claimed source resumably:
@@ -337,6 +345,7 @@ export async function processWebsiteSource(
       chunkCount: source.chunk_count ?? 0,
       resumed: false,
       reason: `crawl in progress (${status.completed}/${status.total})`,
+      deferred: true,
     };
   }
 
@@ -414,6 +423,9 @@ async function ownerEmail(admin: any, userId: string): Promise<string | null> {
   return data?.email ?? null;
 }
 
+// The standalone poller claims ONE source per tick and then sleeps, so a
+// deferred crawl waits POLL_MS like everything else -- no extra guard needed
+// here, unlike the HTTP drain loop above.
 async function runOnce(admin: any, deps: WorkerDependencies = defaultDependencies) {
   const source = await claimSource(admin);
   if (!source) return null;
@@ -448,7 +460,11 @@ async function handleWorkerRequest(req: Request): Promise<Response> {
       break;
     }
     if (!source) break;
-    outcomes.push(await processSource(admin, source, defaultDependencies, deadline));
+    const outcome = await processSource(admin, source, defaultDependencies, deadline);
+    outcomes.push(outcome);
+    // A deferred source is `pending` again and sorts first by created_at, so
+    // continuing would immediately re-claim the one we just put back.
+    if (outcome.deferred) break;
   }
   return jsonResponse({
     ok: true,

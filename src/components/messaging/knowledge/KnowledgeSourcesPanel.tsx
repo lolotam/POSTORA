@@ -180,12 +180,26 @@ export function KnowledgeSourcesPanel({
                 {source.error && <p className="mt-1 text-xs text-destructive">{source.error}</p>}
               </div>
               <div className="flex gap-2">
+                {/* Re-ingest goes through `ingest_source`, which accepts only the
+                    uploaded file types. A catalog has its own sync button, and a
+                    website has no re-scrape action yet -- offering the control
+                    anyway would just return "Source type not supported". */}
                 <Button
                   size="icon"
                   variant="outline"
                   aria-label="Re-ingest source"
-                  disabled={source.source_type === "catalog" || busy}
-                  title={source.source_type === "catalog" ? "Use Sync catalog" : "Re-ingest"}
+                  disabled={
+                    source.source_type === "catalog" ||
+                    source.source_type === "website" ||
+                    busy
+                  }
+                  title={
+                    source.source_type === "catalog"
+                      ? "Use Sync catalog"
+                      : source.source_type === "website"
+                        ? "Delete and scrape the address again to refresh a website"
+                        : "Re-ingest"
+                  }
                   onClick={() => onReingest(source)}
                 >
                   <RefreshCw className="h-4 w-4" />

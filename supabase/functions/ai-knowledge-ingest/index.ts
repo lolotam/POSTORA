@@ -549,6 +549,14 @@ async function handleRequest(req: Request): Promise<Response> {
     const token = authHeader.replace(/^Bearer\s+/i, "");
     const anon = createClient(url, anonKey);
     const admin = createClient(url, serviceKey);
+    // Carries the caller's JWT, so auth.uid() resolves inside SECURITY DEFINER
+    // functions that derive ownership from it. create_ai_knowledge_source is
+    // one: called through `admin` it raises "Not authenticated" before doing
+    // anything, because a service-role connection has no end user. The upload
+    // path never hit this -- it calls the RPC straight from the browser.
+    const caller = createClient(url, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
 
     let user: any = null;
     const { data: userData, error: userError } = await anon.auth.getUser(token);
@@ -785,7 +793,17 @@ async function handleRequest(req: Request): Promise<Response> {
       // Validated BEFORE anything is created. A rejected URL must never leave a
       // source row behind, or the list shows a site that was never read.
       const check = validateKnowledgeUrl(body.url);
-      if (!check.ok) return errorResponse(check.reason, 400);
+      if (!check.ok) {
+        // Refusals are logged too. A rejected private host or credentialed URL
+        // that leaves no system_logs row is a refusal nobody can explain later.
+        // The reason is recorded, never the raw address -- it may carry the
+        // credentials that got it rejected.
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          rejected: check.reason,
+          mode: body.mode === "site" ? "site" : "page",
+        });
+        return errorResponse(check.reason, 400);
+      }
       const mode: "page" | "site" = body.mode === "site" ? "site" : "page";
       const requested = Number(body.limit);
       const limit = Number.isFinite(requested)
@@ -796,6 +814,10 @@ async function handleRequest(req: Request): Promise<Response> {
       try {
         key = await resolveFirecrawlKey(admin);
       } catch (error) {
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          mode,
+          error: message(error).slice(0, 500),
+        });
         // 400, never 5xx: Cloudflare replaces an origin 5xx body with its own
         // page, so the sentence naming the admin setting would never arrive.
         return errorResponse(message(error), 400);
@@ -803,7 +825,7 @@ async function handleRequest(req: Request): Promise<Response> {
 
       const scopeToAccount = body.scope === "account" &&
         typeof body.social_account_id === "string" && body.social_account_id.trim() !== "";
-      const { data: sourceId, error: createError } = await (admin as any).rpc(
+      const { data: sourceId, error: createError } = await (caller as any).rpc(
         "create_ai_knowledge_source",
         {
           p_source_type: "website",

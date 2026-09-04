@@ -14,6 +14,45 @@
 
 const API = "https://api.firecrawl.dev/v2";
 
+/**
+ * Wall-clock ceiling on every provider request.
+ *
+ * Without one, a connection Firecrawl accepts and then stalls holds the edge
+ * isolate until the gateway kills it -- and the catch path that would record
+ * the failure never runs. For a page scrape that leaves the row `processing`
+ * with no `queued_at`, which the claim function refuses, so nothing can reclaim
+ * it and the UI polls it forever. A scrape gets longer than a status poll
+ * because it is rendering a page; both stay well inside the ~60s ceiling.
+ */
+const SCRAPE_TIMEOUT_MS = 30_000;
+const STATUS_TIMEOUT_MS = 15_000;
+
+/** fetch with an abort signal, so a stalled provider becomes a catchable error. */
+async function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+  what: string,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetchImpl(input, { ...init, signal: controller.signal });
+  } catch (error) {
+    // AbortError is the timeout; anything else is a transport failure. Both
+    // become a FirecrawlError so the caller's existing catch persists them.
+    const aborted = error instanceof Error && error.name === "AbortError";
+    throw new FirecrawlError(
+      aborted
+        ? `Firecrawl ${what} timed out after ${Math.round(timeoutMs / 1000)}s`
+        : `Firecrawl ${what} could not be reached: ${String((error as Error)?.message ?? error).slice(0, 200)}`,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export interface FirecrawlPage {
   url: string;
   title: string;
@@ -39,11 +78,19 @@ export class FirecrawlError extends Error {
 export async function resolveFirecrawlKey(admin: any): Promise<string> {
   const fromEnv = Deno.env.get("FIRECRAWL_API_KEY");
   if (fromEnv) return fromEnv;
-  const { data } = await admin
+  const { data, error } = await admin
     .from("provider_api_keys")
     .select("api_key")
     .eq("provider_code", "firecrawl")
     .maybeSingle();
+  // A failed read is NOT an absent key. Collapsing the two would report a
+  // database timeout as "not configured" and send the operator to a settings
+  // page where the key is already sitting, correctly, in place.
+  if (error) {
+    throw new FirecrawlError(
+      `Could not read the Firecrawl API key: ${String(error.message ?? error).slice(0, 200)}`,
+    );
+  }
   if (data?.api_key) return data.api_key as string;
   throw new FirecrawlError(
     "Website scraping is not configured. Add a Firecrawl API key in Admin → Settings → AI Providers.",
@@ -97,11 +144,17 @@ export async function firecrawlScrape(
   url: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<FirecrawlPage> {
-  const response = await fetchImpl(`${API}/scrape`, {
-    method: "POST",
-    headers: authHeaders(key),
-    body: JSON.stringify({ url, formats: ["markdown"], onlyMainContent: true }),
-  });
+  const response = await fetchWithTimeout(
+    fetchImpl,
+    `${API}/scrape`,
+    {
+      method: "POST",
+      headers: authHeaders(key),
+      body: JSON.stringify({ url, formats: ["markdown"], onlyMainContent: true }),
+    },
+    SCRAPE_TIMEOUT_MS,
+    "scrape",
+  );
   const body = await readResponse(response, "scrape");
   const markdown = String(body?.data?.markdown ?? "").trim();
   if (!markdown) {
@@ -122,15 +175,21 @@ export async function firecrawlStartCrawl(
   limit: number,
   fetchImpl: typeof fetch = fetch,
 ): Promise<string> {
-  const response = await fetchImpl(`${API}/crawl`, {
-    method: "POST",
-    headers: authHeaders(key),
-    body: JSON.stringify({
-      url,
-      limit,
-      scrapeOptions: { formats: ["markdown"], onlyMainContent: true },
-    }),
-  });
+  const response = await fetchWithTimeout(
+    fetchImpl,
+    `${API}/crawl`,
+    {
+      method: "POST",
+      headers: authHeaders(key),
+      body: JSON.stringify({
+        url,
+        limit,
+        scrapeOptions: { formats: ["markdown"], onlyMainContent: true },
+      }),
+    },
+    STATUS_TIMEOUT_MS,
+    "crawl",
+  );
   const body = await readResponse(response, "crawl");
   const id = body?.id;
   if (typeof id !== "string" || !id) {
@@ -166,9 +225,13 @@ export async function firecrawlCrawlStatus(
   jobId: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<CrawlStatus> {
-  const response = await fetchImpl(`${API}/crawl/${encodeURIComponent(jobId)}`, {
-    headers: authHeaders(key),
-  });
+  const response = await fetchWithTimeout(
+    fetchImpl,
+    `${API}/crawl/${encodeURIComponent(jobId)}`,
+    { headers: authHeaders(key) },
+    STATUS_TIMEOUT_MS,
+    "crawl status",
+  );
   const body = await readResponse(response, "crawl status");
   const status = String(body?.status ?? "");
   const completed = Number(body?.completed ?? 0) || 0;

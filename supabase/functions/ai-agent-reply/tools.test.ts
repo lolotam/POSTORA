@@ -1,4 +1,4 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { customToolDefinitions, escalateConversation, executeTool, type CustomTool, type ToolContext } from "./tools.ts";
 import { composioBinding } from "../_shared/connectorRegistry.ts";
@@ -570,17 +570,43 @@ Deno.test("both handoff switches off removes every escalation instruction", asyn
   assertEquals(prompt.includes("escalate_to_human"), false);
 });
 
-Deno.test("both handoff switches off also removes the tool, not just the instruction", async () => {
+Deno.test("both handoff switches off removes the tool, not just the instruction", async () => {
   // A switch that only edits the prompt is a suggestion. The tool has to leave
   // the model's function list too, or the agent can still hand off after being
   // told the business does not want handoffs.
   const { agentToolDefinitions } = await import("./tools.ts");
-  const names = (canEscalate: boolean) =>
-    agentToolDefinitions({ canEscalate }).map((tool) => tool.function.name);
+  const names = (onRequest: boolean, onLowConfidence: boolean) =>
+    agentToolDefinitions({ onRequest, onLowConfidence }).map((tool) => tool.function.name);
 
-  assertEquals(names(true).includes("escalate_to_human"), true);
-  assertEquals(names(false).includes("escalate_to_human"), false);
+  assertEquals(names(true, true).includes("escalate_to_human"), true);
+  assertEquals(names(false, false).includes("escalate_to_human"), false);
   // Nothing else is removed with it.
-  assertEquals(names(false).includes("search_knowledge"), true);
-  assertEquals(names(false).includes("notify_admin"), true);
+  assertEquals(names(false, false).includes("search_knowledge"), true);
+  assertEquals(names(false, false).includes("notify_admin"), true);
+});
+
+Deno.test("one handoff switch off narrows the tool description to the other trigger", async () => {
+  // Codex P1. The stock description names BOTH reasons -- "when the customer
+  // asks for a person, or when the knowledge base cannot answer" -- so keeping
+  // it while one switch is off would make that switch do nothing the model can
+  // act on. There is no per-trigger check at execution time, so the description
+  // is the only control there is.
+  const { agentToolDefinitions } = await import("./tools.ts");
+  const describe = (onRequest: boolean, onLowConfidence: boolean) =>
+    agentToolDefinitions({ onRequest, onLowConfidence })
+      .find((tool) => tool.function.name === "escalate_to_human")!.function.description;
+
+  const requestOnly = describe(true, false);
+  assertStringIncludes(requestOnly, "ONLY when the customer explicitly asks for a person");
+  assertEquals(
+    requestOnly.includes("Do NOT use it merely because the knowledge base cannot answer"),
+    true,
+  );
+
+  const knowledgeOnly = describe(false, true);
+  assertStringIncludes(knowledgeOnly, "ONLY when the business knowledge cannot answer");
+  assertEquals(knowledgeOnly.includes("chosen not to transfer on request"), true);
+
+  // Both on keeps the original wording untouched.
+  assertStringIncludes(describe(true, true), "or when the knowledge base cannot answer");
 });
