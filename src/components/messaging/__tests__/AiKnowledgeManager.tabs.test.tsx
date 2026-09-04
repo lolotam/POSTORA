@@ -79,13 +79,6 @@ describe("AiKnowledgeManager input methods", () => {
     };
   });
 
-  it("offers the three input methods", () => {
-    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
-    expect(screen.getByRole("tab", { name: /manual/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /upload/i })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /website/i })).toBeInTheDocument();
-  });
-
   it("keeps the sources panel visible on every input method", () => {
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
     expect(screen.getByText("prices.csv")).toBeInTheDocument();

@@ -1,9 +1,5 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
-export interface WebsitePanelProps {
-  disabled?: boolean;
-}
-
 /**
  * Placeholder until the Firecrawl slice lands (slice 4 of
  * docs/superpowers/plans/2026-09-05-agent-setup-restructure.md).
@@ -12,7 +8,7 @@ export interface WebsitePanelProps {
  * and shipped once, and so the empty state is an honest sentence rather than a
  * control that does nothing when clicked.
  */
-export function WebsitePanel(_props: WebsitePanelProps) {
+export function WebsitePanel() {
   return (
     <Card>
       <CardHeader>

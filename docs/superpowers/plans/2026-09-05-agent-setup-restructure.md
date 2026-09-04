@@ -15,6 +15,7 @@
 - **Branch:** `feat/agent-setup-restructure`. Another CLI drives `F:\Postora_new`'s HEAD and the tree carries unrelated dirty files — every commit is scoped: `git commit -m "…" -- <files>`. Never `git stash -u`.
 - **`userEvent` is unusable in this repo** (clipboard API). All React tests use `fireEvent`.
 - **Run Deno tests BEFORE `bun install`.** `deno test --node-modules-dir=auto` destroys `node_modules` and breaks vitest.
+- **The CI edge-test invocation is `deno test --allow-env --allow-net --allow-read --allow-write --no-check --node-modules-dir=auto supabase/functions/`.** Locally, run new pure modules with `--node-modules-dir=none` so the run does not wipe `node_modules`; run the full CI form last, then `bun install`.
 - **Run `deno check` on every new edge module.** `--no-check` hides type errors that only surface at runtime.
 - **Migrations are manual; `main` auto-deploys the frontend.** A frontend naming a column that does not exist yet makes PostgREST reject the **entire row** (PGRST204) — every config save dies, not just the new field. Migrations for Tasks 6 and 13 are applied to production **before** the slice merges.
 - **Migrations run as `supabase_admin`**, not `postgres` (mixed table ownership). Apply through `ssh-contabo-mcp`:
@@ -578,7 +579,7 @@ Deno.test("parse accepts an empty object and null", () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-deno test --allow-none supabase/functions/_shared/businessProfileText.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/_shared/businessProfileText.test.ts
 ```
 
 Expected: FAIL — module not found.
@@ -707,7 +708,7 @@ export function renderBusinessProfileText(profile: BusinessProfile): string {
 - [ ] **Step 4: Run the tests and the type check**
 
 ```bash
-deno test --allow-none supabase/functions/_shared/businessProfileText.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/_shared/businessProfileText.test.ts
 deno check supabase/functions/_shared/businessProfileText.ts
 ```
 
@@ -801,7 +802,7 @@ Deno.test("an instruction block body over 2000 chars is rejected", () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-deno test --allow-none supabase/functions/_shared/agentBehavior.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/_shared/agentBehavior.test.ts
 ```
 
 Expected: FAIL — module not found.
@@ -813,7 +814,7 @@ Mirror the structure of `businessProfileText.ts`: an explicit key allow-list, en
 - [ ] **Step 4: Run the tests and type check**
 
 ```bash
-deno test --allow-none supabase/functions/_shared/agentBehavior.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/_shared/agentBehavior.test.ts
 deno check supabase/functions/_shared/agentBehavior.ts
 ```
 
@@ -949,7 +950,7 @@ Deno.test("a filled structured profile does not trip the guard", () => {
 - [ ] **Step 2: Run it and watch it fail**
 
 ```bash
-deno test --allow-none supabase/functions/messaging-api/configBlanking.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/messaging-api/configBlanking.test.ts
 ```
 
 Expected: FAIL — the import of `businessProfileText.ts` resolves, but the first case fails only if the renderer misbehaves; if both already pass, that is the correct outcome and the value of the test is regression coverage. Record which.
@@ -1001,7 +1002,7 @@ Add the two imports at the top of the file.
 - [ ] **Step 4: Run the messaging-api Deno tests and type-check**
 
 ```bash
-deno test --allow-none supabase/functions/messaging-api/
+deno test --no-check --node-modules-dir=none supabase/functions/messaging-api/
 deno check supabase/functions/messaging-api/index.ts
 ```
 
@@ -1109,7 +1110,7 @@ Deno.test("handoff rules disappear only when both switches are off", async () =>
 - [ ] **Step 2: Run and watch them fail**
 
 ```bash
-deno test --allow-none supabase/functions/ai-agent-reply/tools.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/ai-agent-reply/tools.test.ts
 ```
 
 Expected: FAIL on the new cases.
@@ -1180,7 +1181,10 @@ and make the two handoff rules conditional (defaulting to the column defaults, s
 ```ts
     (params.handoffOnLowConfidence ?? true)
       ? "- If the knowledge does not contain the answer, say you will check with the team, and use the escalate_to_human tool."
-      : "- If the knowledge does not contain the answer, say you will check with the team and that someone will follow up.",
+      // With the switch off nobody is notified, so the off-variant must not
+      // promise a follow-up: escalateConversation is the only thing that
+      // reaches a human, and it is exactly what this branch skips.
+      : "- If the knowledge does not contain the answer, say plainly that you do not have that information. Do not promise that anyone will follow up.",
     (params.handoffOnRequest ?? true)
       ? "- If the customer asks for a person/human/agent, use the escalate_to_human tool and tell them someone will follow up."
       : "",
@@ -1197,7 +1201,7 @@ In `index.ts` at the `buildSystemPrompt({ … })` call, add:
 - [ ] **Step 4: Run all the ai-agent-reply Deno tests**
 
 ```bash
-deno test --allow-none supabase/functions/ai-agent-reply/
+deno test --no-check --node-modules-dir=none supabase/functions/ai-agent-reply/
 deno check supabase/functions/ai-agent-reply/logic.ts supabase/functions/ai-agent-reply/index.ts
 ```
 
@@ -1284,7 +1288,33 @@ Expected: FAIL — no `Products and services` label.
 
 Copy the type shapes verbatim from the Deno modules and add the four option arrays with user-facing labels. Add a comment at the top pointing at `supabase/functions/_shared/businessProfileText.ts` and `agentBehavior.ts` as the authority — a divergence here produces a 400 from the server's key allow-list, which is the intended failure mode but a confusing one to debug.
 
-- [ ] **Step 4: Extend `useAiAgentConfig.ts`**
+- [ ] **Step 4a: Extend the Settings form's value shape**
+
+`AiAgentManager` holds two definitions of "the config as the form sees it", and
+both must learn `agent_behavior` or `mergeUntouchedFields` and `useDirtyForm`
+will compare `undefined` against `{}` and disagree about whether the field was
+touched:
+
+```ts
+// defaultConfig
+  agent_behavior: {},
+// toFormValues
+    agent_behavior: config.agent_behavior ?? {},
+```
+
+**`business_profile` deliberately goes into NEITHER.** Settings has no UI for it,
+and carrying it would make Settings a second writer able to revert what the
+Knowledge tab just saved.
+
+For the same reason, **remove `business_profile_text` from `toFormValues` and
+`defaultConfig`** in this step. Settings has never rendered that field, so
+sending it back on every save is a write with no author — and once the Knowledge
+tab writes structure instead of text, a Settings save carrying stale text is a
+divergence between the jsonb and the column rendered from it. Verified safe: the
+five contract tests all assert with `expect.objectContaining`, so an added or
+removed key does not break them. Re-run them immediately after this step.
+
+- [ ] **Step 4b: Extend `useAiAgentConfig.ts`**
 
 Add to the `AiAgentConfig` interface:
 
@@ -1473,11 +1503,25 @@ git commit -m "feat(agent-settings): tone, goals, guardrails, handoff and instru
 
 - [ ] **Step 8: Deploy the edge functions for slice 3**
 
+Order matters, and it is not the obvious one:
+
+1. The migration is already applied (Task 6) — a frontend naming a missing
+   column kills every save.
+2. **Merge the branch.** `.github/workflows/deploy-edge-functions.yml` deploys
+   the edge functions from `main` on its own.
+3. Only if Actions is billing-blocked (check the last workflow run before
+   assuming either way — a job failing in ~3s with no steps is billing, not the
+   diff) fall back to the manual runbook, and check out **`origin/main`**, never
+   the feature branch:
+
 ```bash
-# on Contabo, via ssh-contabo-mcp
-cd /root/postora-runtime && git fetch origin && git checkout -q FETCH_HEAD -- supabase/functions
+# fallback only
+cd /root/postora-runtime && git fetch origin && git checkout -q origin/main -- supabase/functions
 cd /etc/dokploy/compose/postorasupabase-supabase-j8axyh && docker compose restart functions
 ```
+
+Checking a feature branch onto `/root/postora-runtime` leaves it dirty against
+`main`, and the next auto-deploy fetch conflicts.
 
 Then confirm a save round-trips: open `/automation/agent-setup?platform=whatsapp`, set a tone, save, reload, and check the tone came back.
 
@@ -1548,7 +1592,7 @@ Deno.test("rejects a URL longer than 2048 characters", () => {
 - [ ] **Step 2: Run and watch it fail**
 
 ```bash
-deno test --allow-none supabase/functions/_shared/knowledgeUrl.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/_shared/knowledgeUrl.test.ts
 ```
 
 Expected: FAIL — module not found.
@@ -1562,7 +1606,7 @@ Note in a comment that this does **not** defeat DNS rebinding — Firecrawl perf
 - [ ] **Step 4: Run and type check**
 
 ```bash
-deno test --allow-none supabase/functions/_shared/knowledgeUrl.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/_shared/knowledgeUrl.test.ts
 deno check supabase/functions/_shared/knowledgeUrl.ts
 ```
 
@@ -1694,7 +1738,7 @@ Deno.test("a page with no markdown is dropped, not passed on as empty", async ()
 - [ ] **Step 2: Run and watch it fail**
 
 ```bash
-deno test --allow-none supabase/functions/_shared/firecrawl.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/_shared/firecrawl.test.ts
 ```
 
 Expected: FAIL — module not found.
@@ -1708,7 +1752,7 @@ Every response goes through one shared reader that throws `FirecrawlError` when 
 - [ ] **Step 4: Run and type check**
 
 ```bash
-deno test --allow-none supabase/functions/_shared/firecrawl.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/_shared/firecrawl.test.ts
 deno check supabase/functions/_shared/firecrawl.ts
 ```
 
@@ -1908,7 +1952,7 @@ Deno.test("a long path is truncated so the name stays readable", () => {
 - [ ] **Step 2: Run and watch it fail**
 
 ```bash
-deno test --allow-none supabase/functions/ai-knowledge-ingest/website.test.ts
+deno test --no-check --node-modules-dir=none supabase/functions/ai-knowledge-ingest/website.test.ts
 ```
 
 Expected: FAIL.
@@ -2001,7 +2045,7 @@ Also allow `website` in `delete_source`'s handling (it takes no storage object �
 - [ ] **Step 4: Run the tests and type check**
 
 ```bash
-deno test --allow-none supabase/functions/ai-knowledge-ingest/
+deno test --no-check --node-modules-dir=none supabase/functions/ai-knowledge-ingest/
 deno check supabase/functions/ai-knowledge-ingest/index.ts
 ```
 
@@ -2108,7 +2152,7 @@ Deno.test("a website source with no crawl job id fails immediately", async () =>
 - [ ] **Step 2: Run and watch it fail**
 
 ```bash
-deno test --allow-none --node-modules-dir=none supabase/functions/ai-knowledge-excel-worker/website.test.ts
+deno test --no-check --node-modules-dir=none --node-modules-dir=none supabase/functions/ai-knowledge-excel-worker/website.test.ts
 ```
 
 Expected: FAIL.
@@ -2128,7 +2172,7 @@ Reuse the existing embedding and checkpoint helpers rather than writing new ones
 - [ ] **Step 4: Run and type check**
 
 ```bash
-deno test --allow-none --node-modules-dir=none supabase/functions/ai-knowledge-excel-worker/
+deno test --no-check --node-modules-dir=none --node-modules-dir=none supabase/functions/ai-knowledge-excel-worker/
 deno check --node-modules-dir=none supabase/functions/ai-knowledge-excel-worker/index.ts
 ```
 
@@ -2252,12 +2296,10 @@ git commit -m "feat(knowledge): website scraping panel with a live crawl checkli
 
 - [ ] **Step 8: Deploy and verify end to end**
 
-```bash
-# on Contabo
-cd /root/postora-runtime && git fetch origin && git checkout -q FETCH_HEAD -- supabase/functions
-cd /etc/dokploy/compose/postorasupabase-supabase-j8axyh
-docker compose restart functions ai-knowledge-excel-worker 2>/dev/null || docker compose restart functions
-```
+Same order as slice 3: migration first (Task 13, already applied), then **merge**
+and let `deploy-edge-functions.yml` ship it — that workflow already knows to
+restart `ai-knowledge-excel-worker` when `_shared/` or the worker changes. Fall
+back to the manual runbook from `origin/main` only if Actions is billing-blocked.
 
 Then, in the app: scrape one page of a real site and confirm the source reaches `ready` with a chunk count; start a whole-site crawl and confirm it moves `crawling → embedding → ready` across cron ticks. Check `system_logs` for the `ingest_website` rows.
 
