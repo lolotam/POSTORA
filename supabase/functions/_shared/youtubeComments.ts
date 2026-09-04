@@ -12,6 +12,7 @@ import { composioBinding } from "./connectorRegistry.ts";
 import {
   type ConnectorCallMeta,
   ConnectorRefusal,
+  resolveWorkspaceForCall,
   withConnectorCall,
 } from "./connectorTelemetry.ts";
 import {
@@ -257,20 +258,39 @@ class YouTubeToolFailure extends Error {
 
 function connectorCallMeta(
   account: YouTubeCommentAccount,
-  toolId: string,
+  workspaceId: string,
+  actionName: string,
 ): ConnectorCallMeta {
   return {
-    workspaceId: account.workspace_id ?? "",
+    workspaceId,
     connectionId: account.connection_id ?? null,
     socialAccountId: account.id,
-    toolId,
+    // Deliberately no toolId: connector_call_logs.tool_id is a uuid FK to
+    // ai_agent_tools, and this path has no agent tool row -- it polls a
+    // channel on a cron. Passing the Composio slug here is what made every
+    // insert fail with `invalid input syntax for type uuid` from the moment
+    // the poll shipped; the slug's home is action_name, which is text.
     connectorType: "youtube",
     authStrategy: "composio_oauth",
-    actionName: toolId,
+    actionName,
     // The ledger's CHECK admits agent | partner | test | publish. Comment actions are none of
     // those; "publish" is the outbound-to-platform bucket until a "comment" source is added.
     source: "publish",
   };
+}
+
+// social_accounts.workspace_id is nullable, but connector_call_logs.workspace_id is a
+// NOT NULL uuid: the `?? ""` this replaced made every ledger insert for an
+// unbackfilled account throw `invalid input syntax for type uuid: ""`, which
+// recordConnectorCall swallowed — blinding the ledger for all callers from
+// 2026-09-03 until this fix. Spec §4.3: the account's workspace when known,
+// else the owner's personal workspace.
+async function workspaceForLedger(
+  account: YouTubeCommentAccount,
+  deps: YouTubeCommentsDeps,
+): Promise<string> {
+  return account.workspace_id ??
+    await resolveWorkspaceForCall(deps.admin, { userId: account.user_id });
 }
 
 async function callComposio(
@@ -282,22 +302,44 @@ async function callComposio(
   if (!deps.composio || !binding) {
     return fail("upstream", "Composio is not configured.");
   }
-  if (!account.connection_id || !account.workspace_id) {
+  if (!account.connection_id) {
     return fail(
       "unauthorized",
       "The Composio connection is inactive. Reconnect the channel in Profiles.",
     );
   }
 
+  // Resolved, not taken from the row: a null workspace_id must still produce a
+  // real workspace for the ledger, and the connection lookup below runs against
+  // the same resolved id. workspace_unresolved (no personal workspace either)
+  // is caught by the block below and reported, never thrown past this adapter.
+  let workspaceId: string;
+  try {
+    workspaceId = await workspaceForLedger(account, deps);
+  } catch (error) {
+    // AGENTS.md rule 4: a refusal that writes nothing anywhere is invisible,
+    // and the ledger cannot hold this one -- workspace_id is the very field
+    // that could not be resolved.
+    console.error(
+      `[youtube-comments] workspace unresolved for account ${account.id}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return fail(
+      "upstream",
+      "Could not resolve the workspace for this channel. Try again.",
+    );
+  }
+
   try {
     const data = await withConnectorCall(
       deps.admin,
-      connectorCallMeta(account, call.composio.slug),
+      connectorCallMeta(account, workspaceId, call.composio.slug),
       async (signal) => {
         const lookup = await loadActiveConnection(
           deps.admin,
           account.connection_id!,
-          account.workspace_id!,
+          workspaceId,
         );
         if (!lookup.ok) throw new ConnectorRefusal(lookup.code);
         const executed = await deps.composio!.executeTool({

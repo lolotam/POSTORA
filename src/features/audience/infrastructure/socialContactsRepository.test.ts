@@ -4,12 +4,15 @@ const from = vi.fn();
 const rpc = vi.fn();
 vi.mock("@/integrations/supabase/client", () => ({ supabase: { from: (...a: unknown[]) => from(...a), rpc: (...a: unknown[]) => rpc(...a) } }));
 
-import { listContacts, fetchContactStats, fetchAllContacts, updateContact } from "./socialContactsRepository";
+import {
+  findWhatsAppContactByPhone, listContacts, fetchContactStats, fetchAllContacts, updateContact,
+} from "./socialContactsRepository";
 import { EMPTY_FILTERS } from "../domain/socialContact";
 
 function chain(result: { data: unknown; error: unknown }) {
   const q: Record<string, unknown> = {};
   for (const m of ["select", "eq", "not", "limit", "update", "delete"]) q[m] = vi.fn(() => q);
+  q.maybeSingle = () => Promise.resolve(result);
   q.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve);
   return q as Record<string, ReturnType<typeof vi.fn>> & { then: unknown };
 }
@@ -69,5 +72,28 @@ describe("updateContact", () => {
     expect(from).toHaveBeenCalledWith("social_contacts");
     expect(q.update).toHaveBeenCalledWith({ tags: ["vip"] });
     expect(q.eq).toHaveBeenCalledWith("id", "1");
+  });
+});
+
+describe("findWhatsAppContactByPhone", () => {
+  it("reads whatsapp_contacts scoped to the caller and the digits-only phone", async () => {
+    const q = chain({ data: { id: "wa-1", display_name: "Dana WA" }, error: null });
+    from.mockReturnValue(q);
+    await expect(findWhatsAppContactByPhone("u1", "96550000000")).resolves.toEqual({
+      id: "wa-1",
+      display_name: "Dana WA",
+    });
+    expect(from).toHaveBeenCalledWith("whatsapp_contacts");
+    expect(q.select).toHaveBeenCalledWith("id, display_name");
+    // The user_id predicate is the tenancy boundary: whatsapp_contacts has an
+    // admin SELECT policy, so without it an admin would match other tenants.
+    expect(q.eq).toHaveBeenCalledWith("user_id", "u1");
+    expect(q.eq).toHaveBeenCalledWith("phone_number", "96550000000");
+  });
+  it("returns null when there is no match and throws the Supabase error", async () => {
+    from.mockReturnValueOnce(chain({ data: null, error: null }));
+    await expect(findWhatsAppContactByPhone("u1", "96599999999")).resolves.toBeNull();
+    from.mockReturnValueOnce(chain({ data: null, error: { message: "boom" } }));
+    await expect(findWhatsAppContactByPhone("u1", "96599999999")).rejects.toMatchObject({ message: "boom" });
   });
 });

@@ -1,6 +1,11 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-import { handleRequest, syncContactsToSheet, type SyncDependencies } from "./index.ts";
+import {
+  getSpreadsheetInfo,
+  handleRequest,
+  syncContactsToSheet,
+  type SyncDependencies,
+} from "./index.ts";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const WS = "22222222-2222-4222-8222-222222222222";
@@ -106,7 +111,9 @@ function fakeAdmin(options: AdminOptions = {}) {
   };
 }
 
-function fakeComposio(outcome: { successful: boolean; error?: string } = { successful: true }) {
+function fakeComposio(
+  outcome: { successful: boolean; error?: string; data?: unknown } = { successful: true },
+) {
   const executions: Array<Record<string, unknown>> = [];
   return {
     executions,
@@ -393,4 +400,118 @@ Deno.test("a connection of another connector type is refused before the tool run
   assertEquals(composio.executions.length, 0);
   assertEquals(admin.ledger.at(-1)?.status, "refused");
   assertEquals(admin.ledger.at(-1)?.error_code, "connector_type_mismatch");
+});
+
+// A Google Spreadsheet resource as GET_SPREADSHEET_INFO returns it: properties
+// for the document title and one sheets[] entry per tab.
+const SPREADSHEET_RESOURCE = {
+  spreadsheetId: "1AbC_spreadsheet",
+  properties: { title: "Audience export" },
+  sheets: [
+    { properties: { sheetId: 0, title: "Sheet1" } },
+    { properties: { sheetId: 1, title: "Contacts 2026" } },
+  ],
+};
+
+function infoRequest(body: unknown) {
+  return request(body);
+}
+
+Deno.test("get_spreadsheet_info returns the real tab titles through the read tool", async () => {
+  const admin = fakeAdmin();
+  const composio = fakeComposio({ successful: true, data: SPREADSHEET_RESOURCE });
+  const response = await handleRequest(
+    infoRequest({
+      operation: "get_spreadsheet_info",
+      connection_id: CONNECTION,
+      spreadsheet_id: "1AbC_spreadsheet",
+    }),
+    () => dependencies(admin, composio),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(await payload(response), {
+    ok: true,
+    spreadsheet_title: "Audience export",
+    sheets: ["Sheet1", "Contacts 2026"],
+  });
+
+  assertEquals(composio.executions.length, 1);
+  const execution = composio.executions[0] as {
+    slug: string;
+    version: string;
+    workspaceId: string;
+    arguments: Record<string, unknown>;
+  };
+  assertEquals(execution.slug, "GOOGLESHEETS_GET_SPREADSHEET_INFO");
+  assertEquals(execution.version, "20260902_00");
+  assertEquals(execution.workspaceId, WS);
+  assertEquals(execution.arguments, { spreadsheet_id: "1AbC_spreadsheet" });
+
+  assertEquals(admin.ledger.length, 1);
+  assertEquals(admin.ledger[0].status, "success");
+  assertEquals(admin.ledger[0].action_name, "GOOGLESHEETS_GET_SPREADSHEET_INFO");
+  assertEquals(admin.ledger[0].connector_type, "google_sheets");
+});
+
+// A wrong or unreadable spreadsheet id is an ERROR the dialog can word, never a
+// spreadsheet with zero tabs (AGENTS.md rule 3).
+Deno.test("get_spreadsheet_info answers ok:false when the tool cannot read the id", async () => {
+  const admin = fakeAdmin();
+  const composio = fakeComposio({ successful: false, error: "Requested entity was not found" });
+  const response = await handleRequest(
+    infoRequest({
+      operation: "get_spreadsheet_info",
+      connection_id: CONNECTION,
+      spreadsheet_id: "not-a-spreadsheet",
+    }),
+    () => dependencies(admin, composio),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(await payload(response), { ok: false, error: "composio_failed" });
+  assertEquals(admin.ledger.at(-1)?.status, "refused");
+  assertEquals(admin.ledger.at(-1)?.error_code, "composio_failed");
+});
+
+// The tool "succeeded" but the body is not a spreadsheet resource: also an
+// error, so a shape change at Composio can never render as an empty tab list.
+Deno.test("get_spreadsheet_info refuses a body that is not a spreadsheet resource", async () => {
+  const admin = fakeAdmin();
+  const composio = fakeComposio({ successful: true, data: { unexpected: true } });
+  const result = await getSpreadsheetInfo(dependencies(admin, composio), {
+    userId: USER,
+    connectionId: CONNECTION,
+    spreadsheetId: "1AbC_spreadsheet",
+  });
+  assertEquals(result, { ok: false, error: "unexpected_spreadsheet_response" });
+  assertEquals(admin.ledger.at(-1)?.status, "refused");
+  assertEquals(admin.ledger.at(-1)?.error_code, "unexpected_spreadsheet_response");
+});
+
+Deno.test("get_spreadsheet_info for a non-member is forbidden and calls no tool", async () => {
+  const admin = fakeAdmin({ member: false });
+  const composio = fakeComposio();
+  const response = await handleRequest(
+    infoRequest({
+      operation: "get_spreadsheet_info",
+      connection_id: CONNECTION,
+      spreadsheet_id: "1AbC_spreadsheet",
+    }),
+    () => dependencies(admin, composio),
+  );
+  assertEquals(response.status, 200);
+  assertEquals(await payload(response), { ok: false, error: "forbidden" });
+  assertEquals(composio.executions.length, 0);
+  assertEquals(admin.ledger.at(-1)?.error_code, "forbidden");
+});
+
+Deno.test("get_spreadsheet_info without a connection id is a 400 invalid_request", async () => {
+  const admin = fakeAdmin();
+  const composio = fakeComposio();
+  const response = await handleRequest(
+    infoRequest({ operation: "get_spreadsheet_info", spreadsheet_id: "1AbC_spreadsheet" }),
+    () => dependencies(admin, composio),
+  );
+  assertEquals(response.status, 400);
+  assertEquals(await payload(response), { ok: false, error: "invalid_request" });
+  assertEquals(composio.executions.length, 0);
 });

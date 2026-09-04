@@ -1,6 +1,7 @@
 import type { ComposioClient } from "../_shared/composioClient.ts";
 import {
   ConnectorRefusal,
+  resolveWorkspaceForCall,
   withConnectorCall,
 } from "../_shared/connectorTelemetry.ts";
 
@@ -9,6 +10,7 @@ export const COMPOSIO_YOUTUBE_REAUTH_MESSAGE =
 
 export interface ProviderAwareYouTubeAccount {
   id: string;
+  user_id: string;
   auth_provider?: "native" | "composio";
   connection_id?: string | null;
   workspace_id?: string | null;
@@ -31,8 +33,15 @@ export async function probeYouTubeProvider<T>(
     return { provider: "native", result: await deps.refreshNative() };
   }
 
+  // social_accounts.workspace_id is nullable but connector_call_logs.workspace_id
+  // is a NOT NULL uuid: the `?? ""` this replaces made the ledger insert throw
+  // `invalid input syntax for type uuid` on every probe of an unbackfilled
+  // account — the every-few-minutes failure that blinded the ledger from
+  // 2026-09-03. Spec §4.3: the account's workspace, else the owner's personal.
+  const workspaceId = account.workspace_id ??
+    await resolveWorkspaceForCall(deps.admin, { userId: account.user_id });
   const meta = {
-    workspaceId: account.workspace_id ?? "",
+    workspaceId,
     connectionId: account.connection_id ?? null,
     socialAccountId: account.id,
     connectorType: "youtube",
@@ -42,11 +51,11 @@ export async function probeYouTubeProvider<T>(
   };
   const remoteActive = await withConnectorCall(deps.admin, meta, async () => {
     if (!deps.client) throw new ConnectorRefusal("connector_unavailable");
-    if (!account.connection_id || !account.workspace_id) return false;
+    if (!account.connection_id) return false;
     const { data, error } = await deps.admin.from("connector_connections")
       .select("id,workspace_id,composio_connected_account_id,status")
       .eq("id", account.connection_id)
-      .eq("workspace_id", account.workspace_id)
+      .eq("workspace_id", workspaceId)
       .maybeSingle();
     if (error) throw new Error("connection_read_failed");
     if (

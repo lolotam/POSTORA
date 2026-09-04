@@ -109,6 +109,29 @@ export async function updateContact(id: string, patch: ContactPatch): Promise<vo
   if (error) throw error;
 }
 
+export interface WhatsAppContactMatch { id: string; display_name: string | null; }
+
+/** Finds the caller's WhatsApp contact with the same digits-only phone
+ *  (whatsapp_contacts.phone_number is stored digits-only, the same
+ *  normalisation the drawer applies to social_contacts.phone_number).
+ *
+ *  Scoped to `userId` explicitly: whatsapp_contacts has an admin SELECT
+ *  policy, so a direct table read is not caller-scoped on its own -- same
+ *  reason as fetchDistinctTags. */
+export async function findWhatsAppContactByPhone(
+  userId: string,
+  phone: string,
+): Promise<WhatsAppContactMatch | null> {
+  const { data, error } = await supabase
+    .from("whatsapp_contacts")
+    .select("id, display_name")
+    .eq("user_id", userId)
+    .eq("phone_number", phone)
+    .maybeSingle();
+  if (error) throw error;
+  return (data ?? null) as WhatsAppContactMatch | null;
+}
+
 export async function deleteContact(id: string): Promise<void> {
   const { error } = await supabase.from("social_contacts").delete().eq("id", id);
   if (error) throw error;
@@ -145,4 +168,28 @@ export async function syncContactsToSheet(input: SheetsSyncInput): Promise<numbe
   if (error) throw error;
   if (!data || data.ok !== true) throw new Error(data?.error ?? "sheets_sync_failed");
   return data.appended ?? 0;
+}
+
+export interface SpreadsheetInfoInput {
+  connection_id: string;
+  spreadsheet_id: string;
+}
+
+export interface SpreadsheetInfo {
+  spreadsheet_title: string | null;
+  sheets: string[];
+}
+
+/** Validates a pasted spreadsheet id and returns its real tabs, so the dialog
+ *  can offer titles that actually exist. A failed lookup throws (the error
+ *  code from the edge function) and must never render as "no tabs". */
+export async function fetchSpreadsheetInfo(input: SpreadsheetInfoInput): Promise<SpreadsheetInfo> {
+  const { data, error } = await supabase.functions.invoke<
+    { ok: boolean; spreadsheet_title?: string | null; sheets?: string[]; error?: string }
+  >("audience-sheets-sync", {
+    body: { operation: "get_spreadsheet_info", connection_id: input.connection_id, spreadsheet_id: input.spreadsheet_id },
+  });
+  if (error) throw error;
+  if (!data || data.ok !== true) throw new Error(data?.error ?? "sheets_lookup_failed");
+  return { spreadsheet_title: data.spreadsheet_title ?? null, sheets: data.sheets ?? [] };
 }

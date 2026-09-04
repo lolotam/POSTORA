@@ -12,7 +12,7 @@ import { z } from "npm:zod@3.23.8";
 
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
-import { loadActiveConnection } from "../_shared/composioConnections.ts";
+import { loadActiveConnection, type ActiveConnection } from "../_shared/composioConnections.ts";
 import { composioBinding } from "../_shared/connectorRegistry.ts";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
@@ -26,12 +26,23 @@ import {
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const BodySchema = z.object({
+// Two operations on one function so they share auth, workspace derivation and
+// telemetry. `sync` stays the default: its body predates the operation field.
+const InfoBodySchema = z.object({
+  operation: z.literal("get_spreadsheet_info"),
+  connection_id: z.string().trim().regex(UUID_PATTERN),
+  spreadsheet_id: z.string().trim().min(1),
+});
+
+const SyncBodySchema = z.object({
+  operation: z.literal("sync").optional(),
   connection_id: z.string().trim().regex(UUID_PATTERN),
   spreadsheet_id: z.string().trim().min(1),
   sheet_name: z.string().trim().min(1),
   contact_ids: z.array(z.string().trim().regex(UUID_PATTERN)).min(1).max(200),
 });
+
+const BodySchema = z.union([InfoBodySchema, SyncBodySchema]);
 
 // The append tool verified against Composio's live googlesheets toolkit listing
 // at version 20260902_00 (the version pinned on the registry's google_sheets
@@ -94,25 +105,44 @@ export type SyncResult =
   | { ok: true; appended: number }
   | { ok: false; error: string };
 
-export async function syncContactsToSheet(
+export type InfoResult =
+  | { ok: true; spreadsheet_title: string | null; sheets: string[] }
+  | { ok: false; error: string };
+
+type ConnectorBinding = NonNullable<ReturnType<typeof composioBinding>>;
+
+interface ResolvedConnector {
+  workspaceId: string;
+  meta: ConnectorCallMeta;
+  binding: ConnectorBinding;
+  connection: ActiveConnection;
+}
+
+type ConnectorResolution =
+  | { ok: true; value: ResolvedConnector }
+  | { ok: false; result: { ok: false; error: string } };
+
+/** The prologue every operation of this function shares, in the one order the
+ *  ledger depends on: connection row -> workspace -> membership -> registry
+ *  allow-list -> active connection -> connector type -> client. Every refusal
+ *  writes a ledger row (AGENTS.md rule 4).
+ *
+ *  `toolAllowed` is per operation because sync's append is a mutating tool
+ *  (checked against `mutating`) while the info lookup is a read tool (checked
+ *  against the allow-list, never against `mutating`). */
+async function resolveConnector(
   deps: SyncDependencies,
-  input: {
-    userId: string;
-    connectionId: string;
-    spreadsheetId: string;
-    sheetName: string;
-    contactIds: string[];
-  },
-): Promise<SyncResult> {
-  // AGENTS.md rule 4: an early return that refuses work writes a ledger row, or an
-  // operator debugging "the sync does nothing" has nothing to read.
+  input: { userId: string; connectionId: string },
+  actionName: string,
+  toolAllowed: (binding: ConnectorBinding) => boolean,
+): Promise<ConnectorResolution> {
   const refuseWith = async (
     meta: ConnectorCallMeta,
     error: string,
-  ): Promise<SyncResult> => {
+  ): Promise<ConnectorResolution> => {
     await recordConnectorCall(deps.admin, meta, { status: "refused", errorCode: error });
     console.error(`[audience-sheets-sync] refused for user ${input.userId}: ${error}`);
-    return { ok: false, error };
+    return { ok: false, result: { ok: false, error } };
   };
 
   // Workspace is derived from the connection row. The caller never supplies it,
@@ -136,7 +166,7 @@ export async function syncContactsToSheet(
     connectionId: input.connectionId,
     connectorType: "google_sheets",
     authStrategy: "composio_oauth",
-    actionName: SHEETS_APPEND_SLUG,
+    actionName,
     source: "audience",
   };
 
@@ -155,22 +185,44 @@ export async function syncContactsToSheet(
   if (isMember !== true) return await refuseWith(meta, "forbidden");
 
   const binding = composioBinding("google_sheets");
-  if (!binding || !binding.mutating.includes(SHEETS_APPEND_SLUG)) {
+  if (!binding || !toolAllowed(binding)) {
     return await refuseWith(meta, "connector_tool_not_allowed");
   }
 
   const lookup = await loadActiveConnection(deps.admin, input.connectionId, workspaceId);
   if (!lookup.ok) return await refuseWith(meta, lookup.code);
-  const connection = lookup.connection;
 
   // An active Slack or Calendar connection in the caller's own workspace would
   // otherwise pass every check above and have its connected-account id handed to
-  // the Sheets append tool, sending contact data at the wrong provider entirely.
-  if (connection.connectorType !== "google_sheets") {
+  // the Sheets tool, sending contact data at the wrong provider entirely.
+  if (lookup.connection.connectorType !== "google_sheets") {
     return await refuseWith(meta, "connector_type_mismatch");
   }
 
   if (!deps.composio) return await refuseWith(meta, "composio_unconfigured");
+
+  return { ok: true, value: { workspaceId, meta, binding, connection: lookup.connection } };
+}
+
+export async function syncContactsToSheet(
+  deps: SyncDependencies,
+  input: {
+    userId: string;
+    connectionId: string;
+    spreadsheetId: string;
+    sheetName: string;
+    contactIds: string[];
+  },
+): Promise<SyncResult> {
+  const resolution = await resolveConnector(
+    deps,
+    input,
+    SHEETS_APPEND_SLUG,
+    // Mutating tool: the allow-list plus the mutating list, exactly as before.
+    (binding) => binding.mutating.includes(SHEETS_APPEND_SLUG),
+  );
+  if (!resolution.ok) return resolution.result;
+  const { workspaceId, meta, binding, connection } = resolution.value;
 
   // Ownership is enforced in the query, not in the caller: the service role
   // bypasses RLS, so `.eq("user_id", userId)` is the tenancy check.
@@ -260,6 +312,103 @@ export async function syncContactsToSheet(
   return { ok: true, appended: values.length };
 }
 
+// Read tool, already in the google_sheets allow-list in both registry mirrors.
+// It is deliberately NOT in `mutating`: reading a spreadsheet's tabs changes
+// nothing in the owner's Sheets.
+const SHEETS_INFO_SLUG = "GOOGLESHEETS_GET_SPREADSHEET_INFO";
+
+/** Extracts the spreadsheet title and the real tab titles from the tool's body.
+ *  Anything that is not a Google spreadsheet resource is an error, never an
+ *  empty tab list -- a failed read must not look like "no tabs" (rule 3). */
+function parseSpreadsheetInfo(
+  body: unknown,
+): { ok: true; spreadsheet_title: string | null; sheets: string[] } | {
+  ok: false;
+  error: string;
+} {
+  const resource = typeof body === "object" && body !== null
+    ? body as { sheets?: unknown; properties?: { title?: unknown } }
+    : null;
+  if (!resource || !Array.isArray(resource.sheets)) {
+    return { ok: false, error: "unexpected_spreadsheet_response" };
+  }
+  const sheets: string[] = [];
+  for (const entry of resource.sheets) {
+    const title = typeof entry === "object" && entry !== null
+      ? (entry as { properties?: { title?: unknown } }).properties?.title
+      : undefined;
+    if (typeof title === "string" && title.length > 0) sheets.push(title);
+  }
+  const spreadsheetTitle = resource.properties?.title;
+  return {
+    ok: true,
+    spreadsheet_title: typeof spreadsheetTitle === "string" && spreadsheetTitle.length > 0
+      ? spreadsheetTitle
+      : null,
+    sheets,
+  };
+}
+
+/** Validates a pasted spreadsheet id against the connection and returns the
+ *  spreadsheet's real tabs, so the dialog offers titles that exist instead of
+ *  letting a mistyped tab name reach Google as an unparseable range. Read-only:
+ *  same gates as the append, no rows written anywhere. */
+export async function getSpreadsheetInfo(
+  deps: SyncDependencies,
+  input: { userId: string; connectionId: string; spreadsheetId: string },
+): Promise<InfoResult> {
+  const resolution = await resolveConnector(
+    deps,
+    input,
+    SHEETS_INFO_SLUG,
+    // Read tool: present in the allow-list is the whole test.
+    (binding) => binding.tools.includes(SHEETS_INFO_SLUG),
+  );
+  if (!resolution.ok) return resolution.result;
+  const { workspaceId, meta, binding, connection } = resolution.value;
+
+  try {
+    const info = await withConnectorCall(deps.admin, meta, async (signal) => {
+      const executed = await deps.composio!.executeTool({
+        slug: SHEETS_INFO_SLUG,
+        version: binding.toolkitVersion,
+        workspaceId,
+        connectedAccountId: connection.composioConnectedAccountId,
+        // Verified input of GOOGLESHEETS_GET_SPREADSHEET_INFO at 20260902_00:
+        // spreadsheet_id (plus optional fields/ranges/include_grid_data, none
+        // needed -- the default response carries the sheet titles).
+        arguments: { spreadsheet_id: input.spreadsheetId },
+        signal,
+      });
+      if (!executed.successful) {
+        // A 404 for an unreadable/wrong id arrives here as successful:false.
+        throw new ConnectorRefusal("composio_failed", executed.error ?? "composio_failed");
+      }
+      // Parsed INSIDE the wrapper so a body that is not a spreadsheet is
+      // ledgered as a refusal, not filed as a success.
+      const parsed = parseSpreadsheetInfo(executed.data);
+      if (!parsed.ok) throw new ConnectorRefusal(parsed.error);
+      return parsed;
+    }, { timeoutMs: TOOL_TIMEOUT_MS });
+    return info;
+  } catch (error) {
+    // Sanitized operational event per ARCHITECTURE.md §17: user and code, never
+    // Composio credentials. The ledger row is already written by the wrapper.
+    if (error instanceof ConnectorRefusal) {
+      console.error(
+        `[audience-sheets-sync] spreadsheet info refused for user ${input.userId}: ${error.code}`,
+      );
+      return { ok: false, error: error.code };
+    }
+    console.error(
+      `[audience-sheets-sync] spreadsheet info failed for user ${input.userId}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return { ok: false, error: "composio_failed" };
+  }
+}
+
 export async function handleRequest(
   req: Request,
   createDeps: () => SyncDependencies = createDependencies,
@@ -298,13 +447,21 @@ export async function handleRequest(
   }
 
   try {
-    const result = await syncContactsToSheet(deps, {
-      userId,
-      connectionId: parsed.connection_id,
-      spreadsheetId: parsed.spreadsheet_id,
-      sheetName: parsed.sheet_name,
-      contactIds: parsed.contact_ids,
-    });
+    // The operation branches only here: auth, validation and the error envelope
+    // are shared, and both operations run their own gates + telemetry.
+    const result = parsed.operation === "get_spreadsheet_info"
+      ? await getSpreadsheetInfo(deps, {
+        userId,
+        connectionId: parsed.connection_id,
+        spreadsheetId: parsed.spreadsheet_id,
+      })
+      : await syncContactsToSheet(deps, {
+        userId,
+        connectionId: parsed.connection_id,
+        spreadsheetId: parsed.spreadsheet_id,
+        sheetName: parsed.sheet_name,
+        contactIds: parsed.contact_ids,
+      });
     return restrictedJsonResponse(req, result);
   } catch (error) {
     // App errors answer 200 so the browser sees the sanitized reason instead of
