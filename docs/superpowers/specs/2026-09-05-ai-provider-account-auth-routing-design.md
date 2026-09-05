@@ -1,682 +1,488 @@
-# AI Provider Account Authentication and Capability Routing
+# AI Provider Connections and Capability Routing
 
+**Status:** Revised implementation-ready design  
 **Date:** 2026-09-05  
-**Status:** Proposed  
-**Owners:** Full-stack / Platform / Security  
-**Product:** POSTORA
+**Scope:** V1 BYOK API connections; Codex is a policy-gated phase 2; Claude Code is excluded
 
-## 1. Summary
+## 1. Decision Summary
 
-POSTORA currently uses platform-managed API credentials for most AI workloads and a dual-scope OAuth implementation for Higgsfield. Higgsfield can run with either a platform connection or the signed-in user's own connection. This design generalizes that pattern into a capability-aware AI provider connection and routing system.
+POSTORA will let a user connect an OpenAI or Anthropic API account and choose whether supported AI work uses that connection before POSTORA's platform credentials. Administrators can create the same connection types for platform traffic and bind an exact connection to each configured model tier.
 
-The new system lets:
+V1 reuses the existing provider catalog, `ai_model_preferences`, connector Vault pattern, feature-flag system, AI fallback chain, and inbound-media vision pipeline. It does not introduce duplicate provider codes, a parallel preference table, a parallel media-analysis function, a generic runtime service, or Claude Code subscription authentication.
 
-1. A user connect an eligible personal provider account or API key and select how each AI capability should be executed.
-2. An administrator continue configuring platform API credentials and, where provider terms permit it, connect a platform account through an account-auth flow.
-3. The execution layer choose a compatible provider, model, authentication source, and runtime without leaking credentials or silently moving cost between the user and POSTORA.
-4. OpenAI API and Codex appear as distinct providers; Anthropic API and Claude Code appear as distinct providers.
+Codex account authentication is phase 2. It remains disabled until OpenAI gives written confirmation that both user-scoped and administrator/shared use are permitted for POSTORA's multi-tenant, webhook-driven, non-coding workload. Claude Code has no implementation scope until a signed Anthropic agreement explicitly permits this deployment shape.
 
-The design does **not** treat a consumer subscription as a general-purpose API key. Subscription-backed products run through their supported first-party runtime:
+## 2. Goals
 
-- Codex through Codex App Server.
-- Claude Code only through the unmodified Claude Code runtime and only where Anthropic's terms and commercial approval permit the requested scope.
+1. Users can connect and validate their own OpenAI or Anthropic API key without exposing it to the browser after submission.
+2. Users can choose `postora_only`, `prefer_own`, or `own_only` per AI category, with optional social-account overrides.
+3. A valid user-owned connection takes priority when requested and is attributed as user-funded usage.
+4. If user-owned execution is unavailable and the mode allows fallback, POSTORA uses the existing user override and admin model chain.
+5. Administrators can create platform connections, control whether they are admin-only or shared, and select the exact connection for a model tier.
+6. Existing routing is compatible while the new routing flags are off.
+7. V1 routes chat, agent replies, captions, hashtags, and the existing inbound vision pipeline. Additional capabilities are added only after adapter-specific tests.
+8. Credentials use the existing Supabase Vault lifecycle pattern and never appear in status APIs, logs, or RLS-visible rows.
 
-## 2. Problem
+## 3. Non-goals
 
-The current provider model is insufficient for account-auth providers:
+- Treating a ChatGPT, Claude, or other consumer subscription as a general-purpose API entitlement.
+- Claude Code authentication, provider rows, cards, feature flags, adapters, or tests.
+- Codex execution in V1.
+- Adding `anthropic` or `google` provider rows.
+- Replacing the working Higgsfield flow during the first routing rollout.
+- Creating `analyze-media` or another vision pipeline beside the existing inbound-media pipeline.
+- Moving every AI modality in one release.
+- Removing current `system_settings`, `provider_api_keys`, or fallback code before parity and rollback gates pass.
 
-- `ai_providers.auth_type` models one authentication method per provider.
-- platform model selection lives in `system_settings.default_ai_model_<category>`.
-- `user_ai_model_overrides` selects a model for a user but does not attach a user-owned credential and is controlled by administrators.
-- `_shared/ai-fallback.ts`, `ai-agent-reply`, and media functions contain separate provider-dispatch logic.
-- Higgsfield maintains a separate `higgsfield_connections` table and custom resolution path.
-- the production container serves a static Vite build through nginx; Supabase Edge Functions cannot safely host long-running Codex App Server or Claude Code processes.
+## 4. Confirmed Current State
 
-As a result, adding a "Codex" or "Claude Code" OAuth button directly to the existing API provider card would create incorrect billing expectations, fragmented routing, and unsafe credential/runtime ownership.
+### 4.1 Provider catalog
 
-## 3. Goals
+Migration `20260323193759_617e4e0d-f514-41d3-a039-9c20c451e71d.sql` already defines these identities:
 
-1. Support both user-scoped and platform-scoped provider connections.
-2. Preserve existing API-key providers.
-3. Add `codex` and `claude_code` as provider identities separate from `openai` and `anthropic`.
-4. Let users choose one of three routing modes globally and per capability:
-   - `postora_only`
-   - `user_first`
-   - `user_only`
-5. Let administrators manage platform API credentials and eligible account-auth connections from Admin Settings.
-6. Discover and show only models that are available to the selected connection and compatible with the capability.
-7. Attribute each execution to the correct credential source and cost owner.
-8. Fail closed on tenancy, credential, policy, and unsupported-capability errors.
-9. Migrate existing Higgsfield behavior without service interruption.
-10. Keep rollout reversible through feature flags and additive migrations.
+| Provider code | Current meaning | V1 action |
+|---|---|---|
+| `openai` | OpenAI Platform API | Keep code; enable through tested API connections |
+| `claude` | Anthropic API | Keep code; display as “Anthropic API” |
+| `gemini` | Google Gemini API | Keep code; do not add `google` |
+| `openrouter` | OpenRouter API | Keep unchanged |
+| `higgsfield` | Higgsfield OAuth/MCP | Keep unchanged in V1 |
 
-## 4. Non-goals
+`openai` and `claude` were seeded inactive. `ai-agent-reply` currently handles `openai`, `openrouter`, `google`, and `gemini`, but not `claude`. Anthropic chat, vision-content mapping, and agent tool-call normalization are new work.
 
-1. Turning Codex or Claude Code subscriptions into generic OpenAI or Anthropic API credentials.
-2. Claiming that one connected model supports chat, vision, image generation, video, speech, and embeddings.
-3. Allowing a personal administrator subscription to serve all subscriber traffic without explicit provider approval.
-4. Removing POSTORA subscription entitlements, abuse limits, runtime limits, storage limits, or service-level quotas.
-5. Replacing the existing Admin default-model chain in the first release.
-6. Exposing provider access tokens, refresh tokens, CLI session files, or runtime sockets to the browser.
-7. Depending on experimental Codex dynamic tools for the first production slice.
+### 4.2 Existing preferences and overrides
 
-## 5. Current POSTORA Constraints
+- `ai_model_preferences` already stores `(user_id, model_id, feature)` and is written by `set-user-preference` in `ai-config`.
+- `get_active_ai_model_config` reads `ai_model_preferences`.
+- `_shared/ai-fallback.ts` does not read `ai_model_preferences`.
+- `resolveChatModelConfig` gives a live, non-expired `user_ai_model_overrides` row precedence over the admin chat primary/fallback chain.
 
-### 5.1 Existing reusable patterns
+V1 extends `ai_model_preferences`; it does not create `user_ai_routing_preferences`. Existing preference rows remain valid and default to `postora_only`.
 
-- `higgsfield-oauth` supports `scope_kind = platform | user`.
-- `resolveHiggsfieldCredential` checks the user connection before the platform connection.
-- `ai_generation_jobs.credential_source` records `platform | byo`.
-- the connector work already establishes workspace ownership, server-side telemetry, and fail-closed authorization patterns.
-- `ai_models.capabilities` is already used by the administrator model picker.
+### 4.3 Existing credential storage
 
-### 5.2 Constraints that shape this design
+Connector credentials already use Supabase Vault through:
 
-- service-role clients bypass RLS; every query must explicitly scope `user_id`, `workspace_id`, or `social_account_id`.
-- migrations must land before frontend code that references new columns.
-- OAuth tokens must remain backend-only and must not appear in logs or client responses.
-- `ai-agent-reply` is time-bound by the Edge gateway and currently uses a platform-global model chain.
-- POSTORA's agent configuration is account-scoped; provider preference may be user-global with an optional social-account override.
-- the current nginx-only container has no long-lived Node/Rust agent runtime.
+- `upsert_connector_credential_secret`
+- `get_connector_credential`
+- connector secret deletion/reclaim logic
 
-## 6. Provider Identity Model
+AI connections reuse this pattern through AI-specific RPCs and ownership checks. Existing `provider_api_keys.api_key` and `higgsfield_connections.access_token` columns are plaintext security debt and need a controlled dual-read/backfill/scrub migration before those paths are declared fully migrated.
 
-Providers are separated by product and execution contract, not only by vendor.
+### 4.4 Feature flags and rollout allowlist
 
-| Provider code | Display name | Runtime | Initial auth methods | Platform scope | User scope |
-|---|---|---|---|---|---|
-| `openai` | OpenAI API | HTTP API | API key | Yes | Yes, BYOK |
-| `codex` | Codex | Codex App Server | ChatGPT managed/device code; API key for diagnostics | Restricted | Yes |
-| `anthropic` | Anthropic API | HTTP API | API key | Yes | Yes, BYOK |
-| `claude_code` | Claude Code | unmodified Claude Code runtime | first-party account login or API key | Disabled by default | Conditional |
-| `google` | Google AI | HTTP API | API key | Yes | Optional BYOK |
-| `openrouter` | OpenRouter | HTTP API | API key | Yes | Optional BYOK |
-| `higgsfield` | Higgsfield | MCP/OAuth | OAuth | Yes | Yes |
+Feature flags are `app_settings` rows, but the frontend only reads keys listed in the hardcoded `FLAG_KEYS`/mapping/defaults in `src/hooks/useFeatureFlags.tsx`. Per-user rollout already exists through `user_feature_overrides`, including expiry.
 
-`openai` and `codex` must not share provider codes. `anthropic` and `claude_code` must not share provider codes. Their credentials, rate limits, capabilities, and terms are different.
+V1 adds rows and updates the hardcoded frontend list. It reuses `user_feature_overrides`; no new rollout allowlist table is permitted.
 
-## 7. Authentication and Traffic Policies
+### 4.5 Existing vision path
 
-Each authentication method has a traffic policy:
+`_shared/inboundMediaUnderstanding.ts`, `inboundMediaPipeline.ts`, and `mediaUnderstandingMode.ts` already process inbound image/document media and accept caller-resolved provider tiers. V1 feeds the new routing and credential result into that tier list. It does not create another Edge Function for media analysis.
 
-| Policy | Meaning |
-|---|---|
-| `own_user` | The connection may execute only requests owned by the same user. |
-| `admin_only` | The connection may execute administrator diagnostics and administrator-owned tasks only. |
-| `platform_shared` | The connection may serve subscriber workloads as a platform credential. |
-| `disabled` | Connection may be displayed or tested but cannot execute production traffic. |
+### 4.6 Deployment and time limit
 
-### 7.1 Platform API credentials
+The root `docker-compose.yml` runs the frontend nginx service only. Supabase Edge Functions run inside the Dokploy Supabase stack and have an effective 60-second worker ceiling; a killed worker may not write a final log row.
 
-Existing administrator API credentials remain eligible for `platform_shared`, subject to current provider and plan controls.
+V1 stays inside existing Edge Functions. A phase-2 Codex runtime, if approved, is a separate Dokploy Compose project attached to the Supabase stack's external Docker network. It is never added to the repository frontend compose or the Supabase compose.
 
-### 7.2 Codex account authentication
+## 5. Provider and Authentication Identity
 
-Codex App Server officially supports managed ChatGPT browser authentication and device-code authentication, reports account plan information, exposes rate-limit status, and can discover models and their input modalities.
+Provider identity describes the protocol/model catalog. Authentication method describes how one connection obtains credentials. They are separate.
 
-Rules:
+### 5.1 V1 identities
 
-- a user Codex connection receives `own_user`.
-- an administrator Codex subscription connection receives `admin_only` by default.
-- `platform_shared` for an administrator Codex subscription is unavailable until a separately documented commercial/terms approval is recorded and the feature flag is enabled.
-- POSTORA never converts or exports the Codex session as an OpenAI API key.
-- browser/device-code authentication is managed by the Codex runtime, not by custom token scraping.
+| Catalog code | Display name | Auth method | Scope |
+|---|---|---|---|
+| `openai` | OpenAI API | `api_key` | user or platform |
+| `claude` | Anthropic API | `api_key` | user or platform |
+| `gemini` | Google Gemini | existing API method | platform, unchanged initially |
+| `higgsfield` | Higgsfield | existing OAuth method | user or platform, unchanged initially |
 
-Official references:
+There must be no `anthropic`, `google`, or `claude_code` catalog seed. Display names may change with `UPDATE ... WHERE provider_code = ...`; codes must not.
 
-- https://learn.chatgpt.com/docs/app-server
-- https://learn.chatgpt.com/docs/auth
+### 5.2 Phase-2 Codex identity
 
-### 7.3 Claude Code account authentication
+`codex` may be added only after the policy gate in section 16 passes. It is distinct because its runtime/protocol and capability contract differ from the OpenAI Platform API. The existence of ChatGPT sign-in, device-code login, or App Server embedding does not decide whether POSTORA may drive a user's subscription in this deployment shape.
 
-Anthropic distinguishes using the unmodified Claude Code binary from embedding Claude through the Agent SDK. Their current documentation does not permit third-party products to offer Claude.ai login or route Free/Pro/Max credentials through the Agent SDK unless previously approved. It does permit an end user to sign in to an unmodified hosted Claude Code binary under stated conditions.
+## 6. Connection and Traffic Policy
 
-Rules:
+### 6.1 Connection scope
 
-- the normal production Anthropic provider uses an API key through `anthropic`.
-- `claude_code` is implemented as a separate runtime adapter, never as an Anthropic API-key adapter.
-- user Claude Code connection is feature-flagged and receives `own_user` only after legal/commercial acceptance criteria are satisfied.
-- administrator Claude Code login may be shown as `admin_only` for diagnostics, but cannot become platform fallback by default.
-- POSTORA must not collect, parse, copy, return, or intermediate Claude.ai session tokens.
-- the Claude Code binary must remain unmodified and all first-party authentication options must remain available where the hosted-runtime path is enabled.
+- `user`: owned by exactly one authenticated user; usable only for that user's work.
+- `platform`: managed by an administrator; may be admin-only or explicitly shared.
 
-Official references:
+### 6.2 Traffic policy
 
-- https://code.claude.com/docs/en/legal-and-compliance
-- https://code.claude.com/docs/en/agent-sdk/overview
+| Scope | Allowed policy | Meaning |
+|---|---|---|
+| user | `own_user` | only the owner may use it |
+| user | `disabled` | no execution |
+| platform | `admin_only` | admin test/manual execution only |
+| platform | `platform_shared` | may serve eligible end-user traffic |
+| platform | `disabled` | no execution |
 
-## 8. Capability Model
+The database constraint is mandatory:
 
-Add `vision` to the existing model categories. The canonical set becomes:
+```sql
+CHECK (
+  (scope_kind = 'user'
+    AND owner_user_id IS NOT NULL
+    AND traffic_policy IN ('own_user', 'disabled'))
+  OR
+  (scope_kind = 'platform'
+    AND owner_user_id IS NULL
+    AND traffic_policy IN ('admin_only', 'platform_shared', 'disabled'))
+)
+```
+
+All create/update RPCs repeat this validation. A user connection can never be promoted to shared traffic by changing one column.
+
+## 7. Data Model
+
+### 7.1 `ai_provider_auth_methods`
+
+Metadata only; no secrets.
 
 ```text
-chat | agent | vision | image | video | tts | stt | search | embedding
+provider_id             uuid FK ai_providers(id)
+auth_method             text
+supports_user_scope     boolean
+supports_platform_scope boolean
+status                  active | policy_blocked | disabled
+capabilities            text[]
+PRIMARY KEY (provider_id, auth_method)
 ```
 
-Initial provider eligibility:
+V1 seeds `api_key` for the existing `openai` and `claude` rows. Higgsfield may be represented as metadata after parity tests; it is not re-seeded as another provider.
 
-| Provider | Chat | Agent | Vision input | Image generation | Video | TTS/STT | Search | Embedding |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| OpenAI API | Yes | Yes | Model-dependent | Model-dependent | Model-dependent | Model-dependent | Model-dependent | Model-dependent |
-| Codex | Yes, gated | Yes | Model-dependent | No initial support | No | No | Runtime-dependent | No |
-| Anthropic API | Yes | Yes | Model-dependent | No | No | No | Tool-dependent | No |
-| Claude Code | Yes, gated | Yes, gated | Test-dependent | No | No | No | Runtime-dependent | No |
-| Google AI | Model-dependent | Model-dependent | Model-dependent | Model-dependent | Model-dependent | Model-dependent | Model-dependent | Model-dependent |
-| OpenRouter | Catalog-dependent | Catalog-dependent | Catalog-dependent | Catalog-dependent | Catalog-dependent | Catalog-dependent | Catalog-dependent | Catalog-dependent |
-| Higgsfield | No | No | Reference-image input only | Yes | Yes | No | No | No |
-
-The matrix is a policy maximum. Actual eligibility is the intersection of:
-
-1. provider policy;
-2. connection traffic policy;
-3. discovered model capability;
-4. administrator enablement;
-5. user entitlement;
-6. feature rollout flag.
-
-## 9. User Experience
-
-### 9.1 Location
-
-Add an `AI Accounts & Routing` section to `/settings?tab=integrations`. If the integrations tab becomes too dense, it may graduate to `/settings?tab=ai` without changing the backend contract.
-
-### 9.2 Connection cards
-
-Cards initially shown:
-
-- Codex account
-- Anthropic API key
-- Claude Code account, marked Beta/Conditional
-- OpenAI API key, optional BYOK
-- Higgsfield account
-- other user-enabled providers
-
-Each card shows only non-secret fields:
-
-- connected/disconnected/reconnect required;
-- account label or masked email;
-- plan type when the provider reports it;
-- authentication method;
-- supported capabilities;
-- last successful health check;
-- rate-limit status where supported;
-- Connect, Reconnect, Test, Sync models, Disconnect.
-
-### 9.3 Routing preferences
-
-Global default:
-
-- `Use POSTORA providers`
-- `Use my accounts first, then POSTORA`
-- `Use only my accounts`
-
-Per-capability override:
-
-- source mode;
-- preferred connected provider;
-- preferred model;
-- whether platform fallback is allowed;
-- optional social-account override.
-
-When fallback could move cost to POSTORA, the UI must state this before save. A provider limit, expired authentication, or unsupported capability must never silently cause platform billing unless `user_first` and `allow_platform_fallback = true` are both stored.
-
-## 10. Administrator Experience
-
-### 10.1 Admin Settings layout
-
-Extend Admin Settings → AI Providers with two sections:
-
-1. `API Connections`
-   - OpenAI API
-   - Anthropic API
-   - Google AI
-   - OpenRouter
-   - other current API providers
-
-2. `Account Authentication`
-   - Higgsfield OAuth
-   - Codex account
-   - Claude Code account
-
-Codex and Claude Code appear as small cards adjacent to Higgsfield, as requested. Each card displays its permitted traffic policy. The UI must not imply that a successful administrator login automatically makes the subscription available to all users.
-
-### 10.2 Admin actions
-
-- Connect/reconnect/disconnect account.
-- Test authentication without executing an end-user job.
-- Synchronize available models and capabilities.
-- View plan/rate-limit state where supported.
-- Enable or disable the provider.
-- Enable allowed capabilities.
-- Select provider/model in Chat, Agent, Vision, and other compatible category cards.
-- Select `Use as platform fallback` only when the connection has `platform_shared` policy.
-
-If a model is visible but not eligible for platform traffic, the selector shows it disabled with a reason such as `Admin-only account`, `User-owned connections only`, `Commercial approval required`, or `Capability not supported`.
-
-## 11. Data Model
-
-### 11.1 Provider authentication methods
-
-Add a normalized table instead of expanding the single `ai_providers.auth_type` string.
-
-```sql
-CREATE TABLE public.ai_provider_auth_methods (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  provider_id uuid NOT NULL REFERENCES public.ai_providers(id) ON DELETE CASCADE,
-  method_code text NOT NULL,
-  runtime_kind text NOT NULL,
-  allowed_scope_kinds text[] NOT NULL,
-  default_traffic_policy text NOT NULL,
-  requires_commercial_approval boolean NOT NULL DEFAULT false,
-  is_enabled boolean NOT NULL DEFAULT true,
-  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (provider_id, method_code)
-);
-```
-
-Allowed `runtime_kind` values:
+### 7.2 `ai_provider_connections`
 
 ```text
-http_api | codex_app_server | claude_code | mcp
+id                    uuid PK
+provider_id           uuid FK ai_providers(id)
+auth_method           text
+scope_kind            user | platform
+owner_user_id         uuid NULL FK auth.users ON DELETE CASCADE
+label                 text
+account_hint          text NULL
+vault_secret_id       uuid NULL
+status                pending | active | expired | revoked | error | disabled
+traffic_policy        own_user | admin_only | platform_shared | disabled
+last_validated_at     timestamptz NULL
+last_error_code       text NULL
+created_by            uuid NULL FK auth.users ON DELETE SET NULL
+created_at            timestamptz
+updated_at            timestamptz
 ```
 
-### 11.2 Provider connections
+Requirements:
 
-```sql
-CREATE TABLE public.ai_provider_connections (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  provider_id uuid NOT NULL REFERENCES public.ai_providers(id),
-  auth_method_id uuid NOT NULL REFERENCES public.ai_provider_auth_methods(id),
-  scope_kind text NOT NULL CHECK (scope_kind IN ('platform', 'user')),
-  user_id uuid REFERENCES auth.users(id) ON DELETE CASCADE,
-  status text NOT NULL CHECK (status IN (
-    'pending', 'connected', 'reconnect_required', 'disabled', 'revoked', 'error'
-  )),
-  traffic_policy text NOT NULL CHECK (traffic_policy IN (
-    'own_user', 'admin_only', 'platform_shared', 'disabled'
-  )),
-  secret_ref uuid,
-  runtime_profile_ref text,
-  external_account_id text,
-  account_label text,
-  plan_type text,
-  expires_at timestamptz,
-  last_health_at timestamptz,
-  last_error_code text,
-  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-  created_by uuid REFERENCES auth.users(id),
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  CHECK (
-    (scope_kind = 'platform' AND user_id IS NULL) OR
-    (scope_kind = 'user' AND user_id IS NOT NULL)
-  )
-);
+- Composite FK from `(provider_id, auth_method)` to `ai_provider_auth_methods`.
+- Scope/owner/traffic `CHECK` from section 6.2.
+- No token, key, refresh token, or decrypted Vault value is client-readable.
+- Browser reads a status-only security-invoker view.
+- User RLS permits status select for owned user connections only; disconnect is RPC-only.
+- Platform rows are admin-only; service-role reads still include intended user/scope predicates.
 
-CREATE UNIQUE INDEX ai_provider_connections_user_method_uq
-  ON public.ai_provider_connections(provider_id, auth_method_id, user_id)
-  WHERE scope_kind = 'user';
-
-CREATE UNIQUE INDEX ai_provider_connections_platform_method_uq
-  ON public.ai_provider_connections(provider_id, auth_method_id)
-  WHERE scope_kind = 'platform';
-
-CREATE UNIQUE INDEX ai_provider_connections_id_user_uq
-  ON public.ai_provider_connections(id, user_id);
-```
-
-Raw credentials are not stored in this table. `secret_ref` points to an encrypted server-side secret. CLI/runtime authentication state is owned by an isolated runtime profile referenced by `runtime_profile_ref`.
-
-### 11.3 Connection-specific model availability
-
-```sql
-CREATE TABLE public.ai_connection_models (
-  connection_id uuid NOT NULL REFERENCES public.ai_provider_connections(id) ON DELETE CASCADE,
-  model_id text NOT NULL,
-  display_name text,
-  capabilities text[] NOT NULL DEFAULT '{}',
-  is_available boolean NOT NULL DEFAULT true,
-  discovered_at timestamptz NOT NULL DEFAULT now(),
-  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-  PRIMARY KEY (connection_id, model_id)
-);
-```
-
-`ai_models` remains the administrator's canonical catalog. `ai_connection_models` records what a specific subscription/account can currently use.
-
-### 11.4 User routing preferences
-
-```sql
-CREATE TABLE public.user_ai_routing_preferences (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  social_account_id uuid REFERENCES public.social_accounts(id) ON DELETE CASCADE,
-  capability text NOT NULL,
-  mode text NOT NULL CHECK (mode IN ('postora_only', 'user_first', 'user_only')),
-  preferred_connection_id uuid,
-  preferred_model_id text,
-  allow_platform_fallback boolean NOT NULL DEFAULT false,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now(),
-  FOREIGN KEY (preferred_connection_id, user_id)
-    REFERENCES public.ai_provider_connections(id, user_id),
-  UNIQUE NULLS NOT DISTINCT (user_id, social_account_id, capability)
-);
-```
-
-Use `capability = '*'` for the user's global default. A social-account-specific row overrides the user-global capability row.
-
-### 11.5 Execution jobs and audit
-
-```sql
-CREATE TABLE public.ai_execution_jobs (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL REFERENCES auth.users(id),
-  social_account_id uuid REFERENCES public.social_accounts(id),
-  capability text NOT NULL,
-  provider_code text,
-  model_id text,
-  connection_id uuid REFERENCES public.ai_provider_connections(id),
-  credential_source text CHECK (credential_source IN ('user', 'platform')),
-  cost_owner text CHECK (cost_owner IN ('user', 'platform')),
-  status text NOT NULL,
-  idempotency_key text NOT NULL,
-  error_code text,
-  started_at timestamptz,
-  completed_at timestamptz,
-  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (user_id, idempotency_key)
-);
-```
-
-Prompt and response bodies do not belong in the audit row. Product content is stored only in its existing domain table when required.
-
-## 12. Routing Semantics
-
-### 12.1 Precedence
-
-For a request `(user, social_account, capability)`:
-
-1. exact social-account capability preference;
-2. user-global capability preference;
-3. user-global `*` preference;
-4. default `postora_only`.
-
-### 12.2 Candidate construction
-
-`AiExecutionPlanner` returns an ordered list of candidates.
-
-For `postora_only`:
-
-1. administrator primary;
-2. administrator fallback;
-3. administrator fallback 2;
-4. configured last resort where the category permits one.
-
-For `user_first`:
-
-1. selected user connection/model;
-2. other user candidates only if explicitly configured later;
-3. administrator chain only when `allow_platform_fallback = true`.
-
-For `user_only`:
-
-1. selected user connection/model;
-2. no platform candidate.
-
-### 12.3 Failure behavior
-
-- `AUTH_EXPIRED`: mark reconnect required; fall back only with explicit permission.
-- `RATE_LIMITED`: show provider reset information where available; fall back only with explicit permission.
-- `CAPABILITY_UNSUPPORTED`: do not call the provider.
-- `MODEL_UNAVAILABLE`: refresh catalog once, then fail/fallback.
-- `PROVIDER_TIMEOUT`: retry only within the remaining request deadline.
-- `POLICY_BLOCKED`: never fallback to another authentication scope silently.
-- `RUNTIME_UNAVAILABLE`: retry boundedly; asynchronous workloads remain queued.
-- `ALL_CANDIDATES_FAILED`: return a stable public error and store sanitized diagnostics.
-
-## 13. Runtime Architecture
-
-Add a private long-running service:
+### 7.3 `ai_connection_models`
 
 ```text
-services/agent-runtime/
+connection_id         uuid FK ai_provider_connections(id) ON DELETE CASCADE
+model_id              uuid FK ai_models(id) ON DELETE CASCADE
+availability          available | unavailable | unknown
+capabilities          text[]
+last_checked_at       timestamptz
+PRIMARY KEY (connection_id, model_id)
 ```
 
-Responsibilities:
+RLS is mandatory:
 
-- spawn and supervise Codex App Server processes;
-- optionally supervise the unmodified Claude Code binary when enabled;
-- own per-user/per-connection runtime profiles;
-- execute login, logout, account status, model discovery, rate-limit reads, and turns;
-- stream internal events or return bounded results;
-- enforce concurrency, memory, disk, and execution deadlines;
-- emit sanitized metrics and audit events.
+- owner may select rows for their user connection;
+- admin may select platform rows;
+- browser roles have no insert/update/delete grants;
+- writes occur through authenticated Edge Functions/service role;
+- a status view exposes model metadata but no secrets.
 
-The service is not internet-public. Supabase Edge Functions call it through a signed internal request. Prefer an internal Unix socket on one host or private HTTPS with mTLS/service JWT across hosts. Codex App Server should use stdio or an internal Unix socket; do not expose its experimental WebSocket transport publicly.
+### 7.4 Extend `ai_model_preferences`
 
-### 13.1 Runtime isolation
-
-Each connection receives:
-
-- opaque runtime profile id;
-- separate encrypted persistent directory;
-- separate process environment;
-- separate session/thread namespace;
-- no access to another user's files or credentials;
-- restricted network policy;
-- read-only or ephemeral workspace for non-coding POSTORA tasks.
-
-Automated customer replies must not receive shell or filesystem tools. Agent tools are supplied only through explicitly allowlisted POSTORA adapters after tool-compatibility tests pass.
-
-### 13.2 Synchronous and asynchronous execution
-
-- short caption/chat/vision calls: synchronous with a strict deadline below the Edge gateway limit;
-- long agent/media tasks: create `ai_execution_jobs`, enqueue, then stream/poll status;
-- webhook auto-replies: bounded attempt, then human escalation rather than an unbounded runtime turn.
-
-## 14. Backend Contracts
-
-### 14.1 `ai-provider-connections` Edge Function
-
-Actions:
+Do not create an overlapping table. Add:
 
 ```text
-list
-start_auth
-complete_auth
-status
-test
-sync_models
-disconnect
-save_user_api_key
-set_traffic_policy   # admin only
+routing_mode            postora_only | prefer_own | own_only
+social_account_id       uuid NULL FK social_accounts(id) ON DELETE CASCADE
+preferred_connection_id uuid NULL
 ```
 
-Every action authenticates the caller before parsing mutable scope fields. Platform scope requires admin role. User scope derives `user_id` from the verified bearer token and ignores any client-supplied user id.
+The existing `model_id uuid` becomes nullable. Add a real composite FK:
 
-### 14.2 `ai-execute` Edge Function
-
-Input:
-
-```ts
-type AiExecutionRequest = {
-  capability: AiCapability;
-  socialAccountId?: string;
-  modelHint?: string;
-  input: unknown;
-  idempotencyKey: string;
-  deadlineMs?: number;
-};
+```sql
+FOREIGN KEY (preferred_connection_id, model_id)
+  REFERENCES ai_connection_models(connection_id, model_id)
+  ON DELETE RESTRICT
 ```
 
-Output:
+Own-connection modes require both connection and model. `postora_only` requires a null connection but may retain a model as the legacy platform-model preference. Disconnect first clears dependent routing choices transactionally, then deletes the connection. Stale connection/model pairs are not accepted.
 
-```ts
-type AiExecutionResponse = {
-  executionId: string;
-  status: 'succeeded' | 'queued';
-  output?: unknown;
-  provider: string;
-  model: string;
-  credentialSource: 'user' | 'platform';
-  fallbackUsed: boolean;
-};
+Replace the old `(user_id, feature)` unique constraint with partial unique indexes:
+
+- `(user_id, feature)` where `social_account_id IS NULL`
+- `(user_id, social_account_id, feature)` where `social_account_id IS NOT NULL`
+
+Backfill existing rows with `routing_mode = 'postora_only'`. Existing `set-user-preference` remains compatible. Add `set-routing-preference` rather than changing the old action's required body.
+
+Keep user-facing preference reads owner-scoped, but revoke direct browser mutation after the Edge/RPC write path is live. This is required because connection ownership and social-account ownership cannot be guaranteed by the composite model FK alone.
+
+### 7.5 Call audit and jobs
+
+V1 creates `ai_provider_call_attempts`, a non-secret synchronous-attempt table. It contains:
+
+```text
+id                    uuid PK
+request_id            uuid NOT NULL
+user_id               uuid NULL FK auth.users ON DELETE SET NULL
+category              text NOT NULL
+provider_code         text NOT NULL
+model_id              text NOT NULL
+connection_id         uuid NULL FK ai_provider_connections ON DELETE SET NULL
+credential_source     user_connection | platform_connection | legacy_platform
+status                started | succeeded | failed | timed_out | skipped
+fallback_level        integer NOT NULL
+provider_request_id   text NULL
+error_code            text NULL
+latency_ms            integer NULL
+started_at            timestamptz NOT NULL
+finished_at           timestamptz NULL
 ```
 
-The response never includes a provider token, secret reference, runtime profile path, or raw internal error.
+RLS is enabled. Browser roles have no write access; admin gets non-secret read access and service role writes. `ON DELETE SET NULL` permits account/connection deletion while preserving aggregate operational evidence.
 
-### 14.3 Adapter interface
+Insert the attempt row before provider dispatch and update it after completion. Never log credentials, raw provider bodies, prompts, or token caches by default.
 
-```ts
-interface AiProviderAdapter {
-  providerCode: string;
-  runtimeKind: RuntimeKind;
-  supports(capability: AiCapability, model: ConnectionModel): boolean;
-  health(connection: ResolvedConnection): Promise<HealthResult>;
-  listModels(connection: ResolvedConnection): Promise<DiscoveredModel[]>;
-  execute(request: AdapterExecutionRequest): Promise<AdapterExecutionResult>;
+V1 does not create a second generic media job table. Existing image/video work continues to use `ai_generation_jobs` and its reserve/release quota flow.
+
+If phase 2 needs generic jobs:
+
+- `ai_execution_jobs.user_id` references `auth.users(id) ON DELETE CASCADE`;
+- add nullable `ai_generation_jobs.execution_job_id` referencing the parent job `ON DELETE SET NULL`;
+- existing generation rows remain valid with a null parent;
+- the migration and worker contract define which table owns status and retries.
+
+## 8. Exact Admin Chain Reference
+
+Existing `system_settings.default_ai_model_<category>`, `_fallback`, and `_fallback_2` values remain the chain source. Extend their JSON shape without invalidating old rows:
+
+```json
+{
+  "provider_code": "openai",
+  "model_id": "gpt-4.1",
+  "connection_id": "optional-platform-connection-uuid"
 }
 ```
 
-Adapters:
+Derivation is deterministic:
 
-```text
-OpenAiApiAdapter
-CodexAppServerAdapter
-AnthropicApiAdapter
-ClaudeCodeAdapter
-GoogleAiAdapter
-OpenRouterAdapter
-HiggsfieldAdapter
-```
+1. With `connection_id`, resolve exactly that active platform connection.
+2. Verify provider, selected model, model availability, capability, and traffic policy.
+3. Never substitute another connection with the same provider code.
+4. Without `connection_id`, use only the legacy platform API credential path. Absence never means “pick any connected account”.
+5. Existing settings retain current behavior until an administrator explicitly selects a connection.
 
-## 15. Credential Security
+Admin writes validate the complete reference transactionally. Model cards display provider, auth method, connection label, scope, and traffic policy.
 
-1. API keys and OAuth refresh tokens are encrypted in a server-side secret store or Vault.
-2. browsers receive only connection ids and masked metadata.
-3. OAuth uses PKCE, one-time state, expiry, verified redirect allowlists, and caller ownership.
-4. disconnect attempts provider revocation where supported, then destroys the local secret/runtime profile.
-5. logs redact Authorization headers, tokens, device codes, callback codes, and filesystem paths.
-6. runtime-profile identifiers are opaque and cannot contain a user email or account id.
-7. secret rotation and reconnect do not change the public connection id.
-8. service-role reads explicitly filter the connection owner.
-9. admin test endpoints cannot accept arbitrary URLs, commands, or model endpoints.
-10. migrate Higgsfield raw token storage to the canonical secret store after the generic path is stable.
+Because the reference lives in JSON and cannot have a relational FK, disconnecting a platform connection must fail with `connection_in_use` while any `default_ai_model_*` setting names its ID. The admin must reassign or clear every reported tier first; the disconnect RPC rechecks under a transaction before deleting the secret/row.
 
-## 16. Billing, Quota, and Cost Attribution
+## 9. Routing Preference Precedence
 
-`credential_source` and `cost_owner` are separate concepts.
+For `(user, social account, category)`, resolve one row in this order:
 
-| Execution source | Provider cost owner | POSTORA AI-credit behavior |
-|---|---|---|
-| User API key/account | User | Do not debit platform AI-provider credits |
-| Platform API key | Platform | Apply normal platform quota/credit rules |
-| Approved platform account auth | Platform | Apply normal platform quota/credit rules |
+1. social-account + exact category
+2. social-account + `*`
+3. user-wide + exact category (`social_account_id IS NULL`)
+4. user-wide + `*`
+5. implicit `postora_only`
 
-User-owned execution may still require an eligible POSTORA plan and remains subject to abuse, concurrency, storage, and runtime limits. The UI must say `Uses your provider allowance` rather than `Free`.
+Expired or disconnected choices do not silently mutate the saved preference. The planner records why a candidate was skipped.
 
-Before platform fallback, quota is reserved atomically. Failed provider dispatch releases the reservation. A successful user-owned attempt never reserves platform AI-provider quota.
+## 10. Candidate Construction
 
-## 17. Observability
+### 10.1 POSTORA chain
 
-Metrics:
+For chat, POSTORA candidates preserve the current live tier:
 
-- executions by capability/provider/model;
-- credential source and cost owner;
-- fallback rate and reason;
-- auth-expiry rate;
-- provider latency/error rate;
-- runtime queue depth and process restarts;
-- model catalog age;
-- rate-limit exhaustion by connection without exposing account identity.
+1. active, non-expired `user_ai_model_overrides` row through the legacy platform credential path;
+2. admin primary;
+3. admin fallback;
+4. admin fallback 2 / validated hardcoded floor.
 
-Audit events:
+For an entrypoint that already calls `get_active_ai_model_config`, a legacy `ai_model_preferences.model_id` remains the first platform-model candidate before admin primary, exactly as that RPC behaves today. Chat and agent fallback do not read this preference today, so V1 does not insert it into those POSTORA chains; they retain `user_ai_model_overrides` and admin tiers. This category mapping is covered by parity fixtures rather than inferred at runtime.
 
-```text
-ai_provider_connection_started
-ai_provider_connection_succeeded
-ai_provider_connection_failed
-ai_provider_connection_disconnected
-ai_provider_models_synced
-ai_routing_preference_changed
-ai_platform_fallback_used
-ai_execution_refused
-```
+### 10.2 Mode behavior
 
-Every policy refusal is recorded with a stable code. No prompt, response, API key, OAuth code, device code, or token is logged.
-
-## 18. Feature Flags
-
-```text
-ai_provider_connections_enabled
-ai_user_routing_enabled
-ai_codex_user_auth_enabled
-ai_codex_platform_shared_enabled
-ai_claude_code_user_auth_enabled
-ai_claude_code_platform_shared_enabled
-ai_agent_runtime_enabled
-ai_generic_higgsfield_adapter_enabled
-```
-
-All default to false except flags explicitly activated after their migration and deployment prerequisites are verified.
-
-## 19. Rollout Strategy
-
-1. Add schema and read-only admin visibility.
-2. Add HTTP API-key adapters and router shadow evaluation.
-3. Migrate Higgsfield behind the generic adapter while preserving its existing tables and endpoint.
-4. Add user routing UI for Higgsfield and BYOK providers.
-5. deploy `agent-runtime` with no external provider enabled.
-6. enable Codex user auth for an internal cohort.
-7. enable Codex chat/vision, then agent after tool and latency acceptance tests.
-8. enable Claude Code user auth only after the policy gate is satisfied.
-9. keep administrator subscription connections `admin_only` until explicit provider approval for shared traffic.
-10. migrate remaining AI entry points one capability at a time.
-
-Rollback is flag-based. Existing Admin `system_settings` and Higgsfield-specific routes remain valid until the new path has production evidence.
-
-## 20. Acceptance Criteria
-
-1. A user can connect Codex through the first-party managed flow without POSTORA receiving a raw ChatGPT token in the browser.
-2. A user can select `postora_only`, `user_first`, or `user_only` globally and per capability.
-3. A user-owned successful execution never debits platform AI-provider quota.
-4. platform fallback occurs only with explicit stored permission.
-5. an expired user connection in `user_only` mode fails with reconnect guidance and no platform call.
-6. Admin Settings shows separate OpenAI/Codex and Anthropic/Claude Code providers.
-7. Codex/Claude Code models cannot be selected for unsupported image/video/audio/embedding categories.
-8. an administrator subscription connection cannot serve subscriber traffic while its traffic policy is `admin_only`.
-9. every provider call records provider, model, credential source, cost owner, result, and sanitized failure code.
-10. no credential is returned by RLS reads, Edge Function responses, logs, or runtime metrics.
-11. current Higgsfield user and platform flows remain operational during migration.
-12. disabling all new feature flags restores the current production routing behavior.
-
-## 21. Risks and Mitigations
-
-| Risk | Mitigation |
+| Mode | Ordered candidates |
 |---|---|
-| Consumer subscription used as shared backend | traffic-policy gate; commercial approval flag; admin subscriptions default to `admin_only`. |
-| Subscription limits produce unpredictable availability | expose rate-limit health; explicit fallback preference; stable reconnect/limit errors. |
-| Cross-user credential/session leak | per-connection runtime isolation; composite ownership FK; explicit service-role tenancy. |
-| Edge timeout on agent runtime | strict deadlines; async jobs; bounded auto-reply; human escalation. |
-| Provider catalog changes | connection-scoped discovery; short cache TTL; one refresh on model-unavailable. |
-| Unsupported capability shown in UI | intersection-based capability resolver; disabled options with reason. |
-| Existing Higgsfield regression | adapter compatibility layer; feature flag; dual-read before cutover. |
-| CLI agent can execute unintended tools | no shell/filesystem for autoresponders; allowlisted tools; sandbox and network restrictions. |
-| Secrets remain in legacy tables | staged Vault migration and credential rotation. |
+| `postora_only` | current POSTORA chain, including live chat override |
+| `prefer_own` | exact preferred user connection/model, then current POSTORA chain |
+| `own_only` | exact preferred user connection/model only |
 
-## 22. Open Decisions Before Production Enablement
+Rules:
 
-1. Which POSTORA plans may connect user-owned providers?
-2. Does user-owned execution bypass only AI credits or also feature-specific daily quotas?
-3. Should preferences be user-global initially, or user-global plus social-account override in v1?
-4. Which Codex workloads qualify for the first cohort: chat, vision, or an interactive agent workspace?
-5. Has OpenAI approved/confirmed any intended administrator subscription shared-traffic use?
-6. Has Anthropic approved the Claude Code hosting and authentication experience for POSTORA's intended use?
-7. Which secret store is authoritative for new credentials and the Higgsfield migration?
-8. What is the maximum synchronous deadline and concurrency per POSTORA plan?
+- User connection must belong to the requester and have `own_user` policy.
+- Platform connection must pass `admin_only`/`platform_shared` checks.
+- Capability and model availability are checked before reading a secret.
+- `own_only` never falls back to platform cost.
+- In `prefer_own`, platform quota is reserved only when crossing into the POSTORA chain.
+- With new routing flags off, callers invoke the existing resolver directly. This is the hard rollback path.
 
-Until decisions 5 and 6 are documented, administrator Codex and Claude Code account connections remain `admin_only` and cannot be selected as platform fallback for subscriber traffic.
+## 11. V1 Provider Adapters
+
+### 11.1 OpenAI API
+
+Use the existing OpenAI-compatible shape where valid. Validate keys server-side with a low-cost authenticated request, apply capability checks, and never infer subscription access from an API key.
+
+### 11.2 Anthropic API (`claude`)
+
+Anthropic is new execution work here. The adapter implements and tests:
+
+- Messages API authentication and headers;
+- system/message/content-block conversion;
+- image content conversion for supported vision models;
+- tool schema conversion;
+- `tool_use` to the internal tool-call representation;
+- internal tool results back to Anthropic `tool_result` blocks;
+- stop reason, usage, rate-limit, timeout, and retry normalization;
+- the existing agent loop with multiple tool rounds.
+
+`ai-agent-reply` must not default an unknown provider to OpenAI. Unsupported providers fail closed with a typed error. Set `openai.is_active = true` only when the OpenAI connection path is deployable behind false-default flags; set `claude.is_active = true` only after the Anthropic adapter contract suite passes. Activation updates existing rows and never seed replacement identities.
+
+## 12. Existing Vision Integration
+
+The router returns authorized connection metadata and a server-only credential handle. The caller materializes authorized `ProviderTier` objects and passes them into `understandInboundMedia`.
+
+Changes stay in the existing pipeline and tests:
+
+- preserve `mediaUnderstandingMode`;
+- preserve byte/mime validation and prompts;
+- replace only tier construction/credential selection;
+- keep one deadline across the ladder;
+- add OpenAI/Anthropic vision only for proven models;
+- do not create `analyze-media`.
+
+## 13. Backend Surface
+
+V1 adds one `ai-provider-connections` Edge Function, or equivalent actions inside `ai-config` if one surface is preferred. It provides:
+
+- `list-status`
+- `connect-api-key`
+- `validate`
+- `refresh-models`
+- `disconnect`
+- admin-only `set-traffic-policy`
+
+Routing/execution stays in shared modules used by existing functions. V1 does not add generic `ai-execute`, auth-callback, or media-analysis Edge Functions.
+
+Required shared modules: connection metadata repository, Vault resolver, preference resolver, candidate planner, OpenAI/Anthropic adapters, typed errors, and call logging.
+
+## 14. Credential Security
+
+1. Copy the connector Vault lifecycle with `upsert_ai_connection_secret`, `get_ai_connection_credential`, and `delete_ai_connection_secret`.
+2. The read RPC accepts intended user and connection IDs, verifies ownership/scope, and is service-role only.
+3. Status responses include only label, account hint, status/expiry, model availability, and normalized error.
+4. Disconnect clears dependent preferences before deleting the Vault secret and row.
+5. Logs redact authorization headers, keys, refresh tokens, OAuth codes, Vault payloads, and Codex caches.
+6. Rate-limit validation and model refresh.
+7. Allowlist provider hosts and reject unsafe redirects.
+8. Service-role queries still require explicit intended owner/scope predicates.
+
+## 15. Feature Flags and Rollout
+
+V1 `app_settings` rows:
+
+- `feature_ai_provider_connections`
+- `feature_ai_user_routing`
+- `feature_ai_anthropic_adapter`
+
+The same keys are added to `FLAG_KEYS`, the key map, types, and defaults in `useFeatureFlags.tsx`. Defaults are false. `user_feature_overrides` is the only per-user cohort mechanism.
+
+Rollout order:
+
+1. schema/status APIs, flags off;
+2. shadow planning without credential reads or route changes;
+3. internal users through `user_feature_overrides`;
+4. OpenAI user BYOK for chat/caption/hashtags;
+5. Anthropic after contract/tool/vision tests;
+6. existing inbound vision routing;
+7. AI agent after end-to-end tool-loop tests;
+8. gradual cohorts;
+9. legacy plaintext credential backfill and scrub after dual-read verification.
+
+## 16. Codex Phase-2 Policy Gate and Runtime
+
+Official Codex documentation describes [App Server](https://developers.openai.com/codex/app-server) as an interface for embedding Codex and [documents ChatGPT browser/device-code authentication](https://developers.openai.com/codex/auth). It does not, by itself, settle whether a multi-tenant SaaS may use an individual ChatGPT subscription for POSTORA's automated non-coding traffic.
+
+Before any Codex schema seed, UI card, flag, or production code is enabled, obtain written approval covering both:
+
+1. user-scoped Codex authentication for the user's own POSTORA traffic; and
+2. administrator-connected Codex authentication for shared or admin-only traffic.
+
+If approved, the runtime is:
+
+- a separate Dokploy Compose project;
+- attached to the Supabase stack's external Docker network;
+- internal HTTP protected by HMAC signature, timestamp, nonce, and replay cache;
+- no host Unix socket;
+- no addition to root `docker-compose.yml` or Supabase compose;
+- one isolated runtime profile/auth store per connection;
+- encrypted persistent storage and explicit logout/revocation;
+- generic parent jobs from section 7.5 for work unsafe inside an Edge request.
+
+Runtime flags remain absent or false until written approval and threat-model review are recorded.
+
+## 17. Claude Code Decision
+
+Claude Code subscription authentication is out of scope. Do not add a provider code, auth method, adapter, runtime profile, UI card, flag, or test suite for it. Reconsider only after a signed Anthropic agreement explicitly permits POSTORA to intermediate automated traffic. Anthropic API-key support under `claude` is independent and remains in V1.
+
+## 18. Edge Deadline and Durable Logging
+
+Every migrated synchronous Edge path uses one total budget measured from handler entry. The 60-second worker ceiling is not a provider timeout.
+
+V1 target:
+
+- hard internal deadline: 50 seconds total;
+- planning/database target: at most 2 seconds;
+- provider ladder bounded by remaining time;
+- at least 5 seconds reserved for persistence/error response;
+- call-attempt row inserted before provider dispatch;
+- row updated after completion; a still-`started` row reveals worker death.
+
+Planner and provider attempts share the deadline; fallback receives no fresh budget. Agent escalation must still have time to persist or hand off.
+
+## 19. Acceptance Criteria
+
+1. No new `anthropic`, `google`, or `claude_code` provider row exists.
+2. `claude` and `gemini` remain canonical.
+3. Database checks make invalid scope/traffic combinations impossible.
+4. A tier with `connection_id` resolves exactly it; a tier without it uses only the legacy credential path.
+5. Flags off preserve `user_ai_model_overrides` → admin primary → fallback.
+6. Existing `ai_model_preferences` rows survive and remain usable.
+7. Preference precedence includes social-account `*`.
+8. Preferred connection/model pairs have a real FK; disconnect clears dependents.
+9. `ai_connection_models` has explicit RLS and no browser mutation grants.
+10. User connections cannot serve another user or platform traffic.
+11. `own_only` never incurs platform-provider cost.
+12. New keys are stored in Vault and never returned.
+13. Anthropic agent execution passes tool-use normalization tests.
+14. Existing inbound media understanding is routed; no parallel media function exists.
+15. A call attempt is durable before dispatch and all retries share a sub-60-second budget.
+16. `ai_generation_jobs` remains the V1 media job source of truth.
+17. New Deno modules pass `deno check` and tests; CI cannot rely on `deno test --no-check` alone.
+18. Claude Code has zero implementation surface.
+19. Codex user and platform auth remain disabled until both written decisions pass.
+
+## 20. Production Decisions Still Open
+
+1. Written OpenAI approval for user-scoped Codex in this deployment shape.
+2. Written OpenAI approval for administrator/shared Codex traffic, if desired.
+3. First Anthropic model/capability allowlist after live contract tests.
+4. Whether to migrate every legacy `provider_api_keys` row before the first cohort or during rollout.
+
+These decisions do not block V1 BYOK API-key work except where tied to that provider or migration stage.
