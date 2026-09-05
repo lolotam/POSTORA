@@ -10,6 +10,7 @@ import {
   type EmbeddingModelCatalogRow,
   embeddingRecord,
   embedKnowledgeDual,
+  embedWithOpenAiCompatible,
   EmbeddingColumnOwnershipError,
   resolveAdminEmbeddingLadder,
   resolveDualEmbeddingConfig,
@@ -201,6 +202,84 @@ Deno.test("dual ingest embeds with both providers at once, not one after the oth
 
   assertEquals(started.sort(), ["gemini", "ollama"]);
   assertEquals(result, { primary: [[0.1]], fallback: [[0.2]] });
+});
+
+/** Runs `body` with fetch and the provider key stubbed, restoring both after. */
+async function withStubbedProvider(
+  responses: Array<{ status: number; body: unknown }>,
+  body: () => Promise<void>,
+): Promise<number> {
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (() => {
+    const next = responses[Math.min(calls, responses.length - 1)];
+    calls += 1;
+    return Promise.resolve(new Response(JSON.stringify(next.body), { status: next.status }));
+  }) as typeof fetch;
+  Deno.env.set("TEST_EMBED_KEY", "k");
+  try {
+    await body();
+  } finally {
+    globalThis.fetch = realFetch;
+    Deno.env.delete("TEST_EMBED_KEY");
+  }
+  return calls;
+}
+
+const stubbedApi = { endpoint: "https://provider.test/embeddings", keyEnvVar: "TEST_EMBED_KEY", label: "Stub" };
+const stubbedConfig: EmbeddingConfig = { provider: "jina", column: "embedding_bge_m3", dimensions: 2, model: "m" };
+const okBody = { data: [{ embedding: [0.1, 0.2] }] };
+
+Deno.test("a rate-limited embedding call waits for the token bucket and succeeds on retry", async () => {
+  // Jina's free key allows 100k tokens/min; the 2026-09-05 backfill hit 429
+  // on its third call. The retry must wait seconds, not milliseconds.
+  const waits: number[] = [];
+  let result: number[][] = [];
+  const calls = await withStubbedProvider(
+    [{ status: 429, body: { detail: "Token rate limit exceeded" } }, { status: 200, body: okBody }],
+    async () => {
+      result = await embedWithOpenAiCompatible(["a"], stubbedConfig, stubbedApi, (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      });
+    },
+  );
+  assertEquals(calls, 2);
+  assertEquals(waits, [12_000]);
+  assertEquals(result, [[0.1, 0.2]]);
+});
+
+Deno.test("a rejected key is not retried", async () => {
+  const waits: number[] = [];
+  const calls = await withStubbedProvider(
+    [{ status: 401, body: { detail: "bad key" } }],
+    async () => {
+      await assertRejects(
+        () => embedWithOpenAiCompatible(["a"], stubbedConfig, stubbedApi, (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        }),
+        Error,
+        "HTTP 401",
+      );
+    },
+  );
+  assertEquals(calls, 1);
+  assertEquals(waits, []);
+});
+
+Deno.test("a provider that stays rate-limited fails after the last attempt with the status", async () => {
+  const calls = await withStubbedProvider(
+    [{ status: 429, body: {} }],
+    async () => {
+      await assertRejects(
+        () => embedWithOpenAiCompatible(["a"], stubbedConfig, stubbedApi, () => Promise.resolve()),
+        Error,
+        "HTTP 429",
+      );
+    },
+  );
+  assertEquals(calls, 3);
 });
 
 Deno.test("dual ingest keeps the primary vectors when the concurrent fallback embed fails", async () => {

@@ -515,38 +515,72 @@ export async function claimEmbeddingColumnOwnership(
 // auth, batched `input`, requested `dimensions`) — Gemini through its
 // OpenAI-compatible endpoint. One caller keeps a third copy of the batching and
 // width-checking from drifting away from the other two.
-async function embedWithOpenAiCompatible(
+/**
+ * How long to wait before retrying a failed embedding call, or null when the
+ * status is not worth retrying (a bad key or a malformed request stays bad).
+ *
+ * A 429 is a per-minute token bucket on the hosted providers (Jina: 100k
+ * tokens/min on the free key, measured 2026-09-05), so it waits long enough
+ * for a meaningful share of the bucket to refill rather than the sub-second
+ * backoff that suits a flaky network. Two retries keep the worst case (~36s)
+ * inside the standalone worker's patience and the edge ingest's 60s ceiling.
+ */
+export function embeddingRetryDelayMs(status: number, attempt: number): number | null {
+  if (status === 429) return 12_000 * (attempt + 1);
+  if (status === 408 || status >= 500) return 500 * 2 ** attempt;
+  return null;
+}
+
+const EMBED_ATTEMPTS = 3;
+
+type OpenAiCompatibleApi = {
+  endpoint: string;
+  keyEnvVar: string;
+  label: string;
+  /** Provider-specific fields sent alongside the standard body. */
+  extraBody?: Record<string, unknown>;
+};
+
+/** Exported for tests only; production goes through embedKnowledge. */
+export async function embedWithOpenAiCompatible(
   texts: string[],
   config: EmbeddingConfig,
-  api: {
-    endpoint: string;
-    keyEnvVar: string;
-    label: string;
-    /** Provider-specific fields sent alongside the standard body. */
-    extraBody?: Record<string, unknown>;
-  },
+  api: OpenAiCompatibleApi,
+  sleep: (milliseconds: number) => Promise<void> = (milliseconds) =>
+    new Promise((resolve) => setTimeout(resolve, milliseconds)),
 ): Promise<number[][]> {
   const key = Deno.env.get(api.keyEnvVar);
   if (!key) throw new Error(`${api.keyEnvVar} is not configured`);
 
   const embeddings: number[][] = [];
   for (let start = 0; start < texts.length; start += 64) {
-    const response = await fetch(api.endpoint, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: config.model,
-        input: texts.slice(start, start + 64),
-        dimensions: config.dimensions,
-        ...api.extraBody,
-      }),
-      signal: AbortSignal.timeout(15_000),
+    const body = JSON.stringify({
+      model: config.model,
+      input: texts.slice(start, start + 64),
+      dimensions: config.dimensions,
+      ...api.extraBody,
     });
-    const payload: { data?: Array<{ embedding?: unknown }> } = await response.json();
-    if (!response.ok || !Array.isArray(payload.data)) {
-      // The status is the only clue between a bad key (401), an exhausted
-      // quota (402/429) and an outage; without it every failure reads alike.
-      throw new Error(`${api.label} embedding request failed (HTTP ${response.status})`);
+    let payload: { data?: Array<{ embedding?: unknown }> } = {};
+    for (let attempt = 0; attempt < EMBED_ATTEMPTS; attempt += 1) {
+      const response = await fetch(api.endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body,
+        signal: AbortSignal.timeout(15_000),
+      });
+      payload = await response.json();
+      if (response.ok && Array.isArray(payload.data)) break;
+      const delay = embeddingRetryDelayMs(response.status, attempt);
+      if (delay === null || attempt === EMBED_ATTEMPTS - 1) {
+        // The status is the only clue between a bad key (401), an exhausted
+        // quota (402/429) and an outage; without it every failure reads alike.
+        throw new Error(`${api.label} embedding request failed (HTTP ${response.status})`);
+      }
+      console.warn(`[knowledge-embeddings] ${api.label} returned HTTP ${response.status}; retrying in ${delay}ms`);
+      await sleep(delay);
+    }
+    if (!Array.isArray(payload.data)) {
+      throw new Error(`${api.label} embedding request failed`);
     }
 
     const batch: unknown[] = payload.data.map((item) => item.embedding);
