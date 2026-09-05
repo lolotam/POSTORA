@@ -213,29 +213,68 @@ Deno.test("a resumed source deletes only chunks at or past the checkpoint and re
   });
 });
 
-Deno.test("hitting the time budget leaves the source processing with an accurate checkpoint", async () => {
+Deno.test("hitting the time budget hands the source back as pending with an accurate checkpoint", async () => {
   const { admin, state } = workerHarness(tenRowCsv, []);
-  // The clock reads 0 when batch 1 starts and is past the deadline from the
-  // second read on, so batch 2 never begins.
+  // The clock reads 0 while batch 1 runs and is past the deadline from then
+  // on, so batch 2 never begins.
   let reads = 0;
-  const now = () => (reads++ === 0 ? 0 : 1_000);
+  const now = () => (reads++ < 3 ? 0 : 1_000);
   const { deps, embedCalls } = dependencies({ now });
 
   const outcome = await processSource(admin, source(), deps, 100);
 
   assertEquals(outcome.status, "processing");
   assertEquals(outcome.chunkCount, 8);
+  assertEquals(outcome.deferred, true, "the request loop must not re-claim the row it just released");
   assertEquals(embedCalls.length, 1);
+  // The row goes back to `pending` so the next cron tick resumes it at once.
+  // Left `processing`, the claim would ignore it for the ten-minute stale
+  // window on every single slice, which is how a 50-chunk file took 35 minutes.
+  assertEquals(state.sourceUpdates, [{ chunk_count: 8 }, { status: "pending" }]);
 
   const resumed = await processSource(admin, source({ chunk_count: 8 }), deps, 100);
   assertEquals(resumed.status, "processing", "deadline already exceeded, nothing more runs");
   assertEquals(resumed.chunkCount, 8);
+  assertEquals(resumed.deferred, true);
   assertEquals(embedCalls.length, 1, "no further embedding happens past the budget");
-  assertEquals(state.sourceUpdates.map((patch) => patch.chunk_count), [8]);
+  assertEquals(state.sourceUpdates.at(-1), { status: "pending" });
   assertEquals(
     state.sourceUpdates.some((patch) => patch.status === "ready"),
     false,
   );
+});
+
+Deno.test("a batch that would overrun the deadline is not started, even though the deadline has not passed", async () => {
+  const { admin, state } = workerHarness(tenRowCsv, []);
+  // Batch 1 takes 30 ticks (reads: loop check, start, end). At the next check
+  // the clock is 30, the deadline 50: 30 + 30 > 50, so batch 2 must not begin.
+  // Starting it anyway is what used to run the isolate into the 60s ceiling,
+  // losing the batch in flight and stranding the row `processing`.
+  const ticks = [0, 0, 30, 30];
+  const now = () => ticks.shift() ?? 30;
+  const { deps, embedCalls } = dependencies({ now });
+
+  const outcome = await processSource(admin, source(), deps, 50);
+
+  assertEquals(embedCalls.length, 1);
+  assertEquals(outcome.status, "processing");
+  assertEquals(outcome.chunkCount, 8);
+  assertEquals(outcome.deferred, true);
+  assertEquals(state.sourceUpdates.at(-1), { status: "pending" });
+});
+
+Deno.test("a batch that fits before the deadline still runs", async () => {
+  const { admin, state } = workerHarness(tenRowCsv, []);
+  // Batch 1 takes 10 ticks; at 10 + 10 < 50 batch 2 runs and the file finishes.
+  const ticks = [0, 0, 10, 10, 10, 20];
+  const now = () => ticks.shift() ?? 20;
+  const { deps, embedCalls } = dependencies({ now });
+
+  const outcome = await processSource(admin, source(), deps, 50);
+
+  assertEquals(embedCalls.length, 2);
+  assertEquals(outcome.status, "ready");
+  assertEquals(state.sourceUpdates.at(-1)?.status, "ready");
 });
 
 Deno.test("a processing error marks the source failed with the sanitized message", async () => {

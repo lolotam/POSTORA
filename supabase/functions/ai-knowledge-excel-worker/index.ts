@@ -24,12 +24,16 @@ import {
 import { downloadKnowledgeFile, locateKnowledgeFile } from "../_shared/knowledgeSourceFiles.ts";
 
 const POLL_MS = 15_000;
-// One checkpoint slice equals one Ollama embed HTTP batch (~2-3s), so a crash
-// between an insert and its checkpoint update loses at most one small batch.
+// One checkpoint slice equals one embed HTTP batch, so a crash between an
+// insert and its checkpoint update loses at most one batch. A batch is not
+// cheap: bge-m3 on the CPU-only Ollama takes ~20s for 8 prose chunks
+// (measured 2026-09-05), plus the primary provider's call.
 const CHECKPOINT_BATCH = EMBED_BATCH_SIZE;
 // The edge isolate lives under a ~60s gateway ceiling; stop with headroom so
-// the checkpoint update and the JSON summary fit inside the request. The claim
-// function's 10-minute stale-`processing` reclaim re-picks the source up.
+// the checkpoint update and the JSON summary fit inside the request. A slice
+// that runs out hands the row back as `pending` for the next cron tick; the
+// claim function's 10-minute stale-`processing` reclaim is only the safety net
+// for an isolate that was killed outright.
 const WORK_BUDGET_MS = 45_000;
 const MIN_REMAINING_MS = 5_000;
 
@@ -183,16 +187,16 @@ async function embedChunksResumably(
     }
 
     let ownershipClaimed = false;
+    // Wall time of the previous batch. A batch is only started when one of the
+    // same length still fits before the deadline: the deadline check alone let
+    // a ~30s batch begin at 40s of a 60s isolate, which killed the isolate mid
+    // batch (no code runs after that) and left the row `processing`.
+    let lastBatchMs = 0;
     for (let offset = start; offset < chunks.length; offset += CHECKPOINT_BATCH) {
-      if (deadline !== undefined && deps.now() >= deadline) {
-        return {
-          sourceId: source.id,
-          status: "processing",
-          chunkCount: start,
-          resumed: resumedFrom > 0,
-          reason: "time budget reached; source stays processing and will be resumed",
-        };
+      if (deadline !== undefined && deps.now() + lastBatchMs >= deadline) {
+        return await handBackToQueue(admin, source, start, resumedFrom);
       }
+      const batchStartedAt = deps.now();
       const batch = chunks.slice(offset, offset + CHECKPOINT_BATCH);
       const embeddings = await deps.embed(
         batch.map((chunk) => chunk.content),
@@ -217,6 +221,7 @@ async function embedChunksResumably(
         await claimEmbeddingColumnOwnership(admin, embeddingConfig);
         ownershipClaimed = true;
       }
+      lastBatchMs = deps.now() - batchStartedAt;
     }
 
     const { error: updateError } = await admin.from("ai_knowledge_sources")
@@ -227,9 +232,37 @@ async function embedChunksResumably(
     return { sourceId: source.id, status: "ready", chunkCount: chunks.length, resumed: resumedFrom > 0 };
 }
 
+/**
+ * Release a source whose slice ran out of budget so the NEXT cron tick resumes
+ * it. It goes back to `pending` with its checkpoint intact: the claim takes
+ * `pending` rows at once but ignores a `processing` row for ten minutes, so
+ * leaving it `processing` (the old behaviour) cost a ten-minute wait per slice
+ * and a 50-chunk document took over half an hour to index.
+ */
+async function handBackToQueue(
+  admin: any,
+  source: Source,
+  chunkCount: number,
+  resumedFrom: number,
+): Promise<SourceOutcome> {
+  const { error } = await admin.from("ai_knowledge_sources")
+    .update({ status: "pending" })
+    .eq("id", source.id);
+  if (error) throw error;
+  return {
+    sourceId: source.id,
+    status: "processing",
+    chunkCount,
+    resumed: resumedFrom > 0,
+    reason: "time budget reached; source handed back to the queue and will be resumed",
+    deferred: true,
+  };
+}
+
 //   * ai_knowledge_sources.chunk_count is the durable checkpoint, advanced only
 //     after the batch it counts has landed; status stays `processing` between
-//     batches so a crash never loses already-embedded work.
+//     batches so a crash never loses already-embedded work, and goes back to
+//     `pending` when a slice runs out of budget so the next tick resumes it.
 //   * Resuming at chunk_count N deletes chunks with chunk_index >= N (the crash
 //     window between an insert and its checkpoint) and continues from N.
 //   * A fresh claim at chunk_count 0 deletes all existing chunks first.

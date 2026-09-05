@@ -9,6 +9,7 @@ import {
   type EmbeddingConfig,
   type EmbeddingModelCatalogRow,
   embeddingRecord,
+  embedKnowledgeDual,
   EmbeddingColumnOwnershipError,
   resolveAdminEmbeddingLadder,
   resolveDualEmbeddingConfig,
@@ -175,6 +176,37 @@ Deno.test("retrieval fails over to the fallback provider when the primary embed 
 
   assertEquals(rpcNames, ["match_ai_knowledge_chunks"]);
   assertEquals(chunks[0].id, "x");
+});
+
+Deno.test("dual ingest embeds with both providers at once, not one after the other", async () => {
+  const dual = resolveDualEmbeddingConfig(
+    env({ EMBEDDING_PROVIDER: "gemini", EMBEDDING_FALLBACK_PROVIDER: "ollama" }),
+  );
+  // Neither call resolves until both have started: sequential code would
+  // never start the second one and this test would hang rather than pass.
+  const started: string[] = [];
+  let releaseAll = () => {};
+  const gate = new Promise<void>((resolve) => (releaseAll = resolve));
+  const result = await embedKnowledgeDual(["a"], dual, async (_texts, config) => {
+    started.push(config.provider);
+    if (started.length === 2) releaseAll();
+    await gate;
+    return [[config.provider === "gemini" ? 0.1 : 0.2]];
+  });
+
+  assertEquals(started.sort(), ["gemini", "ollama"]);
+  assertEquals(result, { primary: [[0.1]], fallback: [[0.2]] });
+});
+
+Deno.test("dual ingest keeps the primary vectors when the concurrent fallback embed fails", async () => {
+  const dual = resolveDualEmbeddingConfig(
+    env({ EMBEDDING_PROVIDER: "gemini", EMBEDDING_FALLBACK_PROVIDER: "ollama" }),
+  );
+  const result = await embedKnowledgeDual(["a"], dual, (_texts, config) => {
+    if (config.provider === "ollama") return Promise.reject(new Error("ollama down"));
+    return Promise.resolve([[0.1]]);
+  });
+  assertEquals(result, { primary: [[0.1]], fallback: null });
 });
 
 // ---------------------------------------------------------------------------
