@@ -110,7 +110,9 @@ let filled = 0;
 let ownershipClaimed = false;
 for (const scope of [priorityUsers.length ? priorityUsers : null, null]) {
   while (chars < maxChars) {
-    const batch = withinBudget(await nextBatch(scope), maxChars - chars);
+    // A batch never exceeds half a minute of the rate budget, so one request
+    // cannot trip the per-minute bucket on its own however dense the chunks.
+    const batch = withinBudget(await nextBatch(scope), Math.min(maxChars - chars, charsPerMinute / 2));
     if (!batch.length) break;
     const batchChars = batch.reduce((sum, chunk) => sum + chunk.content.length, 0);
     const startedAt = Date.now();

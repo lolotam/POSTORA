@@ -527,8 +527,14 @@ export async function claimEmbeddingColumnOwnership(
  */
 export function embeddingRetryDelayMs(status: number, attempt: number): number | null {
   if (status === 429) return 12_000 * (attempt + 1);
-  if (status === 408 || status >= 500) return 500 * 2 ** attempt;
+  if (status === 0 || status === 408 || status >= 500) return 500 * 2 ** attempt;
   return null;
+}
+
+/** fetch rejects with a TypeError; AbortSignal.timeout with a TimeoutError; a non-JSON body with a SyntaxError. */
+function isTransportFailure(error: unknown): boolean {
+  return error instanceof TypeError || error instanceof SyntaxError ||
+    (error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError"));
 }
 
 const EMBED_ATTEMPTS = 3;
@@ -562,21 +568,30 @@ export async function embedWithOpenAiCompatible(
     });
     let payload: { data?: Array<{ embedding?: unknown }> } = {};
     for (let attempt = 0; attempt < EMBED_ATTEMPTS; attempt += 1) {
-      const response = await fetch(api.endpoint, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body,
-        signal: AbortSignal.timeout(15_000),
-      });
-      payload = await response.json();
-      if (response.ok && Array.isArray(payload.data)) break;
-      const delay = embeddingRetryDelayMs(response.status, attempt);
+      // A dropped connection, the 15s timeout, or a non-JSON error page are
+      // as transient as a 503 and take the same bounded retry; they are
+      // reported as HTTP 0 so the message still says what was seen.
+      let status = 0;
+      try {
+        const response = await fetch(api.endpoint, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+          body,
+          signal: AbortSignal.timeout(15_000),
+        });
+        status = response.status;
+        payload = await response.json();
+        if (response.ok && Array.isArray(payload.data)) break;
+      } catch (error) {
+        if (!isTransportFailure(error)) throw error;
+      }
+      const delay = embeddingRetryDelayMs(status, attempt);
       if (delay === null || attempt === EMBED_ATTEMPTS - 1) {
         // The status is the only clue between a bad key (401), an exhausted
         // quota (402/429) and an outage; without it every failure reads alike.
-        throw new Error(`${api.label} embedding request failed (HTTP ${response.status})`);
+        throw new Error(`${api.label} embedding request failed (HTTP ${status})`);
       }
-      console.warn(`[knowledge-embeddings] ${api.label} returned HTTP ${response.status}; retrying in ${delay}ms`);
+      console.warn(`[knowledge-embeddings] ${api.label} returned HTTP ${status}; retrying in ${delay}ms`);
       await sleep(delay);
     }
     if (!Array.isArray(payload.data)) {

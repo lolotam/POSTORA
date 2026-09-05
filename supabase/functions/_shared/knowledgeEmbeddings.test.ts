@@ -268,6 +268,32 @@ Deno.test("a rejected key is not retried", async () => {
   assertEquals(waits, []);
 });
 
+Deno.test("a dropped connection is retried like a 5xx and reported as HTTP 0 if it persists", async () => {
+  const realFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = (() => {
+    calls += 1;
+    return Promise.reject(new TypeError("connection reset"));
+  }) as typeof fetch;
+  Deno.env.set("TEST_EMBED_KEY", "k");
+  const waits: number[] = [];
+  try {
+    await assertRejects(
+      () => embedWithOpenAiCompatible(["a"], stubbedConfig, stubbedApi, (ms) => {
+        waits.push(ms);
+        return Promise.resolve();
+      }),
+      Error,
+      "HTTP 0",
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    Deno.env.delete("TEST_EMBED_KEY");
+  }
+  assertEquals(calls, 3);
+  assertEquals(waits, [500, 1000]);
+});
+
 Deno.test("a provider that stays rate-limited fails after the last attempt with the status", async () => {
   const calls = await withStubbedProvider(
     [{ status: 429, body: {} }],
