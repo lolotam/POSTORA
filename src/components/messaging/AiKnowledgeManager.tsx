@@ -102,9 +102,16 @@ export function AiKnowledgeManager({
     // reaching the browser updated only the text. The TEXT is what the agent has
     // been answering from, so it wins -- initialising from stale JSON would let
     // the next Save & index overwrite a profile the user edited more recently.
-    const diverged = storedText.trim() !== "" &&
-      renderBusinessProfileText(structure).trim() !== storedText.trim();
-    setProfile(diverged ? { ...structure, notes: storedText } : structure);
+    // An EMPTY stored text counts as divergence too. Excluding it meant that a
+    // legacy form clearing the profile after the backfill left a non-empty JSON
+    // looked "consistent" -- so the stale structure was restored into the editor
+    // and the next Save & index resurrected the profile the user had deleted.
+    const diverged = renderBusinessProfileText(structure).trim() !== storedText.trim();
+    // The text replaces the structure rather than merging into it. Divergence
+    // means a writer that does not mirror touched the text, so the text is the
+    // whole truth and the structure's other fields are stale by definition;
+    // keeping them would re-save values the user no longer has.
+    setProfile(diverged ? { notes: storedText } : structure);
     // storedText participates deliberately: a text-only refresh must re-run this.
   }, [storedProfileKey, storedText]);
   // An empty box over a stored value is the user having deleted it -- the same

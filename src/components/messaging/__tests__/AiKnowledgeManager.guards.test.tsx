@@ -153,4 +153,24 @@ describe("AiKnowledgeManager write guards", () => {
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
     expect(screen.getByText(/could not check which sources/i)).toBeTruthy();
   });
+  it("does not resurrect a profile the legacy form cleared", () => {
+    // The mirror image of the recovery above, and the reason empty text counts
+    // as divergence: if the deployed legacy form cleared the text after the
+    // migration had backfilled a non-empty structure, restoring that structure
+    // would put the deleted profile straight back on the next save.
+    configValue = {
+      business_profile: { notes: "We sell day-old chicks." },
+      business_profile_text: "",
+    };
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+
+    expect((box() as HTMLTextAreaElement).value).toBe("");
+
+    fireEvent.click(saveButton());
+
+    const [payload] = upsertConfig.mutateAsync.mock.calls.at(-1) as [Record<string, unknown>];
+    expect(payload.business_profile).toEqual({ notes: "" });
+    // Nothing stored to clear, so nothing to declare.
+    expect(payload.confirm_clear).toBeUndefined();
+  });
 });

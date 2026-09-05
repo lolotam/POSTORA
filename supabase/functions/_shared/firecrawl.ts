@@ -292,7 +292,15 @@ export async function firecrawlCrawlStatus(
       // next tick starts over with a full budget -- where returning what we had
       // would mark a partial site ready.
       if (deadline !== undefined && Date.now() >= deadline - MIN_PAGE_MS) {
-        return { state: "running", completed, total, pages: [] };
+        // Nothing here is checkpointed: the next tick restarts pagination from
+        // the first page. That is survivable once, but if pagination
+        // CONSISTENTLY outlasts the budget it never progresses and the crawl
+        // dies at the 30-minute timeout having indexed nothing, with no
+        // explanation. Say so instead -- the page limit is the lever the user
+        // actually has.
+        throw new FirecrawlError(
+          "The crawl results are taking too long to download. Lower the page limit and try again.",
+        );
       }
       const page = await fetchWithTimeout(
         fetchImpl,
@@ -319,7 +327,14 @@ export async function firecrawlCrawlStatus(
     // consistently slow pagination repeats that forever without ever indexing.
     // Saying `running` instead costs one cron tick and always makes progress.
     if (deadline !== undefined && Date.now() >= deadline - MIN_EMBED_MS) {
-      return { state: "running", completed, total, pages: [] };
+      // Only reachable when pagination finished but left no room to embed. A
+      // single page of results is cheap to fetch again, so restarting next tick
+      // does make progress here -- unlike the multi-page case above, which
+      // would restart the same expensive download forever.
+      if (guard === 0) return { state: "running", completed, total, pages: [] };
+      throw new FirecrawlError(
+        "The crawl results are taking too long to download. Lower the page limit and try again.",
+      );
     }
     return { state: "completed", completed, total, pages };
   }
