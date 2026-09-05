@@ -36,6 +36,9 @@ const STATUS_TIMEOUT_MS = 15_000;
  */
 const MAX_RESULT_PAGES = 20;
 
+/** Below this much budget left, do not start another results page. */
+const MIN_PAGE_MS = 3_000;
+
 /** fetch with an abort signal, so a stalled provider becomes a catchable error. */
 async function fetchWithTimeout(
   fetchImpl: typeof fetch,
@@ -233,12 +236,24 @@ export async function firecrawlCrawlStatus(
   key: string,
   jobId: string,
   fetchImpl: typeof fetch = fetch,
+  /**
+   * Absolute epoch-ms ceiling for the WHOLE call, pagination included.
+   *
+   * Without it, up to 20 follow-up pages each get their own 15s timeout while
+   * the HTTP worker has 45s in total -- so a slow-paginating crawl burns the
+   * edge lifetime before anything is embedded or checkpointed, the row stays
+   * `processing`, and every stale reclaim starts pagination from the beginning
+   * again. Each request now gets whatever time is actually left.
+   */
+  deadline?: number,
 ): Promise<CrawlStatus> {
+  const remaining = () =>
+    deadline === undefined ? STATUS_TIMEOUT_MS : Math.min(STATUS_TIMEOUT_MS, deadline - Date.now());
   const response = await fetchWithTimeout(
     fetchImpl,
     `${API}/crawl/${encodeURIComponent(jobId)}`,
     { headers: authHeaders(key) },
-    STATUS_TIMEOUT_MS,
+    remaining(),
     "crawl status",
   );
   const body = await readResponse(response, "crawl status");
@@ -265,11 +280,18 @@ export async function firecrawlCrawlStatus(
     let guard = 0;
     while (next && guard < MAX_RESULT_PAGES) {
       guard += 1;
+      // Out of budget mid-pagination is NOT a completed crawl. Reporting
+      // `running` sends the row back to the queue with its job intact, so the
+      // next tick starts over with a full budget -- where returning what we had
+      // would mark a partial site ready.
+      if (deadline !== undefined && Date.now() >= deadline - MIN_PAGE_MS) {
+        return { state: "running", completed, total, pages: [] };
+      }
       const page = await fetchWithTimeout(
         fetchImpl,
         next,
         { headers: authHeaders(key) },
-        STATUS_TIMEOUT_MS,
+        remaining(),
         "crawl results page",
       );
       const pageBody = await readResponse(page, "crawl results page");

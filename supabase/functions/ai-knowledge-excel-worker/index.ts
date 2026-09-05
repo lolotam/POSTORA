@@ -63,7 +63,7 @@ export type WorkerDependencies = {
   // ones in index.test.ts included -- a type error that `--no-check` would hide
   // until something called an undefined function at runtime.
   firecrawlKey?: (admin: any) => Promise<string>;
-  crawlStatus?: (key: string, jobId: string) => Promise<CrawlStatus>;
+  crawlStatus?: (key: string, jobId: string, fetchImpl?: typeof fetch, deadline?: number) => Promise<CrawlStatus>;
   scrapePage?: (key: string, url: string) => Promise<FirecrawlPage>;
 };
 
@@ -217,7 +217,7 @@ async function embedChunksResumably(
     }
 
     const { error: updateError } = await admin.from("ai_knowledge_sources")
-      .update({ status: "ready", chunk_count: chunks.length, error: null })
+      .update({ status: "ready", chunk_count: chunks.length, error: null, next_attempt_at: null })
       .eq("id", source.id);
     if (updateError) throw updateError;
     console.log(`[ai-knowledge-excel-worker] ready source=${source.id} chunks=${chunks.length} resumed=${resumedFrom > 0}`);
@@ -235,9 +235,16 @@ async function embedChunksResumably(
 // its metadata so the Firecrawl job id is still available to support.
 const CRAWL_TIMEOUT_MS = 30 * 60_000;
 
+/** How long a released crawl stays invisible to the claim: one cron interval. */
+const DEFER_MS = 2 * 60_000;
+
 async function failSource(admin: any, sourceId: string, detail: string): Promise<SourceOutcome> {
   const reason = detail.slice(0, 500);
-  await admin.from("ai_knowledge_sources").update({ status: "failed", error: reason }).eq("id", sourceId);
+  // next_attempt_at is cleared with the terminal state: a failed row the user
+  // retries must be claimable at once, not still serving out a deferral.
+  await admin.from("ai_knowledge_sources")
+    .update({ status: "failed", error: reason, next_attempt_at: null })
+    .eq("id", sourceId);
   console.error(`[ai-knowledge-excel-worker] website failed source=${sourceId}: ${reason}`);
   return { sourceId, status: "failed", chunkCount: 0, resumed: false, reason };
 }
@@ -312,7 +319,9 @@ export async function processWebsiteSource(
 
   let status: CrawlStatus;
   try {
-    status = await (deps.crawlStatus ?? firecrawlCrawlStatus)(key, jobId);
+    // The worker's own deadline bounds pagination too, so a slow-paginating
+    // crawl cannot eat the whole budget before anything is embedded.
+    status = await (deps.crawlStatus ?? firecrawlCrawlStatus)(key, jobId, undefined, deadline);
   } catch (error) {
     return await failSource(admin, source.id, message(error));
   }
@@ -335,9 +344,18 @@ export async function processWebsiteSource(
     }
     await writeMeta(
       { stage: "crawling", pages_done: status.completed, pages_total: status.total },
-      // Back to pending so the NEXT cron tick can claim it. Left processing, it
-      // would wait for the ten-minute stale reclaim instead.
-      { status: "pending", error: null },
+      {
+        // Back to pending so a later tick can claim it. Left `processing`, it
+        // would wait for the ten-minute stale reclaim instead.
+        status: "pending",
+        error: null,
+        // ...but NOT eligible immediately. The claim orders globally by
+        // created_at, so without this the same crawl is re-selected on every
+        // tick and one slow site blocks every later document and crawl, for
+        // every user, until it finishes. One cron interval is exactly how long
+        // it should wait.
+        next_attempt_at: new Date(deps.now() + DEFER_MS).toISOString(),
+      },
     );
     return {
       sourceId: source.id,

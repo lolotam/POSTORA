@@ -844,8 +844,21 @@ async function handleRequest(req: Request): Promise<Response> {
         return errorResponse(message(error), 400);
       }
 
-      const scopeToAccount = body.scope === "account" &&
-        typeof body.social_account_id === "string" && body.social_account_id.trim() !== "";
+      // A caller asking for account scope MUST name the account. Falling through
+      // to `shared` on a blank id was a silent widening: knowledge meant for one
+      // brand would become readable by every connected agent. Refuse instead --
+      // the request is malformed, and the safe reading of a malformed request is
+      // not "share it with everyone".
+      const namedAccount = typeof body.social_account_id === "string"
+        ? body.social_account_id.trim()
+        : "";
+      if (body.scope === "account" && !namedAccount) {
+        return errorResponse(
+          "An account-scoped source must name the account it belongs to.",
+          400,
+        );
+      }
+      const scopeToAccount = body.scope === "account" && namedAccount !== "";
       const { data: sourceId, error: createError } = await (caller as any).rpc(
         "create_ai_knowledge_source",
         {
@@ -853,7 +866,7 @@ async function handleRequest(req: Request): Promise<Response> {
           p_file_name: buildWebsiteSourceName(check.url, mode),
           // The URL IS the file path for a website source; there is no object.
           p_file_path: check.url,
-          p_social_account_ids: scopeToAccount ? [body.social_account_id] : [],
+          p_social_account_ids: scopeToAccount ? [namedAccount] : [],
           p_visibility: scopeToAccount ? "restricted" : "shared",
         },
       );
@@ -910,11 +923,18 @@ async function handleRequest(req: Request): Promise<Response> {
           });
           return jsonResponse({ ok: true, queued: true, source_id: sourceId }, 202);
         } catch (error) {
+          // The crawl may already be RUNNING and billable while its id failed to
+          // reach source metadata -- which is exactly the state delete-cancel
+          // cannot recover from, because it reads the id from there. Cancelling
+          // here is the only chance to stop it.
+          let cancelled: boolean | null = null;
+          if (startedJobId) cancelled = await firecrawlCancelCrawl(key, startedJobId);
           await setFailed(admin, sourceId, error);
           await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
             source_id: sourceId,
             mode,
             url: check.url,
+            crawl_cancelled: cancelled,
             // The crawl may already be RUNNING and billable while its id failed
             // to persist. Logging what we know is the only way it stays
             // traceable at all.

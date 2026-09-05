@@ -72,8 +72,14 @@ Deno.test("a crawl still running is released back to pending, not failed", async
     }),
   );
   assertEquals(outcome.status, "processing");
+  assertEquals(outcome.deferred, true);
   const last = updates.at(-1)!;
   assertEquals(last.status, "pending");
+  // Deferred, not merely released. Without a future eligibility time the claim
+  // -- which orders globally by created_at -- re-selects this same crawl on
+  // every tick, and one slow site blocks every later item for every user.
+  assertEquals(typeof last.next_attempt_at, "string");
+  assertEquals(Date.parse(last.next_attempt_at as string) > Date.now(), true);
   assertEquals((last.metadata as Record<string, unknown>).pages_done, 2);
   assertEquals((last.metadata as Record<string, unknown>).pages_total, 9);
 });
@@ -230,4 +236,19 @@ Deno.test("a source predating crawl_started_at still times out on created_at", a
     }),
   );
   assertEquals(outcome.status, "failed");
+});
+
+Deno.test("a terminal state clears the deferral", async () => {
+  // A failed row the user retries must be claimable at once, not still serving
+  // out a deferral set on an earlier attempt.
+  const updates: Record<string, unknown>[] = [];
+  await processWebsiteSource(
+    fakeAdmin(updates),
+    websiteSource({ crawl_job_id: "j", mode: "site" }),
+    deps({
+      crawlStatus: () =>
+        Promise.resolve({ state: "failed", completed: 0, total: 0, pages: [], error: "nope" }),
+    }),
+  );
+  assertEquals(updates.at(-1)!.next_attempt_at, null);
 });
