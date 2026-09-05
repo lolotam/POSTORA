@@ -13,6 +13,11 @@ const OPENAI_ENDPOINT = "https://api.openai.com/v1/embeddings";
 // models — that catalog is not evidence of what /embeddings accepts. Each
 // seeded OpenRouter model was verified by a live call before being offered.
 const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/embeddings";
+// Jina speaks the OpenAI dialect plus a `task` field: passages and queries are
+// embedded asymmetrically, which is what makes its retrieval scores good.
+// jina-embeddings-v5-omni-small is 1024 wide and refuses a larger `dimensions`
+// (measured 2026-09-05), so it lives in the 1024 column.
+const JINA_ENDPOINT = "https://api.jina.ai/v1/embeddings";
 
 // ai_knowledge_chunks has exactly two vector columns; a width outside this set
 // has no column to live in and must never be written.
@@ -29,7 +34,12 @@ const EMBEDDING_SETTING_KEYS = [
 const columnOwnerKey = (column: EmbeddingConfig["column"]) =>
   `embedding_column_owner_${column}`;
 
-export type EmbeddingProvider = "gemini" | "ollama" | "openai" | "openrouter";
+export type EmbeddingProvider = "gemini" | "ollama" | "openai" | "openrouter" | "jina";
+/**
+ * What the text is for. Providers with asymmetric retrieval models (Jina)
+ * embed a stored passage and a search query differently; the others ignore it.
+ */
+export type EmbeddingPurpose = "passage" | "query";
 export type EnvironmentReader = (name: string) => string | undefined;
 
 export type EmbeddingConfig = {
@@ -265,9 +275,9 @@ function selectionConfig(
       ollamaBaseUrl: configuredValue(readEnvironment, "OLLAMA_BASE_URL", "http://ollama:11434"),
     };
   }
-  if (selection.provider_code === "openrouter") {
+  if (selection.provider_code === "openrouter" || selection.provider_code === "jina") {
     return {
-      provider: "openrouter",
+      provider: selection.provider_code,
       column,
       dimensions: width,
       model: selection.model_id,
@@ -508,7 +518,13 @@ export async function claimEmbeddingColumnOwnership(
 async function embedWithOpenAiCompatible(
   texts: string[],
   config: EmbeddingConfig,
-  api: { endpoint: string; keyEnvVar: string; label: string },
+  api: {
+    endpoint: string;
+    keyEnvVar: string;
+    label: string;
+    /** Provider-specific fields sent alongside the standard body. */
+    extraBody?: Record<string, unknown>;
+  },
 ): Promise<number[][]> {
   const key = Deno.env.get(api.keyEnvVar);
   if (!key) throw new Error(`${api.keyEnvVar} is not configured`);
@@ -522,12 +538,15 @@ async function embedWithOpenAiCompatible(
         model: config.model,
         input: texts.slice(start, start + 64),
         dimensions: config.dimensions,
+        ...api.extraBody,
       }),
       signal: AbortSignal.timeout(15_000),
     });
     const payload: { data?: Array<{ embedding?: unknown }> } = await response.json();
     if (!response.ok || !Array.isArray(payload.data)) {
-      throw new Error(`${api.label} embedding request failed`);
+      // The status is the only clue between a bad key (401), an exhausted
+      // quota (402/429) and an outage; without it every failure reads alike.
+      throw new Error(`${api.label} embedding request failed (HTTP ${response.status})`);
     }
 
     const batch: unknown[] = payload.data.map((item) => item.embedding);
@@ -571,19 +590,40 @@ function embedWithGemini(texts: string[], config: EmbeddingConfig): Promise<numb
   });
 }
 
+function embedWithJina(
+  texts: string[],
+  config: EmbeddingConfig,
+  purpose: EmbeddingPurpose,
+): Promise<number[][]> {
+  return embedWithOpenAiCompatible(texts, config, {
+    endpoint: JINA_ENDPOINT,
+    keyEnvVar: "JINA_API_KEY",
+    label: "Jina",
+    extraBody: {
+      task: purpose === "query" ? "retrieval.query" : "retrieval.passage",
+      normalized: true,
+      truncate: true,
+    },
+  });
+}
+
 export async function embedKnowledge(
   texts: string[],
   config: EmbeddingConfig = resolveEmbeddingConfig(),
+  purpose: EmbeddingPurpose = "passage",
 ): Promise<number[][]> {
   if (!texts.length) return [];
   if (config.provider === "gemini") return embedWithGemini(texts, config);
   if (config.provider === "openai") return embedWithOpenAI(texts, config);
   if (config.provider === "openrouter") return embedWithOpenRouter(texts, config);
-
-  return embedWithOllama(texts, {
-    baseUrl: config.ollamaBaseUrl,
-    model: config.model,
-  });
+  if (config.provider === "jina") return embedWithJina(texts, config, purpose);
+  if (config.provider === "ollama") {
+    return embedWithOllama(texts, { baseUrl: config.ollamaBaseUrl, model: config.model });
+  }
+  // Reached only by a config built outside selectionConfig; sending an unknown
+  // provider's model id to Ollama would fail one call later with a misleading
+  // "fallback embed failed" instead of naming the real gap.
+  throw new Error(`No embedding caller for provider ${config.provider}`);
 }
 
 export type DualEmbeddings = {
@@ -646,7 +686,11 @@ export type RetrievalRpc = (
 
 // Embedder seam so retrieval failover can be tested without a live provider;
 // production always uses the real embedKnowledge.
-export type Embedder = (texts: string[], config: EmbeddingConfig) => Promise<number[][]>;
+export type Embedder = (
+  texts: string[],
+  config: EmbeddingConfig,
+  purpose?: EmbeddingPurpose,
+) => Promise<number[][]>;
 
 /** What to retrieve, and whose agent is asking. */
 export interface KnowledgeRetrievalRequest {
@@ -668,7 +712,7 @@ async function embedAndMatch(
   config: EmbeddingConfig,
   embed: Embedder,
 ): Promise<KnowledgeChunkMatch[]> {
-  const [embedding] = await embed([request.query], config);
+  const [embedding] = await embed([request.query], config, "query");
   const scoped = !!request.socialAccountId;
   const { data, error } = await rpc(
     scoped ? accountRetrievalRpcName(config) : retrievalRpcName(config),
