@@ -161,6 +161,7 @@ Deno.test("retrieval fails over to the fallback provider when the primary embed 
     env({ EMBEDDING_PROVIDER: "ollama", EMBEDDING_FALLBACK_PROVIDER: "gemini" }),
   );
   const rpcNames: string[] = [];
+  const purposes: Array<string | undefined> = [];
   const chunks = await retrieveKnowledgeChunks(
     (name: string) => {
       rpcNames.push(name);
@@ -168,7 +169,8 @@ Deno.test("retrieval fails over to the fallback provider when the primary embed 
     },
     { userId: "user-1", query: "query", matchCount: 6 },
     dual,
-    (_texts: string[], config: EmbeddingConfig) => {
+    (_texts: string[], config: EmbeddingConfig, purpose) => {
+      purposes.push(purpose);
       if (config.provider === "ollama") throw new Error("ollama down");
       return Promise.resolve([[0.2]]);
     },
@@ -176,6 +178,9 @@ Deno.test("retrieval fails over to the fallback provider when the primary embed 
 
   assertEquals(rpcNames, ["match_ai_knowledge_chunks"]);
   assertEquals(chunks[0].id, "x");
+  // A search string is embedded as a query, not as a stored passage: Jina's
+  // asymmetric model scores a passage-embedded query noticeably worse.
+  assertEquals(purposes, ["query", "query"]);
 });
 
 Deno.test("dual ingest embeds with both providers at once, not one after the other", async () => {
@@ -235,6 +240,8 @@ const SEEDED_CATALOG = [
   catalogRow("gemini", "gemini-embedding-2", 3072, 1536),
   catalogRow("gemini", "text-embedding-004", 768),
   catalogRow("ollama", "bge-m3:latest", 1024),
+  // 1024 native and refuses a larger `dimensions` (measured 2026-09-05).
+  catalogRow("jina", "jina-embeddings-v5-omni-small", 1024),
   // OpenRouter widths below are what the live /embeddings endpoint actually
   // returned when each model was probed, not what its model card advertises.
   catalogRow("openrouter", "perplexity/pplx-embed-v1-4b", 2560, 1536),
@@ -276,6 +283,44 @@ Deno.test("admin selection is honoured across the two vector columns", () => {
   assertEquals(dual.fallback?.provider, "gemini");
   assertEquals(dual.fallback?.column, "embedding");
   assertEquals(dual.fallback?.dimensions, 1536);
+});
+
+Deno.test("a Jina fallback takes the 1024 column beside a Gemini primary", () => {
+  const dual = resolveAdminEmbeddingLadder(
+    { provider_code: "gemini", model_id: "gemini-embedding-001" },
+    { provider_code: "jina", model_id: "jina-embeddings-v5-omni-small" },
+    null,
+    SEEDED_CATALOG,
+    { embedding: "gemini/gemini-embedding-001" },
+    env({}),
+  );
+
+  assertEquals(dual.primary.column, "embedding");
+  assertEquals(dual.fallback, {
+    provider: "jina",
+    column: "embedding_bge_m3",
+    dimensions: 1024,
+    model: "jina-embeddings-v5-omni-small",
+  });
+});
+
+Deno.test("Jina cannot take over the 1024 column while Ollama still owns it", () => {
+  // Replacing Ollama with Jina in the 1024 column is a corpus change: the
+  // owner row must be cleared (and the column re-embedded) before the ladder
+  // may name Jina, otherwise mixed-model vectors would share one index.
+  assertThrows(
+    () =>
+      resolveAdminEmbeddingLadder(
+        { provider_code: "gemini", model_id: "gemini-embedding-001" },
+        { provider_code: "jina", model_id: "jina-embeddings-v5-omni-small" },
+        null,
+        SEEDED_CATALOG,
+        { embedding: "gemini/gemini-embedding-001", embedding_bge_m3: "ollama/bge-m3:latest" },
+        env({}),
+      ),
+    EmbeddingColumnOwnershipError,
+    "requires re-embedding",
+  );
 });
 
 Deno.test("second fallback fills in when the first tier is absent", () => {
