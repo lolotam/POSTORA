@@ -67,8 +67,16 @@ describe("AiKnowledgeManager write guards", () => {
     expect(saveButton()).toBeDisabled();
   });
 
-  it("declares an empty profile over a stored one as a deliberate clear", () => {
-    configValue = { business_profile_text: "We sell day-old chicks." };
+  it("declares an emptied profile over a stored one as a deliberate clear", () => {
+    // The payload is now the STRUCTURE; the server renders the text from it. The
+    // guard has to reach the same verdict the server will, so it compares the
+    // locally rendered text against what is stored -- if it under-reports the
+    // clear, the server refuses with a 409 and the profile becomes impossible
+    // to empty.
+    configValue = {
+      business_profile: { notes: "We sell day-old chicks." },
+      business_profile_text: "Additional notes:\nWe sell day-old chicks.",
+    };
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
 
     // fireEvent.change, NOT `box().value = ""`. Assigning to .value mutates the
@@ -78,8 +86,26 @@ describe("AiKnowledgeManager write guards", () => {
     fireEvent.click(saveButton());
 
     expect(upsertConfig.mutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ business_profile_text: "", confirm_clear: true }),
+      expect.objectContaining({ business_profile: { notes: "" }, confirm_clear: true }),
     );
+  });
+
+  it("recovers the stored text when the structure disagrees with it", () => {
+    // The rollout window: the migration backfilled the structure once, and any
+    // text-only save between then and this build reaching the browser updated
+    // only the text. Opening blank here and saving would destroy that newer
+    // text -- so the text wins and arrives in the editor instead.
+    configValue = { business_profile: {}, business_profile_text: "We sell day-old chicks." };
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+
+    expect((box() as HTMLTextAreaElement).value).toBe("We sell day-old chicks.");
+
+    fireEvent.click(saveButton());
+
+    const [payload] = upsertConfig.mutateAsync.mock.calls.at(-1) as [Record<string, unknown>];
+    expect(payload.business_profile).toEqual({ notes: "We sell day-old chicks." });
+    // Nothing was cleared, so nothing is declared.
+    expect(payload.confirm_clear).toBeUndefined();
   });
 
   it("does not declare a clear when nothing was stored", () => {
@@ -126,5 +152,25 @@ describe("AiKnowledgeManager write guards", () => {
     };
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
     expect(screen.getByText(/could not check which sources/i)).toBeTruthy();
+  });
+  it("does not resurrect a profile the legacy form cleared", () => {
+    // The mirror image of the recovery above, and the reason empty text counts
+    // as divergence: if the deployed legacy form cleared the text after the
+    // migration had backfilled a non-empty structure, restoring that structure
+    // would put the deleted profile straight back on the next save.
+    configValue = {
+      business_profile: { notes: "We sell day-old chicks." },
+      business_profile_text: "",
+    };
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+
+    expect((box() as HTMLTextAreaElement).value).toBe("");
+
+    fireEvent.click(saveButton());
+
+    const [payload] = upsertConfig.mutateAsync.mock.calls.at(-1) as [Record<string, unknown>];
+    expect(payload.business_profile).toEqual({ notes: "" });
+    // Nothing stored to clear, so nothing to declare.
+    expect(payload.confirm_clear).toBeUndefined();
   });
 });

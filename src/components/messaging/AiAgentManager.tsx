@@ -1,16 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Loader2, Plus, X } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
-import { type AiAgentConfigInput, type AiAgentLanguageMode, type AiAgentMode, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
+import { type AiAgentConfigInput, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
@@ -22,6 +16,13 @@ import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConne
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
 import { useDirtyForm } from "@/hooks/useDirtyForm";
 import { useUnsavedChangesGuard } from "@/hooks/useUnsavedChangesGuard";
+import type { AgentBehavior } from "@/lib/agentProfile";
+import { AgentIdentityCard } from "@/components/messaging/agent-settings/AgentIdentityCard";
+import { AdvancedCard } from "@/components/messaging/agent-settings/AdvancedCard";
+import { BusinessGoalsCard } from "@/components/messaging/agent-settings/BusinessGoalsCard";
+import { GuardrailsCard } from "@/components/messaging/agent-settings/GuardrailsCard";
+import { InstructionBlocksCard } from "@/components/messaging/agent-settings/InstructionBlocksCard";
+import { HumanHandoffCard } from "@/components/messaging/agent-settings/HumanHandoffCard";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
   "is_enabled" | "default_mode" | "language_mode" | "daily_message_cap" | "reply_cooldown_seconds"
@@ -32,14 +33,8 @@ const defaultConfig: Required<Pick<AiAgentConfigInput,
   daily_message_cap: 50,
   reply_cooldown_seconds: 0,
   persona_instructions: "",
-  business_profile_text: "",
+  agent_behavior: {},
   admin_phone_numbers: [],
-};
-
-const modeDescriptions: Record<AiAgentMode, string> = {
-  ai_first: "The assistant replies first and hands off when needed.",
-  human_first: "A team member replies first; the assistant stays on standby.",
-  human_then_ai: "A team member gets the first chance, then AI handles the fallback.",
 };
 
 /** The stored config as the form holds it. One definition, so a first load and a
@@ -49,7 +44,7 @@ function toFormValues(config: NonNullable<ReturnType<typeof useAiAgentConfig>["c
     is_enabled: config.is_enabled,
     default_mode: config.default_mode,
     persona_instructions: config.persona_instructions || "",
-    business_profile_text: config.business_profile_text || "",
+    agent_behavior: config.agent_behavior ?? {},
     language_mode: config.language_mode,
     temperature: config.temperature,
     admin_phone_numbers: config.admin_phone_numbers || [],
@@ -69,8 +64,9 @@ function toFormValues(config: NonNullable<ReturnType<typeof useAiAgentConfig>["c
  * the user's own changes survive a refresh and everything else follows the
  * server. Both extremes are lossy: replacing the whole form discards what they
  * typed (the 2026-08-30 outage), and keeping the whole form carries a stale
- * business_profile_text that the next save would write back over the value the
- * knowledge tab had just stored.
+ * server value that the next save would write back over a fresher one -- the
+ * hazard that made this function necessary, when this form still echoed the
+ * knowledge tab's business_profile_text back on every save.
  *
  * Compared with JSON.stringify to match useDirtyForm exactly -- admin_phone_numbers
  * is an array, and two definitions of "changed" in one component would eventually
@@ -149,8 +145,8 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
     // edited ones alone. Resetting everything is how a typed persona became a
     // blank save on 2026-08-30; freezing everything is the opposite mistake, and
     // just as lossy -- the knowledge tab's save refreshes this same query, so a
-    // frozen form would carry a stale business_profile_text and the next Settings
-    // save would silently revert the profile that was just written.
+    // frozen form would carry stale server values and the next Settings save
+    // would silently revert what another surface had just written.
     //
     // A field counts as edited when it has diverged from the baseline, so the
     // user's own changes always win and everything else takes the server's value.
@@ -210,6 +206,17 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
     setForm((current) => ({ ...current, [key]: value }));
   };
 
+  // Merges rather than replaces. agent_behavior is ONE column written by four
+  // different cards; a replacing setter would make whichever card the user
+  // touched last silently erase the other three.
+  const behavior = form.agent_behavior ?? {};
+  const updateBehavior = <K extends keyof AgentBehavior>(key: K, value: AgentBehavior[K]) => {
+    setForm((current) => ({
+      ...current,
+      agent_behavior: { ...(current.agent_behavior ?? {}), [key]: value },
+    }));
+  };
+
   const addPhone = () => {
     const phone = normalizeE164Phone(phoneInput);
     if (!phone) {
@@ -242,7 +249,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
     // blank too and this comparison is false. Only a user who saw a value and
     // deleted it produces a non-empty baseline against an empty form -- which is
     // what makes the flag a real signal rather than a rubber stamp.
-    const clearedAField = (["persona_instructions", "business_profile_text"] as const).some(
+    const clearedAField = (["persona_instructions"] as const).some(
       (field) =>
         String(form[field] ?? "").trim() === "" &&
         String(baseline?.[field] ?? "").trim() !== "",
@@ -266,7 +273,6 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
   // below IS the unloaded state ("a blank form is an unloaded form, not a
   // save"). A spinner would also unmount the account selector mid-switch,
   // taking away the very control the user just used.
-  const selectedMode = (form.default_mode || "human_then_ai") as AiAgentMode;
 
   return (
     <Tabs
@@ -315,107 +321,22 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
               guard nor beforeunload protected them. `contents` keeps the fieldset out of
               the layout; the disabled state still propagates down the DOM tree. */}
           <fieldset disabled={!configLoaded} className="contents" data-testid="agent-form-fields">
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2"><Bot className="h-5 w-5" /> AI agent settings</CardTitle>
-              <CardDescription>Set the default behavior for customer conversations on this platform.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
-                <div>
-                  <Label htmlFor="ai-agent-enabled" className="text-base">Enable AI agent</Label>
-                  <p className="text-sm text-muted-foreground">Allow this agent to participate according to the selected mode.</p>
-                </div>
-                <Switch id="ai-agent-enabled" checked={Boolean(form.is_enabled)} onCheckedChange={(checked) => update("is_enabled", checked)} />
-              </div>
-
-              <div className="grid gap-5 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>Default engagement mode</Label>
-                  <Select value={selectedMode} onValueChange={(value) => update("default_mode", value as AiAgentMode)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="ai_first">AI First</SelectItem>
-                      <SelectItem value="human_first">Human First</SelectItem>
-                      <SelectItem value="human_then_ai">Human then AI fallback</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-sm text-muted-foreground">{modeDescriptions[selectedMode]}</p>
-                </div>
-                <div className="space-y-2">
-                  <Label>Language</Label>
-                  <Select value={form.language_mode || "auto"} onValueChange={(value) => update("language_mode", value as AiAgentLanguageMode)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="auto">Auto-detect (Arabic/English)</SelectItem>
-                      <SelectItem value="ar">Arabic only</SelectItem>
-                      <SelectItem value="en">English only</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-sm text-muted-foreground">Choose whether replies follow the customer&apos;s language automatically.</p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="persona-instructions">Persona and instructions</Label>
-                <Textarea id="persona-instructions" value={form.persona_instructions || ""} onChange={(event) => update("persona_instructions", event.target.value)} placeholder="Describe your tone, policies, and how the assistant should help customers." rows={5} />
-              </div>
-
-              <div className="space-y-2">
-                <Label>Admin phone numbers</Label>
-                <div className="flex flex-wrap gap-2 rounded-md border p-3">
-                  {(form.admin_phone_numbers || []).map((phone) => (
-                    <Badge key={phone} variant="secondary" className="gap-1 pr-1">
-                      {phone}
-                      <button type="button" aria-label={`Remove ${phone}`} className="rounded-sm p-0.5 hover:bg-muted" onClick={() => update("admin_phone_numbers", (form.admin_phone_numbers || []).filter((number) => number !== phone))}>
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
-                  {(form.admin_phone_numbers || []).length === 0 && <span className="text-sm text-muted-foreground">No admin numbers added.</span>}
-                </div>
-                <div className="flex gap-2">
-                  <Input value={phoneInput} onChange={(event) => { setPhoneInput(event.target.value); setPhoneError(null); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addPhone(); } }} placeholder="+96550000000" />
-                  <Button type="button" variant="outline" onClick={addPhone}><Plus className="mr-1 h-4 w-4" /> Add</Button>
-                </div>
-                <p className="text-sm text-muted-foreground">These numbers receive access to operational tools during customer conversations.</p>
-                {phoneError && <p className="text-sm text-destructive">{phoneError}</p>}
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Advanced</CardTitle>
-              <CardDescription>Daily conversation limits and response cooldown settings.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              <div className="grid gap-5 md:grid-cols-2">
-                <div className="space-y-2">
-                  <Label htmlFor="daily-cap">Daily message cap</Label>
-                  <Input
-                    id="daily-cap"
-                    type="number"
-                    min={1}
-                    value={form.daily_message_cap ?? 50}
-                    onChange={(event) => update("daily_message_cap", Number(event.target.value))}
-                  />
-                  <p className="text-xs text-muted-foreground">Maximum automated replies sent per day.</p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="cooldown">Reply cooldown (seconds)</Label>
-                  <Input
-                    id="cooldown"
-                    type="number"
-                    min={0}
-                    value={form.reply_cooldown_seconds ?? 0}
-                    onChange={(event) => update("reply_cooldown_seconds", Number(event.target.value))}
-                  />
-                  <p className="text-xs text-muted-foreground">Wait time between consecutive AI replies (0 for instant).</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+          <AgentIdentityCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
+          <BusinessGoalsCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
+          <GuardrailsCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
+          <HumanHandoffCard
+            form={form}
+            update={update}
+            phoneInput={phoneInput}
+            phoneError={phoneError}
+            onPhoneInputChange={(next) => { setPhoneInput(next); setPhoneError(null); }}
+            onAddPhone={addPhone}
+            onRemovePhone={(phone) =>
+              update("admin_phone_numbers", (form.admin_phone_numbers || []).filter((number) => number !== phone))
+            }
+          />
+          <InstructionBlocksCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
+          <AdvancedCard form={form} update={update} />
           </fieldset>
 
           {/* Auto-Reply Rules */}

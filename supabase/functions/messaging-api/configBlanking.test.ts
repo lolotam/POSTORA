@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { blankedFields } from "./configBlanking.ts";
+import { renderBusinessProfileText } from "../_shared/businessProfileText.ts";
 
 const STORED = {
   persona_instructions: "You are the voice of Eltamlawy Chicks.",
@@ -51,4 +52,22 @@ Deno.test("there is nothing to protect when no config exists yet", () => {
 
 Deno.test("a non-empty value is never a blanking", () => {
   assertEquals(blankedFields({ persona_instructions: "New voice" }, STORED), []);
+});
+
+// --- The structured profile feeds the same guard ---------------------------
+//
+// business_profile_text is now DERIVED, rendered server-side from
+// business_profile. The blanking guard still protects the column, so the
+// renderer and the guard have to agree on what "empty" means -- a profile the
+// user emptied field by field must be indistinguishable from a cleared
+// textarea, or the 2026-08-30 protection quietly stops applying to the new UI.
+
+Deno.test("a structured profile emptied field by field still trips the guard", () => {
+  const updates = { business_profile_text: renderBusinessProfileText({ products: "  " }) };
+  assertEquals(blankedFields(updates, STORED), ["business_profile_text"]);
+});
+
+Deno.test("a filled structured profile is not a blanking", () => {
+  const updates = { business_profile_text: renderBusinessProfileText({ products: "shoes" }) };
+  assertEquals(blankedFields(updates, STORED), []);
 });

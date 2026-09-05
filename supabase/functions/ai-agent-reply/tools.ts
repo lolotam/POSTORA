@@ -98,6 +98,48 @@ export const toolDefinitions = [
   },
 ];
 
+/**
+ * The base tools for this account, honouring the stored handoff switches.
+ *
+ * A switch that only edits the system prompt is a suggestion: the model can
+ * still call a tool it was merely told not to use. Removing escalate_to_human
+ * from the function list is what makes "no handoffs" mean it.
+ *
+ * The model-outage escalation is deliberately unaffected. That path runs in
+ * index.ts when every model in the chain has failed, and it is not a
+ * user-configurable behaviour -- a business that switched off handoffs did not
+ * ask to have its customers silently ignored during an outage.
+ */
+export function agentToolDefinitions(
+  { onRequest, onLowConfidence }: { onRequest: boolean; onLowConfidence: boolean },
+) {
+  if (!onRequest && !onLowConfidence) {
+    return toolDefinitions.filter((tool) => tool.function.name !== "escalate_to_human");
+  }
+  if (onRequest && onLowConfidence) return toolDefinitions;
+
+  // One trigger off, the other on. Leaving the stock description in place would
+  // still tell the model to hand off "when the customer asks for a person, or
+  // when the knowledge base cannot answer" -- so disabling one switch would
+  // change nothing at all. The description is the only per-call control we
+  // have, so it names the one reason that is still allowed and forbids the
+  // other outright.
+  const allowed = onRequest
+    ? "Use this ONLY when the customer explicitly asks for a person, a human, or an agent. Do NOT use it merely because the knowledge base cannot answer -- in that case say you do not have the information."
+    : "Use this ONLY when the business knowledge cannot answer the customer's question. Do NOT use it merely because the customer asked for a person -- the business has chosen not to transfer on request.";
+  return toolDefinitions.map((tool) =>
+    tool.function.name === "escalate_to_human"
+      ? {
+        ...tool,
+        function: {
+          ...tool.function,
+          description: `Hand this conversation to a human team member. ${allowed}`,
+        },
+      }
+      : tool
+  );
+}
+
 async function searchKnowledge(context: ToolContext, query: string): Promise<ToolResult> {
   // retrieveKnowledge already fails over to the fallback embedding provider; if
   // every provider is down, degrade to a "no results" tool answer instead of

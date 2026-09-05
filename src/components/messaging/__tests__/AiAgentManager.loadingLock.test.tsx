@@ -58,7 +58,7 @@ describe("AiAgentManager form lock while a config is loading", () => {
   it("locks the fields after discarding into an account whose config has not arrived", async () => {
     render(<AiAgentManager platform="instagram" />);
 
-    const persona = await screen.findByLabelText(/persona and instructions/i);
+    const persona = await screen.findByLabelText(/additional instructions/i);
     expect(persona).toBeEnabled();
 
     fireEvent.change(persona, { target: { value: "typed but unsaved" } });
@@ -68,14 +68,14 @@ describe("AiAgentManager form lock while a config is loading", () => {
 
     // a2's config never settles, so the form still shows a1's text -- and must be locked,
     // because anything typed here would read as clean and then be overwritten.
-    expect(await screen.findByLabelText(/persona and instructions/i)).toBeDisabled();
+    expect(await screen.findByLabelText(/additional instructions/i)).toBeDisabled();
     expect(screen.getByRole("button", { name: /save settings/i })).toBeDisabled();
   });
 
   it("leaves the fields editable once the config has loaded", async () => {
     render(<AiAgentManager platform="instagram" />);
 
-    expect(await screen.findByLabelText(/persona and instructions/i)).toBeEnabled();
+    expect(await screen.findByLabelText(/additional instructions/i)).toBeEnabled();
     expect(screen.getByRole("button", { name: /save settings/i })).toBeEnabled();
   });
 });

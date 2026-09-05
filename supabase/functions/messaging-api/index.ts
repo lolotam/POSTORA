@@ -13,6 +13,8 @@ import {
 import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
 import { blankedFields } from "./configBlanking.ts";
+import { parseBusinessProfile, renderBusinessProfileText } from "../_shared/businessProfileText.ts";
+import { parseAgentBehavior } from "../_shared/agentBehavior.ts";
 import { parseCredentialUpsertResult } from "./credentialVaultRpc.ts";
 import {
   type CredentialVault,
@@ -487,6 +489,7 @@ function isAiAgentPlatform(value: unknown): value is string {
         "temperature", "admin_phone_numbers",
         "daily_message_cap", "reply_cooldown_seconds", "max_tool_iterations",
         "handoff_on_request", "handoff_on_low_confidence",
+        "business_profile", "agent_behavior",
       ];
       const updates: Record<string, unknown> = {};
       for (const field of allowedFields) {
@@ -503,6 +506,49 @@ function isAiAgentPlatform(value: unknown): value is string {
           return jsonResponse({ error: `Invalid admin phone numbers: ${invalid.join(", ")}` }, 400);
         }
         updates.admin_phone_numbers = normalized as string[];
+      }
+
+      // The structured profile is the INPUT; business_profile_text is the
+      // derived column the vector database is built from. Rendering here rather
+      // than in the browser keeps one producer for the field every blanking
+      // guard protects -- the client form is the layer that emptied live
+      // profiles twice, and giving it the composition too would put the derived
+      // value behind the same failure.
+      //
+      // A payload carrying both is a contradiction. The structure wins, because
+      // it is what the form will render back to the user next time; text that
+      // disagreed with it would be a value nothing on screen can explain.
+      if ("business_profile" in updates) {
+        try {
+          const profile = parseBusinessProfile(updates.business_profile);
+          updates.business_profile = profile;
+          updates.business_profile_text = renderBusinessProfileText(profile);
+        } catch (error) {
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : "Invalid business_profile" },
+            400,
+          );
+        }
+      }
+      // A writer that sends only the TEXT -- the pre-restructure form, or any
+      // API caller -- must not leave the structure behind. The migration
+      // backfilled business_profile once; every text-only write after it would
+      // otherwise widen the gap, and the new form, which initialises from the
+      // structure, would then overwrite newer text with older JSON on its next
+      // save. Mirroring here keeps one source of truth from both directions.
+      if ("business_profile_text" in updates && !("business_profile" in updates)) {
+        const text = String(updates.business_profile_text ?? "");
+        updates.business_profile = text.trim() ? { notes: text } : {};
+      }
+      if ("agent_behavior" in updates) {
+        try {
+          updates.agent_behavior = parseAgentBehavior(updates.agent_behavior);
+        } catch (error) {
+          return jsonResponse(
+            { error: error instanceof Error ? error.message : "Invalid agent_behavior" },
+            400,
+          );
+        }
       }
 
       // Model fields must come from the admin-curated allow-list. Values are

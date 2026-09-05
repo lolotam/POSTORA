@@ -1,19 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useState } from "react";
-import { ExternalLink, FileArchive, Loader2, RefreshCw, Trash2, Upload } from "lucide-react";
+import { Globe, PencilLine, Upload } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   useAiAgentConfig,
   type AiAgentPlatform,
@@ -21,10 +10,6 @@ import {
 import { useAiKnowledge } from "@/hooks/useAiKnowledge";
 import { useWhatsAppCatalog } from "@/hooks/useWhatsAppCatalog";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
-import { Checkbox } from "@/components/ui/checkbox";
-import type { Platform } from "@/lib/types";
-import { PlatformIcon } from "@/components/PlatformIcon";
-import { displaySourceTitle } from "@/lib/knowledgeSourceDisplay";
 import { visibleToAccount } from "@/lib/knowledgeVisibility";
 import {
   accountLabel,
@@ -34,7 +19,6 @@ import {
   type SharingAccount,
 } from "@/lib/knowledgeSharing";
 import {
-  AI_KNOWLEDGE_ACCEPT,
   AI_KNOWLEDGE_BUCKET,
   aiKnowledgeContentType,
   aiKnowledgeObjectPath,
@@ -42,6 +26,15 @@ import {
   getKnowledgeSourceType,
 } from "@/lib/aiKnowledge";
 import { supabase } from "@/integrations/supabase/client";
+import { renderBusinessProfileText, type BusinessProfile } from "@/lib/agentProfile";
+import { KnowledgeSourcesPanel } from "@/components/messaging/knowledge/KnowledgeSourcesPanel";
+import { KnowledgeGraphCard } from "@/components/messaging/knowledge/KnowledgeGraphCard";
+import { ManualProfilePanel } from "@/components/messaging/knowledge/ManualProfilePanel";
+import { UploadPanel } from "@/components/messaging/knowledge/UploadPanel";
+import { WebsitePanel } from "@/components/messaging/knowledge/WebsitePanel";
+
+/** How knowledge gets in. Alternatives, so they are tabs. */
+type KnowledgeMethod = "manual" | "upload" | "website";
 
 export function AiKnowledgeManager({
   platform,
@@ -67,13 +60,14 @@ export function AiKnowledgeManager({
   const catalogHook = useWhatsAppCatalog();
   const waAccount = isWhatsApp ? catalogHook.waAccount : null;
   const catalog = isWhatsApp ? catalogHook.catalog : null;
-  const [profile, setProfile] = useState("");
+  const [profile, setProfile] = useState<BusinessProfile>({});
   const [uploading, setUploading] = useState(false);
   // Where a NEW upload lands. Defaults to the selected account, because a file
   // added while looking at one page is almost always that page's -- and until
   // this existed every upload was hardcoded shared, so a WhatsApp price list
   // answered Instagram customers too. "All accounts" stays one click away.
   const [uploadScope, setUploadScope] = useState<"account" | "all">("account");
+  const [method, setMethod] = useState<KnowledgeMethod>("manual");
   const selectedAccountLabel = socialAccounts.find((account) => account.id === accountId)
     ?.platform_username ?? null;
   // Set when a stored export link cannot be resolved (e.g. the object is gone
@@ -96,14 +90,42 @@ export function AiKnowledgeManager({
   // re-derived from `profileText` whenever the config changes, and the query key
   // already contains the account, so a settled non-error read is this account's.
   const configLoaded = config !== undefined && !error;
-  const profileText = config?.business_profile_text || "";
-  useEffect(() => setProfile(profileText), [profileText]);
+  const storedText = config?.business_profile_text || "";
+  // Keyed on the SERIALISED structure, not the object: the config query hands
+  // back a fresh object identity on every render, and depending on that would
+  // reset the editor under the user's cursor on each one.
+  const storedProfileKey = JSON.stringify(config?.business_profile ?? {});
+  useEffect(() => {
+    const structure = JSON.parse(storedProfileKey) as BusinessProfile;
+    // The two can disagree during the rollout window: the migration backfilled
+    // the structure once, and any text-only save between then and this build
+    // reaching the browser updated only the text. The TEXT is what the agent has
+    // been answering from, so it wins -- initialising from stale JSON would let
+    // the next Save & index overwrite a profile the user edited more recently.
+    // An EMPTY stored text counts as divergence too. Excluding it meant that a
+    // legacy form clearing the profile after the backfill left a non-empty JSON
+    // looked "consistent" -- so the stale structure was restored into the editor
+    // and the next Save & index resurrected the profile the user had deleted.
+    const diverged = renderBusinessProfileText(structure).trim() !== storedText.trim();
+    // The text replaces the structure rather than merging into it. Divergence
+    // means a writer that does not mirror touched the text, so the text is the
+    // whole truth and the structure's other fields are stale by definition;
+    // keeping them would re-save values the user no longer has.
+    setProfile(diverged ? { notes: storedText } : structure);
+    // storedText participates deliberately: a text-only refresh must re-run this.
+  }, [storedProfileKey, storedText]);
   // An empty box over a stored value is the user having deleted it -- the same
   // asymmetry the settings form relies on, since the loaded config IS the
   // baseline here. Declared to the server rather than refused: refusing would
   // leave a business profile unclearable, because no other surface edits this
   // field, and would make the ingest delete branch unreachable.
-  const wouldBlankStoredProfile = profile.trim() === "" && profileText.trim() !== "";
+  // The client's verdict has to match the server's exactly. renderBusinessProfileText
+  // here is a verbatim port of the server module for that reason: if the client
+  // under-reports "this renders to empty", it omits confirm_clear, the server
+  // renders "" anyway and refuses with a 409 -- and the profile becomes
+  // impossible to clear, however many times the user retries.
+  const renderedText = renderBusinessProfileText(profile);
+  const wouldBlankStoredProfile = renderedText.trim() === "" && storedText.trim() !== "";
   // The same predicate the retrieval RPCs use, so the list cannot promise the
   // agent a document it will not read, or hide one it will.
   // Filtering only once the links have actually arrived. An empty link set from
@@ -209,8 +231,11 @@ export function AiKnowledgeManager({
   };
   const saveProfile = async () => {
     try {
+      // The STRUCTURE is sent; the server renders business_profile_text from it.
+      // Sending the text too would be a second, conflicting claim about the same
+      // column.
       await upsertConfig.mutateAsync({
-        business_profile_text: profile,
+        business_profile: profile,
         confirm_clear: wouldBlankStoredProfile || undefined,
       });
       await run(
@@ -333,346 +358,106 @@ export function AiKnowledgeManager({
   };
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Business profile</CardTitle>
-          <CardDescription>
-            This is included in what the AI knows.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Textarea
-            value={profile}
-            onChange={(event) => setProfile(event.target.value)}
-            rows={6}
-            placeholder="Describe your business, products, policies, and FAQs."
+      {/* How knowledge gets IN. The three methods are alternatives, so they are
+          tabs -- but the sources panel below is not one of them: it is the
+          answer to "did that work", and that answer is the same whichever
+          method produced it. It therefore lives outside <Tabs> and stays
+          mounted. */}
+      <Tabs value={method} onValueChange={(value) => setMethod(value as KnowledgeMethod)}>
+        <TabsList className="h-auto flex-wrap justify-start">
+          <TabsTrigger value="manual">
+            <PencilLine className="mr-1.5 h-4 w-4" /> Manual profile
+          </TabsTrigger>
+          <TabsTrigger value="upload">
+            <Upload className="mr-1.5 h-4 w-4" /> Upload files
+          </TabsTrigger>
+          <TabsTrigger value="website">
+            <Globe className="mr-1.5 h-4 w-4" /> Website scraping
+          </TabsTrigger>
+        </TabsList>
+        <TabsContent value="manual" className="mt-4">
+          <ManualProfilePanel
+            profile={profile}
+            onProfileChange={setProfile}
+            onSave={saveProfile}
+            saveDisabled={!configLoaded || upsertConfig.isPending || invoke.isPending}
+            saving={upsertConfig.isPending || invoke.isPending}
+            showCatalog={isWhatsApp}
+            catalog={catalog}
+            hasCatalogAccount={!!waAccount}
+            catalogBusy={invoke.isPending}
+            onSyncCatalog={() =>
+              run(
+                "sync_catalog",
+                { social_account_id: waAccount!.id, catalog_id: catalog!.catalog_id },
+                "Catalog synced",
+              )
+            }
           />
-          <Button
-            onClick={saveProfile}
-            disabled={!configLoaded || upsertConfig.isPending || invoke.isPending}
-          >
-            {(upsertConfig.isPending || invoke.isPending) && (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            )}
-            Save & index
-          </Button>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Upload knowledge file</CardTitle>
-          <CardDescription>
-            Spreadsheets (CSV/XLSX/XLS), PDFs, text files (TXT/MD), and images
-            (PNG/JPG/WEBP — text is extracted automatically).
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {accountId && (
-            <div className="space-y-1.5">
-              <Label htmlFor="upload-scope">Available to</Label>
-              <Select
-                value={uploadScope}
-                onValueChange={(value) => setUploadScope(value as "account" | "all")}
-              >
-                <SelectTrigger id="upload-scope" className="w-full max-w-xs" data-testid="upload-scope">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="account">
-                    {selectedAccountLabel ? `Only ${selectedAccountLabel}` : "Only this account"}
-                  </SelectItem>
-                  <SelectItem value="all">All accounts</SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Applies to the next file you upload. Existing files keep the scope they were
-                given.
-              </p>
-            </div>
-          )}
-          <label className="flex cursor-pointer items-center gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              disabled={uploading}
-              asChild
-            >
-              <span>
-                {uploading ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Upload className="mr-2 h-4 w-4" />
-                )}
-                Upload file
-              </span>
-            </Button>
-            <input
-              className="sr-only"
-              type="file"
-              accept={AI_KNOWLEDGE_ACCEPT}
-              onChange={(event) => {
-                const file = event.target.files?.[0];
-                event.target.value = "";
-                upload(file);
-              }}
-            />
-          </label>
-        </CardContent>
-      </Card>
-      {isWhatsApp && (
-        <Card>
-          <CardHeader>
-            <CardTitle>WhatsApp catalog</CardTitle>
-            <CardDescription>
-              {waAccount && catalog?.catalog_id
-                ? "Sync products for AI product answers."
-                : "Connect a WhatsApp account with a catalog to sync products."}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button
-              onClick={() =>
-                run(
-                  "sync_catalog",
-                  {
-                    social_account_id: waAccount!.id,
-                    catalog_id: catalog!.catalog_id,
-                  },
-                  "Catalog synced",
-                )
-              }
-              disabled={!waAccount || !catalog?.catalog_id || invoke.isPending}
-            >
-              Sync catalog
-            </Button>
-          </CardContent>
-        </Card>
-      )}
-      <Card>
-        <CardHeader>
-          <CardTitle>Sources</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {isLoading ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : linksError ? (
-            // Say the list is unreliable rather than render an unfiltered or
-            // over-filtered one, either of which reads as fact.
-            <p className="text-sm text-destructive">
-              Could not check which sources this account can use. Refresh to try again.
-            </p>
-          ) : visibleSources.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              {sources.length === 0
-                ? "No knowledge sources yet."
-                : "No sources are available to this account yet."}
-            </p>
-          ) : (
-            visibleSources.map((source) => (
-              <div
-                key={source.id}
-                className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
-              >
-                <div>
-                  <p className="font-medium">
-                    {displaySourceTitle(source.file_name, socialAccounts)}
-                  </p>
-                  <div className="mt-1 flex gap-2">
-                    <Badge variant="secondary">{source.source_type}</Badge>
-                    {/* How many OTHER accounts can read this, stated rather than
-                        inferred from the fact that it appears in this account's
-                        list. Counted from the effective set, not from
-                        `visibility` alone: once a source is shared with three of
-                        five accounts it is neither "all accounts" nor "this
-                        account", and calling it either would be a lie the
-                        checkbox strip below immediately contradicts. */}
-                    <Badge variant={source.visibility === "shared" ? "outline" : "secondary"}>
-                      {source.visibility === "shared"
-                        ? "All accounts"
-                        : accountsReady
-                          ? `${(sharedBySource.get(source.id) ?? []).length} account${
-                              (sharedBySource.get(source.id) ?? []).length === 1 ? "" : "s"
-                            }`
-                          : // The count is derived from the accounts list; without
-                            // it, "0 accounts" would be a claim rather than a
-                            // reading. Say only what is still known.
-                            "Some accounts"}
-                    </Badge>
-                    <Badge
-                      variant={
-                        source.status === "failed"
-                          ? "destructive"
-                          : source.status === "ready"
-                            ? "default"
-                            : "secondary"
-                      }
-                    >
-                      {["pending", "processing"].includes(source.status) && (
-                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                      )}
-                      {source.status}
-                      {source.status === "ready"
-                        ? ` · ${source.chunk_count} chunks`
-                        : ""}
-                    </Badge>
-                  </div>
-                  {source.error && (
-                    <p className="mt-1 text-xs text-destructive">
-                      {source.error}
-                    </p>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    aria-label="Re-ingest source"
-                    disabled={
-                      source.source_type === "catalog" || invoke.isPending
-                    }
-                    title={
-                      source.source_type === "catalog"
-                        ? "Use Sync catalog"
-                        : "Re-ingest"
-                    }
-                    onClick={() =>
-                      run(
-                        source.source_type === "profile_text"
-                          ? "ingest_profile_text"
-                          : "ingest_source",
-                        source.source_type === "profile_text"
-                          ? { platform, social_account_id: accountId ?? undefined }
-                          : { source_id: source.id },
-                        "Source indexing started",
-                      )
-                    }
-                  >
-                    <RefreshCw className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    size="icon"
-                    variant="destructive"
-                    aria-label="Delete source"
-                    disabled={invoke.isPending}
-                    onClick={() =>
-                      run(
-                        "delete_source",
-                        { source_id: source.id },
-                        "Source deleted",
-                      )
-                    }
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-                {/* Which agents can read this file. Ticking a box links the
-                    ALREADY-INDEXED chunks to that account, so a price list
-                    uploaded under Facebook answers Instagram customers with no
-                    second upload and no second embedding bill; unticking hides
-                    it from that agent again without touching the chunks.
-
-                    `w-full` inside the flex-wrap row above puts the strip on
-                    its own line. Drawn only once the links have loaded: an
-                    unsettled read renders every box unchecked, and a click on
-                    that would write the wrong state back as if it were chosen. */}
-                {accountsError ? (
-                  // Named, not hidden. Silently dropping the strip on a failed
-                  // account read tells the user sharing is unavailable, when in
-                  // fact the page simply does not know who to offer.
-                  <p className="mt-3 w-full border-t pt-3 text-xs text-destructive">
-                    Could not load your connected accounts, so sharing cannot be
-                    changed here. Refresh to try again.
-                  </p>
-                ) : (
-                  linksReady && accountsReady && shareAccounts.length > 1 && (
-                  <div className="mt-3 w-full border-t pt-3">
-                    <p className="mb-2 text-xs font-medium text-muted-foreground">
-                      Agents that can read this
-                    </p>
-                    <div className="flex flex-wrap gap-x-4 gap-y-2">
-                      {shareAccounts.map((account) => (
-                        <label
-                          key={account.id}
-                          className="flex cursor-pointer items-center gap-2 text-sm"
-                        >
-                          <Checkbox
-                            checked={(sharedBySource.get(source.id) ?? []).includes(account.id)}
-                            disabled={sharingSourceIds.includes(source.id)}
-                            onCheckedChange={(value) =>
-                              toggleShare(source, account, value === true)
-                            }
-                            aria-label={`Share ${displaySourceTitle(source.file_name, socialAccounts)} with ${accountLabel(account)}`}
-                          />
-                          {/* Safe narrowing: agentAccounts already filtered to
-                              the four agent platforms, all of which are members
-                              of Platform. */}
-                          <PlatformIcon
-                            platform={account.platform as Platform}
-                            size="xs"
-                          />
-                          <span>{accountLabel(account)}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                  )
-                )}
-              </div>
-            ))
-          )}
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader>
-          <CardTitle>Knowledge graph</CardTitle>
-          <CardDescription>
-            Generate inspection exports from the knowledge currently indexed for this business.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
-          <Button
-            variant="outline"
-            disabled={invoke.isPending}
-            onClick={async () => {
-              await run("export_graph", {}, "Knowledge graph exports generated");
-              setUnresolvable({ html: false, vault: false });
-            }}
-          >
-            {invoke.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Generate exports
-          </Button>
-          {graphExport?.html_url && (
-            <Button
-              variant="secondary"
-              disabled={unresolvable.html || resolveExportUrls.isPending}
-              title={unresolvable.html ? "Regenerate exports to refresh this link" : undefined}
-              onClick={() => openExport("html")}
-            >
-              {resolveExportUrls.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <ExternalLink className="mr-2 h-4 w-4" />
-              )}
-              Open graph
-            </Button>
-          )}
-          {graphExport?.vault_url && (
-            <Button
-              variant="secondary"
-              disabled={unresolvable.vault || resolveExportUrls.isPending}
-              title={unresolvable.vault ? "Regenerate exports to refresh this link" : undefined}
-              onClick={() => openExport("vault")}
-            >
-              {resolveExportUrls.isPending ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <FileArchive className="mr-2 h-4 w-4" />
-              )}
-              Download vault
-            </Button>
-          )}
-        </CardContent>
-      </Card>
+        </TabsContent>
+        <TabsContent value="upload" className="mt-4">
+          <UploadPanel
+            accountId={accountId ?? null}
+            selectedAccountLabel={selectedAccountLabel}
+            uploadScope={uploadScope}
+            onUploadScopeChange={setUploadScope}
+            uploading={uploading}
+            onFileSelected={upload}
+          />
+        </TabsContent>
+        <TabsContent value="website" className="mt-4">
+          <WebsitePanel
+            accountId={accountId ?? null}
+            selectedAccountLabel={selectedAccountLabel}
+            submitting={invoke.isPending}
+            onSubmit={(input) =>
+              run(
+                "ingest_website",
+                { ...input, social_account_id: accountId ?? undefined },
+                input.mode === "site"
+                  ? "Crawl started — watch the sources list below"
+                  : "Page indexed",
+              )
+            }
+          />
+        </TabsContent>
+      </Tabs>
+      <KnowledgeSourcesPanel
+        sources={visibleSources}
+        allSourcesCount={sources.length}
+        isLoading={isLoading}
+        linksError={linksError}
+        accountsError={accountsError}
+        linksReady={linksReady}
+        accountsReady={accountsReady}
+        shareAccounts={shareAccounts}
+        sharedBySource={sharedBySource}
+        sharingSourceIds={sharingSourceIds}
+        socialAccounts={socialAccounts}
+        busy={invoke.isPending}
+        onReingest={(source) =>
+          run(
+            source.source_type === "profile_text" ? "ingest_profile_text" : "ingest_source",
+            source.source_type === "profile_text"
+              ? { platform, social_account_id: accountId ?? undefined }
+              : { source_id: source.id },
+            "Source indexing started",
+          )
+        }
+        onDelete={(source) => run("delete_source", { source_id: source.id }, "Source deleted")}
+        onToggleShare={toggleShare}
+      />
+      <KnowledgeGraphCard
+        graphExport={graphExport}
+        busy={invoke.isPending}
+        resolving={resolveExportUrls.isPending}
+        unresolvable={unresolvable}
+        onGenerate={async () => {
+          await run("export_graph", {}, "Knowledge graph exports generated");
+          setUnresolvable({ html: false, vault: false });
+        }}
+        onOpen={openExport}
+      />
     </div>
   );
 }

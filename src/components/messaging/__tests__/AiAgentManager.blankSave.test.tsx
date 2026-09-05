@@ -51,7 +51,7 @@ vi.mock("@/components/automation/DatabaseConnectorsManager", () => ({
 import { AiAgentManager } from "@/components/messaging/AiAgentManager";
 
 const persona = () =>
-  screen.getByLabelText("Persona and instructions") as HTMLTextAreaElement;
+  screen.getByLabelText("Additional instructions (free text)") as HTMLTextAreaElement;
 
 describe("AiAgentManager blank-save regression", () => {
   beforeEach(() => {
@@ -110,28 +110,50 @@ describe("AiAgentManager blank-save regression", () => {
       expect.anything(),
     );
   });
-  it("picks up a field refreshed by the other tab while keeping edited ones", () => {
+  it("picks up a field refreshed elsewhere while keeping edited ones", () => {
     // Codex P1. Freezing the whole form on a repeat read is the opposite mistake
-    // to resetting it, and just as lossy: the knowledge tab's save refreshes this
-    // same query, so a frozen form would carry a stale business_profile_text and
-    // the next Settings save would write it back over what was just stored.
-    configValue = { persona_instructions: "Original", business_profile_text: "Old profile" };
+    // to resetting it, and just as lossy: another surface's save refreshes this
+    // same query, so a frozen form would carry stale server values and the next
+    // Settings save would write them back over what was just stored.
+    //
+    // The vehicle used to be business_profile_text, which this form no longer
+    // holds -- see the absence assertion below, which is now the stronger form
+    // of the same protection. agent_behavior replaces it as the untouched field,
+    // and being an object it also exercises the JSON.stringify comparison that
+    // mergeUntouchedFields and useDirtyForm both depend on.
+    configValue = { persona_instructions: "Original", agent_behavior: { tone: "formal" } };
     const { rerender } = render(<AiAgentManager platform="facebook" />);
 
     fireEvent.change(persona(), { target: { value: "Edited persona" } });
 
-    // The knowledge tab saved a new profile; this query refetched.
-    configValue = { persona_instructions: "Original", business_profile_text: "NEW profile" };
+    // Another session saved a new behavior; this query refetched.
+    configValue = { persona_instructions: "Original", agent_behavior: { tone: "concise" } };
     rerender(<AiAgentManager platform="facebook" />);
 
     fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
     expect(upsertConfig.mutate).toHaveBeenCalledWith(
       expect.objectContaining({
-        persona_instructions: "Edited persona",   // the user's edit survives
-        business_profile_text: "NEW profile",     // the untouched field follows the server
+        persona_instructions: "Edited persona",     // the user's edit survives
+        agent_behavior: { tone: "concise" },        // the untouched field follows the server
       }),
       expect.anything(),
     );
+  });
+
+  it("never writes business_profile_text, which the knowledge tab owns", () => {
+    // The structural close of the hazard the test above was written for. This
+    // form has no UI for the business profile, so echoing the server's derived
+    // text back on every save was a write with no author -- and once the
+    // knowledge tab writes STRUCTURE that the server renders into that column,
+    // a Settings save carrying stale text would desync the two.
+    configValue = { persona_instructions: "Original", business_profile_text: "Owned elsewhere" };
+    render(<AiAgentManager platform="facebook" />);
+
+    fireEvent.change(persona(), { target: { value: "Edited persona" } });
+    fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
+
+    const [payload] = upsertConfig.mutate.mock.calls.at(-1) as [Record<string, unknown>];
+    expect("business_profile_text" in payload).toBe(false);
   });
   it("does nothing when a repeat read brings no new values", () => {
     // Idempotence, and it is not cosmetic. Both setters build fresh objects, so
@@ -139,7 +161,7 @@ describe("AiAgentManager blank-save regression", () => {
     // render, so without the equality guard this effect re-enters itself forever.
     // That loop hung a CI job for two hours. The mock deliberately keeps the
     // per-render identity change rather than hiding it.
-    configValue = { persona_instructions: "Stable", business_profile_text: "Stable profile" };
+    configValue = { persona_instructions: "Stable", agent_behavior: { tone: "formal" } };
     const { rerender } = render(<AiAgentManager platform="facebook" />);
 
     for (let i = 0; i < 5; i += 1) rerender(<AiAgentManager platform="facebook" />);
@@ -149,7 +171,7 @@ describe("AiAgentManager blank-save regression", () => {
     expect(upsertConfig.mutate).toHaveBeenCalledWith(
       expect.objectContaining({
         persona_instructions: "Stable",
-        business_profile_text: "Stable profile",
+        agent_behavior: { tone: "formal" },
       }),
       expect.anything(),
     );

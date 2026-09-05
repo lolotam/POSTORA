@@ -64,7 +64,7 @@ describe("AiAgentManager save resolving after an account switch", () => {
   it("does not re-baseline the new account with the saved account's form", async () => {
     render(<AiAgentManager platform="instagram" />);
 
-    fireEvent.change(await screen.findByLabelText(/persona and instructions/i), {
+    fireEvent.change(await screen.findByLabelText(/additional instructions/i), {
       target: { value: "A's edited persona" },
     });
     fireEvent.click(screen.getByRole("button", { name: /save settings/i }));
@@ -75,7 +75,7 @@ describe("AiAgentManager save resolving after an account switch", () => {
     fireEvent.keyDown(screen.getByTestId("agent-account"), { key: "Enter" });
     fireEvent.click(await screen.findByRole("option", { name: "Brand B" }));
     fireEvent.click(await screen.findByRole("button", { name: /discard changes/i }));
-    expect((await screen.findByLabelText(/persona and instructions/i) as HTMLTextAreaElement).value)
+    expect((await screen.findByLabelText(/additional instructions/i) as HTMLTextAreaElement).value)
       .toBe("Brand B persona");
 
     // A's save now lands.

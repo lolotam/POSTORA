@@ -166,7 +166,14 @@ Deno.test("a fresh source deletes everything, stamps chunk_index, and checkpoint
     state.sourceUpdates.map((patch) => patch.chunk_count),
     [8, 10, 10],
   );
-  assertEquals(state.sourceUpdates.at(-1), { status: "ready", chunk_count: 10, error: null });
+  assertEquals(state.sourceUpdates.at(-1), {
+    status: "ready",
+    chunk_count: 10,
+    error: null,
+    // Cleared with the terminal state, so a row deferred on an earlier
+    // attempt is not left invisible to the claim.
+    next_attempt_at: null,
+  });
   // The first successful batch claims the vector columns for its models.
   assertEquals(state.settingUpserts.length > 0, true);
 });
@@ -196,7 +203,14 @@ Deno.test("a resumed source deletes only chunks at or past the checkpoint and re
     [8, 9],
   );
   assertEquals(state.sourceUpdates.map((patch) => patch.chunk_count), [10, 10]);
-  assertEquals(state.sourceUpdates.at(-1), { status: "ready", chunk_count: 10, error: null });
+  assertEquals(state.sourceUpdates.at(-1), {
+    status: "ready",
+    chunk_count: 10,
+    error: null,
+    // Cleared with the terminal state, so a row deferred on an earlier
+    // attempt is not left invisible to the claim.
+    next_attempt_at: null,
+  });
 });
 
 Deno.test("hitting the time budget leaves the source processing with an accurate checkpoint", async () => {

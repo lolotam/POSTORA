@@ -44,6 +44,13 @@ import {
   locateKnowledgeFile,
   type KnowledgeFileOwner,
 } from "../_shared/knowledgeSourceFiles.ts";
+import { validateKnowledgeUrl } from "../_shared/knowledgeUrl.ts";
+import {
+  firecrawlCancelCrawl,
+  firecrawlScrape,
+  firecrawlStartCrawl,
+  resolveFirecrawlKey,
+} from "../_shared/firecrawl.ts";
 import {
   listSourceAccounts,
   parseSetSourceVisibilityInput,
@@ -499,7 +506,38 @@ async function logKnowledgeEvent(
 }
 
 
-Deno.serve(async (req) => {
+/** Page limits for a whole-site crawl. Matched by the UI's number input. */
+const MIN_CRAWL_PAGES = 1;
+const MAX_CRAWL_PAGES = 200;
+const DEFAULT_CRAWL_PAGES = 50;
+/** file_name is what the sources list shows; a full URL would push the row wide. */
+const MAX_SOURCE_NAME = 120;
+
+/**
+ * A readable name for a scraped source.
+ *
+ * Never throws. The caller validates the URL first, so an unparseable one
+ * cannot normally reach here -- but a naming helper that could throw would turn
+ * a cosmetic problem into a failed ingest.
+ */
+export function buildWebsiteSourceName(url: string, mode: "page" | "site"): string {
+  let host = url;
+  let path = "";
+  try {
+    const parsed = new URL(url);
+    host = parsed.hostname;
+    path = parsed.pathname === "/" ? "" : parsed.pathname;
+  } catch {
+    // Fall through with the raw string.
+  }
+  const name = mode === "site" ? `${host} (whole site)` : `${host}${path}`;
+  return name.length > MAX_SOURCE_NAME ? `${name.slice(0, MAX_SOURCE_NAME - 1)}…` : name;
+}
+
+// Named rather than passed inline so the module can be imported by a test
+// without starting a server -- the same convention n8n-api and the knowledge
+// worker already use.
+async function handleRequest(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return handleCorsOptions();
   try {
     const authHeader = req.headers.get("Authorization");
@@ -512,6 +550,14 @@ Deno.serve(async (req) => {
     const token = authHeader.replace(/^Bearer\s+/i, "");
     const anon = createClient(url, anonKey);
     const admin = createClient(url, serviceKey);
+    // Carries the caller's JWT, so auth.uid() resolves inside SECURITY DEFINER
+    // functions that derive ownership from it. create_ai_knowledge_source is
+    // one: called through `admin` it raises "Not authenticated" before doing
+    // anything, because a service-role connection has no end user. The upload
+    // path never hit this -- it calls the RPC straight from the browser.
+    const caller = createClient(url, anonKey, {
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
 
     let user: any = null;
     const { data: userData, error: userError } = await anon.auth.getUser(token);
@@ -578,6 +624,23 @@ Deno.serve(async (req) => {
       if (source.file_path) {
         await deleteSourceFile(admin, source.file_path, { userId: user.id, email: user.email });
       }
+      // A website source deleted mid-crawl leaves a job running and billing at
+      // Firecrawl with nothing left pointing at it. Best-effort and never
+      // blocking: the row the user asked to remove goes either way.
+      const crawlJobId = source.source_type === "website" &&
+          typeof source.metadata?.crawl_job_id === "string"
+        ? source.metadata.crawl_job_id
+        : null;
+      let crawlCancelled: boolean | null = null;
+      if (crawlJobId && ["pending", "processing"].includes(source.status)) {
+        try {
+          const key = await resolveFirecrawlKey(admin);
+          crawlCancelled = await firecrawlCancelCrawl(key, crawlJobId);
+        } catch (error) {
+          console.error("[ai-knowledge-ingest] Could not cancel crawl:", message(error));
+          crawlCancelled = false;
+        }
+      }
       const { error } = await (admin as any)
         .from("ai_knowledge_sources")
         .delete()
@@ -588,6 +651,9 @@ Deno.serve(async (req) => {
         source_id: source.id,
         source_type: source.source_type,
         file_name: source.file_name,
+        // Recorded so a crawl that outlived its source is findable rather than
+        // merely lost.
+        ...(crawlJobId ? { crawl_job_id: crawlJobId, crawl_cancelled: crawlCancelled } : {}),
       });
       return jsonResponse({ ok: true });
     }
@@ -742,6 +808,212 @@ Deno.serve(async (req) => {
           error: message(error).slice(0, 500),
         });
         return errorResponse(message(error));
+      }
+    }
+    if (action === "ingest_website") {
+      // Validated BEFORE anything is created. A rejected URL must never leave a
+      // source row behind, or the list shows a site that was never read.
+      const check = validateKnowledgeUrl(body.url);
+      if (!check.ok) {
+        // Refusals are logged too. A rejected private host or credentialed URL
+        // that leaves no system_logs row is a refusal nobody can explain later.
+        // The reason is recorded, never the raw address -- it may carry the
+        // credentials that got it rejected.
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          rejected: check.reason,
+          mode: body.mode === "site" ? "site" : "page",
+        });
+        return errorResponse(check.reason, 400);
+      }
+      const mode: "page" | "site" = body.mode === "site" ? "site" : "page";
+      const requested = Number(body.limit);
+      const limit = Number.isFinite(requested)
+        ? Math.min(Math.max(Math.trunc(requested), MIN_CRAWL_PAGES), MAX_CRAWL_PAGES)
+        : DEFAULT_CRAWL_PAGES;
+
+      let key: string;
+      try {
+        key = await resolveFirecrawlKey(admin);
+      } catch (error) {
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          mode,
+          error: message(error).slice(0, 500),
+        });
+        // 400, never 5xx: Cloudflare replaces an origin 5xx body with its own
+        // page, so the sentence naming the admin setting would never arrive.
+        return errorResponse(message(error), 400);
+      }
+
+      // A caller asking for account scope MUST name the account. Falling through
+      // to `shared` on a blank id was a silent widening: knowledge meant for one
+      // brand would become readable by every connected agent. Refuse instead --
+      // the request is malformed, and the safe reading of a malformed request is
+      // not "share it with everyone".
+      // The scope is validated against the closed set, not merely tested for
+      // "account". This endpoint takes arbitrary authenticated JSON, not the
+      // UI's TypeScript union, so any other value -- a typo, "restricted",
+      // "private" -- would otherwise fall through to SHARED and widen access on
+      // exactly the input a careful caller thought was narrowing it.
+      const requestedScope = body.scope === undefined || body.scope === null
+        ? "all"
+        : body.scope;
+      if (requestedScope !== "account" && requestedScope !== "all") {
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          rejected: "invalid scope",
+          scope: String(requestedScope).slice(0, 50),
+        });
+        return errorResponse('scope must be "account" or "all".', 400);
+      }
+      const namedAccount = typeof body.social_account_id === "string"
+        ? body.social_account_id.trim()
+        : "";
+      if (requestedScope === "account" && !namedAccount) {
+        // Logged like every other refusal, so an account-scoped request that
+        // never happened is not an operational blind spot.
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          rejected: "account scope with no account id",
+        });
+        return errorResponse(
+          "An account-scoped source must name the account it belongs to.",
+          400,
+        );
+      }
+      const scopeToAccount = requestedScope === "account";
+      const { data: sourceId, error: createError } = await (caller as any).rpc(
+        "create_ai_knowledge_source",
+        {
+          p_source_type: "website",
+          p_file_name: buildWebsiteSourceName(check.url, mode),
+          // The URL IS the file path for a website source; there is no object.
+          p_file_path: check.url,
+          p_social_account_ids: scopeToAccount ? [namedAccount] : [],
+          p_visibility: scopeToAccount ? "restricted" : "shared",
+        },
+      );
+      if (createError) throw createError;
+
+      // THROWS on a failed write. PostgREST reports failures in the resolved
+      // result, not by rejecting, so `await setMeta(...)` would sail past a
+      // transient database error -- and for the crawl handoff below that means
+      // returning 202 with crawl_job_id and queued_at unwritten: a billable
+      // crawl running at Firecrawl that the claim function can never pick up
+      // and no one can see. Every caller here is inside a try that marks the
+      // source failed, so a throw is recoverable and a silent miss is not.
+      const setMeta = async (
+        patch: Record<string, unknown>,
+        columns: Record<string, unknown> = {},
+      ) => {
+        const { error: metaError } = await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ metadata: { url: check.url, mode, ...patch }, ...columns })
+          .eq("id", sourceId);
+        if (metaError) throw new Error(`Could not record crawl state: ${message(metaError)}`);
+      };
+
+      if (mode === "site") {
+        // Held outside the try so a failure AFTER the crawl started can still
+        // name the job in the log.
+        let startedJobId: string | null = null;
+        try {
+          const jobId = await firecrawlStartCrawl(key, check.url, limit);
+          startedJobId = jobId;
+          // queued_at is the handoff. The claim function refuses a website
+          // source without it, which is what stops the worker picking this row
+          // up before the job id exists.
+          await setMeta(
+            {
+              crawl_job_id: jobId,
+              // When the CRAWL started, not when the row was created. The
+              // worker times a crawl out after 30 minutes, and a source that
+              // sat behind other queued work would otherwise burn that budget
+              // before its job was polled once.
+              crawl_started_at: new Date().toISOString(),
+              stage: "crawling",
+              pages_done: 0,
+              pages_total: limit,
+            },
+            { status: "pending", chunk_count: 0, error: null, queued_at: new Date().toISOString() },
+          );
+          await logKnowledgeEvent(admin, user.id, "ingest_website", true, {
+            source_id: sourceId,
+            mode,
+            url: check.url,
+            crawl_job_id: jobId,
+            limit,
+          });
+          return jsonResponse({ ok: true, queued: true, source_id: sourceId }, 202);
+        } catch (error) {
+          // The crawl may already be RUNNING and billable while its id failed to
+          // reach source metadata -- which is exactly the state delete-cancel
+          // cannot recover from, because it reads the id from there. Cancelling
+          // here is the only chance to stop it.
+          let cancelled: boolean | null = null;
+          if (startedJobId) cancelled = await firecrawlCancelCrawl(key, startedJobId);
+          await setFailed(admin, sourceId, error);
+          await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+            source_id: sourceId,
+            mode,
+            url: check.url,
+            crawl_cancelled: cancelled,
+            // The crawl may already be RUNNING and billable while its id failed
+            // to persist. Logging what we know is the only way it stays
+            // traceable at all.
+            crawl_job_id: startedJobId,
+            error: message(error).slice(0, 500),
+          });
+          return errorResponse(message(error), 400);
+        }
+      }
+
+      try {
+        await setMeta({ stage: "crawling" }, { status: "processing", error: null });
+        const page = await firecrawlScrape(key, check.url);
+        await setMeta({ stage: "embedding", pages_done: 1, pages_total: 1 });
+        // Title and URL lead the text so a retrieved chunk still says which page
+        // it came from.
+        const chunks = chunkProfileText(`${page.title}\n${page.url}\n\n${page.markdown}`);
+        if (chunks.length > MAX_INLINE_CHUNKS) {
+          // The same handoff the document path makes: parsing is cheap,
+          // embedding is what runs out of the ~60s budget.
+          await setMeta(
+            { stage: "embedding", pages_done: 1, pages_total: 1 },
+            { status: "pending", chunk_count: 0, error: null, queued_at: new Date().toISOString() },
+          );
+          await logKnowledgeEvent(admin, user.id, "ingest_website", true, {
+            source_id: sourceId,
+            mode,
+            url: check.url,
+            chunk_count: chunks.length,
+            queued: true,
+          });
+          return jsonResponse({ ok: true, queued: true, chunks: chunks.length }, 202);
+        }
+        const stored = await replaceChunks(admin, sourceId, user.id, chunks);
+        // Checked, for the same reason setMeta throws. An unchecked failure here
+        // returns 200 while the row stays `processing` -- and a page source has
+        // no queued_at, so the claim function will never reclaim it and the UI
+        // polls it forever.
+        const { error: readyError } = await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({ status: "ready", chunk_count: chunks.length, error: null })
+          .eq("id", sourceId);
+        if (readyError) throw new Error(`Could not mark the page indexed: ${message(readyError)}`);
+        await updateKnowledgeGraph(admin, user.id, stored);
+        await logKnowledgeEvent(admin, user.id, "ingest_website", true, {
+          source_id: sourceId,
+          mode,
+          url: check.url,
+          chunk_count: chunks.length,
+        });
+        return jsonResponse({ ok: true, chunk_count: chunks.length });
+      } catch (error) {
+        await setFailed(admin, sourceId, error);
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          source_id: sourceId,
+          mode,
+          error: message(error).slice(0, 500),
+        });
+        return errorResponse(message(error), 400);
       }
     }
     if (action === "ingest_profile_text") {
@@ -969,4 +1241,6 @@ Deno.serve(async (req) => {
   } catch (error) {
     return errorResponse(message(error));
   }
-});
+}
+
+if (import.meta.main) Deno.serve(handleRequest);
