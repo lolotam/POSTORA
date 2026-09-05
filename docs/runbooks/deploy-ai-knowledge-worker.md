@@ -65,53 +65,79 @@ done
 
 ## 2. Add the compose service
 
-Edit `$STACK/docker-compose.yml` and add this service. **Before applying, diff
-it against the stack's existing `functions` service** — image tag conventions,
-the `env_file`, the functions volume mount, and the network must match what the
-stack already uses (the sketch below follows the `functions` service
-conventions as of 2026-07-12):
+> **Deployed 2026-09-05.** The service below is live in the stack as
+> `ai-knowledge-excel-worker` (container
+> `postorasupabase-supabase-j8axyh-supabase-ai-knowledge-worker`). Follow this
+> section again only if it has to be recreated.
+
+Dokploy keeps this stack's compose as a **raw record in its own database**
+(`compose."composeFile"`, composeId `YrlABDQZh5Z2fw8-gvTIv`) and rewrites
+`$STACK/docker-compose.yml` from it on every redeploy. Add the service to
+**both**: the on-disk file (so `docker compose up` sees it now) and the record
+(so the next Dokploy redeploy keeps it). A service added only on disk
+disappears at the next redeploy.
+
+This is the block that is deployed. It mirrors the stack's `functions` service:
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are **not** in the stack's
+`.env` (it holds `SERVICE_ROLE_KEY`), so they are set in `environment:`
+exactly as `functions` does, and the stack declares a named network.
 
 ```yaml
   ai-knowledge-excel-worker:
+    container_name: ${CONTAINER_PREFIX}-ai-knowledge-worker
     image: denoland/deno:2.1.7
-    # Poll mode: the entrypoint loop claims one source every 15s. Without
-    # EXCEL_WORKER_POLL the same image serves the bounded HTTP mode instead.
-    environment:
-      - EXCEL_WORKER_POLL=1
     env_file:
       - ./.env
-    command:
-      [
-        "run",
-        "--allow-env",
-        "--allow-net",
-        "/home/deno/functions/ai-knowledge-excel-worker/index.ts",
-      ]
+    restart: unless-stopped
     volumes:
       - ../files/volumes/functions:/home/deno/functions:ro
-    restart: unless-stopped
-    deploy:
-      replicas: 1
+    environment:
+      # Poll mode: the entrypoint loop claims one source every 15s. Without
+      # EXCEL_WORKER_POLL the same file serves the bounded HTTP mode instead.
+      EXCEL_WORKER_POLL: "1"
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_SERVICE_ROLE_KEY: ${SERVICE_ROLE_KEY}
+    command:
+      - run
+      - --allow-env
+      - --allow-net
+      - --allow-read=/home/deno/functions
+      - /home/deno/functions/ai-knowledge-excel-worker/index.ts
+    networks:
+      - postorasupabase-supabase-j8axyh
+```
+
+Insert it before the `analytics:` service in both copies, then update the
+record from the edited copy:
+
+```bash
+docker cp compose-db.yml dokploy-postgres.1.<id>:/tmp/compose-db.yml
+docker exec dokploy-postgres.1.<id> psql -U dokploy -d dokploy -c \
+  "update compose set \"composeFile\" = pg_read_file('/tmp/compose-db.yml') where \"composeId\"='YrlABDQZh5Z2fw8-gvTIv'"
 ```
 
 Notes:
 
-- `env_file: ./.env` supplies `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
-  `OLLAMA_BASE_URL` (and `CRON_SECRET` for the HTTP mode). The worker refuses
-  to start without the first two.
+- The worker refuses to start without `SUPABASE_URL` and
+  `SUPABASE_SERVICE_ROLE_KEY`. `OLLAMA_BASE_URL` is unset and falls back to
+  `http://ollama:11434`; the Ollama container is joined to this stack's network.
 - The volume is mounted **read-only**; the worker only reads code from it.
 - Exactly **one replica**: claims use `FOR UPDATE SKIP LOCKED`, but a single
   poller is what the embedding checkpoint cadence was designed around.
-- The service must join the same Docker network as the `ollama` and Supabase
-  services (the compose default unless the stack declares named networks —
-  mirror whatever `functions` uses).
+- The cron-driven HTTP mode keeps running alongside it. A source the poller is
+  embedding is `processing`, so the cron leaves it alone; a source the cron
+  hands back as `pending` is picked up by the poller within 15s.
 
 ## 3. Start and verify
 
 ```bash
-cd "$STACK" && docker compose up -d --no-deps ai-knowledge-excel-worker
-docker compose logs --tail=40 ai-knowledge-excel-worker
+cd "$STACK" && docker compose -p postorasupabase-supabase-j8axyh up -d --no-deps ai-knowledge-excel-worker
+docker compose -p postorasupabase-supabase-j8axyh logs --tail=40 ai-knowledge-excel-worker
 ```
+
+Always pass `-p postorasupabase-supabase-j8axyh`: that is the project name
+Dokploy runs the stack under, and a bare `docker compose` from `$STACK` would
+create a second project named after the directory.
 
 Healthy looks like: no startup error about missing Supabase configuration, no
 crash loop, and idle silence between polls (the poller only logs when it
