@@ -1,1240 +1,739 @@
-# AI Provider Account Authentication and Capability Routing — Implementation Plan
+# AI Provider Connections and Capability Routing — Revised Implementation Plan
 
-**Date:** 2026-09-05  
-**Status:** Proposed  
-**Design:** `docs/superpowers/specs/2026-09-05-ai-provider-account-auth-routing-design.md`
+**Depends on:** `docs/superpowers/specs/2026-09-05-ai-provider-account-auth-routing-design.md`  
+**Delivery:** Seven V1 pull requests plus a separately approved Codex phase 2  
+**Excluded:** Claude Code subscription authentication
 
-## Goal
+## 1. Outcome
 
-Implement a full-stack, capability-aware provider connection and routing system for POSTORA. Users can run eligible AI services from their own connected provider account or API key, while administrators keep the current platform API configuration and gain account-auth cards for Higgsfield, Codex, and Claude Code.
+V1 gives users and administrators Vault-backed OpenAI and Anthropic API-key connections, deterministic connection-aware model chains, and user routing choices. It preserves the current chat override/fallback route while flags are off and integrates with the existing inbound vision and AI-agent paths.
 
-The delivery must preserve current production behavior until a feature flag enables each new slice.
+The work is intentionally smaller than the first plan:
 
-## Final User Outcomes
+- no duplicate provider identities;
+- no second user-preference table;
+- no generic `ai-execute` function;
+- no parallel media-analysis function;
+- no Node runtime in V1;
+- no Claude Code code surface;
+- Codex begins only after two written policy approvals.
 
-1. Users can connect eligible personal AI providers.
-2. Users can choose POSTORA only, own account first with explicit fallback, or own account only.
-3. Users can choose provider/model per capability.
-4. Admin Settings shows OpenAI API and Codex separately, and Anthropic API and Claude Code separately.
-5. Admin account-auth cards appear alongside Higgsfield.
-6. Models are selectable only where their capability and traffic policy permit execution.
-7. Every call identifies whether the user or POSTORA owns the provider cost.
+## 2. Safety Invariants
 
-## Non-negotiable Safety Rules
+Every PR must preserve these invariants:
 
-1. Apply database migrations before deploying code that names new tables or columns.
-2. Never expose API keys, OAuth tokens, device codes, auth callback codes, CLI session files, secret ids, or runtime paths to the browser.
-3. Every service-role query includes explicit tenancy constraints.
-4. No silent user-to-platform cost fallback.
-5. Admin Codex and Claude Code subscriptions start as `admin_only`, not shared platform fallback.
-6. Claude Code subscription support remains disabled until the design's policy gate is satisfied.
-7. Codex App Server and Claude Code are never started inside a Supabase Edge Function.
-8. Agent runtime transports are private; no public experimental app-server WebSocket.
-9. Automated replies receive no shell/filesystem tools.
-10. Existing Higgsfield behavior remains available behind a rollback flag throughout migration.
+1. Canonical provider codes remain `openai`, `claude`, and `gemini`.
+2. A user connection is usable only for its owner and can never have `platform_shared` or `admin_only` policy.
+3. A platform chain either names an exact `connection_id` or uses only the legacy platform credential path.
+4. Flags off call the existing resolvers and preserve `user_ai_model_overrides` precedence.
+5. A credential is stored in Vault before a connection becomes active and is never returned.
+6. `own_only` has no platform-billed fallback.
+7. Provider-call logging starts before dispatch and one total deadline covers planning plus all attempts.
+8. Unknown providers fail closed; they never default to OpenAI.
+9. Browser roles cannot mutate `ai_connection_models` or read secret-bearing tables.
+10. New Deno modules pass `deno check`; `deno test --no-check` is not an acceptable type gate.
 
-## Delivery Order
+## 3. Delivery Map
 
-```text
-Policy gates
-  -> schema and RLS
-  -> domain resolver
-  -> HTTP API adapters
-  -> Higgsfield compatibility
-  -> connection API
-  -> agent runtime
-  -> Codex auth
-  -> Claude Code conditional auth
-  -> user UI
-  -> admin UI
-  -> workload migrations
-  -> observability and rollout
-```
+| PR | Scope | Production behavior |
+|---|---|---|
+| A | Schema, Vault contract, RLS, flags, compatibility tests | none; flags off |
+| B | Connection API and server-side validation | connection management for allowlisted users |
+| C | Preference resolver, planner, exact admin chain references | shadow planning only |
+| D | User/admin full-stack settings UI | configuration UI behind flags |
+| E | OpenAI/Anthropic adapters and agent tool normalization | adapters testable, not broadly routed |
+| F | Existing caller migrations: chat, captions, hashtags, vision, agent | cohort routing |
+| G | Observability, rollout, legacy secret migration, cleanup gates | controlled GA |
+| Phase 2 | Codex approval, runtime, auth, jobs, UI | separate project and rollout |
 
-## Proposed File Structure
+## 4. Proposed Files
+
+Create or modify only as slices require.
 
 ```text
-src/features/ai-provider-connections/
-  domain/
-    types.ts
-    capabilityPolicy.ts
-    routingPreference.ts
-  application/
-    buildExecutionPlan.ts
-    connectionCommands.ts
-    connectionQueries.ts
-  infrastructure/
-    supabaseConnectionsRepository.ts
-    supabaseRoutingPreferencesRepository.ts
-  ui/
-    AiAccountsRoutingPanel.tsx
-    AiProviderConnectionCard.tsx
-    AiRoutingModeSelector.tsx
-    CapabilityRoutingTable.tsx
-    ProviderModelPicker.tsx
-  index.ts
-
-src/components/admin/settings/ai/
-  AiAuthenticationCards.tsx
-  PlatformProviderConnectionCard.tsx
-  ProviderEligibilityBadge.tsx
-
-supabase/functions/_shared/ai-routing/
-  types.ts
-  capability-policy.ts
-  preference-resolution.ts
-  execution-planner.ts
-  credential-resolution.ts
-  errors.ts
-  telemetry.ts
-  adapters/
-    openai-api.ts
-    anthropic-api.ts
-    google-ai.ts
-    openrouter.ts
-    higgsfield.ts
-    agent-runtime.ts
+supabase/migrations/<timestamp>_ai_provider_connections.sql
+supabase/migrations/<timestamp>_ai_connection_vault.sql
+supabase/migrations/<timestamp>_ai_provider_call_attempts.sql
+supabase/migrations/<timestamp>_ai_routing_flags.sql
+supabase/migrations/<timestamp>_ai_legacy_secret_migration.sql
 
 supabase/functions/ai-provider-connections/index.ts
-supabase/functions/ai-execute/index.ts
-supabase/functions/ai-runtime-callback/index.ts
+supabase/functions/_shared/ai-routing/types.ts
+supabase/functions/_shared/ai-routing/preferences.ts
+supabase/functions/_shared/ai-routing/planner.ts
+supabase/functions/_shared/ai-routing/credentials.ts
+supabase/functions/_shared/ai-routing/deadline.ts
+supabase/functions/_shared/ai-routing/audit.ts
+supabase/functions/_shared/ai-providers/openai.ts
+supabase/functions/_shared/ai-providers/anthropic.ts
+supabase/functions/_shared/ai-providers/normalize.ts
 
-services/agent-runtime/
-  Dockerfile
-  package.json
-  tsconfig.json
-  src/
-    server.ts
-    config.ts
-    auth/internalAuth.ts
-    connections/connectionStore.ts
-    execution/executionService.ts
-    execution/jobLease.ts
-    runtime/runtimeSupervisor.ts
-    runtime/runtimeProfile.ts
-    providers/codex/CodexAppServerClient.ts
-    providers/codex/CodexAuthService.ts
-    providers/codex/CodexExecutionAdapter.ts
-    providers/claude/ClaudeCodeAuthService.ts
-    providers/claude/ClaudeCodeExecutionAdapter.ts
-    security/redaction.ts
-    telemetry/metrics.ts
-  tests/
+src/features/ai-connections/domain/types.ts
+src/features/ai-connections/infrastructure/aiConnectionsApi.ts
+src/features/ai-connections/ui/AiConnectionCard.tsx
+src/features/ai-connections/ui/AiRoutingPreferences.tsx
+src/components/settings/AiSettingsSection.tsx
+src/components/admin/settings/ai/AiProvidersCard.tsx
+src/components/admin/settings/ai/AiCategoryCards.tsx
+src/hooks/useFeatureFlags.tsx
+src/hooks/useAIConfiguration.ts
+src/hooks/ai-config/types.ts
 ```
 
-## Slice 0 — Policy Gates and Provider Registry Decisions
+Tests live beside the module or in the repository's existing test location. Do not introduce a new test framework.
 
-### Task 0.1: Record approval state
+## 5. PR A — Schema, Vault, RLS, Flags, and Compatibility
 
-Create:
+PR A fixes the schema and current-state defects before behavior changes.
 
-- `docs/runbooks/ai-subscription-provider-approval.md`
+### A1. Pin current behavior with tests
 
-Document:
+Add tests before migrations or routing code:
 
-- provider;
-- permitted authentication flow;
-- permitted user scope;
-- permitted platform/shared scope;
-- agreement/contact reference;
-- approval owner and date;
-- expiration or review date.
+- `resolveChatModelConfig` returns active `user_ai_model_overrides` first;
+- admin primary/fallback/fallback-2 behavior remains unchanged;
+- invalid configured last resort still uses the validated hardcoded floor;
+- `ai-config` old `set-user-preference` body remains accepted;
+- existing `ai_model_preferences` rows resolve through `get_active_ai_model_config`;
+- `understandInboundMedia` uses caller-supplied tiers and one ladder deadline.
 
-Acceptance:
+Suggested files:
 
-- absence of an approval record means `platform_shared` is unavailable for Codex and Claude Code subscription auth.
-- Claude Code user-auth flag also stays false until the hosted-binary requirements have been accepted.
+- `supabase/functions/_shared/aiFallbackSettings.test.ts`
+- `supabase/functions/_shared/ai-fallback.test.ts` if needed
+- `supabase/functions/_shared/inboundMediaUnderstanding.test.ts`
+- `supabase/functions/ai-config/index.test.ts` or the current function harness
 
-### Task 0.2: Add feature-flag keys
+### A2. Keep existing provider codes
 
-Add migration:
+Migration rules:
 
-- `supabase/migrations/20260905120000_ai_provider_connection_flags.sql`
+```sql
+UPDATE public.ai_providers
+SET name = 'Anthropic API'
+WHERE provider_code = 'claude';
 
-Seed all flags from the design with safe defaults. Do not overwrite an existing operator value on replay.
-
-Tests:
-
-- migration replay test;
-- settings read test;
-- non-admin write denied.
-
-## Slice 1 — Database Schema, RLS, and Seed Data
-
-### Task 1.1: Provider/auth method schema
-
-Add:
-
-- `supabase/migrations/20260905121000_ai_provider_auth_methods.sql`
-
-Actions:
-
-1. Create `ai_provider_auth_methods`.
-2. Add CHECK constraints for runtime kind, scope, and default traffic policy.
-3. Keep `ai_providers.auth_type` unchanged for compatibility.
-4. Seed auth methods idempotently.
-5. Seed distinct provider rows for `codex`, `anthropic`, and `claude_code` if absent.
-6. Do not rename the existing `openai` or `higgsfield` provider rows.
-
-Seed examples:
-
-| Provider | Method | Runtime | Default policy |
-|---|---|---|---|
-| openai | api_key | http_api | platform_shared / own_user by scope |
-| codex | chatgpt_device_code | codex_app_server | own_user |
-| codex | chatgpt_browser | codex_app_server | own_user |
-| anthropic | api_key | http_api | platform_shared / own_user by scope |
-| claude_code | first_party_login | claude_code | own_user, disabled flag |
-| higgsfield | oauth_pkce | mcp | scope-dependent |
-
-### Task 1.2: Connections and model availability
-
-Add:
-
-- `supabase/migrations/20260905122000_ai_provider_connections.sql`
-
-Create:
-
-- `ai_provider_connections`
-- `ai_connection_models`
-
-RLS/grants:
-
-- authenticated user may read only non-secret columns on their own user connections;
-- authenticated user may delete/disconnect only through the Edge Function, not update secret metadata directly;
-- platform connections are admin-readable through an RPC/view with secret columns omitted;
-- service role has required access;
-- anon has zero access.
-
-Add safe views:
-
-- `user_ai_provider_connection_status`
-- `admin_ai_provider_connection_status`
-
-Views must exclude `secret_ref`, `runtime_profile_ref`, and internal errors.
-
-### Task 1.3: User routing preferences
-
-Add:
-
-- `supabase/migrations/20260905123000_user_ai_routing_preferences.sql`
-
-Create:
-
-- `user_ai_routing_preferences`
-- ownership-safe composite FK for the preferred user connection;
-- capability CHECK including new `vision` category;
-- unique global/per-account preference rule.
-
-Add RPCs:
-
-- `get_effective_ai_routing_preference(p_user_id, p_social_account_id, p_capability)` service-role only;
-- `upsert_my_ai_routing_preference(...)` authenticated, derives owner from `auth.uid()`;
-- `delete_my_ai_routing_preference(...)` authenticated, derives owner from `auth.uid()`.
-
-Do not accept an arbitrary target user id from browser calls.
-
-### Task 1.4: Execution jobs and audit
-
-Add:
-
-- `supabase/migrations/20260905124000_ai_execution_jobs.sql`
-
-Create:
-
-- `ai_execution_jobs`
-- indexes for user history, queued jobs, connection/model analytics;
-- idempotency uniqueness;
-- append-only audit protections;
-- user-safe execution status view.
-
-### Task 1.5: Migration harness
-
-Update the existing PostgreSQL test harness with tests for:
-
-- idempotent replay;
-- CHECK constraints;
-- RLS ownership;
-- composite FK rejecting another user's connection;
-- platform connection hidden from normal users;
-- no token/secret column in safe views;
-- service-role RPC execution;
-- anon has no grants.
-
-Gate:
-
-- apply Slices 1.1–1.4 to production before any frontend merge that queries them.
-
-## Slice 2 — Shared Domain Types and Capability Policy
-
-### Task 2.1: Frontend domain types
-
-Create:
-
-- `src/features/ai-provider-connections/domain/types.ts`
-- `src/features/ai-provider-connections/domain/capabilityPolicy.ts`
-
-Update:
-
-- `src/hooks/ai-config/types.ts`
-- `src/hooks/useAIConfiguration.ts`
-- `src/components/admin/DefaultModelSelector.tsx`
-
-Changes:
-
-- add `vision` to `ModelCategory`;
-- add runtime kind, auth method, scope, traffic policy, connection status, cost owner;
-- define provider maximum-capability matrix;
-- provide a pure `modelEligibility()` function returning `{ eligible, reason }`.
-
-Tests:
-
-- Codex cannot select image/video/tts/stt/embedding in v1;
-- Claude Code cannot select media-generation categories;
-- connection-discovered capabilities cannot exceed provider policy;
-- `admin_only` cannot serve a subscriber execution;
-- `platform_shared` is rejected when approval flag is false.
-
-### Task 2.2: Backend mirror
-
-Create:
-
-- `supabase/functions/_shared/ai-routing/types.ts`
-- `supabase/functions/_shared/ai-routing/capability-policy.ts`
-- `supabase/functions/_shared/ai-routing/capability-policy.test.ts`
-
-The backend is authoritative. Keep the frontend matrix as a UI mirror and point its header comment at the backend authority.
-
-## Slice 3 — Routing Preference Resolution and Execution Planner
-
-### Task 3.1: Pure preference precedence
-
-Create:
-
-- `src/features/ai-provider-connections/domain/routingPreference.ts`
-- `supabase/functions/_shared/ai-routing/preference-resolution.ts`
-- matching Vitest and Deno tests.
-
-Test precedence:
-
-1. social-account capability;
-2. user capability;
-3. user `*`;
-4. `postora_only`.
-
-### Task 3.2: Backend execution planner
-
-Create:
-
-- `supabase/functions/_shared/ai-routing/execution-planner.ts`
-- `supabase/functions/_shared/ai-routing/execution-planner.test.ts`
-
-The planner must:
-
-- authenticate ownership before resolving preferences;
-- load only connected/healthy candidates;
-- validate capability and model availability;
-- enforce traffic policy;
-- build user candidates before platform candidates only for `user_first`;
-- omit all platform candidates for `user_only`;
-- preserve current Admin primary/fallback/fallback2 order for `postora_only`;
-- include a deterministic reason for every skipped candidate.
-
-Required tests:
-
-- default current behavior with flags off;
-- user-owned success path;
-- user-owned expired connection;
-- explicit platform fallback;
-- fallback prohibited;
-- unsupported model;
-- another user's connection id;
-- admin-only subscription offered to subscriber request;
-- no configured candidates.
-
-### Task 3.3: Error taxonomy
-
-Create:
-
-- `supabase/functions/_shared/ai-routing/errors.ts`
-
-Stable codes:
-
-```text
-AI_CONNECTION_REQUIRED
-AI_RECONNECT_REQUIRED
-AI_MODEL_UNAVAILABLE
-AI_CAPABILITY_UNSUPPORTED
-AI_PROVIDER_RATE_LIMITED
-AI_PROVIDER_TIMEOUT
-AI_RUNTIME_UNAVAILABLE
-AI_PLATFORM_FALLBACK_DISABLED
-AI_POLICY_BLOCKED
-AI_NOT_CONFIGURED
-AI_ALL_CANDIDATES_FAILED
+UPDATE public.ai_providers
+SET name = 'Google Gemini'
+WHERE provider_code = 'gemini';
 ```
 
-Separate sanitized user messages from operator diagnostics.
+Do not insert `anthropic`, `google`, or `claude_code`. Add a migration assertion/test that fails if those codes appear.
 
-## Slice 4 — HTTP API Provider Adapters
+Seed `api_key` auth-method rows by joining the existing `openai` and `claude` provider rows. `ON CONFLICT` targets `(provider_id, auth_method)`, not a new provider code.
 
-### Task 4.1: Credential resolution
+### A3. Create connections with a scope/policy constraint
 
-Create:
+Create `ai_provider_auth_methods` and `ai_provider_connections` exactly as specified. The migration must include:
 
-- `supabase/functions/_shared/ai-routing/credential-resolution.ts`
+- composite provider/auth-method FK;
+- `owner_user_id ... ON DELETE CASCADE`;
+- `created_by ... ON DELETE SET NULL`;
+- database `CHECK` coupling scope, owner, and allowed traffic policy;
+- indexes for owner/status and platform/status;
+- updated-at trigger;
+- no raw credential columns.
 
-Resolution rules:
+SQL tests must prove these inserts fail:
 
-- user connection secret only for the same authenticated owner;
-- platform connection secret only for an eligible platform candidate;
-- environment variable compatibility remains during migration;
-- no environment credential is used for a user-owned candidate;
-- secret-store failure fails closed.
+- user + `platform_shared`;
+- user + `admin_only`;
+- platform + `own_user`;
+- user with null owner;
+- platform with non-null owner.
 
-### Task 4.2: Adapter interface and API adapters
+Also prove valid user/platform combinations succeed.
 
-Create:
+### A4. Create connection models with RLS
 
-- `supabase/functions/_shared/ai-routing/adapters/openai-api.ts`
-- `supabase/functions/_shared/ai-routing/adapters/anthropic-api.ts`
-- `supabase/functions/_shared/ai-routing/adapters/google-ai.ts`
-- `supabase/functions/_shared/ai-routing/adapters/openrouter.ts`
+Create `ai_connection_models` with `(connection_id, model_id)` primary key and FKs to connections and `ai_models`.
 
-Normalize:
+Enable RLS and define/grant explicitly:
 
-- text/chat response;
-- structured output where supported;
-- image input;
-- provider error classification;
-- timeout/abort;
-- usage metadata;
-- rate-limit metadata.
+- owner select for user connections;
+- admin select for platform connections;
+- service-role write path;
+- revoke insert/update/delete from `anon` and `authenticated`;
+- status-only security-invoker view if frontend access is needed.
 
-Do not place API-specific branching back into feature Edge Functions.
+Test cross-user selection, anonymous access, user platform-row access, and browser mutation denial.
 
-Tests use stubbed fetch only. Include non-2xx, 200-with-error payload, malformed JSON, timeout, empty output, and token-redaction cases.
+### A5. Extend `ai_model_preferences`; do not duplicate it
 
-### Task 4.3: Replace `getAiEndpoint` behavior behind a flag
+Migration sequence:
 
-Update:
+1. Add nullable `social_account_id`.
+2. Add `routing_mode` with a temporary/default value of `postora_only`.
+3. Add nullable `preferred_connection_id`.
+4. Make existing `model_id` nullable.
+5. Drop the current `(user_id, feature)` unique constraint by its discovered name.
+6. Add the two partial unique indexes from the spec.
+7. Add routing-mode shape checks.
+8. Add the composite FK from `(preferred_connection_id, model_id)` to `ai_connection_models` with `ON DELETE RESTRICT`.
+9. Backfill/validate all existing rows.
 
-- `supabase/functions/_shared/ai-fallback.ts`
+Required checks:
 
-Add an adapter bridge while preserving the old exports. Do not delete the legacy path until all callers have migrated.
+- `prefer_own`/`own_only` require connection and model;
+- `postora_only` requires no preferred connection but may retain the legacy model;
+- the preferred connection belongs to the row's `user_id`, enforced in the write RPC because a plain FK cannot express owner equality;
+- social account belongs to the same user, enforced by RPC and RLS.
 
-Acceptance:
+Add a disconnect RPC that clears dependent own-routing rows and deletes connection/Vault secret in one controlled operation. Direct browser delete must not bypass it.
 
-- OpenAI is never accidentally routed to the Google-compatible endpoint.
-- provider-specific headers and request shapes live in their adapter.
+After the Edge/RPC mutation path is available, keep owner-scoped preference reads but revoke direct browser insert/update/delete. All writes validate connection and social-account ownership server-side.
 
-## Slice 5 — Generalize Higgsfield Without Breaking Production
+### A6. Create durable call attempts
 
-### Task 5.1: Higgsfield adapter
+Create `ai_provider_call_attempts` with the exact columns/statuses from the spec. Required constraints and access:
 
-Create:
+- `user_id ... ON DELETE SET NULL`;
+- `connection_id ... ON DELETE SET NULL`;
+- allowed-value checks for credential source and status;
+- index on `(request_id, fallback_level)` and on stale `started_at` rows;
+- RLS enabled;
+- no browser writes;
+- admin non-secret select and service-role insert/update.
 
-- `supabase/functions/_shared/ai-routing/adapters/higgsfield.ts`
+Test that deleting an account or connection does not fail and leaves an anonymized operational row.
 
-Wrap:
+### A7. Reuse the connector Vault lifecycle
 
-- `resolveHiggsfieldCredential`;
-- model discovery;
-- generation execution;
-- refresh/reconnect mapping;
-- BYO vs platform attribution.
+Mirror the proven connector pattern with AI-specific RPCs:
 
-Do not change the existing resolver's behavior in this task.
+- `upsert_ai_connection_secret`
+- `get_ai_connection_credential`
+- `delete_ai_connection_secret`
+- orphan reclaim trigger/function where cascade behavior requires it
 
-### Task 5.2: Connection metadata dual-write
+Requirements:
 
-Update:
+- Vault stores one JSON object per connection;
+- read RPC checks intended user/scope and connection status;
+- read/secret mutation is service-role only;
+- merge semantics preserve configured fields;
+- delete/cascade leaves no orphan Vault secret;
+- SQL comments document any owner-run/manual migration requirement.
 
-- `supabase/functions/higgsfield-oauth/index.ts`
+Add SQL tests copied/adapted from the connector secret migration harness.
 
-When the generic flag is enabled:
+### A8. Add exact feature flags
 
-- continue writing the existing Higgsfield record;
-- upsert non-secret canonical connection metadata;
-- sync connection models;
-- keep legacy reads as authoritative until a later cutover flag.
+Insert false-valued `app_settings` rows:
 
-Tests:
+- `feature_ai_provider_connections`
+- `feature_ai_user_routing`
+- `feature_ai_anthropic_adapter`
 
-- platform scope admin only;
-- user scope ignores supplied user id;
-- status returns no token;
-- disconnect clears both metadata paths;
-- failed generic dual-write does not falsely report successful generic connection;
-- existing Higgsfield generation still works with generic flags off.
+Update all hardcoded pieces in `src/hooks/useFeatureFlags.tsx`:
 
-### Task 5.3: Secret-store migration
+- `FLAG_KEYS`;
+- TypeScript flag type/interface;
+- `DEFAULT_FLAGS`;
+- `FLAG_KEY_MAP` or equivalent mapping.
 
-After dual-write production evidence:
+Do not create a cohort table. Confirm `user_feature_overrides` can enable each flag for one user and its expiry is honored.
 
-1. migrate Higgsfield refresh/access tokens to the canonical secret store;
-2. rotate or refresh credentials;
-3. switch resolver to `secret_ref`;
-4. verify no client access;
-5. null/remove legacy token values only in a separate, recoverable migration after rollback window closes.
+### A9. PR A verification
 
-## Slice 6 — Provider Connection Edge API
+```bash
+deno check supabase/functions/_shared/ai-fallback.ts
+deno check supabase/functions/_shared/inboundMediaUnderstanding.ts
+deno test supabase/functions/_shared/aiFallbackSettings.test.ts
+deno test supabase/functions/_shared/inboundMediaUnderstanding.test.ts
+npm run test -- --run src/hooks/__tests__/useFeatureFlags.test.tsx
+npm run typecheck
+```
 
-### Task 6.1: Connection endpoint
+Run the repository migration/RLS harness. If its normal command uses `--no-check`, run `deno check` separately on every touched/new Deno module.
 
-Create:
+PR A exit gate: all flags false produces no route or UI behavior change.
 
-- `supabase/functions/ai-provider-connections/index.ts`
+## 6. PR B — Connection API and Validation
 
-Implement actions:
+### B1. Implement one connection Edge surface
 
-- `list`
-- `start_auth`
-- `complete_auth`
-- `status`
-- `test`
-- `sync_models`
+Add `supabase/functions/ai-provider-connections/index.ts` with actions:
+
+- `list-status`
+- `connect-api-key`
+- `validate`
+- `refresh-models`
 - `disconnect`
-- `save_user_api_key`
-- `set_traffic_policy`
+- `set-traffic-policy` (admin only)
 
-Rules:
+Do not add a generic execution function.
 
-- authenticate before action dispatch;
-- platform actions require admin;
-- user actions derive owner from auth;
-- validate provider/method/scope compatibility;
-- rate-limit auth start, callback, test, and sync actions;
-- redact provider errors;
-- audit every mutation and refusal.
+For every request:
 
-### Task 6.2: Internal runtime client
+1. validate JWT claims;
+2. derive caller/user/admin role server-side;
+3. parse an allowlisted provider code and action schema;
+4. enforce requested scope before service-role access;
+5. rate-limit connection and validation actions;
+6. return only normalized status metadata.
 
-Create:
-
-- `supabase/functions/_shared/ai-routing/adapters/agent-runtime.ts`
-
-It signs requests with:
-
-- timestamp;
-- request id;
-- method/path/body hash;
-- short-lived internal JWT or HMAC;
-- replay window.
-
-Tests:
-
-- valid signature;
-- expired signature;
-- body tampering;
-- replayed request id;
-- runtime timeout;
-- sanitized error response.
-
-## Slice 7 — `agent-runtime` Service Foundation
-
-### Task 7.1: Service scaffold
-
-Create the `services/agent-runtime` tree from the file structure above.
-
-Choose a supported Node.js LTS runtime and pin dependency versions. The service must have:
-
-- `/health/live`
-- `/health/ready`
-- internal auth middleware;
-- JSON request-size limits;
-- structured redacted logs;
-- graceful shutdown;
-- per-connection concurrency limits;
-- global overload protection;
-- runtime version reporting.
-
-### Task 7.2: Runtime profiles
-
-Implement:
-
-- opaque profile identifiers;
-- path allowlist rooted in one dedicated volume;
-- one profile per connection;
-- encrypted persistent storage at rest;
-- lifecycle lock to prevent simultaneous auth mutation;
-- secure deletion/tombstone on disconnect;
-- no email/user id in filesystem path;
-- ownership lookup through the database connection id.
-
-### Task 7.3: Runtime supervisor
-
-Implement:
-
-- spawn/stop/restart;
-- stdio JSON-RPC framing for Codex App Server;
-- bounded stdout/stderr buffers;
-- process timeout and kill escalation;
-- circuit breaker;
-- process count and memory caps;
-- version compatibility check;
-- no arbitrary command from HTTP request input.
-
-### Task 7.4: Deployment
-
-Add:
-
-- `services/agent-runtime/Dockerfile`
-- a dedicated service in `docker-compose.yml` or the production deployment manifest;
-- internal network only;
-- persistent encrypted auth volume;
-- health checks;
-- CPU/memory/process limits;
-- runtime secret injection;
-- no public port mapping.
-
-The existing nginx `postora` container remains unchanged except for its deployment relationship.
-
-## Slice 8 — Codex Authentication and Execution
-
-### Task 8.1: Codex App Server client
-
-Create:
-
-- `services/agent-runtime/src/providers/codex/CodexAppServerClient.ts`
-
-Implement protocol operations:
-
-- initialize;
-- account read;
-- login start with `chatgptDeviceCode`;
-- optional managed browser login for supported deployment topology;
-- login completion notifications;
-- logout;
-- rate-limit read;
-- model list;
-- thread start/turn start;
-- cancellation and timeout;
-- clean shutdown.
-
-Generate/pin protocol schemas from the installed Codex version. CI must fail when the runtime version changes without regenerated schemas.
-
-### Task 8.2: Codex auth service
-
-Create:
-
-- `services/agent-runtime/src/providers/codex/CodexAuthService.ts`
+### B2. Connect API keys transactionally
 
 Flow:
 
-1. Edge creates a pending connection owned by the caller.
-2. Runtime creates/locks the profile.
-3. Runtime starts device-code login.
-4. Browser receives only verification URL, user code, connection id, and expiry.
-5. Runtime watches completion.
-6. Backend stores connected metadata and runtime profile reference.
-7. Runtime syncs models, plan type, and rate limits.
+1. Create/update connection metadata as `pending`.
+2. Store key in Vault.
+3. Validate against the allowlisted provider host with a bounded timeout.
+4. Discover or validate allowed models.
+5. Upsert `ai_connection_models` only for catalog models belonging to the same provider.
+6. Mark connection `active` and write `last_validated_at`.
+7. On definitive credential failure, mark `error` and delete/replace the invalid Vault secret according to the retry UX.
 
-Do not send Codex auth files or ChatGPT tokens to Supabase rows or the browser.
+OpenAI and Anthropic validation functions are server-only and never echo provider bodies containing sensitive values.
 
-### Task 8.3: Codex execution adapter
+When the OpenAI connection path is deployable behind false-default flags, update the existing `openai` row to active. Do not activate `claude` in this PR; its row is activated only after PR E's Anthropic contract suite passes.
 
-Create:
+### B3. Traffic-policy mutation
 
-- `services/agent-runtime/src/providers/codex/CodexExecutionAdapter.ts`
+`set-traffic-policy` is admin-only and platform-scope-only. User-scope enable/disable uses a separate owner action constrained to `own_user`/`disabled`. Database checks remain the final defense.
 
-Initial capabilities:
-
-- `chat`, feature-flagged;
-- `vision`, only for models whose discovered `inputModalities` includes image;
-- `agent`, only after the separate agent-tool acceptance gate.
-
-Restrictions:
-
-- ephemeral/read-only workspace for POSTORA content tasks;
-- no shell/process/filesystem tools for automatic replies;
-- no image/video/audio generation claim;
-- bounded turns and output size;
-- no thread reuse across users;
-- record rate-limit failure without exposing account details.
-
-### Task 8.4: Admin Codex card policy
-
-An admin may connect and test Codex. Persist `traffic_policy = admin_only` unless both:
-
-- approval record exists;
-- `ai_codex_platform_shared_enabled = true`.
-
-Backend enforcement is mandatory even if the UI button is disabled.
-
-### Task 8.5: Codex tests
-
-Add protocol fakes covering:
-
-- successful device-code login;
-- cancel and expiry;
-- login notification failure;
-- model discovery;
-- image input rejected by text-only model;
-- rate-limit exhaustion;
-- one user's profile requested by another;
-- admin-only connection used for subscriber request;
-- process crash and restart;
-- stderr token redaction;
-- timeout/cancellation.
-
-## Slice 9 — Claude Code Conditional Authentication
-
-### Task 9.1: Hard policy gate
-
-Before installing or enabling runtime auth, assert:
-
-- approval/terms record present;
-- unmodified binary requirement accepted;
-- first-party authentication flow preserved;
-- no token collection/intermediation;
-- each end user authenticates their own connection;
-- platform-shared policy separately approved if ever requested.
-
-If the gate is absent, backend returns `AI_POLICY_BLOCKED`; UI shows `Unavailable pending provider approval`.
-
-### Task 9.2: Claude Code runtime adapter
-
-Create:
-
-- `services/agent-runtime/src/providers/claude/ClaudeCodeAuthService.ts`
-- `services/agent-runtime/src/providers/claude/ClaudeCodeExecutionAdapter.ts`
-
-Requirements:
-
-- run the published unmodified binary;
-- preserve all first-party auth methods;
-- store runtime state only inside the isolated profile;
-- never parse/copy/export Claude.ai tokens;
-- prevent `ANTHROPIC_API_KEY` from accidentally overriding a subscription-auth profile;
-- distinguish subscription from API billing in status;
-- no shared admin subscription traffic by default.
-
-### Task 9.3: Anthropic API remains independent
-
-The `anthropic` HTTP adapter from Slice 4 is the supported platform path regardless of Claude Code flag state. Its Admin card accepts API credentials and can be selected in Chat, Agent, and Vision categories when compatible models are active.
-
-### Task 9.4: Claude tests
+### B4. Tests
 
 Cover:
 
-- policy gate missing;
-- API key accidentally present in subscription profile environment;
-- user ownership isolation;
-- admin-only traffic enforcement;
-- first-party login handoff without token capture;
-- unsupported media capability;
-- runtime exit/rate limit/reconnect state.
+- missing/invalid JWT;
+- non-admin platform creation/policy mutation;
+- cross-user list/validate/disconnect;
+- invalid provider code or redirect;
+- invalid key redaction;
+- Vault failure rollback;
+- model/provider mismatch;
+- rate limit;
+- user disconnect dependency cleanup and secret reclaim;
+- platform disconnect rejected while referenced by any admin chain tier.
 
-## Slice 10 — User Settings UI
+## 7. PR C — Preference Resolution and Deterministic Planner
 
-### Task 10.1: Query/mutation layer
+### C1. Define shared types
 
-Create:
+In `_shared/ai-routing/types.ts`, define:
 
-- `src/features/ai-provider-connections/application/connectionQueries.ts`
-- `src/features/ai-provider-connections/application/connectionCommands.ts`
-- infrastructure repositories.
+- categories used in V1: `chat`, `agent`, `caption`, `hashtags`, `vision`;
+- routing modes;
+- scope/traffic policy;
+- `ModelChainRef` with optional `connection_id`;
+- credential source: `user_connection | platform_connection | legacy_platform`;
+- candidate skip reasons and normalized terminal errors.
 
-Use React Query keys scoped by authenticated user and social account. Never cache secrets because no secret enters the client.
+Frontend types mirror the wire contract but do not contain credential handles.
 
-### Task 10.2: Accounts and routing panel
+### C2. Resolve preference precedence
 
-Create:
+Implement a pure/testable resolver for:
 
-- `AiAccountsRoutingPanel.tsx`
-- `AiProviderConnectionCard.tsx`
-- `AiRoutingModeSelector.tsx`
-- `CapabilityRoutingTable.tsx`
-- `ProviderModelPicker.tsx`
+1. social account + category;
+2. social account + `*`;
+3. user + category;
+4. user + `*`;
+5. implicit `postora_only`.
 
-Update:
+Tests must include the previously omitted social-account wildcard and prove exact rows win.
 
-- `src/pages/Settings.tsx`
-- `src/components/automation/DatabaseConnectorsManager.tsx`
+Add `set-routing-preference` and `delete-routing-preference` actions to `ai-config` or the connection function. Keep `set-user-preference` unchanged.
 
-Recommended placement:
+### C3. Parse exact admin chain references
 
-- render the new panel before the general database/app connector manager in the integrations tab;
-- retain Higgsfield's current connector preset during compatibility rollout;
-- avoid displaying duplicate Connect actions by having the legacy Higgsfield card deep-link to the canonical AI account card once enabled.
+Extend the existing `system_settings` parser:
 
-### Task 10.3: User UX states
+```ts
+type ModelChainRef = {
+  provider_code: string;
+  model_id: string;
+  connection_id?: string;
+};
+```
 
-Implement:
+Rules/tests:
 
-- disconnected;
-- connecting with device code;
-- connected;
-- model syncing;
-- reconnect required;
-- provider rate limited;
-- policy unavailable;
-- connection disabled by admin;
-- platform fallback explicitly on/off.
+- absent `connection_id` resolves legacy provider credential only;
+- present ID resolves exactly that platform row;
+- provider/model/connection mismatch is rejected;
+- `admin_only` is rejected for end-user traffic;
+- `platform_shared` is allowed only after normal quota checks;
+- disabled, expired, or unavailable connections are skipped with a typed reason;
+- no “first active connection for provider” query exists.
 
-The save button must explain when `user_first` can consume POSTORA quota after user-provider failure.
+### C4. Preserve legacy chat precedence
 
-### Task 10.4: User UI tests
+Build the POSTORA chat candidates by adapting, not bypassing, `resolveChatModelConfig`:
 
-Vitest/Testing Library:
+1. non-expired `user_ai_model_overrides`;
+2. admin primary;
+3. admin fallback;
+4. validated third tier/floor.
 
-- only eligible providers/models appear;
-- another user's status is never rendered;
-- `user_only` hides/disables platform fallback;
-- `user_first` requires explicit fallback checkbox;
-- device-code URL/code rendered without token fields;
-- reconnect flow;
-- policy-blocked Claude Code card;
-- account-specific preference overrides global preference;
-- switching accounts does not save to the previous account.
+When `feature_ai_user_routing` is false, call the existing path directly. Add a golden test comparing old and new outputs across:
 
-Playwright:
+- user override present/expired/absent;
+- primary/fallback missing;
+- invalid fallback 2;
+- provider aliases already supported by legacy code.
 
-- connect/status/disconnect with fake provider runtime;
-- global preference save;
-- per-capability save;
-- per-social-account override;
-- fallback warning and confirmation.
+For categories currently using `get_active_ai_model_config`, preserve the existing `ai_model_preferences.model_id` as the first platform-model candidate. Do not introduce that preference into chat/agent, because `_shared/ai-fallback.ts` does not read it today. Encode this as an explicit category map and parity fixtures.
 
-## Slice 11 — Admin Authentication UI and Model Selectors
+### C5. Planner without secret reads
 
-### Task 11.1: Authentication cards
+Planner output contains candidate metadata and a credential reference, not a secret. It checks ownership, scope, policy, model FK, capability, status, and quota requirements before the execution layer resolves Vault.
 
-Create:
+Mode tests:
 
-- `src/components/admin/settings/ai/AiAuthenticationCards.tsx`
-- `PlatformProviderConnectionCard.tsx`
-- `ProviderEligibilityBadge.tsx`
+- `postora_only` includes current user override;
+- `prefer_own` puts exact own connection first;
+- `prefer_own` falls back only after normalized user-connection failure;
+- `own_only` never contains platform candidates;
+- no usable own connection produces a clear terminal error for `own_only`;
+- user A can never plan user B's connection.
 
-Update:
+### C6. Shadow mode
 
-- `src/components/admin/settings/ai/AiProvidersCard.tsx`
-- `src/components/admin/AdminAiSettings.tsx`
-- admin settings catalog/search entries.
+Add structured shadow logs containing candidate identifiers and skip reasons only. Shadow mode must not read Vault, reserve quota, or call a provider.
 
-Render two groups:
+## 8. PR D — User and Admin UI
 
-1. API Connections.
-2. Account Authentication, with Higgsfield, Codex, and Claude Code adjacent.
+### D1. Client API and query hooks
 
-Each account card supports status, connect, reconnect, test, sync, and disconnect. Only eligible connections show `Use as platform fallback`.
+Create a typed client for the connection/status/preference actions. It must never model an API response field for a raw secret.
 
-### Task 11.2: Distinct providers in model cards
+Add hooks for:
 
-Update:
+- list connections/status/models;
+- connect/validate/disconnect;
+- get/set routing preference;
+- admin platform connection/policy changes.
 
-- `src/components/admin/DefaultModelSelector.tsx`
-- `src/components/admin/settings/ai/AiCategoryCards.tsx`
-- `src/hooks/useAIConfiguration.ts`
+Invalidate only relevant query keys after mutations.
 
-Requirements:
+### D2. User settings
 
-- provider groups show `OpenAI API`, `Codex`, `Anthropic API`, `Claude Code` separately;
-- add a Vision category card;
-- filter models by capability, connection availability, and traffic policy;
-- show badges `API`, `Account`, `Platform`, `Admin only`, `User only`, `Approval required`;
-- disabled model includes the backend-derived reason;
-- never allow admin-only auth as a platform chain candidate.
+Extend `src/components/settings/AiSettingsSection.tsx` with:
 
-### Task 11.3: Admin API changes
+- OpenAI API card;
+- Anthropic API card;
+- masked key entry modal;
+- connection status, last validation, and non-secret error;
+- disconnect confirmation;
+- category routing mode;
+- connection/model selector required for own modes;
+- clear cost labels: “Your provider account” versus “POSTORA provider”.
 
-Update:
+Do not show Codex or Claude Code in V1. Do not claim that an API key uses a consumer subscription.
 
-- `supabase/functions/ai-config/index.ts`
+### D3. Admin settings
 
-Add actions:
+In the existing AI provider/settings area next to Higgsfield:
 
-- list provider auth methods;
-- list safe platform connection status;
-- update provider capability enablement;
-- validate model chain candidate eligibility;
-- reject a subscription-auth model if no eligible platform-shared connection exists.
+- add OpenAI API and Anthropic API platform-connection cards;
+- allow `admin_only`, `platform_shared`, or `disabled` only;
+- show the connection label in category model selectors;
+- write `connection_id` when an account-backed platform connection is chosen;
+- write legacy JSON without a connection ID only for the legacy API credential option;
+- return `connection_in_use` and list referenced tiers while any setting names the connection; require reassignment/clear before disconnect and recheck transactionally.
 
-Existing `set-service-key` remains supported.
+Display labels are connection-aware, for example `OpenAI API — Operations key`, not new catalog provider rows.
 
-### Task 11.4: Admin tests
+### D4. UI tests
 
-Cover:
+Cover flags off, cohort overrides, role visibility, secret redaction, required model choice, social-account wildcard editing, exact admin connection binding, disconnect warnings, and RTL/Arabic layout.
 
-- non-admin forbidden;
-- Codex/Claude cards visible with correct policy;
-- admin login succeeds but shared toggle remains disabled;
-- Anthropic API model selectable while Claude Code is gated;
-- Vision model filters;
-- no unsupported media selection;
-- stale model availability;
-- platform chain refuses admin-only connection server-side.
+## 9. PR E — OpenAI and Anthropic Provider Adapters
 
-## Slice 12 — Unified Execution API and Quota Reservation
+### E1. Normalized adapter contract
 
-### Task 12.1: `ai-execute`
+Define one internal request/result contract for chat/agent/vision V1 use. Keep provider-specific wire structures inside provider modules.
 
-Create:
+Required methods:
 
-- `supabase/functions/ai-execute/index.ts`
+- `validateCredential`
+- `listOrValidateModels`
+- `completeChat`
+- `completeWithTools`
+- `understandImage` or provider content mapping used by the existing media layer
 
-Flow:
+Each call accepts an absolute deadline/AbortSignal and emits normalized usage, request ID, retryability, and error code.
 
-1. authenticate caller;
-2. validate capability input schema;
-3. check POSTORA feature entitlement;
-4. resolve preference and candidate plan;
-5. create idempotent execution row;
-6. attempt candidates within deadline;
-7. reserve platform quota immediately before first platform call;
-8. release reservation if platform dispatch fails;
-9. persist result attribution and sanitized error;
-10. return normalized response or queued status.
+### E2. OpenAI adapter
 
-### Task 12.2: Telemetry helper
+Extract compatible behavior from existing callers without changing legacy behavior. Test auth, model mismatch, rate limits, timeout, malformed body, tool calls, and image content.
 
-Create:
+### E3. Anthropic adapter under code `claude`
 
-- `supabase/functions/_shared/ai-routing/telemetry.ts`
+Implement the full Messages API mapping listed in the spec. Do not simply add an endpoint URL to the OpenAI-compatible client.
 
-Fields:
+Agent tests must cover:
 
-- execution id;
-- user id;
-- social account id;
-- capability;
-- provider/model;
-- connection id;
-- credential source;
-- cost owner;
-- candidate tier;
-- fallback reason;
-- latency/status/error code;
-- token/usage counts where safe;
-- no prompt/response/token.
+- system prompt separation;
+- multiple text/content blocks;
+- tool definition conversion;
+- one and multiple `tool_use` blocks;
+- `tool_result` round trip;
+- multi-round tool loop;
+- stop reason mapping;
+- vision block conversion;
+- usage/rate-limit/timeout normalization.
 
-### Task 12.3: Quota RPC
+### E4. Fail-closed dispatch
 
-Add:
+Replace the current unknown-provider-to-OpenAI fallback in migrated code with an explicit adapter lookup. Missing adapter/capability returns `provider_not_supported` before a credential read or quota reservation.
 
-- `supabase/migrations/20260905125000_ai_execution_quota_reservation.sql`
+Keep `google`/`gemini` legacy aliases where current code requires them; do not create a `google` catalog row.
 
-Create atomic reserve/release/settle semantics generalized from Higgsfield. User-owned successful execution must not reserve platform AI-provider quota. POSTORA plan/concurrency/abuse limits remain separate checks.
+After the Anthropic contract, tool-loop, and vision tests pass, update the existing `claude` provider row to active. Routing remains protected by false-default flags and cohort rollout.
 
-Tests include concurrency races and idempotent settlement.
+### E5. Type and contract gates
 
-## Slice 13 — Migrate Chat, Caption, and Hashtags
+```bash
+deno check supabase/functions/_shared/ai-providers/openai.ts
+deno check supabase/functions/_shared/ai-providers/anthropic.ts
+deno check supabase/functions/_shared/ai-providers/normalize.ts
+deno test supabase/functions/_shared/ai-providers/openai.test.ts
+deno test supabase/functions/_shared/ai-providers/anthropic.test.ts
+```
 
-### Task 13.1: Caption and hashtag callers
+Use mocked provider responses in CI; no real keys.
 
-Update:
+## 10. PR F — Integrate Existing AI Callers
+
+Migrate by existing capability path, not by creating generic duplicate endpoints.
+
+### F1. Shared total deadline and pre-dispatch log
+
+Implement a request deadline helper:
+
+- 50-second hard internal deadline from handler entry;
+- planner/DB target at most 2 seconds;
+- at least 5 seconds kept for logging/response/escalation;
+- every attempt receives only remaining time;
+- fallback never resets the clock.
+
+Insert a durable attempt row before provider dispatch. Update on completion. A stale `started` row identifies likely worker death.
+
+### F2. Captions and hashtags
+
+Integrate planner/adapter selection into:
 
 - `supabase/functions/generate-caption/index.ts`
 - `supabase/functions/generate-hashtags/index.ts`
 
-Route through the planner/adapters behind `ai_user_routing_enabled`.
+Gate each route; preserve old logic when off. Verify user-owned attribution and reserve platform quota only at the platform boundary.
 
-Preserve:
+### F3. Chat paths
 
-- current response shape;
-- prompt templates;
-- current platform chain when flag is off;
-- existing logging contract until the new audit is verified.
+Integrate where `resolveChatModelConfig` is currently used. Preserve active user override as the first POSTORA candidate and all existing hard floors.
 
-Tests:
+### F4. Existing inbound vision
 
-- platform-only parity;
-- user OpenAI/Anthropic BYOK;
-- user Codex chat under flag;
-- explicit platform fallback;
-- `user_only` failure;
-- no duplicate platform quota charge;
-- timeout within Edge budget.
+Modify tier construction feeding:
 
-### Task 13.2: Vision entry point
+- `_shared/inboundMediaPipeline.ts`
+- `_shared/inboundMediaUnderstanding.ts`
 
-If no canonical vision function exists, create:
+Do not add `analyze-media`. Preserve `mediaUnderstandingMode`, MIME/byte checks, prompts, and the existing one-budget ladder. Add provider tiers only when the model capability is validated.
 
-- `supabase/functions/analyze-media/index.ts`
+### F5. AI agent reply
 
-Do not overload image generation. Vision input and image generation are separate capabilities and model selectors.
+Integrate the planner into `supabase/functions/ai-agent-reply/index.ts` behind flags.
 
-Tests:
+Required tests:
 
-- text-only model rejection before provider call;
-- image URL ownership/expiry validation;
-- user Codex model with image modality;
-- Anthropic/OpenAI API vision;
-- content-size bounds.
+- OpenAI and Anthropic tool loops use the same internal tool executor;
+- user-owned connection is scoped to request user;
+- `prefer_own` transitions to current POSTORA chain after a retryable own failure;
+- `own_only` performs no platform fallback;
+- platform quota is reserved only before a platform call;
+- total planner/provider/tool-loop time remains within the Edge budget;
+- model exhaustion still triggers existing escalation/outbox behavior;
+- a call row exists even when the provider times out;
+- unsupported provider fails closed.
 
-## Slice 14 — Migrate AI Agent Reply
+### F6. Rollout order inside PR F
 
-### Task 14.1: Planner integration
+Enable per cohort in this order: captions/hashtags, chat, inbound vision, agent reply. Stop expansion on error-rate, latency, quota-attribution, or isolation regression.
 
-Update:
+## 11. PR G — Observability, Legacy Secrets, and GA
 
-- `supabase/functions/ai-agent-reply/index.ts`
-- `supabase/functions/ai-agent-reply/logic.ts`
+### G1. Metrics and admin visibility
 
-Replace the platform-global model selection at the execution boundary with `AiExecutionPlanner`, preserving the existing prompt, knowledge, handoff, account ownership, and tool logic.
+Add aggregated, non-secret views for:
 
-### Task 14.2: Tool compatibility gate
-
-Initial rollout:
-
-- HTTP API agents continue using the current allowlisted tool loop.
-- Codex and Claude Code can run agent replies only after adapter-level tool tests pass.
-- do not rely on experimental Codex dynamic tools for the production auto-reply path.
-- without tool compatibility, Codex/Claude Code are selectable for Chat/Vision but disabled for automatic Agent with reason.
-
-### Task 14.3: Auto-reply deadline and escalation
-
-- enforce total execution deadline below gateway timeout;
-- cap turns/tool iterations;
-- cancel runtime turn on webhook cancellation;
-- if no candidate succeeds, use current human escalation path;
-- do not queue an unbounded reply after the conversation has already escalated.
-
-### Task 14.4: Agent tests
-
-Run all existing `ai-agent-reply` tests unmodified, then add:
-
-- account-scoped preference;
-- connected user provider;
-- platform fallback consent;
-- admin-only connection rejection;
-- tool-disabled subscription runtime;
-- timeout to human escalation;
-- execution audit and cost attribution;
-- no secret in prompt/log/error.
-
-## Slice 15 — Image, Video, Speech, Search, and Embeddings
-
-### Task 15.1: Image/video
-
-Update:
-
-- `supabase/functions/generate-image/index.ts`
-- relevant video generation functions.
-
-Use the generic planner for Higgsfield and compatible API providers. Codex and Claude Code do not enter image/video generation candidate lists in v1.
-
-Preserve reference-image staging cleanup and reserve/release semantics.
-
-### Task 15.2: TTS/STT/search/embedding
-
-Migrate one capability per PR. Each capability requires:
-
-- adapter contract;
-- model capability filter;
-- payload and output normalization;
-- timeout and size limits;
-- quota attribution tests;
-- current platform-only behavior parity.
-
-Do not enable a provider because it supports generic chat; each capability needs a tested adapter.
-
-## Slice 16 — Observability, Security Review, and Operations
-
-### Task 16.1: Dashboards and alerts
-
-Add metrics and operator views for:
-
-- connection status by provider;
-- authentication failures;
-- execution success/error/latency;
-- user vs platform cost source;
-- fallback frequency/reasons;
-- queue depth/runtime capacity;
-- process crashes;
-- rate-limit exhaustion;
-- stale model catalogs.
-
-Alerts:
-
-- cross-tenant refusal;
-- repeated signature failure;
-- runtime restart storm;
-- platform fallback spike;
-- secret-store failure;
-- provider-wide auth failure.
-
-### Task 16.2: Security tests
-
-Run targeted tests for:
-
-- IDOR on connection ids;
-- platform action without admin role;
-- OAuth state replay;
-- device-code leakage;
-- callback open redirect;
-- SSRF through provider endpoints;
-- command injection into runtime spawn;
-- path traversal in runtime profile id;
-- log injection/redaction;
-- another user's social account preference;
-- service-role missing tenancy predicate;
-- public runtime port exposure.
-
-### Task 16.3: Runbooks
-
-Create:
-
-- `docs/runbooks/ai-provider-connection-incident.md`
-- `docs/runbooks/agent-runtime-operations.md`
-- `docs/runbooks/ai-provider-secret-rotation.md`
-- `docs/runbooks/ai-provider-fallback-cost-spike.md`
-
-Include rollback flags and credential revocation steps.
-
-## Slice 17 — Rollout and Legacy Cleanup
-
-### Task 17.1: Shadow planning
-
-With execution still on the legacy path:
-
-- build the new plan;
-- compare it with the current selected provider/model;
-- log only mismatches and reason codes;
-- do not call an additional provider.
-
-Acceptance:
-
-- platform-only traffic matches current routing for a defined observation window.
-
-### Task 17.2: Internal cohort
-
-Enable in order:
-
-1. administrator safe status cards;
-2. internal user BYOK;
-3. generic Higgsfield;
-4. Codex user authentication;
-5. Codex Chat;
-6. Codex Vision;
-7. Codex Agent after tool gate;
-8. Claude Code only after policy gate.
-
-### Task 17.3: Gradual production rollout
-
-Roll out by user allowlist/percentage and capability. Monitor:
-
-- success rate;
+- calls by credential source/provider/category;
+- own-to-platform fallback rate;
+- error and timeout rate;
 - p50/p95 latency;
-- fallback rate;
-- platform cost movement;
-- reconnect frequency;
-- support tickets;
-- runtime saturation.
+- stale `started` attempts;
+- platform quota reservations/releases;
+- disabled/expired connection skips.
 
-Rollback by disabling the capability/provider flag; do not delete connection metadata during operational rollback.
+Do not expose prompts or user keys.
 
-### Task 17.4: Cleanup
+### G2. Legacy plaintext migration
 
-Only after production stability:
+`provider_api_keys.api_key` and `higgsfield_connections.access_token` are plaintext today. Migrate with a separate operational checklist:
 
-- remove duplicate legacy dispatch branches;
-- retire `user_ai_model_overrides` from runtime resolution if replaced, while preserving admin audit history;
-- remove Higgsfield dual-read/dual-write;
-- remove legacy raw secret columns after migration and credential rotation;
-- update `ARCHITECTURE.md` with the runtime service and canonical AI execution path.
+1. add Vault secret references;
+2. dual-write new/rotated credentials;
+3. dual-read with Vault first and explicit legacy fallback telemetry;
+4. backfill in a controlled owner-run migration;
+5. verify row counts, decryptability, ownership, and active flows;
+6. disable plaintext writes;
+7. scrub plaintext only after rollback backup/approval;
+8. remove legacy reads in a later cleanup PR.
 
-Cleanup is a separate PR and migration set, never part of the initial cutover.
+Never run a destructive scrub automatically in the schema PR.
 
-## Test Matrix
+### G3. Security regression suite
 
-| Layer | Required coverage |
+Prove:
+
+- cross-tenant status/model/preference access fails;
+- service-role helpers require intended owner/scope;
+- traffic policy cannot cross scopes even through RPCs;
+- logs/responses contain no submitted sentinel secret;
+- SSRF allowlist rejects unexpected hosts/redirects;
+- disconnect/revocation reclaims Vault data;
+- `own_only` cannot reserve or consume platform quota;
+- admin-only connection cannot serve normal user traffic.
+
+### G4. Rollout and rollback
+
+Use existing `user_feature_overrides` cohorts. Record dashboards and thresholds before expansion.
+
+Rollback is flag-first:
+
+1. disable `feature_ai_user_routing`;
+2. disable `feature_ai_anthropic_adapter` if provider-specific;
+3. keep connection metadata/Vault rows intact;
+4. existing callers return to legacy resolvers;
+5. investigate without destroying user configuration.
+
+Schema rollback must not be required for traffic rollback.
+
+### G5. Cleanup gate
+
+Only after at least one stable release window:
+
+- remove shadow logging noise;
+- remove legacy plaintext reads after verified scrub;
+- decide whether `get_active_ai_model_config` becomes a thin wrapper over the new preference/planner path;
+- keep old `set-user-preference` until all clients migrate;
+- document operator runbooks and incident response.
+
+## 12. Phase 2 — Codex (Blocked Until Written Approval)
+
+Phase 2 is not part of V1 estimates or PRs. No implementation starts until written OpenAI approval separately covers:
+
+- user-scoped Codex use for the user's own POSTORA workloads;
+- administrator-connected Codex use for admin-only or shared workloads.
+
+Official docs are implementation references, not the commercial permission decision:
+
+- `https://developers.openai.com/codex/app-server`
+- `https://developers.openai.com/codex/auth`
+
+### P2.1. Architecture spike after approval
+
+Prototype against Codex App Server with test accounts and synthetic workloads. Confirm capability, latency, cancellation, concurrency, token refresh, logout, and non-coding workload behavior. Do not route production traffic.
+
+### P2.2. Separate runtime deployment
+
+Create a separate Dokploy Compose project, not a service in root `docker-compose.yml` or the Supabase compose.
+
+Deployment requirements:
+
+- join the Supabase stack's external Docker network;
+- internal HTTP endpoint;
+- HMAC signature over method/path/body hash/timestamp/nonce;
+- clock-skew limit and replay cache;
+- firewall/no public ingress;
+- per-connection isolated runtime profile;
+- encrypted volume/secret lifecycle;
+- bounded process and memory concurrency;
+- health/readiness without account data.
+
+Do not use a host Unix socket; Edge containers cannot reach it.
+
+### P2.3. Jobs relationship
+
+If execution cannot safely complete in the Edge budget, add `ai_execution_jobs` as a generic parent:
+
+- `user_id ... ON DELETE CASCADE`;
+- idempotency key and explicit retry state;
+- `ai_generation_jobs.execution_job_id ... ON DELETE SET NULL`;
+- existing generation jobs remain independent with null parent;
+- one documented owner for status, quota, and retry transitions.
+
+### P2.4. Codex connection and UI
+
+Only after runtime/security gates pass:
+
+- seed provider code `codex` and its approved auth methods;
+- add user/admin connection cards for approved scopes only;
+- use device/browser flow exactly as supported;
+- add separate false-default feature flags to `app_settings`, `FLAG_KEYS`, maps, and defaults;
+- use `user_feature_overrides` for cohorts;
+- bind exact platform `connection_id` in model chains;
+- never copy or expose auth cache contents through the browser/API.
+
+### P2.5. Codex tests and rollout
+
+Test tenant isolation, login completion/cancellation, refresh, logout, runtime restart, HMAC replay rejection, idempotency, deadline cancellation, policy flags, and user/platform cost attribution. Start with internal users and admin-only traffic.
+
+## 13. Claude Code
+
+There are no Claude Code tasks, flags, provider rows, adapters, UI cards, runtime profiles, or tests in this plan. Replanning requires a signed Anthropic agreement that explicitly covers the requested intermediation and workload.
+
+## 14. Test Matrix
+
+| Dimension | Required cases |
 |---|---|
-| Pure domain | capability eligibility, routing precedence, traffic policy, fallback consent |
-| PostgreSQL | migration replay, RLS, grants, composite ownership, quota concurrency, audit append-only |
-| Edge/Deno | auth actions, planner, adapters, timeouts, idempotency, sanitized errors |
-| Runtime unit | JSON-RPC framing, process supervision, profile isolation, signatures, redaction |
-| Runtime integration | Codex fake/real staging login, model list, turn, cancel, rate limit |
-| Frontend Vitest | connection cards, capability filters, routing saves, account switching |
-| Playwright | connect/status/disconnect, model selection, fallback confirmation |
-| Security | IDOR, CSRF/state replay, SSRF, injection, traversal, secret leakage |
-| Production smoke | platform parity, BYO attribution, rollback flags, no public runtime port |
+| Scope | own user, other user, admin platform, shared platform, anonymous |
+| Policy | valid scope policies plus every invalid cross-scope combination |
+| Mode | postora only, prefer own success/fallback, own only success/failure |
+| Preference | social exact, social `*`, user exact, user `*`, default |
+| Legacy chat | active/expired/no user override; valid/invalid admin tiers |
+| Chain binding | exact connection, absent connection, mismatched provider/model, disabled connection |
+| Secret | create, rotate, merge, read, revoke, cascade reclaim, redaction |
+| Provider | OpenAI, Anthropic content/tool/vision, existing Gemini aliases |
+| Capability | chat, caption, hashtags, inbound vision, agent tools |
+| Budget | planner delay, provider timeout, fallback remaining time, stale-started log |
+| Cost | own success, own retry, own-to-platform transition, own-only no platform reservation |
+| RLS | status view, connection models, preferences, platform rows, browser mutations |
+| Flags | global off/on, user override on/expired, immediate rollback |
 
-## CI Gates
+## 15. CI Gates
 
-Each PR must pass the relevant subset:
+For each PR:
 
-```bash
-npm run typecheck
-npm run lint
-npm run test
-deno test --no-check --node-modules-dir=none supabase/functions/_shared/ai-routing/
-deno test --no-check --node-modules-dir=none supabase/functions/ai-provider-connections/
-deno test --no-check --node-modules-dir=none supabase/functions/ai-execute/
-deno test --no-check --node-modules-dir=none supabase/functions/ai-agent-reply/
-npm --prefix services/agent-runtime run typecheck
-npm --prefix services/agent-runtime test
-```
+1. migration/RLS SQL tests;
+2. `deno fmt --check` for touched Deno files;
+3. `deno lint` for touched Deno files;
+4. `deno check` for every new/touched Edge/shared module;
+5. `deno test` for Deno unit/contract tests;
+6. frontend lint/typecheck/unit tests;
+7. production build;
+8. secret-sentinel scan of test logs and serialized API responses.
 
-The migration harness and container image scan are required for schema/runtime slices.
+If the repository-wide Deno test command uses `--no-check`, keep it only for runtime test execution and add explicit `deno check` commands. A green no-check test is not sufficient.
 
-## Suggested Pull Request Breakdown
+## 16. Definition of Done
 
-1. **PR A — schema and feature flags**  
-   Slices 0–1 only; apply migrations before dependent frontend.
+V1 is done only when:
 
-2. **PR B — domain policy and planner**  
-   Slices 2–3; no behavior change.
-
-3. **PR C — HTTP adapters and compatibility bridge**  
-   Slice 4; flags off.
-
-4. **PR D — generic Higgsfield metadata and adapter**  
-   Slice 5; dual-write, legacy execution remains authoritative.
-
-5. **PR E — connection Edge API**  
-   Slice 6.
-
-6. **PR F — agent-runtime foundation**  
-   Slice 7; private deployment, no providers enabled.
-
-7. **PR G — Codex auth and execution**  
-   Slice 8; internal allowlist.
-
-8. **PR H — Claude Code conditional adapter**  
-   Slice 9; cannot merge enabled without policy gate.
-
-9. **PR I — user settings UI**  
-   Slice 10.
-
-10. **PR J — admin auth UI and model selectors**  
-    Slice 11.
-
-11. **PR K — execution/quota API**  
-    Slice 12.
-
-12. **PR L — chat/caption/hashtags/vision**  
-    Slice 13.
-
-13. **PR M — AI agent reply**  
-    Slice 14 after tool gate.
-
-14. **PR N+ — remaining capabilities**  
-    One capability per PR from Slice 15.
-
-15. **PR O — observability/runbooks**  
-    Slice 16.
-
-16. **PR P — legacy cleanup**  
-    Slice 17.4 only after stability window.
-
-## Definition of Done
-
-The initiative is complete only when:
-
-1. schema, RLS, safe views, and migrations pass replay/integration tests;
-2. platform-only routing remains compatible with production defaults;
-3. user routing preference works globally and per capability;
-4. explicit fallback consent controls every user-to-platform transition;
-5. Codex user auth works through managed/device-code App Server flow in an isolated runtime;
-6. administrator Codex connection is blocked from subscriber traffic unless separately approved and enabled;
-7. Anthropic API works independently of Claude Code;
-8. Claude Code auth cannot execute without its policy gate and isolated unmodified runtime;
-9. Admin UI exposes separate OpenAI/Codex and Anthropic/Claude Code provider/model groups;
-10. Chat, Agent, Vision, Image, Video, Speech, Search, and Embedding selectors show only tested compatible models;
-11. every execution has credential source, cost owner, fallback state, and sanitized result telemetry;
-12. no secret appears in browser responses, logs, metrics, audit rows, or cross-user storage;
-13. Higgsfield remains operational and can roll back to its legacy path;
-14. runbooks, dashboards, alerts, and rollback flags are verified in production;
-15. `ARCHITECTURE.md` describes the final canonical route and agent-runtime ownership.
+- provider-code assertions prevent duplicate Anthropic/Google identities;
+- invalid traffic policies are impossible in SQL and APIs;
+- existing preference data is migrated in place;
+- exact admin connection selection is persisted and verified;
+- flags-off parity includes live user overrides;
+- user/admin connection UI is secure and connection-aware;
+- OpenAI and Anthropic adapters pass contract, vision, and agent-tool tests;
+- existing inbound media pipeline is reused;
+- all synchronous attempts share one sub-60-second deadline and pre-dispatch log;
+- RLS/isolation and cost-attribution tests pass;
+- rollback requires flags, not data deletion;
+- Codex remains blocked pending both approvals;
+- Claude Code has no implementation surface.
