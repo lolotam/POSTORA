@@ -838,18 +838,31 @@ async function handleRequest(req: Request): Promise<Response> {
       );
       if (createError) throw createError;
 
-      const setMeta = (
+      // THROWS on a failed write. PostgREST reports failures in the resolved
+      // result, not by rejecting, so `await setMeta(...)` would sail past a
+      // transient database error -- and for the crawl handoff below that means
+      // returning 202 with crawl_job_id and queued_at unwritten: a billable
+      // crawl running at Firecrawl that the claim function can never pick up
+      // and no one can see. Every caller here is inside a try that marks the
+      // source failed, so a throw is recoverable and a silent miss is not.
+      const setMeta = async (
         patch: Record<string, unknown>,
         columns: Record<string, unknown> = {},
-      ) =>
-        (admin as any)
+      ) => {
+        const { error: metaError } = await (admin as any)
           .from("ai_knowledge_sources")
           .update({ metadata: { url: check.url, mode, ...patch }, ...columns })
           .eq("id", sourceId);
+        if (metaError) throw new Error(`Could not record crawl state: ${message(metaError)}`);
+      };
 
       if (mode === "site") {
+        // Held outside the try so a failure AFTER the crawl started can still
+        // name the job in the log.
+        let startedJobId: string | null = null;
         try {
           const jobId = await firecrawlStartCrawl(key, check.url, limit);
+          startedJobId = jobId;
           // queued_at is the handoff. The claim function refuses a website
           // source without it, which is what stops the worker picking this row
           // up before the job id exists.
@@ -880,6 +893,11 @@ async function handleRequest(req: Request): Promise<Response> {
           await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
             source_id: sourceId,
             mode,
+            url: check.url,
+            // The crawl may already be RUNNING and billable while its id failed
+            // to persist. Logging what we know is the only way it stays
+            // traceable at all.
+            crawl_job_id: startedJobId,
             error: message(error).slice(0, 500),
           });
           return errorResponse(message(error), 400);
