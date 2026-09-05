@@ -106,7 +106,9 @@ const ApiDocumentation = lazyWithRetry(() => import("@/pages/ApiDocumentation"),
 const EcommerceWhatsAppApi = lazyWithRetry(() => import("@/pages/docs/EcommerceWhatsAppApi"), "EcommerceWhatsAppApi");
 const AutomationHub = lazyWithRetry(() => import("@/pages/automation/AutomationHub"), "AutomationHub");
 const UnifiedAgentSetupPage = lazyWithRetry(() => import("@/pages/automation/UnifiedAgentSetupPage"), "UnifiedAgentSetupPage");
+const AudiencePage = lazyWithRetry(() => import("@/pages/automation/AudiencePage"), "AudiencePage");
 const CommentManagerPage = lazyWithRetry(() => import("@/pages/comments/CommentManagerPage"), "CommentManagerPage");
+const CommentWorkflowPage = lazyWithRetry(() => import("@/pages/automation/CommentWorkflowPage"), "CommentWorkflowPage");
 
 // Admin pages
 const AdminDashboard = lazyWithRetry(() => import("@/pages/admin/AdminDashboard"), "AdminDashboard");
@@ -307,6 +309,8 @@ export function AnimatedRoutes() {
         <Route path="/automation/messaging" element={<Navigate to="/automation/agents" replace />} />
         <Route path="/automation/comments" element={<Navigate to="/automation/agents" replace />} />
         <Route path="/automation/agents" element={<ProtectedRoute><AnimatedPage><UnifiedAgentSetupPage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/automation/audience" element={<ProtectedRoute><AnimatedPage><AudiencePage /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/automation/comment-workflow" element={<ProtectedRoute><AnimatedPage><CommentWorkflowPage /></AnimatedPage></ProtectedRoute>} />
         <Route path="/automation-hub" element={<Navigate to="/automation" replace />} />
         <Route path="/leads-crm" element={<ProtectedRoute><AnimatedPage><LeadsCRM /></AnimatedPage></ProtectedRoute>} />
         <Route path="/leads" element={<Navigate to="/leads-crm" replace />} />

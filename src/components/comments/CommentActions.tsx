@@ -24,6 +24,10 @@ interface CommentActionsProps {
 export function CommentActions({ comment, socialAccountId, replyCount, onReply }: CommentActionsProps) {
   const hideMutation = useHideComment();
   const deleteMutation = useDeleteComment();
+  // YouTube's comments.delete works only on the channel's own comments; anyone else's can be
+  // hidden (moderation status "rejected") but never removed. Meta lets a page delete any comment
+  // on its posts.
+  const canDelete = comment.platform !== "youtube" || comment.is_own === true;
 
   return (
     <div className="flex shrink-0 items-center gap-1">
@@ -61,6 +65,8 @@ export function CommentActions({ comment, socialAccountId, replyCount, onReply }
             size="icon"
             aria-label="Delete comment"
             className="h-8 w-8 text-destructive hover:text-destructive"
+            disabled={!canDelete}
+            title={canDelete ? undefined : "YouTube only lets you delete your own comments — hide it instead."}
           >
             <Trash2 className="h-4 w-4" />
           </Button>
@@ -69,10 +75,17 @@ export function CommentActions({ comment, socialAccountId, replyCount, onReply }
           <AlertDialogHeader>
             <AlertDialogTitle>Delete comment?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete this comment. This action cannot be undone.
-              {/* Meta deletes a comment's replies with it, and the thread view is the first
-                  place a user can see how many that is before they confirm. */}
-              {replyCount > 0 && ` Its ${replyCount === 1 ? "reply" : `${replyCount} replies`} will go with it.`}
+              {comment.platform === "youtube" ? (
+                // YouTube deletes only the one comment; its replies stay.
+                "This removes your comment from YouTube. This action cannot be undone."
+              ) : (
+                <>
+                  This will permanently delete this comment. This action cannot be undone.
+                  {/* Meta deletes a comment's replies with it, and the thread view is the first
+                      place a user can see how many that is before they confirm. */}
+                  {replyCount > 0 && ` Its ${replyCount === 1 ? "reply" : `${replyCount} replies`} will go with it.`}
+                </>
+              )}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -262,3 +262,45 @@ Deno.test("finalize reports the refusal when activation fails after the account 
   assertEquals(await finalizeConnection(state.deps, input), { status: "failed", failure_code: "no_channel" });
   assertEquals(state.updates.at(-1)?.values.failure_code, "no_channel");
 });
+
+// 2026-09-04: a YouTube OAuth that succeeded at Composio was reported as
+// "Reconnect" because a transient channel-listing failure marked the
+// already-active row failed. Transient failures keep the row active now.
+Deno.test("finalize keeps YouTube active when the channel listing hiccups", async () => {
+  const state = setup({
+    loadConnectionForUser: async () => ({ ...owned, connectorType: "youtube" }),
+    loadPendingConnection: async () => ({ ...pending, connectorType: "youtube" }),
+    composio: composioClient({
+      async listConnectedAccounts() {
+        return [{ ...fresh, toolkit: "youtube" }];
+      },
+      async executeTool() {
+        throw new ComposioError("connector_unavailable", 503);
+      },
+    }),
+  });
+  assertEquals(await finalizeConnection(state.deps, input), { status: "active" });
+  assertEquals(state.updates.at(-1)?.values.status, "active");
+  assertEquals(state.updates.every((update) => update.values.status !== "failed"), true);
+});
+
+Deno.test("finalize keeps YouTube active when the channel import throws", async () => {
+  const state = setup({
+    loadConnectionForUser: async () => ({ ...owned, connectorType: "youtube" }),
+    loadPendingConnection: async () => ({ ...pending, connectorType: "youtube" }),
+    composio: composioClient({
+      async listConnectedAccounts() {
+        return [{ ...fresh, toolkit: "youtube" }];
+      },
+      async executeTool() {
+        return { successful: true, data: { items: [{ id: "channel-1", snippet: { title: "One" } }] } };
+      },
+    }),
+    upsertSocialAccount: async () => {
+      throw new Error("db unavailable");
+    },
+  });
+  assertEquals(await finalizeConnection(state.deps, input), { status: "active" });
+  assertEquals(state.updates.at(-1)?.values.status, "active");
+  assertEquals(state.updates.every((update) => update.values.status !== "failed"), true);
+});

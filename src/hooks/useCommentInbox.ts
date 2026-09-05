@@ -1,3 +1,4 @@
+import { videoLabel } from "@/lib/youtubeVideos";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -17,12 +18,16 @@ export interface Comment {
   post_id?: string;
   post_message?: string;
   like_count?: number;
-  platform: "facebook" | "instagram";
+  platform: "facebook" | "instagram" | "youtube";
+  /** YouTube only: the channel's own comment. Delete works on nothing else there. */
+  is_own?: boolean;
+  /** YouTube only: "published" | "heldForReview" | "rejected", or null when not annotated. */
+  moderation_status?: string | null;
   replies?: Comment[];
 }
 
 interface UseCommentsOptions {
-  platform: "facebook" | "instagram";
+  platform: "facebook" | "instagram" | "youtube";
   socialAccountId: string | null;
   pageId?: string;
   igUserId?: string;
@@ -113,6 +118,76 @@ export function parseIgComments(data: any): Comment[] {
   return comments.sort((a, b) => new Date(b.created_time).getTime() - new Date(a.created_time).getTime());
 }
 
+/** One comment as `comment-manager`'s `get_youtube_comments` returns it (spec §4.3). */
+interface YouTubeReplyRow {
+  id: string;
+  text: string | null;
+  author: { id: string; name: string | null; avatar_url: string | null } | null;
+  published_at: string;
+  like_count?: number;
+  moderation_status: string | null;
+  is_own: boolean;
+}
+
+interface YouTubeThreadRow extends YouTubeReplyRow {
+  total_reply_count?: number;
+  replies?: YouTubeReplyRow[];
+}
+
+export interface YouTubeCommentsResponse {
+  videos: Array<{ id: string; title: string | null; url: string; threads?: YouTubeThreadRow[] }>;
+  next_page_token?: string | null;
+}
+
+export function parseYouTubeComments(data: unknown): Comment[] {
+  const comments: Comment[] = [];
+  const videos = (data as Partial<YouTubeCommentsResponse> | null | undefined)?.videos;
+  for (const video of Array.isArray(videos) ? videos : []) {
+    const label = videoLabel(String(video.id), video.title);
+    const toComment = (row: YouTubeReplyRow, parentId?: string): Comment => ({
+      id: row.id,
+      author_name: row.author?.name || "Unknown",
+      author_id: row.author?.id ?? undefined,
+      author_avatar: row.author?.avatar_url ?? null,
+      message: row.text || "",
+      like_count: row.like_count,
+      created_time: row.published_at,
+      // rejected and heldForReview are both invisible to the public; published (or null on a
+      // comment YouTube did not annotate) is visible.
+      is_hidden: row.moderation_status === "rejected" || row.moderation_status === "heldForReview",
+      moderation_status: row.moderation_status ?? null,
+      is_own: row.is_own === true,
+      is_reply: Boolean(parentId),
+      parent_id: parentId,
+      post_id: video.id,
+      post_message: label,
+      platform: "youtube",
+    });
+    for (const thread of video.threads ?? []) {
+      comments.push(toComment(thread));
+      for (const reply of thread.replies ?? []) comments.push(toComment(reply, thread.id));
+    }
+  }
+  return comments.sort((a, b) => new Date(b.created_time).getTime() - new Date(a.created_time).getTime());
+}
+
+const COMMENT_LIST_ACTION = {
+  facebook: "get_page_comments",
+  instagram: "get_ig_comments",
+  youtube: "get_youtube_comments",
+} as const;
+
+function parseComments(platform: UseCommentsOptions["platform"], data: unknown): Comment[] {
+  switch (platform) {
+    case "facebook":
+      return parsePageComments(data);
+    case "instagram":
+      return parseIgComments(data);
+    case "youtube":
+      return parseYouTubeComments(data);
+  }
+}
+
 // comment-manager returns Meta-side failures as a 200 response with an
 // error/error_type field in the body, not a transport-level error — every
 // caller must check this or a rejected Meta call (e.g. a hide/reply Meta
@@ -149,10 +224,9 @@ export function useComments({ platform, socialAccountId, pageId, igUserId, enabl
   const query = useQuery({
     queryKey: ["comments", platform, socialAccountId],
     queryFn: async () => {
-      const action = platform === "facebook" ? "get_page_comments" : "get_ig_comments";
       const { data, error } = await supabase.functions.invoke("comment-manager", {
         body: {
-          action,
+          action: COMMENT_LIST_ACTION[platform],
           social_account_id: socialAccountId,
           page_id: pageId,
           ig_user_id: igUserId,
@@ -160,11 +234,16 @@ export function useComments({ platform, socialAccountId, pageId, igUserId, enabl
       });
       if (error) throw error;
       throwIfCommentManagerError(data);
-      return platform === "facebook" ? parsePageComments(data) : parseIgComments(data);
+      return parseComments(platform, data);
     },
-    enabled: enabled && !!socialAccountId && (!!pageId || !!igUserId),
+    // YouTube is addressed by the account alone; Meta needs the page or IG user id too.
+    enabled: enabled && !!socialAccountId && (platform === "youtube" || !!pageId || !!igUserId),
     staleTime: 60 * 1000,
-    refetchInterval: 30_000,
+    // Each YouTube read is 2 quota units (thread list + video titles), so a 30 s poll from one
+    // open tab would burn ~5,800 of the 10,000 daily units. The poller's social_inbox_events
+    // writes invalidate this query through the realtime subscription below, and the Refresh
+    // button covers the rest.
+    refetchInterval: platform === "youtube" ? false : 30_000,
   });
   useRealtimeQueryInvalidation({
     table: "social_inbox_events",

@@ -4,7 +4,7 @@ import { callMessagingApi } from "@/lib/messagingApi";
 import { normalizeE164Phone } from "@/lib/phone";
 import type { AgentBehavior, BusinessProfile } from "@/lib/agentProfile";
 
-export type AiAgentPlatform = "whatsapp" | "facebook" | "instagram" | "threads";
+export type AiAgentPlatform = "whatsapp" | "facebook" | "instagram" | "threads" | "youtube";
 export type AiAgentMode = "ai_first" | "human_first" | "human_then_ai";
 export type AiAgentLanguageMode = "auto" | "ar" | "en";
 

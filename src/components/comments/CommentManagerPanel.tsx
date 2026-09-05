@@ -1,17 +1,28 @@
 import { useMemo, useState } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
 import { CommentList } from "@/components/comments/CommentList";
 import { CommentFilters } from "@/components/comments/CommentFilters";
+import { getPlatformName } from "@/components/PlatformIcon";
 import { useComments } from "@/hooks/useCommentInbox";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
-import { RefreshCw, Loader2, Facebook, Camera, AlertTriangle } from "lucide-react";
+import { youtubeCommentCapability } from "@/lib/youtubeCommentCapability";
+import { RefreshCw, Loader2, Facebook, Camera, Youtube, AlertTriangle } from "lucide-react";
+
+type CommentManagerPlatform = "facebook" | "instagram" | "youtube";
 
 interface CommentManagerPanelProps {
-  platform: "facebook" | "instagram";
+  platform: CommentManagerPlatform;
 }
+
+const EMPTY_COPY: Record<CommentManagerPlatform, { Icon: typeof Facebook; label: string; hint: string }> = {
+  facebook: { Icon: Facebook, label: "No Facebook pages connected", hint: "Connect a Facebook page to manage comments." },
+  instagram: { Icon: Camera, label: "No Instagram accounts connected", hint: "Connect an Instagram account to manage comments." },
+  youtube: { Icon: Youtube, label: "No YouTube channels connected", hint: "Connect a YouTube channel to manage comments." },
+};
 
 export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
@@ -32,6 +43,11 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
   const activeAccount = platformAccounts.find((a) => a.id === activeAccountId);
   const pageId = platform === "facebook" ? activeAccount?.platform_user_id : undefined;
   const igUserId = platform === "instagram" ? activeAccount?.platform_user_id : undefined;
+  // A native channel connected before force-ssl was requested would 403 on every read, so the
+  // query is not started at all; the banner below says what fixes it.
+  const needsReconnect = platform === "youtube"
+    && !!activeAccount
+    && youtubeCommentCapability(activeAccount) === "reconnect_required";
 
   const {
     data: comments = [],
@@ -44,13 +60,10 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
     socialAccountId: activeAccountId,
     pageId,
     igUserId,
+    enabled: !needsReconnect,
   });
 
-  const EmptyIcon = platform === "facebook" ? Facebook : Camera;
-  const emptyLabel = platform === "facebook" ? "No Facebook pages connected" : "No Instagram accounts connected";
-  const emptyHint = platform === "facebook"
-    ? "Connect a Facebook page to manage comments."
-    : "Connect an Instagram account to manage comments.";
+  const { Icon: EmptyIcon, label: emptyLabel, hint: emptyHint } = EMPTY_COPY[platform];
   const igPermissionError = platform === "instagram"
     && commentsError instanceof Error
     && /MISSING_SCOPE|TOKEN_EXPIRED|permission|instagram_business_manage_comments|instagram_manage_comments/i.test(commentsError.message);
@@ -78,6 +91,9 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
                         </AvatarFallback>
                       </Avatar>
                       <span className="truncate">{a.platform_username || a.platform_user_id}</span>
+                      {a.auth_provider === "composio" && (
+                        <Badge variant="outline" className="ms-1 text-[10px]">Composio</Badge>
+                      )}
                     </div>
                   </SelectItem>
                 ))}
@@ -119,6 +135,21 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
         </div>
       )}
 
+      {needsReconnect && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
+          <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 shrink-0" />
+          <div className="flex-1">
+            <p className="font-medium text-amber-700 dark:text-amber-300">This channel needs reconnecting</p>
+            <p className="text-amber-700/80 dark:text-amber-300/80 mt-0.5">
+              Reconnect this channel on Profiles to enable comments — YouTube now asks for comment access when you connect.
+            </p>
+          </div>
+          <Button asChild size="sm" variant="outline" className="border-amber-500/50">
+            <Link to="/profiles">Reconnect</Link>
+          </Button>
+        </div>
+      )}
+
       {platformAccounts.length === 0 ? (
         <div className="text-center py-12 text-muted-foreground">
           <EmptyIcon className="h-12 w-12 mx-auto mb-3 opacity-40" />
@@ -132,8 +163,8 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
       ) : commentsError ? (
         <div className="text-center py-12 text-muted-foreground">
           <Camera className="h-12 w-12 mx-auto mb-3 opacity-40" />
-          <p className="font-medium">Couldn&apos;t load Instagram comments</p>
-          <p className="text-sm mt-1">{commentsError instanceof Error ? commentsError.message : "Meta did not return comments for this account."}</p>
+          <p className="font-medium">Couldn&apos;t load {getPlatformName(platform)} comments</p>
+          <p className="text-sm mt-1">{commentsError instanceof Error ? commentsError.message : "The platform did not return comments for this account."}</p>
         </div>
       ) : (
         <CommentList

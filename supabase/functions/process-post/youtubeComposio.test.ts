@@ -33,6 +33,20 @@ function adminWithConnection(status = "active") {
           }),
         };
       }
+      if (table === "workspaces") {
+        // resolveWorkspaceForCall's personal-workspace fallback.
+        return {
+          select() {
+            return this;
+          },
+          eq() {
+            return this;
+          },
+          async maybeSingle() {
+            return { data: { id: "personal-workspace-1" }, error: null };
+          },
+        };
+      }
       return {
         select() {
           return this;
@@ -64,6 +78,7 @@ function adminWithConnection(status = "active") {
 
 const account = {
   id: "social-1",
+  user_id: "owner-1",
   connection_id: "connection-1",
   workspace_id: "workspace-1",
 };
@@ -233,6 +248,27 @@ Deno.test("Composio YouTube thumbnail failure is recorded but does not fail the 
     ["success", "YOUTUBE_MULTIPART_UPLOAD_VIDEO"],
     ["failed", "YOUTUBE_UPDATE_THUMBNAIL"],
   ]);
+});
+
+// connector_call_logs.workspace_id is a NOT NULL uuid: a null social_accounts
+// workspace_id must resolve to the owner's personal workspace, never the
+// empty string that made every ledger insert throw on 2026-09-03.
+Deno.test("Composio YouTube resolves a null account workspace to the owner's personal workspace in the ledger", async () => {
+  const state = adminWithConnection();
+  const { deps, executions } = harness(async () => ({
+    successful: true,
+    data: { id: "video-3" },
+  }));
+  const result = await publishYouTubeViaComposio(
+    { ...account, workspace_id: null },
+    post,
+    [video],
+    { admin: state.admin, ...deps },
+  );
+  assertEquals(result.id, "video-3");
+  assertEquals(executions.length, 1);
+  assertEquals(state.ledger.length, 1);
+  assertEquals(state.ledger[0].workspace_id, "personal-workspace-1");
 });
 
 Deno.test("Composio YouTube records our abort and Composio's own timeout both as timeout", async () => {

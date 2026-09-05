@@ -4,6 +4,7 @@ import { resolveAutomationHandler, resolveCommentAutomationHandler } from "../_s
 import { getSendCredentials, type SocialAccountForMessaging } from "../_shared/messengerCredentials.ts";
 import { buildCommentPayload, buildMessagePayload, buildMessagingSender, dispatchMessageEvent, dispatchN8nEvent, shouldDispatchInboundMessage } from "../_shared/n8nMessagingDispatch.ts";
 import { isOwnComment } from "../_shared/commentAuthor.ts";
+import { touchSocialContact } from "../_shared/socialContactIngest.ts";
 import {
   logSkippedUnderstanding,
   runInboundMediaUnderstanding,
@@ -21,6 +22,7 @@ import {
 import { matchAutoReplyRule } from "../_shared/autoReplyRules.ts";
 import { handleCommentInternally } from "../_shared/commentAutomation.ts";
 import { normalizeMetaCommentChange } from "./commentEvents.ts";
+import { routeComment } from "./commentRouting.ts";
 import {
   buildObservation,
   flushObservations,
@@ -366,20 +368,24 @@ Deno.serve(async (req) => {
             continue;
           }
 
+          await runInBackground("facebook-instagram audience touch", () => touchSocialContact(
+            adminClient,
+            account.id,
+            {
+              platform,
+              author: normalized.author,
+              comment: { id: normalized.comment.id, text: normalized.comment.text },
+              post: { id: normalized.post.id },
+            },
+          ));
+
           const commentHandler = resolveCommentAutomationHandler(account.account_metadata);
-          if (commentHandler === "n8n") {
-            await runInBackground("facebook-instagram comment dispatch", () => dispatchN8nEvent(
-              adminClient,
-              account.user_id,
-              buildCommentPayload({ platform, socialAccountId: account.id, account, ...normalized }),
-            ));
-          } else if (commentHandler === "internal") {
-            await runInBackground("facebook-instagram comment automation", () => handleCommentInternally(
-              adminClient,
-              account,
-              { comment: normalized.comment, post: normalized.post, author: normalized.author },
-            ));
-          }
+          // One background task rather than two, because the funnel's verdict decides whether
+          // the handler runs at all, and reaching that verdict costs a database read and up to
+          // two Graph calls — none of which may sit on the path to Meta's 200. The precedence
+          // itself lives in commentRouting.ts, where it can be tested.
+          await runInBackground("facebook-instagram comment routing", () =>
+            routeComment(adminClient, account, platform, normalized, commentHandler));
         }
 
         // Meta delivering an event that yields no message is indistinguishable from Meta

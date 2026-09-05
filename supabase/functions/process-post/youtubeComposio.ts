@@ -7,6 +7,7 @@ import { uploadFileForTool } from "../_shared/composioFiles.ts";
 import { composioBinding } from "../_shared/connectorRegistry.ts";
 import {
   ConnectorRefusal,
+  resolveWorkspaceForCall,
   withConnectorCall,
 } from "../_shared/connectorTelemetry.ts";
 
@@ -22,6 +23,7 @@ const THUMBNAIL_TOOL = "YOUTUBE_UPDATE_THUMBNAIL";
 
 export interface YouTubeComposioAccount {
   id: string;
+  user_id: string;
   connection_id?: string | null;
   workspace_id?: string | null;
 }
@@ -155,8 +157,16 @@ export async function publishYouTubeViaComposio(
   const fetchImpl = deps.fetch ?? fetch;
   const uploadFile = deps.uploadFile ?? uploadFileForTool;
   const binding = composioBinding("youtube");
+  // social_accounts.workspace_id is nullable but connector_call_logs.workspace_id
+  // is a NOT NULL uuid: the `?? ""` this replaces made the ledger insert throw
+  // `invalid input syntax for type uuid` and the swallow in recordConnectorCall
+  // hid it, so Composio YouTube uploads went unledgered. Spec §4.3: the
+  // account's workspace when known, else the owner's personal workspace.
+  // Resolved before withConnectorCall so the meta never carries an invalid id.
+  const workspaceId = account.workspace_id ??
+    await resolveWorkspaceForCall(deps.admin, { userId: account.user_id });
   const meta = (actionName: string) => ({
-    workspaceId: account.workspace_id ?? "",
+    workspaceId,
     connectionId: account.connection_id ?? null,
     socialAccountId: account.id,
     connectorType: "youtube",
@@ -175,13 +185,13 @@ export async function publishYouTubeViaComposio(
       if (!deps.client || !binding) {
         throw new ConnectorRefusal("connector_unavailable");
       }
-      if (!account.connection_id || !account.workspace_id) {
+      if (!account.connection_id) {
         throw new ConnectorRefusal("connection_inactive");
       }
       const lookup = await loadActiveConnection(
         deps.admin,
         account.connection_id,
-        account.workspace_id,
+        workspaceId,
       );
       if (!lookup.ok) {
         if (lookup.code === "connection_inactive") {

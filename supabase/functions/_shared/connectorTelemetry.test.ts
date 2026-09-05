@@ -42,7 +42,10 @@ function lookupClient(tables: Record<string, DbRow[]>) {
   };
 }
 
-function recordingClient(insertError: { message: string } | null = null) {
+function recordingClient(
+  insertError: { message: string } | null = null,
+  options: { throwInstead?: boolean } = {},
+) {
   const rows: DbRow[] = [];
   return {
     rows,
@@ -52,6 +55,9 @@ function recordingClient(insertError: { message: string } | null = null) {
         return {
           insert(row: DbRow) {
             rows.push(row);
+            if (options.throwInstead) {
+              return Promise.reject(new Error("network went away mid-insert"));
+            }
             return Promise.resolve({ error: insertError });
           },
         };
@@ -60,12 +66,16 @@ function recordingClient(insertError: { message: string } | null = null) {
   };
 }
 
+// Real uuids, because every one of these maps to a uuid column. The old
+// "tool-1"/"connection-1" placeholders were the reason a caller could put a
+// Composio slug in tool_id and still see this suite pass while every
+// production insert failed.
 const callMeta: ConnectorCallMeta = {
-  workspaceId: "workspace-1",
-  toolId: "tool-1",
-  connectionId: "connection-1",
-  socialAccountId: "account-1",
-  partnerKeyId: "key-1",
+  workspaceId: "11111111-1111-4111-8111-111111111111",
+  toolId: "22222222-2222-4222-8222-222222222222",
+  connectionId: "33333333-3333-4333-8333-333333333333",
+  socialAccountId: "44444444-4444-4444-8444-444444444444",
+  partnerKeyId: "55555555-5555-4555-8555-555555555555",
   connectorType: "google_sheets",
   authStrategy: "composio_oauth",
   actionName: "GOOGLESHEETS_BATCH_GET",
@@ -158,11 +168,11 @@ Deno.test("recordConnectorCall maps the ledger row and clamps negative latency",
   });
 
   assertEquals(harness.rows, [{
-    workspace_id: "workspace-1",
-    tool_id: "tool-1",
-    connection_id: "connection-1",
-    social_account_id: "account-1",
-    partner_key_id: "key-1",
+    workspace_id: "11111111-1111-4111-8111-111111111111",
+    tool_id: "22222222-2222-4222-8222-222222222222",
+    connection_id: "33333333-3333-4333-8333-333333333333",
+    social_account_id: "44444444-4444-4444-8444-444444444444",
+    partner_key_id: "55555555-5555-4555-8555-555555555555",
     connector_type: "google_sheets",
     auth_strategy: "composio_oauth",
     action_name: "GOOGLESHEETS_BATCH_GET",
@@ -174,8 +184,40 @@ Deno.test("recordConnectorCall maps the ledger row and clamps negative latency",
   }]);
 });
 
-Deno.test("recordConnectorCall logs an insert error without rejecting", async () => {
-  const harness = recordingClient({ message: "secret database detail" });
+// A caller that hands a uuid column something else loses that one field, with a
+// named warning -- not the whole row. The YouTube comment poll put the Composio
+// slug in toolId and lost every insert to `invalid input syntax for type uuid`.
+Deno.test("ledger row drops a non-uuid id field and still records the call", async () => {
+  const harness = recordingClient();
+  const originalWarn = console.warn;
+  const warned: string[] = [];
+  console.warn = (...args: unknown[]) => warned.push(String(args[0]));
+
+  try {
+    await recordConnectorCall(
+      harness.client,
+      { ...callMeta, toolId: "YOUTUBE_LIST_COMMENT_THREADS" },
+      { status: "success", latencyMs: 3 },
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assertEquals(harness.rows.length, 1);
+  assertEquals(harness.rows[0].tool_id, null);
+  // The rest of the row survives -- that is the whole point.
+  assertEquals(harness.rows[0].action_name, "GOOGLESHEETS_BATCH_GET");
+  assertEquals(harness.rows[0].connection_id, "33333333-3333-4333-8333-333333333333");
+  assertEquals(warned.length, 1);
+  assertEquals(warned[0].includes("dropped non-uuid tool_id"), true);
+  assertEquals(warned[0].includes("YOUTUBE_LIST_COMMENT_THREADS"), true);
+});
+
+// The bare "[connector-telemetry] ledger insert failed" this replaces fired
+// every few minutes for a day before anyone noticed (2026-09-03): a failed
+// insert must name the reason, the action and the connector.
+Deno.test("recordConnectorCall logs an insert error's reason, action and connector without rejecting", async () => {
+  const harness = recordingClient({ message: "invalid input syntax for type uuid" });
   const originalError = console.error;
   const logged: unknown[][] = [];
   console.error = (...args: unknown[]) => logged.push(args);
@@ -189,7 +231,33 @@ Deno.test("recordConnectorCall logs an insert error without rejecting", async ()
     console.error = originalError;
   }
 
-  assertEquals(logged, [["[connector-telemetry] ledger insert failed"]]);
+  assertEquals(logged.length, 1);
+  const message = String(logged[0][0]);
+  assertEquals(message.includes("[connector-telemetry] ledger insert failed"), true);
+  assertEquals(message.includes("connector=google_sheets"), true);
+  assertEquals(message.includes("action=GOOGLESHEETS_BATCH_GET"), true);
+  assertEquals(message.includes("invalid input syntax for type uuid"), true);
+});
+
+Deno.test("recordConnectorCall logs the reason when the insert itself throws", async () => {
+  const harness = recordingClient(null, { throwInstead: true });
+  const originalError = console.error;
+  const logged: unknown[][] = [];
+  console.error = (...args: unknown[]) => logged.push(args);
+
+  try {
+    await recordConnectorCall(harness.client, callMeta, {
+      status: "success",
+      latencyMs: 4,
+    });
+  } finally {
+    console.error = originalError;
+  }
+
+  assertEquals(logged.length, 1);
+  const message = String(logged[0][0]);
+  assertEquals(message.includes("action=GOOGLESHEETS_BATCH_GET"), true);
+  assertEquals(message.includes("network went away mid-insert"), true);
 });
 
 Deno.test("withConnectorCall records success and elapsed latency", async () => {

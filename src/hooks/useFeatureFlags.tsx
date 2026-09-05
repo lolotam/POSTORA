@@ -68,7 +68,10 @@ export interface FeatureFlags {
   msgThreadsAssignment: boolean;
   // Monetization features
   commentManager: boolean;
+  commentWorkflow: boolean;
+  youtubeComments: boolean;
   leadsCrm: boolean;
+  audienceHub: boolean;
   adAnalytics: boolean;
   smartScheduling: boolean;
   humanAgent: boolean;
@@ -145,7 +148,10 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   msgThreadsWebhooks: false,
   msgThreadsAssignment: false,
   commentManager: false,
+  commentWorkflow: false,
+  youtubeComments: false,
   leadsCrm: false,
+  audienceHub: false,
   adAnalytics: false,
   smartScheduling: false,
   humanAgent: false,
@@ -220,7 +226,10 @@ export const FLAG_KEYS = [
   "feature_msg_threads_webhooks",
   "feature_msg_threads_assignment",
   "feature_comment_manager",
+  "feature_comment_workflow",
+  "feature_youtube_comments",
   "feature_leads_crm",
+  "feature_audience_hub",
   "feature_ad_analytics",
   "feature_smart_scheduling",
   "feature_human_agent",
@@ -290,7 +299,10 @@ export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
   feature_msg_threads_webhooks: "msgThreadsWebhooks",
   feature_msg_threads_assignment: "msgThreadsAssignment",
   feature_comment_manager: "commentManager",
+  feature_comment_workflow: "commentWorkflow",
+  feature_youtube_comments: "youtubeComments",
   feature_leads_crm: "leadsCrm",
+  feature_audience_hub: "audienceHub",
   feature_ad_analytics: "adAnalytics",
   feature_smart_scheduling: "smartScheduling",
   feature_human_agent: "humanAgent",
@@ -372,7 +384,10 @@ const FEATURE_DISPLAY_NAMES: Record<keyof FeatureFlags, string> = {
   msgThreadsWebhooks: "Threads Webhooks",
   msgThreadsAssignment: "Threads Assignment",
   commentManager: "Messaging Comments Inbox",
+  commentWorkflow: "Comment Workflow",
+  youtubeComments: "YouTube Comments",
   leadsCrm: "Leads CRM",
+  audienceHub: "Audience & Contacts",
   adAnalytics: "Ad Analytics",
   smartScheduling: "Smart Scheduling",
   humanAgent: "Human Agent",
@@ -443,7 +458,10 @@ const ALL_FLAGS_ENABLED: FeatureFlags = {
   msgThreadsWebhooks: true,
   msgThreadsAssignment: true,
   commentManager: true,
+  commentWorkflow: true,
+  youtubeComments: true,
   leadsCrm: true,
+  audienceHub: true,
   adAnalytics: true,
   smartScheduling: true,
   humanAgent: true,
@@ -561,7 +579,10 @@ export function useFeatureFlags() {
         msgThreadsWebhooks: globalFlagMap["feature_msg_threads_webhooks"] ?? DEFAULT_FLAGS.msgThreadsWebhooks,
         msgThreadsAssignment: globalFlagMap["feature_msg_threads_assignment"] ?? DEFAULT_FLAGS.msgThreadsAssignment,
         commentManager: globalFlagMap["feature_comment_manager"] ?? DEFAULT_FLAGS.commentManager,
+        commentWorkflow: globalFlagMap["feature_comment_workflow"] ?? DEFAULT_FLAGS.commentWorkflow,
+        youtubeComments: globalFlagMap["feature_youtube_comments"] ?? DEFAULT_FLAGS.youtubeComments,
         leadsCrm: globalFlagMap["feature_leads_crm"] ?? DEFAULT_FLAGS.leadsCrm,
+        audienceHub: globalFlagMap["feature_audience_hub"] ?? DEFAULT_FLAGS.audienceHub,
         adAnalytics: globalFlagMap["feature_ad_analytics"] ?? DEFAULT_FLAGS.adAnalytics,
         smartScheduling: globalFlagMap["feature_smart_scheduling"] ?? DEFAULT_FLAGS.smartScheduling,
         humanAgent: globalFlagMap["feature_human_agent"] ?? DEFAULT_FLAGS.humanAgent,
@@ -616,6 +637,15 @@ export function useFeatureFlags() {
   // ADMIN OVERRIDE: Admins get all features EXCEPT "visibility" flags
   // Visibility flags control page-section visibility for ALL users including admins
   const VISIBILITY_FLAG_KEYS: Array<keyof FeatureFlags> = [
+    // Comment Workflow sits here because its page queries tables a migration creates.
+    // Admins otherwise receive every flag regardless of its stored value, so the page
+    // would mount during the window between a merge (which auto-deploys the frontend)
+    // and the migration being applied by hand, querying relations that do not exist yet.
+    "commentWorkflow",
+    // YouTube Comments sits here for the same reason: its tile, agent surface and workflow
+    // platform write youtube rows that the CHECK constraints admit only once the migration is
+    // applied by hand, while the merge auto-deploys this frontend.
+    "youtubeComments",
     "platformAccess",
     "freePlatforms",
     "tiktokOAuthDebug",

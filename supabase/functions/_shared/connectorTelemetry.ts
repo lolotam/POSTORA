@@ -1,4 +1,6 @@
-export type ConnectorCallSource = "agent" | "partner" | "test" | "publish";
+// "audience" is the Audience Hub's Sheets sync: neither the agent, a partner key, a
+// connection test, nor a publish. Widened alongside connector_call_logs' CHECK.
+export type ConnectorCallSource = "agent" | "partner" | "test" | "publish" | "audience";
 export type ConnectorCallStatus = "success" | "failed" | "refused" | "timeout";
 
 export interface ConnectorCallMeta {
@@ -35,10 +37,38 @@ export class ConnectorRefusal extends Error {
   }
 }
 
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * `tool_id` is a uuid FK to ai_agent_tools, and it is the one meta field whose
+ * plausible wrong value is a human-readable Composio slug -- callers think of
+ * tools by slug, and the YouTube comment poll duly passed one, losing every
+ * insert to `invalid input syntax for type uuid` from the day it shipped.
+ * Dropping that single field and naming it keeps the rest of the row, which is
+ * the part an operator actually reads.
+ *
+ * Only this field is laundered. The other id columns are always copied from a
+ * row's own primary key, so a non-uuid there means a test fixture, not a live
+ * caller, and silently nulling it would hide a genuinely different bug.
+ * `workspaceId` is NOT NULL besides: there is nothing to fall back to, and a
+ * bad one must fail loudly rather than invent a workspace the call never
+ * happened in.
+ */
+function toolIdOrNull(meta: ConnectorCallMeta): string | null {
+  const value = meta.toolId;
+  if (value == null) return null;
+  if (UUID_PATTERN.test(value)) return value;
+  console.warn(
+    `[connector-telemetry] dropped non-uuid tool_id connector=${meta.connectorType} action=${meta.actionName} value=${value}`,
+  );
+  return null;
+}
+
 function ledgerRow(meta: ConnectorCallMeta, outcome: ConnectorCallOutcome) {
   return {
     workspace_id: meta.workspaceId,
-    tool_id: meta.toolId ?? null,
+    tool_id: toolIdOrNull(meta),
     connection_id: meta.connectionId ?? null,
     social_account_id: meta.socialAccountId ?? null,
     partner_key_id: meta.partnerKeyId ?? null,
@@ -55,6 +85,28 @@ function ledgerRow(meta: ConnectorCallMeta, outcome: ConnectorCallOutcome) {
   };
 }
 
+function reasonText(reason: unknown): string {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === "object" && reason !== null && "message" in reason) {
+    const message = (reason as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return String(reason ?? "unknown error");
+}
+
+/**
+ * Telemetry must never break the call it records, so a failed insert is logged,
+ * not thrown. The reason is a database-driver message (never user content,
+ * tokens or credentials) and the action and connector come from the meta, so
+ * the next failure names itself instead of firing a bare "insert failed" that
+ * took a day to notice on 2026-09-03.
+ */
+function logLedgerFailure(meta: ConnectorCallMeta, reason: unknown): void {
+  console.error(
+    `[connector-telemetry] ledger insert failed: connector=${meta.connectorType} action=${meta.actionName} reason=${reasonText(reason)}`,
+  );
+}
+
 export async function recordConnectorCall(
   client: any,
   meta: ConnectorCallMeta,
@@ -64,9 +116,9 @@ export async function recordConnectorCall(
     const { error } = await client.from("connector_call_logs").insert(
       ledgerRow(meta, outcome),
     );
-    if (error) console.error("[connector-telemetry] ledger insert failed");
-  } catch {
-    console.error("[connector-telemetry] ledger insert failed");
+    if (error) logLedgerFailure(meta, error);
+  } catch (error) {
+    logLedgerFailure(meta, error);
   }
 }
 

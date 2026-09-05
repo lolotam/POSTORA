@@ -135,7 +135,7 @@ export interface MessagePayload extends N8nEnvelope {
   timestamp: string;
 }
 
-export type CommentPlatform = "facebook" | "instagram" | "threads";
+export type CommentPlatform = "facebook" | "instagram" | "threads" | "youtube";
 export type CommentKind = "comment" | "reply" | "mention";
 
 export interface CommentPayloadInput {

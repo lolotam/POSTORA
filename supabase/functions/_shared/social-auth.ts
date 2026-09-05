@@ -123,7 +123,14 @@ export async function refreshTikTokToken(account: SocialAccount): Promise<{ acce
     }
 }
 
-export async function refreshYouTubeToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number } | null> {
+export class YouTubeInvalidGrantError extends Error {
+    constructor() {
+        super('youtube_invalid_grant');
+        this.name = 'YouTubeInvalidGrantError';
+    }
+}
+
+export async function refreshYouTubeToken(account: SocialAccount): Promise<{ access_token: string; expires_in: number; scope?: string } | null> {
     if (!account.refresh_token) {
         console.error('No refresh token available for YouTube account');
         return null;
@@ -148,14 +155,17 @@ export async function refreshYouTubeToken(account: SocialAccount): Promise<{ acc
         if (data.error) {
             const errorMsg = data.error_description || data.error;
             console.error('YouTube token refresh failed:', errorMsg);
+            if (data.error === 'invalid_grant') throw new YouTubeInvalidGrantError();
             return null;
         }
 
         return {
             access_token: data.access_token,
-            expires_in: data.expires_in || 3600
+            expires_in: data.expires_in || 3600,
+            scope: typeof data.scope === 'string' ? data.scope : undefined
         };
     } catch (error) {
+        if (error instanceof YouTubeInvalidGrantError) throw error;
         console.error('Error refreshing YouTube token:', error);
         return null;
     }

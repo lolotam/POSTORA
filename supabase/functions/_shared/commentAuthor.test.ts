@@ -31,3 +31,9 @@ Deno.test("threads: matches by user id or username, case-insensitively", () => {
 Deno.test("missing author never counts as own", () => {
   assertEquals(isOwnComment(fb, { id: null, username: null }), false);
 });
+
+Deno.test("a youtube comment by the channel itself is the account's own", () => {
+  const account = { platform: "youtube", platform_user_id: "UC-me", platform_username: "Me" };
+  assertEquals(isOwnComment(account, { id: "UC-me", username: null }), true);
+  assertEquals(isOwnComment(account, { id: "UC-ann", username: "Me" }), false);
+});

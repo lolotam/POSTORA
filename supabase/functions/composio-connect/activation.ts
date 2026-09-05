@@ -240,7 +240,9 @@ async function upsertYouTubeChannels(
  * Cache the registry schemas, activate the row (compare-and-swap on the
  * nonce), and for YouTube home the channels. Returns "ok", "invalid_state"
  * when another activation won the race (the row is left alone), or the
- * refusal code the row was just failed with.
+ * refusal code the row was just failed with. A transient YouTube channel
+ * failure keeps the row active: the OAuth itself succeeded, and failing the
+ * row would orphan an authenticated connection behind a Reconnect button.
  */
 export async function activateConnection(
   deps: ComposioConnectDependencies,
@@ -293,13 +295,17 @@ export async function activateConnection(
       input.socialProfileId,
     );
   } catch {
-    // Activation happens before channel discovery by contract. Any database
-    // failure must therefore move the connection back to a failed state.
+    // Activation happens before channel discovery by contract. A database
+    // failure here is transient, so it shares the tool-failure code below.
     channelError = "connector_unavailable";
   }
-  if (channelError) {
+  if (channelError && channelError !== "connector_unavailable") {
     await markFailed(deps, connection, channelError);
     return channelError;
   }
+  // "connector_unavailable" means the listing or the import hiccuped after a
+  // successful OAuth. The failed YOUTUBE_LIST_CHANNELS call is already in the
+  // ledger, and the import retries on the next connect — failing the row
+  // would strand an authenticated connection on Reconnect (2026-09-04).
   return "ok";
 }

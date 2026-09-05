@@ -4,6 +4,7 @@ import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
 import {
+  type AdminClient as ConfigAdminClient,
   parseNamedAccountId,
   resolveConfigWriteAccount,
   resolveOwnedAccountId,
@@ -364,9 +365,9 @@ Deno.serve(async (req) => {
       return cacheParticipantAvatar(req, profilePic);
     }
 
-    // Threads has no DM API, so its agent only ever answers public replies and mentions.
-    // It still needs a config row, engagement modes and threads like the others.
-    const supportedAiAgentPlatforms = ["whatsapp", "facebook", "instagram", "threads"];
+    // Threads and YouTube have no DM API, so their agents only answer public comments.
+    // They still need config rows, engagement modes and threads like the other agents.
+    const supportedAiAgentPlatforms = ["whatsapp", "facebook", "instagram", "threads", "youtube"];
     const supportedAiAgentModes = ["ai_first", "human_first", "human_then_ai"];
 
 function isAiAgentPlatform(value: unknown): value is string {
@@ -453,7 +454,7 @@ function isAiAgentPlatform(value: unknown): value is string {
       }
       const accountId = "absent" in named
         ? null
-        : await resolveOwnedAccountId(adminClient, user.id, platform, (named as { id: string }).id, {
+        : await resolveOwnedAccountId(adminClient as unknown as ConfigAdminClient, user.id, platform, (named as { id: string }).id, {
           // Active on the read too, so read and write agree. Splitting them
           // let ai_get_config answer for a deactivated account that
           // ai_upsert_config then refused with 404 -- a form you can open and
@@ -582,7 +583,7 @@ function isAiAgentPlatform(value: unknown): value is string {
       // platform's only config back onto the dead row a QR reconnect replaced.
       const accountId = "absent" in namedWrite
         ? null
-        : await resolveOwnedAccountId(adminClient, user.id, platform, (namedWrite as { id: string }).id, {
+        : await resolveOwnedAccountId(adminClient as unknown as ConfigAdminClient, user.id, platform, (namedWrite as { id: string }).id, {
           requireActive: true,
         });
       if (!("absent" in namedWrite) && !accountId) {
@@ -598,7 +599,7 @@ function isAiAgentPlatform(value: unknown): value is string {
       // old unscoped write.
       const writeScope = accountId
         ? { accountId }
-        : await resolveConfigWriteAccount(adminClient, user.id, platform);
+        : await resolveConfigWriteAccount(adminClient as unknown as ConfigAdminClient, user.id, platform);
       if ("error" in writeScope) {
         return jsonResponse({ error: writeScope.error }, 400);
       }
@@ -633,7 +634,7 @@ function isAiAgentPlatform(value: unknown): value is string {
       // named account, because inserting a second row for that pair trips the
       // surviving constraint with 23505 -- which is what a WhatsApp QR
       // reconnect produces, the config still bound to the deactivated row.
-      const { data, error } = await writeAccountScopedConfig(adminClient, {
+      const { data, error } = await writeAccountScopedConfig(adminClient as unknown as ConfigAdminClient, {
         userId: user.id,
         platform,
         accountId: writeScope.accountId,

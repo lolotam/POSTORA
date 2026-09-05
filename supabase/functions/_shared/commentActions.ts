@@ -1,4 +1,13 @@
 import { isDirectInstagramAccount } from "./messengerCredentials.ts";
+import {
+  defaultYouTubeDeps,
+  deleteOwnComment,
+  replyToThread,
+  setModerationStatus,
+  type YouTubeCommentAccount,
+  type YouTubeCommentsDeps,
+  type YouTubeResult,
+} from "./youtubeComments.ts";
 
 const GRAPH_API_VERSION = "v22.0";
 const FACEBOOK_GRAPH = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -6,9 +15,16 @@ const INSTAGRAM_GRAPH = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
 const THREADS_GRAPH = "https://graph.threads.net/v1.0";
 
 export interface CommentActionAccount {
+  id?: string;
+  user_id?: string;
   platform: string;
+  auth_provider?: string | null;
   access_token: string | null;
+  refresh_token?: string | null;
+  token_expires_at?: string | null;
   platform_user_id?: string | null;
+  connection_id?: string | null;
+  workspace_id?: string | null;
   ig_auth_type?: string | null;
   account_metadata?: Record<string, unknown> | null;
 }
@@ -51,7 +67,7 @@ async function readJson(response: Response): Promise<any> {
 // error_user_msg first: Meta writes it for humans ("This comment was deleted") while
 // message is the developer string ("(#100) Object does not exist"). The comment manager
 // surfaces whichever one lands here straight to the user.
-function failure(data: any, fallback: string): CommentActionResult {
+export function failure(data: any, fallback: string): CommentActionResult {
   return {
     success: false,
     error: data?.error?.error_user_msg || data?.error?.message || data?.error || fallback,
@@ -62,7 +78,7 @@ type GraphOutcome = { ok: true; data: any } | { ok: false; failure: CommentActio
 
 // Every platform call goes through here so the timeout, and the split between a rejection and
 // an unreachable upstream, are stated once instead of at each of the five call sites.
-async function callGraph(fetcher: Fetcher, url: string, init: RequestInit, fallback: string): Promise<GraphOutcome> {
+export async function callGraph(fetcher: Fetcher, url: string, init: RequestInit, fallback: string): Promise<GraphOutcome> {
   let response: Response;
   try {
     response = await fetcher(url, { ...init, signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS) });
@@ -89,7 +105,51 @@ function requireToken(account: CommentActionAccount): string | CommentActionResu
   return account.access_token || { success: false, error: "The account has no access token. Reconnect it in Profiles." };
 }
 
-export async function replyToComment(account: CommentActionAccount, commentId: string, message: string, fetcher: Fetcher = fetch): Promise<CommentActionResult> {
+const META_PLATFORMS = new Set(["facebook", "instagram"]);
+
+function unsupported(platform: string): CommentActionResult {
+  return { success: false, error: `Comments are not supported on ${platform}.` };
+}
+
+function asYouTubeAccount(
+  account: CommentActionAccount,
+): YouTubeCommentAccount {
+  return {
+    id: account.id ?? "",
+    user_id: account.user_id ?? "",
+    ...account,
+  } as YouTubeCommentAccount;
+}
+
+function fromYouTube<T>(
+  result: YouTubeResult<T>,
+  id: (value: T) => string,
+): CommentActionResult {
+  if (result.ok) {
+    return { success: true, platform_comment_id: id(result.value) };
+  }
+  return {
+    success: false,
+    error: result.message,
+    upstreamUnavailable: result.kind === "upstream",
+  };
+}
+
+export async function replyToComment(account: CommentActionAccount, commentId: string, message: string, fetcher: Fetcher = fetch, youtubeDeps?: YouTubeCommentsDeps): Promise<CommentActionResult> {
+  if (account.platform === "youtube") {
+    return fromYouTube(
+      await replyToThread(
+        asYouTubeAccount(account),
+        { ...(youtubeDeps ?? defaultYouTubeDeps()), fetcher },
+        commentId,
+        message,
+      ),
+      (value) => value.id,
+    );
+  }
+  if (account.platform !== "threads" && !META_PLATFORMS.has(account.platform)) {
+    return unsupported(account.platform);
+  }
   const token = requireToken(account);
   if (typeof token !== "string") return token;
   if (account.platform === "threads") return replyOnThreads(account, token, commentId, message, fetcher);
@@ -157,7 +217,21 @@ async function replyOnThreads(account: CommentActionAccount, token: string, repl
   return { success: true, platform_comment_id: String(publish.data.id) };
 }
 
-export async function hideComment(account: CommentActionAccount, commentId: string, hide: boolean, fetcher: Fetcher = fetch): Promise<CommentActionResult> {
+export async function hideComment(account: CommentActionAccount, commentId: string, hide: boolean, fetcher: Fetcher = fetch, youtubeDeps?: YouTubeCommentsDeps): Promise<CommentActionResult> {
+  if (account.platform === "youtube") {
+    return fromYouTube(
+      await setModerationStatus(
+        asYouTubeAccount(account),
+        { ...(youtubeDeps ?? defaultYouTubeDeps()), fetcher },
+        commentId,
+        hide ? "rejected" : "published",
+      ),
+      () => commentId,
+    );
+  }
+  if (account.platform !== "threads" && !META_PLATFORMS.has(account.platform)) {
+    return unsupported(account.platform);
+  }
   const token = requireToken(account);
   if (typeof token !== "string") return token;
 
@@ -184,10 +258,21 @@ export async function hideComment(account: CommentActionAccount, commentId: stri
   return { success: true, platform_comment_id: commentId };
 }
 
-export async function deleteComment(account: CommentActionAccount, commentId: string, fetcher: Fetcher = fetch): Promise<CommentActionResult> {
+export async function deleteComment(account: CommentActionAccount, commentId: string, fetcher: Fetcher = fetch, youtubeDeps?: YouTubeCommentsDeps): Promise<CommentActionResult> {
+  if (account.platform === "youtube") {
+    return fromYouTube(
+      await deleteOwnComment(
+        asYouTubeAccount(account),
+        { ...(youtubeDeps ?? defaultYouTubeDeps()), fetcher },
+        commentId,
+      ),
+      () => commentId,
+    );
+  }
   if (account.platform === "threads") {
     return { success: false, error: "Threads does not allow deleting other users' replies; use hide instead." };
   }
+  if (!META_PLATFORMS.has(account.platform)) return unsupported(account.platform);
   const token = requireToken(account);
   if (typeof token !== "string") return token;
   const outcome = await callGraph(

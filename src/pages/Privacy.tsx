@@ -85,6 +85,7 @@ const Privacy = () => {
               <li>Respond to your comments and questions</li>
               <li>Analyze usage patterns to enhance user experience</li>
               <li>Post content to your connected social media accounts on your behalf</li>
+              <li>Read, reply to, hide and delete comments on your own posts and videos when you use the Comment Manager, auto-reply rules or the AI agent</li>
               <li>Display your connected account information within the Postora dashboard</li>
             </ul>
 
@@ -163,6 +164,11 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora uses the LinkedIn Application Programming Interface (API) to allow users to authenticate, schedule posts, and view analytics for their authenticated LinkedIn Pages. By connecting your LinkedIn account, you agree to our processing of your data in strict compliance with the{" "}
               <a href="https://legal.linkedin.com/api-terms-of-use" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">LinkedIn API Terms of Use</a>.
+            </p>
+
+            <h4 className="text-lg font-semibold mt-4 mb-2">Data We Collect from YouTube</h4>
+            <p className="text-muted-foreground leading-relaxed mb-4">
+              With your authorization through Google OAuth 2.0 we read your channel name, ID and avatar, upload the videos you create in Postora, and read, reply to, hide and delete comments on your own videos when you use the Comment Manager, auto-reply rules or the AI agent. Comments are read on demand and by a scheduled check; each comment we act on is kept as YouTube returned it (its ID, text, and the commenter's public display name, channel ID and avatar URL) so the same comment is never answered twice. Postora's use of information received from Google APIs adheres to the Google API Services User Data Policy, including the Limited Use requirements.
             </p>
 
             <h4 className="text-lg font-semibold mt-4 mb-2">Data We Collect from LinkedIn</h4>

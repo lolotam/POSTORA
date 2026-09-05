@@ -571,8 +571,8 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
     type: "google_sheets", label: "Google Sheets", auth_strategy: "composio_oauth", category: "productivity_crm", credentials: [],
     composio: {
       toolkit: "googlesheets", toolkitVersion: "20260902_00",
-      tools: ["GOOGLESHEETS_BATCH_GET", "GOOGLESHEETS_LOOKUP_SPREADSHEET_ROW", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_BATCH_UPDATE"],
-      mutating: ["GOOGLESHEETS_BATCH_UPDATE"],
+      tools: ["GOOGLESHEETS_BATCH_GET", "GOOGLESHEETS_LOOKUP_SPREADSHEET_ROW", "GOOGLESHEETS_GET_SPREADSHEET_INFO", "GOOGLESHEETS_BATCH_UPDATE", "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND"],
+      mutating: ["GOOGLESHEETS_BATCH_UPDATE", "GOOGLESHEETS_SPREADSHEETS_VALUES_APPEND"],
     },
     usageGuide: {
       whenToUse: "Rows in the connected Google Sheets spreadsheet — stock lists, bookings, price tables the business keeps in a sheet.",
@@ -627,11 +627,33 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
   },
   youtube: {
     type: "youtube", label: "YouTube", auth_strategy: "composio_oauth", category: "automation", credentials: [],
-    composio: { toolkit: "youtube", toolkitVersion: "20260721_00", tools: ["YOUTUBE_LIST_CHANNELS", "YOUTUBE_MULTIPART_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"], mutating: ["YOUTUBE_MULTIPART_UPLOAD_VIDEO", "YOUTUBE_UPDATE_THUMBNAIL"] },
+    composio: {
+      toolkit: "youtube",
+      toolkitVersion: "20260721_00",
+      tools: [
+        "YOUTUBE_LIST_CHANNELS",
+        "YOUTUBE_MULTIPART_UPLOAD_VIDEO",
+        "YOUTUBE_UPDATE_THUMBNAIL",
+        "YOUTUBE_LIST_COMMENT_THREADS",
+        "YOUTUBE_LIST_COMMENTS",
+        "YOUTUBE_CREATE_COMMENT_REPLY",
+        "YOUTUBE_SET_COMMENT_MODERATION_STATUS",
+        "YOUTUBE_DELETE_COMMENT",
+        "YOUTUBE_GET_VIDEO_DETAILS_BATCH",
+        "YOUTUBE_LIST_PLAYLIST_ITEMS",
+      ],
+      mutating: [
+        "YOUTUBE_MULTIPART_UPLOAD_VIDEO",
+        "YOUTUBE_UPDATE_THUMBNAIL",
+        "YOUTUBE_CREATE_COMMENT_REPLY",
+        "YOUTUBE_SET_COMMENT_MODERATION_STATUS",
+        "YOUTUBE_DELETE_COMMENT",
+      ],
+    },
     usageGuide: {
-      whenToUse: "The connected YouTube channel and supported publishing actions.",
-      requestExamples: ["list the connected channels", "upload this approved video"],
-      limits: "Uploads and thumbnail updates change the channel and are off unless the connector allows writes.",
+      whenToUse: "The connected YouTube channel: publishing, and the comments on its videos. Use it to list comment threads and their replies, reply to a comment, hide or unhide a comment, or delete one of the channel's own comments.",
+      requestExamples: ["list the connected channels", "upload this approved video", "show the latest comment threads on this video", "reply to this comment", "hide this comment", "unhide this comment", "delete our own comment"],
+      limits: "Uploads, thumbnail updates, comment replies, moderation changes and comment deletion change the channel and are off unless the connector allows writes. A reply always attaches to the thread's top-level comment. Hiding is reversible (unhide restores it); deletion only works on comments the channel wrote — hide anyone else's instead.",
     },
   },
 };

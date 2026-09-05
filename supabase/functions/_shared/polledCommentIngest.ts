@@ -1,0 +1,164 @@
+// The single door every inbound comment goes through for a platform Postora polls: for
+// Threads the `replies` webhook, the reply poller, and the mentions refresh alike; for YouTube
+// the comment sweep. A platform may have more than one source for the same comment (Threads
+// has three), so the two invariants below have to hold across sources rather than within one
+// handler — which is why they live here and not in the callers.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import { resolveCommentAutomationHandler } from "./automationHandler.ts";
+import { runInBackground } from "./background.ts";
+import { isOwnComment } from "./commentAuthor.ts";
+import { touchSocialContact } from "./socialContactIngest.ts";
+import {
+  type CommentAutomationAccount,
+  handleCommentInternally,
+} from "./commentAutomation.ts";
+import { runCommentWorkflow } from "./commentWorkflow.ts";
+import {
+  buildCommentPayload,
+  type CommentPayloadInput,
+  type CommentPlatform,
+  dispatchN8nEvent,
+} from "./n8nMessagingDispatch.ts";
+
+export type PolledCommentOutcome =
+  | "persist_failed"
+  | "duplicate"
+  | "own_comment"
+  | "seeded"
+  | "dispatched_n8n"
+  | "automated_internally"
+  | "no_handler";
+
+// Everything buildCommentPayload needs except the three fields this module already knows.
+export type PolledCommentInput = Omit<
+  CommentPayloadInput,
+  "platform" | "socialAccountId" | "account"
+>;
+
+export interface PolledIngestOptions {
+  // Stored verbatim on the inbox row so a delivery can be replayed from what actually arrived
+  // rather than from the normalized shape.
+  rawPayload: unknown;
+  // False on a poller's first pass over an account. See the seeding note below.
+  dispatch?: boolean;
+}
+
+/**
+ * Records one comment from the platform and runs whatever automation the account asked for.
+ *
+ * The `social_inbox_events` insert IS the idempotency claim, and that is the whole reason
+ * this function exists: Meta retries webhook deliveries, and a poller re-reads the same
+ * conversation every run, so the same reply arrives repeatedly and — on Threads — from two
+ * directions at once. Only the first writer of a `(social_account_id, external_event_id)`
+ * pair may run the user's workflow. A mention that is also a reply collapses to a single fire
+ * for the same reason, which is deliberate — it is one event to the person who wrote it.
+ */
+export async function ingestPolledComment(
+  admin: any,
+  account: CommentAutomationAccount,
+  platform: CommentPlatform,
+  comment: PolledCommentInput,
+  options: PolledIngestOptions,
+): Promise<PolledCommentOutcome> {
+  const { data: inserted, error } = await admin
+    .from("social_inbox_events")
+    .upsert({
+      user_id: account.user_id,
+      social_account_id: account.id,
+      platform,
+      event_type: "comment",
+      external_event_id: comment.comment.id,
+      payload: options.rawPayload,
+    }, {
+      onConflict: "social_account_id,external_event_id",
+      ignoreDuplicates: true,
+    })
+    .select("id");
+
+  if (error) {
+    console.error(
+      `[${platform}-ingest] inbox persist failed for ${comment.comment.id}: ${error.message}`,
+    );
+    return "persist_failed";
+  }
+  if (!inserted?.length) return "duplicate";
+
+  // Has to stay ahead of both handler branches: whatever replies below comes back as another
+  // reply on the same post, and only this check ends that cycle.
+  if (isOwnComment(account, comment.author)) {
+    console.log(
+      `[${platform}-ingest] skipped own comment ${comment.comment.id}`,
+    );
+    return "own_comment";
+  }
+
+  // Capturing who commented is not automation, so it runs even for seeded history and for an
+  // account whose handler is "off". This is the one door every polled platform passes through,
+  // so Threads and YouTube are both covered by this single call.
+  await runInBackground(`${platform} audience touch`, () =>
+    touchSocialContact(admin, account.id, {
+      platform,
+      author: comment.author,
+      comment: { id: comment.comment.id, text: comment.comment.text },
+      post: { id: comment.post.id },
+    }));
+
+  // A poller's first pass over an account sees a page of history all at once. Recording it is
+  // what lets the next pass tell new from old; dispatching it would replay weeks of other
+  // people's comments into a live workflow — or, on the `internal` handler, have the AI agent
+  // answer all of them.
+  if (options.dispatch === false) return "seeded";
+
+  const handler = resolveCommentAutomationHandler(account.account_metadata);
+
+  // Everything from here is one background task rather than three, because the funnel's
+  // verdict decides whether the handler runs at all and that verdict needs a database read and
+  // up to two platform calls. threads-webhook awaits this function on its HTTP response path,
+  // and a Threads public reply alone can spend nine seconds polling its container to FINISHED
+  // (commentActions.waitForThreadsContainer) — long enough for Meta to treat the delivery as
+  // failed and redeliver it.
+  //
+  // The returned outcome therefore names what was STARTED, not what finished. Whatever
+  // actually happened is in comment_workflow_events and the logs; the caller only needs to
+  // know the comment was claimed and routed.
+  await runInBackground(`${platform} comment routing`, async () => {
+    // Funnel rules first, for every handler value including "off": creating a rule is itself
+    // the per-account opt-in, and a claim means no other automation answers this comment.
+    const workflow = await runCommentWorkflow(admin, account, {
+      comment: {
+        id: comment.comment.id,
+        text: comment.comment.text,
+        kind: comment.comment.kind,
+      },
+      post: { id: comment.post.id },
+      author: { id: comment.author.id, username: comment.author.username },
+      timestamp: comment.timestamp,
+    });
+    if (workflow === "claimed") return;
+
+    if (handler === "n8n") {
+      await dispatchN8nEvent(
+        admin,
+        account.user_id,
+        buildCommentPayload({
+          platform,
+          socialAccountId: account.id,
+          account,
+          ...comment,
+        }),
+      );
+      return;
+    }
+    if (handler === "internal") {
+      await handleCommentInternally(admin, account, {
+        comment: { id: comment.comment.id, text: comment.comment.text },
+        post: { id: comment.post.id },
+        author: { id: comment.author.id, username: comment.author.username },
+      });
+    }
+  });
+
+  if (handler === "n8n") return "dispatched_n8n";
+  if (handler === "internal") return "automated_internally";
+  return "no_handler";
+}

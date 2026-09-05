@@ -1335,6 +1335,171 @@ export type Database = {
           },
         ]
       }
+      comment_workflow_events: {
+        Row: {
+          author_key: string
+          author_username: string | null
+          comment_text: string | null
+          created_at: string
+          dm_status: string
+          error_message: string | null
+          external_comment_id: string
+          external_post_id: string | null
+          id: string
+          platform: string
+          public_reply_id: string | null
+          public_reply_status: string
+          rule_id: string
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          author_key: string
+          author_username?: string | null
+          comment_text?: string | null
+          created_at?: string
+          dm_status: string
+          error_message?: string | null
+          external_comment_id: string
+          external_post_id?: string | null
+          id?: string
+          platform: string
+          public_reply_id?: string | null
+          public_reply_status: string
+          rule_id: string
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          author_key?: string
+          author_username?: string | null
+          comment_text?: string | null
+          created_at?: string
+          dm_status?: string
+          error_message?: string | null
+          external_comment_id?: string
+          external_post_id?: string | null
+          id?: string
+          platform?: string
+          public_reply_id?: string | null
+          public_reply_status?: string
+          rule_id?: string
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cwe_account_owner"
+            columns: ["social_account_id", "user_id", "platform"]
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+          {
+            foreignKeyName: "cwe_rule_owner"
+            columns: ["rule_id", "user_id"]
+            referencedRelation: "comment_workflow_rules"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      comment_workflow_rules: {
+        Row: {
+          created_at: string
+          dm_message: string | null
+          id: string
+          is_active: boolean
+          keywords: string[]
+          match_type: string
+          media_file_id: string | null
+          name: string
+          platform: string
+          public_replies: string[]
+          send_once_per_user: boolean
+          social_account_id: string
+          target_post_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          dm_message?: string | null
+          id?: string
+          is_active?: boolean
+          keywords?: string[]
+          match_type: string
+          media_file_id?: string | null
+          name: string
+          platform: string
+          public_replies?: string[]
+          send_once_per_user?: boolean
+          social_account_id: string
+          target_post_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          dm_message?: string | null
+          id?: string
+          is_active?: boolean
+          keywords?: string[]
+          match_type?: string
+          media_file_id?: string | null
+          name?: string
+          platform?: string
+          public_replies?: string[]
+          send_once_per_user?: boolean
+          social_account_id?: string
+          target_post_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "cwr_account_owner"
+            columns: ["social_account_id", "user_id", "platform"]
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+          {
+            foreignKeyName: "cwr_media_owner"
+            columns: ["media_file_id", "user_id"]
+            referencedRelation: "media_files"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      comment_workflow_usage: {
+        Row: {
+          author_key: string
+          claimed_at: string
+          external_post_id: string
+          rule_id: string
+        }
+        Insert: {
+          author_key: string
+          claimed_at?: string
+          external_post_id?: string
+          rule_id: string
+        }
+        Update: {
+          author_key?: string
+          claimed_at?: string
+          external_post_id?: string
+          rule_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "comment_workflow_usage_rule_id_fkey"
+            columns: ["rule_id"]
+            referencedRelation: "comment_workflow_rules"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       connector_connections: {
         Row: {
           auth_strategy: string
@@ -4162,6 +4327,112 @@ export type Database = {
           {
             foreignKeyName: "social_accounts_workspace_id_fkey"
             columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      social_contacts: {
+        Row: {
+          company: string | null
+          created_at: string
+          display_name: string
+          email: string | null
+          first_interacted_at: string
+          id: string
+          identity_kind: string
+          last_comment_text: string | null
+          last_interacted_at: string
+          last_post_id: string | null
+          metadata: Json
+          notes: string | null
+          phone_number: string | null
+          platform: string
+          platform_user_id: string
+          profile_url: string | null
+          social_account_id: string | null
+          source: string
+          tags: string[]
+          total_comments_count: number
+          updated_at: string
+          user_id: string
+          username: string | null
+          whatsapp_contact_id: string | null
+          workspace_id: string | null
+        }
+        Insert: {
+          company?: string | null
+          created_at?: string
+          display_name?: string
+          email?: string | null
+          first_interacted_at?: string
+          id?: string
+          identity_kind?: string
+          last_comment_text?: string | null
+          last_interacted_at?: string
+          last_post_id?: string | null
+          metadata?: Json
+          notes?: string | null
+          phone_number?: string | null
+          platform: string
+          platform_user_id: string
+          profile_url?: string | null
+          social_account_id?: string | null
+          source?: string
+          tags?: string[]
+          total_comments_count?: number
+          updated_at?: string
+          user_id: string
+          username?: string | null
+          whatsapp_contact_id?: string | null
+          workspace_id?: string | null
+        }
+        Update: {
+          company?: string | null
+          created_at?: string
+          display_name?: string
+          email?: string | null
+          first_interacted_at?: string
+          id?: string
+          identity_kind?: string
+          last_comment_text?: string | null
+          last_interacted_at?: string
+          last_post_id?: string | null
+          metadata?: Json
+          notes?: string | null
+          phone_number?: string | null
+          platform?: string
+          platform_user_id?: string
+          profile_url?: string | null
+          social_account_id?: string | null
+          source?: string
+          tags?: string[]
+          total_comments_count?: number
+          updated_at?: string
+          user_id?: string
+          username?: string | null
+          whatsapp_contact_id?: string | null
+          workspace_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "social_contacts_social_account_tenant_fk"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "social_contacts_whatsapp_contact_tenant_fk"
+            columns: ["whatsapp_contact_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "whatsapp_contacts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "social_contacts_workspace_id_fkey"
+            columns: ["workspace_id"]
+            isOneToOne: false
             referencedRelation: "workspaces"
             referencedColumns: ["id"]
           },
@@ -7026,6 +7297,20 @@ export type Database = {
       }
     }
     Views: {
+      comment_workflow_rule_stats: {
+        Row: {
+          dm_sent_count: number | null
+          failed_count: number | null
+          indeterminate_count: number | null
+          last_error_at: string | null
+          last_error_message: string | null
+          last_triggered_at: string | null
+          public_sent_count: number | null
+          rule_id: string | null
+          triggered_count: number | null
+        }
+        Relationships: []
+      }
       higgsfield_connection_status: {
         Row: {
           account_email: string | null
@@ -7506,6 +7791,15 @@ export type Database = {
         Args: { "": unknown[] }
         Returns: number
       }
+      get_social_contacts_stats: {
+        Args: Record<PropertyKey, never>
+        Returns: {
+          total: number
+          workflow_leads: number
+          enriched: number
+          top_platform: string
+        }[]
+      }
       has_role: {
         Args: {
           _user_id: string
@@ -7982,6 +8276,32 @@ export type Database = {
           last_event_at: string
           events_7d: number
         }[]
+      }
+      search_social_contacts: {
+        Args: {
+          p_query: string | null
+          p_platform: string | null
+          p_source: string | null
+          p_tags: string[] | null
+          p_limit: number
+          p_offset: number
+        }
+        Returns: {
+          row_count: number
+          contact: Json
+        }[]
+      }
+      touch_social_contact: {
+        Args: {
+          p_social_account_id: string
+          p_platform: string
+          p_author_id: string | null
+          p_author_name: string | null
+          p_author_username: string | null
+          p_comment_text: string | null
+          p_post_id: string | null
+        }
+        Returns: string
       }
       sparsevec_out: {
         Args: { "": unknown }
