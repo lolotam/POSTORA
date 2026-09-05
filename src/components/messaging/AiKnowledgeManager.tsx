@@ -95,7 +95,18 @@ export function AiKnowledgeManager({
   // back a fresh object identity on every render, and depending on that would
   // reset the editor under the user's cursor on each one.
   const storedProfileKey = JSON.stringify(config?.business_profile ?? {});
-  useEffect(() => setProfile(JSON.parse(storedProfileKey) as BusinessProfile), [storedProfileKey]);
+  useEffect(() => {
+    const structure = JSON.parse(storedProfileKey) as BusinessProfile;
+    // The two can disagree during the rollout window: the migration backfilled
+    // the structure once, and any text-only save between then and this build
+    // reaching the browser updated only the text. The TEXT is what the agent has
+    // been answering from, so it wins -- initialising from stale JSON would let
+    // the next Save & index overwrite a profile the user edited more recently.
+    const diverged = storedText.trim() !== "" &&
+      renderBusinessProfileText(structure).trim() !== storedText.trim();
+    setProfile(diverged ? { ...structure, notes: storedText } : structure);
+    // storedText participates deliberately: a text-only refresh must re-run this.
+  }, [storedProfileKey, storedText]);
   // An empty box over a stored value is the user having deleted it -- the same
   // asymmetry the settings form relies on, since the loaded config IS the
   // baseline here. Declared to the server rather than refused: refusing would

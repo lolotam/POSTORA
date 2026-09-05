@@ -14,6 +14,7 @@ import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import { chunkProfileText } from "../ai-knowledge-ingest/chunking.ts";
 import {
+  firecrawlCancelCrawl,
   firecrawlCrawlStatus,
   firecrawlScrape,
   resolveFirecrawlKey,
@@ -65,6 +66,7 @@ export type WorkerDependencies = {
   firecrawlKey?: (admin: any) => Promise<string>;
   crawlStatus?: (key: string, jobId: string, fetchImpl?: typeof fetch, deadline?: number) => Promise<CrawlStatus>;
   scrapePage?: (key: string, url: string) => Promise<FirecrawlPage>;
+  cancelCrawl?: (key: string, jobId: string) => Promise<boolean>;
 };
 
 const defaultDependencies: WorkerDependencies = {
@@ -74,6 +76,7 @@ const defaultDependencies: WorkerDependencies = {
   firecrawlKey: resolveFirecrawlKey,
   crawlStatus: firecrawlCrawlStatus,
   scrapePage: firecrawlScrape,
+  cancelCrawl: firecrawlCancelCrawl,
 };
 
 function workbookToChunks(bytes: ArrayBuffer): KnowledgeChunk[] {
@@ -281,10 +284,19 @@ export async function processWebsiteSource(
   const mode = metadata.mode === "site" ? "site" : "page";
   const url = String(metadata.url || source.file_path || "");
 
-  const writeMeta = (patch: Record<string, unknown>, columns: Record<string, unknown> = {}) =>
-    admin.from("ai_knowledge_sources")
+  // Throws on a failed write, like its counterpart in ai-knowledge-ingest.
+  // Supabase reports write failures in the resolved result, so an unchecked
+  // deferral would return `deferred: true` with the row still `processing` and
+  // no visibility timeout -- unclaimable until the ten-minute stale reclaim.
+  const writeMeta = async (
+    patch: Record<string, unknown>,
+    columns: Record<string, unknown> = {},
+  ) => {
+    const { error: writeError } = await admin.from("ai_knowledge_sources")
       .update({ metadata: { ...metadata, ...patch }, ...columns })
       .eq("id", source.id);
+    if (writeError) throw new Error(`Could not record crawl state: ${message(writeError)}`);
+  };
 
   let key: string;
   try {
@@ -340,9 +352,15 @@ export async function processWebsiteSource(
       : source.created_at;
     const startedAt = startedRaw ? Date.parse(startedRaw) : NaN;
     if (Number.isFinite(startedAt) && deps.now() - startedAt > CRAWL_TIMEOUT_MS) {
+      // Cancel before terminalising. The delete path only cancels sources that
+      // are still pending or processing, so a row failed here and then deleted
+      // could never stop the job -- it would keep consuming credits with no
+      // tracked source pointing at it.
+      await (deps.cancelCrawl ?? firecrawlCancelCrawl)(key, jobId);
       return await failSource(admin, source.id, "Crawl timed out after 30 minutes");
     }
-    await writeMeta(
+    try {
+      await writeMeta(
       { stage: "crawling", pages_done: status.completed, pages_total: status.total },
       {
         // Back to pending so a later tick can claim it. Left `processing`, it
@@ -356,7 +374,11 @@ export async function processWebsiteSource(
         // it should wait.
         next_attempt_at: new Date(deps.now() + DEFER_MS).toISOString(),
       },
-    );
+      );
+    } catch (error) {
+      // Reporting a deferral that was never written would strand the row.
+      return await failSource(admin, source.id, message(error));
+    }
     return {
       sourceId: source.id,
       status: "processing",

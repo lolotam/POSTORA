@@ -39,6 +39,13 @@ const MAX_RESULT_PAGES = 20;
 /** Below this much budget left, do not start another results page. */
 const MIN_PAGE_MS = 3_000;
 
+/**
+ * Budget that must remain AFTER pagination for the caller to embed and
+ * checkpoint. Below it, a completed crawl is reported as still running: one
+ * more tick beats handing back pages there is no time to index.
+ */
+const MIN_EMBED_MS = 10_000;
+
 /** fetch with an abort signal, so a stalled provider becomes a catchable error. */
 async function fetchWithTimeout(
   fetchImpl: typeof fetch,
@@ -304,6 +311,15 @@ export async function firecrawlCrawlStatus(
       throw new FirecrawlError(
         `That crawl returned more than ${MAX_RESULT_PAGES} result pages. Lower the page limit and try again.`,
       );
+    }
+    // Pagination can finish having eaten almost the whole budget -- the last
+    // request may start with time left and return with none. Reporting
+    // `completed` then hands the worker pages it has no time to embed: the row
+    // stays `processing`, the stale reclaim downloads every page again, and
+    // consistently slow pagination repeats that forever without ever indexing.
+    // Saying `running` instead costs one cron tick and always makes progress.
+    if (deadline !== undefined && Date.now() >= deadline - MIN_EMBED_MS) {
+      return { state: "running", completed, total, pages: [] };
     }
     return { state: "completed", completed, total, pages };
   }

@@ -33,6 +33,7 @@ vi.mock("@/hooks/useSocialAccounts", () => ({
 }));
 
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
+import { renderBusinessProfileText } from "@/lib/agentProfile";
 
 const save = () => screen.getByRole("button", { name: /save & index/i });
 const lastPayload = () =>
@@ -42,7 +43,13 @@ describe("AiKnowledgeManager structured profile", () => {
   beforeEach(() => {
     upsertConfig.mutateAsync.mockClear();
     invoke.mutateAsync.mockClear();
-    configValue = { business_profile: { products: "shoes" }, business_profile_text: "Products…" };
+    configValue = {
+      business_profile: { products: "shoes" },
+      // Derived from the structure, exactly as the server stores it. A fixture
+      // where the two disagree would trip the rollout-divergence fallback and
+      // test that instead of the round-trip this case is about.
+      business_profile_text: renderBusinessProfileText({ products: "shoes" }),
+    };
   });
 
   it("opens pre-filled from the stored structure", () => {

@@ -530,6 +530,16 @@ function isAiAgentPlatform(value: unknown): value is string {
           );
         }
       }
+      // A writer that sends only the TEXT -- the pre-restructure form, or any
+      // API caller -- must not leave the structure behind. The migration
+      // backfilled business_profile once; every text-only write after it would
+      // otherwise widen the gap, and the new form, which initialises from the
+      // structure, would then overwrite newer text with older JSON on its next
+      // save. Mirroring here keeps one source of truth from both directions.
+      if ("business_profile_text" in updates && !("business_profile" in updates)) {
+        const text = String(updates.business_profile_text ?? "");
+        updates.business_profile = text.trim() ? { notes: text } : {};
+      }
       if ("agent_behavior" in updates) {
         try {
           updates.agent_behavior = parseAgentBehavior(updates.agent_behavior);

@@ -225,3 +225,40 @@ Deno.test("an endlessly paginating crawl is refused, not silently truncated", as
 
   await assertRejects(() => firecrawlCrawlStatus("k", "j", endless), FirecrawlError, "result pages");
 });
+
+Deno.test("a crawl that finishes paginating with no budget left reports running", async () => {
+  // Codex P1. The last page can return with almost nothing left. Saying
+  // "completed" hands the worker pages it has no time to embed: the row stays
+  // processing, the stale reclaim re-downloads every page, and slow pagination
+  // repeats that forever without indexing anything. One more tick always makes
+  // progress.
+  const done = await firecrawlCrawlStatus(
+    "k",
+    "j",
+    stub({
+      status: "completed",
+      completed: 1,
+      total: 1,
+      data: [{ markdown: "a", metadata: { sourceURL: "https://x.com/a" } }],
+    }),
+    Date.now() + 2_000,
+  );
+  assertEquals(done.state, "running");
+  assertEquals(done.pages.length, 0);
+});
+
+Deno.test("a completed crawl with ample budget still reports completed", async () => {
+  const done = await firecrawlCrawlStatus(
+    "k",
+    "j",
+    stub({
+      status: "completed",
+      completed: 1,
+      total: 1,
+      data: [{ markdown: "a", metadata: { sourceURL: "https://x.com/a" } }],
+    }),
+    Date.now() + 60_000,
+  );
+  assertEquals(done.state, "completed");
+  assertEquals(done.pages.length, 1);
+});

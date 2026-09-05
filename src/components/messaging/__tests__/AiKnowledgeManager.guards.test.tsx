@@ -90,19 +90,22 @@ describe("AiKnowledgeManager write guards", () => {
     );
   });
 
-  it("declares the clear even when only the derived text is stored", () => {
-    // The state the backfill leaves behind for a config saved before this
-    // feature: text present, structure empty. The panel opens blank, so a save
-    // WOULD blank the stored text -- and that has to be declared, or the server
-    // refuses it.
+  it("recovers the stored text when the structure disagrees with it", () => {
+    // The rollout window: the migration backfilled the structure once, and any
+    // text-only save between then and this build reaching the browser updated
+    // only the text. Opening blank here and saving would destroy that newer
+    // text -- so the text wins and arrives in the editor instead.
     configValue = { business_profile: {}, business_profile_text: "We sell day-old chicks." };
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
 
+    expect((box() as HTMLTextAreaElement).value).toBe("We sell day-old chicks.");
+
     fireEvent.click(saveButton());
 
-    expect(upsertConfig.mutateAsync).toHaveBeenCalledWith(
-      expect.objectContaining({ confirm_clear: true }),
-    );
+    const [payload] = upsertConfig.mutateAsync.mock.calls.at(-1) as [Record<string, unknown>];
+    expect(payload.business_profile).toEqual({ notes: "We sell day-old chicks." });
+    // Nothing was cleared, so nothing is declared.
+    expect(payload.confirm_clear).toBeUndefined();
   });
 
   it("does not declare a clear when nothing was stored", () => {

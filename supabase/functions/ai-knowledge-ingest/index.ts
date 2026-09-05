@@ -849,16 +849,36 @@ async function handleRequest(req: Request): Promise<Response> {
       // brand would become readable by every connected agent. Refuse instead --
       // the request is malformed, and the safe reading of a malformed request is
       // not "share it with everyone".
+      // The scope is validated against the closed set, not merely tested for
+      // "account". This endpoint takes arbitrary authenticated JSON, not the
+      // UI's TypeScript union, so any other value -- a typo, "restricted",
+      // "private" -- would otherwise fall through to SHARED and widen access on
+      // exactly the input a careful caller thought was narrowing it.
+      const requestedScope = body.scope === undefined || body.scope === null
+        ? "all"
+        : body.scope;
+      if (requestedScope !== "account" && requestedScope !== "all") {
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          rejected: "invalid scope",
+          scope: String(requestedScope).slice(0, 50),
+        });
+        return errorResponse('scope must be "account" or "all".', 400);
+      }
       const namedAccount = typeof body.social_account_id === "string"
         ? body.social_account_id.trim()
         : "";
-      if (body.scope === "account" && !namedAccount) {
+      if (requestedScope === "account" && !namedAccount) {
+        // Logged like every other refusal, so an account-scoped request that
+        // never happened is not an operational blind spot.
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
+          rejected: "account scope with no account id",
+        });
         return errorResponse(
           "An account-scoped source must name the account it belongs to.",
           400,
         );
       }
-      const scopeToAccount = body.scope === "account" && namedAccount !== "";
+      const scopeToAccount = requestedScope === "account";
       const { data: sourceId, error: createError } = await (caller as any).rpc(
         "create_ai_knowledge_source",
         {
