@@ -598,18 +598,23 @@ export type DualEmbeddings = {
 export async function embedKnowledgeDual(
   texts: string[],
   dual: DualEmbeddingConfig,
+  embed: Embedder = embedKnowledge,
 ): Promise<DualEmbeddings> {
-  const primary = await embedKnowledge(texts, dual.primary);
-  if (!dual.fallback) return { primary, fallback: null };
-  try {
-    return { primary, fallback: await embedKnowledge(texts, dual.fallback) };
-  } catch (error) {
-    console.warn(
-      "[knowledge-embeddings] fallback embed failed; storing primary vectors only:",
-      error instanceof Error ? error.message : String(error),
-    );
-    return { primary, fallback: null };
-  }
+  if (!dual.fallback) return { primary: await embed(texts, dual.primary), fallback: null };
+  // Both providers run at once: the fallback (CPU-only Ollama, ~20s for a
+  // batch of prose chunks) dominates the batch, and running the primary
+  // after it instead of alongside it was pure added latency inside a 60s isolate.
+  const [primary, fallback] = await Promise.all([
+    embed(texts, dual.primary),
+    embed(texts, dual.fallback).catch((error: unknown) => {
+      console.warn(
+        "[knowledge-embeddings] fallback embed failed; storing primary vectors only:",
+        error instanceof Error ? error.message : String(error),
+      );
+      return null;
+    }),
+  ]);
+  return { primary, fallback };
 }
 
 // Column/value record for a single chunk, carrying both providers' vectors when

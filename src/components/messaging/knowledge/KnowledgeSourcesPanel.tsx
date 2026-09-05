@@ -171,6 +171,12 @@ export function KnowledgeSourcesPanel({
                     )}
                     {source.status}
                     {source.status === "ready" ? ` · ${source.chunk_count} chunks` : ""}
+                    {/* A large file is indexed in resumable slices and sits
+                        `pending` between them; the running count is what tells
+                        a slow file apart from a stuck one. */}
+                    {["pending", "processing"].includes(source.status) && source.chunk_count > 0
+                      ? ` · ${source.chunk_count} chunks so far`
+                      : ""}
                   </Badge>
                 </div>
                 {source.source_type === "website" &&
