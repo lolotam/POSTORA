@@ -148,15 +148,16 @@ describe("AiKnowledgeManager input methods", () => {
   });
 
   it("shows the running chunk count while a large file is still being indexed", () => {
-    // A 50-chunk document is indexed in slices over several minutes; without
-    // the count the badge read as a stuck upload (2026-09-05 report).
+    // A 50-chunk document is indexed in slices over several minutes and is
+    // `pending` between slices; without the count the badge read as a stuck
+    // upload (2026-09-05 report).
     knowledge.sources = [
       {
         id: "d1",
         file_name: "handbook.md",
         file_path: "supabase://ai-knowledge/u1/sources/handbook.md",
         source_type: "doc",
-        status: "processing",
+        status: "pending",
         error: null,
         chunk_count: 24,
         visibility: "shared",
@@ -165,6 +166,6 @@ describe("AiKnowledgeManager input methods", () => {
       },
     ];
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
-    expect(screen.getByText(/processing · 24 chunks so far/i)).toBeInTheDocument();
+    expect(screen.getByText(/pending · 24 chunks so far/i)).toBeInTheDocument();
   });
 });

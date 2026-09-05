@@ -46,7 +46,7 @@ Deno.test("parseCsvChunks produces the same chunk shape as the Excel path", () =
 
 type ChunkRow = { id: string; metadata: Record<string, unknown> | null };
 
-function workerHarness(csv: string, existingChunks: ChunkRow[]) {
+function workerHarness(csv: string, existingChunks: ChunkRow[], othersPending = 0) {
   const state = {
     chunkInserts: Array<Array<Record<string, unknown>>>(),
     deletedAllOfSource: [] as string[],
@@ -97,6 +97,17 @@ function workerHarness(csv: string, existingChunks: ChunkRow[]) {
         };
       }
       return {
+        select: () => ({
+          eq: (col: string, value: string) => {
+            assertEquals([col, value], ["status", "pending"]);
+            return {
+              neq: (idCol: string, id: string) => {
+                assertEquals([idCol, id], ["id", "source-1"]);
+                return Promise.resolve({ count: othersPending, error: null });
+              },
+            };
+          },
+        }),
         update: (patch: Record<string, unknown>) => ({
           eq: (col: string, value: string) => {
             assertEquals(col, "id");
@@ -230,14 +241,15 @@ Deno.test("hitting the time budget hands the source back as pending with an accu
   // The row goes back to `pending` so the next cron tick resumes it at once.
   // Left `processing`, the claim would ignore it for the ten-minute stale
   // window on every single slice, which is how a 50-chunk file took 35 minutes.
-  assertEquals(state.sourceUpdates, [{ chunk_count: 8 }, { status: "pending" }]);
+  // Alone in the queue it carries no deferral, so the very next tick takes it.
+  assertEquals(state.sourceUpdates, [{ chunk_count: 8 }, { status: "pending", next_attempt_at: null }]);
 
   const resumed = await processSource(admin, source({ chunk_count: 8 }), deps, 100);
   assertEquals(resumed.status, "processing", "deadline already exceeded, nothing more runs");
   assertEquals(resumed.chunkCount, 8);
   assertEquals(resumed.deferred, true);
   assertEquals(embedCalls.length, 1, "no further embedding happens past the budget");
-  assertEquals(state.sourceUpdates.at(-1), { status: "pending" });
+  assertEquals(state.sourceUpdates.at(-1), { status: "pending", next_attempt_at: null });
   assertEquals(
     state.sourceUpdates.some((patch) => patch.status === "ready"),
     false,
@@ -260,7 +272,25 @@ Deno.test("a batch that would overrun the deadline is not started, even though t
   assertEquals(outcome.status, "processing");
   assertEquals(outcome.chunkCount, 8);
   assertEquals(outcome.deferred, true);
-  assertEquals(state.sourceUpdates.at(-1), { status: "pending" });
+  assertEquals(state.sourceUpdates.at(-1), { status: "pending", next_attempt_at: null });
+});
+
+Deno.test("a released source sits out one tick when other uploads are waiting behind it", async () => {
+  // The claim orders by created_at, so without a deferral the oldest (this)
+  // source would be re-claimed first on every tick and a large document would
+  // block every later upload, other users' included, until it finished.
+  const { admin, state } = workerHarness(tenRowCsv, [], 2);
+  const ticks = [0, 0, 30, 30, 30];
+  const now = () => ticks.shift() ?? 30;
+  const { deps } = dependencies({ now });
+
+  const outcome = await processSource(admin, source(), deps, 50);
+
+  assertEquals(outcome.deferred, true);
+  assertEquals(state.sourceUpdates.at(-1), {
+    status: "pending",
+    next_attempt_at: new Date(30 + 2 * 60_000).toISOString(),
+  });
 });
 
 Deno.test("a batch that fits before the deadline still runs", async () => {
