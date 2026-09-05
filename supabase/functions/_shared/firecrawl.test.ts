@@ -170,3 +170,58 @@ Deno.test("no key anywhere names the admin setting rather than failing vaguely",
   };
   await assertRejects(() => resolveFirecrawlKey(admin), FirecrawlError, "Admin");
 });
+
+Deno.test("a paginated completed crawl follows every results page", async () => {
+  // Codex P1. A large crawl returns this batch plus a `next` URL. Stopping at
+  // the first batch would mark the source ready having indexed a fraction of
+  // the site, with nothing anywhere saying so.
+  const bodies = [
+    {
+      status: "completed",
+      completed: 3,
+      total: 3,
+      data: [{ markdown: "a", metadata: { sourceURL: "https://x.com/a" } }],
+      next: "https://api.firecrawl.dev/v2/crawl/j?skip=1",
+    },
+    {
+      status: "completed",
+      data: [{ markdown: "b", metadata: { sourceURL: "https://x.com/b" } }],
+      next: "https://api.firecrawl.dev/v2/crawl/j?skip=2",
+    },
+    {
+      status: "completed",
+      data: [{ markdown: "c", metadata: { sourceURL: "https://x.com/c" } }],
+    },
+  ];
+  let call = 0;
+  const paging = (() =>
+    Promise.resolve(
+      new Response(JSON.stringify(bodies[call++]), { status: 200 }),
+    )) as unknown as typeof fetch;
+
+  const done = await firecrawlCrawlStatus("k", "j", paging);
+  assertEquals(done.state, "completed");
+  assertEquals(done.pages.map((page) => page.url), [
+    "https://x.com/a",
+    "https://x.com/b",
+    "https://x.com/c",
+  ]);
+});
+
+Deno.test("an endlessly paginating crawl is refused, not silently truncated", async () => {
+  // A source marked ready with two thirds of a site in it is a lie the UI
+  // cannot correct, so the runaway case fails loudly.
+  const endless = (() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          status: "completed",
+          data: [{ markdown: "x", metadata: { sourceURL: "https://x.com/x" } }],
+          next: "https://api.firecrawl.dev/v2/crawl/j?skip=1",
+        }),
+        { status: 200 },
+      ),
+    )) as unknown as typeof fetch;
+
+  await assertRejects(() => firecrawlCrawlStatus("k", "j", endless), FirecrawlError, "result pages");
+});

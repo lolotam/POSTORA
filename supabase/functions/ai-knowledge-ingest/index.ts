@@ -46,6 +46,7 @@ import {
 } from "../_shared/knowledgeSourceFiles.ts";
 import { validateKnowledgeUrl } from "../_shared/knowledgeUrl.ts";
 import {
+  firecrawlCancelCrawl,
   firecrawlScrape,
   firecrawlStartCrawl,
   resolveFirecrawlKey,
@@ -623,6 +624,23 @@ async function handleRequest(req: Request): Promise<Response> {
       if (source.file_path) {
         await deleteSourceFile(admin, source.file_path, { userId: user.id, email: user.email });
       }
+      // A website source deleted mid-crawl leaves a job running and billing at
+      // Firecrawl with nothing left pointing at it. Best-effort and never
+      // blocking: the row the user asked to remove goes either way.
+      const crawlJobId = source.source_type === "website" &&
+          typeof source.metadata?.crawl_job_id === "string"
+        ? source.metadata.crawl_job_id
+        : null;
+      let crawlCancelled: boolean | null = null;
+      if (crawlJobId && ["pending", "processing"].includes(source.status)) {
+        try {
+          const key = await resolveFirecrawlKey(admin);
+          crawlCancelled = await firecrawlCancelCrawl(key, crawlJobId);
+        } catch (error) {
+          console.error("[ai-knowledge-ingest] Could not cancel crawl:", message(error));
+          crawlCancelled = false;
+        }
+      }
       const { error } = await (admin as any)
         .from("ai_knowledge_sources")
         .delete()
@@ -633,6 +651,9 @@ async function handleRequest(req: Request): Promise<Response> {
         source_id: source.id,
         source_type: source.source_type,
         file_name: source.file_name,
+        // Recorded so a crawl that outlived its source is findable rather than
+        // merely lost.
+        ...(crawlJobId ? { crawl_job_id: crawlJobId, crawl_cancelled: crawlCancelled } : {}),
       });
       return jsonResponse({ ok: true });
     }
@@ -928,10 +949,15 @@ async function handleRequest(req: Request): Promise<Response> {
           return jsonResponse({ ok: true, queued: true, chunks: chunks.length }, 202);
         }
         const stored = await replaceChunks(admin, sourceId, user.id, chunks);
-        await (admin as any)
+        // Checked, for the same reason setMeta throws. An unchecked failure here
+        // returns 200 while the row stays `processing` -- and a page source has
+        // no queued_at, so the claim function will never reclaim it and the UI
+        // polls it forever.
+        const { error: readyError } = await (admin as any)
           .from("ai_knowledge_sources")
           .update({ status: "ready", chunk_count: chunks.length, error: null })
           .eq("id", sourceId);
+        if (readyError) throw new Error(`Could not mark the page indexed: ${message(readyError)}`);
         await updateKnowledgeGraph(admin, user.id, stored);
         await logKnowledgeEvent(admin, user.id, "ingest_website", true, {
           source_id: sourceId,

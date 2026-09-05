@@ -27,6 +27,15 @@ const API = "https://api.firecrawl.dev/v2";
 const SCRAPE_TIMEOUT_MS = 30_000;
 const STATUS_TIMEOUT_MS = 15_000;
 
+/**
+ * How many result pages a completed crawl may span before we refuse it.
+ *
+ * The UI caps a crawl at 200 pages and Firecrawl batches results well below
+ * that, so this is a runaway guard rather than a real ceiling -- but an
+ * unbounded follow loop inside a 45-second worker budget is its own failure.
+ */
+const MAX_RESULT_PAGES = 20;
+
 /** fetch with an abort signal, so a stalled provider becomes a catchable error. */
 async function fetchWithTimeout(
   fetchImpl: typeof fetch,
@@ -247,7 +256,62 @@ export async function firecrawlCrawlStatus(
     };
   }
   if (status === "completed") {
-    return { state: "completed", completed, total, pages: toPages(body?.data) };
+    // A large crawl paginates its results: the body carries this batch plus a
+    // `next` URL. Ignoring it would embed only the first page and mark the
+    // source ready -- a whole-site crawl reporting success having indexed a
+    // fraction of the site, with nothing anywhere saying so.
+    const pages = toPages(body?.data);
+    let next = typeof body?.next === "string" ? body.next : null;
+    let guard = 0;
+    while (next && guard < MAX_RESULT_PAGES) {
+      guard += 1;
+      const page = await fetchWithTimeout(
+        fetchImpl,
+        next,
+        { headers: authHeaders(key) },
+        STATUS_TIMEOUT_MS,
+        "crawl results page",
+      );
+      const pageBody = await readResponse(page, "crawl results page");
+      pages.push(...toPages(pageBody?.data));
+      next = typeof pageBody?.next === "string" ? pageBody.next : null;
+    }
+    if (next) {
+      // Refusing beats silently truncating: a source marked ready with two
+      // thirds of a site in it is a lie the UI cannot correct.
+      throw new FirecrawlError(
+        `That crawl returned more than ${MAX_RESULT_PAGES} result pages. Lower the page limit and try again.`,
+      );
+    }
+    return { state: "completed", completed, total, pages };
   }
   return { state: "running", completed, total, pages: [] };
+}
+
+/**
+ * Best-effort cancellation of a crawl whose source is being deleted.
+ *
+ * Never throws: the delete must succeed whether or not Firecrawl cooperates,
+ * and a crawl left running is a billing annoyance, not a reason to strand a row
+ * the user asked to remove. Returns whether the cancel was accepted so the
+ * caller can log it.
+ */
+export async function firecrawlCancelCrawl(
+  key: string,
+  jobId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  try {
+    const response = await fetchWithTimeout(
+      fetchImpl,
+      `${API}/crawl/${encodeURIComponent(jobId)}`,
+      { method: "DELETE", headers: authHeaders(key) },
+      STATUS_TIMEOUT_MS,
+      "crawl cancel",
+    );
+    return response.ok;
+  } catch (error) {
+    console.error(`[firecrawl] cancel failed for ${jobId}: ${String((error as Error)?.message ?? error)}`);
+    return false;
+  }
 }
