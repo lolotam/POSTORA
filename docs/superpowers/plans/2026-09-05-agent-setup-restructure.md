@@ -10,6 +10,37 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-05-agent-setup-restructure-design.md`
 
+## Outcome (2026-09-05)
+
+All 16 tasks shipped on `feat/agent-setup-restructure`, PR #147. Both migrations
+were applied to production before the PR, after rehearsal on the PG17 harness.
+
+**What the plan got wrong, and what caught it.** Three defects survived every
+gate this plan specified — full vitest, the CI-form Deno suite, `deno check`,
+eslint, and two guard-skill passes — and were found only by the Codex bot review:
+
+1. `ingest_website` called `create_ai_knowledge_source` through the service-role
+   client. That RPC derives its owner from `auth.uid()` and raises
+   "Not authenticated" when it is null, so **every website ingest would have
+   failed** before reaching Firecrawl. Invisible to tests because the upload
+   path calls the same RPC from the browser, where the JWT is present.
+2. A completed Firecrawl crawl paginates its results. Discarding the `next` URL
+   embedded only the first batch and marked the source `ready` — a whole-site
+   crawl reporting success having indexed a fraction of the site.
+3. Several PostgREST writes went unchecked. Supabase reports write failures in
+   the resolved result rather than by rejecting, so `await update(...)` sailed
+   past transient errors and returned success on rows left in an unreclaimable
+   state.
+
+The pattern in all three: **a path with no possible fixture**. The lesson for
+the next plan is that "the tests pass" says nothing about a call whose failure
+mode only exists in production wiring. Where a plan introduces a first
+server-side caller of something previously called from the browser, that
+transition deserves its own explicit verification step.
+
+Eleven findings across three review rounds; every one verified against the code
+before being acted on, three of them re-reports of fixes already in the tree.
+
 ## Global Constraints
 
 - **Branch:** `feat/agent-setup-restructure`. Another CLI drives `F:\Postora_new`'s HEAD and the tree carries unrelated dirty files — every commit is scoped: `git commit -m "…" -- <files>`. Never `git stash -u`.
