@@ -201,6 +201,33 @@ describe("WhatsAppMediaAttachment", () => {
     expect(document.querySelector("img")).toBeNull();
   });
 
+  it("offers a download on image, video and audio", async () => {
+    getMedia.mockResolvedValue({ media: [media()] });
+    renderAttachment(attachment(), api);
+    act(() => triggerIntersect());
+    expect(await screen.findByLabelText("Download image")).toBeInTheDocument();
+  });
+
+  it("opens a PDF in the lightbox from the document card", async () => {
+    getMedia.mockResolvedValue({
+      media: [media({ kind: "document", url: "https://signed.example/doc.pdf", file_name: "Receipt.pdf", mime_type: "application/pdf" })],
+    });
+    renderAttachment(attachment({ kind: "document", name: null, mime_type: "application/pdf" }), api);
+    act(() => triggerIntersect());
+    fireEvent.click(await screen.findByRole("button", { name: "Receipt.pdf" }));
+    expect(await screen.findByTitle("Receipt.pdf")).toHaveAttribute("src", "https://signed.example/doc.pdf");
+  });
+
+  it("keeps a non-PDF document as a plain card", async () => {
+    getMedia.mockResolvedValue({
+      media: [media({ kind: "document", url: "https://signed.example/a.docx", file_name: "a.docx", mime_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" })],
+    });
+    renderAttachment(attachment({ kind: "document", name: "a.docx", mime_type: null }), api);
+    act(() => triggerIntersect());
+    expect(await screen.findByText("a.docx")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "a.docx" })).not.toBeInTheDocument();
+  });
+
   it("opens a lightbox on image click and closes it with Escape", async () => {
     getMedia.mockResolvedValue({ media: [media()] });
     renderAttachment(attachment(), api);
