@@ -1,5 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const save = { mutate: vi.fn(), isPending: false };
 const handlers = {
@@ -29,6 +29,15 @@ import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerC
 
 describe("AutomationHandlerCard", () => {
   beforeEach(() => save.mutate.mockReset());
+
+  afterEach(async () => {
+    cleanup();
+    // Radix restores Select focus on the next timer turn. Finish that work in
+    // this jsdom realm, before Vitest replaces its CustomEvent constructor.
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+  });
 
   it("shows a Messages and a Comments row for Instagram", () => {
     render(<AutomationHandlerCard platform="instagram" />);
