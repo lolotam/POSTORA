@@ -1,11 +1,11 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
+import { resolveUserAiRoute, composeAiTiers, markUserKeyInvalid } from "../_shared/ai-user-routing.ts";
+import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID } from "../_shared/ai-routing-errors.ts";
 import { createLogger } from "../_shared/logging.ts";
-import { callAiWithFallback, logAiCall, resolveChatModelConfig } from "../_shared/ai-fallback.ts";
+import { callAiChain, logAiCall, resolveChatModelConfig, platformChatTiers } from "../_shared/ai-fallback.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
-import { z } from "npm:zod@3.23.8";
-
 import { z } from "npm:zod@3.23.8";
 
 const GenerateCaptionSchema = z.object({
@@ -429,20 +429,25 @@ Generate exactly this JSON structure:
       };
 
       // Resolve chat-model config: user override → admin /admin/settings Chat → hardcoded last-resort
+      const route = await resolveUserAiRoute(supabaseAdmin, user.id, 'chat');
+      if (route.mode === 'user_only' && !route.userTier) {
+        await logAiCall(supabaseAdmin, 'brand_intelligence', 'generate-caption', user.id, false, {
+          response: new Response(null, { status: 409 }), tierUsed: 'primary', modelUsed: '', providerUsed: '', tiers: [],
+        }, { error_code: AI_CONNECTION_REQUIRED });
+        return jsonResponse({ error: AI_CONNECTION_REQUIRED, message: 'Connect an AI provider key or change your routing mode.' }, 409);
+      }
       const biCfg = await resolveChatModelConfig(supabaseAdmin, user.id);
       console.log('BI chat model config:', biCfg.source, biCfg.primaryProvider, biCfg.primaryModel);
 
       const biLogger = createLogger(supabaseAdmin, 'generate-caption', 'edge');
       try {
-        const biAiResult = await callAiWithFallback(
-          biRequestBody,
-          biCfg.primaryProvider,
-          biCfg.primaryModel,
-          biCfg.fallbackProvider,
-          biCfg.fallbackModel,
-          biCfg.lastResortProvider,
-          biCfg.lastResortModel,
-        );
+        const biAiResult = await callAiChain(supabaseAdmin, biRequestBody, composeAiTiers(route, platformChatTiers(biCfg)));
+        if (route.reason === 'user_key_missing') biAiResult.fallbackReason = route.reason;
+        for (const tier of biAiResult.tiers) {
+          if (tier.credentialSource === 'user' && tier.error === AI_USER_KEY_INVALID && route.fetchedAt) {
+            await markUserKeyInvalid(supabaseAdmin, user.id, tier.provider, route.fetchedAt);
+          }
+        }
         const biAiSuccess = biAiResult.response.ok;
 
         await logAiCall(supabaseAdmin, 'brand_intelligence', 'generate-caption', user.id, biAiSuccess, biAiResult, {
@@ -544,20 +549,25 @@ Return JSON: {"suggestions": ["tag1, tag2, tag3, tag4, tag5", "tagA, tagB, tagC,
       };
 
       // Resolve chat-model config: user override → admin /admin/settings Chat → hardcoded last-resort
+      const route = await resolveUserAiRoute(supabaseAdmin, user.id, 'chat');
+      if (route.mode === 'user_only' && !route.userTier) {
+        await logAiCall(supabaseAdmin, requestType, 'generate-caption', user.id, false, {
+          response: new Response(null, { status: 409 }), tierUsed: 'primary', modelUsed: '', providerUsed: '', tiers: [],
+        }, { error_code: AI_CONNECTION_REQUIRED });
+        return jsonResponse({ error: AI_CONNECTION_REQUIRED, message: 'Connect an AI provider key or change your routing mode.' }, 409);
+      }
       const ytCfg = await resolveChatModelConfig(supabaseAdmin, user.id);
       console.log('YT chat model config:', ytCfg.source, ytCfg.primaryProvider, ytCfg.primaryModel);
 
       const ytLogger = createLogger(supabaseAdmin, 'generate-caption', 'edge');
       try {
-        const ytAiResult = await callAiWithFallback(
-          ytRequestBody,
-          ytCfg.primaryProvider,
-          ytCfg.primaryModel,
-          ytCfg.fallbackProvider,
-          ytCfg.fallbackModel,
-          ytCfg.lastResortProvider,
-          ytCfg.lastResortModel,
-        );
+        const ytAiResult = await callAiChain(supabaseAdmin, ytRequestBody, composeAiTiers(route, platformChatTiers(ytCfg)));
+        if (route.reason === 'user_key_missing') ytAiResult.fallbackReason = route.reason;
+        for (const tier of ytAiResult.tiers) {
+          if (tier.credentialSource === 'user' && tier.error === AI_USER_KEY_INVALID && route.fetchedAt) {
+            await markUserKeyInvalid(supabaseAdmin, user.id, tier.provider, route.fetchedAt);
+          }
+        }
         const ytAiSuccess = ytAiResult.response.ok;
 
         await logAiCall(supabaseAdmin, requestType, 'generate-caption', user.id, ytAiSuccess, ytAiResult, {
@@ -622,6 +632,13 @@ Return JSON: {"suggestions": ["tag1, tag2, tag3, tag4, tag5", "tagA, tagB, tagC,
     }
 
     // Resolve chat-model config: user override → admin /admin/settings Chat → hardcoded last-resort
+    const route = await resolveUserAiRoute(supabaseAdmin, user.id, 'chat');
+    if (route.mode === 'user_only' && !route.userTier) {
+      await logAiCall(supabaseAdmin, 'caption_generation', 'generate-caption', user.id, false, {
+        response: new Response(null, { status: 409 }), tierUsed: 'primary', modelUsed: '', providerUsed: '', tiers: [],
+      }, { error_code: AI_CONNECTION_REQUIRED });
+      return jsonResponse({ error: AI_CONNECTION_REQUIRED, message: 'Connect an AI provider key or change your routing mode.' }, 409);
+    }
     const chatCfg = await resolveChatModelConfig(supabaseAdmin, user.id);
     if (model) {
       console.warn('Client-supplied model param ignored — admin Chat config governs caption generation. Got:', model);
@@ -675,15 +692,13 @@ Return exactly 5 captions separated by --- on its own line. No numbering, no lab
     };
 
     // 3-tier AI call with fallback chain
-    const aiResult = await callAiWithFallback(
-      requestBody,
-      chatCfg.primaryProvider,
-      chatCfg.primaryModel,
-      chatCfg.fallbackProvider,
-      chatCfg.fallbackModel,
-      chatCfg.lastResortProvider,
-      chatCfg.lastResortModel,
-    );
+    const aiResult = await callAiChain(supabaseAdmin, requestBody, composeAiTiers(route, platformChatTiers(chatCfg)));
+    if (route.reason === 'user_key_missing') aiResult.fallbackReason = route.reason;
+    for (const tier of aiResult.tiers) {
+      if (tier.credentialSource === 'user' && tier.error === AI_USER_KEY_INVALID && route.fetchedAt) {
+        await markUserKeyInvalid(supabaseAdmin, user.id, tier.provider, route.fetchedAt);
+      }
+    }
 
     const aiSuccess = aiResult.response.ok;
 

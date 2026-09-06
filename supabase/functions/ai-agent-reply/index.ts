@@ -18,7 +18,6 @@ import {
   type GraphRelationFact,
   ModelChainExhaustedError,
   modelBudgetRemaining,
-  type ModelRef,
   parseModelRef,
   resolveEngagementMode,
   type ReplyLanguage,
@@ -59,6 +58,11 @@ import {
   resolveDualEmbeddingConfigFromDb,
   retrieveKnowledgeChunks,
 } from "../_shared/knowledgeEmbeddings.ts";
+
+import { type AiTier, fetchWithTimeout, resolvePlatformApiKey } from "../_shared/ai-fallback.ts";
+import { callAnthropicJson } from "../_shared/anthropic-adapter.ts";
+import { composeAiTiers, invalidateRejectedUserTier, resolveUserAiRoute, type AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
+import { AI_CONNECTION_REQUIRED, ProviderHttpError, redactProviderError } from "../_shared/ai-routing-errors.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -115,7 +119,8 @@ const CHAT_TIMEOUT_MS = 25_000;
 // OpenAI-compatible chat-completion endpoints per provider. Providers here
 // must stay in sync with the choices offered in AdminAiAgentSection.tsx.
 const GOOGLE_ENDPOINT = { url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", keyEnv: "GOOGLE_AI_STUDIO_KEY" };
-const PROVIDER_ENDPOINTS: Record<string, { url: string; keyEnv: string }> = {
+const PROVIDER_ENDPOINTS: Record<string, { url: string; keyEnv: string; kind?: "anthropic" }> = {
+  claude: { url: "https://api.anthropic.com/v1/messages", keyEnv: "ANTHROPIC_API_KEY", kind: "anthropic" },
   openai: { url: `${OPENAI_API}/chat/completions`, keyEnv: "OPENAI_API_KEY" },
   openrouter: { url: "https://openrouter.ai/api/v1/chat/completions", keyEnv: "OPENROUTER_API_KEY" },
   // The admin model catalog (ai_providers) codes Google as "gemini"; accept both.
@@ -123,35 +128,48 @@ const PROVIDER_ENDPOINTS: Record<string, { url: string; keyEnv: string }> = {
   gemini: GOOGLE_ENDPOINT,
 };
 
-async function chatCompletion(
-  provider: string,
+export async function chatCompletion(
+  tier: AiTier,
   payload: Record<string, unknown>,
   timeoutMs = CHAT_TIMEOUT_MS,
+  admin?: AiRoutingAdmin,
 ): Promise<any> {
+  const provider = tier.provider;
   const endpoint = PROVIDER_ENDPOINTS[provider] ?? PROVIDER_ENDPOINTS.openai;
-  const key = Deno.env.get(endpoint.keyEnv);
-  if (!key) throw new Error(`${endpoint.keyEnv} is not configured`);
-  let response: Response;
+  const key = tier.credentialSource === "user" ? tier.apiKey : await resolvePlatformApiKey(admin, provider);
+  if (!key?.trim()) throw new Error("AI tier requires an API key");
+  let data;
+  let status: number;
   try {
-    response = await fetch(endpoint.url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "TimeoutError") {
-      throw new Error(`${provider}/${payload.model} timed out after ${timeoutMs / 1000}s`);
+    if (endpoint.kind === "anthropic") {
+      const response = await callAnthropicJson(payload, key, timeoutMs);
+      data = response.json;
+      status = response.status;
+    } else {
+      const response = await fetchWithTimeout(endpoint.url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }, timeoutMs);
+      status = response.status;
+      const text = await response.text();
+      try { data = JSON.parse(text); } catch {
+        if (response.ok) throw new Error("Invalid chat completion response");
+        data = { error: { message: "Chat completion failed" } };
+      }
     }
-    throw error;
+  } catch (error) {
+    throw new Error(redactProviderError(`${provider}/${payload.model}: ${errorMessage(error)}`, key));
   }
-  const data = await response.json();
-  if (!response.ok) throw new Error(data?.error?.message || "Chat completion failed");
+  if (status < 200 || status >= 300) throw new ProviderHttpError(
+    redactProviderError(typeof data?.error?.message === "string" ? data.error.message : "Chat completion failed", key),
+    { status, provider, credentialSource: tier.credentialSource },
+  );
   // A 200 is not yet a completion -- see completionFailure. Throwing here is what puts
   // the failure inside the caller's per-model try, so the next model in the chain gets
   // tried and a total outage still reaches the delivery floor.
   const failure = completionFailure(data);
-  if (failure) throw new Error(failure);
+  if (failure) throw new Error(redactProviderError(failure, key));
   return data;
 }
 
@@ -534,6 +552,8 @@ Deno.serve(async (req) => {
   // Hoisted so the catch block can report which models were attempted.
   let usedModel: string | null = null;
   let usedFallbackLevel = 0;
+  let usedCredentialSource: "user" | "platform" | null = null;
+  let fallbackReason: string | undefined;
   const modelErrors: Array<{ model: string; error: string }> = [];
 
   // Hoisted out of the try below so the model-outage floor in the catch can reach
@@ -541,7 +561,7 @@ Deno.serve(async (req) => {
   let replySender: TextSender | null = null;
   let language: ReplyLanguage = "en";
   let escalationTarget: EscalationTarget | null = null;
-  let modelChain: ModelRef[] = [];
+  let modelChain: AiTier[] = [];
   // Set when a tool escalated during this request. The loop runs another iteration
   // afterwards so the model can phrase a closing message, so exhaustion in THAT
   // iteration would otherwise escalate a second time -- closing and recreating the
@@ -1032,13 +1052,22 @@ Deno.serve(async (req) => {
     // config.fallback_model_2 are deprecated, still in the database but no longer
     // read. Scheduled for removal after a verification window -- see
     // docs/superpowers/specs/2026-08-27-agent-model-selection-design.md §3e.
-    const rawChain = await loadGlobalModelChain(admin);
-    if (!rawChain.length) {
+    const routingAdmin = admin as unknown as AiRoutingAdmin;
+    const route = await resolveUserAiRoute(routingAdmin, request.user_id, 'agent');
+    if (route.mode === 'user_only' && !route.userTier) {
+      await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_CONNECTION_REQUIRED,
+        latency_ms: Date.now() - startedAt }, { error_code: AI_CONNECTION_REQUIRED, dry_run: dryRun });
+      if (outboxId) await cancelOutboxRow(admin, outboxId, AI_CONNECTION_REQUIRED);
+      return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_CONNECTION_REQUIRED });
+    }
+    const rawChain = route.mode === 'user_only' ? [] : await loadGlobalModelChain(admin);
+    modelChain = composeAiTiers(route, rawChain.map((ref) => ({ ...parseModelRef(ref), credentialSource: 'platform' })));
+    if (route.reason === 'user_key_missing') fallbackReason = route.reason;
+    if (!modelChain.length) {
       // No hardcoded last resort. Calling a model no admin selected is how an
       // unlisted gpt-4o-mini kept answering; a human is the better fallback.
       throw new ModelChainExhaustedError("No global AI agent model is configured");
     }
-    modelChain = rawChain.map(parseModelRef);
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       let completion: any = null;
       let lastError: unknown = null;
@@ -1055,7 +1084,7 @@ Deno.serve(async (req) => {
           break;
         }
         try {
-          completion = await chatCompletion(modelChain[mi].provider, {
+          completion = await chatCompletion(modelChain[mi], {
             model: modelChain[mi].model,
             temperature: config.temperature ?? 0.4,
             messages,
@@ -1065,11 +1094,14 @@ Deno.serve(async (req) => {
               ...customToolDefinitions(customTools),
             ],
             tool_choice: "auto",
-          }, Math.min(CHAT_TIMEOUT_MS, budgetMs));
+          }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin);
           usedModel = formatModelRef(modelChain[mi]);
           usedFallbackLevel = mi;
+          usedCredentialSource = modelChain[mi].credentialSource;
           break;
         } catch (err) {
+          await invalidateRejectedUserTier(routingAdmin, request.user_id, route, err);
+          if (modelChain[mi].credentialSource === 'user') fallbackReason = `user_tier_failed:${err instanceof ProviderHttpError ? err.status : 0}`;
           lastError = err;
           modelErrors.push({ model: formatModelRef(modelChain[mi]), error: errorMessage(err) });
         }
@@ -1127,7 +1159,7 @@ Deno.serve(async (req) => {
 
     // Fire-and-forget audit trail for AI agent calls (admin-visible logs).
     try {
-      await admin.from("admin_audit_log").insert({
+      const { error: auditError } = await admin.from("admin_audit_log").insert({
         admin_id: request.user_id,
         action: "ai_agent_reply",
         resource_type: "ai_agent",
@@ -1135,6 +1167,8 @@ Deno.serve(async (req) => {
         details: {
           platform: request.platform,
           used_model: usedModel,
+          credential_source: usedCredentialSource,
+          fallback_reason: fallbackReason,
           fallback_level: usedFallbackLevel,
           model_chain: modelChain.map(formatModelRef),
           model_errors: modelErrors.length ? modelErrors : null,
@@ -1143,6 +1177,7 @@ Deno.serve(async (req) => {
           dry_run: dryRun,
         },
       });
+      if (auditError) throw new Error("AI audit log write failed");
     } catch (e) {
       console.error("[ai-agent-reply] audit log insert failed:", errorMessage(e));
     }
@@ -1158,6 +1193,8 @@ Deno.serve(async (req) => {
         latency_ms: Date.now() - startedAt,
       }, {
         used_model: usedModel,
+        credential_source: usedCredentialSource,
+        fallback_reason: fallbackReason,
         fallback_level: usedFallbackLevel,
         model_errors: modelErrors.length ? modelErrors : null,
         rag_error: ragError,
@@ -1200,6 +1237,8 @@ Deno.serve(async (req) => {
       status: dryRun ? "test" : "sent",
     }, {
       used_model: usedModel,
+      credential_source: usedCredentialSource,
+      fallback_reason: fallbackReason,
       fallback_level: usedFallbackLevel,
       model_errors: modelErrors.length ? modelErrors : null,
         rag_error: ragError,
@@ -1233,6 +1272,8 @@ Deno.serve(async (req) => {
         latency_ms: Date.now() - startedAt,
       }, {
         used_model: usedModel,
+        credential_source: usedCredentialSource,
+        fallback_reason: fallbackReason,
         fallback_level: usedFallbackLevel,
         model_errors: modelErrors.length ? modelErrors : null,
         model_chain: modelChain.map(formatModelRef),
@@ -1262,6 +1303,8 @@ Deno.serve(async (req) => {
       latency_ms: Date.now() - startedAt,
     }, {
       used_model: usedModel,
+      credential_source: usedCredentialSource,
+      fallback_reason: fallbackReason,
       fallback_level: usedFallbackLevel,
       model_errors: modelErrors.length ? modelErrors : null,
     });
