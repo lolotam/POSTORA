@@ -879,6 +879,19 @@ async function handleRequest(req: Request): Promise<Response> {
         );
       }
       const scopeToAccount = requestedScope === "account";
+      if (body.generate_setup !== undefined && typeof body.generate_setup !== "boolean") {
+        await logKnowledgeEvent(admin, user.id, "ingest_website", false, { rejected: "invalid generate_setup" });
+        return errorResponse("generate_setup must be a boolean", 400);
+      }
+      if (body.generate_setup === true) {
+        const { data: account, error: accountError } = await (admin as any).from("social_accounts")
+          .select("id").eq("id", namedAccount || "00000000-0000-0000-0000-000000000000")
+          .eq("user_id", user.id).eq("platform", body.platform).eq("is_active", true).maybeSingle();
+        if (accountError || !account || !["whatsapp", "facebook", "instagram", "threads", "youtube"].includes(body.platform)) {
+          await logKnowledgeEvent(admin, user.id, "ingest_website", false, { rejected: "setup target unavailable" });
+          return errorResponse("Select an active account to generate setup.", 400);
+        }
+      }
       const { data: sourceId, error: createError } = await (caller as any).rpc(
         "create_ai_knowledge_source",
         {
@@ -891,6 +904,16 @@ async function handleRequest(req: Request): Promise<Response> {
         },
       );
       if (createError) throw createError;
+      let setup_error: string | undefined;
+      if (body.generate_setup === true) {
+        const { error: setupError } = await (caller as any).rpc("create_ai_website_setup_job", {
+          p_source_id: sourceId, p_social_account_id: namedAccount, p_platform: body.platform,
+        });
+        if (setupError) {
+          await logKnowledgeEvent(admin, user.id, "ingest_website", false, { source_id: sourceId, rejected: "setup job creation failed" });
+          setup_error = "Setup generation could not be queued. Indexing continues; request setup from the indexed source later.";
+        }
+      }
 
       // THROWS on a failed write. PostgREST reports failures in the resolved
       // result, not by rejecting, so `await setMeta(...)` would sail past a
@@ -941,7 +964,7 @@ async function handleRequest(req: Request): Promise<Response> {
             crawl_job_id: jobId,
             limit,
           });
-          return jsonResponse({ ok: true, queued: true, source_id: sourceId }, 202);
+          return jsonResponse({ ok: true, queued: true, source_id: sourceId, ...(setup_error ? { setup_error } : {}) }, 202);
         } catch (error) {
           // The crawl may already be RUNNING and billable while its id failed to
           // reach source metadata -- which is exactly the state delete-cancel
@@ -971,7 +994,9 @@ async function handleRequest(req: Request): Promise<Response> {
         await setMeta({ stage: "embedding", pages_done: 1, pages_total: 1 });
         // Title and URL lead the text so a retrieved chunk still says which page
         // it came from.
-        const chunks = chunkProfileText(`${page.title}\n${page.url}\n\n${page.markdown}`);
+        const chunks = chunkProfileText(`${page.title}\n${page.url}\n\n${page.markdown}`).map((chunk) => ({
+          ...chunk, metadata: { ...chunk.metadata, source_url: page.url },
+        }));
         if (chunks.length > MAX_INLINE_CHUNKS) {
           // The same handoff the document path makes: parsing is cheap,
           // embedding is what runs out of the ~60s budget.
@@ -986,7 +1011,7 @@ async function handleRequest(req: Request): Promise<Response> {
             chunk_count: chunks.length,
             queued: true,
           });
-          return jsonResponse({ ok: true, queued: true, chunks: chunks.length }, 202);
+          return jsonResponse({ ok: true, queued: true, source_id: sourceId, chunks: chunks.length, ...(setup_error ? { setup_error } : {}) }, 202);
         }
         const stored = await replaceChunks(admin, sourceId, user.id, chunks);
         // Checked, for the same reason setMeta throws. An unchecked failure here
@@ -1005,7 +1030,7 @@ async function handleRequest(req: Request): Promise<Response> {
           url: check.url,
           chunk_count: chunks.length,
         });
-        return jsonResponse({ ok: true, chunk_count: chunks.length });
+        return jsonResponse({ ok: true, source_id: sourceId, chunk_count: chunks.length, ...(setup_error ? { setup_error } : {}) });
       } catch (error) {
         await setFailed(admin, sourceId, error);
         await logKnowledgeEvent(admin, user.id, "ingest_website", false, {
