@@ -122,6 +122,10 @@ function fixture(results: DbResult[] = [], status = 200) {
       calls.push({ name: "eq", args: [column, value] });
       return query;
     },
+    in: (column, values) => {
+      calls.push({ name: "in", args: [column, values] });
+      return query;
+    },
     upsert: (values, options) => {
       calls.push({ name: "upsert", args: [values, options] });
       return query;
@@ -197,6 +201,8 @@ for (const provider of PROVIDERS) {
       const id = existing ? "existing-secret" : "new-secret";
       const f = fixture([
         ok(existing ? stored(id, provider) : null),
+        // A replacement reads the previous key first so a failed row write can restore it.
+        ...existing ? [ok("previous-key")] : [],
         rpcSecret(id),
         ok(),
         ok(stored(id, provider)),
@@ -271,28 +277,80 @@ Deno.test("save network error stores nothing and never exposes exception secrets
   assert(!JSON.stringify([result, f.logs]).includes(key));
 });
 
-for (const existing of [false, true]) {
-  Deno.test(`failed row write ${existing ? "preserves existing" : "reclaims new"} secret`, async () => {
-    const f = fixture([
-      ok(existing ? stored() : null),
-      rpcSecret(),
-      failed(),
-      ...existing ? [] : [ok()],
-    ]);
-    const result = await f.run({
-      action: "save_key",
-      provider_code: "openai",
-      api_key: key,
-    });
-    assertEquals(result.status, 500);
-    assertEquals(result.body.code, "STORE_FAILED");
-    assertEquals(
-      f.calls.filter((c) => c.name === "delete_connector_credential_secret")
-        .map((c) => c.args),
-      existing ? [] : [[{ p_secret_id: "new-secret" }]],
-    );
+Deno.test("failed row write reclaims a newly created secret", async () => {
+  const f = fixture([ok(null), rpcSecret(), failed(), ok()]);
+  const result = await f.run({
+    action: "save_key",
+    provider_code: "openai",
+    api_key: key,
   });
-}
+  assertEquals(result.status, 500);
+  assertEquals(result.body.code, "STORE_FAILED");
+  assertEquals(
+    f.calls.filter((c) => c.name === "delete_connector_credential_secret")
+      .map((c) => c.args),
+    [[{ p_secret_id: "new-secret" }]],
+  );
+  assertEquals(f.remaining(), 0);
+});
+Deno.test("failed row write restores the previous key into an in-place replacement", async () => {
+  const f = fixture([
+    ok(stored("existing-secret")),
+    ok("previous-key"),
+    rpcSecret("existing-secret"),
+    failed(),
+    ok(),
+  ]);
+  const result = await f.run({
+    action: "save_key",
+    provider_code: "openai",
+    api_key: key,
+  });
+  assertEquals(result.status, 500);
+  assertEquals(result.body.code, "STORE_FAILED");
+  assertEquals(
+    f.calls.filter((c) => c.name === "delete_connector_credential_secret"),
+    [],
+  );
+  assertEquals(
+    f.calls.filter((c) => c.name === "upsert_connector_credential_secret")
+      .map((c) => c.args),
+    [
+      [{ p_secret_id: "existing-secret", p_secret: { api_key: key } }],
+      [{ p_secret_id: "existing-secret", p_secret: { api_key: "previous-key" } }],
+    ],
+  );
+  assert(!JSON.stringify([result, f.logs]).includes(key));
+  assertEquals(f.remaining(), 0);
+});
+Deno.test("failed row write reclaims the fresh secret created for a dangling secret id", async () => {
+  // The row points at a Vault id that no longer decrypts: the RPC creates a new
+  // secret, so a failed row write must delete that one, not restore anything.
+  const f = fixture([
+    ok(stored("dangling-secret")),
+    ok(null),
+    rpcSecret("fresh-secret"),
+    failed(),
+    ok(),
+  ]);
+  const result = await f.run({
+    action: "save_key",
+    provider_code: "openai",
+    api_key: key,
+  });
+  assertEquals(result.body.code, "STORE_FAILED");
+  assertEquals(
+    f.calls.filter((c) => c.name === "delete_connector_credential_secret")
+      .map((c) => c.args),
+    [[{ p_secret_id: "fresh-secret" }]],
+  );
+  assertEquals(
+    f.calls.filter((c) => c.name === "upsert_connector_credential_secret")
+      .length,
+    1,
+  );
+  assertEquals(f.remaining(), 0);
+});
 Deno.test("concurrent first-save loser reclaims its secret and returns the winning row", async () => {
   const winner = { ...stored("winner-secret"), key_hint: "5678" };
   const f = fixture([ok(null), rpcSecret(), ok(), ok(winner), ok()]);
@@ -352,27 +410,24 @@ Deno.test("missing test key returns connection required", async () => {
   assertEquals(f.fetchCount(), 0);
 });
 
-Deno.test("delete reclaims secret before deleting the owner-scoped row", async () => {
-  const f = fixture([ok(stored()), ok(), ok()]);
+Deno.test("delete removes only the owner-scoped row and leaves Vault reclaim to the trigger", async () => {
+  const f = fixture([ok(stored()), ok()]);
   assertEquals(
     (await f.run({ action: "delete_key", provider_code: "openai" })).body,
     { ok: true },
   );
-  assert(
-    f.calls.findIndex((c) => c.name === "delete_connector_credential_secret") <
-      f.calls.findIndex((c) => c.name === "delete"),
+  assertEquals(
+    f.calls.filter((c) => c.name === "delete_connector_credential_secret"),
+    [],
   );
-  assertEquals(f.calls.slice(-2).map((c) => c.args), [[
+  assertEquals(f.calls.slice(-3).map((c) => c.args), [[], [
     "user_id",
     "verified-user",
   ], ["provider_code", "openai"]]);
+  assertEquals(f.remaining(), 0);
 });
 for (
-  const results of [[failed()], [ok(stored()), failed()], [
-    ok(stored()),
-    ok(),
-    failed(),
-  ]]
+  const results of [[failed()], [ok(stored()), failed()]]
 ) {
   Deno.test(`delete surfaces failure at database operation ${results.length}`, async () => {
     const f = fixture(results);
@@ -497,4 +552,33 @@ Deno.test("invalid inputs and unknown actions fail before any provider or databa
     (await f.run({ action: "list" }, "user-token", "GET")).status,
     405,
   );
+});
+
+Deno.test("list_models returns the active catalog for the four providers through the service role", async () => {
+  const f = fixture([
+    ok([
+      { id: "m1", model_id: "gpt-x", name: "GPT X", ai_providers: { provider_code: "openai" } },
+      { id: "m2", model_id: "claude-sonnet-5", name: "Claude Sonnet 5", ai_providers: { provider_code: "claude" } },
+    ]),
+  ]);
+  const result = await f.run({ action: "list_models" });
+  assertEquals(result.status, 200);
+  assertEquals(result.body.data, {
+    models: [
+      { id: "m1", model_id: "gpt-x", name: "GPT X", provider_code: "openai" },
+      { id: "m2", model_id: "claude-sonnet-5", name: "Claude Sonnet 5", provider_code: "claude" },
+    ],
+  });
+  assertEquals(f.calls.find((c) => c.name === "from")?.args, ["ai_models"]);
+  assertEquals(
+    f.calls.find((c) => c.name === "in")?.args,
+    ["ai_providers.provider_code", PROVIDERS],
+  );
+  assertEquals(f.calls.find((c) => c.name === "eq")?.args, ["is_active", true]);
+  assertEquals(f.fetchCount(), 0);
+});
+Deno.test("list_models surfaces a failed catalog read instead of an empty list", async () => {
+  const f = fixture([failed()]);
+  const result = await f.run({ action: "list_models" });
+  assertEquals(result, { status: 500, body: { ok: false, code: "STORE_FAILED" } });
 });

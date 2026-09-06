@@ -24,9 +24,24 @@ const gateway = createSupabaseAiProvidersGateway("user-1");
 
 describe("Supabase AI provider gateway", () => {
   beforeEach(() => { response.data = null; response.error = null; invoke.mockReset(); operations.length = 0; });
-  it.each(["getPreferences", "isOnWaitlist", "listModels"] as const)("%s throws a coded Error on a failed read", async method => {
+  it.each(["getPreferences", "isOnWaitlist"] as const)("%s throws a coded Error on a failed read", async method => {
     response.error = { code: "42501" };
     await expect(gateway[method]()).rejects.toMatchObject({ message: "42501", code: "42501" });
+  });
+  it("lists models through the Edge Function, not a browser join, sorted by name", async () => {
+    invoke.mockResolvedValue({ data: { ok: true, data: { models: [
+      { id: "m2", model_id: "claude-sonnet-5", name: "Claude Sonnet 5", provider_code: "claude" },
+      { id: "m1", model_id: "gpt-x", name: "A GPT", provider_code: "openai" },
+      { id: "m3", model_id: "other", name: "Other", provider_code: "xai" },
+    ] } }, error: null });
+    const models = await gateway.listModels();
+    expect(invoke).toHaveBeenCalledWith("user-ai-providers", { body: { action: "list_models" } });
+    expect(operations).toEqual([]);
+    expect(models.map(m => m.model_id)).toEqual(["gpt-x", "claude-sonnet-5"]);
+  });
+  it("listModels throws the envelope code on a failed catalog read", async () => {
+    invoke.mockResolvedValue({ data: { ok: false, code: "STORE_FAILED" }, error: null });
+    await expect(gateway.listModels()).rejects.toMatchObject({ message: "STORE_FAILED", code: "STORE_FAILED" });
   });
   it("throws on both preference write and delete errors", async () => {
     response.error = { code: "42501" };

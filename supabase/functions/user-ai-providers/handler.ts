@@ -5,7 +5,12 @@ import {
   RATE_LIMITED,
   STORE_FAILED,
 } from "./errors.ts";
-import { isProvider, type Provider, validateKey } from "./validation.ts";
+import {
+  isProvider,
+  type Provider,
+  PROVIDERS,
+  validateKey,
+} from "./validation.ts";
 
 type Row = Record<string, unknown>;
 export interface DbResult {
@@ -15,6 +20,7 @@ export interface DbResult {
 export interface Query extends PromiseLike<DbResult> {
   select(columns: string): Query;
   eq(column: string, value: unknown): Query;
+  in(column: string, values: readonly string[]): Query;
   upsert(
     values: Row,
     options: { onConflict: string; ignoreDuplicates?: boolean },
@@ -55,7 +61,14 @@ export interface Result {
 }
 const SAFE_COLUMNS =
   "id, provider_code, key_hint, status, last_verified_at, updated_at";
-const ACTIONS = ["list", "save_key", "test_key", "delete_key", "join_waitlist"];
+const ACTIONS = [
+  "list",
+  "list_models",
+  "save_key",
+  "test_key",
+  "delete_key",
+  "join_waitlist",
+];
 const success = (data?: unknown): Result => ({
   status: 200,
   body: { ok: true, ...(data === undefined ? {} : { data }) },
@@ -136,6 +149,45 @@ function parseSecret(data: unknown): string {
   return row.secret_id;
 }
 
+async function readStoredKey(
+  admin: AdminClient,
+  userId: string,
+  provider: Provider,
+): Promise<string | null> {
+  const { data, error } = await admin.rpc("get_user_ai_provider_key", {
+    p_user_id: userId,
+    p_provider_code: provider,
+    p_include_invalid: true,
+  });
+  if (error) throw new Error(STORE_FAILED);
+  if (data === null) return null;
+  if (typeof data !== "string" || !data) throw new Error(STORE_FAILED);
+  return data;
+}
+
+// Vault update and row upsert are two statements, so a failed row write must
+// put the secret back the way it was: a newly created secret is deleted, an
+// in-place replacement is restored to the previous key. Without this an
+// `invalid` row would keep ignoring a secret that now holds a working key.
+async function undoSecretWrite(
+  admin: AdminClient,
+  existingId: string | null,
+  previousKey: string | null,
+  writtenId: string,
+): Promise<void> {
+  if (writtenId !== existingId) {
+    await deleteSecret(admin, writtenId);
+    return;
+  }
+  if (previousKey !== null) {
+    const { error } = await admin.rpc("upsert_connector_credential_secret", {
+      p_secret_id: existingId,
+      p_secret: { api_key: previousKey },
+    });
+    if (error) throw new Error(STORE_FAILED);
+  }
+}
+
 async function saveKey(
   deps: Dependencies,
   userId: string,
@@ -151,6 +203,9 @@ async function saveKey(
   }
   const existing = await readKey(deps.admin, userId, provider);
   const existingId = secretId(existing);
+  const previousKey = existingId
+    ? await readStoredKey(deps.admin, userId, provider)
+    : null;
   const { data, error } = await deps.admin.rpc(
     "upsert_connector_credential_secret",
     {
@@ -169,21 +224,41 @@ async function saveKey(
     last_verified_at: new Date(deps.now()).toISOString(),
     last_error_code: null,
   };
-  try {
-    const { error: writeError } = await deps.admin.from("user_ai_provider_keys")
-      .upsert(values, { onConflict: "user_id,provider_code" });
-    if (writeError) throw new Error(STORE_FAILED);
-  } catch {
-    // An existing secret is updated IN PLACE; reclaiming it would destroy the connection.
-    if (!existingId) await deleteSecret(deps.admin, writtenId);
+  const { error: writeError } = await deps.admin.from("user_ai_provider_keys")
+    .upsert(values, { onConflict: "user_id,provider_code" });
+  if (writeError) {
+    await undoSecretWrite(deps.admin, existingId, previousKey, writtenId);
     throw new Error(STORE_FAILED);
   }
   const saved = await readKey(deps.admin, userId, provider);
   if (!saved) throw new Error(STORE_FAILED);
-  if (!existingId && secretId(saved) !== writtenId) {
+  if (writtenId !== existingId && secretId(saved) !== writtenId) {
+    // A concurrent first save won the row; reclaim the secret this request created.
     await deleteSecret(deps.admin, writtenId);
   }
   return success(safeKey(saved));
+}
+
+// Model catalog for the routing picker. ai_providers is admin-only under RLS,
+// so a browser join through it returns an empty list for regular users; the
+// service role reads it here and returns only catalog columns.
+async function listModels(deps: Dependencies): Promise<Result> {
+  const { data, error } = await deps.admin.from("ai_models")
+    .select("id, model_id, name, ai_providers!inner(provider_code)")
+    .eq("is_active", true)
+    .in("ai_providers.provider_code", PROVIDERS);
+  if (error || !Array.isArray(data)) throw new Error(STORE_FAILED);
+  return success({
+    models: data.map((value) => {
+      const row = record(value);
+      return {
+        id: row.id,
+        model_id: row.model_id,
+        name: row.name,
+        provider_code: record(row.ai_providers).provider_code,
+      };
+    }),
+  });
 }
 
 async function listKeys(deps: Dependencies, userId: string): Promise<Result> {
@@ -249,8 +324,9 @@ async function deleteKey(
 ): Promise<Result> {
   const existing = await readKey(deps.admin, userId, provider);
   if (!existing) return failure(404, AI_CONNECTION_REQUIRED);
-  const existingId = secretId(existing);
-  if (existingId) await deleteSecret(deps.admin, existingId);
+  // Only the row is deleted here. The AFTER DELETE trigger installed by the
+  // migration reclaims the Vault secret inside the same transaction, so a
+  // failed row delete never leaves a connected-looking row without a key.
   const { error } = await deps.admin.from("user_ai_provider_keys").delete()
     .eq("user_id", userId).eq("provider_code", provider);
   if (error) throw new Error(STORE_FAILED);
@@ -264,6 +340,7 @@ async function dispatch(
   body: Row,
 ): Promise<Result> {
   if (action === "list") return await listKeys(deps, userId);
+  if (action === "list_models") return await listModels(deps);
   if (action === "join_waitlist") {
     if (body.provider_code !== "codex") return failure(400, "INVALID_REQUEST");
     return await joinWaitlist(deps, userId);

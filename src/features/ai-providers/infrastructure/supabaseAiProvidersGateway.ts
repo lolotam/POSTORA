@@ -4,6 +4,7 @@ import {
   type AiProvidersGateway,
   type KeyStatus,
   type ProviderCode,
+  type ProviderModel,
   type RoutingPreference,
 } from "../application/ports";
 
@@ -90,14 +91,12 @@ export function createSupabaseAiProvidersGateway(userId: string): AiProvidersGat
       check(error);
     },
     async listModels() {
-      const { data, error } = await supabase.from("ai_models")
-        .select("id, model_id, name, ai_providers!inner(provider_code)")
-        .eq("is_active", true).in("ai_providers.provider_code", Object.keys(PROVIDERS)).order("name");
-      check(error);
-      return (data ?? []).map(row => ({
-        id: row.id, model_id: row.model_id, name: row.name,
-        provider_code: row.ai_providers.provider_code as ProviderCode,
-      }));
+      // ai_providers is admin-only under RLS, so the catalog comes from the
+      // Edge Function (service role) rather than a browser join.
+      const data = await invoke<{ models: ProviderModel[] }>({ action: "list_models" });
+      return data.models
+        .filter(row => row.provider_code in PROVIDERS)
+        .sort((a, b) => a.name.localeCompare(b.name));
     },
   };
 }
