@@ -23,7 +23,7 @@ Deno.test("Anthropic extracts all system turns and drops deprecated sampling par
   });
   assertEquals(request, {
     model: "claude-sonnet-5",
-    max_tokens: 1024,
+    max_tokens: 8192,
     system: "one\n\ntwo",
     messages: [{ role: "user", content: [{ type: "text", text: "hi" }] }],
   });

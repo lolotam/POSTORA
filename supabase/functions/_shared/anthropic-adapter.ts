@@ -1,6 +1,7 @@
 import { redactProviderError } from "./ai-routing-errors.ts";
 
 type JsonRecord = Record<string, unknown>;
+export const DEFAULT_MAX_TOKENS = 8192;
 function record(value: unknown): JsonRecord {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? value as JsonRecord
@@ -78,9 +79,14 @@ export function toAnthropicRequest(openAiBody: JsonRecord): JsonRecord {
     if (previous?.role === role) previous.content.push(...content);
     else messages.push({ role, content });
   }
+  // Anthropic requires max_tokens; OpenAI-shaped callers here never send one.
+  // 1024 truncated brand intelligence (10 captions + 10 image prompts + 10
+  // video outlines) with a 200 and stop_reason max_tokens, which the chain
+  // reads as success. 8192 fits every current caller and is well under the
+  // seeded models' output ceilings (64K on Haiku 4.5, 128K on Sonnet/Opus 5).
   const request: JsonRecord = {
     model: openAiBody.model,
-    max_tokens: openAiBody.max_tokens ?? 1024,
+    max_tokens: openAiBody.max_tokens ?? DEFAULT_MAX_TOKENS,
     messages,
   };
   if (system.length) request.system = system.join("\n\n");
