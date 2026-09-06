@@ -103,3 +103,4 @@ DO $$ BEGIN
  END IF;
 END $$;
 SELECT 'website_setup_jobs: tenancy, visibility, leases, idempotence, CAS and operational preservation passed' AS result;
+\echo website_setup_jobs: ALL CHECKS PASSED

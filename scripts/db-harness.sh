@@ -121,6 +121,10 @@ SUITES=(
   social_contacts.sql
   byok_provider_keys.sql
 )
+# These fixtures build their own focused schema and apply the migration under
+# test. They must never run against the restored production-shaped database.
+ISOLATED_SUITES=(website_setup_jobs.sql)
+ISOLATED_DB_NAME=website_setup_test
 SEED_USER_ID="0e5eeee1-0000-4000-8000-000000000001"
 SEED_USER_EMAIL="harness-seed@example.invalid"
 
@@ -230,6 +234,10 @@ if [ "$MAINT_DB" = "$HARNESS_DB_NAME" ]; then
   fail 2 "REFUSING: the connection string already targets the harness database '$HARNESS_DB_NAME'.
   Connect to a maintenance database (e.g. 'postgres'); the harness creates '$HARNESS_DB_NAME' itself."
 fi
+if [ "$MAINT_DB" = "$ISOLATED_DB_NAME" ] || [ "$HARNESS_DB_NAME" = "$ISOLATED_DB_NAME" ]; then
+  fail 2 "REFUSING: '$ISOLATED_DB_NAME' is reserved for the isolated SQL suite.
+  Neither the maintenance nor the baseline harness database may use that name."
+fi
 command -v psql >/dev/null 2>&1 || fail 2 "psql is required but not on PATH"
 
 # URL for the harness database: swap the path component of DB_URL.
@@ -238,7 +246,8 @@ command -v psql >/dev/null 2>&1 || fail 2 "psql is required but not on PATH"
 # step pointed at the MAINTENANCE database (dropping its schemas!). The
 # current_database() check below now makes any rewrite failure loud.
 harness_url() {
-  printf '%s' "$DB_URL" | sed -E "s#^([a-zA-Z][a-zA-Z0-9+.-]*://[^/]*/)[^/?]*(\?.*)?\$#\1$HARNESS_DB_NAME#"
+  local target_db="${1:-$HARNESS_DB_NAME}"
+  printf '%s' "$DB_URL" | sed -E "s#^([a-zA-Z][a-zA-Z0-9+.-]*://[^/]*/)[^/?]*(\?.*)?\$#\1$target_db#"
 }
 
 PSQL_COMMON=(-X --set=ON_ERROR_STOP=1)
@@ -594,20 +603,33 @@ EXCLUDED_FROM_SUITES=(baseline_schema.sql partner_api_race_fixture.sql)
 for f in "$TESTS_DIR"/*.sql; do
   name="$(basename "$f")"
   listed=0
-  for s in "${SUITES[@]}" "${EXCLUDED_FROM_SUITES[@]}"; do
+  for s in "${SUITES[@]}" "${ISOLATED_SUITES[@]}" "${EXCLUDED_FROM_SUITES[@]}"; do
     [ "$s" = "$name" ] && listed=1 && break
   done
   if [ "$listed" -eq 0 ]; then
-    echo "db-harness: FAIL: $name exists in $TESTS_DIR but is not in SUITES (or EXCLUDED_FROM_SUITES)." >&2
+    echo "db-harness: FAIL: $name exists in $TESTS_DIR but is not in SUITES, ISOLATED_SUITES or EXCLUDED_FROM_SUITES." >&2
     echo "  A suite that is not listed never runs, and this harness would still report OK." >&2
     exit 1
   fi
 done
 
-for s in "${SUITES[@]}"; do
+for s in "${SUITES[@]}" "${ISOLATED_SUITES[@]}"; do
   STEP="suite $s"
+  SUITE_URL="$HARNESS_URL"
+  ISOLATED=0
+  for isolated_suite in "${ISOLATED_SUITES[@]}"; do
+    if [ "$s" = "$isolated_suite" ]; then
+      ISOLATED=1
+      psql "${PSQL_COMMON[@]}" "$DB_URL" -q -c "drop database if exists \"$ISOLATED_DB_NAME\" with (force)"
+      psql "${PSQL_COMMON[@]}" "$DB_URL" -q -c "create database \"$ISOLATED_DB_NAME\""
+      SUITE_URL="$(harness_url "$ISOLATED_DB_NAME")"
+      GOT_DB="$(psql "${PSQL_COMMON[@]}" "$SUITE_URL" -Atqc "select current_database()")"
+      [ "$GOT_DB" = "$ISOLATED_DB_NAME" ] || fail 2 "REFUSING: isolated suite URL resolved to the wrong database."
+      break
+    fi
+  done
   echo "db-harness: running suite $s"
-  if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -f "$TESTS_DIR/$s" >"$OUT" 2>"$ERR"; then
+  if ! psql "${PSQL_COMMON[@]}" "$SUITE_URL" -f "$TESTS_DIR/$s" >"$OUT" 2>"$ERR"; then
     echo "" >&2
     echo "db-harness: SUITE FAILED (sql error): $s" >&2
     sed 's/^/  /' "$ERR" >&2
@@ -772,6 +794,9 @@ for s in "${SUITES[@]}"; do
         exit 1 ;;
     esac
   fi
+  if [ "$ISOLATED" -eq 1 ]; then
+    psql "${PSQL_COMMON[@]}" "$DB_URL" -q -c "drop database \"$ISOLATED_DB_NAME\" with (force)"
+  fi
 done
 
 echo "db-harness: race fixture partner_api_race_fixture.sql intentionally NOT applied (manual concurrency rehearsal; see supabase/tests/README.md)"
@@ -796,5 +821,5 @@ if ! psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -f "$E2E_FIXTURE" >"$OUT" 2>"$ERR";
 fi
 echo "db-harness: E2E fixture installed (partner_e2e_fixture)"
 
-echo "db-harness: OK — baseline ($MARKER) + ${#NEW_MIGRATIONS[@]} newer migrations + ${#SUITES[@]} suites passed"
+echo "db-harness: OK — baseline ($MARKER) + ${#NEW_MIGRATIONS[@]} newer migrations + ${#SUITES[@]} baseline suites + ${#ISOLATED_SUITES[@]} isolated suites passed"
 echo "db-harness: harness database left in place for inspection: $(redacted_url)"
