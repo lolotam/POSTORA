@@ -391,6 +391,8 @@ export async function importEvolutionHistory(deps: {
   try {
     const outcome = await syncEvolutionHistory(deps);
     console.log(`[whatsapp-sync] ${instanceName}: ${JSON.stringify(outcome)}`);
+    // The setup page polls this to tell the user what the button they pressed achieved.
+    completion.last_sync_outcome = { ...outcome, finished_at: new Date().toISOString() };
     // Completion needs evidence the history was actually there. Baileys can publish the chat
     // list before it has loaded any messages, so a sweep that found 300 conversations and
     // zero messages has not succeeded -- recording it would permanently disable the retry
@@ -403,6 +405,14 @@ export async function importEvolutionHistory(deps: {
     if (sweptCleanly && outcome.messagesWritten > 0) {
       completion.last_sync_at = new Date().toISOString();
     }
+  } catch (error) {
+    // The user pressed a button and deserves to see why nothing arrived. The text is
+    // Evolution's or Postgres's error message, never a credential.
+    completion.last_sync_outcome = {
+      finished_at: new Date().toISOString(),
+      error: error instanceof Error ? error.message.slice(0, 200) : "sync failed",
+    };
+    throw error;
   } finally {
     await admin.from("whatsapp_evolution_instances").update(completion).eq("social_account_id", account.id);
   }

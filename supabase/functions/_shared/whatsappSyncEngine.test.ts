@@ -304,6 +304,52 @@ Deno.test("a page that repeats a message id is written once", async () => {
   assertEquals(rowsFor(admin, "import_whatsapp_messages").map((r) => r.message_id).sort(), ["OTHER", "SAME"]);
 });
 
+Deno.test("importEvolutionHistory records the outcome with the lease release", async () => {
+  const admin = fakeAdmin();
+  const baseRpc = admin.rpc;
+  (admin as any).rpc = (fn: string, args: any) => {
+    if (fn === "claim_whatsapp_history_sync") return Promise.resolve({ data: true, error: null });
+    return baseRpc(fn, args);
+  };
+  await importEvolutionHistory({
+    admin,
+    api: fakeApi({
+      chats: [chat("96555683677@s.whatsapp.net")],
+      messages: { "96555683677@s.whatsapp.net": [lidMessage("M1", "96555683677@s.whatsapp.net", "hi")] },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+  const completion = rowsFor(admin, "whatsapp_evolution_instances")[0];
+  assertEquals(completion.sync_started_at, null);
+  assertEquals(typeof completion.last_sync_at, "string");
+  assertEquals(completion.last_sync_outcome.chatsImported, 1);
+  assertEquals(completion.last_sync_outcome.messagesWritten, 1);
+  assertEquals(typeof completion.last_sync_outcome.finished_at, "string");
+});
+
+Deno.test("a sweep that throws still records the error for the setup page", async () => {
+  const admin = fakeAdmin();
+  const baseRpc = admin.rpc;
+  (admin as any).rpc = (fn: string, args: any) => {
+    if (fn === "claim_whatsapp_history_sync") return Promise.resolve({ data: true, error: null });
+    return baseRpc(fn, args);
+  };
+  const api = fakeApi();
+  api.findChats = () => Promise.reject(new Error("evolution unreachable"));
+  let thrown: unknown = null;
+  try {
+    await importEvolutionHistory({ admin, api, account: ACCOUNT, instanceName: "postora_acc-1" });
+  } catch (error) {
+    thrown = error;
+  }
+  assertEquals(thrown instanceof Error, true);
+  const completion = rowsFor(admin, "whatsapp_evolution_instances")[0];
+  assertEquals(completion.sync_started_at, null);
+  assertEquals(completion.last_sync_outcome.error, "evolution unreachable");
+  assertEquals("last_sync_at" in completion, false);
+});
+
 Deno.test("a sweep is not marked complete until history is actually available", async (t) => {
   // 2026-08-21 review finding: Baileys can publish the chat list before it has loaded any
   // messages. Recording completion on chats alone permanently disabled the retry a warming
