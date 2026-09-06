@@ -1,6 +1,13 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
+import { callAnthropic } from "./anthropic-adapter.ts";
+import { AI_USER_KEY_INVALID, redactProviderError } from "./ai-routing-errors.ts";
+import type { AiRoutingAdmin } from "./ai-user-routing.ts";
+
+export type AiTier =
+  | { provider: string; model: string; credentialSource: 'user'; apiKey: string }
+  | { provider: string; model: string; credentialSource: 'platform'; apiKey?: string };
 
 export interface AiEndpoint {
+  kind?: 'anthropic';
   apiUrl: string;
   apiKey: string;
   headers: Record<string, string>;
@@ -12,6 +19,8 @@ export interface AiTierResult {
   model: string;
   status: number;
   error?: string;
+  credentialSource?: 'user' | 'platform';
+  reason?: 'tier_cap';
 }
 
 export interface AiCallResult {
@@ -20,6 +29,10 @@ export interface AiCallResult {
   modelUsed: string;
   providerUsed: string;
   tiers: AiTierResult[];
+  credentialSource?: 'user' | 'platform';
+  fallbackReason?: string;
+  /** Set when every attempted tier was the user's own key and the provider rejected it. */
+  errorCode?: 'AI_USER_KEY_INVALID';
 }
 
 /** Category-aware hardcoded last resort models */
@@ -32,9 +45,18 @@ const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } |
   stt: { provider: 'openai', model: 'whisper-1' },
 };
 
-export function getAiEndpoint(provider: string): AiEndpoint {
+export function getAiEndpoint(provider: string, suppliedKey?: string): AiEndpoint {
+  if (provider === 'claude') {
+    const apiKey = suppliedKey ?? Deno.env.get('ANTHROPIC_API_KEY') ?? '';
+    return { kind: 'anthropic', apiUrl: '', apiKey, headers: {} };
+  }
+  if (provider === 'openai') {
+    const apiKey = suppliedKey ?? Deno.env.get('OPENAI_API_KEY') ?? '';
+    return { apiUrl: 'https://api.openai.com/v1/chat/completions', apiKey,
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } };
+  }
   if (provider === 'openrouter') {
-    const apiKey = Deno.env.get('OPENROUTER_API_KEY') ?? '';
+    const apiKey = suppliedKey ?? Deno.env.get('OPENROUTER_API_KEY') ?? '';
     return {
       apiUrl: 'https://openrouter.ai/api/v1/chat/completions',
       apiKey,
@@ -48,7 +70,7 @@ export function getAiEndpoint(provider: string): AiEndpoint {
   }
 
   // Default: Google AI Studio direct
-  const apiKey = Deno.env.get('GOOGLE_AI_STUDIO_KEY') ?? '';
+  const apiKey = suppliedKey ?? Deno.env.get('GOOGLE_AI_STUDIO_KEY') ?? '';
   return {
     apiUrl: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
     apiKey,
@@ -59,8 +81,21 @@ export function getAiEndpoint(provider: string): AiEndpoint {
   };
 }
 
+export async function resolvePlatformApiKey(admin: AiRoutingAdmin | undefined, provider: string): Promise<string> {
+  if (admin) {
+    const { data, error } = await admin.from('provider_api_keys').select('api_key')
+      .eq('provider_code', provider === 'google' ? 'gemini' : provider).maybeSingle();
+    if (error) throw new Error('Platform AI key read failed');
+    if (data !== null) {
+      if (typeof data !== 'object' || !('api_key' in data) || typeof data.api_key !== 'string') throw new Error('Invalid platform AI key response');
+      if (data.api_key.trim()) return data.api_key;
+    }
+  }
+  return getAiEndpoint(provider).apiKey;
+}
+
 export function normalizeModelName(model: string, provider: string): string {
-  if (provider === 'google' || provider === 'lovable') {
+  if (provider === 'google' || provider === 'gemini' || provider === 'lovable') {
     return model.replace(/^google\//, '');
   }
   return model;
@@ -75,10 +110,12 @@ export async function fetchAiSettings(supabaseAdmin: any): Promise<{
   fallbackProvider: string;
   fallbackModel: string;
 }> {
-  const { data: settings } = await supabaseAdmin
+  const { data: settings, error: settingsError } = await supabaseAdmin
     .from('app_settings')
     .select('key, value')
     .in('key', ['ai_provider', 'ai_model', 'ai_fallback_provider', 'ai_fallback_model']);
+
+  if (settingsError) throw new Error('AI settings read failed');
 
   let primaryProvider = 'google';
   let primaryModel = 'google/gemini-2.5-flash';
@@ -116,10 +153,12 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
   // hardcoded CATEGORY_LAST_RESORT instead -- for every category, not just stt.
   const fallback2Key = `default_ai_model_${category}_fallback_2`;
 
-  const { data: settings } = await supabaseAdmin
+  const { data: settings, error: settingsError } = await supabaseAdmin
     .from('system_settings')
     .select('key, value')
     .in('key', [primaryKey, fallbackKey, fallback2Key]);
+
+  if (settingsError) throw new Error('AI settings read failed');
 
   let primaryProvider = 'google';
   let primaryModel = 'google/gemini-2.5-flash';
@@ -156,13 +195,14 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
   // must not be able to take out the last line of defence for every AI category.
   let useConfiguredLastResort = false;
   if (configuredLastResortProvider && configuredLastResortModel) {
-    const { data: known } = await supabaseAdmin
+    const { data: known, error: modelError } = await supabaseAdmin
       .from('ai_models')
       .select('id, ai_providers!inner(provider_code)')
       .eq('model_id', configuredLastResortModel)
       .eq('is_active', true)
       .eq('ai_providers.provider_code', configuredLastResortProvider)
       .maybeSingle();
+    if (modelError) throw new Error('AI model catalog read failed');
     useConfiguredLastResort = Boolean(known);
     if (!useConfiguredLastResort) {
       console.warn(
@@ -208,12 +248,13 @@ export async function resolveChatModelConfig(
 
   // Check user-specific override (non-expired)
   if (userId) {
-    const { data: userOverride } = await supabaseAdmin
+    const { data: userOverride, error: overrideError } = await supabaseAdmin
       .from('user_ai_model_overrides')
       .select('provider, model, expires_at')
       .eq('user_id', userId)
       .maybeSingle();
 
+    if (overrideError) throw new Error('AI model override read failed');
     if (userOverride && (!userOverride.expires_at || new Date(userOverride.expires_at) > new Date())) {
       return {
         primaryProvider: userOverride.provider,
@@ -245,14 +286,80 @@ export async function resolveChatModelConfig(
 // (Kong ~60s) never returns a 504 with stripped CORS headers.
 const AI_TIER_TIMEOUT_MS = 15_000;
 
-async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+export async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => { ctrl.abort(); reject(new Error(`timeout after ${timeoutMs}ms`)); }, timeoutMs);
+  });
   try {
-    return await fetch(url, { ...init, signal: ctrl.signal });
+    return await Promise.race([deadline, (async () => {
+      const response = await fetch(url, { ...init, signal: ctrl.signal });
+      const body = await response.arrayBuffer();
+      return new Response(body.byteLength ? body : null, { status: response.status, headers: response.headers });
+    })()]);
   } finally {
     clearTimeout(timer);
   }
+}
+
+export function platformChatTiers(config: {
+  primaryProvider: string; primaryModel: string; fallbackProvider: string; fallbackModel: string;
+  lastResortProvider?: string; lastResortModel?: string;
+}): AiTier[] {
+  // ── Tier 1: Primary ──
+  const tiers: AiTier[] = [{ provider: config.primaryProvider, model: config.primaryModel, credentialSource: 'platform' }];
+  // ── Tier 2: Fallback ──
+  if (config.fallbackProvider && config.fallbackModel) tiers.push({ provider: config.fallbackProvider, model: config.fallbackModel, credentialSource: 'platform' });
+  // ── Tier 3: Last Resort ──
+  tiers.push({ provider: config.lastResortProvider || 'google', model: config.lastResortModel || 'gemini-3-flash-preview', credentialSource: 'platform' });
+  return tiers;
+}
+
+export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody: Record<string, unknown>, candidates: AiTier[]): Promise<AiCallResult> {
+  if (candidates.some((tier) => tier.credentialSource === 'user' && !tier.apiKey?.trim())) throw new Error('User AI tier requires an API key');
+  const labels = ['primary', 'fallback', 'last_resort'] as const;
+  const skipped: AiTierResult[] = candidates.slice(3).map((tier) => ({
+    tier: 'last_resort', provider: tier.provider, model: tier.model, status: 0, reason: 'tier_cap', credentialSource: tier.credentialSource,
+  }));
+  const tiers: AiTierResult[] = [];
+  const platformKeys = new Map<string, string>();
+  let fallbackReason: string | undefined;
+  for (const [index, tier] of candidates.slice(0, 3).entries()) {
+    // Resolve outside the provider catch: failed database reads are not missing keys.
+    let apiKey = tier.apiKey;
+    if (tier.credentialSource === 'platform') {
+      if (!platformKeys.has(tier.provider)) platformKeys.set(tier.provider, await resolvePlatformApiKey(admin, tier.provider));
+      apiKey = platformKeys.get(tier.provider)!;
+    }
+    const attempt: AiTierResult = { tier: labels[index], provider: tier.provider, model: tier.model, status: 0, credentialSource: tier.credentialSource };
+    tiers.push(attempt);
+    if (!apiKey) { attempt.error = 'API key not configured'; continue; }
+    try {
+      const endpoint = getAiEndpoint(tier.provider, apiKey);
+      const body = { ...requestBody, model: normalizeModelName(tier.model, tier.provider) };
+      const response = endpoint.kind === 'anthropic'
+        ? await callAnthropic(body, apiKey, AI_TIER_TIMEOUT_MS)
+        : await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, AI_TIER_TIMEOUT_MS);
+      attempt.status = response.status;
+      if (response.ok) return { response, tierUsed: attempt.tier, modelUsed: tier.model, providerUsed: tier.provider,
+        credentialSource: tier.credentialSource, fallbackReason, tiers: [...tiers, ...skipped] };
+      attempt.error = tier.credentialSource === 'user' && [401, 403].includes(response.status)
+        ? AI_USER_KEY_INVALID : redactProviderError(await response.text(), apiKey);
+    } catch (error) {
+      attempt.error = redactProviderError(error instanceof Error ? error.message : 'AI request failed', apiKey);
+    }
+    if (tier.credentialSource === 'user') fallbackReason = `user_tier_failed:${attempt.status}`;
+  }
+  const last = tiers[tiers.length - 1];
+  // A chain made only of the user's rejected key is not a provider outage: keep
+  // the actionable code so callers can tell the user to fix the saved key.
+  const userKeyRejected = tiers.length > 0 &&
+    tiers.every((t) => t.credentialSource === 'user' && t.error === AI_USER_KEY_INVALID);
+  const errorCode = userKeyRejected ? AI_USER_KEY_INVALID : undefined;
+  return { response: new Response(JSON.stringify({ error: errorCode ?? 'All AI tiers failed' }), { status: 502 }),
+    tierUsed: last?.tier ?? 'last_resort', modelUsed: last?.model ?? '', providerUsed: last?.provider ?? '',
+    credentialSource: last?.credentialSource, fallbackReason, errorCode, tiers: [...tiers, ...skipped] };
 }
 
 export async function callAiWithFallback(
@@ -264,100 +371,14 @@ export async function callAiWithFallback(
   lastResortProvider?: string,
   lastResortModel?: string,
 ): Promise<AiCallResult> {
-  const tiers: AiTierResult[] = [];
-  const lrProvider = lastResortProvider || 'google';
-  const lrModel = lastResortModel || 'gemini-3-flash-preview';
-
-  // ── Tier 1: Primary ──
-  const ep1 = getAiEndpoint(primaryProvider);
-  if (ep1.apiKey) {
-    const model1 = normalizeModelName(primaryModel, primaryProvider);
-    const body1 = { ...requestBody, model: model1 };
-    try {
-      const res = await fetchWithTimeout(ep1.apiUrl, {
-        method: 'POST',
-        headers: ep1.headers,
-        body: JSON.stringify(body1),
-      }, AI_TIER_TIMEOUT_MS);
-      tiers.push({ tier: 'primary', provider: primaryProvider, model: primaryModel, status: res.status });
-      if (res.ok) {
-        return { response: res, tierUsed: 'primary', modelUsed: primaryModel, providerUsed: primaryProvider, tiers };
-      }
-      const errText = await res.text();
-      tiers[tiers.length - 1].error = errText.substring(0, 500);
-      console.error('Primary AI failed:', res.status, errText.substring(0, 200));
-    } catch (e: any) {
-      const msg = e?.name === 'AbortError' ? `timeout after ${AI_TIER_TIMEOUT_MS}ms` : e?.message;
-      tiers.push({ tier: 'primary', provider: primaryProvider, model: primaryModel, status: 0, error: msg });
-      console.error('Primary AI exception:', msg);
-    }
-  } else {
-    tiers.push({ tier: 'primary', provider: primaryProvider, model: primaryModel, status: 0, error: 'API key not configured' });
+  const result = await callAiChain(undefined, requestBody, platformChatTiers({ primaryProvider, primaryModel,
+    fallbackProvider, fallbackModel, lastResortProvider, lastResortModel }));
+  // The positional API keeps its last-resort label even when slot two is unset.
+  if (!fallbackProvider || !fallbackModel) {
+    if (result.tiers[1]) result.tiers[1].tier = 'last_resort';
+    if (result.tierUsed === 'fallback') result.tierUsed = 'last_resort';
   }
-
-  // ── Tier 2: Fallback ──
-  if (fallbackProvider && fallbackModel) {
-    const ep2 = getAiEndpoint(fallbackProvider);
-    if (ep2.apiKey) {
-      const model2 = normalizeModelName(fallbackModel, fallbackProvider);
-      const body2 = { ...requestBody, model: model2 };
-      try {
-        const res = await fetchWithTimeout(ep2.apiUrl, {
-          method: 'POST',
-          headers: ep2.headers,
-          body: JSON.stringify(body2),
-        }, AI_TIER_TIMEOUT_MS);
-        tiers.push({ tier: 'fallback', provider: fallbackProvider, model: fallbackModel, status: res.status });
-        if (res.ok) {
-          return { response: res, tierUsed: 'fallback', modelUsed: fallbackModel, providerUsed: fallbackProvider, tiers };
-        }
-        const errText = await res.text();
-        tiers[tiers.length - 1].error = errText.substring(0, 500);
-        console.error('Fallback AI failed:', res.status, errText.substring(0, 200));
-      } catch (e: any) {
-        const msg = e?.name === 'AbortError' ? `timeout after ${AI_TIER_TIMEOUT_MS}ms` : e?.message;
-        tiers.push({ tier: 'fallback', provider: fallbackProvider, model: fallbackModel, status: 0, error: msg });
-        console.error('Fallback AI exception:', msg);
-      }
-    } else {
-      tiers.push({ tier: 'fallback', provider: fallbackProvider, model: fallbackModel, status: 0, error: 'API key not configured' });
-    }
-  }
-
-  // ── Tier 3: Last Resort ──
-  const normalizedLrModel = normalizeModelName(lrModel, lrProvider);
-  const ep3 = getAiEndpoint(lrProvider);
-  if (ep3.apiKey) {
-    const body3 = { ...requestBody, model: normalizedLrModel };
-    try {
-      const res = await fetchWithTimeout(ep3.apiUrl, {
-        method: 'POST',
-        headers: ep3.headers,
-        body: JSON.stringify(body3),
-      }, AI_TIER_TIMEOUT_MS);
-      tiers.push({ tier: 'last_resort', provider: lrProvider, model: lrModel, status: res.status });
-      if (res.ok) {
-        return { response: res, tierUsed: 'last_resort', modelUsed: lrModel, providerUsed: lrProvider, tiers };
-      }
-      const errText = await res.text();
-      tiers[tiers.length - 1].error = errText.substring(0, 500);
-      console.error('Last resort AI failed:', res.status, errText.substring(0, 200));
-    } catch (e: any) {
-      const msg = e?.name === 'AbortError' ? `timeout after ${AI_TIER_TIMEOUT_MS}ms` : e?.message;
-      tiers.push({ tier: 'last_resort', provider: lrProvider, model: lrModel, status: 0, error: msg });
-      console.error('Last resort AI exception:', msg);
-    }
-  } else {
-    tiers.push({ tier: 'last_resort', provider: lrProvider, model: lrModel, status: 0, error: 'API key not configured' });
-  }
-
-  return {
-    response: new Response(JSON.stringify({ error: 'All AI tiers failed' }), { status: 502 }),
-    tierUsed: 'last_resort',
-    modelUsed: lrModel,
-    providerUsed: lrProvider,
-    tiers,
-  };
+  return result;
 }
 
 /**
@@ -375,15 +396,17 @@ export async function logAiCall(
   try {
     const tierDetails: Record<string, any> = {};
     for (const t of result.tiers) {
-      tierDetails[t.tier] = {
+      tierDetails[t.reason === 'tier_cap' ? `skipped_${Object.keys(tierDetails).length}` : t.tier] = {
         provider: t.provider,
         model: t.model,
         status: t.status,
         error: t.error || undefined,
+        credential_source: t.credentialSource,
+        reason: t.reason,
       };
     }
 
-    await supabaseAdmin.from('system_logs').insert({
+    const { error } = await supabaseAdmin.from('system_logs').insert({
       level: success ? 'info' : 'error',
       category: 'ai',
       source,
@@ -396,12 +419,15 @@ export async function logAiCall(
         model_used: result.modelUsed,
         provider_used: result.providerUsed,
         tier_used: result.tierUsed,
+        credential_source: result.credentialSource,
+        fallback_reason: result.fallbackReason,
         success,
         tiers: tierDetails,
         ...extraMeta,
       },
     });
+    if (error) throw new Error(`AI call log write failed: ${(error as { message?: string }).message ?? 'unknown'}`);
   } catch (e) {
-    console.error('Failed to log AI call:', e);
+    console.error('Failed to log AI call:', e instanceof Error ? e.message : e);
   }
 }

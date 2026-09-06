@@ -1,8 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
+import { resolveUserAiRoute, composeAiTiers, markUserKeyInvalid } from "../_shared/ai-user-routing.ts";
+import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID } from "../_shared/ai-routing-errors.ts";
 import { createLogger } from "../_shared/logging.ts";
-import { callAiWithFallback, logAiCall, resolveChatModelConfig } from "../_shared/ai-fallback.ts";
+import { callAiChain, logAiCall, resolveChatModelConfig, platformChatTiers } from "../_shared/ai-fallback.ts";
 
 interface SubscriptionCheck {
   allowed: boolean;
@@ -129,6 +131,13 @@ serve(async (req) => {
     const { caption, platform, model } = await req.json();
 
     // Resolve chat-model config: user override → admin /admin/settings Chat → hardcoded last-resort
+    const route = await resolveUserAiRoute(supabaseAdmin, user.id, 'chat');
+    if (route.mode === 'user_only' && !route.userTier) {
+      await logAiCall(supabaseAdmin, 'hashtag_generation', 'generate-hashtags', user.id, false, {
+        response: new Response(null, { status: 409 }), tierUsed: 'primary', modelUsed: '', providerUsed: '', tiers: [],
+      }, { error_code: AI_CONNECTION_REQUIRED });
+      return jsonResponse({ error: AI_CONNECTION_REQUIRED, message: 'Connect an AI provider key or change your routing mode.' }, 409);
+    }
     const chatCfg = await resolveChatModelConfig(supabaseAdmin, user.id);
     if (model) {
       console.warn('Client-supplied model param ignored — admin Chat config governs hashtag generation. Got:', model);
@@ -166,15 +175,13 @@ Return only the hashtags, one per line.`;
     };
 
     // 3-tier AI call with fallback chain
-    const aiResult = await callAiWithFallback(
-      requestBody,
-      chatCfg.primaryProvider,
-      chatCfg.primaryModel,
-      chatCfg.fallbackProvider,
-      chatCfg.fallbackModel,
-      chatCfg.lastResortProvider,
-      chatCfg.lastResortModel,
-    );
+    const aiResult = await callAiChain(supabaseAdmin, requestBody, composeAiTiers(route, platformChatTiers(chatCfg)));
+    if (route.reason === 'user_key_missing') aiResult.fallbackReason = route.reason;
+    for (const tier of aiResult.tiers) {
+      if (tier.credentialSource === 'user' && tier.error === AI_USER_KEY_INVALID && route.fetchedAt) {
+        await markUserKeyInvalid(supabaseAdmin, user.id, tier.provider, route.fetchedAt);
+      }
+    }
 
     const aiSuccess = aiResult.response.ok;
 
@@ -183,6 +190,9 @@ Return only the hashtags, one per line.`;
       platform,
     });
 
+    if (aiResult.errorCode === AI_USER_KEY_INVALID) {
+      return jsonResponse({ error: AI_USER_KEY_INVALID, message: 'Your saved API key was rejected by the provider. Update it or change your routing mode.' }, 409);
+    }
     if (!aiSuccess) {
       const errorText = await aiResult.response.text();
       console.error('All AI tiers failed for hashtag generation:', errorText);

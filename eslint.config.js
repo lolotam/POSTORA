@@ -42,4 +42,19 @@ export default tseslint.config(
       }],
     },
   },
+  {
+    files: [
+      "src/features/ai-providers/application/**/*.{ts,tsx}",
+      "src/features/ai-providers/ui/**/*.{ts,tsx}",
+    ],
+    ignores: ["src/features/ai-providers/ui/AiProvidersPanel.tsx", "**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: ["**/infrastructure/**", "**/infrastructure/*", "@/integrations/supabase/client"],
+          message: "AI providers depend on application/ports.ts. Only AiProvidersPanel composes infrastructure; only infrastructure imports Supabase.",
+        }],
+      }],
+    },
+  },
 );

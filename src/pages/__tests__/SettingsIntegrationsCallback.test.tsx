@@ -12,6 +12,7 @@ vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 vi.mock("@/components/layout/DashboardLayout", () => ({
   DashboardLayout: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
+vi.mock("@/features/ai-providers", () => ({ AiProvidersPanel: () => null }));
 vi.mock("@/components/automation/DatabaseConnectorsManager", () => ({
   DatabaseConnectorsManager: () => <div>connectors</div>,
 }));

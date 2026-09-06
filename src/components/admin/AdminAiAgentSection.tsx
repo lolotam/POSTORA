@@ -15,7 +15,7 @@ import {
 // cosmetic slip: parseModelRef rewrites an unknown provider prefix to "openai",
 // so a Claude or Z AI model would be posted to OpenAI's endpoint under a name it
 // does not have.
-const AGENT_PROVIDER_CODES = ["openai", "openrouter", "gemini"];
+const AGENT_PROVIDER_CODES = ["openai", "openrouter", "gemini", "claude"];
 
 export function AdminAiAgentSection() {
   const { data: aiConfig } = useAIConfiguration();

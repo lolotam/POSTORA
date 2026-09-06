@@ -1,3 +1,4 @@
+import { AiProvidersPanel } from "@/features/ai-providers";
 import { useState, useEffect } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -202,6 +203,7 @@ export default function Settings() {
 
           {/* Unified Integrations & Connectors Tab */}
           <TabsContent value="integrations" className="mt-6 space-y-8">
+            <AiProvidersPanel />
             <DatabaseConnectorsManager readOnly />
           </TabsContent>
 

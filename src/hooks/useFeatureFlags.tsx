@@ -69,6 +69,7 @@ export interface FeatureFlags {
   // Monetization features
   commentManager: boolean;
   commentWorkflow: boolean;
+  byokProviders: boolean;
   youtubeComments: boolean;
   leadsCrm: boolean;
   audienceHub: boolean;
@@ -149,6 +150,7 @@ export const DEFAULT_FLAGS: FeatureFlags = {
   msgThreadsAssignment: false,
   commentManager: false,
   commentWorkflow: false,
+  byokProviders: false,
   youtubeComments: false,
   leadsCrm: false,
   audienceHub: false,
@@ -227,6 +229,7 @@ export const FLAG_KEYS = [
   "feature_msg_threads_assignment",
   "feature_comment_manager",
   "feature_comment_workflow",
+  "feature_byok_providers",
   "feature_youtube_comments",
   "feature_leads_crm",
   "feature_audience_hub",
@@ -300,6 +303,7 @@ export const FLAG_KEY_MAP: Record<string, keyof FeatureFlags> = {
   feature_msg_threads_assignment: "msgThreadsAssignment",
   feature_comment_manager: "commentManager",
   feature_comment_workflow: "commentWorkflow",
+  feature_byok_providers: "byokProviders",
   feature_youtube_comments: "youtubeComments",
   feature_leads_crm: "leadsCrm",
   feature_audience_hub: "audienceHub",
@@ -385,6 +389,7 @@ const FEATURE_DISPLAY_NAMES: Record<keyof FeatureFlags, string> = {
   msgThreadsAssignment: "Threads Assignment",
   commentManager: "Messaging Comments Inbox",
   commentWorkflow: "Comment Workflow",
+  byokProviders: "Your AI providers",
   youtubeComments: "YouTube Comments",
   leadsCrm: "Leads CRM",
   audienceHub: "Audience & Contacts",
@@ -459,6 +464,7 @@ const ALL_FLAGS_ENABLED: FeatureFlags = {
   msgThreadsAssignment: true,
   commentManager: true,
   commentWorkflow: true,
+  byokProviders: true,
   youtubeComments: true,
   leadsCrm: true,
   audienceHub: true,
@@ -525,6 +531,7 @@ export function useFeatureFlags() {
       }
 
       const baseFromDb: FeatureFlags = {
+        byokProviders: globalFlagMap["feature_byok_providers"] ?? DEFAULT_FLAGS.byokProviders,
         videoCompress: globalFlagMap["feature_video_compress"] ?? DEFAULT_FLAGS.videoCompress,
         tiktokTranscode: globalFlagMap["feature_tiktok_transcode"] ?? DEFAULT_FLAGS.tiktokTranscode,
         tiktokPreCheck: globalFlagMap["feature_tiktok_precheck"] ?? DEFAULT_FLAGS.tiktokPreCheck,
@@ -642,6 +649,8 @@ export function useFeatureFlags() {
     // would mount during the window between a merge (which auto-deploys the frontend)
     // and the migration being applied by hand, querying relations that do not exist yet.
     "commentWorkflow",
+    // BYOK queries migration-owned tables; flag off must hide it for admins too.
+    "byokProviders",
     // YouTube Comments sits here for the same reason: its tile, agent surface and workflow
     // platform write youtube rows that the CHECK constraints admit only once the migration is
     // applied by hand, while the merge auto-deploys this frontend.
