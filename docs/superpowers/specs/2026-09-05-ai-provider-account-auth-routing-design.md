@@ -355,20 +355,22 @@ and the view returns nothing.
   (the credential-introspection endpoint, not the public catalog). Classification: 401/403 →
   `AI_USER_KEY_INVALID` (400), nothing stored; 429, 5xx, timeout, network error →
   `AI_PROVIDER_UNREACHABLE` (503), nothing changed, an existing key is preserved. On 2xx:
-  read the existing row; call `upsert_connector_credential_secret(existingSecretId ?? null,
-  {api_key})`; upsert the row (`key_hint`, `status = 'active'`, `last_verified_at`,
-  `last_error_code = null`). Compensation: if the row write fails **and no secret existed
-  before** (a new id was returned), delete the new secret; an existing secret is never
-  deleted by compensation because the upsert updated it in place. Saves for one
-  (user, provider) are serialised with `pg_advisory_xact_lock(hashtext(user_id || provider))`
-  inside a small SECURITY DEFINER wrapper, or, if that is judged too heavy, by re-reading the
-  row after the write and deleting the newly created secret when the row now points at a
-  different id (the losing race). The migration owner picks one and the suite proves it.
+  call `save_user_ai_provider_key(user_id, provider_code, api_key, key_hint, verified_at)`
+  (migration `20260906130000`, `service_role` only). That function takes
+  `pg_advisory_xact_lock(hashtext(user_id || ':' || provider_code))`, updates the existing
+  Vault secret in place (or creates one when none exists or the id is dangling), and upserts
+  the row (`key_hint`, `status = 'active'`, `last_verified_at`, `last_error_code = null`)
+  in the same transaction, so a failure anywhere rolls back both writes and overlapping
+  replacement saves cannot interleave. There is no client-side compensation path.
+- `list_models` → active `ai_models` rows for the four providers whose `capabilities`
+  contain `chat`, read under the service role (`ai_providers` SELECT is admin-only under
+  RLS, so a browser join returns nothing for regular users). Returns id, model_id, name,
+  provider_code only.
 - `test_key { provider_code }` → key via `get_user_ai_provider_key(user, provider, true)`;
   NULL → `AI_CONNECTION_REQUIRED` (404); same classification as above; 2xx heals the row to
   `active` and sets `last_verified_at`; 401/403 marks `invalid`; unreachable leaves the row.
-- `delete_key { provider_code }` → read the row (404 if none), `delete_connector_credential_secret`
-  when it has a secret id, then delete the row; both errors surfaced.
+- `delete_key { provider_code }` → read the row (404 if none), then delete the row; the
+  AFTER DELETE trigger reclaims the Vault secret in the same transaction.
 - `join_waitlist { provider_code: 'codex' }` → insert into `ai_provider_waitlist`, idempotent.
 - `save_key` and `test_key` are rate-limited at 10 per user per 10 minutes with a documented
   best-effort per-isolate in-memory guard (there is no shared helper).
