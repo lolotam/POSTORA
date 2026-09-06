@@ -39,9 +39,11 @@ Deno.test("provider status classification separates invalid credentials from tra
   for (const status of [200, 204, 299]) {
     assertEquals(classifyResponse(status), "valid");
   }
-  for (const status of [400, 401, 403, 404, 422]) {
+  for (const status of [400, 401, 404, 422]) {
     assertEquals(classifyResponse(status), "invalid");
   }
+  // A key scoped away from the probe endpoint is authenticated, hence usable.
+  assertEquals(classifyResponse(403), "valid");
   for (const status of [429, 500, 503]) {
     assertEquals(classifyResponse(status), "transient");
   }

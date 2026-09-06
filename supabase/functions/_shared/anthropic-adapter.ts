@@ -44,6 +44,21 @@ function toolUse(call: unknown): JsonRecord {
   return { type: "tool_use", id: tool.id, name: fn.name, input };
 }
 
+// OpenAI tool_choice → Anthropic tool_choice. A forced function must stay
+// forced: dropping it would let the model answer in prose, which the chain
+// reads as success while the caller waits for structured arguments.
+function toolChoice(value: unknown): JsonRecord | undefined {
+  if (value === "auto") return { type: "auto" };
+  if (value === "required") return { type: "any" };
+  if (value === "none") return { type: "none" };
+  const forced = record(value);
+  if (forced.type === "function") {
+    const name = record(forced.function).name;
+    if (typeof name === "string" && name) return { type: "tool", name };
+  }
+  return undefined;
+}
+
 export function toAnthropicRequest(openAiBody: JsonRecord): JsonRecord {
   if ("response_format" in openAiBody) {
     throw new Error(
@@ -99,9 +114,8 @@ export function toAnthropicRequest(openAiBody: JsonRecord): JsonRecord {
         input_schema: fn.parameters,
       };
     });
-    if (openAiBody.tool_choice === "auto") {
-      request.tool_choice = { type: "auto" };
-    }
+    const choice = toolChoice(openAiBody.tool_choice);
+    if (choice) request.tool_choice = choice;
   }
   return request;
 }

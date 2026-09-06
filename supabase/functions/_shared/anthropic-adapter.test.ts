@@ -264,3 +264,24 @@ Deno.test("Anthropic deadline covers a hanging response body", async () => {
     globalThis.fetch = original;
   }
 });
+
+Deno.test("forced, required and none tool choices survive translation", () => {
+  const tools = [{ type: "function", function: { name: "analyze_log", parameters: {} } }];
+  const forced = toAnthropicRequest({
+    model: "m", messages: [{ role: "user", content: "x" }], tools,
+    tool_choice: { type: "function", function: { name: "analyze_log" } },
+  });
+  assertEquals(forced.tool_choice, { type: "tool", name: "analyze_log" });
+  assertEquals(
+    toAnthropicRequest({ model: "m", messages: [], tools, tool_choice: "required" }).tool_choice,
+    { type: "any" },
+  );
+  assertEquals(
+    toAnthropicRequest({ model: "m", messages: [], tools, tool_choice: "none" }).tool_choice,
+    { type: "none" },
+  );
+  assertEquals(
+    "tool_choice" in toAnthropicRequest({ model: "m", messages: [], tools }),
+    false,
+  );
+});

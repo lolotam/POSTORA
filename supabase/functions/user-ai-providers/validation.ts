@@ -27,8 +27,13 @@ export function validationRequest(provider: Provider, apiKey: string): Request {
   return new Request(url, { method: "GET", headers, redirect: "error" });
 }
 
+// 403 is "authenticated, but this probe endpoint is outside the key's scope":
+// an OpenAI key restricted to chat completions is denied the model list yet
+// works on the execution path. Only 401 (and Gemini's 400 for a bad key)
+// prove the credential itself is wrong.
 export function classifyResponse(status: number): ValidationOutcome {
   if (status >= 200 && status < 300) return "valid";
+  if (status === 403) return "valid";
   if (status === 429 || status >= 500) return "transient";
   return "invalid";
 }
