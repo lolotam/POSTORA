@@ -1040,6 +1040,126 @@ BEGIN
   END IF;
 END $byok_delete_lockkey$;
 
+-- ===========================================================================
+-- get_user_ai_provider_key_snapshot privilege surface: service_role only,
+-- one signature. The Edge Function calls it under the service role; a
+-- second overload would double as a second read path with its own
+-- privileges.
+-- ===========================================================================
+\echo '--- snapshot function privileges ---'
+DO $byok_snapshot_privs$
+DECLARE
+  v_proc_count integer;
+BEGIN
+  IF has_function_privilege('anon',
+      'public.get_user_ai_provider_key_snapshot(uuid,text,boolean)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: get_user_ai_provider_key_snapshot is EXECUTEable as anon';
+  END IF;
+  IF has_function_privilege('authenticated',
+      'public.get_user_ai_provider_key_snapshot(uuid,text,boolean)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: get_user_ai_provider_key_snapshot is EXECUTEable as authenticated';
+  END IF;
+  IF NOT has_function_privilege('service_role',
+      'public.get_user_ai_provider_key_snapshot(uuid,text,boolean)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: get_user_ai_provider_key_snapshot is NOT EXECUTEable as service_role';
+  END IF;
+
+  SELECT count(*) INTO v_proc_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'get_user_ai_provider_key_snapshot';
+  IF v_proc_count <> 1 THEN
+    RAISE EXCEPTION 'FAIL: % pg_proc rows named get_user_ai_provider_key_snapshot, expected exactly 1', v_proc_count;
+  END IF;
+END $byok_snapshot_privs$;
+
+-- ===========================================================================
+-- VAULT-CONDITIONAL snapshot: key + row version from one statement. Never
+-- CALLED when supabase_vault is absent: the plpgsql body fails only at
+-- execution time without the extension, so calling it there would fail the
+-- suite for the wrong reason. One NOTICE covers the skip.
+-- ===========================================================================
+\echo '--- snapshot read (vault-conditional) ---'
+DO $byok_snapshot_read$
+DECLARE
+  v_present boolean;
+  v_a uuid := '11111111-1111-4111-8111-111111111111';
+  v_b uuid := '22222222-2222-4222-8222-222222222222';
+  v_n integer;
+  v_api_key text;
+  v_status text;
+  v_snap_ts timestamptz;
+  v_row_ts timestamptz;
+BEGIN
+  SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'supabase_vault')
+    INTO v_present;
+  IF NOT v_present THEN
+    RAISE NOTICE 'vault absent: skipping get_user_ai_provider_key_snapshot assertions';
+    RETURN;
+  END IF;
+
+  -- Own fixture: the earlier blocks deleted A's key row, so save one here.
+  PERFORM 1 FROM public.save_user_ai_provider_key(
+    v_a, 'openai', 'byok-snapshot-key-1', 'hint-snap', now()) AS s;
+
+  -- Exactly one row: the saved key, active, version equal to the row.
+  SELECT count(*) INTO v_n
+    FROM public.get_user_ai_provider_key_snapshot(v_a, 'openai') AS s;
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'FAIL: snapshot returned % rows for A, expected 1', v_n;
+  END IF;
+  SELECT s.api_key, s.status, s.updated_at
+    INTO v_api_key, v_status, v_snap_ts
+    FROM public.get_user_ai_provider_key_snapshot(v_a, 'openai') AS s;
+  IF v_api_key IS DISTINCT FROM 'byok-snapshot-key-1' THEN
+    RAISE EXCEPTION 'FAIL: snapshot api_key is %, expected byok-snapshot-key-1', v_api_key;
+  END IF;
+  IF v_status IS DISTINCT FROM 'active' THEN
+    RAISE EXCEPTION 'FAIL: snapshot status is %, expected active', v_status;
+  END IF;
+  SELECT k.updated_at INTO v_row_ts
+    FROM public.user_ai_provider_keys AS k
+   WHERE k.user_id = v_a AND k.provider_code = 'openai';
+  IF v_snap_ts IS DISTINCT FROM v_row_ts THEN
+    RAISE EXCEPTION 'FAIL: snapshot updated_at % disagrees with row updated_at %', v_snap_ts, v_row_ts;
+  END IF;
+
+  -- An invalid key is invisible to the default call but readable with
+  -- p_include_invalid (the re-verify path).
+  UPDATE public.user_ai_provider_keys
+     SET status = 'invalid' WHERE user_id = v_a AND provider_code = 'openai';
+  SELECT count(*) INTO v_n
+    FROM public.get_user_ai_provider_key_snapshot(v_a, 'openai') AS s;
+  IF v_n <> 0 THEN
+    RAISE EXCEPTION 'FAIL: snapshot returned % rows for invalid key, expected 0', v_n;
+  END IF;
+  SELECT count(*) INTO v_n
+    FROM public.get_user_ai_provider_key_snapshot(v_a, 'openai', true) AS s;
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'FAIL: snapshot with p_include_invalid returned % rows, expected 1', v_n;
+  END IF;
+  SELECT s.api_key, s.status INTO v_api_key, v_status
+    FROM public.get_user_ai_provider_key_snapshot(v_a, 'openai', true) AS s;
+  IF v_api_key IS DISTINCT FROM 'byok-snapshot-key-1' THEN
+    RAISE EXCEPTION 'FAIL: snapshot p_include_invalid api_key is %, expected byok-snapshot-key-1', v_api_key;
+  END IF;
+  IF v_status IS DISTINCT FROM 'invalid' THEN
+    RAISE EXCEPTION 'FAIL: snapshot p_include_invalid status is %, expected invalid', v_status;
+  END IF;
+
+  -- Structural tenancy: B has no row, so the snapshot returns zero rows
+  -- rather than A's key. The ownership check lives in the SQL, not the caller.
+  SELECT count(*) INTO v_n
+    FROM public.get_user_ai_provider_key_snapshot(v_b, 'openai') AS s;
+  IF v_n <> 0 THEN
+    RAISE EXCEPTION 'FAIL: snapshot returned % rows for B, expected 0', v_n;
+  END IF;
+
+  -- This block owns its fixture row: remove it so the trailing cleanup
+  -- assertion (empty key table) still holds on the vault path.
+  DELETE FROM public.user_ai_provider_keys
+   WHERE user_id = v_a AND provider_code = 'openai';
+END $byok_snapshot_read$;
+
 -- ---------------------------------------------------------------------------
 -- Trailing cleanup: the suite leaves no rows behind.
 -- ---------------------------------------------------------------------------
