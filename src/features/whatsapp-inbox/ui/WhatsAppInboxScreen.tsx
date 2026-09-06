@@ -33,9 +33,18 @@ export function WhatsAppInboxScreen(): JSX.Element {
   const ignoredRouteChatIdRef = useRef<string | null>(null);
   const { assignments } = useWhatsAppLabels();
   const { setCompact } = useWhatsAppChrome();
+  // The list search is server-side (name or phone digits); typing is debounced so a
+  // ten-character query costs one request rather than ten.
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
   const { data: conversations = [], isLoading: conversationsLoading } = useConversations(
     selectedAccountId,
     "WHATSAPP",
+    { search: debouncedSearch },
   );
 
   const whatsappAccounts = useMemo(
@@ -207,6 +216,8 @@ export function WhatsAppInboxScreen(): JSX.Element {
                           selectedId={selectedConversation?.id || null}
                           onSelect={selectConversation}
                           isLoading={conversationsLoading}
+                          search={search}
+                          onSearchChange={setSearch}
                           showLabels
                           selectionMode={selectionMode}
                           selectedIds={selectedIds}

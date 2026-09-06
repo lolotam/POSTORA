@@ -19,6 +19,13 @@ interface ConversationListProps {
   selectedIds?: ReadonlySet<string>;
   onToggleSelect?: (conv: Conversation) => void;
   onFilteredChange?: (conversations: Conversation[]) => void;
+  /** Controlled search: the owner sends it to the server, so no local filtering happens. */
+  search?: string;
+  onSearchChange?: (value: string) => void;
+  /** WhatsApp style: HH:mm today, dd/MM/yy otherwise. Default keeps the relative label. */
+  absoluteTimes?: boolean;
+  /** Hover trash on each row; omitted hides it. */
+  onDelete?: (conv: Conversation) => void;
 }
 
 export function ConversationList({
@@ -31,11 +38,16 @@ export function ConversationList({
   selectedIds,
   onToggleSelect,
   onFilteredChange,
+  search,
+  onSearchChange,
 }: ConversationListProps) {
-  const [search, setSearch] = useState("");
+  const [localSearch, setLocalSearch] = useState("");
+  const controlled = search !== undefined && onSearchChange !== undefined;
+  const searchValue = controlled ? search : localSearch;
+  const setSearch = controlled ? onSearchChange : setLocalSearch;
 
-  const filtered = search
-    ? conversations.filter((c) => c.participant_name.toLowerCase().includes(search.toLowerCase()))
+  const filtered = !controlled && searchValue
+    ? conversations.filter((c) => c.participant_name.toLowerCase().includes(searchValue.toLowerCase()))
     : conversations;
 
   // Select-all must apply to what the user can actually see, so the owner of the selection
@@ -59,7 +71,7 @@ export function ConversationList({
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search conversations..."
-            value={search}
+            value={searchValue}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-8 h-9"
           />
@@ -70,7 +82,7 @@ export function ConversationList({
           <div className="flex flex-col items-center justify-center py-12 text-center px-4">
             <MessageCircle className="w-8 h-8 text-muted-foreground mb-2" />
             <p className="text-sm text-muted-foreground">
-              {search ? "No conversations match your search" : "No conversations yet"}
+              {searchValue ? "No conversations match your search" : "No conversations yet"}
             </p>
           </div>
         ) : (
