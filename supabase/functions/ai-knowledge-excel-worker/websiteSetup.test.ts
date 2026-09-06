@@ -3,7 +3,12 @@ import {
   assertRejects,
   assertThrows,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { boundedWebsiteInput, processWebsiteSetup } from "./websiteSetup.ts";
+import {
+  boundedWebsiteInput,
+  processWebsiteSetup,
+  safeSetupFailure,
+} from "./websiteSetup.ts";
+import { parseDraft } from "../ai-website-setup/draft.ts";
 
 Deno.test("bounded extraction reports incomplete coverage and rejects unattributed site text", () => {
   const input = boundedWebsiteInput({
@@ -102,4 +107,100 @@ Deno.test("worker does not turn a failed claim into an empty queue", async () =>
       rpc: () => Promise.resolve({ data: null, error: { code: "57014" } }),
     })
   );
+});
+
+Deno.test("safe diagnostics preserve known validator reasons but never raw error content", () => {
+  for (
+    const [error, expected] of [
+      [
+        new SyntaxError("Unexpected token SECRET in model JSON"),
+        "Invalid JSON response",
+      ],
+      [
+        new Error("provider failed with token SECRET"),
+        "Unexpected extraction failure",
+      ],
+      [
+        new Error("Unknown business_profile key: SECRET"),
+        "Unknown business_profile field",
+      ],
+      [new Error("greeting must be a string"), "greeting must be a string"],
+      [
+        new Error("instruction_blocks[2].body is limited to 2000 characters"),
+        "instruction_blocks[2].body is limited to 2000 characters",
+      ],
+      [
+        new Error("greeting must be a string SECRET"),
+        "Unexpected extraction failure",
+      ],
+      [
+        new Error("Business facts require source attribution"),
+        "Business facts require source attribution",
+      ],
+    ] as const
+  ) assertEquals(safeSetupFailure(error), expected);
+});
+
+Deno.test("worker failure log retains parse stage and safe response metrics without model keys", async () => {
+  const logs: unknown[][] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logs.push(args);
+  };
+  try {
+    const db = {
+      from: () => {
+        throw new Error("No provider calls expected");
+      },
+      rpc: (name: string) =>
+        Promise.resolve({
+          error: null,
+          data: name === "claim_ai_website_setup"
+            ? [{ id: "job", user_id: "owner", lease_token: "lease" }]
+            : name === "read_ai_website_setup_input"
+            ? {
+              source: {
+                file_path: "https://example.com",
+                metadata: {},
+                chunk_count: 1,
+              },
+              chunks: [{ content: "Mugs", metadata: {} }],
+            }
+            : true,
+        }),
+    };
+    await processWebsiteSetup(db, (_db, _user, input, report) => {
+      report?.({
+        stage: "model_content",
+        finish_reason: "stop",
+        content_chars: 120,
+        content_is_string: true,
+        has_choices: true,
+      });
+      report?.({ stage: "draft_validation" });
+      return Promise.resolve(
+        parseDraft(
+          {
+            business_profile: { SECRET: "PRIVATE MODEL OUTPUT" },
+            evidence: {},
+          },
+          input.urls,
+          input.coverage,
+        ),
+      );
+    });
+    assertEquals(logs[0][1], {
+      job_id: "job",
+      stage: "draft_validation",
+      finish_reason: "stop",
+      content_chars: 120,
+      content_is_string: true,
+      has_choices: true,
+      reason: "Unknown business_profile field",
+    });
+    assertEquals(JSON.stringify(logs).includes("SECRET"), false);
+    assertEquals(JSON.stringify(logs).includes("PRIVATE MODEL OUTPUT"), false);
+  } finally {
+    console.error = originalError;
+  }
 });
