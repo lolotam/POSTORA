@@ -130,7 +130,7 @@ Deno.test("reconnect retires a sibling already holding the new id before adoptin
   // because twenty tables cascade on social_accounts.id.
   const rows = [
     structuredClone(TARGET),
-    { id: "acct-dup", user_id: OWNER, platform: "threads", platform_user_id: "367", platform_username: "eltamlawy_chicks", is_active: true },
+    { id: "acct-dup", user_id: OWNER, platform: "threads", platform_user_id: "367", platform_username: "eltamlawy_chicks", is_active: true, access_token: "dup-token", refresh_token: "dup-refresh" },
   ];
   const admin = fakeAdmin(rows);
 
@@ -147,6 +147,8 @@ Deno.test("reconnect retires a sibling already holding the new id before adoptin
   const sibling = rows[1];
   assertEquals(sibling.platform_user_id, "retired_acct-dup");
   assertEquals(sibling.is_active, false);
+  assertEquals(sibling.access_token, null);
+  assertEquals(sibling.refresh_token, null);
   assertEquals(rows[0].platform_user_id, "367");
   // Sibling retired before the target adopted the id.
   assertEquals(admin.updates.map((u) => u.filters.id), ["acct-dup", "acct-old"]);

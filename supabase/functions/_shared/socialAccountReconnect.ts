@@ -114,6 +114,10 @@ async function retireSiblingHoldingId(
     .update({
       platform_user_id: `retired_${sibling.id}`,
       is_active: false,
+      // The target now holds the live token; a second copy on a hidden row
+      // would let any reader that forgets is_active act on the account twice.
+      access_token: null,
+      refresh_token: null,
       updated_at: now,
     })
     .eq("id", sibling.id)
