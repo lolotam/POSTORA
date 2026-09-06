@@ -62,8 +62,13 @@ function fakeAdmin(
     },
     rpc(name: string, args: Record<string, unknown>) {
       rpcCalls.push([name, args]);
+      const apiKey = options.key === undefined ? "user-secret" : options.key;
       return Promise.resolve({
-        data: options.key === undefined ? "user-secret" : options.key,
+        data: apiKey === null ? [] : [{
+          api_key: apiKey,
+          status: "active",
+          updated_at: "2026-09-06T00:00:00.000Z",
+        }],
         error: options.fail === "rpc" ? { message: "vault failed" } : null,
       });
     },
@@ -121,9 +126,9 @@ Deno.test("capability preference beats wildcard and resolves only the owner's pr
     credentialSource: "user",
     apiKey: "user-secret",
   });
-  // fetchedAt is the row's own updated_at, not a Deno clock reading.
+  // fetchedAt is the row's own updated_at from the same snapshot as the key.
   assertEquals(route.fetchedAt, "2026-09-06T00:00:00.000Z");
-  assertEquals(fake.rpcCalls, [["get_user_ai_provider_key", {
+  assertEquals(fake.rpcCalls, [["get_user_ai_provider_key_snapshot", {
     p_user_id: "owner-2",
     p_provider_code: "openai",
   }]]);
@@ -187,14 +192,6 @@ Deno.test("flag, override, preference and RPC failures all throw", async () => {
       Error,
     );
   }
-});
-
-Deno.test("a key row that vanished between preference and version read is a missing key", async () => {
-  const fake = fakeAdmin({ preferences: [preference()], row: null });
-  const route = await resolveUserAiRoute(fake.admin, "owner", "chat");
-  assertEquals(route.userTier, undefined);
-  assertEquals(route.reason, "user_key_missing");
-  assertEquals(fake.rpcCalls, []);
 });
 
 Deno.test("key invalidation is scoped to user, provider and the fetched key version; errors throw", async () => {

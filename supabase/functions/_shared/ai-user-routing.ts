@@ -103,32 +103,36 @@ export async function resolveUserAiRoute(
   ) {
     throw new Error("Invalid AI routing preference");
   }
-  // The row's own updated_at is the key's version: markUserKeyInvalid matches
-  // on equality with it, so a replacement that commits after this read (which
-  // bumps updated_at) can never be invalidated by the old key's rejection.
-  // Comparing against a Deno clock with <= would race the replacement
-  // transaction's NOW(), which is fixed at its start.
-  const version = await admin.from("user_ai_provider_keys").select("updated_at")
-    .eq("user_id", userId).eq("provider_code", provider).maybeSingle();
-  if (version.error) throw new Error("AI provider key version read failed");
-  const versionRow = row(version.data);
-  if (!versionRow || typeof versionRow.updated_at !== "string") {
+  // The key and its row version come from ONE statement, so they always
+  // describe the same revision. markUserKeyInvalid matches on equality with
+  // that updated_at; a replacement that commits later bumps it and can never
+  // be invalidated by the old key's rejection. (Two statements, or a Deno
+  // clock compared with <=, both race the replacement transaction.)
+  const snapshot = await admin.rpc("get_user_ai_provider_key_snapshot", {
+    p_user_id: userId,
+    p_provider_code: provider,
+  });
+  if (snapshot.error) throw new Error("AI provider key read failed");
+  const snapshotRows = Array.isArray(snapshot.data)
+    ? snapshot.data
+    : snapshot.data === null
+    ? []
+    : [snapshot.data];
+  if (snapshotRows.length === 0) {
     return {
       mode,
       allowPlatformFallback: mode === "user_first",
       reason: "user_key_missing",
     };
   }
-  const fetchedAt = versionRow.updated_at;
-  const key = await admin.rpc("get_user_ai_provider_key", {
-    p_user_id: userId,
-    p_provider_code: provider,
-  });
-  if (key.error) throw new Error("AI provider key read failed");
-  if (key.data !== null && typeof key.data !== "string") {
+  const keyRow = row(snapshotRows[0]);
+  if (
+    !keyRow || typeof keyRow.api_key !== "string" ||
+    typeof keyRow.updated_at !== "string" || !keyRow.updated_at
+  ) {
     throw new Error("Invalid AI provider key response");
   }
-  if (key.data === null || !key.data.trim()) {
+  if (!keyRow.api_key.trim()) {
     return {
       mode,
       allowPlatformFallback: mode === "user_first",
@@ -138,8 +142,13 @@ export async function resolveUserAiRoute(
   return {
     mode,
     allowPlatformFallback: mode === "user_first",
-    fetchedAt,
-    userTier: { provider, model, credentialSource: "user", apiKey: key.data },
+    fetchedAt: keyRow.updated_at,
+    userTier: {
+      provider,
+      model,
+      credentialSource: "user",
+      apiKey: keyRow.api_key,
+    },
   };
 }
 

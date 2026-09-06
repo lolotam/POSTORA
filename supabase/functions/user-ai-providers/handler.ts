@@ -202,25 +202,43 @@ async function joinWaitlist(
   return success({ joined: true });
 }
 
-// The row version (updated_at) is captured before the provider call and the
-// status write is conditioned on it, so a slow test of an old key can never
-// mark a key that was replaced meanwhile as invalid (or healed).
-async function testKey(
-  deps: Dependencies,
+// RETURNS TABLE arrives as an array from PostgREST; zero rows means no key
+// (or an invalid one when p_include_invalid is false).
+async function readKeySnapshot(
+  admin: AdminClient,
   userId: string,
   provider: Provider,
-): Promise<Result> {
-  const existing = await readKey(deps.admin, userId, provider);
-  if (!existing) return failure(404, AI_CONNECTION_REQUIRED);
-  const { data, error } = await deps.admin.rpc("get_user_ai_provider_key", {
+): Promise<{ apiKey: string; updatedAt: string } | null> {
+  const { data, error } = await admin.rpc("get_user_ai_provider_key_snapshot", {
     p_user_id: userId,
     p_provider_code: provider,
     p_include_invalid: true,
   });
   if (error) throw new Error(STORE_FAILED);
-  if (data === null) return failure(404, AI_CONNECTION_REQUIRED);
-  if (typeof data !== "string" || !data) throw new Error(STORE_FAILED);
-  const validation = await validateKey(provider, data, deps.fetch);
+  const rows = Array.isArray(data) ? data : data === null ? [] : [data];
+  if (rows.length === 0) return null;
+  const row = record(rows[0]);
+  if (
+    typeof row.api_key !== "string" || !row.api_key ||
+    typeof row.updated_at !== "string" || !row.updated_at
+  ) throw new Error(STORE_FAILED);
+  return { apiKey: row.api_key, updatedAt: row.updated_at };
+}
+
+// The key and its row version come from one snapshot and the status write is
+// conditioned on that version, so a slow test of an old key can never mark a
+// key that was replaced meanwhile as invalid (or healed).
+async function testKey(
+  deps: Dependencies,
+  userId: string,
+  provider: Provider,
+): Promise<Result> {
+  // One statement returns the key and the row version it belongs to, so the
+  // conditional write below can never apply an old key's result to a newer
+  // row or a new key's result under an old version.
+  const snapshot = await readKeySnapshot(deps.admin, userId, provider);
+  if (!snapshot) return failure(404, AI_CONNECTION_REQUIRED);
+  const validation = await validateKey(provider, snapshot.apiKey, deps.fetch);
   if (validation === "transient") return failure(503, AI_PROVIDER_UNREACHABLE);
   const values = validation === "valid"
     ? {
@@ -232,7 +250,7 @@ async function testKey(
   const { error: updateError } = await deps.admin.from("user_ai_provider_keys")
     .update(values)
     .eq("user_id", userId).eq("provider_code", provider)
-    .eq("updated_at", existing.updated_at);
+    .eq("updated_at", snapshot.updatedAt);
   if (updateError) throw new Error(STORE_FAILED);
   // Re-read rather than echo `values`: if the key was replaced during the
   // provider call the conditional update matched nothing, and the caller

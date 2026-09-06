@@ -28,8 +28,9 @@ Deno.test("database failures never masquerade as missing keys or successful writ
     { action: "save_key", results: [ok([])] },
     { action: "save_key", results: [ok([stored("x", "claude")])] },
     { action: "test_key", results: [failed()] },
-    { action: "test_key", results: [ok(stored()), failed()] },
-    { action: "test_key", results: [ok(stored()), ok(key), failed()] },
+    { action: "test_key", results: [ok(stored())] },
+    { action: "test_key", results: [ok([snapshot()]), failed()] },
+    { action: "test_key", results: [ok([snapshot()]), ok(), failed()] },
     { action: "delete_key", results: [failed()] },
     { action: "delete_key", results: [ok("yes")] },
     { action: "join_waitlist", results: [failed()] },
@@ -87,6 +88,7 @@ const stored = (id = "new-secret", provider = "openai") => ({
   last_verified_at: new Date(timestamp).toISOString(),
   updated_at: "updated",
 });
+const snapshot = (updated_at = "updated") => ({ api_key: key, status: "active", updated_at });
 const ok = (data: unknown = null): DbResult => ({ data, error: null });
 const failed = (): DbResult => ({ data: null, error: { message: key } });
 
@@ -265,14 +267,14 @@ for (const status of [200, 401, 429, 503]) {
   Deno.test(`test_key provider ${status} heals, invalidates, or preserves the row`, async () => {
     const transient = status === 429 || status === 503;
     const after = status === 200 ? stored() : { ...stored(), status: "invalid" };
-    const f = fixture([ok(stored()), ok(key), ...transient ? [] : [ok(), ok(after)]], status);
+    const f = fixture([ok([snapshot()]), ...transient ? [] : [ok(), ok(after)]], status);
     const result = await f.run({
       action: "test_key",
       provider_code: "openai",
       user_id: "attacker",
     });
     assertEquals(result.status, transient ? 503 : status === 200 ? 200 : 400);
-    assertEquals(f.calls.find((c) => c.name === "get_user_ai_provider_key")?.args, [{
+    assertEquals(f.calls.find((c) => c.name === "get_user_ai_provider_key_snapshot")?.args, [{
       p_user_id: "verified-user",
       p_provider_code: "openai",
       p_include_invalid: true,
@@ -298,14 +300,14 @@ for (const status of [200, 401, 429, 503]) {
 }
 Deno.test("a stale test result never overwrites a key replaced during the provider call", async () => {
   const replaced = { ...stored(), key_hint: "9999", status: "active", updated_at: "later" };
-  const f = fixture([ok(stored()), ok(key), ok(), ok(replaced)], 401);
+  const f = fixture([ok([snapshot()]), ok(), ok(replaced)], 401);
   const result = await f.run({ action: "test_key", provider_code: "openai" });
   assertEquals(result.status, 200);
   assertEquals((result.body.data as Row).key_hint, "9999");
   assert(f.calls.some((c) => c.name === "eq" && c.args[0] === "updated_at" && c.args[1] === "updated"));
 });
 Deno.test("missing test key returns connection required", async () => {
-  const f = fixture([ok(null)]);
+  const f = fixture([ok([])]);
   assertEquals(await f.run({ action: "test_key", provider_code: "openai" }), {
     status: 404,
     body: { ok: false, code: "AI_CONNECTION_REQUIRED" },
