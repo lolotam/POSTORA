@@ -22,6 +22,7 @@ import {
   type FirecrawlPage,
 } from "../_shared/firecrawl.ts";
 import { downloadKnowledgeFile, locateKnowledgeFile } from "../_shared/knowledgeSourceFiles.ts";
+import { processWebsiteSetup, type WorkerSetupDb } from "./websiteSetup.ts";
 
 const POLL_MS = 15_000;
 // One checkpoint slice equals one embed HTTP batch, so a crash between an
@@ -573,14 +574,19 @@ if (import.meta.main) {
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!url || !serviceKey) throw new Error("Supabase worker configuration is missing");
     const admin = createClient(url, serviceKey);
-    while (true) {
-      try {
-        await runOnce(admin);
-      } catch (error) {
-        console.error(`[ai-knowledge-excel-worker] queue failure: ${message(error)}`);
+    const poll = async (work: () => Promise<unknown>, queue: string) => {
+      while (true) {
+        try { await work(); }
+        catch (error) { console.error(`[ai-knowledge-excel-worker] ${queue} queue failure: ${message(error)}`); }
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
       }
-      await new Promise((resolve) => setTimeout(resolve, POLL_MS));
-    }
+    };
+    // Independent loops let setup progress during large-file embeddings without
+    // restoring the Edge Runtime deadline that stranded large document imports.
+    await Promise.all([
+      poll(() => runOnce(admin), "knowledge"),
+      poll(() => processWebsiteSetup(admin as unknown as WorkerSetupDb), "website setup"),
+    ]);
   } else {
     // Same import-safe serving convention as n8n-api: the edge runtime loads
     // this file as the main module, while `deno test` imports it as a library.

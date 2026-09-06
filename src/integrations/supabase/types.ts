@@ -743,6 +743,57 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_website_setup_jobs: {
+        Row: {
+          id: string
+          user_id: string
+          source_id: string
+          social_account_id: string
+          platform: string
+          status: string
+          result: Json | null
+          error: string | null
+          attempts: number
+          lease_token: string | null
+          lease_expires_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          source_id: string
+          social_account_id: string
+          platform: string
+          status?: string
+          result?: Json | null
+          error?: string | null
+          attempts?: number
+          lease_token?: string | null
+          lease_expires_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          source_id?: string
+          social_account_id?: string
+          platform?: string
+          status?: string
+          result?: Json | null
+          error?: string | null
+          attempts?: number
+          lease_token?: string | null
+          lease_expires_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          { foreignKeyName: "ai_website_setup_jobs_source_id_fkey"; columns: ["source_id"]; isOneToOne: false; referencedRelation: "ai_knowledge_sources"; referencedColumns: ["id"] },
+          { foreignKeyName: "ai_website_setup_jobs_social_account_id_fkey"; columns: ["social_account_id"]; isOneToOne: false; referencedRelation: "social_accounts"; referencedColumns: ["id"] },
+        ]
+      }
       ai_model_preferences: {
         Row: {
           created_at: string
@@ -7526,6 +7577,38 @@ export type Database = {
       }
     }
     Functions: {
+      create_ai_website_setup_job: {
+        Args: { p_source_id: string; p_social_account_id: string; p_platform: string }
+        Returns: string
+      }
+      website_setup_target_allowed: {
+        Args: { p_user: string; p_source: string; p_account: string; p_platform: string }
+        Returns: boolean
+      }
+      read_ai_website_setup: {
+        Args: { p_user_id: string; p_social_account_id: string | null; p_platform: string | null; p_job_id?: string | null }
+        Returns: Json
+      }
+      retry_ai_website_setup: {
+        Args: { p_user_id: string; p_job_id: string }
+        Returns: string
+      }
+      claim_ai_website_setup: {
+        Args: Record<PropertyKey, never>
+        Returns: Database["public"]["Tables"]["ai_website_setup_jobs"]["Row"][]
+      }
+      finish_ai_website_setup: {
+        Args: { p_job_id: string; p_lease_token: string; p_result: Json | null; p_error: string | null }
+        Returns: boolean
+      }
+      read_ai_website_setup_input: {
+        Args: { p_job_id: string; p_lease_token: string }
+        Returns: Json
+      }
+      apply_ai_website_setup: {
+        Args: { p_user_id: string; p_job_id: string; p_expected_updated_at: string | null; p_business_profile: Json; p_agent_behavior: Json; p_business_profile_text: string | null }
+        Returns: Json
+      }
       accept_workspace_invitation: {
         Args: { p_token: string }
         Returns: string

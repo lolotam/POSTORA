@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Globe, PencilLine, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -32,6 +32,8 @@ import { KnowledgeGraphCard } from "@/components/messaging/knowledge/KnowledgeGr
 import { ManualProfilePanel } from "@/components/messaging/knowledge/ManualProfilePanel";
 import { UploadPanel } from "@/components/messaging/knowledge/UploadPanel";
 import { WebsitePanel } from "@/components/messaging/knowledge/WebsitePanel";
+import { WebsiteSetupDrafts } from "@/components/messaging/knowledge/WebsiteSetupDrafts";
+import { mergeProfileRefresh, websiteIndexingMessage } from "@/lib/websiteSetup";
 
 /** How knowledge gets in. Alternatives, so they are tabs. */
 type KnowledgeMethod = "manual" | "upload" | "website";
@@ -61,6 +63,10 @@ export function AiKnowledgeManager({
   const waAccount = isWhatsApp ? catalogHook.waAccount : null;
   const catalog = isWhatsApp ? catalogHook.catalog : null;
   const [profile, setProfile] = useState<BusinessProfile>({});
+  const profileRef = useRef(profile);
+  profileRef.current = profile;
+  const loadedProfile = useRef<{ scope: string; profile: BusinessProfile } | null>(null);
+  const profileScope = `${platform}:${accountId ?? ""}`;
   const [uploading, setUploading] = useState(false);
   // Where a NEW upload lands. Defaults to the selected account, because a file
   // added while looking at one page is almost always that page's -- and until
@@ -111,9 +117,16 @@ export function AiKnowledgeManager({
     // means a writer that does not mirror touched the text, so the text is the
     // whole truth and the structure's other fields are stale by definition;
     // keeping them would re-save values the user no longer has.
-    setProfile(diverged ? { notes: storedText } : structure);
+    const nextProfile = diverged ? { notes: storedText } : structure;
+    const previous = loadedProfile.current;
+    // A draft application may finish after the user returns to Manual profile.
+    // Refetching its saved config must not erase edits made during that request.
+    setProfile(previous?.scope === profileScope
+      ? mergeProfileRefresh(profileRef.current, previous.profile, nextProfile)
+      : nextProfile);
+    loadedProfile.current = { scope: profileScope, profile: nextProfile };
     // storedText participates deliberately: a text-only refresh must re-run this.
-  }, [storedProfileKey, storedText]);
+  }, [storedProfileKey, storedText, profileScope]);
   // An empty box over a stored value is the user having deleted it -- the same
   // asymmetry the settings form relies on, since the loaded config IS the
   // baseline here. Declared to the server rather than refused: refusing would
@@ -142,11 +155,14 @@ export function AiKnowledgeManager({
   const run = async (
     action: string,
     body: Record<string, unknown>,
-    success: string,
+    success: string | ((response: { queued?: boolean; chunk_count?: number }) => string),
   ) => {
     try {
-      await invoke.mutateAsync({ action, ...body });
-      toast.success(success);
+      const response = await invoke.mutateAsync({ action, ...body });
+      toast.success(typeof success === "function" ? success(response) : success);
+      if (action === "ingest_website" && response.setup_error) {
+        toast.warning("Website knowledge was accepted, but setup generation could not start. Use Generate setup from indexed website to retry after indexing finishes.");
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Knowledge action failed",
@@ -413,13 +429,16 @@ export function AiKnowledgeManager({
             onSubmit={(input) =>
               run(
                 "ingest_website",
-                { ...input, social_account_id: accountId ?? undefined },
-                input.mode === "site"
-                  ? "Crawl started — watch the sources list below"
-                  : "Page indexed",
+                { ...input, platform, social_account_id: accountId ?? undefined },
+                websiteIndexingMessage,
               )
             }
           />
+          {accountId && <WebsiteSetupDrafts
+            key={`${platform}:${accountId}`} platform={platform} accountId={accountId}
+            sources={visibleSources} config={config} configError={error} profile={profile}
+            profileDirty={configLoaded && renderedText.trim() !== storedText.trim()}
+          />}
         </TabsContent>
       </Tabs>
       <KnowledgeSourcesPanel

@@ -1,4 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render as renderUI, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // The three input methods are tabs, but the sources list is NOT one of them.
@@ -10,6 +12,10 @@ const upsertConfig = { mutateAsync: vi.fn().mockResolvedValue({}), isPending: fa
 const invoke = { mutateAsync: vi.fn().mockResolvedValue({}), isPending: false };
 let configValue: unknown = null;
 let configError: unknown = null;
+vi.mock("@/hooks/useAuth", () => ({ useAuth: () => ({ user: { id: "u1" } }) }));
+vi.mock("@/lib/messagingApi", () => ({ callEdgeApi: vi.fn().mockResolvedValue({ jobs: [] }) }));
+const successToast = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({ toast: { success: successToast, error: vi.fn() } }));
 
 vi.mock("@/hooks/useAiAgentConfig", () => ({
   useAiAgentConfig: () => ({ config: configValue, error: configError, upsertConfig }),
@@ -44,6 +50,11 @@ vi.mock("@/hooks/useSocialAccounts", () => ({
 
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 
+function render(children: ReactNode) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  return renderUI(children, { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
+}
+
 // Radix activates a tab from mousedown, not click, so a bare fireEvent.click
 // leaves the panel unchanged and every assertion after it silently tests the
 // first tab again.
@@ -55,6 +66,7 @@ const selectTab = (name: RegExp) => {
 
 describe("AiKnowledgeManager input methods", () => {
   beforeEach(() => {
+    successToast.mockClear();
     upsertConfig.mutateAsync.mockClear();
     invoke.mutateAsync.mockClear();
     configValue = { business_profile_text: "we sell shoes" };
@@ -77,6 +89,19 @@ describe("AiKnowledgeManager input methods", () => {
       linksReady: true,
       linksError: null,
     };
+  });
+
+  it("shows a queued message when single-page indexing is deferred", async () => {
+    invoke.mutateAsync.mockResolvedValueOnce({ queued: true, source_id: "w1" });
+    render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    selectTab(/website/i);
+    fireEvent.change(screen.getByLabelText(/website address/i), { target: { value: "https://example.com" } });
+    fireEvent.click(screen.getByRole("button", { name: /start scraping/i }));
+    await vi.waitFor(() => expect(successToast).toHaveBeenCalledWith(expect.stringMatching(/queued/i)));
+    expect(successToast).not.toHaveBeenCalledWith("Page indexed");
+    expect(invoke.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({
+      action: "ingest_website", social_account_id: "a1", platform: "facebook", generate_setup: true,
+    }));
   });
 
   it("keeps the sources panel visible on every input method", () => {

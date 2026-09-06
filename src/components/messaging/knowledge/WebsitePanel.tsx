@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
@@ -12,6 +13,7 @@ export interface WebsiteScrapeInput {
   mode: "page" | "site";
   limit: number;
   scope: "account" | "all";
+  generate_setup: boolean;
 }
 
 export interface WebsitePanelProps {
@@ -36,6 +38,7 @@ export function WebsitePanel({
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [scope, setScope] = useState<"account" | "all">("account");
   const [error, setError] = useState<string | null>(null);
+  const [generateSetup, setGenerateSetup] = useState(true);
 
   const submit = () => {
     const trimmed = url.trim();
@@ -52,7 +55,7 @@ export function WebsitePanel({
       return;
     }
     setError(null);
-    onSubmit({ url: trimmed, mode, limit, scope: accountId ? scope : "all" });
+    onSubmit({ url: trimmed, mode, limit, scope: accountId ? scope : "all", generate_setup: !!accountId && generateSetup });
   };
 
   return (
@@ -133,6 +136,22 @@ export function WebsitePanel({
               </SelectContent>
             </Select>
           </div>
+        )}
+
+        {accountId ? (
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <Checkbox checked={generateSetup} onCheckedChange={(checked) => setGenerateSetup(checked === true)} />
+              Generate business and agent setup
+            </label>
+            <p className="text-sm text-muted-foreground">
+              Review extracted business details and suggested replies before saving to {selectedAccountLabel || "this account"}.
+            </p>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Select a connected account to generate and apply business and agent settings. You can still index website knowledge here.
+          </p>
         )}
 
         <Button onClick={submit} disabled={submitting}>
