@@ -51,8 +51,14 @@ user's ChatGPT session server-side, and a consumer seat cannot serve subscriber 
   any unknown provider prefix to `openai`. `AdminAiAgentSection.tsx` offers
   `AGENT_PROVIDER_CODES = ["openai","openrouter","gemini"]`.
 - `DefaultModelSelector` lists every active provider and model immediately; it is not
-  behind any flag. Activating `openai` or `claude` before the adapters are deployed would
-  let an admin select a chain entry that today routes to Google.
+  behind any flag. **Production state on 2026-09-06:** `openai`, `claude`, `gemini` and
+  `openrouter` are all already `is_active = true` (the seed's `false` was toggled by an
+  admin), all four platform env keys are set in the functions container, `supabase_vault`
+  is installed, and the live chat chain is `openai/gpt-5.5` → `xai/grok-4.3` →
+  `openrouter/nemotron`. With today's `getAiEndpoint` the first two tiers are posted to the
+  Google endpoint and fail, so every caption is served by the third tier. Deploying the
+  `openai` branch is therefore a live routing change for captions: tier 1 will reach OpenAI
+  with the platform key. `xai` stays unrouted (out of scope) and keeps failing over.
 - Platform keys entered in the admin card (`set-service-key`) land in `provider_api_keys`;
   `ai-fallback.ts` and `ai-agent-reply` never read that table.
 - Vault: `upsert_connector_credential_secret(p_secret_id, p_secret jsonb)` and
@@ -419,7 +425,9 @@ activation → smoke → global flag decision. Rollback: set the flag false; row
 ## 11. Acceptance criteria
 
 1. With the flag off, caption, hashtag, and agent-reply requests produce byte-identical tier
-   selection to today (verified by the existing test suites, unmodified).
+   selection to today (verified by the existing test suites, unmodified). Tier routing for
+   `openai` and `claude` changes by design: those tiers now reach their own APIs instead of
+   Google. The live smoke confirms the chat primary answers from OpenAI.
 2. Saving a bad key returns `AI_USER_KEY_INVALID` and creates no row and no Vault secret.
 3. After saving a valid key, `user_ai_provider_key_status` shows the hint and no other client
    path returns the key (RLS test, view column test, Edge response test).
