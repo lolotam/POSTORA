@@ -53,6 +53,12 @@ import {
 import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 import {
+  CONVERSATION_LIST_LIMIT,
+  conversationSearchOr,
+  displayNameFor,
+  sanitizeConversationSearch,
+} from "../_shared/whatsappConversationList.ts";
+import {
   getWhatsAppConversationState,
   setWhatsAppMessageFlag,
 } from "../_shared/whatsappConversationState.ts";
@@ -1403,14 +1409,17 @@ function isAiAgentPlatform(value: unknown): value is string {
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
 
-      const { data, error } = await adminClient
+      const searchTerm = sanitizeConversationSearch(body.q);
+      let listQuery = adminClient
         .from("messaging_cache")
         .select("*")
         .eq("social_account_id", social_account_id)
         .eq("workspace_id", account.workspaceId)
-        .eq("platform", "whatsapp")
+        .eq("platform", "whatsapp");
+      if (searchTerm) listQuery = listQuery.or(conversationSearchOr(searchTerm));
+      const { data, error } = await listQuery
         .order("last_message_at", { ascending: false })
-        .limit(50);
+        .limit(CONVERSATION_LIST_LIMIT);
 
       if (error) throw error;
 
@@ -1419,33 +1428,35 @@ function isAiAgentPlatform(value: unknown): value is string {
       const participantPhones = [...new Set(
         (data || []).map((conversation: any) => participantPhone(conversation.conversation_id)),
       )].filter(Boolean);
-      const contactIdByPhone = new Map<string, string>();
+      const contactByPhone = new Map<string, { id: string; display_name: string | null }>();
 
       if (participantPhones.length > 0) {
         const { data: contacts, error: contactsError } = await adminClient
           .from("whatsapp_contacts")
-          .select("id, phone_number")
+          .select("id, phone_number, display_name")
           .eq("workspace_id", account.workspaceId)
           .in("phone_number", participantPhones);
         if (contactsError) throw contactsError;
         for (const contact of contacts || []) {
-          contactIdByPhone.set(contact.phone_number, contact.id);
+          contactByPhone.set(contact.phone_number, { id: contact.id, display_name: contact.display_name });
         }
       }
 
       const conversations = (data || []).map((c: any) => {
         const phone = participantPhone(c.conversation_id);
+        const contact = contactByPhone.get(phone);
+        const name = displayNameFor(c.participant_name, phone, contact);
         return {
           id: c.conversation_id,
           cache_id: c.id,
           workspace_id: c.workspace_id,
-          contact_id: contactIdByPhone.get(phone) || null,
-          participant_name: c.participant_name || "Unknown",
+          contact_id: contact?.id || null,
+          participant_name: name,
           participant_id: phone,
           participant_avatar: c.participant_avatar || null,
           last_message: c.last_message_preview || "",
           last_message_time: c.last_message_at,
-          last_message_from: c.participant_name || "",
+          last_message_from: name,
           unread_count: c.unread_count || 0,
           updated_time: c.updated_at,
         };
