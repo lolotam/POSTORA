@@ -665,6 +665,238 @@ END $byok_flag_read$;
 RESET ROLE;
 SELECT set_config('request.jwt.claim.sub', '', false);
 
+-- ===========================================================================
+-- save_user_ai_provider_key privilege surface: service_role only, one
+-- signature. The Edge Function calls it under the service role; a second
+-- overload would double as a second write path with its own privileges.
+-- ===========================================================================
+\echo '--- save function privileges ---'
+DO $byok_save_privs$
+DECLARE
+  v_proc_count integer;
+BEGIN
+  IF has_function_privilege('anon',
+      'public.save_user_ai_provider_key(uuid,text,text,text,timestamptz)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: save_user_ai_provider_key is EXECUTEable as anon';
+  END IF;
+  IF has_function_privilege('authenticated',
+      'public.save_user_ai_provider_key(uuid,text,text,text,timestamptz)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: save_user_ai_provider_key is EXECUTEable as authenticated';
+  END IF;
+  IF NOT has_function_privilege('service_role',
+      'public.save_user_ai_provider_key(uuid,text,text,text,timestamptz)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'FAIL: save_user_ai_provider_key is NOT EXECUTEable as service_role';
+  END IF;
+
+  SELECT count(*) INTO v_proc_count
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'save_user_ai_provider_key';
+  IF v_proc_count <> 1 THEN
+    RAISE EXCEPTION 'FAIL: % pg_proc rows named save_user_ai_provider_key, expected exactly 1', v_proc_count;
+  END IF;
+END $byok_save_privs$;
+
+-- ===========================================================================
+-- save_user_ai_provider_key input guard: baseline-safe, no Vault needed.
+-- Both refusals fire before any vault.* reference, so this block proves the
+-- guard on a database without supabase_vault too.
+-- ===========================================================================
+\echo '--- save function input guard ---'
+DO $byok_save_input_guard$
+BEGIN
+  BEGIN
+    PERFORM 1 FROM public.save_user_ai_provider_key(
+      '11111111-1111-4111-8111-111111111111', 'openai', '', 'hint-x', now()) AS s;
+    RAISE EXCEPTION 'FAIL: empty api key was ACCEPTED';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE 'FAIL:%' THEN
+      RAISE;
+    ELSIF SQLERRM NOT LIKE '%api key must not be empty%' THEN
+      RAISE;
+    END IF;
+    -- else the expected validation refusal: swallow
+  END;
+
+  BEGIN
+    PERFORM 1 FROM public.save_user_ai_provider_key(
+      '11111111-1111-4111-8111-111111111111', 'xai', 'byok-probe-key', 'hint-x', now()) AS s;
+    RAISE EXCEPTION 'FAIL: unknown provider was ACCEPTED';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM LIKE 'FAIL:%' THEN
+      RAISE;
+    ELSIF SQLERRM NOT LIKE '%unknown provider%' THEN
+      RAISE;
+    END IF;
+    -- else the expected validation refusal: swallow
+  END;
+END $byok_save_input_guard$;
+
+-- ===========================================================================
+-- VAULT-CONDITIONAL save/replace/heal: first save creates row + secret,
+-- replacement reuses the row id AND the secret id, a save heals an
+-- 'invalid' row back to 'active', and deleting the row still reclaims the
+-- Vault secret. Never CALLED when supabase_vault is absent: the body
+-- touches vault.* at execution time, so calling it there would fail the
+-- suite for the wrong reason. One NOTICE covers the skip.
+-- ===========================================================================
+\echo '--- save/replace/heal (vault-conditional) ---'
+DO $byok_save_replace$
+DECLARE
+  v_present boolean;
+  v_a uuid := '11111111-1111-4111-8111-111111111111';
+  v_n integer;
+  v_first_id uuid;
+  v_second_id uuid;
+  v_status text;
+  v_hint text;
+  v_first_secret uuid;
+  v_second_secret uuid;
+  v_key text;
+  v_left integer;
+BEGIN
+  SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'supabase_vault')
+    INTO v_present;
+  IF NOT v_present THEN
+    RAISE NOTICE 'vault absent: skipping save_user_ai_provider_key assertions';
+    RETURN;
+  END IF;
+
+  -- First save: one row, active, hint stored, key readable back.
+  SELECT s.id, s.status, s.key_hint INTO v_first_id, v_status, v_hint
+    FROM public.save_user_ai_provider_key(
+      v_a, 'openai', 'byok-save-key-1', 'hint-1', now()) AS s;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'FAIL: first save returned % rows, expected 1', v_n;
+  END IF;
+  IF v_status IS DISTINCT FROM 'active' THEN
+    RAISE EXCEPTION 'FAIL: first save status is %, expected active', v_status;
+  END IF;
+  IF v_hint IS DISTINCT FROM 'hint-1' THEN
+    RAISE EXCEPTION 'FAIL: first save key_hint is %, expected hint-1', v_hint;
+  END IF;
+  v_key := public.get_user_ai_provider_key(v_a, 'openai');
+  IF v_key IS DISTINCT FROM 'byok-save-key-1' THEN
+    RAISE EXCEPTION 'FAIL: first save key reads back as %, expected byok-save-key-1', v_key;
+  END IF;
+  SELECT k.credentials_secret_id INTO v_first_secret
+    FROM public.user_ai_provider_keys AS k
+   WHERE k.user_id = v_a AND k.provider_code = 'openai';
+  IF v_first_secret IS NULL THEN
+    RAISE EXCEPTION 'FAIL: first save left no linked Vault secret';
+  END IF;
+
+  -- Replacement save: same row id, SAME secret id (in-place update), new key.
+  SELECT s.id, s.status, s.key_hint INTO v_second_id, v_status, v_hint
+    FROM public.save_user_ai_provider_key(
+      v_a, 'openai', 'byok-save-key-2', 'hint-2', now()) AS s;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  IF v_n <> 1 THEN
+    RAISE EXCEPTION 'FAIL: replacement save returned % rows, expected 1', v_n;
+  END IF;
+  IF v_second_id IS DISTINCT FROM v_first_id THEN
+    RAISE EXCEPTION 'FAIL: replacement save changed row id % to %', v_first_id, v_second_id;
+  END IF;
+  SELECT k.credentials_secret_id INTO v_second_secret
+    FROM public.user_ai_provider_keys AS k
+   WHERE k.user_id = v_a AND k.provider_code = 'openai';
+  IF v_second_secret IS DISTINCT FROM v_first_secret THEN
+    RAISE EXCEPTION 'FAIL: replacement save re-pointed secret % to %', v_first_secret, v_second_secret;
+  END IF;
+  v_key := public.get_user_ai_provider_key(v_a, 'openai');
+  IF v_key IS DISTINCT FROM 'byok-save-key-2' THEN
+    RAISE EXCEPTION 'FAIL: replacement save key reads back as %, expected byok-save-key-2', v_key;
+  END IF;
+
+  -- Heal: an invalid row comes back active on the next save.
+  UPDATE public.user_ai_provider_keys
+     SET status = 'invalid'
+   WHERE user_id = v_a AND provider_code = 'openai';
+  SELECT s.id, s.status INTO v_second_id, v_status
+    FROM public.save_user_ai_provider_key(
+      v_a, 'openai', 'byok-save-key-3', 'hint-3', now()) AS s;
+  IF v_status IS DISTINCT FROM 'active' THEN
+    RAISE EXCEPTION 'FAIL: save did not heal invalid status, got %', v_status;
+  END IF;
+  IF v_second_id IS DISTINCT FROM v_first_id THEN
+    RAISE EXCEPTION 'FAIL: heal save changed row id % to %', v_first_id, v_second_id;
+  END IF;
+  v_key := public.get_user_ai_provider_key(v_a, 'openai');
+  IF v_key IS DISTINCT FROM 'byok-save-key-3' THEN
+    RAISE EXCEPTION 'FAIL: heal save key reads back as %, expected byok-save-key-3', v_key;
+  END IF;
+
+  -- The save path reclaims like the direct-write path: deleting the row
+  -- removes the Vault secret.
+  SELECT k.credentials_secret_id INTO v_second_secret
+    FROM public.user_ai_provider_keys AS k
+   WHERE k.user_id = v_a AND k.provider_code = 'openai';
+  DELETE FROM public.user_ai_provider_keys
+   WHERE user_id = v_a AND provider_code = 'openai';
+  SELECT count(*) INTO v_left FROM vault.secrets WHERE id = v_second_secret;
+  IF v_left <> 0 THEN
+    RAISE EXCEPTION 'FAIL: Vault secret % survives its save-path key row deletion', v_second_secret;
+  END IF;
+END $byok_save_replace$;
+
+-- ===========================================================================
+-- VAULT-CONDITIONAL rollback proof: a save rolled back leaves neither a row
+-- nor a Vault secret behind. The whole point of the transactional wrapper
+-- is that the Vault write shares the row's fate.
+-- ===========================================================================
+\echo '--- save rollback proof (vault-conditional) ---'
+DO $byok_save_rollback$
+DECLARE
+  v_present boolean;
+  v_b uuid := '22222222-2222-4222-8222-222222222222';
+  v_before integer;
+  v_after integer;
+  v_rows integer;
+BEGIN
+  SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'supabase_vault')
+    INTO v_present;
+  IF NOT v_present THEN
+    RAISE NOTICE 'vault absent: skipping save rollback assertion';
+    RETURN;
+  END IF;
+
+  SELECT count(*) INTO v_before
+    FROM vault.secrets
+   WHERE name LIKE 'user_ai_provider_key:credentials:%';
+
+  -- No explicit SAVEPOINT here on purpose: ROLLBACK TO SAVEPOINT is a
+  -- transaction-control statement, which plpgsql (and therefore a DO block)
+  -- rejects. The inner BEGIN/EXCEPTION block below establishes its own
+  -- implicit subtransaction instead: everything it does -- the Vault write
+  -- plus the row upsert -- is undone when the deliberate exception is
+  -- caught, which is exactly the atomicity this proves.
+  BEGIN
+    PERFORM 1 FROM public.save_user_ai_provider_key(
+      v_b, 'openai', 'byok-rollback-probe', 'hint-rb', now()) AS s;
+    RAISE EXCEPTION 'byok deliberate rollback probe';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE '%deliberate rollback probe%' THEN
+      RAISE;
+    END IF;
+    -- Swallowing here rolls the inner block back to its implicit
+    -- savepoint: the save's Vault write and row insert are both undone.
+  END;
+
+  SELECT count(*) INTO v_rows
+    FROM public.user_ai_provider_keys
+   WHERE user_id = v_b;
+  IF v_rows <> 0 THEN
+    RAISE EXCEPTION 'FAIL: rollback left % key rows for B, expected 0', v_rows;
+  END IF;
+
+  SELECT count(*) INTO v_after
+    FROM vault.secrets
+   WHERE name LIKE 'user_ai_provider_key:credentials:%';
+  IF v_after <> v_before THEN
+    RAISE EXCEPTION 'FAIL: rollback left vault secrets behind (% before, % after)', v_before, v_after;
+  END IF;
+END $byok_save_rollback$;
+
 -- ---------------------------------------------------------------------------
 -- Trailing cleanup: the suite leaves no rows behind.
 -- ---------------------------------------------------------------------------
