@@ -201,7 +201,7 @@ describe("WhatsAppMediaAttachment", () => {
     expect(document.querySelector("img")).toBeNull();
   });
 
-  it("offers a download on image, video and audio", async () => {
+  it("offers a download control on an image", async () => {
     getMedia.mockResolvedValue({ media: [media()] });
     renderAttachment(attachment(), api);
     act(() => triggerIntersect());

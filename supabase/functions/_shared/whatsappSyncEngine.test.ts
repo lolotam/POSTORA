@@ -29,18 +29,16 @@ function fakeAdmin(options: { anchors?: Record<string, string> } = {}) {
     //   .from("whatsapp_evolution_instances").update(values).eq(...)
     // `anchors` maps a message id to the conversation the live webhook stored it under.
     from: (table: string) => {
-      let ids: string[] = [];
       const chain: any = {
         select: () => chain,
         eq: () => chain,
-        in: (_column: string, values: string[]) => {
-          ids = values;
-          return chain;
-        },
-        limit: () => {
-          const hit = ids.map((id) => anchors[id]).find(Boolean);
-          return Promise.resolve({ data: hit ? [{ conversation_id: hit }] : [], error: null });
-        },
+        in: (_column: string, values: string[]) =>
+          Promise.resolve({
+            data: values
+              .filter((id) => anchors[id])
+              .map((id) => ({ message_id: id, conversation_id: anchors[id] })),
+            error: null,
+          }),
         update: (values: Record<string, unknown>) => ({
           eq: () => {
             writes.push({ table, rows: [values] });
@@ -78,11 +76,14 @@ function fakeApi(options: {
   contacts?: any[];
   messages?: Record<string, any[]>;
   failOn?: string;
+  /** Filled in as the sweep runs: how many times each chat's history was requested. */
+  calls?: Record<string, number>;
 } = {}) {
   return {
     findChats: () => Promise.resolve(options.chats ?? []),
     findContacts: () => Promise.resolve(options.contacts ?? []),
     findMessages: (_instance: string, remoteJid: string) => {
+      if (options.calls) options.calls[remoteJid] = (options.calls[remoteJid] ?? 0) + 1;
       if (options.failOn === remoteJid) return Promise.reject(new Error("evolution unreachable"));
       // findMessages now returns { records, complete }: the flag is what stops a
       // deadline- or ceiling-truncated chat being recorded as a finished sweep.
@@ -146,6 +147,30 @@ Deno.test("a LID chat with a live anchor is imported under the anchored number",
   const messages = rowsFor(admin, "import_whatsapp_messages");
   assertEquals(messages.length, 2);
   assertEquals(messages.every((row) => row.conversation_id === "wa_96597950350_96555683677"), true);
+});
+
+Deno.test("a LID chat anchored by its own last message id is imported without a probe", async () => {
+  // findChats already names the newest message; when the webhook stored that id, the sweep
+  // must not spend an Evolution call per chat finding out what it already knows.
+  const admin = fakeAdmin({ anchors: { LAST1: "wa_96597950350_96555683677" } });
+  const calls: Record<string, number> = {};
+  const lidJid = "166095025660123@lid";
+  const outcome = await syncEvolutionHistory({
+    admin,
+    api: fakeApi({
+      calls,
+      chats: [chat(lidJid, {
+        lastMessage: { key: { id: "LAST1", remoteJid: lidJid }, message: { conversation: "latest" }, messageTimestamp: 1787268633 },
+      })],
+      messages: { [lidJid]: [lidMessage("LAST1", lidJid, "latest")] },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+  assertEquals(outcome.chatsLidResolved, 1);
+  // Exactly one findMessages call: the import itself, no probe before it.
+  assertEquals(calls[lidJid], 1);
+  assertEquals(rowsFor(admin, "import_whatsapp_conversations")[0].conversation_id, "wa_96597950350_96555683677");
 });
 
 Deno.test("a LID chat with no anchor is counted as waiting, not imported", async () => {

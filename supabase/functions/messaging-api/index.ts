@@ -1739,7 +1739,7 @@ function isAiAgentPlatform(value: unknown): value is string {
       const account = await withWhatsAppActionAccess({
         client: whatsappAccessClient,
         userId: user.id,
-        action: "whatsapp_send_message",
+        action: "whatsapp_forward_message",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
 
@@ -1828,22 +1828,25 @@ function isAiAgentPlatform(value: unknown): value is string {
       const account = await withWhatsAppActionAccess({
         client: whatsappAccessClient,
         userId: user.id,
-        action: "whatsapp_mark_read",
+        action: "whatsapp_delete_conversation",
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
 
+      // Both spellings of the id, exactly as whatsapp_get_messages reads them: leaving the
+      // "+" variant behind would resurface the thread the next time the contact writes.
+      const conversationIds = conversationIdsForFilter(conversation_id.replace(/_\+/g, "_"), conversation_id);
       const { error: messagesError } = await adminClient
         .from("whatsapp_messages")
         .delete()
         .eq("social_account_id", social_account_id)
-        .eq("conversation_id", conversation_id);
+        .in("conversation_id", conversationIds);
       if (messagesError) throw messagesError;
       const { error: cacheError } = await adminClient
         .from("messaging_cache")
         .delete()
         .eq("social_account_id", social_account_id)
         .eq("workspace_id", account.workspaceId)
-        .eq("conversation_id", conversation_id);
+        .in("conversation_id", conversationIds);
       if (cacheError) throw cacheError;
       return jsonResponse({ success: true });
     }

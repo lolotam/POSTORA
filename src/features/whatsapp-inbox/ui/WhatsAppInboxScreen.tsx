@@ -19,6 +19,7 @@ import { ConversationList } from "@/components/messaging/ConversationList";
 import { NewConversationDialog } from "@/components/messaging/NewConversationDialog";
 import { Button } from "@/components/ui/button";
 import { useWhatsAppChrome } from "@/components/whatsapp/WhatsAppChromeContext";
+import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
 import { useConversations, useMessagingAccounts, type Conversation } from "@/hooks/useMessaging";
 import { useWhatsAppLabels } from "@/hooks/useWhatsAppLabels";
 import { cn } from "@/lib/utils";
@@ -48,6 +49,10 @@ export function WhatsAppInboxScreen(): JSX.Element {
   const queryClient = useQueryClient();
   const { assignments } = useWhatsAppLabels();
   const { setCompact } = useWhatsAppChrome();
+  // whatsapp_delete_conversation is admin-min on the server; showing the trash to an agent
+  // would only earn them a 403 toast.
+  const { activeRole } = useWhatsAppWorkspaceContext();
+  const canDeleteChats = activeRole === "owner" || activeRole === "admin";
   // The list search is server-side (name or phone digits); typing is debounced so a
   // ten-character query costs one request rather than ten.
   const [search, setSearch] = useState("");
@@ -263,7 +268,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
                           isLoading={conversationsLoading}
                           search={search}
                           onSearchChange={setSearch}
-                          onDelete={setDeleteTarget}
+                          onDelete={canDeleteChats ? setDeleteTarget : undefined}
                           absoluteTimes
                           showLabels
                           selectionMode={selectionMode}

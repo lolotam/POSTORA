@@ -142,20 +142,36 @@ function scanChats(chats: any[], contacts: any[], account: SyncAccount): ChatSca
  * in whatsapp_messages therefore pins the chat to the number the live event carried. Scoped
  * to this account: the same LID can belong to a different tenant's contact.
  */
-async function lookupAnchorNumber(admin: any, accountId: string, ids: string[]): Promise<string | null> {
-  if (ids.length === 0) return null;
+/** Message id → subscriber number, for every id the webhook has already stored for this account. */
+async function lookupAnchorNumbers(admin: any, accountId: string, ids: string[]): Promise<Map<string, string>> {
+  const anchors = new Map<string, string>();
+  if (ids.length === 0) return anchors;
   const { data, error } = await admin
     .from("whatsapp_messages")
-    .select("conversation_id")
+    .select("message_id, conversation_id")
     .eq("social_account_id", accountId)
-    .in("message_id", ids)
-    .limit(1);
+    .in("message_id", ids);
   if (error) throw error;
-  const conversationId = data?.[0]?.conversation_id as string | undefined;
-  const number = conversationId?.split("_").pop();
-  return number && /^\d+$/.test(number) ? number : null;
+  for (const row of data ?? []) {
+    const number = String(row.conversation_id ?? "").split("_").pop();
+    if (number && /^\d+$/.test(number)) anchors.set(String(row.message_id), number);
+  }
+  return anchors;
 }
 
+function messageIdsOf(records: any[]): string[] {
+  return records
+    .map((record: any) => record?.key?.id)
+    .filter((id: unknown): id is string => typeof id === "string" && id.length > 0);
+}
+
+/**
+ * Two passes, cheapest first. The chat record already carries its last message id, so one
+ * IN query anchors every LID chat whose newest message arrived live -- no Evolution call.
+ * Only the leftovers get a one-page probe, and those run CHAT_CONCURRENCY at a time: an
+ * account with 255 LID chats probed one by one would spend the whole sweep budget here
+ * and import nothing.
+ */
 async function resolveLidChats(deps: {
   admin: any;
   api: EvolutionApi;
@@ -168,31 +184,50 @@ async function resolveLidChats(deps: {
   const { admin, api, account, instanceName, contacts, pending, deadlineAt } = deps;
   const contactByJid = contactIndex(contacts);
   const resolved: ChatSummary[] = [];
-  let awaiting = 0;
-  for (const chat of pending) {
-    if (Date.now() >= deadlineAt) {
-      awaiting += 1;
-      continue;
-    }
+  const adopt = (chat: any, number: string) => {
     const remoteJid = String(chat?.remoteJid || "");
-    try {
-      // One page is enough: a live message, when there is one, is among the newest.
-      const probe = await api.findMessages(instanceName, remoteJid, { deadlineAt, pageCeiling: 1 });
-      const ids = probe.records
-        .map((record: any) => record?.key?.id)
-        .filter((id: unknown): id is string => typeof id === "string" && id.length > 0);
-      const number = await lookupAnchorNumber(admin, account.id, ids);
-      if (!number) {
-        awaiting += 1;
-        continue;
+    resolved.push(summarize(chat, remoteJid, `${number}${DIRECT_JID_SUFFIX}`, contactByJid.get(remoteJid), account));
+  };
+
+  const lastIds = new Map<any, string>();
+  for (const chat of pending) {
+    const id = chat?.lastMessage?.key?.id;
+    if (typeof id === "string" && id) lastIds.set(chat, id);
+  }
+  const fromRecords = await lookupAnchorNumbers(admin, account.id, [...lastIds.values()]);
+  const leftovers: any[] = [];
+  for (const chat of pending) {
+    const number = fromRecords.get(lastIds.get(chat) ?? "");
+    if (number) adopt(chat, number);
+    else leftovers.push(chat);
+  }
+
+  let awaiting = 0;
+  for (let index = 0; index < leftovers.length; index += CHAT_CONCURRENCY) {
+    if (Date.now() >= deadlineAt) {
+      awaiting += leftovers.length - index;
+      break;
+    }
+    const batch = leftovers.slice(index, index + CHAT_CONCURRENCY);
+    const probes = await Promise.all(batch.map(async (chat) => {
+      const remoteJid = String(chat?.remoteJid || "");
+      try {
+        // One page is enough: a live message, when there is one, is among the newest.
+        const page = await api.findMessages(instanceName, remoteJid, { deadlineAt, pageCeiling: 1 });
+        return { chat, ids: messageIdsOf(page.records) };
+      } catch (error) {
+        console.error(
+          `[whatsapp-sync] ${instanceName} LID probe failed:`,
+          error instanceof Error ? error.message : error,
+        );
+        return { chat, ids: [] as string[] };
       }
-      resolved.push(summarize(chat, remoteJid, `${number}${DIRECT_JID_SUFFIX}`, contactByJid.get(remoteJid), account));
-    } catch (error) {
-      awaiting += 1;
-      console.error(
-        `[whatsapp-sync] ${instanceName} LID probe failed:`,
-        error instanceof Error ? error.message : error,
-      );
+    }));
+    const fromProbes = await lookupAnchorNumbers(admin, account.id, probes.flatMap((probe) => probe.ids));
+    for (const probe of probes) {
+      const number = probe.ids.map((id) => fromProbes.get(id)).find(Boolean);
+      if (number) adopt(probe.chat, number);
+      else awaiting += 1;
     }
   }
   return { resolved, awaiting };
@@ -414,6 +449,14 @@ export async function importEvolutionHistory(deps: {
     };
     throw error;
   } finally {
-    await admin.from("whatsapp_evolution_instances").update(completion).eq("social_account_id", account.id);
+    // A rejected completion (e.g. a column the deployed schema lacks) would otherwise leave
+    // the lease held and the outcome lost with nothing in the logs to say so.
+    const { error: completionError } = await admin
+      .from("whatsapp_evolution_instances")
+      .update(completion)
+      .eq("social_account_id", account.id);
+    if (completionError) {
+      console.error(`[whatsapp-sync] ${instanceName}: completion write failed:`, completionError.message ?? completionError);
+    }
   }
 }
