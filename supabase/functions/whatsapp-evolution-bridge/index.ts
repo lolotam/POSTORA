@@ -14,6 +14,9 @@ import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_sha
 
 const EVOLUTION_EVENTS: EvolutionEvent[] = [
   "MESSAGES_UPSERT",
+  // Delivery / read / rejection acks for our own sends. Instances paired before this event
+  // was listed need the resubscribe_webhook action once.
+  "MESSAGES_UPDATE",
   "CONNECTION_UPDATE",
   "QRCODE_UPDATED",
 ];
@@ -26,7 +29,13 @@ class BridgeError extends Error {
 }
 
 interface BridgeBody {
-  action: "create_and_get_qr" | "get_qr_status" | "logout_instance" | "sync_past_chats";
+  action:
+    | "create_and_get_qr"
+    | "get_qr_status"
+    | "logout_instance"
+    | "sync_past_chats"
+    | "get_sync_status"
+    | "resubscribe_webhook";
   social_account_id?: string;
   workspace_id?: string;
   risk_consent?: boolean;
@@ -40,6 +49,8 @@ interface EvolutionInstanceRow {
   jwt_key: string;
   last_qr: string | null;
   last_sync_at: string | null;
+  sync_started_at: string | null;
+  last_sync_outcome: Record<string, unknown> | null;
 }
 
 function clientIp(req: Request): string | null {
@@ -148,7 +159,7 @@ async function findOwnedAccount(admin: any, userId: string, socialAccountId: str
 async function findInstance(admin: any, socialAccountId: string): Promise<EvolutionInstanceRow> {
   const { data, error } = await admin
     .from("whatsapp_evolution_instances")
-    .select("social_account_id, instance_name, jwt_key, last_qr, last_sync_at")
+    .select("social_account_id, instance_name, jwt_key, last_qr, last_sync_at, sync_started_at, last_sync_outcome")
     .eq("social_account_id", socialAccountId)
     .maybeSingle();
   if (error) throw error;
@@ -267,6 +278,35 @@ async function syncPastChats(admin: any, userId: string, body: BridgeBody) {
   return { success: true, message: "Importing your WhatsApp conversations" };
 }
 
+// The sweep outlives the request that started it, so the setup page polls this until
+// finished_at moves past the value it saw before pressing the button.
+async function getSyncStatus(admin: any, userId: string, body: BridgeBody) {
+  if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
+  await findOwnedAccount(admin, userId, body.social_account_id);
+  const instance = await findInstance(admin, body.social_account_id);
+  return {
+    success: true,
+    social_account_id: body.social_account_id,
+    sync_running: instance.sync_started_at !== null,
+    last_sync_at: instance.last_sync_at,
+    last_sync_outcome: instance.last_sync_outcome,
+  };
+}
+
+// One-time repair for instances paired before MESSAGES_UPDATE was subscribed: same URL,
+// same jwt_key header, the full current event list.
+async function resubscribeWebhook(context: Awaited<ReturnType<typeof authenticateRequest>>, body: BridgeBody) {
+  if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
+  await findOwnedAccount(context.admin, context.user.id, body.social_account_id);
+  const instance = await findInstance(context.admin, body.social_account_id);
+  await createEvolutionApi().setWebhook(instance.instance_name, {
+    url: `${context.webhookBaseUrl}/functions/v1/whatsapp-evolution-webhook`,
+    headers: { jwt_key: instance.jwt_key },
+    events: EVOLUTION_EVENTS,
+  });
+  return { success: true, social_account_id: body.social_account_id, events: EVOLUTION_EVENTS };
+}
+
 // The webhook is the primary activation path; this keeps a dropped delivery from
 // leaving an already-linked session permanently inactive in Postora.
 async function reconcileAccountConnection(reconciliation: {
@@ -349,6 +389,12 @@ Deno.serve(async (req) => {
     }
     if (body.action === "sync_past_chats") {
       return restrictedJsonResponse(req, await syncPastChats(context.admin, context.user.id, body));
+    }
+    if (body.action === "get_sync_status") {
+      return restrictedJsonResponse(req, await getSyncStatus(context.admin, context.user.id, body));
+    }
+    if (body.action === "resubscribe_webhook") {
+      return restrictedJsonResponse(req, await resubscribeWebhook(context, body));
     }
     if (body.action === "logout_instance") {
       return restrictedJsonResponse(req, await logoutInstance(context.admin, context.user.id, body));

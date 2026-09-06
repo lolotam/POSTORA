@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { importEvolutionHistory, syncEvolutionHistory } from "./whatsappSyncEngine.ts";
+import { importEvolutionHistory, SYNC_FAILED_MESSAGE, syncEvolutionHistory } from "./whatsappSyncEngine.ts";
 
 const ACCOUNT = {
   id: "acc-1",
@@ -15,14 +15,48 @@ interface Write {
 
 // Stands in for the Supabase client. The database is a system boundary, so the assertions
 // below are on the rows the sweep would write, not on how the client was called.
-function fakeAdmin() {
+function fakeAdmin(options: { anchors?: Record<string, string> } = {}) {
   const writes: Write[] = [];
+  const anchors = options.anchors ?? {};
   return {
     writes,
     rpc: (fn: string, args: { p_rows: any[] }) => {
       writes.push({ table: fn, rows: args.p_rows });
       return Promise.resolve({ data: args.p_rows.length, error: null });
     },
+    // Models the two shapes the sweep uses on the client:
+    //   .from("whatsapp_messages").select(...).eq(...).in("message_id", ids).limit(1)
+    //   .from("whatsapp_evolution_instances").update(values).eq(...)
+    // `anchors` maps a message id to the conversation the live webhook stored it under.
+    from: (table: string) => {
+      const chain: any = {
+        select: () => chain,
+        eq: () => chain,
+        in: (_column: string, values: string[]) =>
+          Promise.resolve({
+            data: values
+              .filter((id) => anchors[id])
+              .map((id) => ({ message_id: id, conversation_id: anchors[id] })),
+            error: null,
+          }),
+        update: (values: Record<string, unknown>) => ({
+          eq: () => {
+            writes.push({ table, rows: [values] });
+            return Promise.resolve({ error: null });
+          },
+        }),
+      };
+      return chain;
+    },
+  };
+}
+
+function lidMessage(id: string, remoteJid: string, text: string) {
+  return {
+    key: { id, remoteJid, fromMe: false },
+    message: { conversation: text },
+    messageTimestamp: 1787268633,
+    pushName: "Lid Person",
   };
 }
 
@@ -42,11 +76,14 @@ function fakeApi(options: {
   contacts?: any[];
   messages?: Record<string, any[]>;
   failOn?: string;
+  /** Filled in as the sweep runs: how many times each chat's history was requested. */
+  calls?: Record<string, number>;
 } = {}) {
   return {
     findChats: () => Promise.resolve(options.chats ?? []),
     findContacts: () => Promise.resolve(options.contacts ?? []),
     findMessages: (_instance: string, remoteJid: string) => {
+      if (options.calls) options.calls[remoteJid] = (options.calls[remoteJid] ?? 0) + 1;
       if (options.failOn === remoteJid) return Promise.reject(new Error("evolution unreachable"));
       // findMessages now returns { records, complete }: the flag is what stops a
       // deadline- or ceiling-truncated chat being recorded as a finished sweep.
@@ -80,8 +117,76 @@ Deno.test("only chats that can be replied to are imported", async () => {
   assertEquals(outcome.chatsDiscovered, 3);
   assertEquals(outcome.chatsImported, 1);
   assertEquals(outcome.chatsSkipped, 1);
-  assertEquals(outcome.chatsUnaddressable, 1);
+  assertEquals(outcome.chatsAwaitingLid, 1);
   assertEquals(rowsFor(admin, "import_whatsapp_conversations")[0].conversation_id, "wa_96597950350_96555683677");
+});
+
+Deno.test("a LID chat with a live anchor is imported under the anchored number", async () => {
+  // Evolution stores this chat's history under the LID only. One of its message ids was
+  // already ingested live (the webhook is phone-normalised), which pins it to a number.
+  const admin = fakeAdmin({ anchors: { LIVE1: "wa_96597950350_96555683677" } });
+  const outcome = await syncEvolutionHistory({
+    admin,
+    api: fakeApi({
+      chats: [chat("166095025660123@lid")],
+      messages: {
+        "166095025660123@lid": [
+          lidMessage("LIVE1", "166095025660123@lid", "hello"),
+          lidMessage("OLD1", "166095025660123@lid", "older"),
+        ],
+      },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+  assertEquals(outcome.chatsLidResolved, 1);
+  assertEquals(outcome.chatsAwaitingLid, 0);
+  assertEquals(outcome.chatsImported, 1);
+  const conversations = rowsFor(admin, "import_whatsapp_conversations");
+  assertEquals(conversations[0].conversation_id, "wa_96597950350_96555683677");
+  const messages = rowsFor(admin, "import_whatsapp_messages");
+  assertEquals(messages.length, 2);
+  assertEquals(messages.every((row) => row.conversation_id === "wa_96597950350_96555683677"), true);
+});
+
+Deno.test("a LID chat anchored by its own last message id is imported without a probe", async () => {
+  // findChats already names the newest message; when the webhook stored that id, the sweep
+  // must not spend an Evolution call per chat finding out what it already knows.
+  const admin = fakeAdmin({ anchors: { LAST1: "wa_96597950350_96555683677" } });
+  const calls: Record<string, number> = {};
+  const lidJid = "166095025660123@lid";
+  const outcome = await syncEvolutionHistory({
+    admin,
+    api: fakeApi({
+      calls,
+      chats: [chat(lidJid, {
+        lastMessage: { key: { id: "LAST1", remoteJid: lidJid }, message: { conversation: "latest" }, messageTimestamp: 1787268633 },
+      })],
+      messages: { [lidJid]: [lidMessage("LAST1", lidJid, "latest")] },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+  assertEquals(outcome.chatsLidResolved, 1);
+  // Exactly one findMessages call: the import itself, no probe before it.
+  assertEquals(calls[lidJid], 1);
+  assertEquals(rowsFor(admin, "import_whatsapp_conversations")[0].conversation_id, "wa_96597950350_96555683677");
+});
+
+Deno.test("a LID chat with no anchor is counted as waiting, not imported", async () => {
+  const admin = fakeAdmin();
+  const outcome = await syncEvolutionHistory({
+    admin,
+    api: fakeApi({
+      chats: [chat("166095025660123@lid")],
+      messages: { "166095025660123@lid": [lidMessage("X1", "166095025660123@lid", "hi")] },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+  assertEquals(outcome.chatsAwaitingLid, 1);
+  assertEquals(outcome.chatsLidResolved, 0);
+  assertEquals(rowsFor(admin, "import_whatsapp_conversations").length, 0);
 });
 
 Deno.test("a LID chat is imported under the number its own history reveals", async () => {
@@ -116,7 +221,7 @@ Deno.test("a LID chat is imported under the number its own history reveals", asy
   });
 
   assertEquals(outcome.chatsImported, 1);
-  assertEquals(outcome.chatsUnaddressable, 0);
+  assertEquals(outcome.chatsAwaitingLid, 0);
   // Both messages land in the phone-addressed conversation the live webhook writes to --
   // the sibling without the alternate included.
   assertEquals(
@@ -222,6 +327,53 @@ Deno.test("a page that repeats a message id is written once", async () => {
 
   assertEquals(outcome.messagesWritten, 2);
   assertEquals(rowsFor(admin, "import_whatsapp_messages").map((r) => r.message_id).sort(), ["OTHER", "SAME"]);
+});
+
+Deno.test("importEvolutionHistory records the outcome with the lease release", async () => {
+  const admin = fakeAdmin();
+  const baseRpc = admin.rpc;
+  (admin as any).rpc = (fn: string, args: any) => {
+    if (fn === "claim_whatsapp_history_sync") return Promise.resolve({ data: true, error: null });
+    return baseRpc(fn, args);
+  };
+  await importEvolutionHistory({
+    admin,
+    api: fakeApi({
+      chats: [chat("96555683677@s.whatsapp.net")],
+      messages: { "96555683677@s.whatsapp.net": [lidMessage("M1", "96555683677@s.whatsapp.net", "hi")] },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+  const completion = rowsFor(admin, "whatsapp_evolution_instances")[0];
+  assertEquals(completion.sync_started_at, null);
+  assertEquals(typeof completion.last_sync_at, "string");
+  assertEquals(completion.last_sync_outcome.chatsImported, 1);
+  assertEquals(completion.last_sync_outcome.messagesWritten, 1);
+  assertEquals(typeof completion.last_sync_outcome.finished_at, "string");
+});
+
+Deno.test("a sweep that throws still records the error for the setup page", async () => {
+  const admin = fakeAdmin();
+  const baseRpc = admin.rpc;
+  (admin as any).rpc = (fn: string, args: any) => {
+    if (fn === "claim_whatsapp_history_sync") return Promise.resolve({ data: true, error: null });
+    return baseRpc(fn, args);
+  };
+  const api = fakeApi();
+  api.findChats = () => Promise.reject(new Error("evolution unreachable"));
+  let thrown: unknown = null;
+  try {
+    await importEvolutionHistory({ admin, api, account: ACCOUNT, instanceName: "postora_acc-1" });
+  } catch (error) {
+    thrown = error;
+  }
+  assertEquals(thrown instanceof Error, true);
+  const completion = rowsFor(admin, "whatsapp_evolution_instances")[0];
+  assertEquals(completion.sync_started_at, null);
+  // The raw Evolution/Postgres text stays in the log; the browser gets the stable message.
+  assertEquals(completion.last_sync_outcome.error, SYNC_FAILED_MESSAGE);
+  assertEquals("last_sync_at" in completion, false);
 });
 
 Deno.test("a sweep is not marked complete until history is actually available", async (t) => {

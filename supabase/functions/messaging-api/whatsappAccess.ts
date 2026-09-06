@@ -26,7 +26,9 @@ export type WhatsAppAction =
   | "whatsapp_get_conversation_state"
   | "whatsapp_set_message_flag"
   | "whatsapp_revoke_message"
-  | "whatsapp_send_voice";
+  | "whatsapp_send_voice"
+  | "whatsapp_forward_message"
+  | "whatsapp_delete_conversation";
 
 export const WHATSAPP_ACTION_MINIMUM_ROLE: Record<
   WhatsAppAction,
@@ -53,6 +55,9 @@ export const WHATSAPP_ACTION_MINIMUM_ROLE: Record<
   whatsapp_set_message_flag: "viewer",
   whatsapp_revoke_message: "agent",
   whatsapp_send_voice: "agent",
+  whatsapp_forward_message: "agent",
+  // Deleting a thread removes shared history for the whole workspace; agents hide, admins delete.
+  whatsapp_delete_conversation: "admin",
 };
 
 export interface WhatsAppActionAccessRequest {

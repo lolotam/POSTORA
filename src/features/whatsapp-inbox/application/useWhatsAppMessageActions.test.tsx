@@ -52,6 +52,8 @@ describe("useWhatsAppMessageActions", () => {
       setMessageFlag,
       revokeMessage: vi.fn(),
       sendVoice: vi.fn(),
+      forwardMessage: vi.fn(),
+      deleteConversation: vi.fn(),
       downloadBlob: vi.fn(),
     };
     const { result, queryClient } = renderActions(api);
@@ -88,6 +90,8 @@ describe("useWhatsAppMessageActions", () => {
       setMessageFlag: vi.fn(),
       revokeMessage,
       sendVoice: vi.fn(),
+      forwardMessage: vi.fn(),
+      deleteConversation: vi.fn(),
       downloadBlob: vi.fn(),
     };
     const { result, queryClient } = renderActions(api);

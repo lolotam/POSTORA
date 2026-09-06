@@ -1,11 +1,12 @@
-import { format } from "date-fns";
 import { Contact, MapPin } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { cn } from "@/lib/utils";
 import type { WhatsAppAttachment, WhatsAppMessage } from "../application/ports";
+import { formatBubbleTime } from "../domain/messageStatus";
 import type { WhatsAppConnectionMode } from "../domain/whatsappCapabilities";
 import { WhatsAppMediaAttachment } from "./WhatsAppMediaAttachment";
 import { WhatsAppMessageContextMenu } from "./WhatsAppMessageContextMenu";
+import { WhatsAppStatusTicks } from "./WhatsAppStatusTicks";
 
 export type { WhatsAppMessage };
 
@@ -13,6 +14,7 @@ interface WhatsAppMessageBubbleProps {
   message: WhatsAppMessage;
   isSent: boolean;
   connectionMode?: WhatsAppConnectionMode;
+  onForward?(): void;
   onPin?(): void;
   onUnpin?(): void;
   onHide?(): void;
@@ -55,6 +57,7 @@ export function WhatsAppMessageBubble({
   message,
   isSent,
   connectionMode = null,
+  onForward,
   onPin,
   onUnpin,
   onHide,
@@ -76,8 +79,8 @@ export function WhatsAppMessageBubble({
         className={cn(
           "relative rounded-2xl px-4 py-2 text-sm",
           isSent
-            ? "rounded-br-sm bg-primary text-primary-foreground"
-            : "rounded-bl-sm bg-muted text-foreground",
+            ? "rounded-br-sm bg-whatsapp/20 text-foreground dark:bg-whatsapp-dark/40"
+            : "rounded-bl-sm bg-card text-foreground shadow-sm",
         )}
       >
         {revoked ? (
@@ -107,8 +110,9 @@ export function WhatsAppMessageBubble({
           </CollapsibleContent>
         </Collapsible>
       ) : null}
-      <span className="mt-0.5 text-[10px] text-muted-foreground">
-        {format(new Date(message.created_time), "MMM d, h:mm a")}
+      <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+        <span>{formatBubbleTime(message.created_time)}</span>
+        {isSent ? <WhatsAppStatusTicks status={message.status} /> : null}
       </span>
     </div>
   );
@@ -128,6 +132,7 @@ export function WhatsAppMessageBubble({
       onCopy={() => {
         void navigator.clipboard.writeText(message.message ?? "");
       }}
+      onForward={() => onForward?.()}
       onPin={() => onPin?.()}
       onUnpin={() => onUnpin?.()}
       onHide={() => onHide?.()}

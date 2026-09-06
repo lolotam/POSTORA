@@ -1,4 +1,7 @@
 import type {
+  DeleteConversationRequest,
+  ForwardMessageRequest,
+  ForwardMessageResponse,
   GetConversationStateRequest,
   GetConversationStateResponse,
   GetMessagesPageRequest,
@@ -77,6 +80,12 @@ export function createWhatsAppInboxApi(): WhatsAppInboxApi {
     },
     sendVoice(input: SendWhatsAppVoiceRequest): Promise<SendWhatsAppVoiceResponse> {
       return callMessagingApi<SendWhatsAppVoiceResponse>("whatsapp_send_voice", { ...input });
+    },
+    forwardMessage(input: ForwardMessageRequest): Promise<ForwardMessageResponse> {
+      return callMessagingApi<ForwardMessageResponse>("whatsapp_forward_message", { ...input });
+    },
+    deleteConversation(input: DeleteConversationRequest): Promise<{ success: boolean }> {
+      return callMessagingApi<{ success: boolean }>("whatsapp_delete_conversation", { ...input });
     },
     downloadBlob,
   };

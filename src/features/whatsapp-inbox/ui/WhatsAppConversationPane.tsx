@@ -1,16 +1,25 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type UIEvent } from "react";
-import { ArrowLeft, Loader2, MessageCircle } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { ArrowLeft, Loader2, MessageCircle, Pencil, UserPlus } from "lucide-react";
 import { AiConversationModeSelect } from "@/components/messaging/AiConversationModeSelect";
+import { ContactFormDialog } from "@/components/messaging/contacts/ContactFormDialog";
+import type { ContactRecord } from "@/components/messaging/contacts/contactCodecs";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
 import { useMarkConversationRead, type Conversation } from "@/hooks/useMessaging";
+import { supabase } from "@/integrations/supabase/client";
 import { HIDDEN_UNDO_MS, useWhatsAppMessageActions } from "../application/useWhatsAppMessageActions";
 import { useWhatsAppMessages } from "../application/useWhatsAppMessages";
+import { groupByDay } from "../domain/dayGroups";
 import type { WhatsAppConnectionMode } from "../domain/whatsappCapabilities";
 import { anchorOffsetAfterPrepend, shouldStickToBottom } from "../domain/scrollAnchor";
+
+const CONTACT_COLUMNS =
+  "id, phone_number, display_name, first_name, last_name, email, company, job_title, phone_secondary, street, city, country, birthday, website, notes, tags, avatar_url";
 import { PinnedMessagesBar } from "./PinnedMessagesBar";
 import { WhatsAppComposer } from "./WhatsAppComposer";
+import { WhatsAppForwardDialog, type ForwardTarget } from "./WhatsAppForwardDialog";
 import { WhatsAppMessageBubble } from "./WhatsAppMessageBubble";
 
 interface WhatsAppConversationPaneProps {
@@ -18,6 +27,8 @@ interface WhatsAppConversationPaneProps {
   socialAccountId: string;
   pageId: string;
   connectionMode?: WhatsAppConnectionMode;
+  /** Chats and contacts the forward dialog can send to; the screen builds it from the list. */
+  forwardTargets?: ForwardTarget[];
   onScrollStateChange(scrolledAway: boolean): void;
   onBack?: () => void;
 }
@@ -27,9 +38,11 @@ export function WhatsAppConversationPane({
   socialAccountId,
   pageId,
   connectionMode = null,
+  forwardTargets = [],
   onScrollStateChange,
   onBack,
 }: WhatsAppConversationPaneProps): JSX.Element {
+  const [forwardRowId, setForwardRowId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const scrollFrameRef = useRef<number | null>(null);
@@ -57,8 +70,33 @@ export function WhatsAppConversationPane({
   // mark-read loop that took production down on 2026-08-26 (~100 requests/s per open tab, and
   // every conversations query invalidated on each cycle until Meta rate-limited the app).
   const { mutate: markConversationRead } = useMarkConversationRead();
-  const { activeRole } = useWhatsAppWorkspaceContext();
+  const { activeRole, activeWorkspaceId } = useWhatsAppWorkspaceContext();
   const conversationId = conversation?.id;
+  const groups = useMemo(() => groupByDay(visibleMessages), [visibleMessages]);
+
+  // The directory row for the open chat decides whether the header offers "Add to
+  // contacts" or "Edit contact". A row whose display_name is only the number was
+  // auto-captured on an outbound send and counts as unnamed.
+  const phone = conversation?.participant_id ?? null;
+  const contactQuery = useQuery({
+    queryKey: ["whatsapp-contact-by-phone", activeWorkspaceId, phone],
+    enabled: Boolean(activeWorkspaceId && phone),
+    queryFn: async (): Promise<ContactRecord | null> => {
+      const { data, error } = await supabase
+        .from("whatsapp_contacts")
+        .select(CONTACT_COLUMNS)
+        .eq("workspace_id", activeWorkspaceId as string)
+        .eq("phone_number", phone as string)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as unknown as ContactRecord | null) ?? null;
+    },
+  });
+  const [contactOpen, setContactOpen] = useState(false);
+  const directoryContact = contactQuery.data ?? null;
+  const hasName = Boolean(
+    directoryContact?.display_name && directoryContact.display_name.replace(/^\+/, "") !== phone,
+  );
 
   useEffect(() => {
     if (!conversationId || !socialAccountId) return;
@@ -253,11 +291,25 @@ export function WhatsAppConversationPane({
         </Avatar>
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold">{conversation.participant_name}</p>
-          <p className="text-xs text-muted-foreground">
-            {conversation.unread_count > 0 ? `${conversation.unread_count} unread` : "Active"}
+          <p className="text-xs text-muted-foreground" dir="ltr">
+            +{conversation.participant_id}
+            {conversation.unread_count > 0 ? ` · ${conversation.unread_count} unread` : ""}
           </p>
         </div>
-        <div className="ml-auto">
+        <div className="ml-auto flex items-center gap-2">
+          {/* whatsapp_contacts RLS allows writes to owner/admin/agent only; a viewer's save would fail. */}
+          {activeRole !== "viewer" ? (
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              aria-label={hasName ? "Edit contact" : "Add to contacts"}
+              title={hasName ? "Edit contact" : "Add to contacts"}
+              onClick={() => setContactOpen(true)}
+            >
+              {hasName ? <Pencil className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+            </Button>
+          ) : null}
           <AiConversationModeSelect
             platform="whatsapp"
             conversationId={conversation.assignment_key || conversation.id}
@@ -275,7 +327,7 @@ export function WhatsAppConversationPane({
         ref={scrollRef}
         data-testid="wa-message-pane"
         onScroll={handleScroll}
-        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto p-4"
+        className="relative min-h-0 flex-1 space-y-3 overflow-y-auto bg-whatsapp/5 p-4 dark:bg-whatsapp-dark/10"
       >
         <div ref={topSentinelRef} data-testid="wa-history-sentinel" className="h-px w-full" />
         {isLoading ? (
@@ -285,17 +337,27 @@ export function WhatsAppConversationPane({
         ) : visibleMessages.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">No messages in this conversation</p>
         ) : (
-          visibleMessages.map((message) => (
-            <WhatsAppMessageBubble
-              key={message.id}
-              message={message}
-              isSent={message.from?.id === pageId}
-              connectionMode={connectionMode}
-              onPin={() => actions.pin(message)}
-              onUnpin={() => actions.unpin(message)}
-              onHide={() => hideMessage(message)}
-              onRevoke={() => actions.revoke(message)}
-            />
+          groups.map((group) => (
+            <div key={group.day} className="space-y-3">
+              <div className="flex justify-center">
+                <span className="rounded-md bg-card px-2 py-0.5 text-[11px] text-muted-foreground shadow-sm">
+                  {group.label}
+                </span>
+              </div>
+              {group.rows.map((message) => (
+                <WhatsAppMessageBubble
+                  key={message.id}
+                  message={message}
+                  isSent={message.from?.id === pageId}
+                  connectionMode={connectionMode}
+                  onForward={() => setForwardRowId(message.id)}
+                  onPin={() => actions.pin(message)}
+                  onUnpin={() => actions.unpin(message)}
+                  onHide={() => hideMessage(message)}
+                  onRevoke={() => actions.revoke(message)}
+                />
+              ))}
+            </div>
           ))
         )}
         {hiddenUndo ? (
@@ -327,6 +389,28 @@ export function WhatsAppConversationPane({
         socialAccountId={socialAccountId}
         connectionMode={connectionMode}
       />
+
+      <WhatsAppForwardDialog
+        open={forwardRowId !== null}
+        onOpenChange={(open) => !open && setForwardRowId(null)}
+        socialAccountId={socialAccountId}
+        messageRowId={forwardRowId}
+        targets={forwardTargets}
+      />
+
+      {/* Mounted on demand: the form reads auth and workspace context that the pane itself
+          never needs, and its reset effect runs on open anyway. */}
+      {contactOpen ? (
+        <ContactFormDialog
+          open
+          onOpenChange={(open) => {
+            setContactOpen(open);
+            if (!open) void contactQuery.refetch();
+          }}
+          contact={directoryContact}
+          initialPhone={phone ?? undefined}
+        />
+      ) : null}
     </div>
   );
 }

@@ -52,6 +52,8 @@ const formerlyLeakingActions: WhatsAppAction[] = [
   "whatsapp_list_conversations",
   "whatsapp_get_messages",
   "whatsapp_mark_read",
+  "whatsapp_forward_message",
+  "whatsapp_delete_conversation",
 ];
 
 for (const action of formerlyLeakingActions) {

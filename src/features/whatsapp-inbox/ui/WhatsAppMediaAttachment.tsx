@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronLeft, ChevronRight, Download, FileIcon } from "lucide-react";
-import { Dialog, DialogContent } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
+import { useEffect, useRef, useState } from "react";
+import { Download, FileIcon, Maximize2 } from "lucide-react";
 import { useWhatsAppMedia } from "../application/useWhatsAppMedia";
 import type { WhatsAppAttachment, WhatsAppResolvedMedia } from "../application/ports";
+import { resolveMediaKind } from "../domain/mediaKind";
 import { VoiceNotePlayer } from "./VoiceNotePlayer";
+import { useWhatsAppInboxApi } from "./WhatsAppInboxApiProvider";
+import { WhatsAppMediaLightbox, type LightboxEntry } from "./WhatsAppMediaLightbox";
 
 interface WhatsAppMediaAttachmentProps {
   attachment: WhatsAppAttachment;
@@ -50,12 +51,29 @@ function PendingPlaceholder({ busy }: { busy: boolean }): JSX.Element {
   );
 }
 
+function SmallAction({ label, onClick, children }: { label: string; onClick(): void; children: JSX.Element }): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      className="rounded p-1 opacity-70 transition-opacity hover:bg-background/60 hover:opacity-100"
+    >
+      {children}
+    </button>
+  );
+}
+
 function DocumentCard({
   media,
   attachment,
+  onOpen,
 }: {
   media: WhatsAppResolvedMedia;
   attachment: WhatsAppAttachment;
+  /** Present for PDFs: the name becomes a button that previews the file. */
+  onOpen?: () => void;
 }): JSX.Element {
   const filename = media.file_name || attachment.name;
   const size = typeof media.size_bytes === "number" ? formatSize(media.size_bytes) : null;
@@ -68,7 +86,13 @@ function DocumentCard({
     >
       <FileIcon className="h-4 w-4 shrink-0" />
       <div className="min-w-0">
-        <p className="truncate text-xs">{label}</p>
+        {onOpen ? (
+          <button type="button" onClick={onOpen} className="block truncate text-xs underline-offset-2 hover:underline">
+            {label}
+          </button>
+        ) : (
+          <p className="truncate text-xs">{label}</p>
+        )}
         {size && <p className="text-[10px] text-current/70">{size}</p>}
       </div>
       {media.url && (
@@ -85,84 +109,14 @@ function DocumentCard({
   );
 }
 
-function ImageLightbox({
-  open,
-  onOpenChange,
-  urls,
-  index,
-  onIndexChange,
-}: {
-  open: boolean;
-  onOpenChange(open: boolean): void;
-  urls: string[];
-  index: number;
-  onIndexChange(index: number): void;
-}): JSX.Element | null {
-  if (urls.length === 0) return null;
-  const safeIndex = Math.min(Math.max(index, 0), urls.length - 1);
-  const current = urls[safeIndex];
-
-  const prev = () => onIndexChange((safeIndex - 1 + urls.length) % urls.length);
-  const next = () => onIndexChange((safeIndex + 1) % urls.length);
-
-  const handleKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "ArrowLeft") {
-      event.preventDefault();
-      prev();
-    }
-    if (event.key === "ArrowRight") {
-      event.preventDefault();
-      next();
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
-        className="max-w-4xl overflow-hidden border-none bg-black/95 p-0"
-        onKeyDown={handleKeyDown}
-        hideCloseButton
-      >
-        <div className="relative flex min-h-[60vh] items-center justify-center">
-          <img src={current} alt="" className="max-h-[80vh] w-full object-contain" />
-          {urls.length > 1 && (
-            <>
-              <Button
-                type="button"
-                size="icon"
-                variant="secondary"
-                aria-label="Previous image"
-                onClick={prev}
-                className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full"
-              >
-                <ChevronLeft className="h-5 w-5" />
-              </Button>
-              <Button
-                type="button"
-                size="icon"
-                variant="secondary"
-                aria-label="Next image"
-                onClick={next}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full"
-              >
-                <ChevronRight className="h-5 w-5" />
-              </Button>
-            </>
-          )}
-        </div>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 export function WhatsAppMediaAttachment({
   attachment,
   createdTime,
 }: WhatsAppMediaAttachmentProps): JSX.Element {
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
-  const [lightboxOpen, setLightboxOpen] = useState(false);
-  const [lightboxIndex, setLightboxIndex] = useState(0);
+  const [lightbox, setLightbox] = useState<LightboxEntry | null>(null);
+  const api = useWhatsAppInboxApi();
   const { requestMedia, mediaByRowId, requestedRowIds, imageUrls } = useWhatsAppMedia();
   const resolved = mediaByRowId.get(attachment.message_row_id);
 
@@ -222,74 +176,105 @@ export function WhatsAppMediaAttachment({
     requestMedia(attachment.message_row_id, { createdTime });
   }, [attachment.kind, attachment.message_row_id, createdTime, requestMedia, visible]);
 
-  const openLightbox = (url: string) => {
-    const index = imageUrls.indexOf(url);
-    setLightboxIndex(index >= 0 ? index : 0);
-    setLightboxOpen(true);
+  // The signed URL is same-origin-hostile for `<a download>` (cross-origin downloads open in
+  // a tab instead), so the bytes go through a Blob and the port's saver.
+  const download = async (url: string, fileName: string | null) => {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    api.downloadBlob(blob, fileName || (url === resolved?.url ? `whatsapp-${attachment.message_row_id}` : "whatsapp-image"));
   };
+  const fileName = resolved?.file_name || attachment.name || null;
 
   let body: JSX.Element;
   if (!visible || !requestedRowIds.has(attachment.message_row_id) || !resolved) {
     body = <PendingPlaceholder busy={visible} />;
   } else if (!resolved.url) {
     body = <UnavailablePlaceholder />;
-  } else if (attachment.kind === "image") {
-    body = (
-      <>
-        <button
-          type="button"
-          className="mt-2 block max-w-full"
-          onClick={() => openLightbox(resolved.url as string)}
-        >
-          {/* Deliberately NOT loading="lazy". These bubbles live in a nested scroll container
-              that is scrolled programmatically to the newest message, and Chrome never marks
-              such images visible, so they stay unloaded forever: a permanently blank bubble
-              whose URL is perfectly good (verified by hand -- HTTP 200 image/jpeg, and a bare
-              new Image() with the same src decodes at full size).
-
-              Nothing is lost by dropping it. The expensive half is already lazy: useWhatsAppMedia
-              only asks the server to materialise bytes once a bubble enters the viewport, so the
-              browser attribute was saving a request we had already decided to make.
-
-              min-h/min-w give the element a box before its bytes arrive -- otherwise an <img>
-              with only max-* constraints lays out at 0x0 and the bubble collapses while loading. */}
-          <img
-            src={resolved.url}
-            alt={attachment.name || "Image attachment"}
-            className="min-h-24 min-w-24 max-h-72 max-w-full cursor-pointer rounded-lg bg-muted object-cover"
-          />
-        </button>
-        <ImageLightbox
-          open={lightboxOpen}
-          onOpenChange={setLightboxOpen}
-          urls={imageUrls}
-          index={lightboxIndex}
-          onIndexChange={setLightboxIndex}
-        />
-      </>
-    );
-  } else if (attachment.kind === "video") {
-    body = (
-      <video
-        src={resolved.url}
-        controls
-        preload="metadata"
-        className="mt-2 max-h-72 max-w-full rounded-lg"
-      />
-    );
-  } else if (attachment.kind === "audio") {
-    body = (
-      <div className="mt-2">
-        <VoiceNotePlayer src={resolved.url} durationSeconds={attachment.duration_seconds} />
-      </div>
-    );
   } else {
-    body = <DocumentCard media={resolved} attachment={attachment} />;
+    const url = resolved.url;
+    const kind = resolveMediaKind(attachment, resolved.mime_type);
+    if (kind === "image") {
+      body = (
+        <div className="mt-2">
+          <button
+            type="button"
+            className="block max-w-full"
+            onClick={() => setLightbox({ kind: "image", url, fileName, urls: imageUrls })}
+          >
+            {/* Deliberately NOT loading="lazy". These bubbles live in a nested scroll container
+                that is scrolled programmatically to the newest message, and Chrome never marks
+                such images visible, so they stay unloaded forever: a permanently blank bubble
+                whose URL is perfectly good (verified by hand -- HTTP 200 image/jpeg, and a bare
+                new Image() with the same src decodes at full size).
+
+                Nothing is lost by dropping it. The expensive half is already lazy: useWhatsAppMedia
+                only asks the server to materialise bytes once a bubble enters the viewport, so the
+                browser attribute was saving a request we had already decided to make.
+
+                min-h/min-w give the element a box before its bytes arrive -- otherwise an <img>
+                with only max-* constraints lays out at 0x0 and the bubble collapses while loading. */}
+            <img
+              src={url}
+              alt={attachment.name || "Image attachment"}
+              className="min-h-24 min-w-24 max-h-72 max-w-full cursor-pointer rounded-lg bg-muted object-cover"
+            />
+          </button>
+          <div className="mt-1 flex justify-end">
+            <SmallAction label="Download image" onClick={() => void download(url, fileName)}>
+              <Download className="h-3.5 w-3.5" />
+            </SmallAction>
+          </div>
+        </div>
+      );
+    } else if (kind === "video") {
+      body = (
+        <div className="mt-2">
+          <video src={url} controls preload="metadata" className="max-h-72 max-w-full rounded-lg" />
+          <div className="mt-1 flex justify-end gap-1">
+            <SmallAction label="Open video" onClick={() => setLightbox({ kind: "video", url, fileName })}>
+              <Maximize2 className="h-3.5 w-3.5" />
+            </SmallAction>
+            <SmallAction label="Download video" onClick={() => void download(url, fileName)}>
+              <Download className="h-3.5 w-3.5" />
+            </SmallAction>
+          </div>
+        </div>
+      );
+    } else if (kind === "audio") {
+      body = (
+        <div className="mt-2 flex items-center gap-1">
+          <div className="min-w-0 flex-1">
+            <VoiceNotePlayer src={url} durationSeconds={attachment.duration_seconds} />
+          </div>
+          <SmallAction label="Download audio" onClick={() => void download(url, fileName)}>
+            <Download className="h-3.5 w-3.5" />
+          </SmallAction>
+        </div>
+      );
+    } else if (kind === "pdf") {
+      body = (
+        <DocumentCard
+          media={resolved}
+          attachment={attachment}
+          onOpen={() => setLightbox({ kind: "pdf", url, fileName })}
+        />
+      );
+    } else {
+      body = <DocumentCard media={resolved} attachment={attachment} />;
+    }
   }
 
   return (
     <div ref={sentinelRef} className="min-w-0">
       {body}
+      <WhatsAppMediaLightbox
+        entry={lightbox}
+        onClose={() => setLightbox(null)}
+        // Another gallery image carries another name, which this bubble does not know; the
+        // download then falls back to a generic name rather than this attachment's.
+        onNavigate={(url) => setLightbox((entry) => (entry ? { ...entry, url, fileName: url === resolved?.url ? fileName : null } : entry))}
+        onDownload={(url, name) => void download(url, name)}
+      />
     </div>
   );
 }

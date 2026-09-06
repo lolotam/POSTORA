@@ -118,10 +118,17 @@ export function useMessagingAccounts() {
   return { accounts, isLoading };
 }
 
-export function useConversations(socialAccountId: string | null, messagingPlatform: string, options?: { silent?: boolean }) {
+export function useConversations(
+  socialAccountId: string | null,
+  messagingPlatform: string,
+  options?: { silent?: boolean; search?: string },
+) {
   const { session } = useAuth();
+  // Server-side search exists only for the WhatsApp cache; Graph conversations keep the
+  // client-side name filter in ConversationList.
+  const search = messagingPlatform === "WHATSAPP" ? (options?.search ?? "").trim() : "";
   const query = useQuery({
-    queryKey: ["messaging-conversations", socialAccountId, messagingPlatform],
+    queryKey: ["messaging-conversations", socialAccountId, messagingPlatform, search],
     queryFn: async () => {
       if (!socialAccountId) return [];
       try {
@@ -130,6 +137,7 @@ export function useConversations(socialAccountId: string | null, messagingPlatfo
         const data = await callMessagingApi(action, {
           social_account_id: socialAccountId,
           messaging_platform: messagingPlatform,
+          ...(search ? { q: search } : {}),
         });
         return (data.conversations || []) as Conversation[];
       } catch (err) {

@@ -141,4 +141,30 @@ describe("createWhatsAppInboxApi", () => {
       mime_type: "audio/webm;codecs=opus",
     });
   });
+
+  it("forwardMessage posts whatsapp_forward_message", async () => {
+    callMessagingApi.mockResolvedValue({ success: true, message_id: "3EB0" });
+    await createWhatsAppInboxApi().forwardMessage({
+      social_account_id: "acct",
+      message_row_id: "row-1",
+      to_phone: "96555",
+    });
+    expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_forward_message", {
+      social_account_id: "acct",
+      message_row_id: "row-1",
+      to_phone: "96555",
+    });
+  });
+
+  it("deleteConversation posts whatsapp_delete_conversation", async () => {
+    callMessagingApi.mockResolvedValue({ success: true });
+    await createWhatsAppInboxApi().deleteConversation({
+      social_account_id: "acct",
+      conversation_id: "wa_1_96555",
+    });
+    expect(callMessagingApi).toHaveBeenCalledWith("whatsapp_delete_conversation", {
+      social_account_id: "acct",
+      conversation_id: "wa_1_96555",
+    });
+  });
 });

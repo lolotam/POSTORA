@@ -156,6 +156,24 @@ export interface SendWhatsAppVoiceResponse {
   error?: string;
 }
 
+export interface ForwardMessageRequest {
+  social_account_id: string;
+  message_row_id: string;
+  to_phone: string;
+}
+
+export interface ForwardMessageResponse {
+  success: boolean;
+  message_id?: string | null;
+  error_type?: string;
+  error?: string;
+}
+
+export interface DeleteConversationRequest {
+  social_account_id: string;
+  conversation_id: string;
+}
+
 export interface WhatsAppInboxApi {
   getMessagesPage(input: GetMessagesPageRequest, signal?: AbortSignal): Promise<GetMessagesPageResponse>;
   getMedia(input: GetWhatsAppMediaRequest, signal?: AbortSignal): Promise<GetWhatsAppMediaResponse>;
@@ -165,6 +183,8 @@ export interface WhatsAppInboxApi {
   setMessageFlag(input: SetMessageFlagRequest): Promise<SetMessageFlagResponse>;
   revokeMessage(input: RevokeMessageRequest): Promise<RevokeMessageResponse>;
   sendVoice(input: SendWhatsAppVoiceRequest): Promise<SendWhatsAppVoiceResponse>;
+  forwardMessage(input: ForwardMessageRequest): Promise<ForwardMessageResponse>;
+  deleteConversation(input: DeleteConversationRequest): Promise<{ success: boolean }>;
   downloadBlob(blob: Blob, filename: string): void;
 }
 

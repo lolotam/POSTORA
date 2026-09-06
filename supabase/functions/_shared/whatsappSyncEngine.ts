@@ -9,6 +9,7 @@ import type { EvolutionApi } from "./evolutionApi.ts";
 import { addressableJid, buildEvolutionMessageRow, remoteNumberFor } from "./evolutionMessage.ts";
 
 const LID_JID_SUFFIX = "@lid";
+const DIRECT_JID_SUFFIX = "@s.whatsapp.net";
 const CHAT_CONCURRENCY = 5;
 const IMPORT_BATCH = 500;
 
@@ -35,10 +36,12 @@ export interface SyncOutcome {
   chatsDiscovered: number;
   chatsImported: number;
   chatsSkipped: number;
-  /** One-to-one chats Evolution addressed only by LID, with no subscriber number anywhere
-   *  in the record. They are real conversations, unlike the groups counted as skipped, and
-   *  separating them is what stops "imported 2 of 258" reading as a clean sweep. */
-  chatsUnaddressable: number;
+  /** One-to-one chats Evolution addressed only by LID, with no subscriber number in the
+   *  record and no live message ingested yet to anchor them. They are real conversations,
+   *  unlike the groups counted as skipped, and they unlock as the contact writes in. */
+  chatsAwaitingLid: number;
+  /** LID-only chats pinned to a number through a message the webhook already ingested. */
+  chatsLidResolved: number;
   messagesWritten: number;
   chatFailures: number;
   truncated: boolean;
@@ -82,19 +85,39 @@ function realName(candidate: unknown, number: string): string | null {
 interface ChatScan {
   summaries: ChatSummary[];
   /** LID-addressed one-to-one chats whose subscriber number appears nowhere in the record. */
-  unaddressable: number;
+  lidPending: any[];
+}
+
+function contactIndex(contacts: any[]): Map<string, any> {
+  const contactByJid = new Map<string, any>();
+  for (const contact of contacts) {
+    if (contact?.remoteJid) contactByJid.set(contact.remoteJid, contact);
+  }
+  return contactByJid;
+}
+
+function summarize(chat: any, remoteJid: string, address: string, contact: any, account: SyncAccount): ChatSummary {
+  const number = remoteNumberFor(address);
+  return {
+    remoteJid,
+    address,
+    number,
+    conversationId: `wa_${account.platform_user_id}_${number}`,
+    name: realName(contact?.pushName, number) ?? realName(chat?.pushName, number),
+    avatar: contact?.profilePicUrl || chat?.profilePicUrl || null,
+    preview: previewOf(chat),
+    lastMessageAt: lastMessageIso(chat),
+    unreadCount: Number(chat?.unreadCount) || 0,
+  };
 }
 
 // A chat carries its address on itself, but the LID-to-number alternate only ever appears on
 // a message key -- so the chat's own last message is the one place a LID-addressed chat can
 // name its subscriber number.
 function scanChats(chats: any[], contacts: any[], account: SyncAccount): ChatScan {
-  const contactByJid = new Map<string, any>();
-  for (const contact of contacts) {
-    if (contact?.remoteJid) contactByJid.set(contact.remoteJid, contact);
-  }
+  const contactByJid = contactIndex(contacts);
 
-  const scan: ChatScan = { summaries: [], unaddressable: 0 };
+  const scan: ChatScan = { summaries: [], lidPending: [] };
   for (const chat of chats) {
     const remoteJid = String(chat?.remoteJid || "");
     const address = addressableJid({
@@ -103,26 +126,111 @@ function scanChats(chats: any[], contacts: any[], account: SyncAccount): ChatSca
     });
     if (!address) {
       // A group or a newsletter is not a conversation this sweep imports at all; a LID chat
-      // is one it cannot address. Counting them apart is what keeps a sweep that reached two
-      // of two hundred chats from reading as a clean success.
-      if (remoteJid.endsWith(LID_JID_SUFFIX)) scan.unaddressable += 1;
+      // is one it cannot address from the record alone and gets a second chance below.
+      if (remoteJid.endsWith(LID_JID_SUFFIX)) scan.lidPending.push(chat);
       continue;
     }
-    const number = remoteNumberFor(address);
     const contact = contactByJid.get(address) ?? contactByJid.get(remoteJid);
-    scan.summaries.push({
-      remoteJid,
-      address,
-      number,
-      conversationId: `wa_${account.platform_user_id}_${number}`,
-      name: realName(contact?.pushName, number) ?? realName(chat?.pushName, number),
-      avatar: contact?.profilePicUrl || chat?.profilePicUrl || null,
-      preview: previewOf(chat),
-      lastMessageAt: lastMessageIso(chat),
-      unreadCount: Number(chat?.unreadCount) || 0,
-    });
+    scan.summaries.push(summarize(chat, remoteJid, address, contact, account));
   }
   return scan;
+}
+
+/**
+ * Evolution files a LID chat's history under the LID with no phone alias, but it normalises
+ * LIVE webhook events to the phone JID. A message id present both in the chat's history and
+ * in whatsapp_messages therefore pins the chat to the number the live event carried. Scoped
+ * to this account: the same LID can belong to a different tenant's contact.
+ */
+/** Message id → subscriber number, for every id the webhook has already stored for this account. */
+async function lookupAnchorNumbers(admin: any, accountId: string, ids: string[]): Promise<Map<string, string>> {
+  const anchors = new Map<string, string>();
+  if (ids.length === 0) return anchors;
+  const { data, error } = await admin
+    .from("whatsapp_messages")
+    .select("message_id, conversation_id")
+    .eq("social_account_id", accountId)
+    .in("message_id", ids);
+  if (error) throw error;
+  for (const row of data ?? []) {
+    const number = String(row.conversation_id ?? "").split("_").pop();
+    if (number && /^\d+$/.test(number)) anchors.set(String(row.message_id), number);
+  }
+  return anchors;
+}
+
+function messageIdsOf(records: any[]): string[] {
+  return records
+    .map((record: any) => record?.key?.id)
+    .filter((id: unknown): id is string => typeof id === "string" && id.length > 0);
+}
+
+/**
+ * Two passes, cheapest first. The chat record already carries its last message id, so one
+ * IN query anchors every LID chat whose newest message arrived live -- no Evolution call.
+ * Only the leftovers get a one-page probe, and those run CHAT_CONCURRENCY at a time: an
+ * account with 255 LID chats probed one by one would spend the whole sweep budget here
+ * and import nothing.
+ */
+async function resolveLidChats(deps: {
+  admin: any;
+  api: EvolutionApi;
+  account: SyncAccount;
+  instanceName: string;
+  contacts: any[];
+  pending: any[];
+  deadlineAt: number;
+}): Promise<{ resolved: ChatSummary[]; awaiting: number }> {
+  const { admin, api, account, instanceName, contacts, pending, deadlineAt } = deps;
+  const contactByJid = contactIndex(contacts);
+  const resolved: ChatSummary[] = [];
+  const adopt = (chat: any, number: string) => {
+    const remoteJid = String(chat?.remoteJid || "");
+    resolved.push(summarize(chat, remoteJid, `${number}${DIRECT_JID_SUFFIX}`, contactByJid.get(remoteJid), account));
+  };
+
+  const lastIds = new Map<any, string>();
+  for (const chat of pending) {
+    const id = chat?.lastMessage?.key?.id;
+    if (typeof id === "string" && id) lastIds.set(chat, id);
+  }
+  const fromRecords = await lookupAnchorNumbers(admin, account.id, [...lastIds.values()]);
+  const leftovers: any[] = [];
+  for (const chat of pending) {
+    const number = fromRecords.get(lastIds.get(chat) ?? "");
+    if (number) adopt(chat, number);
+    else leftovers.push(chat);
+  }
+
+  let awaiting = 0;
+  for (let index = 0; index < leftovers.length; index += CHAT_CONCURRENCY) {
+    if (Date.now() >= deadlineAt) {
+      awaiting += leftovers.length - index;
+      break;
+    }
+    const batch = leftovers.slice(index, index + CHAT_CONCURRENCY);
+    const probes = await Promise.all(batch.map(async (chat) => {
+      const remoteJid = String(chat?.remoteJid || "");
+      try {
+        // One page is enough: a live message, when there is one, is among the newest.
+        const page = await api.findMessages(instanceName, remoteJid, { deadlineAt, pageCeiling: 1 });
+        return { chat, ids: messageIdsOf(page.records) };
+      } catch (error) {
+        console.error(
+          `[whatsapp-sync] ${instanceName} LID probe failed:`,
+          error instanceof Error ? error.message : error,
+        );
+        return { chat, ids: [] as string[] };
+      }
+    }));
+    const fromProbes = await lookupAnchorNumbers(admin, account.id, probes.flatMap((probe) => probe.ids));
+    for (const probe of probes) {
+      const number = probe.ids.map((id) => fromProbes.get(id)).find(Boolean);
+      if (number) adopt(probe.chat, number);
+      else awaiting += 1;
+    }
+  }
+  return { resolved, awaiting };
 }
 
 // The conflict rules live in SQL (import_whatsapp_* ) rather than here. Deciding them in
@@ -195,23 +303,28 @@ export async function syncEvolutionHistory(deps: {
     api.findContacts(instanceName),
   ]);
 
-  const { summaries, unaddressable } = scanChats(chats, contacts, account);
+  const { summaries: direct, lidPending } = scanChats(chats, contacts, account);
+  const lid = await resolveLidChats({
+    admin, api, account, instanceName, contacts, pending: lidPending, deadlineAt,
+  });
+  const summaries = [...direct, ...lid.resolved];
   const outcome: SyncOutcome = {
     chatsDiscovered: chats.length,
     chatsImported: summaries.length,
-    chatsSkipped: chats.length - summaries.length - unaddressable,
-    chatsUnaddressable: unaddressable,
+    chatsSkipped: chats.length - direct.length - lidPending.length,
+    chatsAwaitingLid: lid.awaiting,
+    chatsLidResolved: lid.resolved.length,
     messagesWritten: 0,
     chatFailures: 0,
     truncated: false,
   };
-  // Their history is unreachable: Evolution files it under the LID and holds no mapping
-  // back to a number, so no retry recovers it. Saying so is the difference between a user
-  // reading "sync finished" and understanding why most of their chats are missing.
-  if (unaddressable > 0) {
+  // Their history stays unreachable until the contact writes in once: Evolution files it
+  // under the LID and only a live, phone-normalised message can anchor it. Saying so is the
+  // difference between a user reading "sync finished" and understanding what is missing.
+  if (lid.awaiting > 0) {
     console.log(
-      `[whatsapp-sync] ${instanceName}: ${unaddressable} one-to-one chat(s) carry no subscriber ` +
-        `number (LID-addressed) and were not imported`,
+      `[whatsapp-sync] ${instanceName}: ${lid.awaiting} one-to-one chat(s) are LID-addressed with no ` +
+        `live message yet and were not imported`,
     );
   }
   if (summaries.length === 0) return outcome;
@@ -275,6 +388,8 @@ export async function syncEvolutionHistory(deps: {
 // and the manual action can arrive at any time, so the claim and the completion record live
 // with the sweep rather than at each call site.
 const LEASE_SECONDS = 300;
+/** What the setup page shows for a sweep that threw; the cause is only in the server log. */
+export const SYNC_FAILED_MESSAGE = "The import stopped unexpectedly. Try again in a minute.";
 
 export async function importEvolutionHistory(deps: {
   admin: any;
@@ -313,6 +428,8 @@ export async function importEvolutionHistory(deps: {
   try {
     const outcome = await syncEvolutionHistory(deps);
     console.log(`[whatsapp-sync] ${instanceName}: ${JSON.stringify(outcome)}`);
+    // The setup page polls this to tell the user what the button they pressed achieved.
+    completion.last_sync_outcome = { ...outcome, finished_at: new Date().toISOString() };
     // Completion needs evidence the history was actually there. Baileys can publish the chat
     // list before it has loaded any messages, so a sweep that found 300 conversations and
     // zero messages has not succeeded -- recording it would permanently disable the retry
@@ -325,7 +442,22 @@ export async function importEvolutionHistory(deps: {
     if (sweptCleanly && outcome.messagesWritten > 0) {
       completion.last_sync_at = new Date().toISOString();
     }
+  } catch (error) {
+    // The user pressed a button and deserves to learn that nothing arrived; the technical
+    // message stays in the server log because it can name tables, hosts or constraints and
+    // get_sync_status returns this record to the browser.
+    console.error(`[whatsapp-sync] ${instanceName}: sweep failed:`, error instanceof Error ? error.message : error);
+    completion.last_sync_outcome = { finished_at: new Date().toISOString(), error: SYNC_FAILED_MESSAGE };
+    throw error;
   } finally {
-    await admin.from("whatsapp_evolution_instances").update(completion).eq("social_account_id", account.id);
+    // A rejected completion (e.g. a column the deployed schema lacks) would otherwise leave
+    // the lease held and the outcome lost with nothing in the logs to say so.
+    const { error: completionError } = await admin
+      .from("whatsapp_evolution_instances")
+      .update(completion)
+      .eq("social_account_id", account.id);
+    if (completionError) {
+      console.error(`[whatsapp-sync] ${instanceName}: completion write failed:`, completionError.message ?? completionError);
+    }
   }
 }

@@ -30,6 +30,8 @@ const api: WhatsAppInboxApi = {
   setMessageFlag: vi.fn(),
   revokeMessage: vi.fn(),
   sendVoice: vi.fn(),
+  forwardMessage: vi.fn(),
+  deleteConversation: vi.fn(),
 };
 
 function renderBubble(
@@ -129,6 +131,23 @@ describe("WhatsAppMessageBubble", () => {
     fireEvent.contextMenu(screen.getByTestId("wa-bubble"));
     expect(screen.queryByText("Copy")).not.toBeInTheDocument();
     expect(screen.queryByText(/for everyone/i)).not.toBeInTheDocument();
+  });
+
+  it("shows ticks only on sent bubbles and reflects the status", () => {
+    renderBubble(message({ status: "read", direction: "outbound" }), { isSent: true });
+    expect(screen.getByTestId("wa-ticks")).toHaveAttribute("data-status", "read");
+  });
+
+  it("shows no ticks on received bubbles", () => {
+    renderBubble(message({ status: "received" }), { isSent: false });
+    expect(screen.queryByTestId("wa-ticks")).not.toBeInTheDocument();
+  });
+
+  it("renders the time as hours and minutes only", () => {
+    const iso = "2026-08-25T10:07:00.000Z";
+    renderBubble(message({ created_time: iso }));
+    const expected = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso));
+    expect(screen.getByText(expected)).toBeInTheDocument();
   });
 });
 

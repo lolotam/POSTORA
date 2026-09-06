@@ -106,6 +106,8 @@ class FakeMessageServer {
       }),
       revokeMessage: async () => ({ success: true, revoked_at: "2026-08-25T12:00:00.000Z" }),
       sendVoice: async () => ({ success: true, message_id: "3EB0" }),
+      forwardMessage: async () => ({ success: true, message_id: "3EB1" }),
+      deleteConversation: async () => ({ success: true }),
       downloadBlob: () => {},
     };
   }
@@ -229,6 +231,8 @@ describe("useWhatsAppMessages", () => {
       }),
       revokeMessage: async () => ({ success: true }),
       sendVoice: async () => ({ success: true, message_id: "3EB0" }),
+      forwardMessage: async () => ({ success: true, message_id: "3EB1" }),
+      deleteConversation: async () => ({ success: true }),
       downloadBlob: () => {},
     };
     const { result } = renderMessages(api, "acct", "conv");
@@ -306,6 +310,8 @@ describe("useWhatsAppMessages", () => {
       }),
       revokeMessage: async () => ({ success: true }),
       sendVoice: async () => ({ success: true, message_id: "3EB0" }),
+      forwardMessage: async () => ({ success: true, message_id: "3EB1" }),
+      deleteConversation: async () => ({ success: true }),
       downloadBlob: () => {},
     };
     const { result } = renderMessages(api, "acct", "conv");

@@ -7,6 +7,7 @@ import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
 import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
 import { buildEvolutionMessageRow, remoteNumberFor } from "../_shared/evolutionMessage.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
+import { ackUpdates, statusesAdvancedBy } from "../_shared/evolutionMessageAck.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 import {
   logSkippedUnderstanding,
@@ -298,6 +299,21 @@ async function triggerAiAgentReply(
   }
 }
 
+// A server ack for one of our own sends. Scoped to the account the token authenticated. The
+// rank check lives in the UPDATE predicate: delivery and read acks for one message can run
+// concurrently, and a read-then-write let the later DELIVERY_ACK overwrite READ.
+async function handleMessagesUpdate(admin: any, account: EvolutionAccount, body: any): Promise<void> {
+  for (const update of ackUpdates(messageItems(body))) {
+    const { error } = await admin
+      .from("whatsapp_messages")
+      .update({ status: update.status })
+      .eq("social_account_id", account.id)
+      .eq("message_id", update.messageId)
+      .in("status", statusesAdvancedBy(update.status));
+    if (error) throw error;
+  }
+}
+
 async function handleConnectionUpdate(
   admin: any,
   account: EvolutionAccount,
@@ -373,6 +389,8 @@ Deno.serve(async (req) => {
       for (const message of messageItems(body)) {
         await persistEvolutionMessage(admin, account, message, instance.instance_name);
       }
+    } else if (event === "MESSAGES_UPDATE") {
+      await handleMessagesUpdate(admin, account, body);
     } else if (event === "CONNECTION_UPDATE") {
       await handleConnectionUpdate(admin, account, instance, body.data);
     } else if (event === "QRCODE_UPDATED") {

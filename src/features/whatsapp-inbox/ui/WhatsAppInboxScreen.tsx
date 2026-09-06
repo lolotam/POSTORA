@@ -1,12 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, Download, Loader2, Plus, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { AccountSelector } from "@/components/messaging/AccountSelector";
 import { LabelFilter } from "@/components/messaging/ConversationLabels";
 import { ConversationList } from "@/components/messaging/ConversationList";
 import { NewConversationDialog } from "@/components/messaging/NewConversationDialog";
 import { Button } from "@/components/ui/button";
 import { useWhatsAppChrome } from "@/components/whatsapp/WhatsAppChromeContext";
+import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
 import { useConversations, useMessagingAccounts, type Conversation } from "@/hooks/useMessaging";
 import { useWhatsAppLabels } from "@/hooks/useWhatsAppLabels";
 import { cn } from "@/lib/utils";
@@ -31,12 +44,38 @@ export function WhatsAppInboxScreen(): JSX.Element {
   const [exportOpen, setExportOpen] = useState(false);
   const [visibleConversations, setVisibleConversations] = useState<Conversation[]>([]);
   const ignoredRouteChatIdRef = useRef<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const queryClient = useQueryClient();
   const { assignments } = useWhatsAppLabels();
   const { setCompact } = useWhatsAppChrome();
+  // whatsapp_delete_conversation is admin-min on the server; showing the trash to an agent
+  // would only earn them a 403 toast.
+  const { activeRole } = useWhatsAppWorkspaceContext();
+  const canDeleteChats = activeRole === "owner" || activeRole === "admin";
+  // The list search is server-side (name or phone digits); typing is debounced so a
+  // ten-character query costs one request rather than ten.
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
   const { data: conversations = [], isLoading: conversationsLoading } = useConversations(
     selectedAccountId,
     "WHATSAPP",
+    { search: debouncedSearch },
   );
+  // The forward picker must offer every chat, not the ones matching the list search.
+  const { data: allConversations = [] } = useConversations(selectedAccountId, "WHATSAPP");
+
+  // The list refetches after a contact rename or a mark-read; the open chat's header renders
+  // the selected object, so it has to follow the refreshed row or it keeps the old name.
+  useEffect(() => {
+    if (!selectedConversation) return;
+    const refreshed = allConversations.find((conversation) => conversation.id === selectedConversation.id);
+    if (refreshed && refreshed !== selectedConversation) setSelectedConversation(refreshed);
+  }, [allConversations, selectedConversation]);
 
   const whatsappAccounts = useMemo(
     () => accounts.filter((account) => account.platform === "whatsapp"),
@@ -86,6 +125,36 @@ export function WhatsAppInboxScreen(): JSX.Element {
     setSelectedAccountId(id);
     selectConversation(null);
   };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget || !selectedAccountId) return;
+    setDeleting(true);
+    try {
+      await api.deleteConversation({ social_account_id: selectedAccountId, conversation_id: deleteTarget.id });
+      if (selectedConversation?.id === deleteTarget.id) selectConversation(null);
+      await queryClient.invalidateQueries({ queryKey: ["messaging-conversations", selectedAccountId] });
+      toast.success("Chat deleted");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not delete chat");
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+    }
+  };
+
+  // Forward targets are every chat of the account, one entry per number.
+  const forwardTargets = useMemo(() => {
+    const byPhone = new Map<string, { phone: string; label: string }>();
+    for (const conversation of allConversations) {
+      if (!byPhone.has(conversation.participant_id)) {
+        byPhone.set(conversation.participant_id, {
+          phone: conversation.participant_id,
+          label: conversation.participant_name,
+        });
+      }
+    }
+    return [...byPhone.values()];
+  }, [allConversations]);
 
   if (accountsLoading) {
     return (
@@ -207,6 +276,10 @@ export function WhatsAppInboxScreen(): JSX.Element {
                           selectedId={selectedConversation?.id || null}
                           onSelect={selectConversation}
                           isLoading={conversationsLoading}
+                          search={search}
+                          onSearchChange={setSearch}
+                          onDelete={canDeleteChats ? setDeleteTarget : undefined}
+                          absoluteTimes
                           showLabels
                           selectionMode={selectionMode}
                           selectedIds={selectedIds}
@@ -232,6 +305,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
                         socialAccountId={selectedAccountId}
                         pageId={pageId}
                         connectionMode={selectedAccount?.connection_mode ?? null}
+                        forwardTargets={forwardTargets}
                         onScrollStateChange={setCompact}
                         onBack={() => selectConversation(null)}
                       />
@@ -242,6 +316,30 @@ export function WhatsAppInboxScreen(): JSX.Element {
             </div>
           )}
         </div>
+
+        <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this chat?</AlertDialogTitle>
+              <AlertDialogDescription>
+                All messages in this chat are removed from Postora. Nothing is sent to WhatsApp and the
+                contact is kept.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={deleting}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void confirmDelete();
+                }}
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </WhatsAppMediaScope>
     </WhatsAppInboxApiProvider>
   );

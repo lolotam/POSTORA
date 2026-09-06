@@ -71,6 +71,8 @@ describe("useWhatsAppMedia", () => {
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
       sendVoice: vi.fn(),
+      forwardMessage: vi.fn(),
+      deleteConversation: vi.fn(),
       downloadBlob: vi.fn(),
     };
   });

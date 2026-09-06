@@ -1,5 +1,6 @@
 export type EvolutionEvent =
   | "MESSAGES_UPSERT"
+  | "MESSAGES_UPDATE"
   | "CONNECTION_UPDATE"
   | "QRCODE_UPDATED";
 
@@ -56,6 +57,8 @@ export class EvolutionApiError extends Error {
 export interface FindMessagesOptions {
   /** Epoch ms. Checked between pages so one chat cannot burn the whole sweep budget. */
   deadlineAt?: number;
+  /** Stop after this many pages (max 20). The LID anchor probe reads one; the import reads all. */
+  pageCeiling?: number;
 }
 
 export interface FindMessagesResult {
@@ -223,7 +226,7 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
     // deadline or ceiling exit so the caller can refuse to record the sweep as finished.
     findMessages: async (instanceName, remoteJid, options) => {
       const offset = 50;
-      const pageCeiling = 20;
+      const pageCeiling = Math.max(1, Math.min(options?.pageCeiling ?? 20, 20));
       const records: any[] = [];
       for (let page = 1; page <= pageCeiling; page++) {
         const payload: any = await request(`/chat/findMessages/${encodeURIComponent(instanceName)}`, {
