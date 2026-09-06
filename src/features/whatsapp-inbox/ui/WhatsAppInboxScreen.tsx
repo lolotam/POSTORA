@@ -127,16 +127,6 @@ export function WhatsAppInboxScreen(): JSX.Element {
     }
   };
 
-  if (accountsLoading) {
-    return (
-      <WhatsAppInboxApiProvider api={api}>
-        <div className="flex h-full min-h-0 items-center justify-center">
-          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-        </div>
-      </WhatsAppInboxApiProvider>
-    );
-  }
-
   // Forward targets are the chats the list already knows about, one entry per number.
   const forwardTargets = useMemo(() => {
     const byPhone = new Map<string, { phone: string; label: string }>();
@@ -150,6 +140,16 @@ export function WhatsAppInboxScreen(): JSX.Element {
     }
     return [...byPhone.values()];
   }, [conversations]);
+
+  if (accountsLoading) {
+    return (
+      <WhatsAppInboxApiProvider api={api}>
+        <div className="flex h-full min-h-0 items-center justify-center">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      </WhatsAppInboxApiProvider>
+    );
+  }
 
   const filteredConversations = labelFilter
     ? conversations.filter((conversation) => assignments.some(
