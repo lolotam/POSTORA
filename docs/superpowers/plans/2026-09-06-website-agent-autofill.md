@@ -50,9 +50,9 @@ Files: `src/components/messaging/knowledge/WebsitePanel.tsx`, `AiKnowledgeManage
 - [x] Run relevant Deno/Vitest tests, lint and production build. Refresh graph output.
 - [x] Apply additive SQL using the owning database role; isolated PostgreSQL fixture verifies cross-owner denial and concurrent apply rejection.
 - [x] Deploy committed backend files through Contabo SSH; verify SHA256 and restart functions/worker.
-- [ ] Push branch, open PR, land after required checks, verify Dokploy frontend build.
-- [ ] Use existing Codex browser to scrape a relevant account's public website, inspect ready draft and apply only appropriate reviewed fields; verify persistence after refresh.
-- [ ] Record exact release and test-source cleanup status. No credential values in Git, logs or reports.
+- [x] Push branch, open PR, land after required checks, verify Dokploy frontend build.
+- [x] Use existing Codex browser to scrape a relevant account's public website, inspect ready draft and apply only appropriate reviewed fields; verify persistence after refresh.
+- [x] Record exact release and test-source cleanup status. No credential values in Git, logs or reports.
 
 ## Ledger
 
@@ -62,4 +62,7 @@ Files: `src/components/messaging/knowledge/WebsitePanel.tsx`, `AiKnowledgeManage
 
 - Validation: 1,513 Vitest tests passed (15 skipped), frontend typecheck/build passed; 14 new Deno and 26 existing worker/ingest tests passed; actual migration fixture passed on PostgreSQL 17. Existing ingest typecheck errors are unrelated sourceVisibility interfaces. Full CI caught isolated SQL fixture registration, being integrated before merge.
 - Release: PR #155 opened. Migration applied as postgres. Six production modules match Git SHA256; shared dependencies match base. Both edge runtime and standalone worker restarted; setup OPTIONS returns 200.
+
+
+- Live acceptance completed: website ready31 chunks, eight reviewed fields applied to the admin-owned xsellpoint_kw Threads account, generated profile ready1 chunk, fresh-page persistence confirmed, agent disabled. See [production acceptance](2026-09-06-website-agent-autofill-acceptance.md) for the follow-up fixes and retained-source record.
 

@@ -37,6 +37,21 @@ export function fieldValue(input: unknown, path: string): unknown {
     input,
   );
 }
+function documentUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      url.username || url.password ||
+      !["http:", "https:"].includes(url.protocol)
+    ) return null;
+    // Fragments identify a location in the fetched document; pathname and query
+    // stay exact so a model cannot cite an uncrawled page on the same host.
+    url.hash = "";
+    return url.href;
+  } catch {
+    return null;
+  }
+}
 export function parseDraft(
   input: unknown,
   urls: readonly string[],
@@ -70,6 +85,7 @@ export function parseDraft(
     throw new Error("Setup draft is too long");
   }
   const evidence: Record<string, string[]> = {};
+  const crawledDocuments = new Map(urls.map((url) => [documentUrl(url), url]));
   const refs = value.evidence;
   if (!refs || typeof refs !== "object" || Array.isArray(refs)) {
     throw new Error("Missing source attribution");
@@ -81,13 +97,30 @@ export function parseDraft(
     ) {
       throw new Error("Invalid source attribution field");
     }
+    // Some providers return one URL as a scalar despite the requested array.
+    // Normalizing its shape still checks every URL against the actual crawl.
+    const referenceList = typeof references === "string"
+      ? [references]
+      : references;
     if (
-      !Array.isArray(references) || references.length > 20 ||
-      references.some((url) => typeof url !== "string" || !urls.includes(url))
+      !Array.isArray(referenceList) || referenceList.length > 20 ||
+      referenceList.some((url) => typeof url !== "string")
     ) {
-      throw new Error("Source attribution is outside the crawled pages");
+      throw new Error("Invalid source attribution list");
     }
-    evidence[path] = [...new Set(references)];
+    evidence[path] = [
+      ...new Set(referenceList.map((reference) => {
+        const canonical = documentUrl(reference);
+        if (canonical === null) {
+          throw new Error("Invalid source attribution URL");
+        }
+        const crawled = crawledDocuments.get(canonical);
+        if (!crawled) {
+          throw new Error("Source attribution is outside the crawled pages");
+        }
+        return crawled;
+      })),
+    ];
   }
   for (
     const path of SETUP_FIELDS.filter((field) =>
@@ -111,6 +144,54 @@ export function parseDraft(
     throw new Error("Incomplete FAQ");
   }
   return { business_profile, agent_behavior, evidence, coverage };
+}
+
+export type SetupField = typeof SETUP_FIELDS[number];
+
+/** Extraction may propose unknown facts; discard only those without citations.
+ * Supplied citations and all remaining structure still go through parseDraft.
+ */
+export function parseExtractedDraft(
+  input: unknown,
+  urls: readonly string[],
+  coverage: WebsiteSetupDraft["coverage"],
+  reportMissing?: (fields: SetupField[]) => void,
+): WebsiteSetupDraft {
+  const candidate = structuredClone(input);
+  const omitted: SetupField[] = [];
+  const refs = fieldValue(candidate, "evidence");
+  if (refs && typeof refs === "object" && !Array.isArray(refs)) {
+    for (
+      const path of SETUP_FIELDS.filter((field) =>
+        field.startsWith("business_profile.")
+      )
+    ) {
+      const references = (refs as Record<string, unknown>)[path];
+      if (
+        fieldValue(candidate, path) === undefined ||
+        !(references === undefined ||
+          (Array.isArray(references) && references.length === 0))
+      ) continue;
+      const parts = path.split(".");
+      const parent = fieldValue(
+        candidate,
+        parts.slice(0, -1).join("."),
+      ) as Record<string, unknown>;
+      delete parent[parts.at(-1)!];
+      omitted.push(path);
+    }
+  }
+  reportMissing?.(omitted);
+  const draft = parseDraft(candidate, urls, coverage);
+  if (
+    !SETUP_FIELDS.some((path) =>
+      path.startsWith("business_profile.") &&
+      fieldValue(draft, path) !== undefined
+    )
+  ) {
+    throw new Error("No attributable business facts found");
+  }
+  return draft;
 }
 
 export interface ConfigSnapshot {

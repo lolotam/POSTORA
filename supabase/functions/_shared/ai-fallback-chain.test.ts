@@ -48,6 +48,101 @@ const platformTier: AiTier = {
   credentialSource: "platform",
 };
 
+Deno.test("GPT-5 request parameters are adapted without mutating the Google fallback request", async () => {
+  const original = globalThis.fetch;
+  const sent: Record<string, unknown>[] = [];
+  const request = {
+    max_tokens: 4500,
+    temperature: 0.1,
+    response_format: { type: "json_object" },
+  };
+  try {
+    globalThis.fetch = (_url, init) => {
+      sent.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(
+        new Response("{}", { status: sent.length === 1 ? 503 : 200 }),
+      );
+    };
+    const result = await callAiChain(undefined, request, [
+      { ...userTier, model: "gpt-5.5" },
+      { ...userTier, provider: "google", model: "gemini-3-flash-preview" },
+    ]);
+    assertEquals(result.response.status, 200);
+    assertEquals(sent[0], {
+      model: "gpt-5.5",
+      max_completion_tokens: 4500,
+      response_format: { type: "json_object" },
+    });
+    assertEquals(sent[1], { ...request, model: "gemini-3-flash-preview" });
+    assertEquals(request.max_tokens, 4500);
+    assertEquals(request.temperature, 0.1);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("xAI platform models reach xAI with the configured xAI key", async () => {
+  const original = globalThis.fetch;
+  const fake = platformAdmin("xai-secret");
+  try {
+    globalThis.fetch = (url, init) => {
+      assertEquals(url, "https://api.x.ai/v1/chat/completions");
+      assertEquals(
+        new Headers(init?.headers).get("authorization"),
+        "Bearer xai-secret",
+      );
+      assertEquals(JSON.parse(String(init?.body)), {
+        model: "grok-4.3",
+        max_tokens: 4500,
+        temperature: 0.1,
+      });
+      return Promise.resolve(new Response("{}"));
+    };
+    const result = await callAiChain(fake.admin, {
+      max_tokens: 4500,
+      temperature: 0.1,
+    }, [{ ...platformTier, provider: "xai", model: "grok-4.3" }]);
+    assertEquals(result.response.status, 200);
+    assertEquals(fake.providers, ["xai"]);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("explicit completion limits and supported non-reasoning sampling survive OpenAI adaptation", async () => {
+  const original = globalThis.fetch;
+  let sent: Record<string, unknown> = {};
+  try {
+    globalThis.fetch = (_url, init) => {
+      sent = JSON.parse(String(init?.body));
+      return Promise.resolve(new Response("{}"));
+    };
+    await callAiChain(undefined, {
+      max_tokens: 4500,
+      max_completion_tokens: 7000,
+      temperature: 0.1,
+      reasoning_effort: "none",
+    }, [{ ...userTier, model: "gpt-5.2" }]);
+    assertEquals(sent, {
+      model: "gpt-5.2",
+      max_completion_tokens: 7000,
+      temperature: 0.1,
+      reasoning_effort: "none",
+    });
+    await callAiChain(undefined, { max_tokens: 200, temperature: 0.2 }, [{
+      ...userTier,
+      model: "gpt-4.1-mini",
+    }]);
+    assertEquals(sent, {
+      model: "gpt-4.1-mini",
+      max_tokens: 200,
+      temperature: 0.2,
+    });
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 Deno.test("OpenAI reaches OpenAI; rejected user credentials never enter platform tiers", async () => {
   const original = globalThis.fetch;
   const fake = platformAdmin();
@@ -273,15 +368,32 @@ Deno.test("a user-only chain rejected with 401 keeps AI_USER_KEY_INVALID instead
   try {
     globalThis.fetch = async () => new Response("{}", { status: 401 });
     const result = await callAiChain(undefined, {}, [
-      { provider: "openai", model: "gpt-test", credentialSource: "user", apiKey: "user-key" },
+      {
+        provider: "openai",
+        model: "gpt-test",
+        credentialSource: "user",
+        apiKey: "user-key",
+      },
     ]);
     assertEquals(result.response.status, 502);
     assertEquals(result.errorCode, "AI_USER_KEY_INVALID");
-    assertEquals(await result.response.json(), { error: "AI_USER_KEY_INVALID" });
+    assertEquals(await result.response.json(), {
+      error: "AI_USER_KEY_INVALID",
+    });
     // A platform tier in the chain means it was an outage, not a bad key.
     const mixed = await callAiChain(undefined, {}, [
-      { provider: "openai", model: "gpt-test", credentialSource: "user", apiKey: "user-key" },
-      { provider: "openai", model: "gpt-floor", credentialSource: "platform", apiKey: "platform-key" },
+      {
+        provider: "openai",
+        model: "gpt-test",
+        credentialSource: "user",
+        apiKey: "user-key",
+      },
+      {
+        provider: "openai",
+        model: "gpt-floor",
+        credentialSource: "platform",
+        apiKey: "platform-key",
+      },
     ]);
     assertEquals(mixed.errorCode, undefined);
   } finally {
