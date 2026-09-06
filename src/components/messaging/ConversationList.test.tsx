@@ -37,6 +37,16 @@ describe("ConversationList controlled search", () => {
     expect(onSearchChange).toHaveBeenCalledWith("sa");
   });
 
+  it("shows a delete control per row when onDelete is given", () => {
+    const onDelete = vi.fn();
+    const rows = [conv("wa_1_96555", "Ali")];
+    render(
+      <ConversationList conversations={rows} selectedId={null} onSelect={vi.fn()} isLoading={false} onDelete={onDelete} />,
+    );
+    fireEvent.click(screen.getByLabelText("Delete chat with Ali"));
+    expect(onDelete).toHaveBeenCalledWith(rows[0]);
+  });
+
   it("still filters locally when uncontrolled", () => {
     render(
       <ConversationList

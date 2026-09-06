@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { Search, MessageCircle } from "lucide-react";
+import { Search, MessageCircle, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Conversation } from "@/hooks/useMessaging";
 import { ConversationLabelChips, ConversationLabelPicker } from "./ConversationLabels";
@@ -40,6 +40,7 @@ export function ConversationList({
   onFilteredChange,
   search,
   onSearchChange,
+  onDelete,
 }: ConversationListProps) {
   const [localSearch, setLocalSearch] = useState("");
   const controlled = search !== undefined && onSearchChange !== undefined;
@@ -87,8 +88,21 @@ export function ConversationList({
           </div>
         ) : (
           filtered.map((conv) => (
+            <div key={conv.id} className="group relative">
+              {onDelete && (
+                <button
+                  type="button"
+                  aria-label={`Delete chat with ${conv.participant_name}`}
+                  className="absolute right-1 top-1 z-10 rounded p-1 text-destructive opacity-0 hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onDelete(conv);
+                  }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
             <button
-              key={conv.id}
               onClick={() => (selectionMode ? onToggleSelect?.(conv) : onSelect(conv))}
               aria-pressed={selectionMode ? selectedIds?.has(conv.id) === true : undefined}
               className={cn(
@@ -135,6 +149,7 @@ export function ConversationList({
                 </span>
               )}
             </button>
+            </div>
           ))
         )}
       </div>

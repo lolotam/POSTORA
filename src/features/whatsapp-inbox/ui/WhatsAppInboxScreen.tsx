@@ -1,6 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { CheckSquare, Download, Loader2, Plus, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
+import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { AccountSelector } from "@/components/messaging/AccountSelector";
 import { LabelFilter } from "@/components/messaging/ConversationLabels";
 import { ConversationList } from "@/components/messaging/ConversationList";
@@ -31,6 +43,9 @@ export function WhatsAppInboxScreen(): JSX.Element {
   const [exportOpen, setExportOpen] = useState(false);
   const [visibleConversations, setVisibleConversations] = useState<Conversation[]>([]);
   const ignoredRouteChatIdRef = useRef<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Conversation | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const queryClient = useQueryClient();
   const { assignments } = useWhatsAppLabels();
   const { setCompact } = useWhatsAppChrome();
   // The list search is server-side (name or phone digits); typing is debounced so a
@@ -96,6 +111,22 @@ export function WhatsAppInboxScreen(): JSX.Element {
     selectConversation(null);
   };
 
+  const confirmDelete = async () => {
+    if (!deleteTarget || !selectedAccountId) return;
+    setDeleting(true);
+    try {
+      await api.deleteConversation({ social_account_id: selectedAccountId, conversation_id: deleteTarget.id });
+      if (selectedConversation?.id === deleteTarget.id) selectConversation(null);
+      await queryClient.invalidateQueries({ queryKey: ["messaging-conversations", selectedAccountId] });
+      toast.success("Chat deleted");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not delete chat");
+    } finally {
+      setDeleting(false);
+      setDeleteTarget(null);
+    }
+  };
+
   if (accountsLoading) {
     return (
       <WhatsAppInboxApiProvider api={api}>
@@ -105,6 +136,20 @@ export function WhatsAppInboxScreen(): JSX.Element {
       </WhatsAppInboxApiProvider>
     );
   }
+
+  // Forward targets are the chats the list already knows about, one entry per number.
+  const forwardTargets = useMemo(() => {
+    const byPhone = new Map<string, { phone: string; label: string }>();
+    for (const conversation of conversations) {
+      if (!byPhone.has(conversation.participant_id)) {
+        byPhone.set(conversation.participant_id, {
+          phone: conversation.participant_id,
+          label: conversation.participant_name,
+        });
+      }
+    }
+    return [...byPhone.values()];
+  }, [conversations]);
 
   const filteredConversations = labelFilter
     ? conversations.filter((conversation) => assignments.some(
@@ -218,6 +263,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
                           isLoading={conversationsLoading}
                           search={search}
                           onSearchChange={setSearch}
+                          onDelete={setDeleteTarget}
                           showLabels
                           selectionMode={selectionMode}
                           selectedIds={selectedIds}
@@ -243,6 +289,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
                         socialAccountId={selectedAccountId}
                         pageId={pageId}
                         connectionMode={selectedAccount?.connection_mode ?? null}
+                        forwardTargets={forwardTargets}
                         onScrollStateChange={setCompact}
                         onBack={() => selectConversation(null)}
                       />
@@ -253,6 +300,30 @@ export function WhatsAppInboxScreen(): JSX.Element {
             </div>
           )}
         </div>
+
+        <AlertDialog open={deleteTarget !== null} onOpenChange={(open) => !open && !deleting && setDeleteTarget(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete this chat?</AlertDialogTitle>
+              <AlertDialogDescription>
+                All messages in this chat are removed from Postora. Nothing is sent to WhatsApp and the
+                contact is kept.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={deleting}
+                onClick={(event) => {
+                  event.preventDefault();
+                  void confirmDelete();
+                }}
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </WhatsAppMediaScope>
     </WhatsAppInboxApiProvider>
   );
