@@ -97,14 +97,19 @@ export function parseDraft(
     ) {
       throw new Error("Invalid source attribution field");
     }
+    // Some providers return one URL as a scalar despite the requested array.
+    // Normalizing its shape still checks every URL against the actual crawl.
+    const referenceList = typeof references === "string"
+      ? [references]
+      : references;
     if (
-      !Array.isArray(references) || references.length > 20 ||
-      references.some((url) => typeof url !== "string")
+      !Array.isArray(referenceList) || referenceList.length > 20 ||
+      referenceList.some((url) => typeof url !== "string")
     ) {
       throw new Error("Invalid source attribution list");
     }
     evidence[path] = [
-      ...new Set(references.map((reference) => {
+      ...new Set(referenceList.map((reference) => {
         const canonical = documentUrl(reference);
         if (canonical === null) {
           throw new Error("Invalid source attribution URL");

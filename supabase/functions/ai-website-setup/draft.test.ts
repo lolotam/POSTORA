@@ -56,6 +56,36 @@ Deno.test("equivalent root URLs resolve to the exact crawled document attributio
   assertEquals(result.evidence, { "business_profile.products": [root] });
 });
 
+Deno.test("a scalar evidence URL is normalized losslessly and must still identify a crawled page", () => {
+  const input = (reference: string) => ({
+    business_profile: { products: "Software" },
+    evidence: {
+      "business_profile.products": reference,
+    },
+  });
+  assertEquals(
+    parseDraft(
+      input("https://xsellpoint.com"),
+      ["https://xsellpoint.com/"],
+      coverage,
+    ).evidence,
+    { "business_profile.products": ["https://xsellpoint.com/"] },
+  );
+  assertThrows(
+    () =>
+      parseDraft(input("https://xsellpoint.com/invented"), [
+        "https://xsellpoint.com/",
+      ], coverage),
+    Error,
+    "Source attribution is outside the crawled pages",
+  );
+  assertThrows(
+    () => parseDraft(input(""), ["https://xsellpoint.com/"], coverage),
+    Error,
+    "Invalid source attribution URL",
+  );
+});
+
 Deno.test("canonical attribution still refuses different pages, queries, schemes and credentials", () => {
   for (
     const reference of [
@@ -85,7 +115,9 @@ Deno.test("canonical attribution still refuses different pages, queries, schemes
       parseDraft(
         {
           business_profile: {},
-          evidence: { "business_profile.products": "https://xsellpoint.com/" },
+          evidence: {
+            "business_profile.products": { url: "https://xsellpoint.com/" },
+          },
         },
         ["https://xsellpoint.com/"],
         coverage,

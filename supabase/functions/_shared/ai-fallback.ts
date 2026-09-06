@@ -69,6 +69,12 @@ export function getAiEndpoint(provider: string, suppliedKey?: string): AiEndpoin
     };
   }
 
+  if (provider === 'xai') {
+    const apiKey = suppliedKey ?? '';
+    return { apiUrl: 'https://api.x.ai/v1/chat/completions', apiKey,
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } };
+  }
+
   // Default: Google AI Studio direct
   const apiKey = suppliedKey ?? Deno.env.get('GOOGLE_AI_STUDIO_KEY') ?? '';
   return {
@@ -99,6 +105,27 @@ export function normalizeModelName(model: string, provider: string): string {
     return model.replace(/^google\//, '');
   }
   return model;
+}
+
+function chatRequestForTier(request: Record<string, unknown>, tier: AiTier): Record<string, unknown> {
+  const model = normalizeModelName(tier.model, tier.provider);
+  const body: Record<string, unknown> = { ...request, model };
+  if (tier.provider !== 'openai' || !/^(?:gpt-5(?:[.-]|$)|o[134](?:-|$))/.test(model)) return body;
+  // GPT-5 and o-series reject the legacy token parameter. Build a fresh body
+  // per tier: removing fields from the caller would also alter Google fallback.
+  if (body.max_completion_tokens === undefined && body.max_tokens !== undefined) {
+    body.max_completion_tokens = body.max_tokens;
+  }
+
+  delete body.max_tokens;
+  const samplingSupported = /^gpt-5\.[1-9][0-9]*(?:-|$)/.test(model) && body.reasoning_effort === 'none';
+  if (!samplingSupported) {
+    delete body.temperature;
+    delete body.top_p;
+    delete body.logprobs;
+    delete body.top_logprobs;
+  }
+  return body;
 }
 
 /**
@@ -337,7 +364,7 @@ export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody
     if (!apiKey) { attempt.error = 'API key not configured'; continue; }
     try {
       const endpoint = getAiEndpoint(tier.provider, apiKey);
-      const body = { ...requestBody, model: normalizeModelName(tier.model, tier.provider) };
+      const body = chatRequestForTier(requestBody, tier);
       const response = endpoint.kind === 'anthropic'
         ? await callAnthropic(body, apiKey, AI_TIER_TIMEOUT_MS)
         : await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, AI_TIER_TIMEOUT_MS);
