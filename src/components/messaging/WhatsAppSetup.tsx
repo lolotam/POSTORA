@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { describeSyncOutcome, type SyncOutcomeView } from "@/lib/whatsappSyncOutcome";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -99,18 +100,43 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   };
 
   // Direct QR imports history from the Evolution session rather than from Meta, so it does
-  // not share the coexistence sync hook. The sweep runs in the background on the server;
-  // the inbox picks the conversations up on its next refetch.
+  // not share the coexistence sync hook. The sweep runs in the background on the server and
+  // records its outcome when it finishes; this polls for that record so the user learns how
+  // many chats landed and whether to press the button again.
+  const readSyncOutcome = async (socialAccountId: string): Promise<SyncOutcomeView | null> => {
+    const { data, error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
+      body: { action: "get_sync_status", social_account_id: socialAccountId },
+    });
+    if (error) throw error;
+    return (data?.last_sync_outcome as SyncOutcomeView | null) ?? null;
+  };
+
   const syncPastChats = async (socialAccountId: string) => {
     setSyncingAccountId(socialAccountId);
     try {
+      const previousFinishedAt = (await readSyncOutcome(socialAccountId))?.finished_at ?? null;
       const { error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
         body: { action: "sync_past_chats", social_account_id: socialAccountId },
       });
       if (error) throw error;
       toast({
         title: "Importing your conversations",
-        description: "Past chats will appear in the inbox in a few seconds.",
+        description: "This can take a minute for large accounts.",
+      });
+
+      const deadline = Date.now() + 5 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 3000));
+        const outcome = await readSyncOutcome(socialAccountId);
+        if (outcome?.finished_at && outcome.finished_at !== previousFinishedAt) {
+          toast(describeSyncOutcome(outcome));
+          queryClient.invalidateQueries({ queryKey: ["messaging-conversations"] });
+          return;
+        }
+      }
+      toast({
+        title: "Still importing",
+        description: "Large accounts keep importing in the background. Check the inbox in a few minutes.",
       });
     } catch (error) {
       toast({
