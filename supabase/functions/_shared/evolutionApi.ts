@@ -1,5 +1,6 @@
 export type EvolutionEvent =
   | "MESSAGES_UPSERT"
+  | "MESSAGES_UPDATE"
   | "CONNECTION_UPDATE"
   | "QRCODE_UPDATED";
 

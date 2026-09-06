@@ -14,6 +14,9 @@ import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_sha
 
 const EVOLUTION_EVENTS: EvolutionEvent[] = [
   "MESSAGES_UPSERT",
+  // Delivery / read / rejection acks for our own sends. Instances paired before this event
+  // was listed need the resubscribe_webhook action once.
+  "MESSAGES_UPDATE",
   "CONNECTION_UPDATE",
   "QRCODE_UPDATED",
 ];
@@ -26,7 +29,13 @@ class BridgeError extends Error {
 }
 
 interface BridgeBody {
-  action: "create_and_get_qr" | "get_qr_status" | "logout_instance" | "sync_past_chats" | "get_sync_status";
+  action:
+    | "create_and_get_qr"
+    | "get_qr_status"
+    | "logout_instance"
+    | "sync_past_chats"
+    | "get_sync_status"
+    | "resubscribe_webhook";
   social_account_id?: string;
   workspace_id?: string;
   risk_consent?: boolean;
@@ -284,6 +293,20 @@ async function getSyncStatus(admin: any, userId: string, body: BridgeBody) {
   };
 }
 
+// One-time repair for instances paired before MESSAGES_UPDATE was subscribed: same URL,
+// same jwt_key header, the full current event list.
+async function resubscribeWebhook(context: Awaited<ReturnType<typeof authenticateRequest>>, body: BridgeBody) {
+  if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
+  await findOwnedAccount(context.admin, context.user.id, body.social_account_id);
+  const instance = await findInstance(context.admin, body.social_account_id);
+  await createEvolutionApi().setWebhook(instance.instance_name, {
+    url: `${context.webhookBaseUrl}/functions/v1/whatsapp-evolution-webhook`,
+    headers: { jwt_key: instance.jwt_key },
+    events: EVOLUTION_EVENTS,
+  });
+  return { success: true, social_account_id: body.social_account_id, events: EVOLUTION_EVENTS };
+}
+
 // The webhook is the primary activation path; this keeps a dropped delivery from
 // leaving an already-linked session permanently inactive in Postora.
 async function reconcileAccountConnection(reconciliation: {
@@ -369,6 +392,9 @@ Deno.serve(async (req) => {
     }
     if (body.action === "get_sync_status") {
       return restrictedJsonResponse(req, await getSyncStatus(context.admin, context.user.id, body));
+    }
+    if (body.action === "resubscribe_webhook") {
+      return restrictedJsonResponse(req, await resubscribeWebhook(context, body));
     }
     if (body.action === "logout_instance") {
       return restrictedJsonResponse(req, await logoutInstance(context.admin, context.user.id, body));
