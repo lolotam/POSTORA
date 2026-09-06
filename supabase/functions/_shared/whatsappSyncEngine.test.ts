@@ -15,14 +15,50 @@ interface Write {
 
 // Stands in for the Supabase client. The database is a system boundary, so the assertions
 // below are on the rows the sweep would write, not on how the client was called.
-function fakeAdmin() {
+function fakeAdmin(options: { anchors?: Record<string, string> } = {}) {
   const writes: Write[] = [];
+  const anchors = options.anchors ?? {};
   return {
     writes,
     rpc: (fn: string, args: { p_rows: any[] }) => {
       writes.push({ table: fn, rows: args.p_rows });
       return Promise.resolve({ data: args.p_rows.length, error: null });
     },
+    // Models the two shapes the sweep uses on the client:
+    //   .from("whatsapp_messages").select(...).eq(...).in("message_id", ids).limit(1)
+    //   .from("whatsapp_evolution_instances").update(values).eq(...)
+    // `anchors` maps a message id to the conversation the live webhook stored it under.
+    from: (table: string) => {
+      let ids: string[] = [];
+      const chain: any = {
+        select: () => chain,
+        eq: () => chain,
+        in: (_column: string, values: string[]) => {
+          ids = values;
+          return chain;
+        },
+        limit: () => {
+          const hit = ids.map((id) => anchors[id]).find(Boolean);
+          return Promise.resolve({ data: hit ? [{ conversation_id: hit }] : [], error: null });
+        },
+        update: (values: Record<string, unknown>) => ({
+          eq: () => {
+            writes.push({ table, rows: [values] });
+            return Promise.resolve({ error: null });
+          },
+        }),
+      };
+      return chain;
+    },
+  };
+}
+
+function lidMessage(id: string, remoteJid: string, text: string) {
+  return {
+    key: { id, remoteJid, fromMe: false },
+    message: { conversation: text },
+    messageTimestamp: 1787268633,
+    pushName: "Lid Person",
   };
 }
 
@@ -80,8 +116,52 @@ Deno.test("only chats that can be replied to are imported", async () => {
   assertEquals(outcome.chatsDiscovered, 3);
   assertEquals(outcome.chatsImported, 1);
   assertEquals(outcome.chatsSkipped, 1);
-  assertEquals(outcome.chatsUnaddressable, 1);
+  assertEquals(outcome.chatsAwaitingLid, 1);
   assertEquals(rowsFor(admin, "import_whatsapp_conversations")[0].conversation_id, "wa_96597950350_96555683677");
+});
+
+Deno.test("a LID chat with a live anchor is imported under the anchored number", async () => {
+  // Evolution stores this chat's history under the LID only. One of its message ids was
+  // already ingested live (the webhook is phone-normalised), which pins it to a number.
+  const admin = fakeAdmin({ anchors: { LIVE1: "wa_96597950350_96555683677" } });
+  const outcome = await syncEvolutionHistory({
+    admin,
+    api: fakeApi({
+      chats: [chat("166095025660123@lid")],
+      messages: {
+        "166095025660123@lid": [
+          lidMessage("LIVE1", "166095025660123@lid", "hello"),
+          lidMessage("OLD1", "166095025660123@lid", "older"),
+        ],
+      },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+  assertEquals(outcome.chatsLidResolved, 1);
+  assertEquals(outcome.chatsAwaitingLid, 0);
+  assertEquals(outcome.chatsImported, 1);
+  const conversations = rowsFor(admin, "import_whatsapp_conversations");
+  assertEquals(conversations[0].conversation_id, "wa_96597950350_96555683677");
+  const messages = rowsFor(admin, "import_whatsapp_messages");
+  assertEquals(messages.length, 2);
+  assertEquals(messages.every((row) => row.conversation_id === "wa_96597950350_96555683677"), true);
+});
+
+Deno.test("a LID chat with no anchor is counted as waiting, not imported", async () => {
+  const admin = fakeAdmin();
+  const outcome = await syncEvolutionHistory({
+    admin,
+    api: fakeApi({
+      chats: [chat("166095025660123@lid")],
+      messages: { "166095025660123@lid": [lidMessage("X1", "166095025660123@lid", "hi")] },
+    }),
+    account: ACCOUNT,
+    instanceName: "postora_acc-1",
+  });
+  assertEquals(outcome.chatsAwaitingLid, 1);
+  assertEquals(outcome.chatsLidResolved, 0);
+  assertEquals(rowsFor(admin, "import_whatsapp_conversations").length, 0);
 });
 
 Deno.test("a LID chat is imported under the number its own history reveals", async () => {
@@ -116,7 +196,7 @@ Deno.test("a LID chat is imported under the number its own history reveals", asy
   });
 
   assertEquals(outcome.chatsImported, 1);
-  assertEquals(outcome.chatsUnaddressable, 0);
+  assertEquals(outcome.chatsAwaitingLid, 0);
   // Both messages land in the phone-addressed conversation the live webhook writes to --
   // the sibling without the alternate included.
   assertEquals(

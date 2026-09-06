@@ -9,6 +9,7 @@ import type { EvolutionApi } from "./evolutionApi.ts";
 import { addressableJid, buildEvolutionMessageRow, remoteNumberFor } from "./evolutionMessage.ts";
 
 const LID_JID_SUFFIX = "@lid";
+const DIRECT_JID_SUFFIX = "@s.whatsapp.net";
 const CHAT_CONCURRENCY = 5;
 const IMPORT_BATCH = 500;
 
@@ -35,10 +36,12 @@ export interface SyncOutcome {
   chatsDiscovered: number;
   chatsImported: number;
   chatsSkipped: number;
-  /** One-to-one chats Evolution addressed only by LID, with no subscriber number anywhere
-   *  in the record. They are real conversations, unlike the groups counted as skipped, and
-   *  separating them is what stops "imported 2 of 258" reading as a clean sweep. */
-  chatsUnaddressable: number;
+  /** One-to-one chats Evolution addressed only by LID, with no subscriber number in the
+   *  record and no live message ingested yet to anchor them. They are real conversations,
+   *  unlike the groups counted as skipped, and they unlock as the contact writes in. */
+  chatsAwaitingLid: number;
+  /** LID-only chats pinned to a number through a message the webhook already ingested. */
+  chatsLidResolved: number;
   messagesWritten: number;
   chatFailures: number;
   truncated: boolean;
@@ -82,19 +85,39 @@ function realName(candidate: unknown, number: string): string | null {
 interface ChatScan {
   summaries: ChatSummary[];
   /** LID-addressed one-to-one chats whose subscriber number appears nowhere in the record. */
-  unaddressable: number;
+  lidPending: any[];
+}
+
+function contactIndex(contacts: any[]): Map<string, any> {
+  const contactByJid = new Map<string, any>();
+  for (const contact of contacts) {
+    if (contact?.remoteJid) contactByJid.set(contact.remoteJid, contact);
+  }
+  return contactByJid;
+}
+
+function summarize(chat: any, remoteJid: string, address: string, contact: any, account: SyncAccount): ChatSummary {
+  const number = remoteNumberFor(address);
+  return {
+    remoteJid,
+    address,
+    number,
+    conversationId: `wa_${account.platform_user_id}_${number}`,
+    name: realName(contact?.pushName, number) ?? realName(chat?.pushName, number),
+    avatar: contact?.profilePicUrl || chat?.profilePicUrl || null,
+    preview: previewOf(chat),
+    lastMessageAt: lastMessageIso(chat),
+    unreadCount: Number(chat?.unreadCount) || 0,
+  };
 }
 
 // A chat carries its address on itself, but the LID-to-number alternate only ever appears on
 // a message key -- so the chat's own last message is the one place a LID-addressed chat can
 // name its subscriber number.
 function scanChats(chats: any[], contacts: any[], account: SyncAccount): ChatScan {
-  const contactByJid = new Map<string, any>();
-  for (const contact of contacts) {
-    if (contact?.remoteJid) contactByJid.set(contact.remoteJid, contact);
-  }
+  const contactByJid = contactIndex(contacts);
 
-  const scan: ChatScan = { summaries: [], unaddressable: 0 };
+  const scan: ChatScan = { summaries: [], lidPending: [] };
   for (const chat of chats) {
     const remoteJid = String(chat?.remoteJid || "");
     const address = addressableJid({
@@ -103,26 +126,76 @@ function scanChats(chats: any[], contacts: any[], account: SyncAccount): ChatSca
     });
     if (!address) {
       // A group or a newsletter is not a conversation this sweep imports at all; a LID chat
-      // is one it cannot address. Counting them apart is what keeps a sweep that reached two
-      // of two hundred chats from reading as a clean success.
-      if (remoteJid.endsWith(LID_JID_SUFFIX)) scan.unaddressable += 1;
+      // is one it cannot address from the record alone and gets a second chance below.
+      if (remoteJid.endsWith(LID_JID_SUFFIX)) scan.lidPending.push(chat);
       continue;
     }
-    const number = remoteNumberFor(address);
     const contact = contactByJid.get(address) ?? contactByJid.get(remoteJid);
-    scan.summaries.push({
-      remoteJid,
-      address,
-      number,
-      conversationId: `wa_${account.platform_user_id}_${number}`,
-      name: realName(contact?.pushName, number) ?? realName(chat?.pushName, number),
-      avatar: contact?.profilePicUrl || chat?.profilePicUrl || null,
-      preview: previewOf(chat),
-      lastMessageAt: lastMessageIso(chat),
-      unreadCount: Number(chat?.unreadCount) || 0,
-    });
+    scan.summaries.push(summarize(chat, remoteJid, address, contact, account));
   }
   return scan;
+}
+
+/**
+ * Evolution files a LID chat's history under the LID with no phone alias, but it normalises
+ * LIVE webhook events to the phone JID. A message id present both in the chat's history and
+ * in whatsapp_messages therefore pins the chat to the number the live event carried. Scoped
+ * to this account: the same LID can belong to a different tenant's contact.
+ */
+async function lookupAnchorNumber(admin: any, accountId: string, ids: string[]): Promise<string | null> {
+  if (ids.length === 0) return null;
+  const { data, error } = await admin
+    .from("whatsapp_messages")
+    .select("conversation_id")
+    .eq("social_account_id", accountId)
+    .in("message_id", ids)
+    .limit(1);
+  if (error) throw error;
+  const conversationId = data?.[0]?.conversation_id as string | undefined;
+  const number = conversationId?.split("_").pop();
+  return number && /^\d+$/.test(number) ? number : null;
+}
+
+async function resolveLidChats(deps: {
+  admin: any;
+  api: EvolutionApi;
+  account: SyncAccount;
+  instanceName: string;
+  contacts: any[];
+  pending: any[];
+  deadlineAt: number;
+}): Promise<{ resolved: ChatSummary[]; awaiting: number }> {
+  const { admin, api, account, instanceName, contacts, pending, deadlineAt } = deps;
+  const contactByJid = contactIndex(contacts);
+  const resolved: ChatSummary[] = [];
+  let awaiting = 0;
+  for (const chat of pending) {
+    if (Date.now() >= deadlineAt) {
+      awaiting += 1;
+      continue;
+    }
+    const remoteJid = String(chat?.remoteJid || "");
+    try {
+      // One page is enough: a live message, when there is one, is among the newest.
+      const probe = await api.findMessages(instanceName, remoteJid, { deadlineAt, pageCeiling: 1 });
+      const ids = probe.records
+        .map((record: any) => record?.key?.id)
+        .filter((id: unknown): id is string => typeof id === "string" && id.length > 0);
+      const number = await lookupAnchorNumber(admin, account.id, ids);
+      if (!number) {
+        awaiting += 1;
+        continue;
+      }
+      resolved.push(summarize(chat, remoteJid, `${number}${DIRECT_JID_SUFFIX}`, contactByJid.get(remoteJid), account));
+    } catch (error) {
+      awaiting += 1;
+      console.error(
+        `[whatsapp-sync] ${instanceName} LID probe failed:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+  return { resolved, awaiting };
 }
 
 // The conflict rules live in SQL (import_whatsapp_* ) rather than here. Deciding them in
@@ -195,23 +268,28 @@ export async function syncEvolutionHistory(deps: {
     api.findContacts(instanceName),
   ]);
 
-  const { summaries, unaddressable } = scanChats(chats, contacts, account);
+  const { summaries: direct, lidPending } = scanChats(chats, contacts, account);
+  const lid = await resolveLidChats({
+    admin, api, account, instanceName, contacts, pending: lidPending, deadlineAt,
+  });
+  const summaries = [...direct, ...lid.resolved];
   const outcome: SyncOutcome = {
     chatsDiscovered: chats.length,
     chatsImported: summaries.length,
-    chatsSkipped: chats.length - summaries.length - unaddressable,
-    chatsUnaddressable: unaddressable,
+    chatsSkipped: chats.length - direct.length - lidPending.length,
+    chatsAwaitingLid: lid.awaiting,
+    chatsLidResolved: lid.resolved.length,
     messagesWritten: 0,
     chatFailures: 0,
     truncated: false,
   };
-  // Their history is unreachable: Evolution files it under the LID and holds no mapping
-  // back to a number, so no retry recovers it. Saying so is the difference between a user
-  // reading "sync finished" and understanding why most of their chats are missing.
-  if (unaddressable > 0) {
+  // Their history stays unreachable until the contact writes in once: Evolution files it
+  // under the LID and only a live, phone-normalised message can anchor it. Saying so is the
+  // difference between a user reading "sync finished" and understanding what is missing.
+  if (lid.awaiting > 0) {
     console.log(
-      `[whatsapp-sync] ${instanceName}: ${unaddressable} one-to-one chat(s) carry no subscriber ` +
-        `number (LID-addressed) and were not imported`,
+      `[whatsapp-sync] ${instanceName}: ${lid.awaiting} one-to-one chat(s) are LID-addressed with no ` +
+        `live message yet and were not imported`,
     );
   }
   if (summaries.length === 0) return outcome;
