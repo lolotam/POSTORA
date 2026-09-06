@@ -146,6 +146,54 @@ export function parseDraft(
   return { business_profile, agent_behavior, evidence, coverage };
 }
 
+export type SetupField = typeof SETUP_FIELDS[number];
+
+/** Extraction may propose unknown facts; discard only those without citations.
+ * Supplied citations and all remaining structure still go through parseDraft.
+ */
+export function parseExtractedDraft(
+  input: unknown,
+  urls: readonly string[],
+  coverage: WebsiteSetupDraft["coverage"],
+  reportMissing?: (fields: SetupField[]) => void,
+): WebsiteSetupDraft {
+  const candidate = structuredClone(input);
+  const omitted: SetupField[] = [];
+  const refs = fieldValue(candidate, "evidence");
+  if (refs && typeof refs === "object" && !Array.isArray(refs)) {
+    for (
+      const path of SETUP_FIELDS.filter((field) =>
+        field.startsWith("business_profile.")
+      )
+    ) {
+      const references = (refs as Record<string, unknown>)[path];
+      if (
+        fieldValue(candidate, path) === undefined ||
+        !(references === undefined ||
+          (Array.isArray(references) && references.length === 0))
+      ) continue;
+      const parts = path.split(".");
+      const parent = fieldValue(
+        candidate,
+        parts.slice(0, -1).join("."),
+      ) as Record<string, unknown>;
+      delete parent[parts.at(-1)!];
+      omitted.push(path);
+    }
+  }
+  reportMissing?.(omitted);
+  const draft = parseDraft(candidate, urls, coverage);
+  if (
+    !SETUP_FIELDS.some((path) =>
+      path.startsWith("business_profile.") &&
+      fieldValue(draft, path) !== undefined
+    )
+  ) {
+    throw new Error("No attributable business facts found");
+  }
+  return draft;
+}
+
 export interface ConfigSnapshot {
   business_profile?: unknown;
   business_profile_text?: string | null;

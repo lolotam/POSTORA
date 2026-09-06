@@ -2,7 +2,12 @@ import {
   assertEquals,
   assertThrows,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { mergeDraft, parseDraft } from "./draft.ts";
+import {
+  mergeDraft,
+  parseDraft,
+  parseExtractedDraft,
+  type SetupField,
+} from "./draft.ts";
 
 const url = "https://example.com/products";
 const coverage = { mode: "page" as const, pages: 1, truncated: false };
@@ -16,6 +21,73 @@ const draft = () =>
     [url],
     coverage,
   );
+
+Deno.test("extraction drops unsourced industry and policy but retains cited products without altering strict validation", () => {
+  const input = {
+    business_profile: {
+      industry: "ecommerce",
+      products: "Mugs",
+      policies: { shipping: "Free worldwide" },
+    },
+    evidence: {
+      "business_profile.products": [url],
+      "business_profile.policies.shipping": [],
+    },
+  };
+  let omitted: SetupField[] = [];
+  const parsed = parseExtractedDraft(input, [url], coverage, (fields) => {
+    omitted = fields;
+  });
+  assertEquals(parsed.business_profile, { products: "Mugs", policies: {} });
+  assertEquals(omitted, [
+    "business_profile.industry",
+    "business_profile.policies.shipping",
+  ]);
+  assertEquals(input.business_profile.policies.shipping, "Free worldwide");
+  assertThrows(
+    () => parseDraft(input, [url], coverage),
+    Error,
+    "Business facts require source attribution",
+  );
+});
+
+Deno.test("extraction rejects supplied bad citations and cannot succeed with behavior alone", () => {
+  for (const references of [["https://invented.example/"], "", [123], null]) {
+    assertThrows(() =>
+      parseExtractedDraft(
+        {
+          business_profile: { products: "Mugs" },
+          evidence: {
+            "business_profile.products": references,
+          },
+        },
+        [url],
+        coverage,
+      )
+    );
+  }
+  assertThrows(
+    () =>
+      parseExtractedDraft(
+        {
+          business_profile: { products: "Uncited" },
+          agent_behavior: { tone: "formal" },
+          evidence: {},
+        },
+        [url],
+        coverage,
+      ),
+    Error,
+    "No attributable business facts found",
+  );
+  assertThrows(() =>
+    parseExtractedDraft(
+      { business_profile: { SECRET: "raw output" }, evidence: {} },
+      [url],
+      coverage,
+    )
+  );
+});
 
 Deno.test("extraction keeps unknown policies absent and requires real attribution for every fact", () => {
   assertEquals(draft().business_profile, { products: "Handmade mugs" });
