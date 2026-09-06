@@ -160,6 +160,9 @@ export function AiKnowledgeManager({
     try {
       const response = await invoke.mutateAsync({ action, ...body });
       toast.success(typeof success === "function" ? success(response) : success);
+      if (action === "ingest_website" && response.setup_error) {
+        toast.warning("Website knowledge was accepted, but setup generation could not start. Use Generate setup from indexed website to retry after indexing finishes.");
+      }
     } catch (error) {
       toast.error(
         error instanceof Error ? error.message : "Knowledge action failed",
