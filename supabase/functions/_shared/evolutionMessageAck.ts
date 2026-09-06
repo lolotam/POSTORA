@@ -51,6 +51,15 @@ export function shouldAdvanceStatus(current: string | null, next: InboxAckStatus
   return MESSAGE_STATUS_RANK[next] > currentRank;
 }
 
+/**
+ * The stored statuses an ack may overwrite, for use in the UPDATE predicate itself. Two acks
+ * for one message can arrive concurrently; a read-then-write let the later DELIVERY_ACK win
+ * over READ, so the transition has to be decided by the row's current value inside one statement.
+ */
+export function statusesAdvancedBy(next: InboxAckStatus): string[] {
+  return Object.keys(MESSAGE_STATUS_RANK).filter((status) => shouldAdvanceStatus(status, next));
+}
+
 export interface AckUpdate {
   messageId: string;
   status: InboxAckStatus;

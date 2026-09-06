@@ -7,7 +7,7 @@ import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
 import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
 import { buildEvolutionMessageRow, remoteNumberFor } from "../_shared/evolutionMessage.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
-import { ackUpdates, shouldAdvanceStatus } from "../_shared/evolutionMessageAck.ts";
+import { ackUpdates, statusesAdvancedBy } from "../_shared/evolutionMessageAck.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 import {
   logSkippedUnderstanding,
@@ -299,22 +299,17 @@ async function triggerAiAgentReply(
   }
 }
 
-// A server ack for one of our own sends. Scoped to the account the token authenticated,
-// read-then-write so an out-of-order DELIVERY_ACK cannot undo a READ already stored.
+// A server ack for one of our own sends. Scoped to the account the token authenticated. The
+// rank check lives in the UPDATE predicate: delivery and read acks for one message can run
+// concurrently, and a read-then-write let the later DELIVERY_ACK overwrite READ.
 async function handleMessagesUpdate(admin: any, account: EvolutionAccount, body: any): Promise<void> {
   for (const update of ackUpdates(messageItems(body))) {
-    const { data: row, error: readError } = await admin
-      .from("whatsapp_messages")
-      .select("id, status")
-      .eq("social_account_id", account.id)
-      .eq("message_id", update.messageId)
-      .maybeSingle();
-    if (readError) throw readError;
-    if (!row || !shouldAdvanceStatus(row.status, update.status)) continue;
     const { error } = await admin
       .from("whatsapp_messages")
       .update({ status: update.status })
-      .eq("id", row.id);
+      .eq("social_account_id", account.id)
+      .eq("message_id", update.messageId)
+      .in("status", statusesAdvancedBy(update.status));
     if (error) throw error;
   }
 }

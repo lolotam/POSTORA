@@ -181,7 +181,7 @@ export function WhatsAppMediaAttachment({
   const download = async (url: string, fileName: string | null) => {
     const response = await fetch(url);
     const blob = await response.blob();
-    api.downloadBlob(blob, fileName || `whatsapp-${attachment.message_row_id}`);
+    api.downloadBlob(blob, fileName || (url === resolved?.url ? `whatsapp-${attachment.message_row_id}` : "whatsapp-image"));
   };
   const fileName = resolved?.file_name || attachment.name || null;
 
@@ -270,7 +270,9 @@ export function WhatsAppMediaAttachment({
       <WhatsAppMediaLightbox
         entry={lightbox}
         onClose={() => setLightbox(null)}
-        onNavigate={(url) => setLightbox((entry) => (entry ? { ...entry, url } : entry))}
+        // Another gallery image carries another name, which this bubble does not know; the
+        // download then falls back to a generic name rather than this attachment's.
+        onNavigate={(url) => setLightbox((entry) => (entry ? { ...entry, url, fileName: url === resolved?.url ? fileName : null } : entry))}
         onDownload={(url, name) => void download(url, name)}
       />
     </div>

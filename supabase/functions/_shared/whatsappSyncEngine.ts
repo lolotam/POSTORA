@@ -388,6 +388,8 @@ export async function syncEvolutionHistory(deps: {
 // and the manual action can arrive at any time, so the claim and the completion record live
 // with the sweep rather than at each call site.
 const LEASE_SECONDS = 300;
+/** What the setup page shows for a sweep that threw; the cause is only in the server log. */
+export const SYNC_FAILED_MESSAGE = "The import stopped unexpectedly. Try again in a minute.";
 
 export async function importEvolutionHistory(deps: {
   admin: any;
@@ -441,12 +443,11 @@ export async function importEvolutionHistory(deps: {
       completion.last_sync_at = new Date().toISOString();
     }
   } catch (error) {
-    // The user pressed a button and deserves to see why nothing arrived. The text is
-    // Evolution's or Postgres's error message, never a credential.
-    completion.last_sync_outcome = {
-      finished_at: new Date().toISOString(),
-      error: error instanceof Error ? error.message.slice(0, 200) : "sync failed",
-    };
+    // The user pressed a button and deserves to learn that nothing arrived; the technical
+    // message stays in the server log because it can name tables, hosts or constraints and
+    // get_sync_status returns this record to the browser.
+    console.error(`[whatsapp-sync] ${instanceName}: sweep failed:`, error instanceof Error ? error.message : error);
+    completion.last_sync_outcome = { finished_at: new Date().toISOString(), error: SYNC_FAILED_MESSAGE };
     throw error;
   } finally {
     // A rejected completion (e.g. a column the deployed schema lacks) would otherwise leave

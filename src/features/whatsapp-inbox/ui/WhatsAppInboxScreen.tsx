@@ -66,6 +66,16 @@ export function WhatsAppInboxScreen(): JSX.Element {
     "WHATSAPP",
     { search: debouncedSearch },
   );
+  // The forward picker must offer every chat, not the ones matching the list search.
+  const { data: allConversations = [] } = useConversations(selectedAccountId, "WHATSAPP");
+
+  // The list refetches after a contact rename or a mark-read; the open chat's header renders
+  // the selected object, so it has to follow the refreshed row or it keeps the old name.
+  useEffect(() => {
+    if (!selectedConversation) return;
+    const refreshed = allConversations.find((conversation) => conversation.id === selectedConversation.id);
+    if (refreshed && refreshed !== selectedConversation) setSelectedConversation(refreshed);
+  }, [allConversations, selectedConversation]);
 
   const whatsappAccounts = useMemo(
     () => accounts.filter((account) => account.platform === "whatsapp"),
@@ -132,10 +142,10 @@ export function WhatsAppInboxScreen(): JSX.Element {
     }
   };
 
-  // Forward targets are the chats the list already knows about, one entry per number.
+  // Forward targets are every chat of the account, one entry per number.
   const forwardTargets = useMemo(() => {
     const byPhone = new Map<string, { phone: string; label: string }>();
-    for (const conversation of conversations) {
+    for (const conversation of allConversations) {
       if (!byPhone.has(conversation.participant_id)) {
         byPhone.set(conversation.participant_id, {
           phone: conversation.participant_id,
@@ -144,7 +154,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
       }
     }
     return [...byPhone.values()];
-  }, [conversations]);
+  }, [allConversations]);
 
   if (accountsLoading) {
     return (

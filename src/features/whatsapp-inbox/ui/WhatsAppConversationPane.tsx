@@ -297,16 +297,19 @@ export function WhatsAppConversationPane({
           </p>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          <Button
-            variant="outline"
-            size="icon"
-            className="h-8 w-8 shrink-0"
-            aria-label={hasName ? "Edit contact" : "Add to contacts"}
-            title={hasName ? "Edit contact" : "Add to contacts"}
-            onClick={() => setContactOpen(true)}
-          >
-            {hasName ? <Pencil className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
-          </Button>
+          {/* whatsapp_contacts RLS allows writes to owner/admin/agent only; a viewer's save would fail. */}
+          {activeRole !== "viewer" ? (
+            <Button
+              variant="outline"
+              size="icon"
+              className="h-8 w-8 shrink-0"
+              aria-label={hasName ? "Edit contact" : "Add to contacts"}
+              title={hasName ? "Edit contact" : "Add to contacts"}
+              onClick={() => setContactOpen(true)}
+            >
+              {hasName ? <Pencil className="h-4 w-4" /> : <UserPlus className="h-4 w-4" />}
+            </Button>
+          ) : null}
           <AiConversationModeSelect
             platform="whatsapp"
             conversationId={conversation.assignment_key || conversation.id}

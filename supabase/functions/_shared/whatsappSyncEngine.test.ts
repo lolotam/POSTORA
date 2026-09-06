@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { importEvolutionHistory, syncEvolutionHistory } from "./whatsappSyncEngine.ts";
+import { importEvolutionHistory, SYNC_FAILED_MESSAGE, syncEvolutionHistory } from "./whatsappSyncEngine.ts";
 
 const ACCOUNT = {
   id: "acc-1",
@@ -371,7 +371,8 @@ Deno.test("a sweep that throws still records the error for the setup page", asyn
   assertEquals(thrown instanceof Error, true);
   const completion = rowsFor(admin, "whatsapp_evolution_instances")[0];
   assertEquals(completion.sync_started_at, null);
-  assertEquals(completion.last_sync_outcome.error, "evolution unreachable");
+  // The raw Evolution/Postgres text stays in the log; the browser gets the stable message.
+  assertEquals(completion.last_sync_outcome.error, SYNC_FAILED_MESSAGE);
   assertEquals("last_sync_at" in completion, false);
 });
 

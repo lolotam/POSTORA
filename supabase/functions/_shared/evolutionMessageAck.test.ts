@@ -5,6 +5,7 @@ import {
   isMessageKeyId,
   normalizeAckStatus,
   shouldAdvanceStatus,
+  statusesAdvancedBy,
 } from "./evolutionMessageAck.ts";
 
 Deno.test("ack status accepts Evolution strings and raw Baileys numbers", () => {
@@ -36,6 +37,12 @@ Deno.test("only own sends with a valid key become updates, in both payload shape
     { messageId: "3EB0BBBB2222", status: "delivered" },
   ]);
   assertEquals(isMessageKeyId("3EB0AAAA1111"), true);
+});
+
+Deno.test("the update predicate lists exactly the statuses an ack may overwrite", () => {
+  assertEquals(statusesAdvancedBy("delivered"), ["sent"]);
+  assertEquals(statusesAdvancedBy("read"), ["sent", "delivered"]);
+  assertEquals(statusesAdvancedBy("failed"), ["sent", "delivered", "read"]);
 });
 
 Deno.test("status only moves forward and failed is terminal", () => {
