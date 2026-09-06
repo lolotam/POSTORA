@@ -59,6 +59,22 @@ describe("AiKnowledgeManager structured profile", () => {
     );
   });
 
+  it("preserves manual edits when a website draft save refreshes the config", () => {
+    const view = render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    fireEvent.change(screen.getByLabelText(/products and services/i), { target: { value: "My newer edits" } });
+    configValue = {
+      business_profile: { products: "Website generated catalog", policies: { returns: "14 days" } },
+      business_profile_text: renderBusinessProfileText({ products: "Website generated catalog", policies: { returns: "14 days" } }),
+    };
+    view.rerender(<AiKnowledgeManager platform="facebook" accountId="a1" />);
+    expect(screen.getByLabelText(/products and services/i)).toHaveValue("My newer edits");
+    expect(screen.getByLabelText(/returns policy/i)).toHaveValue("14 days");
+    fireEvent.click(save());
+    expect(lastPayload().business_profile).toEqual(expect.objectContaining({ products: "My newer edits", policies: expect.objectContaining({ returns: "14 days" }) }));
+    view.rerender(<AiKnowledgeManager platform="facebook" accountId="a2" />);
+    expect(screen.getByLabelText(/products and services/i)).toHaveValue("Website generated catalog");
+  });
+
   it("saves the edited structure, never the derived text", () => {
     render(<AiKnowledgeManager platform="facebook" accountId="a1" />);
 

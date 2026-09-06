@@ -45,6 +45,7 @@ describe("WebsitePanel", () => {
       mode: "page",
       limit: 50,
       scope: "account",
+      generate_setup: true,
     });
   });
 
@@ -65,6 +66,7 @@ describe("WebsitePanel", () => {
       mode: "site",
       limit: 120,
       scope: "account",
+      generate_setup: true,
     });
   });
 
@@ -86,6 +88,15 @@ describe("WebsitePanel", () => {
       target: { value: "https://x.com" },
     });
     fireEvent.click(screen.getByRole("button", { name: /start scraping/i }));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ scope: "all" }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ scope: "all", generate_setup: false }));
+    expect(screen.queryByRole("checkbox", { name: /generate business/i })).not.toBeInTheDocument();
+  });
+
+  it("allows knowledge-only indexing without generating settings", () => {
+    const onSubmit = setup();
+    fireEvent.click(screen.getByRole("checkbox", { name: /generate business/i }));
+    typeUrl("https://x.com");
+    start();
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ generate_setup: false }));
   });
 });
