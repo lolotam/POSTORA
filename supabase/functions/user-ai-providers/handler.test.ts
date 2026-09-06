@@ -23,13 +23,10 @@ Deno.test("database failures never masquerade as missing keys or successful writ
   const cases: { action: string; results: DbResult[] }[] = [
     { action: "list", results: [failed()] },
     { action: "save_key", results: [failed()] },
-    { action: "save_key", results: [ok(null), failed()] },
-    { action: "save_key", results: [ok(null), ok([])] },
-    {
-      action: "save_key",
-      results: [ok(null), rpcSecret(), failed(), failed()],
-    },
-    { action: "save_key", results: [ok(null), rpcSecret(), ok(), failed()] },
+    // Malformed or foreign rows from the RPC are never reported as a saved key.
+    { action: "save_key", results: [ok(null)] },
+    { action: "save_key", results: [ok([])] },
+    { action: "save_key", results: [ok([stored("x", "claude")])] },
     { action: "test_key", results: [failed()] },
     { action: "test_key", results: [ok(key), failed()] },
     { action: "join_waitlist", results: [failed()] },
@@ -126,6 +123,10 @@ function fixture(results: DbResult[] = [], status = 200) {
       calls.push({ name: "in", args: [column, values] });
       return query;
     },
+    contains: (column, values) => {
+      calls.push({ name: "contains", args: [column, values] });
+      return query;
+    },
     upsert: (values, options) => {
       calls.push({ name: "upsert", args: [values, options] });
       return query;
@@ -192,57 +193,39 @@ function fixture(results: DbResult[] = [], status = 200) {
     remaining: () => responses.length,
   };
 }
-const rpcSecret = (id = "new-secret") =>
-  ok([{ secret_id: id, configured_fields: ["api_key"] }]);
-
 for (const provider of PROVIDERS) {
-  for (const existing of [false, true]) {
-    Deno.test(`save ${provider} ${existing ? "updates" : "creates"} a Vault secret and returns only status`, async () => {
-      const id = existing ? "existing-secret" : "new-secret";
-      const f = fixture([
-        ok(existing ? stored(id, provider) : null),
-        // A replacement reads the previous key first so a failed row write can restore it.
-        ...existing ? [ok("previous-key")] : [],
-        rpcSecret(id),
-        ok(),
-        ok(stored(id, provider)),
-      ]);
-      const result = await f.run({
-        action: "save_key",
-        provider_code: provider,
-        api_key: `  ${key}  `,
-        user_id: "attacker",
-      });
-      assertEquals(result.status, 200);
-      assertEquals(result.body.data, {
-        provider_code: provider,
-        key_hint: "1234",
-        status: "active",
-        last_verified_at: new Date(timestamp).toISOString(),
-      });
-      assertEquals(
-        f.calls.find((c) => c.name === "upsert_connector_credential_secret")
-          ?.args,
-        [{ p_secret_id: existing ? id : null, p_secret: { api_key: key } }],
-      );
-      const values = f.calls.find((c) => c.name === "upsert")!.args[0] as Row;
-      assertEquals(values.user_id, "verified-user");
-      assertEquals(values.key_hint, "1234");
-      assertEquals(values.last_error_code, null);
-      assertEquals(
-        f.calls.filter((c) => c.name === "eq" && c.args[0] === "user_id").map((
-          c,
-        ) => c.args[1]),
-        ["verified-user", "verified-user"],
-      );
-      assert(!JSON.stringify(result).includes(key));
-      assert(!JSON.stringify(result).includes(id));
-      assert(!JSON.stringify(result).includes("credentials_secret_id"));
-      assert(!JSON.stringify(f.logs).includes(key));
-      assertEquals(f.logs.length, 1);
-      assertEquals(f.remaining(), 0);
+  Deno.test(`save ${provider} stores through the transactional RPC under the verified owner and returns only status`, async () => {
+    const f = fixture([ok([stored("secret-id", provider)])]);
+    const result = await f.run({
+      action: "save_key",
+      provider_code: provider,
+      api_key: `  ${key}  `,
+      user_id: "attacker",
     });
-  }
+    assertEquals(result.status, 200);
+    assertEquals(result.body.data, {
+      provider_code: provider,
+      key_hint: "1234",
+      status: "active",
+      last_verified_at: new Date(timestamp).toISOString(),
+    });
+    assertEquals(
+      f.calls.find((c) => c.name === "save_user_ai_provider_key")?.args,
+      [{
+        p_user_id: "verified-user",
+        p_provider_code: provider,
+        p_api_key: key,
+        p_key_hint: "1234",
+        p_verified_at: new Date(timestamp).toISOString(),
+      }],
+    );
+    assert(!JSON.stringify(result).includes(key));
+    assert(!JSON.stringify(result).includes("secret-id"));
+    assert(!JSON.stringify(result).includes("credentials_secret_id"));
+    assert(!JSON.stringify(f.logs).includes(key));
+    assertEquals(f.logs.length, 1);
+    assertEquals(f.remaining(), 0);
+  });
 }
 
 for (
@@ -277,96 +260,18 @@ Deno.test("save network error stores nothing and never exposes exception secrets
   assert(!JSON.stringify([result, f.logs]).includes(key));
 });
 
-Deno.test("failed row write reclaims a newly created secret", async () => {
-  const f = fixture([ok(null), rpcSecret(), failed(), ok()]);
+Deno.test("save is one transactional RPC and nothing else touches the database", async () => {
+  const f = fixture([ok([stored("any", "claude")])]);
   const result = await f.run({
     action: "save_key",
-    provider_code: "openai",
-    api_key: key,
-  });
-  assertEquals(result.status, 500);
-  assertEquals(result.body.code, "STORE_FAILED");
-  assertEquals(
-    f.calls.filter((c) => c.name === "delete_connector_credential_secret")
-      .map((c) => c.args),
-    [[{ p_secret_id: "new-secret" }]],
-  );
-  assertEquals(f.remaining(), 0);
-});
-Deno.test("failed row write restores the previous key into an in-place replacement", async () => {
-  const f = fixture([
-    ok(stored("existing-secret")),
-    ok("previous-key"),
-    rpcSecret("existing-secret"),
-    failed(),
-    ok(),
-  ]);
-  const result = await f.run({
-    action: "save_key",
-    provider_code: "openai",
-    api_key: key,
-  });
-  assertEquals(result.status, 500);
-  assertEquals(result.body.code, "STORE_FAILED");
-  assertEquals(
-    f.calls.filter((c) => c.name === "delete_connector_credential_secret"),
-    [],
-  );
-  assertEquals(
-    f.calls.filter((c) => c.name === "upsert_connector_credential_secret")
-      .map((c) => c.args),
-    [
-      [{ p_secret_id: "existing-secret", p_secret: { api_key: key } }],
-      [{ p_secret_id: "existing-secret", p_secret: { api_key: "previous-key" } }],
-    ],
-  );
-  assert(!JSON.stringify([result, f.logs]).includes(key));
-  assertEquals(f.remaining(), 0);
-});
-Deno.test("failed row write reclaims the fresh secret created for a dangling secret id", async () => {
-  // The row points at a Vault id that no longer decrypts: the RPC creates a new
-  // secret, so a failed row write must delete that one, not restore anything.
-  const f = fixture([
-    ok(stored("dangling-secret")),
-    ok(null),
-    rpcSecret("fresh-secret"),
-    failed(),
-    ok(),
-  ]);
-  const result = await f.run({
-    action: "save_key",
-    provider_code: "openai",
-    api_key: key,
-  });
-  assertEquals(result.body.code, "STORE_FAILED");
-  assertEquals(
-    f.calls.filter((c) => c.name === "delete_connector_credential_secret")
-      .map((c) => c.args),
-    [[{ p_secret_id: "fresh-secret" }]],
-  );
-  assertEquals(
-    f.calls.filter((c) => c.name === "upsert_connector_credential_secret")
-      .length,
-    1,
-  );
-  assertEquals(f.remaining(), 0);
-});
-Deno.test("concurrent first-save loser reclaims its secret and returns the winning row", async () => {
-  const winner = { ...stored("winner-secret"), key_hint: "5678" };
-  const f = fixture([ok(null), rpcSecret(), ok(), ok(winner), ok()]);
-  const result = await f.run({
-    action: "save_key",
-    provider_code: "openai",
+    provider_code: "claude",
     api_key: key,
   });
   assertEquals(result.status, 200);
-  assertEquals((result.body.data as Row).key_hint, "5678");
-  assertEquals(f.calls.at(-1), {
-    name: "delete_connector_credential_secret",
-    args: [{ p_secret_id: "new-secret" }],
-  });
+  const dbCalls = f.calls.filter((c) => c.name !== "eq");
+  assertEquals(dbCalls.map((c) => c.name), ["save_user_ai_provider_key"]);
+  assertEquals(f.remaining(), 0);
 });
-
 for (const status of [200, 401, 429, 503]) {
   Deno.test(`test_key provider ${status} heals, invalidates, or preserves the row`, async () => {
     const transient = status === 429 || status === 503;
@@ -575,6 +480,8 @@ Deno.test("list_models returns the active catalog for the four providers through
     ["ai_providers.provider_code", PROVIDERS],
   );
   assertEquals(f.calls.find((c) => c.name === "eq")?.args, ["is_active", true]);
+  // Image, TTS and video rows must never reach the routing picker.
+  assertEquals(f.calls.find((c) => c.name === "contains")?.args, ["capabilities", ["chat"]]);
   assertEquals(f.fetchCount(), 0);
 });
 Deno.test("list_models surfaces a failed catalog read instead of an empty list", async () => {

@@ -21,6 +21,7 @@ export interface Query extends PromiseLike<DbResult> {
   select(columns: string): Query;
   eq(column: string, value: unknown): Query;
   in(column: string, values: readonly string[]): Query;
+  contains(column: string, values: readonly string[]): Query;
   upsert(
     values: Row,
     options: { onConflict: string; ignoreDuplicates?: boolean },
@@ -116,78 +117,15 @@ async function readKey(
   provider: Provider,
 ): Promise<Row | null> {
   const { data, error } = await admin.from("user_ai_provider_keys")
-    .select(`${SAFE_COLUMNS}, credentials_secret_id`).eq("user_id", userId)
+    .select(SAFE_COLUMNS).eq("user_id", userId)
     .eq("provider_code", provider).maybeSingle();
   if (error) throw new Error(STORE_FAILED);
   return data === null ? null : record(data);
 }
-async function deleteSecret(
-  admin: AdminClient,
-  secretId: string,
-): Promise<void> {
-  const { error } = await admin.rpc("delete_connector_credential_secret", {
-    p_secret_id: secretId,
-  });
-  if (error) throw new Error(STORE_FAILED);
-}
-function secretId(row: Row | null): string | null {
-  const value = row?.credentials_secret_id;
-  if (value === undefined || value === null) return null;
-  if (typeof value !== "string" || !value) throw new Error(STORE_FAILED);
-  return value;
-}
-// RETURNS TABLE is an array in PostgREST, even when it contains exactly one row.
-function parseSecret(data: unknown): string {
-  const row = record(Array.isArray(data) ? data[0] : data);
-  if (
-    typeof row.secret_id !== "string" || !row.secret_id ||
-    !Array.isArray(row.configured_fields) ||
-    !row.configured_fields.every((field) => typeof field === "string")
-  ) {
-    throw new Error(STORE_FAILED);
-  }
-  return row.secret_id;
-}
-
-async function readStoredKey(
-  admin: AdminClient,
-  userId: string,
-  provider: Provider,
-): Promise<string | null> {
-  const { data, error } = await admin.rpc("get_user_ai_provider_key", {
-    p_user_id: userId,
-    p_provider_code: provider,
-    p_include_invalid: true,
-  });
-  if (error) throw new Error(STORE_FAILED);
-  if (data === null) return null;
-  if (typeof data !== "string" || !data) throw new Error(STORE_FAILED);
-  return data;
-}
-
-// Vault update and row upsert are two statements, so a failed row write must
-// put the secret back the way it was: a newly created secret is deleted, an
-// in-place replacement is restored to the previous key. Without this an
-// `invalid` row would keep ignoring a secret that now holds a working key.
-async function undoSecretWrite(
-  admin: AdminClient,
-  existingId: string | null,
-  previousKey: string | null,
-  writtenId: string,
-): Promise<void> {
-  if (writtenId !== existingId) {
-    await deleteSecret(admin, writtenId);
-    return;
-  }
-  if (previousKey !== null) {
-    const { error } = await admin.rpc("upsert_connector_credential_secret", {
-      p_secret_id: existingId,
-      p_secret: { api_key: previousKey },
-    });
-    if (error) throw new Error(STORE_FAILED);
-  }
-}
-
+// The Vault write and the row upsert happen inside one SECURITY DEFINER
+// function under a per-(user, provider) advisory transaction lock, so a
+// failure anywhere rolls both back and overlapping replacements cannot
+// interleave. RETURNS TABLE is an array in PostgREST, even for one row.
 async function saveKey(
   deps: Dependencies,
   userId: string,
@@ -201,51 +139,29 @@ async function saveKey(
       validation === "invalid" ? AI_USER_KEY_INVALID : AI_PROVIDER_UNREACHABLE,
     );
   }
-  const existing = await readKey(deps.admin, userId, provider);
-  const existingId = secretId(existing);
-  const previousKey = existingId
-    ? await readStoredKey(deps.admin, userId, provider)
-    : null;
-  const { data, error } = await deps.admin.rpc(
-    "upsert_connector_credential_secret",
-    {
-      p_secret_id: existingId,
-      p_secret: { api_key: key },
-    },
-  );
+  const { data, error } = await deps.admin.rpc("save_user_ai_provider_key", {
+    p_user_id: userId,
+    p_provider_code: provider,
+    p_api_key: key,
+    p_key_hint: key.slice(-4),
+    p_verified_at: new Date(deps.now()).toISOString(),
+  });
   if (error) throw new Error(STORE_FAILED);
-  const writtenId = parseSecret(data);
-  const values = {
-    user_id: userId,
-    provider_code: provider,
-    credentials_secret_id: writtenId,
-    key_hint: key.slice(-4),
-    status: "active",
-    last_verified_at: new Date(deps.now()).toISOString(),
-    last_error_code: null,
-  };
-  const { error: writeError } = await deps.admin.from("user_ai_provider_keys")
-    .upsert(values, { onConflict: "user_id,provider_code" });
-  if (writeError) {
-    await undoSecretWrite(deps.admin, existingId, previousKey, writtenId);
-    throw new Error(STORE_FAILED);
-  }
-  const saved = await readKey(deps.admin, userId, provider);
-  if (!saved) throw new Error(STORE_FAILED);
-  if (writtenId !== existingId && secretId(saved) !== writtenId) {
-    // A concurrent first save won the row; reclaim the secret this request created.
-    await deleteSecret(deps.admin, writtenId);
-  }
+  const saved = record(Array.isArray(data) ? data[0] : data);
+  if (saved.provider_code !== provider) throw new Error(STORE_FAILED);
   return success(safeKey(saved));
 }
 
 // Model catalog for the routing picker. ai_providers is admin-only under RLS,
 // so a browser join through it returns an empty list for regular users; the
-// service role reads it here and returns only catalog columns.
+// service role reads it here and returns only catalog columns. Only models
+// that declare the chat capability are offered: every routed execution posts
+// to a chat-completions endpoint, so an image or TTS row would fail on use.
 async function listModels(deps: Dependencies): Promise<Result> {
   const { data, error } = await deps.admin.from("ai_models")
     .select("id, model_id, name, ai_providers!inner(provider_code)")
     .eq("is_active", true)
+    .contains("capabilities", ["chat"])
     .in("ai_providers.provider_code", PROVIDERS);
   if (error || !Array.isArray(data)) throw new Error(STORE_FAILED);
   return success({
