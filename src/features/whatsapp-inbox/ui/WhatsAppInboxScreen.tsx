@@ -264,6 +264,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
                           search={search}
                           onSearchChange={setSearch}
                           onDelete={setDeleteTarget}
+                          absoluteTimes
                           showLabels
                           selectionMode={selectionMode}
                           selectedIds={selectedIds}

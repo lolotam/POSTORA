@@ -5,6 +5,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Search, MessageCircle, Trash2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import type { Conversation } from "@/hooks/useMessaging";
+import { formatListTime } from "@/features/whatsapp-inbox";
 import { ConversationLabelChips, ConversationLabelPicker } from "./ConversationLabels";
 
 interface ConversationListProps {
@@ -40,6 +41,7 @@ export function ConversationList({
   onFilteredChange,
   search,
   onSearchChange,
+  absoluteTimes,
   onDelete,
 }: ConversationListProps) {
   const [localSearch, setLocalSearch] = useState("");
@@ -134,9 +136,11 @@ export function ConversationList({
                     {conv.participant_name}
                   </span>
                   <span className="text-[10px] text-muted-foreground shrink-0 ml-2">
-                    {conv.last_message_time
-                      ? formatDistanceToNow(new Date(conv.last_message_time), { addSuffix: true })
-                      : ""}
+                    {!conv.last_message_time
+                      ? ""
+                      : absoluteTimes
+                        ? formatListTime(conv.last_message_time)
+                        : formatDistanceToNow(new Date(conv.last_message_time), { addSuffix: true })}
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground truncate mt-0.5">{conv.last_message}</p>

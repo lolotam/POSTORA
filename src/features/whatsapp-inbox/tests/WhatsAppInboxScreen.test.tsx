@@ -319,6 +319,45 @@ describe("WhatsAppConversationPane mark-read", () => {
   });
 });
 
+describe("WhatsAppConversationPane header", () => {
+  it("shows the phone number and offers Add to contacts when the directory has no name", async () => {
+    testState.messages = [];
+    renderWithProviders(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId="account-1"
+        pageId="96550000000"
+        onScrollStateChange={() => {}}
+      />,
+      { withInboxApi: true },
+    );
+    expect(await screen.findByLabelText("Add to contacts")).toBeInTheDocument();
+    expect(screen.getByText(`+${conversation.participant_id}`)).toBeInTheDocument();
+  });
+
+  it("separates messages by day", async () => {
+    const today = new Date();
+    today.setHours(10, 0, 0, 0);
+    const yesterday = new Date(today);
+    yesterday.setDate(today.getDate() - 1);
+    testState.messages = [
+      { ...testState.messages[0], id: "m-old", message: "older", created_time: yesterday.toISOString(), from: { name: "C", id: "96551111111" }, to: [], attachments: [] } as never,
+      { ...testState.messages[0], id: "m-new", message: "newer", created_time: today.toISOString(), from: { name: "C", id: "96551111111" }, to: [], attachments: [] } as never,
+    ];
+    renderWithProviders(
+      <WhatsAppConversationPane
+        conversation={conversation}
+        socialAccountId="account-1"
+        pageId="96550000000"
+        onScrollStateChange={() => {}}
+      />,
+      { withInboxApi: true },
+    );
+    expect(await screen.findByText("Yesterday")).toBeInTheDocument();
+    expect(screen.getByText("Today")).toBeInTheDocument();
+  });
+});
+
 describe("WhatsAppConversationPane composer", () => {
   it("can send a message", () => {
     testState.messages = [];

@@ -21,6 +21,8 @@ interface ContactFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   contact: ContactRecord | null;
+  /** Add mode only: seeds the number when the dialog opens from a conversation header. */
+  initialPhone?: string;
 }
 
 const EMPTY = {
@@ -41,7 +43,7 @@ const EMPTY = {
   avatar_url: "",
 };
 
-export function ContactFormDialog({ open, onOpenChange, contact }: ContactFormDialogProps) {
+export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }: ContactFormDialogProps) {
   const { session } = useAuth();
   const { toast } = useToast();
   const { createContact, updateContact } = useContactMutations();
@@ -70,9 +72,9 @@ export function ContactFormDialog({ open, onOpenChange, contact }: ContactFormDi
             tags: (contact.tags || []).join(", "),
             avatar_url: contact.avatar_url || "",
           }
-        : EMPTY,
+        : { ...EMPTY, phone_number: initialPhone ?? "" },
     );
-  }, [open, contact]);
+  }, [open, contact, initialPhone]);
 
   const set = (k: keyof typeof EMPTY) => (v: string) =>
     setForm((f) => ({ ...f, [k]: v }));

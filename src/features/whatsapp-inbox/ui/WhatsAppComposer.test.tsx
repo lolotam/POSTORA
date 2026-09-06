@@ -129,6 +129,8 @@ describe("WhatsAppComposer outbound upload", () => {
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
       sendVoice: sendVoice as unknown as WhatsAppInboxApi["sendVoice"],
+      forwardMessage: vi.fn(),
+      deleteConversation: vi.fn(),
       downloadBlob: vi.fn(),
     };
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
