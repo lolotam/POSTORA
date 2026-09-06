@@ -62,7 +62,7 @@ import {
 import { type AiTier, fetchWithTimeout, resolvePlatformApiKey } from "../_shared/ai-fallback.ts";
 import { callAnthropicJson } from "../_shared/anthropic-adapter.ts";
 import { composeAiTiers, invalidateRejectedUserTier, resolveUserAiRoute, type AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
-import { AI_CONNECTION_REQUIRED, ProviderHttpError, redactProviderError } from "../_shared/ai-routing-errors.ts";
+import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID, ProviderHttpError, redactProviderError } from "../_shared/ai-routing-errors.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -1107,6 +1107,21 @@ Deno.serve(async (req) => {
         }
       }
       if (!completion) {
+        // A user_only chain rejected by its own provider is a credential error,
+        // not a model outage: the key has just been invalidated, the next
+        // request is skipped as AI_CONNECTION_REQUIRED, and running the outage
+        // floor here would apologise or escalate for a problem only the user
+        // can fix. Mirrors the 409 the caption path returns.
+        if (
+          route.mode === 'user_only' && lastError instanceof ProviderHttpError &&
+          lastError.credentialSource === 'user' && [401, 403].includes(lastError.status)
+        ) {
+          await logOutcome(admin, { ...baseLog, status: 'skipped', error: AI_USER_KEY_INVALID,
+            latency_ms: Date.now() - startedAt }, { error_code: AI_USER_KEY_INVALID, dry_run: dryRun,
+            model_errors: modelErrors });
+          if (outboxId) await cancelOutboxRow(admin, outboxId, AI_USER_KEY_INVALID);
+          return jsonResponse({ ok: true, skipped: 'no_reply_generated', error: AI_USER_KEY_INVALID });
+        }
         // Typed so the catch can tell a total model outage apart from the
         // database, send, and validation errors that share it. Per-model detail
         // is already in modelErrors.
