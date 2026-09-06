@@ -43,6 +43,7 @@ interface WhatsAppMessageContextMenuProps {
   connectionMode: WhatsAppConnectionMode;
   children: ReactNode;
   onCopy(): void;
+  onForward(): void;
   onPin(): void;
   onUnpin(): void;
   onHide(): void;
@@ -55,6 +56,7 @@ interface ActionListProps {
   revokeEnabled: boolean;
   revokeReason: string | null;
   onCopy(): void;
+  onForward(): void;
   onTogglePin(): void;
   onHide(): void;
   onAskRevoke(): void;
@@ -66,6 +68,7 @@ function WhatsAppMessageActionList({
   revokeEnabled,
   revokeReason,
   onCopy,
+  onForward,
   onTogglePin,
   onHide,
   onAskRevoke,
@@ -78,6 +81,7 @@ function WhatsAppMessageActionList({
   return (
     <>
       <Item onSelect={onCopy}>Copy</Item>
+      <Item onSelect={onForward}>Forward</Item>
       <Item onSelect={onTogglePin}>{pinned ? "Unpin" : "Pin"}</Item>
       <Sub>
         <SubTrigger>Delete</SubTrigger>
@@ -105,6 +109,7 @@ export function WhatsAppMessageContextMenu({
   connectionMode,
   children,
   onCopy,
+  onForward,
   onPin,
   onUnpin,
   onHide,
@@ -130,6 +135,7 @@ export function WhatsAppMessageContextMenu({
     revokeEnabled: revoke.enabled,
     revokeReason,
     onCopy,
+    onForward,
     onTogglePin: pinned ? onUnpin : onPin,
     onHide,
     onAskRevoke: () => {

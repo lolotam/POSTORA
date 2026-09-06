@@ -11,6 +11,7 @@ import type { WhatsAppConnectionMode } from "../domain/whatsappCapabilities";
 import { anchorOffsetAfterPrepend, shouldStickToBottom } from "../domain/scrollAnchor";
 import { PinnedMessagesBar } from "./PinnedMessagesBar";
 import { WhatsAppComposer } from "./WhatsAppComposer";
+import { WhatsAppForwardDialog, type ForwardTarget } from "./WhatsAppForwardDialog";
 import { WhatsAppMessageBubble } from "./WhatsAppMessageBubble";
 
 interface WhatsAppConversationPaneProps {
@@ -18,6 +19,8 @@ interface WhatsAppConversationPaneProps {
   socialAccountId: string;
   pageId: string;
   connectionMode?: WhatsAppConnectionMode;
+  /** Chats and contacts the forward dialog can send to; the screen builds it from the list. */
+  forwardTargets?: ForwardTarget[];
   onScrollStateChange(scrolledAway: boolean): void;
   onBack?: () => void;
 }
@@ -27,9 +30,11 @@ export function WhatsAppConversationPane({
   socialAccountId,
   pageId,
   connectionMode = null,
+  forwardTargets = [],
   onScrollStateChange,
   onBack,
 }: WhatsAppConversationPaneProps): JSX.Element {
+  const [forwardRowId, setForwardRowId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const scrollFrameRef = useRef<number | null>(null);
@@ -291,6 +296,7 @@ export function WhatsAppConversationPane({
               message={message}
               isSent={message.from?.id === pageId}
               connectionMode={connectionMode}
+              onForward={() => setForwardRowId(message.id)}
               onPin={() => actions.pin(message)}
               onUnpin={() => actions.unpin(message)}
               onHide={() => hideMessage(message)}
@@ -326,6 +332,14 @@ export function WhatsAppConversationPane({
         conversation={conversation}
         socialAccountId={socialAccountId}
         connectionMode={connectionMode}
+      />
+
+      <WhatsAppForwardDialog
+        open={forwardRowId !== null}
+        onOpenChange={(open) => !open && setForwardRowId(null)}
+        socialAccountId={socialAccountId}
+        messageRowId={forwardRowId}
+        targets={forwardTargets}
       />
     </div>
   );

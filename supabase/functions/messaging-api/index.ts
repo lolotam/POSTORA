@@ -1724,6 +1724,130 @@ function isAiAgentPlatform(value: unknown): value is string {
 
       return jsonResponse({ success: true, message_id: sentMessageId, data });
     }
+
+    // ACTION: whatsapp_forward_message
+    // Re-sends a stored message (text, or the cached file of a media message) to another
+    // number. Same role floor as a send; the source row must belong to this account.
+    if (action === "whatsapp_forward_message") {
+      const { social_account_id, message_row_id, to_phone } = body;
+      if (!social_account_id || !message_row_id || !to_phone) {
+        throw new Error("social_account_id, message_row_id, and to_phone required");
+      }
+      const recipientPhone = String(to_phone).replace(/\D/g, "");
+      if (recipientPhone.length < 8) throw new Error("to_phone must be a phone number");
+
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_send_message",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+
+      const { data: source, error: sourceError } = await adminClient
+        .from("whatsapp_messages")
+        .select("id, message_text, message_type, media_type, media_url, media_metadata")
+        .eq("social_account_id", social_account_id)
+        .eq("id", message_row_id)
+        .maybeSingle();
+      if (sourceError) throw sourceError;
+      if (!source) throw new Error("Message not found");
+
+      const transport = await resolveWhatsAppTransport(adminClient, {
+        id: account.accountId,
+        platform_user_id: account.platformUserId,
+        access_token: account.accessToken,
+        connection_mode: account.connectionMode,
+        account_metadata: account.accountMetadata as Record<string, unknown> | null,
+      });
+      const phoneNumberId = account.platformUserId;
+      const conversationId = `wa_${phoneNumberId}_${recipientPhone}`;
+
+      let data: any;
+      let preview: string;
+      let row: Record<string, unknown>;
+      if (source.media_type) {
+        const [media] = await resolveWhatsAppMedia(adminClient, account, { messageRowIds: [source.id] });
+        if (!media?.url) {
+          return jsonResponse({ error_type: "media_unavailable", error: "This file is no longer available to forward" });
+        }
+        data = (await transport.sendMedia({
+          recipientPhone,
+          mediaUrl: media.url,
+          mediaType: media.kind,
+          fileName: media.kind === "document" ? media.file_name || "file" : undefined,
+        })).raw;
+        preview = `[${media.kind}]`;
+        row = {
+          message_text: preview,
+          message_type: media.kind,
+          media_url: source.media_url,
+          media_type: source.media_type,
+          media_metadata: source.media_metadata,
+        };
+      } else {
+        const text = String(source.message_text || "").trim();
+        if (!text) return jsonResponse({ error_type: "empty_message", error: "This message has nothing to forward" });
+        data = (await transport.sendText({ recipientPhone, text })).raw;
+        preview = text;
+        row = { message_text: text, message_type: "text" };
+      }
+      const sentMessageId = data?.messages?.[0]?.id || data?.key?.id;
+
+      await adminClient.from("whatsapp_messages").insert({
+        user_id: account.ownerId,
+        social_account_id,
+        conversation_id: conversationId,
+        message_id: sentMessageId,
+        from_phone: phoneNumberId,
+        from_name: "You",
+        to_phone: recipientPhone,
+        direction: "outbound",
+        status: "sent",
+        timestamp: new Date().toISOString(),
+        ...row,
+      });
+      await upsertOutboundConversation(adminClient, {
+        user_id: account.ownerId,
+        social_account_id,
+        workspace_id: account.workspaceId,
+        phone_number_id: phoneNumberId,
+        recipient_phone: recipientPhone,
+        preview,
+      });
+      return jsonResponse({ success: true, message_id: sentMessageId });
+    }
+
+    // ACTION: whatsapp_delete_conversation
+    // Removes a thread from Postora only (nothing is sent to WhatsApp). Messages go first: if
+    // that fails the cache row survives and the thread stays visible rather than orphaning
+    // invisible rows. Contacts and cached media are kept.
+    if (action === "whatsapp_delete_conversation") {
+      const { social_account_id, conversation_id } = body;
+      if (!social_account_id || !conversation_id) throw new Error("social_account_id and conversation_id required");
+
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: "whatsapp_mark_read",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+
+      const { error: messagesError } = await adminClient
+        .from("whatsapp_messages")
+        .delete()
+        .eq("social_account_id", social_account_id)
+        .eq("conversation_id", conversation_id);
+      if (messagesError) throw messagesError;
+      const { error: cacheError } = await adminClient
+        .from("messaging_cache")
+        .delete()
+        .eq("social_account_id", social_account_id)
+        .eq("workspace_id", account.workspaceId)
+        .eq("conversation_id", conversation_id);
+      if (cacheError) throw cacheError;
+      return jsonResponse({ success: true });
+    }
+
     if (action === "whatsapp_send_interactive") {
       const { social_account_id, recipient_phone, interactive } = body;
       if (!social_account_id || !recipient_phone || !interactive) throw new Error("social_account_id, recipient_phone, and interactive required");

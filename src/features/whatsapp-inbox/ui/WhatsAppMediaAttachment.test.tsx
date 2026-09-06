@@ -98,6 +98,8 @@ describe("WhatsAppMediaAttachment", () => {
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
       sendVoice: vi.fn(),
+      forwardMessage: vi.fn(),
+      deleteConversation: vi.fn(),
       downloadBlob: vi.fn(),
     };
   });
@@ -236,6 +238,8 @@ describe("WhatsAppMediaAttachment when the observer never fires", () => {
       setMessageFlag: vi.fn(),
       revokeMessage: vi.fn(),
       sendVoice: vi.fn(),
+      forwardMessage: vi.fn(),
+      deleteConversation: vi.fn(),
       downloadBlob: vi.fn(),
     } as unknown as WhatsAppInboxApi;
 

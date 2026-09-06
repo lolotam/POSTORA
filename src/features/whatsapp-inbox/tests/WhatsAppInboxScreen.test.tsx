@@ -156,6 +156,8 @@ const fakeApi: WhatsAppInboxApi = {
   })),
   revokeMessage: vi.fn(async () => ({ success: true, revoked_at: "2026-08-25T12:00:00.000Z" })),
   sendVoice: vi.fn(async () => ({ success: true, message_id: "3EB0" })),
+  forwardMessage: vi.fn(async () => ({ success: true, message_id: "3EB1" })),
+  deleteConversation: vi.fn(async () => ({ success: true })),
 };
 
 function testQueryClient(): QueryClient {

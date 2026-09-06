@@ -14,6 +14,7 @@ interface WhatsAppMessageBubbleProps {
   message: WhatsAppMessage;
   isSent: boolean;
   connectionMode?: WhatsAppConnectionMode;
+  onForward?(): void;
   onPin?(): void;
   onUnpin?(): void;
   onHide?(): void;
@@ -56,6 +57,7 @@ export function WhatsAppMessageBubble({
   message,
   isSent,
   connectionMode = null,
+  onForward,
   onPin,
   onUnpin,
   onHide,
@@ -130,6 +132,7 @@ export function WhatsAppMessageBubble({
       onCopy={() => {
         void navigator.clipboard.writeText(message.message ?? "");
       }}
+      onForward={() => onForward?.()}
       onPin={() => onPin?.()}
       onUnpin={() => onUnpin?.()}
       onHide={() => onHide?.()}

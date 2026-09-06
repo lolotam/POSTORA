@@ -30,6 +30,8 @@ const api: WhatsAppInboxApi = {
   setMessageFlag: vi.fn(),
   revokeMessage: vi.fn(),
   sendVoice: vi.fn(),
+  forwardMessage: vi.fn(),
+  deleteConversation: vi.fn(),
 };
 
 function renderBubble(
