@@ -28,7 +28,10 @@ Deno.test("database failures never masquerade as missing keys or successful writ
     { action: "save_key", results: [ok([])] },
     { action: "save_key", results: [ok([stored("x", "claude")])] },
     { action: "test_key", results: [failed()] },
-    { action: "test_key", results: [ok(key), failed()] },
+    { action: "test_key", results: [ok(stored()), failed()] },
+    { action: "test_key", results: [ok(stored()), ok(key), failed()] },
+    { action: "delete_key", results: [failed()] },
+    { action: "delete_key", results: [ok("yes")] },
     { action: "join_waitlist", results: [failed()] },
   ];
   for (const scenario of cases) {
@@ -47,28 +50,14 @@ Deno.test("database failures never masquerade as missing keys or successful writ
   }
 });
 
-Deno.test("delete distinguishes missing rows from rows without a Vault link", async () => {
-  const missing = fixture([ok(null)]);
+Deno.test("delete reports a missing row as 404 through the locked RPC", async () => {
+  const missing = fixture([ok(false)]);
   assertEquals(
     (await missing.run({ action: "delete_key", provider_code: "openai" }))
       .status,
     404,
   );
-  const unlinked = fixture([
-    ok({ ...stored(), credentials_secret_id: null }),
-    ok(),
-  ]);
-  assertEquals(
-    (await unlinked.run({ action: "delete_key", provider_code: "openai" }))
-      .status,
-    200,
-  );
-  assertEquals(
-    unlinked.calls.filter((c) =>
-      c.name === "delete_connector_credential_secret"
-    ),
-    [],
-  );
+  assertEquals(missing.fetchCount(), 0);
 });
 
 Deno.test("test_key has its own ten-attempt limit without consuming save attempts", async () => {
@@ -275,14 +264,15 @@ Deno.test("save is one transactional RPC and nothing else touches the database",
 for (const status of [200, 401, 429, 503]) {
   Deno.test(`test_key provider ${status} heals, invalidates, or preserves the row`, async () => {
     const transient = status === 429 || status === 503;
-    const f = fixture([ok(key), ...transient ? [] : [ok()]], status);
+    const after = status === 200 ? stored() : { ...stored(), status: "invalid" };
+    const f = fixture([ok(stored()), ok(key), ...transient ? [] : [ok(), ok(after)]], status);
     const result = await f.run({
       action: "test_key",
       provider_code: "openai",
       user_id: "attacker",
     });
     assertEquals(result.status, transient ? 503 : status === 200 ? 200 : 400);
-    assertEquals(f.calls[0].args, [{
+    assertEquals(f.calls.find((c) => c.name === "get_user_ai_provider_key")?.args, [{
       p_user_id: "verified-user",
       p_provider_code: "openai",
       p_include_invalid: true,
@@ -299,13 +289,21 @@ for (const status of [200, 401, 429, 503]) {
         : { status: "invalid", last_error_code: "AI_USER_KEY_INVALID" },
     );
     if (!transient) {
-      assertEquals(f.calls.slice(-2).map((c) => c.args), [[
-        "user_id",
-        "verified-user",
-      ], ["provider_code", "openai"]]);
+      // The status write is conditioned on the row version read before the provider call.
+      assert(f.calls.some((c) => c.name === "eq" && c.args[0] === "updated_at" && c.args[1] === "updated"));
     }
+    assert(!JSON.stringify([result, f.logs]).includes(key));
+    assertEquals(f.remaining(), 0);
   });
 }
+Deno.test("a stale test result never overwrites a key replaced during the provider call", async () => {
+  const replaced = { ...stored(), key_hint: "9999", status: "active", updated_at: "later" };
+  const f = fixture([ok(stored()), ok(key), ok(), ok(replaced)], 401);
+  const result = await f.run({ action: "test_key", provider_code: "openai" });
+  assertEquals(result.status, 200);
+  assertEquals((result.body.data as Row).key_hint, "9999");
+  assert(f.calls.some((c) => c.name === "eq" && c.args[0] === "updated_at" && c.args[1] === "updated"));
+});
 Deno.test("missing test key returns connection required", async () => {
   const f = fixture([ok(null)]);
   assertEquals(await f.run({ action: "test_key", provider_code: "openai" }), {
@@ -315,35 +313,16 @@ Deno.test("missing test key returns connection required", async () => {
   assertEquals(f.fetchCount(), 0);
 });
 
-Deno.test("delete removes only the owner-scoped row and leaves Vault reclaim to the trigger", async () => {
-  const f = fixture([ok(stored()), ok()]);
+Deno.test("delete runs through the locked RPC under the verified owner and touches nothing else", async () => {
+  const f = fixture([ok(true)]);
   assertEquals(
-    (await f.run({ action: "delete_key", provider_code: "openai" })).body,
+    (await f.run({ action: "delete_key", provider_code: "openai", user_id: "attacker" })).body,
     { ok: true },
   );
-  assertEquals(
-    f.calls.filter((c) => c.name === "delete_connector_credential_secret"),
-    [],
-  );
-  assertEquals(f.calls.slice(-3).map((c) => c.args), [[], [
-    "user_id",
-    "verified-user",
-  ], ["provider_code", "openai"]]);
+  assertEquals(f.calls.map((c) => c.name), ["delete_user_ai_provider_key"]);
+  assertEquals(f.calls[0].args, [{ p_user_id: "verified-user", p_provider_code: "openai" }]);
   assertEquals(f.remaining(), 0);
 });
-for (
-  const results of [[failed()], [ok(stored()), failed()]]
-) {
-  Deno.test(`delete surfaces failure at database operation ${results.length}`, async () => {
-    const f = fixture(results);
-    assertEquals(
-      (await f.run({ action: "delete_key", provider_code: "openai" })).body
-        .code,
-      "STORE_FAILED",
-    );
-    assertEquals(f.remaining(), 0);
-  });
-}
 Deno.test("waitlist duplicates use ignoreDuplicates and reject non-Codex providers", async () => {
   const f = fixture([ok(), ok()]);
   for (let i = 0; i < 2; i++) {

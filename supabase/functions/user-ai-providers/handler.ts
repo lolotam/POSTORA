@@ -202,11 +202,16 @@ async function joinWaitlist(
   return success({ joined: true });
 }
 
+// The row version (updated_at) is captured before the provider call and the
+// status write is conditioned on it, so a slow test of an old key can never
+// mark a key that was replaced meanwhile as invalid (or healed).
 async function testKey(
   deps: Dependencies,
   userId: string,
   provider: Provider,
 ): Promise<Result> {
+  const existing = await readKey(deps.admin, userId, provider);
+  if (!existing) return failure(404, AI_CONNECTION_REQUIRED);
   const { data, error } = await deps.admin.rpc("get_user_ai_provider_key", {
     p_user_id: userId,
     p_provider_code: provider,
@@ -226,10 +231,16 @@ async function testKey(
     : { status: "invalid", last_error_code: AI_USER_KEY_INVALID };
   const { error: updateError } = await deps.admin.from("user_ai_provider_keys")
     .update(values)
-    .eq("user_id", userId).eq("provider_code", provider);
+    .eq("user_id", userId).eq("provider_code", provider)
+    .eq("updated_at", existing.updated_at);
   if (updateError) throw new Error(STORE_FAILED);
-  return validation === "valid"
-    ? success({ provider_code: provider, ...values })
+  // Re-read rather than echo `values`: if the key was replaced during the
+  // provider call the conditional update matched nothing, and the caller
+  // must see the row as it is now.
+  const current = await readKey(deps.admin, userId, provider);
+  if (!current) return failure(404, AI_CONNECTION_REQUIRED);
+  return validation === "valid" || current.status === "active"
+    ? success(safeKey(current))
     : failure(400, AI_USER_KEY_INVALID);
 }
 
@@ -238,14 +249,17 @@ async function deleteKey(
   userId: string,
   provider: Provider,
 ): Promise<Result> {
-  const existing = await readKey(deps.admin, userId, provider);
-  if (!existing) return failure(404, AI_CONNECTION_REQUIRED);
-  // Only the row is deleted here. The AFTER DELETE trigger installed by the
-  // migration reclaims the Vault secret inside the same transaction, so a
-  // failed row delete never leaves a connected-looking row without a key.
-  const { error } = await deps.admin.from("user_ai_provider_keys").delete()
-    .eq("user_id", userId).eq("provider_code", provider);
+  // delete_user_ai_provider_key takes the same per-(user, provider) advisory
+  // lock as the save RPC, so a delete cannot interleave with a replacement
+  // save; the AFTER DELETE trigger reclaims the Vault secret in the same
+  // transaction. A false result means there was no row to delete.
+  const { data, error } = await deps.admin.rpc("delete_user_ai_provider_key", {
+    p_user_id: userId,
+    p_provider_code: provider,
+  });
   if (error) throw new Error(STORE_FAILED);
+  if (typeof data !== "boolean") throw new Error(STORE_FAILED);
+  if (!data) return failure(404, AI_CONNECTION_REQUIRED);
   return success();
 }
 
