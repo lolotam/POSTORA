@@ -31,6 +31,8 @@ export interface AiCallResult {
   tiers: AiTierResult[];
   credentialSource?: 'user' | 'platform';
   fallbackReason?: string;
+  /** Set when every attempted tier was the user's own key and the provider rejected it. */
+  errorCode?: 'AI_USER_KEY_INVALID';
 }
 
 /** Category-aware hardcoded last resort models */
@@ -350,9 +352,14 @@ export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody
     if (tier.credentialSource === 'user') fallbackReason = `user_tier_failed:${attempt.status}`;
   }
   const last = tiers[tiers.length - 1];
-  return { response: new Response(JSON.stringify({ error: 'All AI tiers failed' }), { status: 502 }),
+  // A chain made only of the user's rejected key is not a provider outage: keep
+  // the actionable code so callers can tell the user to fix the saved key.
+  const userKeyRejected = tiers.length > 0 &&
+    tiers.every((t) => t.credentialSource === 'user' && t.error === AI_USER_KEY_INVALID);
+  const errorCode = userKeyRejected ? AI_USER_KEY_INVALID : undefined;
+  return { response: new Response(JSON.stringify({ error: errorCode ?? 'All AI tiers failed' }), { status: 502 }),
     tierUsed: last?.tier ?? 'last_resort', modelUsed: last?.model ?? '', providerUsed: last?.provider ?? '',
-    credentialSource: last?.credentialSource, fallbackReason, tiers: [...tiers, ...skipped] };
+    credentialSource: last?.credentialSource, fallbackReason, errorCode, tiers: [...tiers, ...skipped] };
 }
 
 export async function callAiWithFallback(

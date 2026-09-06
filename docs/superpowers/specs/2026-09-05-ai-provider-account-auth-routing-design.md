@@ -261,12 +261,14 @@ For a request `(user, capability)` where capability is `chat` (caption, hashtags
    so; the log row records `credential_source` of the tier that answered and the fallback
    reason.
 
-Errors surfaced to callers: `AI_CONNECTION_REQUIRED`, `AI_USER_KEY_INVALID` (provider
-returned 401/403 on the user key), and the existing all-tiers-failed path. Marking a key
-`invalid` after a 401/403 is version-conditional: `UPDATE ... WHERE user_id = $1 AND
-provider_code = $2 AND updated_at <= $fetched_at`, where `fetched_at` is the time the key was
-read for this request, so a key rotated during the request is not invalidated by the old
-key's rejection.
+Errors surfaced to callers: `AI_CONNECTION_REQUIRED` (409), `AI_USER_KEY_INVALID` (409 when
+every attempted tier was the user's key and the provider rejected it; `callAiChain` sets
+`errorCode` for that case), and the existing all-tiers-failed path. Marking a key `invalid`
+after a 401/403 is version-conditional: the resolver reads the key row's `updated_at`
+before decrypting and `markUserKeyInvalid` runs `UPDATE ... WHERE user_id = $1 AND
+provider_code = $2 AND updated_at = $version`. Equality on the row's own version (not a
+`<=` against a Deno clock) means a replacement that commits after the read, which bumps
+`updated_at`, can never be invalidated by the old key's rejection.
 
 ## 7. Backend contracts
 
@@ -369,8 +371,12 @@ and the view returns nothing.
 - `test_key { provider_code }` → key via `get_user_ai_provider_key(user, provider, true)`;
   NULL → `AI_CONNECTION_REQUIRED` (404); same classification as above; 2xx heals the row to
   `active` and sets `last_verified_at`; 401/403 marks `invalid`; unreachable leaves the row.
-- `delete_key { provider_code }` → read the row (404 if none), then delete the row; the
-  AFTER DELETE trigger reclaims the Vault secret in the same transaction.
+- `delete_key { provider_code }` → `delete_user_ai_provider_key(user_id, provider_code)`
+  (migration `20260906140000`, `service_role` only) takes the same advisory lock as the save
+  RPC and deletes the row; the AFTER DELETE trigger reclaims the Vault secret in that
+  transaction. A `false` result is reported as 404.
+- `test_key` conditions its status write on the row's `updated_at` read before the provider
+  call and re-reads afterwards, so a slow result for a replaced key changes nothing.
 - `join_waitlist { provider_code: 'codex' }` → insert into `ai_provider_waitlist`, idempotent.
 - `save_key` and `test_key` are rate-limited at 10 per user per 10 minutes with a documented
   best-effort per-isolate in-memory guard (there is no shared helper).

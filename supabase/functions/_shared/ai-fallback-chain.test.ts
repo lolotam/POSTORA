@@ -267,3 +267,24 @@ Deno.test("legacy wrapper preserves the configured three-tier provider and model
     Deno.env.get = originalEnv;
   }
 });
+
+Deno.test("a user-only chain rejected with 401 keeps AI_USER_KEY_INVALID instead of a generic outage", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async () => new Response("{}", { status: 401 });
+    const result = await callAiChain(undefined, {}, [
+      { provider: "openai", model: "gpt-test", credentialSource: "user", apiKey: "user-key" },
+    ]);
+    assertEquals(result.response.status, 502);
+    assertEquals(result.errorCode, "AI_USER_KEY_INVALID");
+    assertEquals(await result.response.json(), { error: "AI_USER_KEY_INVALID" });
+    // A platform tier in the chain means it was an outage, not a bad key.
+    const mixed = await callAiChain(undefined, {}, [
+      { provider: "openai", model: "gpt-test", credentialSource: "user", apiKey: "user-key" },
+      { provider: "openai", model: "gpt-floor", credentialSource: "platform", apiKey: "platform-key" },
+    ]);
+    assertEquals(mixed.errorCode, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

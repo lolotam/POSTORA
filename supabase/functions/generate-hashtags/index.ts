@@ -190,6 +190,9 @@ Return only the hashtags, one per line.`;
       platform,
     });
 
+    if (aiResult.errorCode === AI_USER_KEY_INVALID) {
+      return jsonResponse({ error: AI_USER_KEY_INVALID, message: 'Your saved API key was rejected by the provider. Update it or change your routing mode.' }, 409);
+    }
     if (!aiSuccess) {
       const errorText = await aiResult.response.text();
       console.error('All AI tiers failed for hashtag generation:', errorText);

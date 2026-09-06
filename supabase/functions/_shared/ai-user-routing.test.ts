@@ -14,6 +14,7 @@ function fakeAdmin(
     override?: Record<string, unknown>;
     preferences?: Record<string, unknown>[];
     key?: unknown;
+    row?: Record<string, unknown> | null;
     fail?: string;
   } = {},
 ) {
@@ -31,6 +32,8 @@ function fakeAdmin(
           ? options.override ?? null
           : table === "user_ai_routing_preferences"
           ? options.preferences ?? []
+          : table === "user_ai_provider_keys"
+          ? (options.row === undefined ? { updated_at: "2026-09-06T00:00:00.000Z" } : options.row)
           : null,
         error: options.fail === table
           ? { message: "database unavailable" }
@@ -43,10 +46,6 @@ function fakeAdmin(
         },
         in(column: string, value: unknown) {
           filters.push([table, column, value]);
-          return query;
-        },
-        lte(column: string, value: unknown) {
-          filters.push([table, column, "<=", value]);
           return query;
         },
         maybeSingle: () => Promise.resolve(result()),
@@ -122,7 +121,8 @@ Deno.test("capability preference beats wildcard and resolves only the owner's pr
     credentialSource: "user",
     apiKey: "user-secret",
   });
-  assertEquals(Number.isFinite(Date.parse(route.fetchedAt!)), true);
+  // fetchedAt is the row's own updated_at, not a Deno clock reading.
+  assertEquals(route.fetchedAt, "2026-09-06T00:00:00.000Z");
   assertEquals(fake.rpcCalls, [["get_user_ai_provider_key", {
     p_user_id: "owner-2",
     p_provider_code: "openai",
@@ -189,6 +189,14 @@ Deno.test("flag, override, preference and RPC failures all throw", async () => {
   }
 });
 
+Deno.test("a key row that vanished between preference and version read is a missing key", async () => {
+  const fake = fakeAdmin({ preferences: [preference()], row: null });
+  const route = await resolveUserAiRoute(fake.admin, "owner", "chat");
+  assertEquals(route.userTier, undefined);
+  assertEquals(route.reason, "user_key_missing");
+  assertEquals(fake.rpcCalls, []);
+});
+
 Deno.test("key invalidation is scoped to user, provider and the fetched key version; errors throw", async () => {
   const fake = fakeAdmin();
   const fetchedAt = "2026-09-06T00:00:00.000Z";
@@ -201,7 +209,7 @@ Deno.test("key invalidation is scoped to user, provider and the fetched key vers
     "user_ai_provider_keys",
     "provider_code",
     "claude",
-  ], ["user_ai_provider_keys", "updated_at", "<=", fetchedAt]]);
+  ], ["user_ai_provider_keys", "updated_at", fetchedAt]]);
   await assertRejects(
     () =>
       markUserKeyInvalid(

@@ -8,7 +8,6 @@ interface DbResult {
 interface Query extends PromiseLike<DbResult> {
   eq(column: string, value: unknown): Query;
   in(column: string, values: readonly string[]): Query;
-  lte(column: string, value: string): Query;
   maybeSingle(): PromiseLike<DbResult>;
 }
 export interface AiRoutingAdmin {
@@ -23,6 +22,7 @@ export interface UserAiRoute {
   userTier?: AiTier & { credentialSource: "user" };
   allowPlatformFallback: boolean;
   reason?: "flag_off" | "no_preference" | "user_key_missing";
+  /** The key row's updated_at at read time; markUserKeyInvalid matches on it. */
   fetchedAt?: string;
 }
 function row(value: unknown): Record<string, unknown> | null {
@@ -103,8 +103,23 @@ export async function resolveUserAiRoute(
   ) {
     throw new Error("Invalid AI routing preference");
   }
-  // Capture before the read: a rotation during the RPC must not be invalidated later.
-  const fetchedAt = new Date().toISOString();
+  // The row's own updated_at is the key's version: markUserKeyInvalid matches
+  // on equality with it, so a replacement that commits after this read (which
+  // bumps updated_at) can never be invalidated by the old key's rejection.
+  // Comparing against a Deno clock with <= would race the replacement
+  // transaction's NOW(), which is fixed at its start.
+  const version = await admin.from("user_ai_provider_keys").select("updated_at")
+    .eq("user_id", userId).eq("provider_code", provider).maybeSingle();
+  if (version.error) throw new Error("AI provider key version read failed");
+  const versionRow = row(version.data);
+  if (!versionRow || typeof versionRow.updated_at !== "string") {
+    return {
+      mode,
+      allowPlatformFallback: mode === "user_first",
+      reason: "user_key_missing",
+    };
+  }
+  const fetchedAt = versionRow.updated_at;
   const key = await admin.rpc("get_user_ai_provider_key", {
     p_user_id: userId,
     p_provider_code: provider,
@@ -136,10 +151,8 @@ export async function markUserKeyInvalid(
 ): Promise<void> {
   const { error } = await admin.from("user_ai_provider_keys")
     .update({ status: "invalid", last_error_code: AI_USER_KEY_INVALID })
-    .eq("user_id", userId).eq("provider_code", providerCode).lte(
-      "updated_at",
-      fetchedAt,
-    );
+    .eq("user_id", userId).eq("provider_code", providerCode)
+    .eq("updated_at", fetchedAt);
   if (error) throw new Error("AI provider key invalidation failed");
 }
 

@@ -457,6 +457,9 @@ Generate exactly this JSON structure:
           feature: 'brand_intelligence',
         });
 
+        if (biAiResult.errorCode === AI_USER_KEY_INVALID) {
+          return jsonResponse({ error: AI_USER_KEY_INVALID, message: 'Your saved API key was rejected by the provider. Update it or change your routing mode.' }, 409);
+        }
         if (!biAiSuccess) {
           const errText = await biAiResult.response.text();
           await biLogger.error('Brand intelligence AI generation failed', {
@@ -575,6 +578,9 @@ Return JSON: {"suggestions": ["tag1, tag2, tag3, tag4, tag5", "tagA, tagB, tagC,
           language: language || 'english',
         });
 
+        if (ytAiResult.errorCode === AI_USER_KEY_INVALID) {
+          return jsonResponse({ error: AI_USER_KEY_INVALID, message: 'Your saved API key was rejected by the provider. Update it or change your routing mode.' }, 409);
+        }
         if (!ytAiSuccess) {
           const errText = await ytAiResult.response.text();
           await ytLogger.error(`YouTube ${requestType} AI generation failed`, {
@@ -709,6 +715,9 @@ Return exactly 5 captions separated by --- on its own line. No numbering, no lab
       language: language || 'english',
     });
 
+    if (aiResult.errorCode === AI_USER_KEY_INVALID) {
+      return jsonResponse({ error: AI_USER_KEY_INVALID, message: 'Your saved API key was rejected by the provider. Update it or change your routing mode.' }, 409);
+    }
     if (!aiSuccess) {
       const errorText = await aiResult.response.text();
       console.error('All AI tiers failed for caption generation:', errorText);
