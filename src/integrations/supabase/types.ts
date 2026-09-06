@@ -34,6 +34,102 @@ export type Database = {
   }
   public: {
     Tables: {
+      user_ai_provider_keys: {
+        Row: {
+          id: string
+          user_id: string
+          provider_code: string
+          credentials_secret_id: string | null
+          key_hint: string | null
+          status: string
+          last_verified_at: string | null
+          last_error_code: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          user_id: string
+          provider_code: string
+          credentials_secret_id?: string | null
+          key_hint?: string | null
+          status?: string
+          last_verified_at?: string | null
+          last_error_code?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          user_id?: string
+          provider_code?: string
+          credentials_secret_id?: string | null
+          key_hint?: string | null
+          status?: string
+          last_verified_at?: string | null
+          last_error_code?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_ai_provider_keys_provider_code_fkey"
+            columns: ["provider_code"]
+            isOneToOne: false
+            referencedRelation: "ai_providers"
+            referencedColumns: ["provider_code"]
+          },
+        ]
+      }
+      user_ai_routing_preferences: {
+        Row: {
+          user_id: string
+          capability: string
+          mode: string
+          preferred_provider_code: string | null
+          preferred_model_id: string | null
+          allow_platform_fallback: boolean
+          updated_at: string
+        }
+        Insert: {
+          user_id: string
+          capability: string
+          mode: string
+          preferred_provider_code?: string | null
+          preferred_model_id?: string | null
+          allow_platform_fallback?: boolean
+          updated_at?: string
+        }
+        Update: {
+          user_id?: string
+          capability?: string
+          mode?: string
+          preferred_provider_code?: string | null
+          preferred_model_id?: string | null
+          allow_platform_fallback?: boolean
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      ai_provider_waitlist: {
+        Row: {
+          user_id: string
+          provider_code: string
+          created_at: string
+        }
+        Insert: {
+          user_id: string
+          provider_code: string
+          created_at?: string
+        }
+        Update: {
+          user_id?: string
+          provider_code?: string
+          created_at?: string
+        }
+        Relationships: []
+      }
+
       admin_audit_log: {
         Row: {
           action: string
@@ -7297,6 +7393,26 @@ export type Database = {
       }
     }
     Views: {
+      user_ai_provider_key_status: {
+        Row: {
+          id: string | null
+          user_id: string | null
+          provider_code: string | null
+          key_hint: string | null
+          status: string | null
+          last_verified_at: string | null
+          updated_at: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "user_ai_provider_keys_provider_code_fkey"
+            columns: ["provider_code"]
+            isOneToOne: false
+            referencedRelation: "ai_providers"
+            referencedColumns: ["provider_code"]
+          },
+        ]
+      }
       comment_workflow_rule_stats: {
         Row: {
           dm_sent_count: number | null
