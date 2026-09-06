@@ -37,6 +37,21 @@ export function fieldValue(input: unknown, path: string): unknown {
     input,
   );
 }
+function documentUrl(value: string): string | null {
+  try {
+    const url = new URL(value);
+    if (
+      url.username || url.password ||
+      !["http:", "https:"].includes(url.protocol)
+    ) return null;
+    // Fragments identify a location in the fetched document; pathname and query
+    // stay exact so a model cannot cite an uncrawled page on the same host.
+    url.hash = "";
+    return url.href;
+  } catch {
+    return null;
+  }
+}
 export function parseDraft(
   input: unknown,
   urls: readonly string[],
@@ -70,6 +85,7 @@ export function parseDraft(
     throw new Error("Setup draft is too long");
   }
   const evidence: Record<string, string[]> = {};
+  const crawledDocuments = new Map(urls.map((url) => [documentUrl(url), url]));
   const refs = value.evidence;
   if (!refs || typeof refs !== "object" || Array.isArray(refs)) {
     throw new Error("Missing source attribution");
@@ -83,11 +99,23 @@ export function parseDraft(
     }
     if (
       !Array.isArray(references) || references.length > 20 ||
-      references.some((url) => typeof url !== "string" || !urls.includes(url))
+      references.some((url) => typeof url !== "string")
     ) {
-      throw new Error("Source attribution is outside the crawled pages");
+      throw new Error("Invalid source attribution list");
     }
-    evidence[path] = [...new Set(references)];
+    evidence[path] = [
+      ...new Set(references.map((reference) => {
+        const canonical = documentUrl(reference);
+        if (canonical === null) {
+          throw new Error("Invalid source attribution URL");
+        }
+        const crawled = crawledDocuments.get(canonical);
+        if (!crawled) {
+          throw new Error("Source attribution is outside the crawled pages");
+        }
+        return crawled;
+      })),
+    ];
   }
   for (
     const path of SETUP_FIELDS.filter((field) =>

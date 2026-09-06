@@ -56,6 +56,8 @@ const SAFE_SETUP_ERRORS = new Set([
   "Setup draft is too long",
   "Missing source attribution",
   "Invalid source attribution field",
+  "Invalid source attribution list",
+  "Invalid source attribution URL",
   "Source attribution is outside the crawled pages",
   "Unknown facts must be omitted",
   "Business facts require source attribution",

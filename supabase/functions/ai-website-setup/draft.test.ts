@@ -38,6 +38,63 @@ Deno.test("extraction keeps unknown policies absent and requires real attributio
   ) assertThrows(() => parseDraft(input, [url], coverage));
 });
 
+Deno.test("equivalent root URLs resolve to the exact crawled document attribution", () => {
+  const root = "https://xsellpoint.com/";
+  const result = parseDraft(
+    {
+      business_profile: { products: "Software" },
+      evidence: {
+        "business_profile.products": [
+          "https://xsellpoint.com",
+          "https://XSELLPOINT.COM:443/#products",
+        ],
+      },
+    },
+    [root],
+    coverage,
+  );
+  assertEquals(result.evidence, { "business_profile.products": [root] });
+});
+
+Deno.test("canonical attribution still refuses different pages, queries, schemes and credentials", () => {
+  for (
+    const reference of [
+      "https://xsellpoint.com/products",
+      "https://xsellpoint.com/?ref=1",
+      "http://xsellpoint.com/",
+      "https://user@xsellpoint.com/",
+      "https://:password@xsellpoint.com/",
+      "not a URL",
+    ]
+  ) {
+    assertThrows(() =>
+      parseDraft(
+        {
+          business_profile: { products: "Software" },
+          evidence: {
+            "business_profile.products": [reference],
+          },
+        },
+        ["https://xsellpoint.com/"],
+        coverage,
+      )
+    );
+  }
+  assertThrows(
+    () =>
+      parseDraft(
+        {
+          business_profile: {},
+          evidence: { "business_profile.products": "https://xsellpoint.com/" },
+        },
+        ["https://xsellpoint.com/"],
+        coverage,
+      ),
+    Error,
+    "Invalid source attribution list",
+  );
+});
+
 Deno.test("malformed and permission-shaped model output is rejected", () => {
   for (
     const input of [
