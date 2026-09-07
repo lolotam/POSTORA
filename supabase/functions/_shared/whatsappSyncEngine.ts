@@ -10,6 +10,7 @@ import { addressableJid, buildEvolutionMessageRow, remoteNumberFor } from "./evo
 import { cacheAvatarToCloudinary } from "./avatar-cache.ts";
 import { backfillWhatsAppParticipantAvatars } from "./whatsappAvatarEnrichment.ts";
 
+const AVATAR_BACKFILL_BUDGET_MS = 10_000;
 const LID_JID_SUFFIX = "@lid";
 const DIRECT_JID_SUFFIX = "@s.whatsapp.net";
 const CHAT_CONCURRENCY = 5;
@@ -332,10 +333,12 @@ export async function syncEvolutionHistory(deps: {
   if (summaries.length === 0) return outcome;
 
   await importRows(admin, "import_whatsapp_conversations", conversationRows(account, summaries));
+  // The message sweep below shares deadlineAt; a page of slow picture lookups must not
+  // spend the whole sync budget before a single message is imported.
   await backfillWhatsAppParticipantAvatars({
     admin,
     cacheAvatar: cacheAvatarToCloudinary,
-    deadlineAt,
+    deadlineAt: Math.min(deadlineAt, Date.now() + AVATAR_BACKFILL_BUDGET_MS),
     fetchProfilePictureUrl: (name, number) => api.fetchProfilePictureUrl(name, number),
   }, {
     userId: account.user_id,
