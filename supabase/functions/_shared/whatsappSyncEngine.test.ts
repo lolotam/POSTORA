@@ -32,6 +32,10 @@ function fakeAdmin(options: { anchors?: Record<string, string> } = {}) {
       const chain: any = {
         select: () => chain,
         eq: () => chain,
+        is: () => chain,
+        or: () => chain,
+        limit: () => Promise.resolve({ data: [], error: null }),
+        maybeSingle: () => Promise.resolve({ data: null, error: null }),
         in: (_column: string, values: string[]) =>
           Promise.resolve({
             data: values
@@ -82,6 +86,7 @@ function fakeApi(options: {
   return {
     findChats: () => Promise.resolve(options.chats ?? []),
     findContacts: () => Promise.resolve(options.contacts ?? []),
+    fetchProfilePictureUrl: () => Promise.resolve(null),
     findMessages: (_instance: string, remoteJid: string) => {
       if (options.calls) options.calls[remoteJid] = (options.calls[remoteJid] ?? 0) + 1;
       if (options.failOn === remoteJid) return Promise.reject(new Error("evolution unreachable"));
@@ -402,14 +407,24 @@ Deno.test("a sweep is not marked complete until history is actually available", 
           (admin.writes as any[]).push({ table: fn, rows: args.p_rows });
           return Promise.resolve({ data: args.p_rows.length, error: null });
         },
-        from: () => ({
-          update: (values: Record<string, unknown>) => ({
-            eq: () => {
-              updates.push(values);
-              return Promise.resolve({ error: null });
-            },
-          }),
-        }),
+        from: () => {
+          const chain: any = {
+            select: () => chain,
+            eq: () => chain,
+            is: () => chain,
+            or: () => chain,
+            limit: () => Promise.resolve({ data: [], error: null }),
+            maybeSingle: () => Promise.resolve({ data: null, error: null }),
+            in: () => Promise.resolve({ data: [], error: null }),
+            update: (values: Record<string, unknown>) => ({
+              eq: () => {
+                updates.push(values);
+                return Promise.resolve({ error: null });
+              },
+            }),
+          };
+          return chain;
+        },
       };
       await importEvolutionHistory({
         admin,

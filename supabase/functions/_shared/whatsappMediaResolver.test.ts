@@ -52,6 +52,8 @@ function fakeAdmin(opts: {
   cached?: string[];
   failUpload?: boolean;
   failUpdate?: boolean;
+  failSignAfterUpload?: boolean;
+  slowSignMs?: number;
 } = {}) {
   const uploaded = new Set<string>(opts.cached ?? []);
   const signed: string[] = [];
@@ -132,12 +134,16 @@ function fakeAdmin(opts: {
     storage: {
       from() {
         return {
-          createSignedUrl: (path: string, _ttl: number) => {
+          createSignedUrl: async (path: string, _ttl: number) => {
+            if (opts.slowSignMs) await new Promise((resolve) => setTimeout(resolve, opts.slowSignMs));
             signed.push(path);
-            if (!uploaded.has(path)) {
-              return Promise.resolve({ data: null, error: { message: "not found" } });
+            if (opts.failSignAfterUpload && uploaded.has(path)) {
+              return { data: null, error: { message: "not found" } };
             }
-            return Promise.resolve({ data: { signedUrl: `https://storage.test/${path}?s=1` }, error: null });
+            if (!uploaded.has(path)) {
+              return { data: null, error: { message: "not found" } };
+            }
+            return { data: { signedUrl: `https://storage.test/${path}?s=1` }, error: null };
           },
           upload: (path: string, _bytes: Uint8Array, _opts: unknown) => {
             if (opts.failUpload) return Promise.resolve({ error: { message: "upload failed" } });
@@ -448,4 +454,122 @@ Deno.test("a completed row hands its bytes back so a long batch does not starve"
   });
   assertEquals(media.length, 5);
   assertEquals(media.filter((item) => item.url !== null).length, 5);
+});
+
+async function captureErrors(run: () => Promise<unknown>): Promise<string[]> {
+  const lines: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    lines.push(args.map(String).join(" "));
+  };
+  try {
+    await run();
+    return lines;
+  } finally {
+    console.error = original;
+  }
+}
+
+function assertSanitised(lines: string[]) {
+  const joined = lines.join("\n");
+  assertEquals(/https?:\/\//.test(joined), false);
+  assertEquals(joined.includes("pps.whatsapp"), false);
+  assertEquals(joined.includes("BAILEYS"), false);
+}
+
+Deno.test("deadline before fetch logs deadline and a batch summary", async () => {
+  const admin = fakeAdmin({ rows: [mediaRow()], slowSignMs: 80 });
+  let fetched = false;
+  const lines = await captureErrors(() =>
+    resolveWhatsAppMedia(admin, access(), { messageRowIds: ["row-1"] }, {
+      deadlineMs: 30,
+      fetchers: [{
+        name: "should-not-run",
+        canHandle: () => true,
+        fetchMediaBytes: async () => {
+          fetched = true;
+          return { bytes: new Uint8Array([1]), mimeType: "image/jpeg" };
+        },
+      }],
+    })
+  );
+  assertEquals(fetched, false);
+  assert(lines.some((line) => line === "[whatsapp-media] row-1 deadline"));
+  assert(lines.some((line) => line === "[whatsapp-media] batch deadline=1"));
+  assertSanitised(lines);
+});
+
+Deno.test("an unusable provider id logs unusable_id", async () => {
+  const admin = fakeAdmin({ rows: [mediaRow({ message_id: null })] });
+  const lines = await captureErrors(() =>
+    resolveWhatsAppMedia(admin, access(), { messageRowIds: ["row-1"] }, {
+      fetchers: realFetchers(),
+    })
+  );
+  assert(lines.some((line) => line === "[whatsapp-media] row-1 unusable_id"));
+  assert(lines.some((line) => line === "[whatsapp-media] batch unusable_id=1"));
+  assertSanitised(lines);
+});
+
+Deno.test("a budget that never admits logs budget", async () => {
+  const admin = fakeAdmin({ rows: [mediaRow()] });
+  const lines = await captureErrors(() =>
+    resolveWhatsAppMedia(admin, access(), { messageRowIds: ["row-1"] }, {
+      perItemMaxBytes: 100,
+      aggregateBudgetBytes: 1,
+      deadlineMs: 50,
+      fetchers: [{
+        name: "unused",
+        canHandle: () => true,
+        fetchMediaBytes: async () => ({ bytes: new Uint8Array([1]), mimeType: "image/jpeg" }),
+      }],
+    })
+  );
+  assert(lines.some((line) => line === "[whatsapp-media] row-1 budget"));
+  assert(lines.some((line) => line === "[whatsapp-media] batch budget=1"));
+  assertSanitised(lines);
+});
+
+Deno.test("no matching fetcher logs no_fetcher", async () => {
+  const admin = fakeAdmin({ rows: [mediaRow()] });
+  const lines = await captureErrors(() =>
+    resolveWhatsAppMedia(admin, access(), { messageRowIds: ["row-1"] }, {
+      fetchers: [],
+    })
+  );
+  assert(lines.some((line) => line === "[whatsapp-media] row-1 no_fetcher"));
+  assert(lines.some((line) => line === "[whatsapp-media] batch no_fetcher=1"));
+  assertSanitised(lines);
+});
+
+Deno.test("a fetcher that returns null logs fetch_null", async () => {
+  const admin = fakeAdmin({ rows: [mediaRow()] });
+  const lines = await captureErrors(() =>
+    resolveWhatsAppMedia(admin, access(), { messageRowIds: ["row-1"] }, {
+      fetchers: [{
+        name: "empty",
+        canHandle: () => true,
+        fetchMediaBytes: () => Promise.resolve(null as never),
+      }],
+    })
+  );
+  assert(lines.some((line) => line === "[whatsapp-media] row-1 fetch_null"));
+  assert(lines.some((line) => line === "[whatsapp-media] batch fetch_null=1"));
+  assertSanitised(lines);
+});
+
+Deno.test("a post-upload sign failure logs sign_failed", async () => {
+  const admin = fakeAdmin({ rows: [mediaRow()], failSignAfterUpload: true });
+  const lines = await captureErrors(() =>
+    resolveWhatsAppMedia(admin, access(), { messageRowIds: ["row-1"] }, {
+      fetchers: [{
+        name: "bytes",
+        canHandle: () => true,
+        fetchMediaBytes: async () => ({ bytes: new Uint8Array([1, 2, 3]), mimeType: "image/jpeg" }),
+      }],
+    })
+  );
+  assert(lines.some((line) => line === "[whatsapp-media] row-1 sign_failed"));
+  assert(lines.some((line) => line === "[whatsapp-media] batch sign_failed=1"));
+  assertSanitised(lines);
 });

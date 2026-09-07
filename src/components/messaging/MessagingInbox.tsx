@@ -15,15 +15,19 @@ import { useWhatsAppLabels } from "@/hooks/useWhatsAppLabels";
 import type { Conversation } from "@/hooks/useMessaging";
 import { parseInboxRoute, withInboxRoute } from "@/lib/whatsappInboxRoute";
 
+export type MessagingInboxPlatform = "facebook" | "instagram";
+
 interface MessagingInboxProps {
-  platform?: "facebook" | "instagram" | "whatsapp";
+  platform?: MessagingInboxPlatform;
 }
+
+type InboxTab = MessagingInboxPlatform | "whatsapp";
 
 export function MessagingInbox({ platform }: MessagingInboxProps) {
   const { flags } = useFeatureFlags();
   const { accounts, isLoading: accountsLoading } = useMessagingAccounts();
-  const defaultTab = platform || (flags.msgFacebook ? "facebook" : flags.msgInstagram ? "instagram" : flags.msgWhatsapp ? "whatsapp" : "facebook");
-  const [platformTab, setPlatformTab] = useState<"facebook" | "instagram" | "whatsapp">(defaultTab as any);
+  const defaultTab: InboxTab = platform || (flags.msgFacebook ? "facebook" : flags.msgInstagram ? "instagram" : flags.msgWhatsapp ? "whatsapp" : "facebook");
+  const [platformTab, setPlatformTab] = useState<InboxTab>(defaultTab);
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
 
@@ -85,7 +89,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
   };
 
   const handleTabChange = (tab: string) => {
-    setPlatformTab(tab as "facebook" | "instagram" | "whatsapp");
+    setPlatformTab(tab as InboxTab);
     setSelectedAccountId(null);
     setSelectedConversation(null);
   };

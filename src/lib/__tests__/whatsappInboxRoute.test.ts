@@ -87,9 +87,17 @@ describe("whatsappInboxRoute", () => {
 
   it("clears a param when the selection no longer has it", () => {
     const existing = new URLSearchParams(`chat=${CHAT_ID}&label=vip`);
-    const merged = withInboxRoute(existing, {});
+    const merged = withInboxRoute(existing, { conversationCacheId: undefined });
 
     expect(merged.get(INBOX_CHAT_PARAM)).toBeNull();
     expect(merged.get("label")).toBe("vip");
+  });
+
+  it("preserves an existing workspace param when the selection omits workspaceId", () => {
+    const existing = new URLSearchParams(`ws=${WORKSPACE_ID}&chat=${CHAT_ID}`);
+    const merged = withInboxRoute(existing, { conversationCacheId: CHAT_ID });
+
+    expect(merged.get(INBOX_WORKSPACE_PARAM)).toBe(WORKSPACE_ID);
+    expect(merged.get(INBOX_CHAT_PARAM)).toBe(CHAT_ID);
   });
 });

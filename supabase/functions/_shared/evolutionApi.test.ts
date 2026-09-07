@@ -249,6 +249,31 @@ Deno.test("findMessages reports incomplete when it stops at the page ceiling", a
   assertEquals(result.complete, false);
 });
 
+Deno.test("fetchProfilePictureUrl posts the number and returns the picture URL", async () => {
+  const calls: Array<{ url: string; body: unknown }> = [];
+  const api = createEvolutionApi(async (url, init) => {
+    calls.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    return response({ profilePictureUrl: "https://pps.whatsapp.net/v/pic.jpg" });
+  }, { baseUrl: "https://wa.postora.cloud", apiKey: "k" });
+
+  assertEquals(
+    await api.fetchProfilePictureUrl("postora-account-1", "96550000000"),
+    "https://pps.whatsapp.net/v/pic.jpg",
+  );
+  assertEquals(calls, [{
+    url: "https://wa.postora.cloud/chat/fetchProfilePictureUrl/postora-account-1",
+    body: { number: "96550000000" },
+  }]);
+});
+
+Deno.test("fetchProfilePictureUrl returns null on a confirmed miss", async () => {
+  const api = createEvolutionApi(async () => response({ profilePictureUrl: null }), {
+    baseUrl: "https://wa.postora.cloud",
+    apiKey: "k",
+  });
+  assertEquals(await api.fetchProfilePictureUrl("postora-account-1", "96550000000"), null);
+});
+
 Deno.test("findMessages treats a bare array as one page and never re-requests it", async () => {
   // A deployment that ignores `page` answers with the bare array shape. Asking again
   // would accumulate the same rows nineteen more times.

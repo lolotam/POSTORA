@@ -76,6 +76,9 @@ export function buildInboxRoute(
 /**
  * Merge a selection into existing params, preserving unrelated ones (filters,
  * tabs) so deep-link syncing never discards the rest of the query string.
+ *
+ * Keys omitted from `selection` keep their existing param. Keys present
+ * (including `undefined`) are set when valid, otherwise deleted.
  */
 export function withInboxRoute(
   existing: URLSearchParams,
@@ -83,14 +86,20 @@ export function withInboxRoute(
 ): URLSearchParams {
   const merged = new URLSearchParams(existing);
   const next = buildInboxRouteParams(selection);
+  const fields: Array<{ param: string; field: keyof InboxRouteSelection }> = [
+    { param: INBOX_WORKSPACE_PARAM, field: "workspaceId" },
+    { param: INBOX_ACCOUNT_PARAM, field: "accountId" },
+    { param: INBOX_CHAT_PARAM, field: "conversationCacheId" },
+  ];
 
-  [INBOX_WORKSPACE_PARAM, INBOX_ACCOUNT_PARAM, INBOX_CHAT_PARAM].forEach((param) => {
+  for (const { param, field } of fields) {
+    if (!(field in selection)) continue;
     const value = next.get(param);
     if (value) {
       merged.set(param, value);
     } else {
       merged.delete(param);
     }
-  });
+  }
   return merged;
 }

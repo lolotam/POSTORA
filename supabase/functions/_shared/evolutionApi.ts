@@ -97,6 +97,7 @@ export interface EvolutionApi {
   fetchInstance(instanceName: string): Promise<unknown>;
   findChats(instanceName: string): Promise<any[]>;
   findContacts(instanceName: string): Promise<any[]>;
+  fetchProfilePictureUrl(instanceName: string, number: string): Promise<string | null>;
   findMessages(instanceName: string, remoteJid: string, options?: FindMessagesOptions): Promise<FindMessagesResult>;
   logout(instanceName: string): Promise<unknown>;
   deleteInstance(instanceName: string): Promise<unknown>;
@@ -130,6 +131,16 @@ function createRequestBody(input: EvolutionCreateInstanceInput): Record<string, 
 
 function sendResult(raw: any): EvolutionSendResult {
   return { messageId: raw?.key?.id || raw?.messages?.[0]?.id || null, raw };
+}
+
+// v2.3.x answers `{ wuid, profilePictureUrl }`, with `profilePictureUrl: null` for a contact
+// whose picture is private -- that null is a confirmed miss, not an error.
+function profilePictureUrlFrom(payload: unknown): string | null {
+  const candidate = payload && typeof payload === "object"
+    ? (payload as Record<string, unknown>).profilePictureUrl
+    : null;
+  if (typeof candidate !== "string" || !/^https?:\/\//i.test(candidate)) return null;
+  return candidate;
 }
 
 export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionApiOptions = {}): EvolutionApi {
@@ -215,6 +226,13 @@ export function createEvolutionApi(fetcher: Fetcher = fetch, options: EvolutionA
         body: JSON.stringify({}),
       });
       return Array.isArray(payload) ? payload : [];
+    },
+    fetchProfilePictureUrl: async (instanceName, number) => {
+      const payload = await request(
+        `/chat/fetchProfilePictureUrl/${encodeURIComponent(instanceName)}`,
+        { method: "POST", body: JSON.stringify({ number }) },
+      );
+      return profilePictureUrlFrom(payload);
     },
     // Unlike the other two this answers with a paged envelope, and it caps a page at its
     // own size rather than the `offset` asked for -- measured against v2.3.7, a

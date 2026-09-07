@@ -149,6 +149,7 @@ export async function resolveWhatsAppMedia(
   const fetchers = deps.fetchers ?? await defaultFetchers(admin, access);
 
   const results = new Map<string, WhatsAppMediaItem>();
+  const log = new MediaUnavailableLog();
   const work = ids.map((id) => async () => {
     const row = byId.get(id);
     if (!row) {
@@ -164,11 +165,16 @@ export async function resolveWhatsAppMedia(
         perItemMax,
         ttl,
         deadline,
+        log,
       }),
     );
   });
 
-  await runPool(work, deps.maxConcurrent ?? MAX_CONCURRENT_FETCHES);
+  try {
+    await runPool(work, deps.maxConcurrent ?? MAX_CONCURRENT_FETCHES);
+  } finally {
+    log.flush();
+  }
 
   const ordered = ids.map((id) => results.get(id) ?? unavailable(id, "document"));
   for (const id of extras) ordered.push(unavailable(id, "document"));
@@ -182,6 +188,7 @@ interface ResolveOneOpts {
   perItemMax: number;
   ttl: number;
   deadline: AbortSignal;
+  log: MediaUnavailableLog;
 }
 
 async function resolveOne(
@@ -203,20 +210,27 @@ async function resolveOne(
     return successItem(row.id, kind, signedCached, opts.ttl, mime, fileName, numberField(meta, "size") ?? numberField(meta, "file_length"));
   }
 
-  if (opts.deadline.aborted) return unavailable(row.id, kind);
+  if (opts.deadline.aborted) {
+    opts.log.record(row.id, "deadline");
+    return unavailable(row.id, kind);
+  }
 
   if (access.connectionMode === "evolution_qr" && isUnusableProviderId(row.message_id)) {
+    opts.log.record(row.id, "unusable_id");
     return unavailable(row.id, kind);
   }
 
   const knownSize = trustedSizeBytes(meta, opts.perItemMax);
   if (knownSize === "too_large") {
-    logFetchFailure(row.id, new MediaFetchError("metadata exceeds media cap", "too_large"));
+    opts.log.record(row.id, reasonFromFetchError(new MediaFetchError("metadata exceeds media cap", "too_large")));
     return unavailable(row.id, kind, "too_large");
   }
   const reservation = knownSize ?? opts.perItemMax;
   const admitted = await opts.budget.acquire(reservation, opts.deadline);
-  if (!admitted) return unavailable(row.id, kind);
+  if (!admitted) {
+    opts.log.record(row.id, "budget");
+    return unavailable(row.id, kind);
+  }
 
   // The budget models bytes currently resident in the isolate, so every exit path has to
   // hand them back -- including the successful one, whose bytes are gone the moment the
@@ -227,17 +241,18 @@ async function resolveOne(
   let held = reservation;
   try {
     const fetched = await fetchBytes(access, row, mime, opts);
-    if (!fetched) {
+    if (fetched.status !== "ok") {
+      opts.log.record(row.id, fetched.status);
       return unavailable(row.id, kind);
     }
-    opts.budget.reconcile(reservation, fetched.bytes.byteLength);
-    held = fetched.bytes.byteLength;
+    opts.budget.reconcile(reservation, fetched.media.bytes.byteLength);
+    held = fetched.media.bytes.byteLength;
 
-    const uploadPath = inboundPath.replace(/\.[^.]+$/, `.${extensionFor(fetched.mimeType, row.media_type)}`);
+    const uploadPath = inboundPath.replace(/\.[^.]+$/, `.${extensionFor(fetched.media.mimeType, row.media_type)}`);
     const { error: uploadError } = await admin.storage.from(MEDIA_BUCKET).upload(
       uploadPath,
-      fetched.bytes,
-      { contentType: fetched.mimeType, upsert: true },
+      fetched.media.bytes,
+      { contentType: fetched.media.mimeType, upsert: true },
     );
     if (uploadError) {
       console.error("[whatsapp-media] upload failed:", uploadError.message ?? uploadError);
@@ -254,30 +269,38 @@ async function resolveOne(
     }
 
     const url = await signMediaPath(admin, uploadPath, opts.ttl);
-    if (!url) return unavailable(row.id, kind);
+    if (!url) {
+      opts.log.record(row.id, "sign_failed");
+      return unavailable(row.id, kind);
+    }
     return successItem(
       row.id,
       kind,
       url,
       opts.ttl,
-      fetched.mimeType,
+      fetched.media.mimeType,
       fileName,
-      fetched.bytes.byteLength,
+      fetched.media.bytes.byteLength,
     );
   } catch (error) {
-    logFetchFailure(row.id, error);
+    opts.log.record(row.id, reasonFromFetchError(error));
     return unavailable(row.id, kind, error instanceof MediaFetchError && error.reason === "too_large" ? "too_large" : undefined);
   } finally {
     opts.budget.release(held);
   }
 }
 
+type FetchBytesResult =
+  | { status: "ok"; media: FetchedMedia }
+  | { status: "no_fetcher" }
+  | { status: "fetch_null" };
+
 async function fetchBytes(
   access: WhatsAppAccountAccess,
   row: MessageMediaRow,
   mime: string | null,
   opts: ResolveOneOpts,
-): Promise<FetchedMedia | null> {
+): Promise<FetchBytesResult> {
   const ref: MediaRef = {
     platform: "whatsapp",
     connectionMode: access.connectionMode,
@@ -287,20 +310,39 @@ async function fetchBytes(
     mimeType: mime,
   };
   const chosen = selectFetcher(ref, opts.fetchers);
-  if (!chosen) return null;
-  return await chosen.fetchMediaBytes(
+  if (!chosen) return { status: "no_fetcher" };
+  const media = await chosen.fetchMediaBytes(
     ref,
     { maxBytes: opts.perItemMax, timeoutMs: remainingMs(opts.deadline) },
     opts.httpFetch,
     opts.deadline,
   );
+  if (!media) return { status: "fetch_null" };
+  return { status: "ok", media };
 }
 
-function logFetchFailure(rowId: string, error: unknown) {
-  const reason = error instanceof MediaFetchError
+class MediaUnavailableLog {
+  private readonly counts = new Map<string, number>();
+
+  record(rowId: string, reason: string) {
+    console.error(`[whatsapp-media] ${rowId} ${reason}`);
+    this.counts.set(reason, (this.counts.get(reason) ?? 0) + 1);
+  }
+
+  flush() {
+    if (this.counts.size === 0) return;
+    const summary = [...this.counts.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([reason, count]) => `${reason}=${count}`)
+      .join(" ");
+    console.error(`[whatsapp-media] batch ${summary}`);
+  }
+}
+
+function reasonFromFetchError(error: unknown): string {
+  return error instanceof MediaFetchError
     ? error.reason
     : ((error as Error)?.name === "AbortError" ? "timeout" : "failed");
-  console.error(`[whatsapp-media] ${rowId} ${reason}`);
 }
 
 function successItem(

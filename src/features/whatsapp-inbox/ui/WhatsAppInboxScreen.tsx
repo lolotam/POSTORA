@@ -51,7 +51,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
   const { setCompact } = useWhatsAppChrome();
   // whatsapp_delete_conversation is admin-min on the server; showing the trash to an agent
   // would only earn them a 403 toast.
-  const { activeRole } = useWhatsAppWorkspaceContext();
+  const { activeRole, activeWorkspaceId } = useWhatsAppWorkspaceContext();
   const canDeleteChats = activeRole === "owner" || activeRole === "admin";
   // The list search is server-side (name or phone digits); typing is debounced so a
   // ten-character query costs one request rather than ten.
@@ -84,20 +84,24 @@ export function WhatsAppInboxScreen(): JSX.Element {
   const selectedAccount = accounts.find((account) => account.id === selectedAccountId);
   const pageId = selectedAccount?.platform_user_id || "";
 
-  useEffect(() => {
-    if (whatsappAccounts.length === 0) return;
-    const stillValid = selectedAccountId && whatsappAccounts.some((account) => account.id === selectedAccountId);
-    if (!stillValid) {
-      setSelectedAccountId(whatsappAccounts[0].id);
-      setSelectedConversation(null);
-    }
-  }, [selectedAccountId, whatsappAccounts]);
-
   // Deep links carry messaging_cache.id (`chat`), which is stable, rather than the
   // external conversation string. An unknown or stale id deliberately selects NOTHING
   // rather than falling back to a neighbouring conversation and showing the wrong chat.
   const routeSelection = parseInboxRoute(searchParams);
+  const routeAccountId = routeSelection.accountId;
   const routeChatId = routeSelection.conversationCacheId;
+
+  useEffect(() => {
+    if (whatsappAccounts.length === 0) return;
+    const stillValid = selectedAccountId && whatsappAccounts.some((account) => account.id === selectedAccountId);
+    if (stillValid) return;
+    const routed = routeAccountId
+      && whatsappAccounts.some((account) => account.id === routeAccountId)
+      ? routeAccountId
+      : whatsappAccounts[0].id;
+    setSelectedAccountId(routed);
+    setSelectedConversation(null);
+  }, [routeAccountId, selectedAccountId, whatsappAccounts]);
 
   useEffect(() => {
     if (!routeChatId) return;
@@ -107,14 +111,15 @@ export function WhatsAppInboxScreen(): JSX.Element {
     if (target) setSelectedConversation(target);
   }, [conversations, routeChatId, selectedConversation]);
 
-  const selectConversation = (conversation: Conversation | null) => {
+  const selectConversation = (conversation: Conversation | null, accountId: string | null = selectedAccountId) => {
     // React Router and local state settle in separate renders. Ignore the old URL selection
     // during an explicit deselection so mobile Back cannot reopen the chat it just closed.
     ignoredRouteChatIdRef.current = conversation ? null : routeChatId ?? null;
     setSelectedConversation(conversation);
     setSearchParams(
       withInboxRoute(searchParams, {
-        accountId: selectedAccountId ?? undefined,
+        ...(activeWorkspaceId ? { workspaceId: activeWorkspaceId } : {}),
+        accountId: accountId ?? undefined,
         conversationCacheId: conversation?.cache_id,
       }),
       { replace: true },
@@ -123,7 +128,7 @@ export function WhatsAppInboxScreen(): JSX.Element {
 
   const handleAccountChange = (id: string) => {
     setSelectedAccountId(id);
-    selectConversation(null);
+    selectConversation(null, id);
   };
 
   const confirmDelete = async () => {

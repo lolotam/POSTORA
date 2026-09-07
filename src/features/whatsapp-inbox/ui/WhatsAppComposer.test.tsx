@@ -213,6 +213,19 @@ describe("WhatsAppComposer outbound upload", () => {
     expect(screen.queryByRole("menuitem", { name: /^voice note/i })).not.toBeInTheDocument();
   });
 
+  it("hides the interactive builder on a Direct QR account and shows the disabled label", () => {
+    renderComposer("evolution_qr");
+    expect(screen.queryByText("Interactive")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", {
+      name: /interactive messages are only available on cloud api accounts/i,
+    })).toBeDisabled();
+  });
+
+  it("shows the interactive builder on a Cloud API account", () => {
+    renderComposer("cloud_api");
+    expect(screen.getByText("Interactive")).toBeInTheDocument();
+  });
+
   it("uploads a recorded note under the caller uid and sends media_path", async () => {
     installVoiceBrowser();
     upload.mockResolvedValue({ data: { path: "user-uuid/whatsapp/outbound/voice.webm" }, error: null });
