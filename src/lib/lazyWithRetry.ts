@@ -1,19 +1,8 @@
-import { lazy, ComponentType } from "react";
+import { lazy } from "react";
+import { isChunkLoadError, reloadForNewVersion } from "@/lib/staleChunk";
 
-type ComponentModule = { default: ComponentType<any> };
-
-const CHUNK_ERROR_PATTERNS = [
-  "Failed to fetch dynamically imported module",
-  "ChunkLoadError",
-  "Importing a module script failed",
-  "Loading chunk",
-  "Loading CSS chunk",
-];
-
-function isChunkLoadError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return CHUNK_ERROR_PATTERNS.some((pattern) => message.includes(pattern));
-}
+type LazyImporter = Parameters<typeof lazy>[0];
+type ComponentModule = Awaited<ReturnType<LazyImporter>>;
 
 export function lazyWithRetry(
   importer: () => Promise<ComponentModule>,
@@ -37,9 +26,10 @@ export function lazyWithRetry(
           throw error;
         }
 
-        // Set guard and hard-reload so the browser fetches fresh index.html + chunks
+        // Set guard and reload with a cache-busting query so the browser fetches a fresh
+        // index.html rather than the cached one that still names the missing chunk.
         sessionStorage.setItem(key, "1");
-        window.location.reload();
+        reloadForNewVersion();
 
         // Return a never-resolving promise to prevent React from rendering stale tree
         return new Promise<ComponentModule>(() => {});
