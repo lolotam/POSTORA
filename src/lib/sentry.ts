@@ -1,11 +1,21 @@
 import * as Sentry from "@sentry/react";
 
-const SENTRY_DSN = "https://ec92b6803c7ea7187dbc282906cab7a4@o4508088707448832.ingest.us.sentry.io/4510744147656704";
+// Overridable per deployment; the literal is the Postora project DSN. A DSN is a public
+// ingest address, not a secret, so a fallback in source is safe.
+const SENTRY_DSN =
+  import.meta.env.VITE_SENTRY_DSN ||
+  "https://ec92b6803c7ea7187dbc282906cab7a4@o4508088707448832.ingest.us.sentry.io/4510744147656704";
 
 export function initSentry() {
-  // Only initialize in production or when explicitly enabled
   const isProduction = import.meta.env.PROD;
-  
+  // A dev server reports every hot-reload ReferenceError as a production-looking issue
+  // (eight of thirteen open issues on 2026-09-07 were localhost). Dev sends only when a
+  // DSN is set explicitly for that purpose.
+  if (!isProduction && !import.meta.env.VITE_SENTRY_DSN) {
+    console.log("[Sentry] Disabled in development (set VITE_SENTRY_DSN to enable)");
+    return;
+  }
+
   Sentry.init({
     dsn: SENTRY_DSN,
     
@@ -17,19 +27,17 @@ export function initSentry() {
     integrations: [
       // Browser tracing for performance monitoring
       Sentry.browserTracingIntegration(),
-      // Replay for session recording on errors
-      Sentry.replayIntegration({
-        maskAllText: false,
-        blockAllMedia: false,
-      }),
+      // Replay for session recording on errors. The defaults mask text and block media: the
+      // inbox renders customers' WhatsApp messages, which must not reach Sentry in clear.
+      Sentry.replayIntegration(),
     ],
     
     // Performance monitoring
     tracesSampleRate: isProduction ? 0.1 : 1.0, // 10% in prod, 100% in dev
     
-    // Session replay
-    replaysSessionSampleRate: 0.1, // 10% of sessions
-    replaysOnErrorSampleRate: 1.0, // 100% of sessions with errors
+    // Session replay: only sessions that hit an error are recorded.
+    replaysSessionSampleRate: 0,
+    replaysOnErrorSampleRate: 1.0,
     
     // Environment
     environment: isProduction ? "production" : "development",
