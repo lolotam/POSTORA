@@ -1,6 +1,6 @@
 import { useRef, useState, type ChangeEvent, type KeyboardEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { FileAudio, FileIcon, Image, Loader2, Paperclip, Send, Video, X } from "lucide-react";
+import { FileAudio, FileIcon, Image, LayoutList, Loader2, Paperclip, Send, Video, X } from "lucide-react";
 import { toast } from "sonner";
 import { InteractiveMessageBuilder } from "@/components/messaging/InteractiveMessageBuilder";
 import { QuickReplyPicker, SlashCommandSuggestions } from "@/components/messaging/QuickReplyPicker";
@@ -17,7 +17,13 @@ import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
 import { waHistoryQueryKey, waLatestQueryKey } from "../application/useWhatsAppMessages";
 import { canRecordForMode } from "../domain/voiceNotePolicy";
-import { voiceNoteCapability, voiceNoteDisabledLabel, type WhatsAppConnectionMode } from "../domain/whatsappCapabilities";
+import {
+  interactiveMessageCapability,
+  interactiveMessageDisabledLabel,
+  voiceNoteCapability,
+  voiceNoteDisabledLabel,
+  type WhatsAppConnectionMode,
+} from "../domain/whatsappCapabilities";
 import { useWhatsAppInboxApi } from "./WhatsAppInboxApiProvider";
 import { WhatsAppVoiceComposer } from "./WhatsAppVoiceComposer";
 
@@ -64,6 +70,10 @@ export function WhatsAppComposer({
   const queryClient = useQueryClient();
   const voice = voiceNoteCapability(connectionMode, canRecordForMode(connectionMode, browserTypeSupported));
   const hiddenMicReason = voice.enabled ? null : voiceNoteDisabledLabel(voice.reason);
+  const interactive = interactiveMessageCapability(connectionMode);
+  const interactiveDisabledLabel = interactive.enabled
+    ? null
+    : interactiveMessageDisabledLabel(interactive.reason);
 
   const clearPreview = (preview: MediaPreview | null) => {
     if (preview) URL.revokeObjectURL(preview.url);
@@ -281,7 +291,21 @@ export function WhatsAppComposer({
               </DropdownMenu>
 
               <QuickReplyPicker onSelect={handleQuickReplySelect} />
-              <InteractiveMessageBuilder onSend={handleSendInteractive} />
+              {interactive.enabled ? (
+                <InteractiveMessageBuilder onSend={handleSendInteractive} />
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  disabled
+                  className="h-9 w-9 shrink-0"
+                  title={interactiveDisabledLabel ?? undefined}
+                  aria-label={interactiveDisabledLabel ?? "Interactive message"}
+                >
+                  <LayoutList className="h-4 w-4" />
+                </Button>
+              )}
 
               <Textarea
                 value={messageText}

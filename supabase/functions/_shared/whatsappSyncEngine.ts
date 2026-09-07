@@ -7,6 +7,8 @@
 
 import type { EvolutionApi } from "./evolutionApi.ts";
 import { addressableJid, buildEvolutionMessageRow, remoteNumberFor } from "./evolutionMessage.ts";
+import { cacheAvatarToCloudinary } from "./avatar-cache.ts";
+import { backfillWhatsAppParticipantAvatars } from "./whatsappAvatarEnrichment.ts";
 
 const LID_JID_SUFFIX = "@lid";
 const DIRECT_JID_SUFFIX = "@s.whatsapp.net";
@@ -330,6 +332,17 @@ export async function syncEvolutionHistory(deps: {
   if (summaries.length === 0) return outcome;
 
   await importRows(admin, "import_whatsapp_conversations", conversationRows(account, summaries));
+  await backfillWhatsAppParticipantAvatars({
+    admin,
+    cacheAvatar: cacheAvatarToCloudinary,
+    deadlineAt,
+    fetchProfilePictureUrl: (name, number) => api.fetchProfilePictureUrl(name, number),
+  }, {
+    userId: account.user_id,
+    workspaceId: account.workspace_id,
+    accountId: account.id,
+    instanceName,
+  });
   await importRows(admin, "import_whatsapp_contacts", contactRows(account, summaries));
 
   let chatsSwept = 0;

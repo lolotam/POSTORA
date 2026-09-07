@@ -98,8 +98,19 @@ vi.mock("@/hooks/useWhatsAppLabels", () => ({
 }));
 
 vi.mock("@/components/messaging/AccountSelector", () => ({
-  AccountSelector: ({ accounts, onSelect }: { accounts: MessagingAccount[]; onSelect(id: string): void }) => (
-    <button type="button" onClick={() => onSelect(accounts[0]?.id)}>Select account</button>
+  AccountSelector: ({
+    accounts,
+    selectedId,
+    onSelect,
+  }: {
+    accounts: MessagingAccount[];
+    selectedId: string | null;
+    onSelect(id: string): void;
+  }) => (
+    <div>
+      <span data-testid="selected-account">{selectedId}</span>
+      <button type="button" onClick={() => onSelect(accounts[0]?.id)}>Select account</button>
+    </div>
   ),
 }));
 
@@ -252,6 +263,28 @@ describe("WhatsAppInboxScreen", () => {
 
     await screen.findByTestId("wa-message-pane");
     expect(screen.getByText("Select a conversation")).toBeInTheDocument();
+  });
+
+  it("honours the account query param instead of defaulting to the first account", async () => {
+    const first: MessagingAccount = {
+      ...account,
+      id: "aaaaaaaa-0000-4000-8000-00000000000a",
+      platform_username: "First",
+    };
+    const second: MessagingAccount = {
+      ...account,
+      id: "bbbbbbbb-0000-4000-8000-00000000000b",
+      platform_username: "Second",
+    };
+    renderWithProviders(<WhatsAppInboxScreen />, {
+      accounts: [first, second],
+      route: "/messaging/whatsapp/conversations?account=bbbbbbbb-0000-4000-8000-00000000000b",
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId("selected-account")).toHaveTextContent(
+        "bbbbbbbb-0000-4000-8000-00000000000b",
+      );
+    });
   });
 });
 

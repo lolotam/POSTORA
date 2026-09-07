@@ -75,3 +75,28 @@ export function voiceNoteDisabledLabel(reason: VoiceNoteDisabledReason | null): 
   }
   return null;
 }
+
+export type InteractiveMessageDisabledReason = "unsupported_mode";
+
+export interface InteractiveMessageCapability {
+  enabled: boolean;
+  reason: InteractiveMessageDisabledReason | null;
+}
+
+export function interactiveMessageCapability(
+  connectionMode: WhatsAppConnectionMode,
+): InteractiveMessageCapability {
+  if (connectionMode === "cloud_api" || connectionMode === "coexistence") {
+    return { enabled: true, reason: null };
+  }
+  return { enabled: false, reason: "unsupported_mode" };
+}
+
+export function interactiveMessageDisabledLabel(
+  reason: InteractiveMessageDisabledReason | null,
+): string | null {
+  if (reason === "unsupported_mode") {
+    return "Interactive messages are only available on Cloud API accounts";
+  }
+  return null;
+}

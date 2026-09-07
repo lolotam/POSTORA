@@ -5,6 +5,8 @@ import {
   revokeDisabledLabel,
   voiceNoteCapability,
   voiceNoteDisabledLabel,
+  interactiveMessageCapability,
+  interactiveMessageDisabledLabel,
 } from "./whatsappCapabilities";
 
 describe("whatsappCapabilities", () => {
@@ -43,5 +45,16 @@ describe("whatsappCapabilities", () => {
     expect(voiceNoteDisabledLabel("unsupported_mode")).toMatch(/Direct QR/i);
     expect(voiceNoteDisabledLabel("unsupported_browser")).toMatch(/browser/i);
     expect(voiceNoteDisabledLabel(null)).toBeNull();
+  });
+
+  it("offers interactive messages only on cloud_api and coexistence", () => {
+    expect(interactiveMessageCapability("cloud_api")).toEqual({ enabled: true, reason: null });
+    expect(interactiveMessageCapability("coexistence")).toEqual({ enabled: true, reason: null });
+    expect(interactiveMessageCapability("evolution_qr")).toEqual({ enabled: false, reason: "unsupported_mode" });
+    expect(interactiveMessageCapability(null)).toEqual({ enabled: false, reason: "unsupported_mode" });
+    expect(interactiveMessageDisabledLabel("unsupported_mode")).toBe(
+      "Interactive messages are only available on Cloud API accounts",
+    );
+    expect(interactiveMessageDisabledLabel(null)).toBeNull();
   });
 });

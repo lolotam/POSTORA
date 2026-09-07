@@ -9,6 +9,11 @@ import { buildEvolutionMessageRow, remoteNumberFor } from "../_shared/evolutionM
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { ackUpdates, statusesAdvancedBy } from "../_shared/evolutionMessageAck.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
+import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import {
+  enrichWhatsAppParticipantAvatar,
+  WEBHOOK_AVATAR_DEADLINE_MS,
+} from "../_shared/whatsappAvatarEnrichment.ts";
 import {
   logSkippedUnderstanding,
   runInboundMediaUnderstanding,
@@ -161,6 +166,24 @@ async function persistEvolutionMessage(
     timestamp: built.timestamp,
     unreadDelta: sentByOwner ? 0 : 1,
   });
+  // Owner-sent echoes still enrich the other party; skip only the automation fan-out.
+  await enrichWhatsAppParticipantAvatar(
+    {
+      admin,
+      cacheAvatar: cacheAvatarToCloudinary,
+      deadlineAt: Date.now() + WEBHOOK_AVATAR_DEADLINE_MS,
+      fetchProfilePictureUrl: (name, number) =>
+        createEvolutionApi().fetchProfilePictureUrl(name, number),
+    },
+    {
+      userId: account.user_id,
+      workspaceId: account.workspace_id,
+      accountId: account.id,
+      conversationId,
+      instanceName,
+      contactNumber: remoteNumber,
+    },
+  );
   // Only a message from the contact is an inbound event for automations; echoing the
   // operator's own reply back into n8n would retrigger their workflows on their own text.
   if (sentByOwner) return true;

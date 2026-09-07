@@ -7,6 +7,9 @@ import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerC
 import { GradientDivider, Reveal } from "@/components/fx";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { Button } from "@/components/ui/button";
+import { WhatsAppChromeProvider } from "@/components/whatsapp/WhatsAppChromeContext";
+import { WhatsAppWorkspaceProvider } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
+import { WhatsAppInboxScreen } from "@/features/whatsapp-inbox";
 import { CheckCircle2, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -173,7 +176,13 @@ export default function UnifiedInboxesPage() {
                 </div>
 
                 <AutomationHandlerCard platform="whatsapp" surface="dms" />
-                <MessagingInbox platform="whatsapp" />
+                <div className="flex h-[620px] min-h-0 flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-sm">
+                  <WhatsAppChromeProvider>
+                    <WhatsAppWorkspaceProvider>
+                      <WhatsAppInboxScreen />
+                    </WhatsAppWorkspaceProvider>
+                  </WhatsAppChromeProvider>
+                </div>
               </div>
             )}
 
