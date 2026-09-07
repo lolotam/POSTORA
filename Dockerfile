@@ -7,7 +7,9 @@ COPY package*.json ./
 RUN npm install
 
 COPY . .
-RUN npm run build
+# Source maps are uploaded to Sentry during the build (see vite.config.ts); whatever is
+# left must not ship, or the unminified source is one URL away on postora.cloud.
+RUN npm run build && find dist -name '*.map' -type f -delete
 
 # Stage 2: Serve
 FROM nginx:alpine

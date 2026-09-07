@@ -1,4 +1,11 @@
 import * as Sentry from "@sentry/react";
+import { useEffect } from "react";
+import {
+  createRoutesFromChildren,
+  matchRoutes,
+  useLocation,
+  useNavigationType,
+} from "react-router-dom";
 
 // Overridable per deployment; the literal is the Postora project DSN. A DSN is a public
 // ingest address, not a secret, so a fallback in source is safe.
@@ -25,8 +32,16 @@ export function initSentry() {
     },
     
     integrations: [
-      // Browser tracing for performance monitoring
-      Sentry.browserTracingIntegration(),
+      // Route-aware tracing: transactions are named by the matched route pattern
+      // ("/messaging/whatsapp/:id") instead of each concrete URL, which is what makes
+      // the performance view groupable. Needs the SentryRoutes wrapper in AnimatedRoutes.
+      Sentry.reactRouterV7BrowserTracingIntegration({
+        useEffect,
+        useLocation,
+        useNavigationType,
+        createRoutesFromChildren,
+        matchRoutes,
+      }),
       // Replay for session recording on errors. The defaults mask text and block media: the
       // inbox renders customers' WhatsApp messages, which must not reach Sentry in clear.
       Sentry.replayIntegration(),

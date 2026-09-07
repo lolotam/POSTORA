@@ -1,15 +1,35 @@
-import { defineConfig } from "vite";
+import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "path";
 import { componentTagger } from "lovable-tagger";
+import { sentryVitePlugin } from "@sentry/vite-plugin";
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => ({
+export default defineConfig(({ mode }) => {
+  // Dokploy writes the app's variables into a .env in the build context; Vite only lifts
+  // VITE_* from it into import.meta.env, so a build-time secret has to be read explicitly.
+  const sentryAuthToken = loadEnv(mode, process.cwd(), "").SENTRY_AUTH_TOKEN;
+
+  return {
   server: {
     host: "::",
     port: 8080,
   },
-  plugins: [react(), mode === "development" && componentTagger()].filter(Boolean),
+  plugins: [
+    react(),
+    mode === "development" && componentTagger(),
+    // Uploads the production source maps to Sentry so stack traces are readable, then
+    // deletes them from dist so they are not served from postora.cloud. Without a token
+    // the plugin is disabled and the Dockerfile still strips the maps.
+    mode === "production" && sentryVitePlugin({
+      org: "klozin",
+      project: "javascript-react",
+      authToken: sentryAuthToken,
+      disable: !sentryAuthToken,
+      telemetry: false,
+      sourcemaps: { filesToDeleteAfterUpload: ["./dist/**/*.map"] },
+    }),
+  ].filter(Boolean),
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -53,4 +73,5 @@ export default defineConfig(({ mode }) => ({
       VITE_SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
     },
   },
-}));
+  };
+});
