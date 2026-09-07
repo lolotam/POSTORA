@@ -8,7 +8,12 @@ import { sentryVitePlugin } from "@sentry/vite-plugin";
 export default defineConfig(({ mode }) => {
   // Dokploy writes the app's variables into a .env in the build context; Vite only lifts
   // VITE_* from it into import.meta.env, so a build-time secret has to be read explicitly.
-  const sentryAuthToken = loadEnv(mode, process.cwd(), "").SENTRY_AUTH_TOKEN;
+  const buildEnv = loadEnv(mode, process.cwd(), "");
+  const sentryAuthToken = buildEnv.SENTRY_AUTH_TOKEN;
+  // Slugs, not ids: Sentry lets an org or project be renamed, and the upload then fails with
+  // "Project not found" until this catches up (happened 2026-09-07). Overridable from the env.
+  const sentryOrg = buildEnv.SENTRY_ORG || "lolotam";
+  const sentryProject = buildEnv.SENTRY_PROJECT || "postora";
 
   return {
   server: {
@@ -22,8 +27,8 @@ export default defineConfig(({ mode }) => {
     // deletes them from dist so they are not served from postora.cloud. Without a token
     // the plugin is disabled and the Dockerfile still strips the maps.
     mode === "production" && sentryVitePlugin({
-      org: "klozin",
-      project: "javascript-react",
+      org: sentryOrg,
+      project: sentryProject,
       authToken: sentryAuthToken,
       disable: !sentryAuthToken,
       telemetry: false,
