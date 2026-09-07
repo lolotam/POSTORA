@@ -12,6 +12,7 @@ import {
   MEDIA_UNAVAILABLE,
   useWhatsAppInboxApi,
   type WhatsAppResolvedMedia,
+  type WhatsAppAttachmentKind,
 } from "./ports";
 
 export const WA_MEDIA_STALE_TIME_MS = 50 * 60_000;
@@ -19,6 +20,7 @@ export const WA_MEDIA_BATCH_SIZE = 10;
 
 export interface RequestMediaMeta {
   createdTime?: string | null;
+  kind?: WhatsAppAttachmentKind;
 }
 
 export interface WhatsAppMediaState {
@@ -53,7 +55,9 @@ function useWhatsAppMediaCollector(socialAccountId: string | null): WhatsAppMedi
     const queued = queuedRef.current;
     queuedRef.current = [];
     if (queued.length === 0) return;
-    setBatches((prev) => [...prev, ...chunkSorted(queued, WA_MEDIA_BATCH_SIZE)]);
+    const videos = queued.filter((id) => metaRef.current.get(id)?.kind === "video");
+    const others = queued.filter((id) => metaRef.current.get(id)?.kind !== "video");
+    setBatches((prev) => [...prev, ...chunkSorted(others, WA_MEDIA_BATCH_SIZE), ...videos.map((id) => [id])]);
   }, []);
 
   const requestMedia = useCallback((rowId: string, meta?: RequestMediaMeta) => {
@@ -73,21 +77,30 @@ function useWhatsAppMediaCollector(socialAccountId: string | null): WhatsAppMedi
       queryKey: ["wa-media", socialAccountId, ids],
       queryFn: async () => {
         if (!socialAccountId) return { media: [] as WhatsAppResolvedMedia[] };
-        const result = await api.getMedia({
-          social_account_id: socialAccountId,
-          message_row_ids: ids,
-        });
-        const byId = new Map((result.media ?? []).map((item) => [item.message_row_id, item]));
+        let media: WhatsAppResolvedMedia[] = [];
+        try {
+          const result = await api.getMedia({
+            social_account_id: socialAccountId,
+            message_row_ids: ids,
+          });
+          media = result.media ?? [];
+        } catch {
+          // A cancelled worker has no per-row response. Settle every bubble so it
+          // can display its failure state instead of retrying into another OOM.
+          console.error("[whatsapp-media] batch resolution failed");
+        }
+        const byId = new Map(media.map((item) => [item.message_row_id, item]));
         return {
           media: ids.map((id) => byId.get(id) ?? {
             message_row_id: id,
-            kind: "document" as const,
+            kind: metaRef.current.get(id)?.kind ?? "document",
             url: null,
             error: MEDIA_UNAVAILABLE,
           }),
         };
       },
       staleTime: WA_MEDIA_STALE_TIME_MS,
+      retry: false,
       refetchInterval: WA_MEDIA_STALE_TIME_MS,
       enabled: Boolean(socialAccountId) && ids.length > 0,
     })),

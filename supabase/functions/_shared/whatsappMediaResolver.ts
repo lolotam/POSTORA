@@ -28,6 +28,11 @@ export const OUTBOUND_SIGN_TTL_SECONDS = 7 * 24 * 3600;
 export const MAX_MEDIA_ROWS = 10;
 const MAX_CONCURRENT_FETCHES = 2;
 const PER_ITEM_MAX_BYTES = 16 * 1024 * 1024;
+// Danat's 10 MiB product cap leaves room under the 150 MiB isolate: two items
+// retain 2 * (13.34 envelope + 10 decoded + 10 upload) = 66.68 MiB.
+// Even retaining readCapped's chunk copies adds only 26.68 MiB (~93.36 total).
+// Cloud downloads have no base64 envelope and retain their existing 16 MiB cap.
+const EVOLUTION_PER_ITEM_MAX_BYTES = 10 * 1024 * 1024;
 const AGGREGATE_BUDGET_BYTES = 24 * 1024 * 1024;
 const BATCH_DEADLINE_MS = 20_000;
 
@@ -44,6 +49,7 @@ export interface WhatsAppMediaItem {
   file_name?: string;
   size_bytes?: number;
   error?: typeof MEDIA_UNAVAILABLE;
+  reason?: "too_large";
 }
 
 export interface ResolveWhatsAppMediaDeps {
@@ -137,7 +143,8 @@ export async function resolveWhatsAppMedia(
   const deadlineMs = deps.deadlineMs ?? BATCH_DEADLINE_MS;
   const deadline = abortAfter(deadlineMs);
   const budget = new ByteBudget(deps.aggregateBudgetBytes ?? AGGREGATE_BUDGET_BYTES);
-  const perItemMax = deps.perItemMaxBytes ?? PER_ITEM_MAX_BYTES;
+  const modeMax = access.connectionMode === "evolution_qr" ? EVOLUTION_PER_ITEM_MAX_BYTES : PER_ITEM_MAX_BYTES;
+  const perItemMax = Math.min(deps.perItemMaxBytes ?? modeMax, modeMax);
   const ttl = deps.signTtlSeconds ?? INBOUND_SIGN_TTL_SECONDS;
   const fetchers = deps.fetchers ?? await defaultFetchers(admin, access);
 
@@ -203,7 +210,10 @@ async function resolveOne(
   }
 
   const knownSize = trustedSizeBytes(meta, opts.perItemMax);
-  if (knownSize === "too_large") return unavailable(row.id, kind);
+  if (knownSize === "too_large") {
+    logFetchFailure(row.id, new MediaFetchError("metadata exceeds media cap", "too_large"));
+    return unavailable(row.id, kind, "too_large");
+  }
   const reservation = knownSize ?? opts.perItemMax;
   const admitted = await opts.budget.acquire(reservation, opts.deadline);
   if (!admitted) return unavailable(row.id, kind);
@@ -256,7 +266,7 @@ async function resolveOne(
     );
   } catch (error) {
     logFetchFailure(row.id, error);
-    return unavailable(row.id, kind);
+    return unavailable(row.id, kind, error instanceof MediaFetchError && error.reason === "too_large" ? "too_large" : undefined);
   } finally {
     opts.budget.release(held);
   }
@@ -278,17 +288,12 @@ async function fetchBytes(
   };
   const chosen = selectFetcher(ref, opts.fetchers);
   if (!chosen) return null;
-  try {
-    return await chosen.fetchMediaBytes(
-      ref,
-      { maxBytes: opts.perItemMax, timeoutMs: remainingMs(opts.deadline) },
-      opts.httpFetch,
-      opts.deadline,
-    );
-  } catch (error) {
-    logFetchFailure(row.id, error);
-    return null;
-  }
+  return await chosen.fetchMediaBytes(
+    ref,
+    { maxBytes: opts.perItemMax, timeoutMs: remainingMs(opts.deadline) },
+    opts.httpFetch,
+    opts.deadline,
+  );
 }
 
 function logFetchFailure(rowId: string, error: unknown) {
@@ -321,8 +326,8 @@ function successItem(
   return item;
 }
 
-function unavailable(id: string, kind: WhatsAppAttachmentKind): WhatsAppMediaItem {
-  return { message_row_id: id, kind, url: null, error: MEDIA_UNAVAILABLE };
+function unavailable(id: string, kind: WhatsAppAttachmentKind, reason?: "too_large"): WhatsAppMediaItem {
+  return { message_row_id: id, kind, url: null, error: MEDIA_UNAVAILABLE, ...(reason ? { reason } : {}) };
 }
 
 async function signExisting(

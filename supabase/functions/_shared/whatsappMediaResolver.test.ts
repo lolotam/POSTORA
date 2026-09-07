@@ -385,6 +385,45 @@ function assertRejectsPath(path: string, uid: string) {
   }
 }
 
+Deno.test("an oversized video is unavailable without uploading and other batch rows resolve", async () => {
+  const admin = fakeAdmin({ rows: [
+    mediaRow({ id: "video", message_id: "large", media_type: "video" }),
+    mediaRow({ id: "image", message_id: "small" }),
+  ] });
+  const media = await resolveWhatsAppMedia(admin, access(), { messageRowIds: ["video", "image"] }, {
+    fetchers: [{
+      name: "size-limited",
+      canHandle: () => true,
+      fetchMediaBytes: async (ref) => {
+        if (ref.mediaId === "large") throw new MediaFetchError("exceeds cap", "too_large");
+        return { bytes: new Uint8Array([1]), mimeType: "image/jpeg" };
+      },
+    }],
+  });
+  assertEquals(media[0], { message_row_id: "video", kind: "video", url: null, error: MEDIA_UNAVAILABLE, reason: "too_large" });
+  assert(media[1].url);
+  assertEquals([...admin.uploaded], [inboundCachePath(OWNER, "image", "jpg")]);
+});
+
+for (const connectionMode of ["evolution_qr", "cloud_api"] as const) {
+  Deno.test(`${connectionMode} applies its media ceiling before fetching known oversized rows`, async () => {
+    const admin = fakeAdmin({ rows: [mediaRow({ media_metadata: { size: 11 * 1024 * 1024 } })] });
+    let fetched = false;
+    const media = await resolveWhatsAppMedia(admin, access({ connectionMode }), { messageRowIds: ["row-1"] }, {
+      fetchers: [{
+        name: "bounded",
+        canHandle: () => true,
+        fetchMediaBytes: async () => {
+          fetched = true;
+          return { bytes: new Uint8Array([1]), mimeType: "image/jpeg" };
+        },
+      }],
+    });
+    assertEquals(fetched, connectionMode === "cloud_api");
+    assertEquals(media[0].reason, connectionMode === "evolution_qr" ? "too_large" : undefined);
+  });
+}
+
 // Regression, 2026-08-25: the budget charged bytes on acquire and reconciled them to the real
 // size, but the SUCCESS path never released them -- so every resolved row held its bytes for
 // the life of the batch and later rows starved until the deadline. Each row here fits the

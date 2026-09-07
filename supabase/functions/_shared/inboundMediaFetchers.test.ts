@@ -595,3 +595,52 @@ Deno.test("malformed Evolution json is a stable error, not a raw parse failure",
     "evolution returned invalid json",
   );
 });
+
+for (const [key, encoded, expected] of [
+  ["base64", "AAH+/w==", [0, 1, 254, 255]],
+  ["media", "AQID", [1, 2, 3]],
+  ["base64", "AQI=", [1, 2]],
+  ["base64", "AQ", [1]],
+  ["base64", "data:video/mp4;base64,AQID", [1, 2, 3]],
+] as const) {
+  Deno.test(`Evolution byte envelope decodes ${key} ${encoded} at the exact cap`, async () => {
+    const result = await new EvolutionFetcher("https://evo.example", "k", "i").fetchMediaBytes(
+      { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+      { ...LIMITS, maxBytes: expected.length },
+      () => Promise.resolve(new Response(`{ "mimetype" : "video/mp4", "${key}" : "${encoded}" }`)),
+    );
+    assertEquals([...result.bytes], [...expected]);
+    assertEquals(result.mimeType, "video/mp4");
+  });
+}
+
+Deno.test("Evolution envelope rejects decoded size before allocating the media buffer", async () => {
+  // Fits the envelope allowance, but is larger than the decoded cap. This reaches
+  // the span-length check rather than merely exercising readCapped's body limit.
+  const error = await assertRejects(() => new EvolutionFetcher("https://evo.example", "k", "i").fetchMediaBytes(
+    { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+    { ...LIMITS, maxBytes: 1024 * 1024 },
+    () => Promise.resolve(new Response(JSON.stringify({ base64: "A".repeat(1398104), mimetype: "video/mp4" }))),
+  ), MediaFetchError, "base64 payload");
+  assertEquals(error.reason, "too_large");
+});
+
+for (const envelope of [
+  '{"base64":"AQID"',
+  '{"base64":"AQID",}',
+  '{"base64":"A=ID"}',
+  '{"base64":123}',
+  '{"media":"AQID","base64":false}',
+  '{"base64":"AQID","base64":"AQID"}',
+  '{"nested":{"base64":"AQID"}}',
+  '{"base64":"A"}',
+]) {
+  Deno.test(`malformed Evolution envelope returns transport_failed: ${envelope}`, async () => {
+    const error = await assertRejects(() => new EvolutionFetcher("https://evo.example", "k", "i").fetchMediaBytes(
+      { platform: "whatsapp", connectionMode: "evolution_qr", mediaId: "m1" },
+      LIMITS,
+      () => Promise.resolve(new Response(envelope)),
+    ), MediaFetchError);
+    assertEquals(error.reason, "transport_failed");
+  });
+}

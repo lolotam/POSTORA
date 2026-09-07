@@ -18,31 +18,44 @@ const testState = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   fetchOlder: vi.fn(),
   hasOlder: false,
-  markReadCalls: 0,
+  markReadRequest: vi.fn(),
+  toast: vi.fn(),
 }));
 
 vi.mock("@/hooks/useMessaging", async () => {
-  const { useCallback, useState } = await import("react");
+  const actual = await vi.importActual<typeof import("@/hooks/useMessaging")>("@/hooks/useMessaging");
   return {
     useMessagingAccounts: () => ({ accounts: testState.accounts, isLoading: false }),
     useConversations: () => ({ data: testState.conversations, isLoading: false }),
     useMessages: () => ({ data: testState.messages, isLoading: false }),
     useSendMessage: () => ({ mutate: testState.sendMessage, isPending: false }),
-    // Models the real useMutation contract, which the old `{ mutate: vi.fn() }` stub did not:
-    // `mutate` is referentially stable, the RESULT OBJECT is new on every render, and calling
-    // mutate re-renders the component as the mutation moves through pending/success. Anything
-    // that lists the result object as an effect dependency therefore loops for real here.
-    // The re-render count is capped so a regression fails an assertion instead of hanging.
-    useMarkConversationRead: () => {
-      const [, setVersion] = useState(0);
-      const mutate = useCallback(() => {
-        testState.markReadCalls += 1;
-        if (testState.markReadCalls <= 25) setVersion((version) => version + 1);
-      }, []);
-      return { mutate, mutateAsync: vi.fn(), isPending: false };
-    },
+    useMarkConversationRead: actual.useMarkConversationRead,
   };
 });
+
+
+vi.mock("@/hooks/use-toast", () => ({ toast: testState.toast }));
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn().mockResolvedValue({ data: { session: { access_token: "jwt" } } }),
+    },
+  },
+}));
+
+beforeEach(() => {
+  testState.markReadRequest.mockReset().mockResolvedValue(
+    new Response(JSON.stringify({ success: true }), { status: 200 }),
+  );
+  testState.toast.mockClear();
+  vi.stubGlobal("fetch", vi.fn((_url: string, init: RequestInit) => {
+    const body = JSON.parse(init.body as string);
+    if (body.action !== "whatsapp_mark_read") throw new Error(`Unexpected action: ${body.action}`);
+    return testState.markReadRequest(body).then((response: Response) => response.clone());
+  }));
+});
+
+afterEach(() => { vi.unstubAllGlobals(); });
 
 vi.mock("@/components/whatsapp/WhatsAppWorkspaceProvider", () => ({
   useWhatsAppWorkspaceContext: () => ({ activeRole: "owner" }),
@@ -302,7 +315,6 @@ describe("WhatsAppConversationPane mark-read", () => {
   // Instagram list refetched on each cycle until Meta rate-limited the app (error 613).
   it("marks an opened conversation read exactly once", async () => {
     testState.messages = [];
-    testState.markReadCalls = 0;
     renderWithProviders(
       <WhatsAppConversationPane
         conversation={conversation}
@@ -315,8 +327,68 @@ describe("WhatsAppConversationPane mark-read", () => {
     await act(async () => {
       await Promise.resolve();
     });
-    expect(testState.markReadCalls).toBe(1);
+    await waitFor(() => expect(testState.markReadRequest).toHaveBeenCalledTimes(1));
+    expect(testState.markReadRequest).toHaveBeenCalledWith({
+      action: "whatsapp_mark_read",
+      social_account_id: account.id,
+      conversation_id: conversation.id,
+    });
   });
+
+  function renderUnreadPane() {
+    const client = testQueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>
+        <WhatsAppInboxApiProvider api={fakeApi}>
+          <WhatsAppMediaScope socialAccountId={account.id}>{children}</WhatsAppMediaScope>
+        </WhatsAppInboxApiProvider>
+      </QueryClientProvider>
+    );
+    const pane = (unread: number) => (
+      <WhatsAppConversationPane
+        conversation={{ ...conversation, assignment_key: "different-alias", unread_count: unread }}
+        socialAccountId={account.id}
+        pageId={account.platform_user_id}
+        connectionMode="evolution_qr"
+        onScrollStateChange={() => undefined}
+      />
+    );
+    testState.messages = [];
+    const view = render(pane(0), { wrapper });
+    return (unread: number) => view.rerender(pane(unread));
+  }
+
+  it("marks the exact thread once per unread transition, without marking its optimistic clear", async () => {
+    const rerenderUnread = renderUnreadPane();
+    await waitFor(() => expect(testState.markReadRequest).toHaveBeenCalledTimes(1));
+    expect(testState.markReadRequest).toHaveBeenLastCalledWith({
+      action: "whatsapp_mark_read",
+      social_account_id: account.id,
+      conversation_id: conversation.id,
+    });
+    rerenderUnread(2);
+    await waitFor(() => expect(testState.markReadRequest).toHaveBeenCalledTimes(2));
+    rerenderUnread(3);
+    rerenderUnread(0);
+    await act(async () => { await Promise.resolve(); });
+    expect(testState.markReadRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a failed mark-read toast without automatically retrying restored unread", async () => {
+    testState.markReadRequest.mockResolvedValue(
+      new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 }),
+    );
+    const rerenderUnread = renderUnreadPane();
+    await waitFor(() => expect(testState.toast).toHaveBeenCalledWith({
+      title: "Couldn't mark the chat as read",
+      variant: "destructive",
+    }));
+    rerenderUnread(2);
+    await act(async () => { await Promise.resolve(); });
+    expect(testState.markReadRequest).toHaveBeenCalledTimes(1);
+    expect(testState.toast).toHaveBeenCalledTimes(1);
+  });
+
 });
 
 describe("WhatsAppConversationPane header", () => {

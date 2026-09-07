@@ -28,16 +28,19 @@ function scrollRootFor(element: Element): Element | null {
   return null;
 }
 
-function UnavailablePlaceholder(): JSX.Element {
-  return (
-    <div
-      role="status"
-      data-testid="wa-media-unavailable"
-      className="mt-2 rounded-lg bg-background/50 px-3 py-2 text-xs"
-    >
-      Media unavailable
-    </div>
-  );
+function downloadFileName(name: string | null, mimeType: string | null | undefined, attachment: WhatsAppAttachment): string {
+  if (name?.trim()) return name;
+  const extensions: Record<string, string> = {
+    "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/gif": "gif", "image/heic": "heic",
+    "video/mp4": "mp4", "video/3gpp": "3gp", "video/webm": "webm", "video/quicktime": "mov",
+    "audio/ogg": "ogg", "audio/opus": "ogg", "audio/mpeg": "mp3", "audio/mp4": "m4a", "audio/wav": "wav",
+    "application/pdf": "pdf", "application/zip": "zip", "text/plain": "txt",
+    "application/msword": "doc", "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.ms-excel": "xls", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+  };
+  const bare = (mimeType ?? "").split(";")[0].trim().toLowerCase();
+  const fallback = { image: "jpg", video: "mp4", audio: "ogg", document: "bin" };
+  return `whatsapp-${attachment.message_row_id}.${extensions[bare] ?? fallback[attachment.kind]}`;
 }
 
 function PendingPlaceholder({ busy }: { busy: boolean }): JSX.Element {
@@ -69,15 +72,18 @@ function DocumentCard({
   media,
   attachment,
   onOpen,
+  onDownload,
 }: {
   media: WhatsAppResolvedMedia;
   attachment: WhatsAppAttachment;
   /** Present for PDFs: the name becomes a button that previews the file. */
   onOpen?: () => void;
+  onDownload?: () => void;
 }): JSX.Element {
   const filename = media.file_name || attachment.name;
   const size = typeof media.size_bytes === "number" ? formatSize(media.size_bytes) : null;
-  const label = filename || "Document";
+  const labels = { image: "Image", video: "Video", audio: "Voice message", document: "Document" };
+  const label = filename || labels[attachment.kind];
 
   return (
     <div
@@ -94,11 +100,19 @@ function DocumentCard({
           <p className="truncate text-xs">{label}</p>
         )}
         {size && <p className="text-[10px] text-current/70">{size}</p>}
+        {!media.url && (
+          <p role="status" data-testid="wa-media-unavailable" className="mt-1 text-xs text-current/70">
+            {media.reason === "too_large"
+              ? "Too large to preview — download from your phone."
+              : "Media unavailable — open WhatsApp on your phone."}
+          </p>
+        )}
       </div>
       {media.url && (
         <a
           href={media.url}
-          download={filename || true}
+          download={downloadFileName(filename, media.mime_type ?? attachment.mime_type, attachment)}
+          onClick={(event) => { event.preventDefault(); onDownload?.(); }}
           className="ml-auto inline-flex items-center gap-1 text-xs underline"
         >
           <Download className="h-3 w-3" />
@@ -116,6 +130,7 @@ export function WhatsAppMediaAttachment({
   const sentinelRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
   const [lightbox, setLightbox] = useState<LightboxEntry | null>(null);
+  const [downloadError, setDownloadError] = useState(false);
   const api = useWhatsAppInboxApi();
   const { requestMedia, mediaByRowId, requestedRowIds, imageUrls } = useWhatsAppMedia();
   const resolved = mediaByRowId.get(attachment.message_row_id);
@@ -173,15 +188,24 @@ export function WhatsAppMediaAttachment({
 
   useEffect(() => {
     if (!visible) return;
-    requestMedia(attachment.message_row_id, { createdTime });
+    requestMedia(attachment.message_row_id, { createdTime, kind: attachment.kind });
   }, [attachment.kind, attachment.message_row_id, createdTime, requestMedia, visible]);
 
   // The signed URL is same-origin-hostile for `<a download>` (cross-origin downloads open in
   // a tab instead), so the bytes go through a Blob and the port's saver.
   const download = async (url: string, fileName: string | null) => {
-    const response = await fetch(url);
-    const blob = await response.blob();
-    api.downloadBlob(blob, fileName || (url === resolved?.url ? `whatsapp-${attachment.message_row_id}` : "whatsapp-image"));
+    setDownloadError(false);
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("download failed");
+      const blob = await response.blob();
+      const target = url === resolved?.url ? attachment : { ...attachment, kind: "image" as const, message_row_id: "image" };
+      const mime = url === resolved?.url ? resolved.mime_type ?? attachment.mime_type ?? blob.type : blob.type;
+      api.downloadBlob(blob, downloadFileName(fileName, mime, target));
+    } catch {
+      console.error("[whatsapp-media] download failed");
+      setDownloadError(true);
+    }
   };
   const fileName = resolved?.file_name || attachment.name || null;
 
@@ -189,7 +213,7 @@ export function WhatsAppMediaAttachment({
   if (!visible || !requestedRowIds.has(attachment.message_row_id) || !resolved) {
     body = <PendingPlaceholder busy={visible} />;
   } else if (!resolved.url) {
-    body = <UnavailablePlaceholder />;
+    body = <DocumentCard media={resolved} attachment={attachment} />;
   } else {
     const url = resolved.url;
     const kind = resolveMediaKind(attachment, resolved.mime_type);
@@ -257,16 +281,18 @@ export function WhatsAppMediaAttachment({
           media={resolved}
           attachment={attachment}
           onOpen={() => setLightbox({ kind: "pdf", url, fileName })}
+          onDownload={() => void download(url, fileName)}
         />
       );
     } else {
-      body = <DocumentCard media={resolved} attachment={attachment} />;
+      body = <DocumentCard media={resolved} attachment={attachment} onDownload={() => void download(url, fileName)} />;
     }
   }
 
   return (
     <div ref={sentinelRef} className="min-w-0">
       {body}
+      {downloadError && <p role="status" className="mt-1 text-xs">Download failed. Please try again.</p>}
       <WhatsAppMediaLightbox
         entry={lightbox}
         onClose={() => setLightbox(null)}

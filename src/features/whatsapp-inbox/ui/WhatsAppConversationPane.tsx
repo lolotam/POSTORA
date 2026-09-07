@@ -8,6 +8,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useWhatsAppWorkspaceContext } from "@/components/whatsapp/WhatsAppWorkspaceProvider";
 import { useMarkConversationRead, type Conversation } from "@/hooks/useMessaging";
+import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import { HIDDEN_UNDO_MS, useWhatsAppMessageActions } from "../application/useWhatsAppMessageActions";
 import { useWhatsAppMessages } from "../application/useWhatsAppMessages";
@@ -72,6 +73,13 @@ export function WhatsAppConversationPane({
   const { mutate: markConversationRead } = useMarkConversationRead();
   const { activeRole, activeWorkspaceId } = useWhatsAppWorkspaceContext();
   const conversationId = conversation?.id;
+  const hasUnread = (conversation?.unread_count ?? 0) > 0;
+  const readStateRef = useRef<{
+    socialAccountId: string;
+    conversationId: string;
+    hasUnread: boolean;
+    failed: boolean;
+  } | null>(null);
   const groups = useMemo(() => groupByDay(visibleMessages), [visibleMessages]);
 
   // The directory row for the open chat decides whether the header offers "Add to
@@ -99,14 +107,31 @@ export function WhatsAppConversationPane({
   );
 
   useEffect(() => {
-    if (!conversationId || !socialAccountId) return;
+    if (!conversationId || !socialAccountId) {
+      readStateRef.current = null;
+      return;
+    }
     // whatsapp_mark_read is agent-min; a viewer 403s on every open. Do not relax the policy.
     if (activeRole === "viewer") return;
+    const previous = readStateRef.current;
+    const opened = previous?.conversationId !== conversationId || previous?.socialAccountId !== socialAccountId;
+    const shouldMark = opened || (hasUnread && !previous.hasUnread);
+    const readState = opened
+      ? { socialAccountId, conversationId, hasUnread, failed: false }
+      : previous;
+    readState.hasUnread = hasUnread;
+    readStateRef.current = readState;
+    // Optimistic clearing is not another read event. A failed write waits for reopening,
+    // so the settlement refetch restoring unread cannot start an automatic retry loop.
+    if (!shouldMark || readState.failed) return;
     markConversationRead(
       { socialAccountId, conversationId },
-      { onError: () => undefined },
+      { onError: () => {
+        readState.failed = true;
+        toast({ title: "Couldn't mark the chat as read", variant: "destructive" });
+      } },
     );
-  }, [activeRole, conversationId, markConversationRead, socialAccountId]);
+  }, [activeRole, conversationId, hasUnread, markConversationRead, socialAccountId]);
 
   useEffect(() => {
     onScrollStateChange(false);

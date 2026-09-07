@@ -214,8 +214,46 @@ describe("WhatsAppMediaAttachment", () => {
     });
     renderAttachment(attachment({ kind: "document", name: null, mime_type: "application/pdf" }), api);
     act(() => triggerIntersect());
+    expect(await screen.findByRole("link", { name: "Download" })).toHaveAttribute("download", "Receipt.pdf");
     fireEvent.click(await screen.findByRole("button", { name: "Receipt.pdf" }));
     expect(await screen.findByTitle("Receipt.pdf")).toHaveAttribute("src", "https://signed.example/doc.pdf");
+  });
+
+  it("transitions a rejected video request from skeleton to a named chip with an error", async () => {
+    let rejectMedia!: (reason: Error) => void;
+    getMedia.mockReturnValue(new Promise((_resolve, reject) => { rejectMedia = reject; }));
+    renderAttachment(attachment({ kind: "video", name: null, mime_type: "video/mp4" }), api);
+    expect(screen.getByTestId("wa-media-pending")).toBeInTheDocument();
+    await waitFor(() => expect(getMedia).toHaveBeenCalled());
+    act(() => rejectMedia(new Error("WorkerRequestCancelled")));
+    expect(await screen.findByTestId("wa-media-document")).toHaveTextContent("Video");
+    expect(screen.getByTestId("wa-media-unavailable")).toHaveTextContent("Media unavailable");
+    expect(screen.queryByTestId("wa-media-pending")).not.toBeInTheDocument();
+  });
+
+  it("explains the phone fallback for an oversized attachment", async () => {
+    getMedia.mockResolvedValue({ media: [media({ url: null, file_name: "holiday.mp4", error: "MEDIA_UNAVAILABLE", reason: "too_large" })] });
+    renderAttachment(attachment({ kind: "video", name: "holiday.mp4" }), api);
+    expect(await screen.findByTestId("wa-media-document")).toHaveTextContent("holiday.mp4");
+    expect(screen.getByRole("status")).toHaveTextContent("Too large to preview — download from your phone.");
+  });
+
+  it.each([
+    ["document", "application/pdf", "pdf", "Download"],
+    ["video", "video/mp4", "mp4", "Download video"],
+    ["audio", "audio/ogg; codecs=opus", "ogg", "Download audio"],
+    ["image", "image/png", "png", "Download image"],
+  ] as const)("downloads nameless %s bytes with a MIME-derived extension", async (kind, mime, ext, label) => {
+    getMedia.mockResolvedValue({ media: [media({ kind, mime_type: mime, file_name: undefined })] });
+    const blob = new Blob(["file"], { type: mime });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({ ok: true, blob: async () => blob } as Response);
+    try {
+      renderAttachment(attachment({ kind, name: null, mime_type: null }), api);
+      fireEvent.click(await screen.findByRole(kind === "document" ? "link" : "button", { name: label }));
+      await waitFor(() => expect(api.downloadBlob).toHaveBeenCalledWith(blob, `whatsapp-row-1.${ext}`));
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   it("keeps a non-PDF document as a plain card", async () => {
