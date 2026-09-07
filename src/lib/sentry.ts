@@ -7,9 +7,15 @@ const SENTRY_DSN =
   "https://ec92b6803c7ea7187dbc282906cab7a4@o4508088707448832.ingest.us.sentry.io/4510744147656704";
 
 export function initSentry() {
-  // Only initialize in production or when explicitly enabled
   const isProduction = import.meta.env.PROD;
-  
+  // A dev server reports every hot-reload ReferenceError as a production-looking issue
+  // (eight of thirteen open issues on 2026-09-07 were localhost). Dev sends only when a
+  // DSN is set explicitly for that purpose.
+  if (!isProduction && !import.meta.env.VITE_SENTRY_DSN) {
+    console.log("[Sentry] Disabled in development (set VITE_SENTRY_DSN to enable)");
+    return;
+  }
+
   Sentry.init({
     dsn: SENTRY_DSN,
     
