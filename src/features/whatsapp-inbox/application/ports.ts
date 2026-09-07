@@ -27,6 +27,7 @@ export interface WhatsAppResolvedMedia {
   file_name?: string;
   size_bytes?: number;
   error?: MediaUnavailableError;
+  reason?: "too_large";
 }
 
 export interface GetWhatsAppMediaRequest {

@@ -368,6 +368,133 @@ function decodeBase64Capped(data: string, maxBytes: number): Uint8Array {
   return bytes;
 }
 
+type ByteSpan = { start: number; end: number };
+const EVOLUTION_ENVELOPE_ALLOWANCE = 1024;
+
+function invalidEvolutionEnvelope(): never {
+  throw new MediaFetchError("evolution returned invalid json", "transport_failed");
+}
+
+function jsonStringEnd(raw: Uint8Array, start: number): number {
+  for (let i = start; i < raw.length; i += 1) {
+    if (raw[i] === 92) i += 1;
+    else if (raw[i] === 34) return i;
+  }
+  return invalidEvolutionEnvelope();
+}
+
+function payloadValueStart(raw: Uint8Array, afterKey: number): number | null {
+  let offset = afterKey;
+  while ([9, 10, 13, 32].includes(raw[offset])) offset += 1;
+  if (raw[offset++] !== 58) return null;
+  while ([9, 10, 13, 32].includes(raw[offset])) offset += 1;
+  return raw[offset] === 34 ? offset + 1 : null;
+}
+
+function evolutionPayloadSpans(raw: Uint8Array): Map<string, ByteSpan> {
+  const spans = new Map<string, ByteSpan>();
+  let depth = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    if (raw[i] === 123 || raw[i] === 91) depth += 1;
+    else if (raw[i] === 125 || raw[i] === 93) depth -= 1;
+    else if (raw[i] === 34) {
+      const end = jsonStringEnd(raw, i + 1);
+      if (depth === 1 && end - i <= 10) {
+        const key = new TextDecoder().decode(raw.subarray(i + 1, end));
+        if (key === "base64" || key === "media") {
+          const start = payloadValueStart(raw, end + 1);
+          if (start !== null) {
+            if (spans.has(key)) invalidEvolutionEnvelope();
+            const valueEnd = jsonStringEnd(raw, start);
+            spans.set(key, { start, end: valueEnd });
+            i = valueEnd;
+            continue;
+          }
+        }
+      }
+      i = end;
+    }
+  }
+  return spans;
+}
+
+function evolutionMetadata(raw: Uint8Array, spans: Map<string, ByteSpan>): Uint8Array {
+  // Validate only the small metadata envelope with payload spans removed. Neither
+  // TextDecoder nor JSON.parse may ever receive the multi-megabyte base64 value.
+  const ordered = [...spans.values()].sort((a, b) => a.start - b.start);
+  const metadataSize = raw.length - ordered.reduce((sum, span) => sum + span.end - span.start, 0);
+  if (metadataSize > EVOLUTION_ENVELOPE_ALLOWANCE) invalidEvolutionEnvelope();
+  const metadata = new Uint8Array(metadataSize);
+  let from = 0;
+  let offset = 0;
+  for (const span of ordered) {
+    metadata.set(raw.subarray(from, span.start), offset);
+    offset += span.start - from;
+    from = span.end;
+  }
+  metadata.set(raw.subarray(from), offset);
+  return metadata;
+}
+
+function evolutionEnvelope(raw: Uint8Array): { payload: Uint8Array; mimeType?: string } {
+  const spans = evolutionPayloadSpans(raw);
+  const metadata = evolutionMetadata(raw, spans);
+  let envelope: { base64?: unknown; media?: unknown; mimetype?: unknown };
+  try {
+    envelope = JSON.parse(new TextDecoder().decode(metadata));
+  } catch {
+    return invalidEvolutionEnvelope();
+  }
+  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) invalidEvolutionEnvelope();
+  const span = spans.get(envelope.base64 == null ? "media" : "base64");
+  if (!span) invalidEvolutionEnvelope();
+  if (envelope.mimetype != null && (typeof envelope.mimetype !== "string" || envelope.mimetype.length > 256)) {
+    invalidEvolutionEnvelope();
+  }
+  return { payload: raw.subarray(span.start, span.end), mimeType: envelope.mimetype as string | undefined };
+}
+
+function base64Digit(byte: number): number {
+  if (byte >= 65 && byte <= 90) return byte - 65;
+  if (byte >= 97 && byte <= 122) return byte - 71;
+  if (byte >= 48 && byte <= 57) return byte + 4;
+  if (byte === 43) return 62;
+  if (byte === 47) return 63;
+  throw new MediaFetchError("media payload is not valid base64", "transport_failed");
+}
+
+function decodeBase64BytesCapped(payload: Uint8Array, maxBytes: number): Uint8Array {
+  // Data URL prefixes are short metadata, never a reason to copy the base64 span.
+  if (payload[0] === 100 && payload[1] === 97 && payload[2] === 116 && payload[3] === 97 && payload[4] === 58) {
+    const comma = payload.subarray(0, 256).indexOf(44);
+    if (comma < 0) invalidEvolutionEnvelope();
+    payload = payload.subarray(comma + 1);
+  }
+  let length = payload.length;
+  let padding = 0;
+  while (length > 0 && payload[length - 1] === 61) { length -= 1; padding += 1; }
+  if (!length || length % 4 === 1 || padding > 2 || (padding > 0 && payload.length % 4 !== 0)) {
+    throw new MediaFetchError("media payload is not valid base64", "transport_failed");
+  }
+  const decodedLength = Math.floor(length * 3 / 4);
+  if (decodedLength > maxBytes) {
+    throw new MediaFetchError(`base64 payload ${decodedLength} bytes exceeds ${maxBytes}`, "too_large");
+  }
+  const bytes = new Uint8Array(decodedLength);
+  let bits = 0;
+  let available = 0;
+  let offset = 0;
+  for (let i = 0; i < length; i += 1) {
+    bits = (bits << 6) | base64Digit(payload[i]);
+    available += 6;
+    if (available >= 8) {
+      available -= 8;
+      bytes[offset++] = (bits >>> available) & 255;
+    }
+  }
+  return bytes;
+}
+
 /**
  * WhatsApp Cloud API, coexistence, Instagram and Messenger.
  *
@@ -503,22 +630,11 @@ export class EvolutionFetcher implements InboundMediaFetcher {
       throw new MediaFetchError(`evolution media ${response.status}`, "transport_failed");
     }
 
-    // Bounded like every other body. Evolution returns the media base64-encoded inside
-    // JSON, so the envelope is about 4/3 of the bytes plus the wrapper -- twice the byte
-    // ceiling is ample and still stops an unbounded read. decodeBase64Capped applies the
-    // real limit to the payload itself.
-    const raw = await readCapped(response, limits.maxBytes * 2, limits.timeoutMs, signal);
-    let data: { base64?: string; media?: string; mimetype?: string };
-    try {
-      data = JSON.parse(new TextDecoder().decode(raw));
-    } catch {
-      throw new MediaFetchError("evolution returned invalid json", "transport_failed");
-    }
-    const base64 = data?.base64 ?? data?.media ?? null;
-    if (!base64) throw new MediaFetchError("evolution returned no base64", "not_found");
-
-    const bytes = decodeBase64Capped(String(base64), limits.maxBytes);
-    return { bytes, mimeType: data?.mimetype ?? ref.mimeType ?? "application/octet-stream" };
+    const envelopeCap = Math.ceil(limits.maxBytes / 3) * 4 + EVOLUTION_ENVELOPE_ALLOWANCE;
+    const raw = await readCapped(response, envelopeCap, limits.timeoutMs, signal);
+    const envelope = evolutionEnvelope(raw);
+    const bytes = decodeBase64BytesCapped(envelope.payload, limits.maxBytes);
+    return { bytes, mimeType: envelope.mimeType ?? ref.mimeType ?? "application/octet-stream" };
   }
 }
 
