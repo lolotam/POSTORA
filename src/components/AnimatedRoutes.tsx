@@ -5,6 +5,10 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { PageLoader } from "@/components/PageLoader";
 import { PageTransition } from "@/components/PageTransition";
 import { lazyWithRetry } from "@/lib/lazyWithRetry";
+import { Sentry } from "@/lib/sentry";
+
+// Lets Sentry read the route tree so pageload/navigation spans carry the route pattern.
+const SentryRoutes = Sentry.withSentryReactRouterV7Routing(Routes);
 
 // Lazy load all page components with chunk-retry resilience
 const Landing = lazyWithRetry(() => import("@/pages/Landing"), "Landing");
@@ -157,7 +161,7 @@ function AnimatedPage({ children, fill = false }: { children: React.ReactNode; f
 export function AnimatedRoutes() {
   return (
     <Suspense fallback={<PageLoader />}>
-      <Routes>
+      <SentryRoutes>
         <Route path="/" element={<AnimatedPage><Landing /></AnimatedPage>} />
         <Route path="/auth" element={<AnimatedPage><Auth /></AnimatedPage>} />
         <Route path="/workspace/invite" element={<AnimatedPage><WorkspaceInvite /></AnimatedPage>} />
@@ -532,7 +536,7 @@ export function AnimatedRoutes() {
         
         {/* Catch-all route */}
         <Route path="*" element={<AnimatedPage><NotFound /></AnimatedPage>} />
-      </Routes>
+      </SentryRoutes>
     </Suspense>
   );
 }
