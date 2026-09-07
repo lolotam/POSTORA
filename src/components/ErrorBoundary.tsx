@@ -2,6 +2,7 @@ import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { captureException } from '@/services/errorTracking';
+import { isChunkLoadError, reloadForNewVersion } from '@/lib/staleChunk';
 
 interface Props {
   children: ReactNode;
@@ -12,19 +13,6 @@ interface State {
   hasError: boolean;
   error: Error | null;
   errorId: string | null;
-}
-
-const CHUNK_ERROR_PATTERNS = [
-  "Failed to fetch dynamically imported module",
-  "ChunkLoadError",
-  "Importing a module script failed",
-  "Loading chunk",
-  "Loading CSS chunk",
-];
-
-function isChunkLoadError(error: Error | null): boolean {
-  if (!error) return false;
-  return CHUNK_ERROR_PATTERNS.some((p) => error.message?.includes(p));
 }
 
 export class ErrorBoundary extends Component<Props, State> {
@@ -39,6 +27,12 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
+    // A stale chunk after a deploy is expected, and this screen already tells the user to
+    // reload. Reporting it as a crash produced Sentry POSTORA-1 (30 events, 4 users).
+    if (isChunkLoadError(error)) {
+      console.warn('Stale chunk after deploy; prompting for reload:', error.message);
+      return;
+    }
     const errorId = captureException(error, {
       componentStack: errorInfo.componentStack || undefined,
       additionalContext: {
@@ -55,7 +49,7 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   private handleReload = () => {
-    window.location.reload();
+    reloadForNewVersion();
   };
 
   public render() {
