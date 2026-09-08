@@ -172,6 +172,10 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
     const automationChildren = [
       { icon: Sparkles, label: "Overview", path: "/automation" },
       { icon: Bot, label: "Agent Setup", path: "/automation/agents" },
+      // Sits beside Agent Setup deliberately: this is the human half of the same
+      // conversation pipeline the AI agent handles. It lived under Ad Manager until
+      // 2026-09-08, which put a live support queue next to advertising tools.
+      ...(flags.humanAgent ? [{ icon: Headphones, label: "Human Agent", path: "/human-agent" }] : []),
       ...(hasMessagingFlags ? [{ icon: Inbox, label: "Unified Inboxes", path: "/messaging" }] : []),
       ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
       ...(flags.audienceHub ? [{ icon: Users, label: "Audience & Contacts", path: "/automation/audience" }] : []),
@@ -190,7 +194,6 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       ...(flags.adManager ? [{ icon: Megaphone, label: "Ad Manager", path: "/ad-manager" }] : []),
       ...(flags.adAnalytics ? [{ icon: BarChart3, label: "Ad Analytics", path: "/ad-analytics" }] : []),
       ...(flags.leadsCrm ? [{ icon: Users, label: "Leads CRM", path: "/leads-crm" }] : []),
-      ...(flags.humanAgent ? [{ icon: Headphones, label: "Human Agent", path: "/human-agent" }] : []),
       ...(flags.whatsappShop ? [{ icon: ShoppingBag, label: "WhatsApp Shop", path: "/whatsapp-shop" }] : []),
     ];
 
