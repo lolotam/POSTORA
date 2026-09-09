@@ -15,7 +15,9 @@ import {
   resolvePageSize,
   SupabaseValidationError,
 } from "./supabase.ts";
-import { handleAdapterRequest, meterTestConnectionProbe, type AdminClientFactory } from "./handler.ts";
+import { handleAdapterRequest, meterTestConnectionProbe, RequestSchema, type AdminClientFactory } from "./handler.ts";
+import { createAdapterDependencies } from "./dependencies.ts";
+import { SUPABASE_ADAPTER_OUTPUT_LIMIT } from "../_shared/connectorBudgets.ts";
 import {
   type AdapterDependencies,
   type ConnectorResult,
@@ -619,6 +621,11 @@ Deno.test("an oversized cell is truncated so the rest of the rows survive", asyn
     assertEquals(cell.endsWith("…[truncated]"), true);
     assertEquals(cell.length <= 160 + "…[truncated]".length, true);
   }
+  // Restored contract (see SUPABASE_ADAPTER_OUTPUT_LIMIT): the reply side
+  // passes this envelope to the model whole only if it fits the Supabase
+  // output cap, and the adapter's own character budget bounds it further.
+  assertEquals(JSON.stringify(data).length <= SUPABASE_ADAPTER_OUTPUT_LIMIT, true);
+  assertEquals(JSON.stringify(data.rows).length <= SUPABASE_CHAR_BUDGET, true);
 });
 
 Deno.test("ordinary values are returned untouched", async () => {
@@ -1411,7 +1418,9 @@ Deno.test("an unconfigured connector still emits limit=25 in one request", async
     dependencies(f.impl),
   );
   assertEquals(f.urls.length, 1);
-  assertStringIncludes(f.urls[0], "limit=25");
+  // Exact param match: an assertStringIncludes("limit=25") would also pass
+  // against limit=250.
+  assertEquals(new URL(f.urls[0]).searchParams.get("limit"), "25");
 });
 
 Deno.test("the loop refuses to start a hop it has no time to finish", async () => {
@@ -1455,4 +1464,292 @@ Deno.test("a page whose body never arrives is abandoned and earlier rows survive
   assertEquals(data.row_count, 50);
   assertEquals(data.truncated_by, "upstream_error");
   assertEquals(data.has_more, true);
+});
+
+// ---------------------------------------------------------------------------
+// Redaction, narrowed to credential VALUES on a successful Supabase read
+// (plan Task 7; revision 3 corrections C7/C10; guard fixes G5/G6). Customer
+// columns named token/api_key/key and hex digests are the payload the
+// connector exists to deliver; the connector's own credentials still never
+// survive, in any representation.
+// ---------------------------------------------------------------------------
+
+Deno.test("a customer column named token survives a successful Supabase read", async () => {
+  const f = pagingFetch([[{ id: 1, token: "ABC-123", api_key: "plain", key: "k1" }]], { total: 1 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals((data.rows[0] as { token: string }).token, "ABC-123");
+  assertEquals((data.rows[0] as { api_key: string }).api_key, "plain");
+  assertEquals((data.rows[0] as { key: string }).key, "k1");
+});
+
+Deno.test("a 64-character hex column is customer data, not a leaked secret", async () => {
+  const digest = "a".repeat(64);
+  const f = pagingFetch([[{ id: 1, sha256: digest }]], { total: 1 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals((data.rows[0] as { sha256: string }).sha256, digest);
+});
+
+Deno.test("the connector's own anon key is still stripped if a row echoes it", async () => {
+  const f = pagingFetch([[{ id: 1, note: `key is ${SUPABASE_ANON_KEY}` }]], { total: 1 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals((data.rows[0] as { note: string }).note.includes(SUPABASE_ANON_KEY), false);
+});
+
+Deno.test("a credential longer than the cell cap leaves no surviving prefix", async () => {
+  // G6: redaction must run BEFORE trimValue. A 260-character key that was
+  // trimmed first would leave an unmatchable 160-character prefix behind --
+  // asserting only on the whole key cannot catch that reordering.
+  const longKey = makeJwt({ role: "anon", pad: "x".repeat(200) });
+  const f = pagingFetch([[{ id: 1, note: `echo ${longKey}` }]], { total: 1 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool(),
+      credentials: { anon_key: longKey },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  const note = (data.rows[0] as { note: string }).note;
+  assertEquals(note.includes(longKey), false);
+  assertEquals(note.includes(longKey.slice(0, 160)), false);
+});
+
+Deno.test("a bearer token in a customer row is still redacted by the generic rule", async () => {
+  // Rows skip the key-name pass after Task 7; the ^Bearer rule inside
+  // stripCredentialValues is the only thing still catching these.
+  const f = pagingFetch([[{ id: 1, note: "Bearer abc.def.ghi" }]], { total: 1 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals((data.rows[0] as { note: string }).note, "[REDACTED]");
+});
+
+Deno.test("a deeply nested JSONB column is bounded, not recursed forever", async () => {
+  let nested: Record<string, unknown> = { leaf: "ok" };
+  for (let i = 0; i < 40; i++) nested = { child: nested };
+  const f = pagingFetch([[{ id: 1, payload: nested }]], { total: 1 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertStringIncludes(JSON.stringify(data.rows[0]), "[REDACTED]");
+});
+
+Deno.test("WooCommerce results keep the generic key-name and hex redaction", async () => {
+  // C10: Woo's own projection already drops a `token` field, so asserting on
+  // one proves nothing. `sku` survives the projection, and a 64-hex sku is
+  // redacted only by the generic pass this test protects.
+  const digest = "b".repeat(64);
+  const result = await executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request(),
+    },
+    dependencies(() => Promise.resolve(jsonResponse([{ id: 1, name: "Hat", sku: digest }]))),
+  );
+  assertEquals(result.ok, true);
+  const body = serialized(result.ok === true && result.action === "execute" ? result.data : null);
+  assertEquals(body.includes(digest), false);
+  assertStringIncludes(body, "[REDACTED]");
+});
+
+Deno.test("a Supabase failure path keeps credential redaction", async () => {
+  // C10: a refusal with a fixed message carries nothing that needs redacting.
+  // The fetch rejects on the FIRST page with the anon key inside the error,
+  // so the credential actually enters the failure path.
+  const result = await executeConnector(
+    {
+      tool: pagedTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(() => Promise.reject(new Error(`network copied ${SUPABASE_ANON_KEY}`))),
+  );
+  assertEquals(result.ok, false);
+  assertEquals(serialized(result).includes(SUPABASE_ANON_KEY), false);
+});
+
+// ---------------------------------------------------------------------------
+// Guard fix G2: next_offset must never name a call the connector itself
+// would refuse or that repeats the request identically.
+// ---------------------------------------------------------------------------
+
+Deno.test("an unordered truncation offers no offset it would refuse to continue", async () => {
+  // has_more stays true -- more rows genuinely may exist -- but a follow-up
+  // with any offset is GUARANTEED supabase_order_required, so handing one
+  // back burns an iteration on a call that always errors. The model should
+  // report that the connector needs an order column instead.
+  const f = pagingFetch([rows(0, 200)], { total: 900 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: ["products"],
+          max_rows: "500",
+          page_size: "200",
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals(data.truncated_by, "unordered");
+  assertEquals(data.has_more, true);
+  assertEquals(data.next_offset, null);
+});
+
+Deno.test("a time-budget stop with zero rows does not echo the requested offset", async () => {
+  // next_offset equal to the offset just requested means the model retries
+  // identically forever.
+  const f = pagingFetch([rows(40, 10)], { total: 900 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "10" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products", offset: "40" } }),
+    },
+    { ...dependencies(f.impl), callBudgetMs: 2_000 },
+  ));
+  assertEquals(f.urls.length, 0);
+  assertEquals(data.row_count, 0);
+  assertEquals(data.truncated_by, "time_budget");
+  assertEquals(data.next_offset, null);
+});
+
+// ---------------------------------------------------------------------------
+// Guard fix G3: five break sites stop with "upstream_error" on a SUCCESSFUL
+// envelope, so without an explicit log event the failure produces no
+// telemetry at all -- just a short answer the model presents as complete.
+// ---------------------------------------------------------------------------
+
+Deno.test("a mid-loop upstream failure is logged, not silent", async () => {
+  const logged: unknown[] = [];
+  const f = pagingFetch([rows(0, 200)], { total: 900, failAfter: 1 });
+  const result = await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "200" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl, [], logged),
+  );
+  assertEquals(result.ok, true);
+  assertEquals(envelopeOf(result).truncated_by, "upstream_error");
+  const failure = logged.find(
+    (event) => (event as { event?: string }).event === "connector_failure",
+  );
+  assertEquals(typeof failure === "object", true);
+  const event = failure as { vendor: string; operation: string; error_code: string; vendor_status?: number };
+  assertEquals(event.vendor, "supabase");
+  assertEquals(event.operation, "search_products");
+  assertEquals(event.error_code, "supabase_http_error");
+  assertEquals(event.vendor_status, 500);
+});
+
+// ---------------------------------------------------------------------------
+// Guard fix G4: buildUrl writes filters with searchParams.set before the page
+// loop overwrites order/limit/offset on the same URL (and `select` would be
+// overwritten outright), so a column with one of those names was silently
+// dropped -- the connector returned the whole table where the model asked for
+// one row, a wrong answer delivered as a right one.
+// ---------------------------------------------------------------------------
+
+Deno.test("a filter named like a PostgREST reserved word is refused, not silently dropped", async () => {
+  for (const column of ["select", "order", "limit", "offset", "and", "or", "not"]) {
+    let fetched = false;
+    const result = await executeConnector(
+      {
+        tool: supabaseTool(),
+        credentials: { anon_key: SUPABASE_ANON_KEY },
+        request: request({ parameters: { table: "products", filters: { [column]: "x" } } }),
+      },
+      dependencies(() => {
+        fetched = true;
+        return Promise.resolve(jsonResponse([]));
+      }),
+    );
+    assertEquals(result.ok, false, `filter column "${column}" was not refused`);
+    assertEquals((result as { error: { code: string } }).error.code, "supabase_filter_refused");
+    assertEquals(fetched, false, `filter column "${column}" must be refused before any vendor request`);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Guard fix G1: the caller's remaining budget has to cross the HTTP boundary,
+// or the page loop always assumes a full ceiling while the caller may abort
+// at a fraction of it.
+// ---------------------------------------------------------------------------
+
+Deno.test("createAdapterDependencies carries a granted call budget into the adapter seam", () => {
+  assertEquals(createAdapterDependencies().callBudgetMs, undefined);
+  assertEquals(createAdapterDependencies(1_600).callBudgetMs, 1_600);
+  assertEquals(createAdapterDependencies(-1).callBudgetMs, undefined);
+});
+
+Deno.test("the internal adapter contract accepts an optional call_budget_ms", () => {
+  const base = {
+    tool_id: "00000000-0000-0000-0000-000000000003",
+    action: "execute",
+    capability: "search_products",
+    parameters: {},
+  };
+  assertEquals(RequestSchema.safeParse({ ...base, call_budget_ms: 4_000 }).success, true);
+  assertEquals(RequestSchema.safeParse({ ...base, call_budget_ms: -2 }).success, false);
+  assertEquals(RequestSchema.safeParse({ ...base, call_budget_ms: "lots" }).success, false);
+});
+
+// ---------------------------------------------------------------------------
+// Also-fix: the first-page deadline expiry escaped as a generic
+// connector_request_failed; it needs its own stable code.
+// ---------------------------------------------------------------------------
+
+Deno.test("a first page that outlives the deadline is a named timeout, not a generic failure", async () => {
+  const hanging = new Response(
+    new ReadableStream({ start() { /* never enqueues */ } }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+  const result = await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    { ...dependencies(() => Promise.resolve(hanging)), callBudgetMs: 3_200 },
+  );
+  assertEquals(result.ok, false);
+  assertEquals((result as { error: { code: string } }).error.code, "supabase_timeout");
 });

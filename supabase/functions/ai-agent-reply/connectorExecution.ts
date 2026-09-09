@@ -98,6 +98,8 @@ interface AdapterRequestInput {
   args: Record<string, unknown>;
   config: AdapterCallConfig;
   signal: AbortSignal;
+  /** The budget granted to this call, forwarded so the callee can size its own work. */
+  callBudgetMs?: number;
 }
 
 function adapterFailure(toolName: string, detail: string): ToolResult {
@@ -124,7 +126,7 @@ function adapterCallConfig(
 }
 
 function adapterRequest(input: AdapterRequestInput): Request | null {
-  const { context, tool, args, config, signal } = input;
+  const { context, tool, args, config, signal, callBudgetMs } = input;
   if (typeof args.capability !== "string") return null;
   const parameters = isRecord(args.parameters) ? args.parameters : {};
   return new Request(
@@ -142,6 +144,12 @@ function adapterRequest(input: AdapterRequestInput): Request | null {
         action: "execute",
         capability: args.capability,
         parameters,
+        // Tell the callee how long it really has. Without this the adapter
+        // assumes its full ceiling and plans a loop the caller will abort,
+        // discarding every page already fetched.
+        ...(typeof callBudgetMs === "number" && callBudgetMs > 0
+          ? { call_budget_ms: Math.trunc(callBudgetMs) }
+          : {}),
       }),
       signal,
     },
@@ -222,17 +230,28 @@ export async function executeAdapterTool(
   if (!config) return adapterFailure(tool.name, "connector service is unavailable.");
 
   const controller = new AbortController();
-  const request = adapterRequest({ context, tool, args, config, signal: controller.signal });
-  if (!request) return adapterFailure(tool.name, "the requested capability is missing.");
-
   // MAX_SAFE_INTEGER means "caller did not say", so the vendor's own ceiling
   // applies and existing call sites keep today's behaviour. adapterCallBudget
   // itself maps non-finite input to 0, so the default is resolved here.
   const remainingBudgetMs = dependencies.remainingBudgetMs ?? Number.MAX_SAFE_INTEGER;
+  const grantedBudgetMs = adapterCallBudget(
+    tool.connector_type ?? "custom_rest",
+    remainingBudgetMs,
+  );
+
+  const request = adapterRequest({
+    context,
+    tool,
+    args,
+    config,
+    signal: controller.signal,
+    callBudgetMs: grantedBudgetMs,
+  });
+  if (!request) return adapterFailure(tool.name, "the requested capability is missing.");
+
   const timeout = setTimeout(
     () => controller.abort(),
-    dependencies.timeoutMs ??
-      adapterCallBudget(tool.connector_type ?? "custom_rest", remainingBudgetMs),
+    dependencies.timeoutMs ?? grantedBudgetMs,
   );
   try {
     // SUPABASE_URL is the in-cluster gateway; using the public hostname here

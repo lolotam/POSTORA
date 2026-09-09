@@ -38,27 +38,6 @@ function credentialRepresentations(credentials: Record<string, unknown>): string
   return [...values].filter(Boolean).sort((left, right) => right.length - left.length);
 }
 
-function replaceCredentialValues(value: unknown, sensitiveValues: string[]): unknown {
-  if (typeof value === "string") {
-    return sensitiveValues.reduce(
-      (safe, sensitive) => safe.replaceAll(sensitive, REDACTED),
-      value,
-    );
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => replaceCredentialValues(item, sensitiveValues));
-  }
-  if (value !== null && typeof value === "object") {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        replaceCredentialValues(item, sensitiveValues),
-      ]),
-    );
-  }
-  return value;
-}
-
 // A deeply nested JSONB column must not recurse without a bound.
 const REDACTION_MAX_DEPTH = 10;
 
@@ -91,21 +70,53 @@ function stripCredentialValue(value: unknown, secrets: string[], depth = 0): unk
  * credential longer than the cell cap cannot be cut into an unmatchable
  * prefix that then survives trimming.
  */
-export function stripCredentialValues(
-  value: unknown,
-  credentials: Record<string, unknown>,
-): unknown {
-  return stripCredentialValue(value, credentialRepresentations(credentials));
+export function stripCredentialValues(value: unknown, secrets: string[]): unknown {
+  return stripCredentialValue(value, secrets);
+}
+
+/**
+ * The expensive half of the above: builds every form a credential can take.
+ * Hoist this above a row loop; it allocates a Set, encodes, base64s and sorts.
+ */
+export function credentialSecrets(credentials: Record<string, unknown>): string[] {
+  return credentialRepresentations(credentials);
+}
+
+function isSupabaseReadEnvelope(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return candidate.ok === true && candidate.vendor === "supabase" &&
+    candidate.action === "execute" &&
+    candidate.data !== null && typeof candidate.data === "object" &&
+    Array.isArray((candidate.data as Record<string, unknown>).rows);
 }
 
 export function redactConnectorOutput(
   value: unknown,
   credentials: Record<string, unknown>,
 ): unknown {
-  const structurallyRedacted = redactSensitive(value);
-  return replaceCredentialValues(
-    structurallyRedacted,
-    credentialRepresentations(credentials),
-  );
+  const secrets = credentialRepresentations(credentials);
+
+  // One payload skips the generic key-name and hex pass: the ROWS of a
+  // successful Supabase read. Those are the customer's own columns, on a table
+  // the operator allow-listed, and a column called `key`, `token` or `api_key`
+  // is ordinary business data -- blanking it made a full-table read useless.
+  // Credential-value redaction still runs on them, and everything else --
+  // every other vendor, every error, every test-connection result -- keeps the
+  // key-name pass exactly as before.
+  if (isSupabaseReadEnvelope(value)) {
+    const { data, ...envelope } = value;
+    const payload = data as Record<string, unknown>;
+    const { rows, ...meta } = payload;
+    return {
+      ...(stripCredentialValue(redactSensitive(envelope), secrets) as Record<string, unknown>),
+      data: {
+        ...(stripCredentialValue(redactSensitive(meta), secrets) as Record<string, unknown>),
+        rows: stripCredentialValue(rows, secrets),
+      },
+    };
+  }
+
+  return stripCredentialValue(redactSensitive(value), secrets);
 }
 

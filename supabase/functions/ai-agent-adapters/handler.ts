@@ -62,13 +62,18 @@ export async function meterTestConnectionProbe(
   return outcome;
 }
 
-const RequestSchema = z.object({
+export const RequestSchema = z.object({
   tool_id: z.string().uuid(),
   action: z.enum(["execute", "test_connection"]),
   capability: z.enum(CAPABILITIES).optional(),
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
   parameters: z.record(z.unknown()).default({}),
   user_id: z.string().uuid().optional(),
+  // The caller's REMAINING wall-clock budget for this whole adapter call. The
+  // Supabase page loop derives its deadline from it, so a call made late in a
+  // conversation shortens its loop instead of being aborted mid-flight with
+  // every page it already fetched thrown away.
+  call_budget_ms: z.number().int().positive().optional(),
 }).strict().superRefine((request, context) => {
   if (request.action === "execute" && !request.capability) {
     context.addIssue({
@@ -209,7 +214,7 @@ async function executeAdapterRequest(
           parameters: parsedRequest.data.parameters,
         },
       },
-      createAdapterDependencies(),
+      createAdapterDependencies(parsedRequest.data.call_budget_ms),
     );
   const connectorOutcome = parsedRequest.data.action === "test_connection"
     ? await meterTestConnectionProbe(admin, {

@@ -259,6 +259,10 @@ Deno.test("adapter call uses the in-cluster URL and service-role internal contra
     action: "execute",
     capability: "search_products",
     parameters: { query: "hat" },
+    // The callee sizes its own work from this. Without it the adapter assumes
+    // its full ceiling and plans a loop this caller will abort, discarding
+    // every page already fetched. 6000 is WooCommerce's ceiling, unchanged.
+    call_budget_ms: ADAPTER_CALL_TIMEOUT_MS,
   });
 });
 

@@ -1,5 +1,5 @@
 import { readJson, safeVendorFetch } from "./http.ts";
-import { stripCredentialValues } from "./redaction.ts";
+import { credentialSecrets, stripCredentialValues } from "./redaction.ts";
 import {
   SUPABASE_CALL_TIMEOUT_MS,
   SUPABASE_LOOP_BUDGET_MS,
@@ -306,6 +306,16 @@ function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string }
       if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(column)) {
         throw new SupabaseValidationError("supabase_filter_invalid", "A Supabase filter is invalid.");
       }
+      // The page loop writes `order`, `limit` and `offset` onto this same URL,
+      // and `select` is already set. A filter sharing one of those names is
+      // silently overwritten, so the connector answers the whole table where
+      // the model asked for one row -- a wrong answer that looks right.
+      if (RESERVED_QUERY_PARAMS.has(column)) {
+        throw new SupabaseValidationError(
+          "supabase_filter_refused",
+          `Filtering on "${column}" is not supported by this connector.`,
+        );
+      }
       if (allowedColumns && !allowedColumns.has(column)) {
         throw new SupabaseValidationError(
           "supabase_filter_refused",
@@ -344,14 +354,27 @@ function isPostgrestErrorBody(payload: unknown): boolean {
  * redirect hop and clears it before readJson, so only an outer race like this
  * bounds a hop end-to-end (C1).
  */
+/** Distinguishes "we ran out of time" from any other rejection. */
+class SupabaseDeadlineError extends Error {
+  constructor() {
+    super("Supabase page exceeded its deadline");
+    this.name = "SupabaseDeadlineError";
+  }
+}
+
 function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const signal = AbortSignal.timeout(Math.max(0, ms));
-    const onAbort = () => reject(new Error("Supabase page exceeded its deadline"));
+    const onAbort = () => reject(new SupabaseDeadlineError());
     signal.addEventListener("abort", onAbort, { once: true });
     work.then(
       (value) => {
         signal.removeEventListener("abort", onAbort);
+        if (signal.aborted && value instanceof Response) {
+          // The race already rejected; drop the body rather than leak it.
+          value.body?.cancel().catch(() => {});
+          return;
+        }
         resolve(value);
       },
       (error) => {
@@ -364,6 +387,11 @@ function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
 
 // UTF-16 code units, not bytes: String.length is what the serialised envelope
 // is measured in downstream, so the budget is counted the same way.
+/** Reserved by PostgREST's query grammar and by the page loop's own params. */
+const RESERVED_QUERY_PARAMS = new Set([
+  "select", "order", "limit", "offset", "and", "or", "not",
+]);
+
 export const SUPABASE_CHAR_BUDGET = 60_000;
 
 export interface SupabaseReadEnvelope {
@@ -388,7 +416,13 @@ async function readPages(
   headers: Record<string, string>,
   dependencies: AdapterDependencies,
   credentials: Record<string, unknown>,
-  limits: { maxRows: number; pageSize: number; startOffset: number; orderBy: string | null },
+  limits: {
+    maxRows: number;
+    pageSize: number;
+    startOffset: number;
+    orderBy: string | null;
+    operation: string;
+  },
 ): Promise<SupabaseReadEnvelope> {
   // The caller may have less than 12s left, so the loop cannot assume 8s. The
   // Supabase caller ceiling is SUPABASE_CALL_TIMEOUT_MS (C8); callBudgetMs
@@ -401,6 +435,13 @@ async function readPages(
   let cursor = limits.startOffset;
   let stop: SupabaseReadEnvelope["truncated_by"] = null;
   let exhausted = false;
+  // Captured at whichever break site sets `upstream_error`, so the single log
+  // call at loop exit can say what actually went wrong.
+  let pageErrorCode = "supabase_http_error";
+  let pageStatus: number | undefined;
+  // Built once. This allocates a Set, URL-encodes, base64s and sorts, and the
+  // row loop below runs up to `maxRows` times.
+  const secrets = credentialSecrets(credentials);
 
   while (collected.length < limits.maxRows) {
     const remaining = deadline - Date.now();
@@ -434,6 +475,7 @@ async function readPages(
       // A rejected fetch, an abort or a DNS failure on page two must not throw
       // away page one; the dispatcher would turn it into connector_request_failed.
       if (collected.length === 0) throw cause;
+      pageErrorCode = "supabase_request_failed";
       stop = "upstream_error";
       break;
     }
@@ -449,6 +491,8 @@ async function readPages(
           response.status,
         );
       }
+      pageErrorCode = "supabase_http_error";
+      pageStatus = response.status;
       stop = "upstream_error";
       break;
     }
@@ -459,6 +503,7 @@ async function readPages(
       payload = await withDeadline(readJson(response), deadline - Date.now());
     } catch (cause) {
       if (collected.length === 0) throw cause;
+      pageErrorCode = "supabase_request_failed";
       stop = "upstream_error";
       break;
     }
@@ -470,6 +515,8 @@ async function readPages(
           response.status,
         );
       }
+      pageErrorCode = "supabase_postgrest_error";
+      pageStatus = response.status;
       stop = "upstream_error";
       break;
     }
@@ -481,6 +528,8 @@ async function readPages(
           response.status,
         );
       }
+      pageErrorCode = "supabase_response_invalid";
+      pageStatus = response.status;
       stop = "upstream_error";
       break;
     }
@@ -493,7 +542,7 @@ async function readPages(
     let budgetHit = false;
     let acceptedFromPage = 0;
     for (const row of payload) {
-      const stripped = stripCredentialValues(row, credentials);
+      const stripped = stripCredentialValues(row, secrets);
       const trimmed = (trimRows([stripped]) as unknown[])[0];
       const cost = JSON.stringify(trimmed).length + (collected.length ? 1 : 0);
       if (chars + cost > SUPABASE_CHAR_BUDGET) { budgetHit = true; break; }
@@ -532,15 +581,36 @@ async function readPages(
     hasMore = total === null || cursor < total;
   }
   if (stop === "no_progress") {
-    // C5: an unchanged offset tells the model to retry the same offset forever.
+    // An unchanged offset tells the model to retry the same offset forever.
     hasMore = false;
   }
+
+  // An offset is only worth handing back if a follow-up call would ACCEPT it.
+  // Without an order column the connector refuses a non-zero offset outright,
+  // and a stop that collected nothing would hand back the offset just used --
+  // both leave the model retrying a call that cannot advance. `has_more` stays
+  // honest either way: more rows may well exist, we just cannot page to them.
+  const continuable = limits.orderBy !== null && cursor > limits.startOffset;
+
+  if (stop === "upstream_error") {
+    // A page that failed mid-loop still returns a SUCCESSFUL envelope, so the
+    // dispatcher's failure logging never fires and a short answer reaches the
+    // customer looking complete. This is the only place that can say otherwise.
+    dependencies.log({
+      event: "connector_failure",
+      vendor: "supabase",
+      operation: limits.operation,
+      error_code: pageErrorCode,
+      ...(pageStatus === undefined ? {} : { vendor_status: pageStatus }),
+    });
+  }
+
   return {
     rows: collected,
     row_count: collected.length,
     total,
     has_more: hasMore,
-    next_offset: hasMore ? cursor : null,
+    next_offset: hasMore && continuable ? cursor : null,
     truncated_by: stop,
   };
 }
@@ -639,9 +709,18 @@ async function callSupabase(
       pageSize: resolvePageSize(invocation.tool.settings),
       startOffset,
       orderBy,
+      operation: capability,
     });
     return { ok: true, vendor: "supabase", action: "execute", capability, data: envelope };
   } catch (error) {
+    if (error instanceof SupabaseDeadlineError) {
+      // Otherwise this escapes as the dispatcher's generic
+      // connector_request_failed and the model learns nothing it can act on.
+      return supabaseFailure(
+        "supabase_timeout",
+        "Supabase did not answer within the time this request had left.",
+      );
+    }
     if (error instanceof SupabaseValidationError) {
       return supabaseFailure(error.code, error.message, error.vendorStatus);
     }

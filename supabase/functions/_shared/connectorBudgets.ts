@@ -25,3 +25,14 @@ export const SUPABASE_LOOP_BUDGET_MS = 8_000;
  * its caller by beginning a request it has no time to finish.
  */
 export const SUPABASE_MIN_HOP_MS = 1_500;
+
+/** Every vendor's reply-side serialization cap. Unchanged. */
+export const ADAPTER_OUTPUT_LIMIT = 8_000;
+
+/**
+ * The Supabase envelope can legitimately run to the adapter's own 60k
+ * character budget, so its reply-side backstop sits proportionally higher.
+ * Serializing at the generic 8000 cut a paged envelope mid-JSON -- the exact
+ * 2026-09-01 incident this family of constants exists to prevent.
+ */
+export const SUPABASE_ADAPTER_OUTPUT_LIMIT = 80_000;
