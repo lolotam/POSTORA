@@ -1,8 +1,76 @@
 # Deploy Edge Function to Self-Hosted Supabase
 
-Dokploy auto-redeploys the **frontend** (`postora` app) on every push. It does **not** touch the edge-functions volume of the self-hosted Supabase stack. After any change under `supabase/functions/*`, follow this runbook to make it live on `https://api.postora.cloud`.
+Dokploy auto-redeploys the **frontend** (`postora` app) on every push. It does **not** touch the edge-functions volume of the self-hosted Supabase stack as part of that build.
+
+**Since 2026-09-09, a merge to `main` deploys the functions on its own** — see [Automatic deploy](#automatic-deploy-dokploy-schedule) below. Reach for the manual steps in this runbook when you need to deploy a **branch before it merges**, when the schedule is **disabled or has parked a failed commit**, or when you are deploying a **server-only hotfix** that is deliberately not in git.
 
 Run on the Contabo VPS (`86.48.2.205`) via `ssh-contabo-mcp` or a normal SSH session.
+
+---
+
+## Automatic deploy (Dokploy Schedule)
+
+A Dokploy Schedule named **`Edge Functions Sync (POSTORA)`** runs every two minutes and deploys
+`origin/main` with no further action. It is a `dokploy-server` schedule, so it executes **inside the
+Dokploy container**, where `/etc/dokploy` is visible but `/root` is not. Its whole body is one line:
+
+```bash
+bash /etc/dokploy/postora-edge-deploy.sh
+```
+
+The script is versioned in this repo at [`scripts/deploy/postora-edge-deploy.sh`](../../scripts/deploy/postora-edge-deploy.sh).
+It reads its own clone at `/etc/dokploy/postora-runtime` (deploy key `/etc/dokploy/ssh/postora_edge_deploy`),
+mirrors `git archive origin/main` into `$VOL`, restarts `functions`, restarts
+`ai-knowledge-excel-worker` when `_shared/` changed, health-checks `get-public-config`, and then
+sends an `OPTIONS` to **each changed function** to prove it boots. That last step matters because a
+function whose module fails to load answers 5xx only on its own path, while `get-public-config` keeps
+returning 200 — which is how `generate-caption` stayed broken for ten weeks. A run that fails either
+check **rolls the volume back to the previous commit** and exits non-zero so Dokploy flags it red.
+
+**A failed commit is parked, not retried.** The script writes the bad SHA to
+`/etc/dokploy/postora-edge-deploy.failed` and every later tick skips it, so a bad merge cannot become
+a restart loop. Delete that file to let it try again:
+
+```bash
+cat /etc/dokploy/postora-edge-deploy.failed   # which commit is parked
+rm /etc/dokploy/postora-edge-deploy.failed    # allow the next tick to retry
+```
+
+### Pause it before any server-only hotfix
+
+The reconciler compares the volume against `origin/main` on **every** tick, not only when a new
+commit lands. Anything you write straight into `$VOL` that is not in git — the classic
+server-only hotfix — is overwritten or deleted within two minutes. Park the schedule first:
+
+```bash
+touch /etc/dokploy/postora-edge-deploy.paused   # ticks now exit without touching the volume
+# ... apply the hotfix, verify it ...
+rm /etc/dokploy/postora-edge-deploy.paused      # resume; the next tick reconciles to origin/main
+```
+
+**Removing the pause reverts the hotfix.** A pause buys time to land the same fix in git, it does
+not preserve anything. Leave the marker in place until the fix is merged, and say so in the incident
+notes, because a paused schedule silently stops deploying everyone else's merges too.
+
+Read a run's output in Dokploy under Schedules, or on disk:
+
+```bash
+ls -t /etc/dokploy/schedules/*/*.log | head -3
+```
+
+**Migrations are not covered, and the schedule will not wait for one.** A merge carrying both a
+migration and a function that needs the new schema deploys the function within two minutes, against
+the old database. Nothing detects this: the function boots fine and only fails when it touches the
+missing column, so the health check and the boot probes both pass.
+
+**Apply the migration before you merge the function**, not after. That ordering is the only thing
+standing between a schema change and a live failure window, and it is the same rule the manual path
+always had — see the Task Execution Workflow in [`CLAUDE.md`](../../CLAUDE.md). If a migration cannot
+be applied ahead of the merge, pause the schedule (below) until it has been.
+
+`/root/postora-runtime` is a **separate** checkout kept for the manual sections below. The schedule
+never touches it, so it will fall behind `main`. That is harmless: every path here reads
+`git archive`/`git show` from a fetched `origin/main`, never from a working tree.
 
 ---
 
@@ -243,8 +311,17 @@ That's your trigger to run Section 1 with the named `FN`.
 
 ---
 
-## Why this is manual
+## Why the manual path still exists
 
+- Dokploy's `postora` app only rebuilds the frontend container; the Supabase stack (`postorasupabase-supabase-j8axyh`) is a separate Dokploy stack and its `functions` volume is not in the frontend build context. Nothing in the frontend deploy can reach it, which is why the schedule above exists as a separate job.
+- Restarting only the `functions` container (not the whole stack) avoids any auth/db/storage downtime. Both the schedule and these steps do that.
 - Lovable's sandbox has no SSH access to Contabo.
-- Dokploy's `postora` app only rebuilds the frontend container; the Supabase stack (`postorasupabase-supabase-j8axyh`) is a separate Dokploy stack and its `functions` volume is not in the frontend build context.
-- Restarting only the `functions` container (not the whole stack) avoids any auth/db/storage downtime.
+- The schedule only ever deploys `origin/main`. Deploying a branch before merge, or a server-only hotfix that is deliberately absent from git, still has to be done by hand.
+
+### Why not GitHub Actions
+
+There used to be a `deploy-edge-functions.yml` workflow doing the same sync over SSH. It was removed
+in PR #168 along with the rest of the workflows: Actions billing blocks every job on this repo, so
+both `Deploy Supabase Edge Functions` and `Tests` failed within about five seconds of starting,
+having run no steps (`gh run list` still shows them for 2026-09-09). The schedule replaces it and
+depends on nothing outside the VPS.
