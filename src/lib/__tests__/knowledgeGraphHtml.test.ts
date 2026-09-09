@@ -79,3 +79,19 @@ describe("buildGraphHtml executed", () => {
     expect(html).not.toContain("x".repeat(300));
   });
 });
+
+describe("node detail", () => {
+  it("exposes type and description as a hover title, escaped", () => {
+    const dom = new JSDOM(
+      buildGraphHtml(
+        [{ id: "a", name: "Alpha", type: "product", description: "<b>bold</b> & sharp" }],
+        [],
+      ),
+      { runScripts: "dangerously" },
+    );
+    const titles = [...dom.window.document.querySelectorAll("g[data-entity-id] title")];
+    expect(titles).toHaveLength(1);
+    expect(titles[0].textContent).toBe("product -- <b>bold</b> & sharp");
+    expect(dom.window.document.querySelectorAll("b").length).toBe(0);
+  });
+});

@@ -222,6 +222,11 @@ var nodeEls=nodes.map(function(item){
   label.setAttribute("y",String(item.y+RADIUS+12));
   label.setAttribute("text-anchor","middle");
   label.textContent=item.name;
+  // The description is the reason each node carries one: the label shows the
+  // name unconditionally, and the truncated description is the hover detail.
+  var tip=svgEl("title");
+  tip.textContent=item.description?item.type+" -- "+item.description:item.type;
+  group.appendChild(tip);
   group.appendChild(circle);
   group.appendChild(label);
   nodeLayer.appendChild(group);
