@@ -44,6 +44,12 @@ import {
   locateKnowledgeFile,
   type KnowledgeFileOwner,
 } from "../_shared/knowledgeSourceFiles.ts";
+import { publicSupabaseUrl } from "../_shared/publicSupabaseUrl.ts";
+import {
+  resolveSourceDownload,
+  type SignerLike,
+  type SourceReader,
+} from "./downloadSource.ts";
 import { validateKnowledgeUrl } from "../_shared/knowledgeUrl.ts";
 import {
   firecrawlCancelCrawl,
@@ -612,6 +618,37 @@ async function handleRequest(req: Request): Promise<Response> {
         vault_resolved: exportRow.vault_url ? urls.vault_url !== null : null,
       });
       return jsonResponse({ ok: true, ...urls, generated_at: exportRow.generated_at });
+    }
+    if (action === "download_source") {
+      // Ownership and the uniform 404 live in downloadSource.ts so they can be
+      // tested without a live Supabase; this block is transport only.
+      const signer = createClient(publicSupabaseUrl(), serviceKey);
+      const outcome = await resolveSourceDownload(
+        admin as unknown as SourceReader,
+        signer as unknown as SignerLike,
+        { userId: user.id, email: user.email },
+        body.source_id,
+      );
+      if (!outcome.ok) {
+        // Every refusal is logged, not just the signing failures: a run of
+        // not_found against ids this user does not own is what a cross-tenant
+        // probe looks like, and it left no trace at all before. The id is
+        // recorded, never the caller's guess at a path.
+        await logKnowledgeEvent(admin, user.id, "download_source", false, {
+          source_id: outcome.sourceId,
+          reason: outcome.reason,
+        });
+        // A failed read is the one refusal that is not a 404 -- the row's
+        // existence is unknown, so reporting it as missing would be a lie.
+        if (outcome.reason === "read_failed") {
+          return errorResponse("Could not read the knowledge source", 503);
+        }
+        return errorResponse("Knowledge source not found", 404);
+      }
+      await logKnowledgeEvent(admin, user.id, "download_source", true, {
+        source_id: outcome.sourceId,
+      });
+      return jsonResponse({ url: outcome.url });
     }
     if (action === "delete_source") {
       const { data: source } = await (admin as any)
