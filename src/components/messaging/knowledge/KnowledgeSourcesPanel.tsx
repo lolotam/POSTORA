@@ -1,10 +1,15 @@
-import { Check, Circle, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { Check, Circle, Download, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { PlatformIcon } from "@/components/PlatformIcon";
-import type { AiKnowledgeSource } from "@/hooks/useAiKnowledge";
+import {
+  requestSourceDownloadUrl,
+  type AiKnowledgeSource,
+} from "@/hooks/useAiKnowledge";
 import { displaySourceTitle } from "@/lib/knowledgeSourceDisplay";
 import { accountLabel, type SharingAccount } from "@/lib/knowledgeSharing";
 import type { Platform } from "@/lib/types";
@@ -14,6 +19,29 @@ interface NamedAccount {
   platform: string;
   platform_username?: string | null;
   platform_user_id?: string | null;
+}
+
+/** The source types ingested from an uploaded object, and so the only ones with
+ *  something to hand back. An allow-list mirroring the one `reingest_source`
+ *  accepts: a future source type that carries no file then defaults to no
+ *  download button, rather than to a button that always 404s. The fileless
+ *  types today are website, catalog and profile_text. */
+const DOWNLOADABLE_SOURCE_TYPES = ["csv", "excel", "pdf", "doc", "image"];
+
+function sourceHasFile(sourceType: string): boolean {
+  return DOWNLOADABLE_SOURCE_TYPES.includes(sourceType);
+}
+
+function IndexedBadge({ status, indexedAt }: { status: AiKnowledgeSource["status"]; indexedAt: string | null }) {
+  if (status !== "ready") return null;
+  if (!indexedAt) return null;
+  const date = new Date(indexedAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return (
+    <Badge variant="outline" title={date.toLocaleString()}>
+      Indexed {date.toLocaleDateString()}
+    </Badge>
+  );
 }
 
 /**
@@ -104,6 +132,20 @@ export function KnowledgeSourcesPanel({
   onDelete,
   onToggleShare,
 }: KnowledgeSourcesPanelProps) {
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
+  const downloadSource = async (sourceId: string) => {
+    setDownloadingId(sourceId);
+    try {
+      const url = await requestSourceDownloadUrl(sourceId);
+      window.location.assign(url);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not download source");
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
@@ -178,6 +220,7 @@ export function KnowledgeSourcesPanel({
                       ? ` · ${source.chunk_count} chunks so far`
                       : ""}
                   </Badge>
+                  <IndexedBadge status={source.status} indexedAt={source.indexed_at} />
                 </div>
                 {source.source_type === "website" &&
                   ["pending", "processing"].includes(source.status) && (
@@ -186,6 +229,22 @@ export function KnowledgeSourcesPanel({
                 {source.error && <p className="mt-1 text-xs text-destructive">{source.error}</p>}
               </div>
               <div className="flex gap-2">
+                {sourceHasFile(source.source_type) && (
+                  <Button
+                    size="icon"
+                    variant="outline"
+                    aria-label="Download source"
+                    disabled={busy || downloadingId === source.id}
+                    title="Download"
+                    onClick={() => void downloadSource(source.id)}
+                  >
+                    {downloadingId === source.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Download className="h-4 w-4" />
+                    )}
+                  </Button>
+                )}
                 {/* Re-ingest goes through `ingest_source`, which accepts only the
                     uploaded file types. A catalog has its own sync button, and a
                     website has no re-scrape action yet -- offering the control

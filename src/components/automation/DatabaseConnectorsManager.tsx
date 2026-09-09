@@ -1978,8 +1978,8 @@ function DatabaseConnectorsEditor({
 
       {/* Interactive Detail & Connection Modal */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden">
+          <DialogHeader className="shrink-0">
             <div className="flex items-center gap-3.5">
               {selectedPreset && (
                 <div className="relative shrink-0 w-14 h-14 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border border-border/50 shadow-md">
@@ -2009,6 +2009,10 @@ function DatabaseConnectorsEditor({
 
           {/* Special OAuth UI for Higgsfield */}
           {selectedPreset?.id === "higgsfield" ? (
+            <>
+              {/* min-h-0 lets this flex child shrink so overflow-y-auto can
+                  engage; without it the dialog grows past the viewport. */}
+              <div className="min-h-0 overflow-y-auto">
             <div className="space-y-4 pt-3">
               <div className="p-4 rounded-xl border border-border/60 bg-muted/20 space-y-3">
                 <div className="flex items-center justify-between">
@@ -2031,8 +2035,10 @@ function DatabaseConnectorsEditor({
                   </p>
                 )}
               </div>
+            </div>
+              </div>
 
-              <div className="flex items-center justify-between pt-4 border-t border-border/40">
+              <div className="flex shrink-0 items-center justify-between border-t border-border/40 pt-4">
                 <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="text-xs h-8">
                   Cancel
                 </Button>
@@ -2060,9 +2066,12 @@ function DatabaseConnectorsEditor({
                   </Button>
                 )}
               </div>
-            </div>
+            </>
           ) : (
             <>
+              {/* min-h-0 lets this flex child shrink so overflow-y-auto can
+                  engage; without it the dialog grows past the viewport. */}
+              <div className="min-h-0 overflow-y-auto">
               {/* Modal Tabs */}
               <Tabs
                 value={modalTab}
@@ -2379,9 +2388,10 @@ function DatabaseConnectorsEditor({
               </div>
             </TabsContent>
           </Tabs>
+              </div>
 
           {/* Modal Footer */}
-          <div className="flex items-center justify-between pt-4 border-t border-border/40 mt-2">
+          <div className="mt-2 flex shrink-0 items-center justify-between border-t border-border/40 pt-4">
             <div>
               {editingTool && (
                 <Button

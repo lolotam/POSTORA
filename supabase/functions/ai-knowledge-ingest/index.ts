@@ -613,6 +613,47 @@ async function handleRequest(req: Request): Promise<Response> {
       });
       return jsonResponse({ ok: true, ...urls, generated_at: exportRow.generated_at });
     }
+    if (action === "download_source") {
+      // Unknown, not-ours, and unresolvable all 404 with the same body so a
+      // caller cannot probe whether an id exists in someone else's library.
+      const sourceId = body.source_id;
+      if (typeof sourceId !== "string" || !sourceId) {
+        return errorResponse("Knowledge source not found", 404);
+      }
+      const { data: source } = await (admin as any)
+        .from("ai_knowledge_sources")
+        .select("id, file_path, file_name")
+        .eq("id", sourceId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (!source) return errorResponse("Knowledge source not found", 404);
+      const location = locateKnowledgeFile(source.file_path, {
+        userId: user.id,
+        email: user.email,
+      });
+      if (!location) return errorResponse("Knowledge source not found", 404);
+      if (location.kind === "cloudinary") {
+        // Cloudinary serves a raw asset inline, and the caller navigates to
+        // whatever URL comes back -- without this the browser would leave the
+        // app and render the file instead of saving it. `fl_attachment` sets
+        // Content-Disposition at the CDN, which is the only place it can be set
+        // for a cross-origin URL. A URL that does not match the expected
+        // delivery shape is returned untouched rather than corrupted.
+        const withAttachment = location.url.replace(
+          /(\/raw\/upload\/)(v\d+\/)/,
+          "$1fl_attachment/$2",
+        );
+        return jsonResponse({ url: withAttachment });
+      }
+      const fileName = source.file_name || source.id;
+      const { data: signed, error: signError } = await admin.storage
+        .from(location.bucket)
+        .createSignedUrl(location.path, 60, { download: fileName });
+      if (signError || !signed?.signedUrl) {
+        return errorResponse("Knowledge source not found", 404);
+      }
+      return jsonResponse({ url: signed.signedUrl });
+    }
     if (action === "delete_source") {
       const { data: source } = await (admin as any)
         .from("ai_knowledge_sources")

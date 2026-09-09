@@ -17,12 +17,45 @@ export interface AiKnowledgeSource {
    *  The query selects *, so this arrives without a read-site change. */
   metadata?: Record<string, unknown> | null;
   created_at: string;
+  /**
+   * Newest chunk's created_at — the last time this source was embedded.
+   * Not updated_at: sharing toggles write the source row and a trigger
+   * advances that column without touching chunks.
+   */
+  indexed_at: string | null;
 }
 export interface AiKnowledgeGraphExport {
   html_url: string | null;
   vault_url: string | null;
   generated_at: string;
 }
+
+type SourceRow = Omit<AiKnowledgeSource, "indexed_at"> & {
+  ai_knowledge_chunks?: { created_at: string }[] | null;
+};
+
+function flattenIndexedAt(row: SourceRow): AiKnowledgeSource {
+  const { ai_knowledge_chunks, ...source } = row;
+  return {
+    ...source,
+    indexed_at: ai_knowledge_chunks?.[0]?.created_at ?? null,
+  };
+}
+
+/**
+ * Mint a short-lived download URL for a file-backed source.
+ * Not signed in the browser: four stored file_path formats exist, and only
+ * the edge action's locator covers all of them.
+ */
+export async function requestSourceDownloadUrl(sourceId: string): Promise<string> {
+  const data = await callAiKnowledgeApi("download_source", { source_id: sourceId });
+  const url = data?.url;
+  if (typeof url !== "string" || url.length === 0) {
+    throw new Error("Download link is unavailable");
+  }
+  return url;
+}
+
 export function useAiKnowledge() {
   const { user } = useAuth();
   const client = useQueryClient();
@@ -32,10 +65,12 @@ export function useAiKnowledge() {
     queryFn: async () => {
       const { data, error } = await (supabase as any)
         .from("ai_knowledge_sources")
-        .select("*")
-        .order("created_at", { ascending: false });
+        .select("*, ai_knowledge_chunks(created_at)")
+        .order("created_at", { ascending: false })
+        .order("created_at", { referencedTable: "ai_knowledge_chunks", ascending: false })
+        .limit(1, { referencedTable: "ai_knowledge_chunks" });
       if (error) throw error;
-      return data as AiKnowledgeSource[];
+      return ((data ?? []) as SourceRow[]).map(flattenIndexedAt);
     },
     refetchInterval: (query) =>
       query.state.data?.some((source: AiKnowledgeSource) =>
