@@ -1,7 +1,7 @@
 # Nightly knowledge-graph refresh
 
 Date: 2026-09-09
-Status: design, pending approval
+Status: implemented on `feat/nightly-graph-refresh`
 
 ## Why
 
@@ -58,7 +58,13 @@ Any one of these makes a user stale:
 2. The newest entity or relation is newer than `generated_at`.
 3. Stored entity or relation count differs from the current count.
 4. `html_url` or `vault_url` is not an external delivery URL, meaning it is a
-   storage reference or a legacy public-storage URL.
+   storage reference or any Supabase Storage object URL.
+
+   The check is on the URL path, not the bucket. A first implementation asked
+   only whether the bucket-aware parser called the value external, and a test
+   asserting that a *foreign*-bucket storage URL is unrenderable failed against
+   it. The test was right: these columns are user-writable through RLS, and
+   Storage down-converts HTML on every bucket, not only `ai-knowledge`.
 
 Rule 3 exists because deletion never moves a `created_at`. The nightly prune at
 03:15 deletes orphan entities, so without it a pruned user's graph would stay
@@ -76,9 +82,10 @@ invalidated half an hour later.
 ## Components
 
 **`supabase/functions/ai-knowledge-ingest/graphExports.ts`** — pure move of
-`createGraphExports`, `uploadGraphExport` and `cloudinarySignature` out of
-`index.ts`. They are currently function-local, so nothing else can import them.
-No behaviour change; `index.ts` imports them back.
+`createGraphExports` and `uploadGraphExport` out of `index.ts`, where they were
+function-local and therefore unreachable from any other function. `index.ts`
+imports them back. `cloudinarySignature` moved to `_shared` instead, because once
+the block left it had two real callers: this upload and the source-file delete.
 
 **`supabase/functions/ai-knowledge-graph-refresh/index.ts`** — the worker.
 Guarded by `verifyCronAuth`. Selects due users, rebuilds each one, updates the
@@ -89,6 +96,12 @@ function directories.
 **`supabase/functions/ai-knowledge-graph-refresh/dueUsers.ts`** — the staleness
 rule as a pure function over rows, so all four conditions are testable without a
 live database. This is where the real logic lives.
+
+**`public.ai_knowledge_graph_activity()`** — a `SECURITY DEFINER` rollup
+returning one row per user with entity count, relation count, newest timestamp
+and email, so the worker decides staleness in one round trip rather than two
+counts per user. It returns every user's email, so execute is revoked from
+`anon` and `authenticated` and granted to `service_role` alone.
 
 **Migration A** — `entity_count` and `relation_count` on
 `ai_knowledge_graph_exports`, both nullable integers. Null means "written before
@@ -106,6 +119,12 @@ relation read, a zip build and two uploads. The worker stops starting new users
 at 45 seconds elapsed and caps a run at 25 users. Anything not reached is due
 again tomorrow and nothing is lost, because due-ness is derived from the data
 rather than from a queue.
+
+## What did not need changing
+
+The **Show Graph** button already opens whatever URL the server resolves, so
+once a row holds an Openinary URL it opens the live page directly with no
+signing step. No frontend change is part of this work.
 
 ## Known gap
 
