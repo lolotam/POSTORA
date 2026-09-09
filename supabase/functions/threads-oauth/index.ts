@@ -2,6 +2,10 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
+import {
+  reconnectErrorParam,
+  reconnectSocialAccountInPlace,
+} from "../_shared/socialAccountReconnect.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -45,6 +49,25 @@ interface ThreadsTokenExchangeResult {
   access_token: string;
   expires_in: number;
   tokenGrantedScopes: string[];
+}
+
+/**
+ * Reconnect mode targets the row the user clicked "Reconnect" on. Threads user
+ * ids are app-scoped, so after a Meta app change the same account comes back
+ * with a new id and the upsert below would insert a duplicate instead of
+ * renewing the expired row.
+ */
+interface ReconnectTarget {
+  social_account_id: string;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function readReconnectTarget(source: Record<string, unknown>): ReconnectTarget | null {
+  if (source.mode !== "reconnect") return null;
+  const id = source.social_account_id;
+  if (typeof id !== "string" || !UUID_RE.test(id)) return null;
+  return { social_account_id: id };
 }
 
 async function exchangeThreadsCode(
@@ -94,9 +117,10 @@ async function exchangeThreadsCode(
 async function saveThreadsAccount(
   supabase: SupabaseClient,
   user_id: string,
-  social_profile_id: string | null,
   exchange: ThreadsTokenExchangeResult,
+  destination: { social_profile_id: string | null; reconnect: ReconnectTarget | null },
 ): Promise<{ username: string }> {
+  const { social_profile_id, reconnect } = destination;
   const { access_token: finalAccessToken, expires_in: expiresIn, tokenGrantedScopes } = exchange;
 
   let permissionsFromApi: string[] = [];
@@ -261,6 +285,33 @@ async function saveThreadsAccount(
     capability_probed_at: new Date().toISOString(),
   };
 
+  const tokenExpiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+  if (reconnect) {
+    // Same handle, possibly a new app-scoped id: renew the clicked row in place.
+    const result = await reconnectSocialAccountInPlace(supabase, {
+      socialAccountId: reconnect.social_account_id,
+      userId: user_id,
+      platform: "threads",
+      identity: { platformUserId: String(safeUserId), platformUsername: username },
+      identityPolicy: "username",
+      patch: {
+        access_token: finalAccessToken,
+        token_expires_at: tokenExpiresAt,
+        avatar_url: avatarUrl,
+        account_metadata: accountMetadata,
+      },
+    });
+    console.log(JSON.stringify({
+      event: "threads_account_reconnected",
+      user_id,
+      social_account_id: reconnect.social_account_id,
+      id_changed: result.previousPlatformUserId !== result.platformUserId,
+      retired_duplicate: result.retiredSiblingId,
+    }));
+    return { username };
+  }
+
   // Atomic upsert - prevents race conditions and ensures only 1 row per user/platform/account
   const { error: dbError } = await supabase
     .from("social_accounts")
@@ -272,7 +323,7 @@ async function saveThreadsAccount(
         platform_username: username,
         avatar_url: avatarUrl,
         access_token: finalAccessToken,
-        token_expires_at: new Date(Date.now() + expiresIn * 1000).toISOString(),
+        token_expires_at: tokenExpiresAt,
         is_active: true,
         social_profile_id,
         connected_at: new Date().toISOString(),
@@ -324,24 +375,26 @@ Deno.serve(async (req) => {
       }
 
       const payload = await verifyOAuthState(state, { expectedPlatform: "threads" });
+      // The target came from the signed state, so it is the one this user
+      // asked to reconnect; ownership is re-checked against the row itself.
+      const reconnect = readReconnectTarget(payload);
       const exchange = await exchangeThreadsCode(code, THREADS_REDIRECT_URI);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      await saveThreadsAccount(
-        supabase,
-        payload.user_id,
-        payload.profile_id ?? null,
-        exchange,
-      );
+      await saveThreadsAccount(supabase, payload.user_id, exchange, {
+        social_profile_id: payload.profile_id ?? null,
+        reconnect,
+      });
 
       const ret = new URL(payload.return_to ?? RETURN_URL_DEFAULT);
       ret.searchParams.set("connected", "threads");
+      if (reconnect) ret.searchParams.set("reconnected", "1");
       if (payload.profile_id) ret.searchParams.set("profile_id", payload.profile_id);
       return Response.redirect(ret.toString(), 302);
     } catch (err) {
       console.error("Threads GET callback error:", err);
       const ret = new URL(RETURN_URL_DEFAULT);
       ret.searchParams.set("connected", "threads");
-      ret.searchParams.set("error", "threads_callback_failed");
+      ret.searchParams.set("error", reconnectErrorParam(err, "threads_callback_failed"));
       return Response.redirect(ret.toString(), 302);
     }
   }
@@ -359,6 +412,7 @@ Deno.serve(async (req) => {
   try {
     const body = await req.json().catch(() => ({}));
     const { action, code, redirect_uri, social_profile_id, return_to } = body;
+    const reconnect = readReconnectTarget(body);
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
     let user_id: string;
@@ -393,6 +447,7 @@ Deno.serve(async (req) => {
         user_id,
         profile_id: social_profile_id ?? null,
         return_to: return_to ?? RETURN_URL_DEFAULT,
+        extra: reconnect ? { mode: "reconnect", social_account_id: reconnect.social_account_id } : undefined,
       });
 
       // Build URL manually so commas in `scope` stay literal (Meta's docs use raw commas).
@@ -438,14 +493,12 @@ Deno.serve(async (req) => {
 
       console.log("Processing Threads OAuth legacy POST callback for user:", user_id);
       const exchange = await exchangeThreadsCode(code, redirect_uri);
-      const { username } = await saveThreadsAccount(
-        supabase,
-        user_id,
-        social_profile_id ?? null,
-        exchange,
-      );
+      const { username } = await saveThreadsAccount(supabase, user_id, exchange, {
+        social_profile_id: social_profile_id ?? null,
+        reconnect,
+      });
 
-      return new Response(JSON.stringify({ success: true, username }), {
+      return new Response(JSON.stringify({ success: true, username, reconnected: !!reconnect }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }

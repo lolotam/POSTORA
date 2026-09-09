@@ -4,6 +4,11 @@ import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
 import { OAUTH_CALLBACKS, buildReturnUrl } from "@/lib/oauthRedirects";
 
+export interface ThreadsConnectOptions {
+  mode?: "connect" | "reconnect";
+  socialAccountId?: string;
+}
+
 export function useThreadsOAuth(
   setConnectingPlatform: (p: any) => void,
   setConnectingProfile: (p: string | null) => void,
@@ -12,8 +17,14 @@ export function useThreadsOAuth(
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
-  const handleThreadsConnect = async (profileId: string) => {
+  const handleThreadsConnect = async (
+    profileId: string,
+    options: ThreadsConnectOptions = {},
+  ) => {
     if (!user) throw new Error("Not authenticated");
+    // Reconnect renews the clicked row in place. Threads ids are app-scoped, so
+    // without the row id the backend upsert would insert a duplicate account.
+    const isReconnect = options.mode === "reconnect" && !!options.socialAccountId;
     if (typeof window !== "undefined" && window.location.protocol !== "https:") {
       toast({
         title: "Threads requires HTTPS",
@@ -30,6 +41,9 @@ export function useThreadsOAuth(
         action: "authorize",
         social_profile_id: profileId,
         return_to: buildReturnUrl("threads"),
+        ...(isReconnect
+          ? { mode: "reconnect", social_account_id: options.socialAccountId }
+          : {}),
       },
     });
     if (error) throw error;

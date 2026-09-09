@@ -111,10 +111,11 @@ export function useProfileOAuth() {
 
     try {
       // `options` is only consumed by the platforms whose OAuth function implements an
-      // explicit reconnect mode (TikTok, Pinterest, Twitter): they use social_account_id
-      // to update that exact row after an ownership check. The others upsert on
-      // (user_id, platform, platform_user_id), which already targets the existing row,
-      // so there is nothing for them to do with it.
+      // explicit reconnect mode (TikTok, Pinterest, Twitter, Threads): they use
+      // social_account_id to update that exact row after an ownership check. The others
+      // upsert on (user_id, platform, platform_user_id), which targets the existing row
+      // as long as the provider id is stable (Facebook pages, Instagram, YouTube, Bluesky,
+      // Reddit). Threads needs the explicit mode because its ids are app-scoped.
       if (platform === "tiktok") {
         await handleTikTokConnect(profileId, options);
       } else if (platform === "instagram") {
@@ -137,7 +138,7 @@ export function useProfileOAuth() {
       } else if (platform === "twitter") {
         await handleTwitterConnect(profileId, options);
       } else if (platform === "threads") {
-        await handleThreadsConnect(profileId);
+        await handleThreadsConnect(profileId, options);
       } else if (platform === "bluesky") {
         await handleBlueskyConnect(profileId);
       } else if (platform === "reddit") {
