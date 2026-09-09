@@ -37,6 +37,7 @@ function renderPicker(overrides: Partial<Parameters<typeof SupabaseSchemaPicker>
       schema="public"
       tableAllowList=""
       selectColumns=""
+      columnMap=""
       onPatch={onPatch}
       {...overrides}
     />,
@@ -91,7 +92,7 @@ describe("SupabaseSchemaPicker", () => {
     expect(onPatch).toHaveBeenCalledWith({ table_allow_list: "price_table" });
   });
 
-  it("offers only the selected tables' columns and writes select_columns", async () => {
+  it("offers only the selected tables' columns and writes a per-table map", async () => {
     const onPatch = renderPicker({ tableAllowList: "price_table" });
     fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
     await waitFor(() => expect(screen.getByText("type_name")).toBeInTheDocument());
@@ -99,8 +100,39 @@ describe("SupabaseSchemaPicker", () => {
     // orders' columns are not offered while orders is unselected.
     expect(screen.queryByText("total")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("price"));
-    expect(onPatch).toHaveBeenCalledWith({ select_columns: "price" });
+    fireEvent.click(screen.getByLabelText("price_table.price"));
+    expect(onPatch).toHaveBeenCalledWith({ column_map: '{"price_table":["price"]}' });
+  });
+
+  it("keeps each table's columns separate instead of unioning them", async () => {
+    // Unioning sent "price,total" to BOTH tables, so each query failed on the
+    // column its own table lacks: adding a second table broke access that
+    // already worked.
+    const onPatch = renderPicker({
+      tableAllowList: "price_table, orders",
+      columnMap: '{"price_table":["price"]}',
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("orders.total")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("orders.total"));
+    expect(onPatch).toHaveBeenCalledWith({
+      column_map: '{"price_table":["price"],"orders":["total"]}',
+    });
+  });
+
+  it("clearing a table's last column sends the empty-map sentinel", async () => {
+    // A blank value is dropped before save, so the old restriction would
+    // otherwise survive forever.
+    const onPatch = renderPicker({
+      tableAllowList: "price_table",
+      columnMap: '{"price_table":["price"]}',
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("price_table.price")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("price_table.price"));
+    expect(onPatch).toHaveBeenCalledWith({ column_map: "{}" });
   });
 
   it("shows the introspection error instead of an empty picker", async () => {

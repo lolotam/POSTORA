@@ -207,11 +207,21 @@ function splitColumns(raw: unknown): string[] {
  * empty list, refuses the call instead of falling through to star — otherwise a
  * typo, or deleting the last column from a table, silently returns every column.
  */
+export interface ResolvedColumns {
+  select: string;
+  /**
+   * True only when the OPERATOR named these columns. The model choosing its own
+   * `select` is not approval: it could name `password` or `refresh_token`, so
+   * that path keeps the structural redaction pass.
+   */
+  explicit: boolean;
+}
+
 export function resolveColumns(
   settings: Record<string, unknown>,
   table: string,
   modelSelect: string | null,
-): string {
+): ResolvedColumns {
   const raw = settings.column_map;
   if (typeof raw === "string" && raw.trim()) {
     let parsed: unknown;
@@ -239,7 +249,7 @@ export function resolveColumns(
           `No columns are allowed on "${table}" for this connector.`,
         );
       }
-      return columns.join(",");
+      return { select: columns.join(","), explicit: true };
     }
     // An ACTIVE map that does not name this table is refused, not widened.
     // Deleting or mistyping a table's entry would otherwise take the agent
@@ -253,10 +263,10 @@ export function resolveColumns(
     }
   }
   const flat = splitColumns(settings.select_columns);
-  if (flat.length) return flat.join(",");
+  if (flat.length) return { select: flat.join(","), explicit: true };
   const fromModel = splitColumns(modelSelect);
-  if (fromModel.length) return fromModel.join(",");
-  return "*";
+  if (fromModel.length) return { select: fromModel.join(","), explicit: false };
+  return { select: "*", explicit: false };
 }
 
 function validateResource(table: string, select: string, allowList: string[]): void {
@@ -287,7 +297,7 @@ function validateResource(table: string, select: string, allowList: string[]): v
   }
 }
 
-function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string; select: string } {
+function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string; columns: ResolvedColumns } {
   const projectUrl = requiredString(invocation.tool.settings, "project_url");
   const schema = requiredString(invocation.tool.settings, "schema");
   const allowList = tableAllowList(invocation.tool.settings);
@@ -305,11 +315,12 @@ function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string; 
   // columns, and the model has a record of inventing column names that 400 the
   // whole query. Resolution order: column_map[table], then the flat
   // select_columns, then the model's select, then star.
-  const select = resolveColumns(
+  const columns = resolveColumns(
     invocation.tool.settings,
     table,
     requiredString(parameters, "select"),
   );
+  const select = columns.select;
   validateResource(table, select, allowList);
 
   const url = new URL(`${projectUrl.replace(/\/+$/, "")}/rest/v1/${encodeURIComponent(table)}`);
@@ -351,7 +362,7 @@ function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string; 
   }
   // No limit/offset here: the test-connection probe sets limit=1 itself and
   // the page loop owns paging (spec §5.1).
-  return { url, schema, select };
+  return { url, schema, columns };
 }
 
 /** PostgREST answers `0-24/4213`, or `*` in place of the range on a count probe. */
@@ -662,7 +673,7 @@ async function callSupabase(
 
   try {
     validateSupabaseAnonKey(anonKey);
-    const { url: baseUrl, schema, select } = buildUrl(invocation);
+    const { url: baseUrl, schema, columns } = buildUrl(invocation);
     const headers = {
       Accept: "application/json",
       apikey: anonKey,
@@ -712,10 +723,23 @@ async function callSupabase(
 
     // Count mode is routed first (C3): it needs no ordering and reads no rows.
     if (invocation.request.parameters.mode === "count") {
-      const response = await safeVendorFetch(
-        baseUrl.toString(),
-        { method: "HEAD", headers: { ...headers, Prefer: "count=exact" } },
-        dependencies,
+      // The caller may have far less left than the vendor default, and its
+      // abort would discard a count that was still running -- the same timeout
+      // mismatch the row path exists to avoid.
+      const countBudget = Math.max(
+        0,
+        Math.min(
+          dependencies.timeoutMs,
+          (dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS) - SUPABASE_MIN_HOP_MS,
+        ),
+      );
+      const response = await withDeadline(
+        safeVendorFetch(
+          baseUrl.toString(),
+          { method: "HEAD", headers: { ...headers, Prefer: "count=exact" } },
+          { ...dependencies, timeoutMs: countBudget },
+        ),
+        countBudget,
       );
       if (!response.ok) {
         throw new SupabaseValidationError("supabase_http_error", "Supabase rejected the request.", response.status);
@@ -747,7 +771,7 @@ async function callSupabase(
       startOffset,
       orderBy,
       operation: capability,
-      columnsExplicit: select !== "*",
+      columnsExplicit: columns.explicit,
     });
     return { ok: true, vendor: "supabase", action: "execute", capability, data: envelope };
   } catch (error) {

@@ -26,11 +26,27 @@ interface SupabaseSchemaPickerProps {
   schema: string;
   tableAllowList: string;
   selectColumns: string;
+  columnMap: string;
   onPatch: (patch: Record<string, string>) => void;
 }
 
 function parseList(value: string): string[] {
   return value.split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function parseColumnMap(value: string): Record<string, string[]> {
+  if (!value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).map(([table, columns]) => [table, parseList(String(columns))]),
+    );
+  } catch {
+    // A hand-edited map that will not parse must not blank the picker; the
+    // adapter refuses it loudly at call time.
+    return {};
+  }
 }
 
 function toggled(list: string[], entry: string): string[] {
@@ -43,6 +59,7 @@ export function SupabaseSchemaPicker({
   schema,
   tableAllowList,
   selectColumns,
+  columnMap,
   onPatch,
 }: SupabaseSchemaPickerProps) {
   const [introspection, setIntrospection] = useState<SupabaseIntrospection | null>(null);
@@ -57,13 +74,34 @@ export function SupabaseSchemaPicker({
   const selectedTables = parseList(tableAllowList);
   const selectedColumns = parseList(selectColumns);
 
-  // Columns are offered from the SELECTED tables only; with none selected yet,
-  // every table's columns would be one undifferentiated pile.
-  const offeredColumns = introspection
-    ? [...new Set(
-      selectedTables.flatMap((table) => introspection.columnsByTable[table] ?? []),
-    )]
-    : [];
+  // Columns are offered per SELECTED table. Unioning them was wrong once a
+  // connector allowed two tables: picking products.price and orders.total sent
+  // "price,total" to BOTH, so each query failed on the column its table lacks,
+  // and adding a second table broke access that already worked.
+  const columnsByTable: Record<string, string[]> = introspection
+    ? Object.fromEntries(
+      selectedTables.map((table) => [table, introspection.columnsByTable[table] ?? []]),
+    )
+    : {};
+
+  const parsedMap = parseColumnMap(columnMap);
+
+  const columnsFor = (table: string): string[] => {
+    const mapped = parsedMap[table];
+    if (mapped) return mapped;
+    // Before any per-table choice exists, the flat list is what applies.
+    return selectedColumns;
+  };
+
+  const emitMap = (table: string, column: string) => {
+    const next = { ...parsedMap, [table]: toggled(columnsFor(table), column) };
+    for (const key of Object.keys(next)) {
+      if (next[key].length === 0) delete next[key];
+    }
+    // "{}" rather than "" so a cleared map actually reaches the server; a blank
+    // value is dropped before save and the old restriction would survive.
+    onPatch({ column_map: Object.keys(next).length === 0 ? "{}" : JSON.stringify(next) });
+  };
 
   const sampleTypedTables = async () => {
     if (selectedTables.length === 0) {
@@ -170,27 +208,36 @@ export function SupabaseSchemaPicker({
           </div>
 
           {selectedTables.length > 0 && (
-            <div className="space-y-1">
+            <div className="space-y-2">
               <p className="text-[10px] font-medium text-muted-foreground">
-                Columns the AI agent reads ({selectedColumns.length === 0
-                  ? "all"
-                  : selectedColumns.length} selected)
+                Columns the AI agent reads, per table
               </p>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-40 overflow-y-auto">
-                {offeredColumns.map((column) => (
-                  <label key={column} className="flex items-center gap-2 text-xs cursor-pointer">
-                    <Checkbox
-                      checked={selectedColumns.includes(column)}
-                      onCheckedChange={() =>
-                        onPatch({ select_columns: toggled(selectedColumns, column).join(", ") })}
-                    />
-                    <span className="truncate font-mono">{column}</span>
-                  </label>
-                ))}
-              </div>
+              {selectedTables.map((table) => (
+                <div key={table} className="space-y-1">
+                  <p className="text-[10px] font-mono text-muted-foreground">
+                    {table} ({columnsFor(table).length === 0 ? "all" : columnsFor(table).length}
+                    {" selected"})
+                  </p>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-32 overflow-y-auto">
+                    {(columnsByTable[table] ?? []).map((column) => (
+                      <label
+                        key={`${table}.${column}`}
+                        className="flex items-center gap-2 text-xs cursor-pointer"
+                      >
+                        <Checkbox
+                          aria-label={`${table}.${column}`}
+                          checked={columnsFor(table).includes(column)}
+                          onCheckedChange={() => emitMap(table, column)}
+                        />
+                        <span className="truncate font-mono">{column}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
               <p className="text-[10px] text-muted-foreground">
-                Selecting none returns every column. Fewer columns means smaller prompts and
-                cheaper replies.
+                Selecting none for a table returns every column it has. Fewer columns means
+                smaller prompts and cheaper replies.
               </p>
             </div>
           )}

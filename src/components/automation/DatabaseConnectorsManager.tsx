@@ -2179,6 +2179,7 @@ function DatabaseConnectorsEditor({
                       schema={form.credentials.schema ?? "public"}
                       tableAllowList={form.credentials.table_allow_list ?? ""}
                       selectColumns={form.credentials.select_columns ?? ""}
+                      columnMap={form.credentials.column_map ?? ""}
                       onPatch={(patch) =>
                         setForm((prev) => ({
                           ...prev,

@@ -957,8 +957,8 @@ Deno.test("column_map wins over the flat select_columns list", () => {
     column_map: '{"products":["id","price"],"orders":["id","total"]}',
     select_columns: "name",
   };
-  assertEquals(resolveColumns(settings, "products", null), "id,price");
-  assertEquals(resolveColumns(settings, "orders", null), "id,total");
+  assertEquals(resolveColumns(settings, "products", null).select, "id,price");
+  assertEquals(resolveColumns(settings, "orders", null).select, "id,total");
 });
 
 Deno.test("a table an active map does not name is refused, not widened", () => {
@@ -973,8 +973,12 @@ Deno.test("a table an active map does not name is refused, not widened", () => {
 });
 
 Deno.test("with nothing configured the model's select is used, else star", () => {
-  assertEquals(resolveColumns({}, "products", "id,name"), "id,name");
-  assertEquals(resolveColumns({}, "products", null), "*");
+  // A model-chosen select is NOT operator approval: it could name
+  // `password`, so it must keep the structural redaction pass.
+  assertEquals(resolveColumns({}, "products", "id,name").select, "id,name");
+  assertEquals(resolveColumns({}, "products", "id,name").explicit, false);
+  assertEquals(resolveColumns({ select_columns: "id" }, "products", null).explicit, true);
+  assertEquals(resolveColumns({}, "products", null).select, "*");
 });
 
 Deno.test("an unparseable column_map is refused, never ignored", () => {
@@ -997,12 +1001,12 @@ Deno.test("a table mapped to an empty list is refused, not widened", () => {
 });
 
 Deno.test("an empty map object means unrestricted, the cleared-field sentinel", () => {
-  assertEquals(resolveColumns({ column_map: "{}" }, "products", null), "*");
-  assertEquals(resolveColumns({ column_map: "{}", select_columns: "price" }, "products", null), "price");
+  assertEquals(resolveColumns({ column_map: "{}" }, "products", null).select, "*");
+  assertEquals(resolveColumns({ column_map: "{}", select_columns: "price" }, "products", null).select, "price");
 });
 
 Deno.test("column_map accepts a comma string per table as well as an array", () => {
-  assertEquals(resolveColumns({ column_map: '{"products":"id, price"}' }, "products", null), "id,price");
+  assertEquals(resolveColumns({ column_map: '{"products":"id, price"}' }, "products", null).select, "id,price");
 });
 
 // ---------------------------------------------------------------------------
