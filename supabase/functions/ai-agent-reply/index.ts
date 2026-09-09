@@ -1156,7 +1156,15 @@ Deno.serve(async (req) => {
         sideEffectsHappened = true;
         const customTool = customToolByName.get(toolCall.function.name);
         const result: ToolResult = customTool
-          ? await executeRoutedCustomTool(toolContext, customTool, args)
+          ? await executeRoutedCustomTool(
+            toolContext,
+            customTool,
+            args,
+            {},
+            // The model budget is elapsed, not a per-call allowance, so a tool
+            // call late in the conversation must shrink to what is left.
+            modelBudgetRemaining(startedAt, Date.now()),
+          )
           : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
             (await executeTool(toolContext, toolCall.function.name, args));
         if (result.escalated) {

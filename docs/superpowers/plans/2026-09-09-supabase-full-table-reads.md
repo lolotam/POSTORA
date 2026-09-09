@@ -245,7 +245,7 @@ Deno.test("order_by is null unless a single valid identifier is configured", () 
 
 ```bash
 cd F:/Postora-supabase-fulltable
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
 ```
 
 Expected: FAIL — `resolveMaxRows` is not exported.
@@ -309,7 +309,7 @@ export function resolveOrderBy(settings: Record<string, unknown>): string | null
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
 deno check --node-modules-dir=none supabase/functions/ai-agent-adapters/supabase.ts
 ```
 
@@ -392,7 +392,7 @@ Deno.test("column_map accepts a comma string per table as well as an array", () 
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
 ```
 
 Expected: FAIL — `resolveColumns` is not exported.
@@ -469,7 +469,7 @@ Ensure `SupabaseValidationError` is exported and carries a public `code`.
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
 ```
 
 Expected: PASS.
@@ -565,7 +565,7 @@ Deno.test("with no column list configured any shape-valid filter still works", a
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
 ```
 
 Expected: FAIL — the first test gets `ok: true` and `fetched === true`.
@@ -604,7 +604,7 @@ Replace the filter loop at `supabase.ts:179-190`:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/
 ```
 
 Expected: PASS.
@@ -667,7 +667,7 @@ Deno.test("the call budget never exceeds the request's remaining time", () => {
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-reply/connectorRouting.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-reply/connectorRouting.test.ts
 ```
 
 Expected: FAIL — `adapterCallBudget` is not exported.
@@ -713,7 +713,7 @@ export const SUPABASE_MIN_HOP_MS = 1_500;
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/
 deno check --node-modules-dir=none supabase/functions/ai-agent-reply/connectorExecution.ts
 ```
 
@@ -1066,7 +1066,7 @@ proves `trimValue` survives.
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
 ```
 
 Expected: FAIL — the adapter returns a bare array, so `data.row_count` is `undefined`.
@@ -1217,7 +1217,7 @@ with one HEAD request. Finally delete `ROW_LIMIT`, whose only reference was
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/
 deno check --node-modules-dir=none supabase/functions/ai-agent-adapters/supabase.ts
 ```
 
@@ -1284,7 +1284,7 @@ Deno.test("an oversized payload is still capped, and the cap is announced", asyn
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-reply/connectorRouting.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-reply/connectorRouting.test.ts
 ```
 
 Expected: FAIL — `JSON.parse` throws on the mid-object cut.
@@ -1311,7 +1311,7 @@ and at `:146-158`:
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-reply/
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-reply/
 ```
 
 Expected: PASS.
@@ -1411,7 +1411,7 @@ Deno.test("a Supabase failure keeps the generic key-name redaction", async () =>
 - [ ] **Step 2: Run the tests to verify they fail**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/adapters.test.ts
 ```
 
 Expected: FAIL — `token`, `api_key`, `key` and the hex digest come back `[REDACTED]`.
@@ -1510,7 +1510,7 @@ Deno.test("a deeply nested JSONB column is bounded, not recursed forever", async
 - [ ] **Step 4: Run the tests to verify they pass**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-adapters/
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-adapters/
 ```
 
 Expected: PASS, including the existing redaction tests at `adapters.test.ts:250` and `:272`.
@@ -1551,7 +1551,7 @@ Deno.test("the model is offered offset and mode on a supabase connector", () => 
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-reply/connectorRouting.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-reply/connectorRouting.test.ts
 ```
 
 Expected: FAIL — `properties.offset` is `undefined`.
@@ -1614,7 +1614,7 @@ Copy all four blocks and both parameters verbatim into `src/lib/connectorRegistr
 - [ ] **Step 4: Run both suites**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/
 bun run test -- src/lib/__tests__/connectorRegistry.test.ts
 ```
 
@@ -1719,7 +1719,7 @@ Deno.test("the usage guide tells the model how to continue a large read", () => 
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/ai-agent-reply/toolGuides.test.ts
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/ai-agent-reply/toolGuides.test.ts
 ```
 
 Expected: FAIL.
@@ -1738,7 +1738,7 @@ discards a client bearer token was wrong — `kong-entrypoint.sh` preserves any
 ```bash
 cd F:/Postora-supabase-fulltable
 deno check --node-modules-dir=none supabase/functions/ai-agent-adapters/*.ts
-deno test --allow-env --allow-net --node-modules-dir=none supabase/functions/
+deno test --allow-env --allow-net --allow-read --node-modules-dir=none supabase/functions/
 bun install
 bun run test
 bunx tsc --noEmit

@@ -1,8 +1,20 @@
 import {
   assertEquals,
   assertStringIncludes,
+  assertThrows,
 } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { executeConnector } from "./dispatcher.ts";
+import {
+  DEFAULT_MAX_ROWS,
+  SUPABASE_CHAR_BUDGET,
+  SupabaseReadEnvelope,
+  resolveColumns,
+  resolveMaxRows,
+  resolveOffset,
+  resolveOrderBy,
+  resolvePageSize,
+  SupabaseValidationError,
+} from "./supabase.ts";
 import { handleAdapterRequest, meterTestConnectionProbe, type AdminClientFactory } from "./handler.ts";
 import {
   type AdapterDependencies,
@@ -570,34 +582,15 @@ Deno.test("an unrecognised payload shape is passed through, not emptied", () => 
 /**
  * Production, 2026-09-01. A Supabase price table answers correctly through the
  * adapter, but its rows carry signed storage URLs several hundred characters
- * long. The adapter asked for 20 rows and returned them verbatim, and
- * connectorExecution.ts serialises that into the model's messages under a
- * 2000-character budget -- so the model would have read three rows and half of
- * a fourth, cut mid-JSON. Unlike WooCommerce the table is arbitrary, so the
- * fields cannot be projected; the row count and the per-value length are what
- * can be bounded.
+ * long. Unlike WooCommerce the table is arbitrary, so the fields cannot be
+ * projected; the row count and the per-value length are what can be bounded.
+ * Rewritten for the read envelope: rows now live in `data.rows`, and the
+ * default limit=25 single request is asserted by the "unconfigured connector"
+ * test in the full-table-reads section below.
  */
-Deno.test("Supabase fetches enough rows to cover a small catalog whole", async () => {
-  // Five arbitrary rows of a 14-type price table made the model fill the gaps
-  // from the stale knowledge base; see the ROW_LIMIT comment in supabase.ts.
-  let requested = "";
-  await executeConnector(
-    {
-      tool: supabaseTool(),
-      credentials: { anon_key: SUPABASE_ANON_KEY },
-      request: request({ capability: "search_products", parameters: { table: "products" } }),
-    },
-    dependencies((url) => {
-      requested = String(url);
-      return Promise.resolve(jsonResponse([]));
-    }),
-  );
-  assertStringIncludes(requested, "limit=25");
-});
-
 Deno.test("an oversized cell is truncated so the rest of the rows survive", async () => {
   const signedUrl = `https://p.supabase.co/storage/v1/object/sign/x.png?token=${"e".repeat(600)}`;
-  const rows = Array.from({ length: 25 }, (_, i) => ({
+  const tableRows = Array.from({ length: 25 }, (_, i) => ({
     id: `row-${i}`,
     type_name: "كتاكيت جميزة",
     price: "١٨ جنية",
@@ -611,18 +604,21 @@ Deno.test("an oversized cell is truncated so the rest of the rows survive", asyn
       credentials: { anon_key: SUPABASE_ANON_KEY },
       request: request({ capability: "search_products", parameters: { table: "products" } }),
     },
-    dependencies(() => Promise.resolve(jsonResponse(rows))),
+    dependencies(() => Promise.resolve(jsonResponse(tableRows))),
   );
 
   assertEquals(result.ok, true);
-  const body = serialized(result.ok === true && result.action === "execute" ? result.data : null);
+  const data = envelopeOf(result);
+  assertEquals(data.row_count, 25);
   // Every row's price must still be there -- that is the answer the customer asked for.
-  assertEquals((body.match(/١٨ جنية/g) || []).length, 25);
-  assertEquals(body.includes("e".repeat(600)), false);
-  // The whole table must fit connectorExecution's 8000-character allowance,
-  // because a truncated table is not "less data" -- it is wrong data, filled in
-  // from stale knowledge by the model.
-  assertEquals(body.length < 8000, true, `payload is ${body.length} chars`);
+  assertEquals((serialized(data.rows).match(/١٨ جنية/g) || []).length, 25);
+  assertEquals(serialized(data.rows).includes("e".repeat(600)), false);
+  for (const row of data.rows) {
+    const cell = (row as { image_url: string }).image_url;
+    // The marker is the point: a silently shortened URL reads as a working link.
+    assertEquals(cell.endsWith("…[truncated]"), true);
+    assertEquals(cell.length <= 160 + "…[truncated]".length, true);
+  }
 });
 
 Deno.test("ordinary values are returned untouched", async () => {
@@ -637,9 +633,10 @@ Deno.test("ordinary values are returned untouched", async () => {
       Promise.resolve(jsonResponse([{ id: 1, price: "١٨ جنية", in_stock: true, qty: 40 }]))
     ),
   );
+  assertEquals(result.ok, true);
   assertEquals(
-    serialized(result.ok === true && result.action === "execute" ? result.data : null),
-    '[{"id":1,"price":"١٨ جنية","in_stock":true,"qty":40}]',
+    envelopeOf(result).rows,
+    [{ id: 1, price: "١٨ جنية", in_stock: true, qty: 40 }],
   );
 });
 
@@ -890,4 +887,572 @@ Deno.test("an unresolvable workspace still runs the probe, unmetered", async () 
   // branch — but the probe's answer must survive even here.
   assertEquals(outcome, PROBE_SUCCESS);
   assertEquals(state.rows.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Full-table reads (plan 2026-09-09): settings resolution. Pure functions,
+// no network. Defaults preserve today's behaviour exactly.
+// ---------------------------------------------------------------------------
+
+Deno.test("max_rows defaults to the 25 this connector shipped with", () => {
+  assertEquals(resolveMaxRows({}), DEFAULT_MAX_ROWS);
+  assertEquals(resolveMaxRows({ max_rows: "" }), DEFAULT_MAX_ROWS);
+});
+
+Deno.test("max_rows clamps instead of rejecting, so a typo degrades", () => {
+  assertEquals(resolveMaxRows({ max_rows: "500" }), 500);
+  assertEquals(resolveMaxRows({ max_rows: "99999" }), 1000);
+  assertEquals(resolveMaxRows({ max_rows: "-4" }), 1);
+  assertEquals(resolveMaxRows({ max_rows: "abc" }), DEFAULT_MAX_ROWS);
+  assertEquals(resolveMaxRows({ max_rows: "12.9" }), 12);
+  // "0" is the UI's cleared-field sentinel and must mean "default", not 1.
+  assertEquals(resolveMaxRows({ max_rows: "0" }), DEFAULT_MAX_ROWS);
+});
+
+Deno.test("page_size defaults to 200 and is capped at 1000", () => {
+  assertEquals(resolvePageSize({}), 200);
+  assertEquals(resolvePageSize({ page_size: "50" }), 50);
+  assertEquals(resolvePageSize({ page_size: "5000" }), 1000);
+});
+
+Deno.test("offset comes from the model and floors at zero", () => {
+  assertEquals(resolveOffset({}), 0);
+  assertEquals(resolveOffset({ offset: "40" }), 40);
+  assertEquals(resolveOffset({ offset: "-1" }), 0);
+  assertEquals(resolveOffset({ offset: "nonsense" }), 0);
+});
+
+Deno.test("order_by is null unless a single valid identifier is configured", () => {
+  assertEquals(resolveOrderBy({}), null);
+  assertEquals(resolveOrderBy({ order_by: "  " }), null);
+  assertEquals(resolveOrderBy({ order_by: "id" }), "id");
+  assertEquals(resolveOrderBy({ order_by: " created_at " }), "created_at");
+  // Anything that is not a bare identifier is dropped rather than injected
+  // into the query string.
+  assertEquals(resolveOrderBy({ order_by: "id desc, name" }), null);
+  assertEquals(resolveOrderBy({ order_by: "id;drop" }), null);
+});
+
+// ---------------------------------------------------------------------------
+// Per-table column map. It fails CLOSED: a map that will not parse, or that
+// names this table with an empty list, refuses the call instead of falling
+// through to star.
+// ---------------------------------------------------------------------------
+
+Deno.test("column_map wins over the flat select_columns list", () => {
+  const settings = {
+    column_map: '{"products":["id","price"],"orders":["id","total"]}',
+    select_columns: "name",
+  };
+  assertEquals(resolveColumns(settings, "products", null), "id,price");
+  assertEquals(resolveColumns(settings, "orders", null), "id,total");
+});
+
+Deno.test("a table the map does not name falls back to the flat list", () => {
+  const settings = { column_map: '{"products":["id"]}', select_columns: "name, price" };
+  assertEquals(resolveColumns(settings, "invoices", null), "name,price");
+});
+
+Deno.test("with nothing configured the model's select is used, else star", () => {
+  assertEquals(resolveColumns({}, "products", "id,name"), "id,name");
+  assertEquals(resolveColumns({}, "products", null), "*");
+});
+
+Deno.test("an unparseable column_map is refused, never ignored", () => {
+  // Falling through to "*" would silently widen access on a typo.
+  const error = assertThrows(
+    () => resolveColumns({ column_map: "{not json", select_columns: "price" }, "products", null),
+    SupabaseValidationError,
+  ) as SupabaseValidationError;
+  assertEquals(error.code, "supabase_column_map_invalid");
+});
+
+Deno.test("a table mapped to an empty list is refused, not widened", () => {
+  // Deleting the last column from a table's list is a restriction, not an
+  // instruction to return every column.
+  const error = assertThrows(
+    () => resolveColumns({ column_map: '{"products":[]}' }, "products", null),
+    SupabaseValidationError,
+  ) as SupabaseValidationError;
+  assertEquals(error.code, "supabase_columns_empty");
+});
+
+Deno.test("an empty map object means unrestricted, the cleared-field sentinel", () => {
+  assertEquals(resolveColumns({ column_map: "{}" }, "products", null), "*");
+  assertEquals(resolveColumns({ column_map: "{}", select_columns: "price" }, "products", null), "price");
+});
+
+Deno.test("column_map accepts a comma string per table as well as an array", () => {
+  assertEquals(resolveColumns({ column_map: '{"products":"id, price"}' }, "products", null), "id,price");
+});
+
+// ---------------------------------------------------------------------------
+// Filters are restricted to the resolved column list. `select` limits what
+// comes back; without this the model could still filter on an excluded column
+// and read it one equality test at a time.
+// ---------------------------------------------------------------------------
+
+Deno.test("a filter on a column outside the configured list is refused", async () => {
+  let fetched = false;
+  const result = await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: ["products"],
+          select_columns: "id, name, price",
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products", filters: { email: "a@b.c" } } }),
+    },
+    dependencies(() => {
+      fetched = true;
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+  assertEquals(result.ok, false);
+  assertEquals((result as { error: { code: string } }).error.code, "supabase_filter_refused");
+  assertEquals(fetched, false, "must refuse before any vendor request");
+});
+
+Deno.test("a filter on a configured column is still allowed", async () => {
+  let requested = "";
+  const result = await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: ["products"],
+          select_columns: "id, name, price",
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products", filters: { name: "widget" } } }),
+    },
+    dependencies((url) => {
+      requested = String(url);
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+  assertEquals(result.ok, true);
+  assertStringIncludes(requested, "name=eq.widget");
+});
+
+Deno.test("with no column list configured any shape-valid filter still works", async () => {
+  let requested = "";
+  await executeConnector(
+    {
+      tool: supabaseTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products", filters: { sku: "A1" } } }),
+    },
+    dependencies((url) => {
+      requested = String(url);
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+  assertStringIncludes(requested, "sku=eq.A1");
+});
+
+// ---------------------------------------------------------------------------
+// Full-table reads: the page loop and the result envelope. One tool call may
+// issue several PostgREST requests, bounded by a row ceiling, a character
+// budget and an absolute time budget, and the envelope states exactly why it
+// stopped.
+// ---------------------------------------------------------------------------
+
+/** Serves successive pages and records the URL and headers of each request. */
+function pagingFetch(
+  pages: unknown[][],
+  opts: { total?: number; failAfter?: number } = {},
+): { impl: typeof fetch; urls: string[]; headers: Array<Record<string, string>> } {
+  const urls: string[] = [];
+  const headers: Array<Record<string, string>> = [];
+  let call = 0;
+  const impl = ((url: string | URL, init?: RequestInit) => {
+    urls.push(String(url));
+    const h: Record<string, string> = {};
+    new Headers(init?.headers).forEach((v, k) => { h[k] = v; });
+    headers.push(h);
+    const index = call++;
+    if (opts.failAfter !== undefined && index >= opts.failAfter) {
+      return Promise.resolve(new Response("upstream exploded", { status: 500 }));
+    }
+    const body = pages[index] ?? [];
+    const extra: Record<string, string> = {};
+    if (opts.total !== undefined) {
+      const start = pages.slice(0, index).reduce((n, p) => n + p.length, 0);
+      extra["Content-Range"] = `${start}-${start + body.length - 1}/${opts.total}`;
+    }
+    return Promise.resolve(jsonResponse(body, 200, extra));
+  }) as unknown as typeof fetch;
+  return { impl, urls, headers };
+}
+
+function pagedTool(settings: Record<string, unknown> = {}) {
+  return supabaseTool({
+    settings: {
+      project_url: "https://project.example.com",
+      schema: "public",
+      table_allow_list: ["products"],
+      order_by: "id",
+      ...settings,
+    },
+  });
+}
+
+function rows(from: number, count: number) {
+  return Array.from({ length: count }, (_, i) => ({ id: from + i, name: `row-${from + i}` }));
+}
+
+function envelopeOf(result: ConnectorResult) {
+  return (result as { data: SupabaseReadEnvelope }).data;
+}
+
+Deno.test("the loop pages past 25 rows and reports an accurate count", async () => {
+  const f = pagingFetch([rows(0, 200), rows(200, 60)], { total: 260 });
+  const result = await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "200" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  );
+  assertEquals(result.ok, true);
+  const data = envelopeOf(result);
+  assertEquals(data.row_count, 260);
+  assertEquals(data.total, 260);
+  assertEquals(data.has_more, false);
+  assertEquals(data.truncated_by, null);
+  assertEquals(f.urls.length, 2);
+  assertStringIncludes(f.urls[0], "offset=0");
+  assertStringIncludes(f.urls[1], "offset=200");
+  assertStringIncludes(f.urls[0], "order=id");
+});
+
+Deno.test("a short page is the server's row cap, not the end of the table", async () => {
+  // PostgREST's db-max-rows can cap a response. Treating a short page as
+  // exhaustion returned 100 of 900 rows claiming has_more: false.
+  const f = pagingFetch([rows(0, 100), rows(100, 100), rows(200, 100)], { total: 300 });
+  const result = await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "200" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  );
+  const data = envelopeOf(result);
+  assertEquals(data.row_count, 300);
+  assertEquals(data.has_more, false);
+  assertEquals(f.urls.length, 3);
+  assertStringIncludes(f.urls[1], "offset=100");
+});
+
+Deno.test("an empty page ends the loop even when no total was returned", async () => {
+  const f = pagingFetch([rows(0, 200), []]);
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "200" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals(data.row_count, 200);
+  assertEquals(data.total, null);
+  assertEquals(data.has_more, false);
+});
+
+Deno.test("only the first request pays for an exact count", async () => {
+  const f = pagingFetch([rows(0, 200), rows(200, 10)], { total: 210 });
+  await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "200" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  );
+  assertEquals(f.headers[0]["prefer"], "count=exact");
+  assertEquals(f.headers[1]["prefer"], undefined);
+});
+
+Deno.test("stopping on max_rows reports has_more and where to resume", async () => {
+  const f = pagingFetch([rows(0, 50)], { total: 900 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "50", page_size: "50" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals(data.row_count, 50);
+  assertEquals(data.total, 900);
+  assertEquals(data.has_more, true);
+  assertEquals(data.next_offset, 50);
+  assertEquals(data.truncated_by, "max_rows");
+});
+
+Deno.test("an exact multiple of max_rows does not invent a phantom next page", async () => {
+  const f = pagingFetch([rows(0, 50)], { total: 50 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "50", page_size: "50" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals(data.has_more, false);
+  assertEquals(data.next_offset, null);
+  assertEquals(data.truncated_by, null);
+});
+
+Deno.test("the model's offset resumes where the previous call stopped", async () => {
+  const f = pagingFetch([rows(50, 1)], { total: 900 });
+  await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "50", page_size: "50" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products", offset: "50" } }),
+    },
+    dependencies(f.impl),
+  );
+  assertStringIncludes(f.urls[0], "offset=50");
+});
+
+Deno.test("an offset with no order_by is refused, because it cannot be stable", async () => {
+  // Continuing from an offset with no deterministic ORDER BY returns a
+  // differently-shuffled window -- worse than an error (spec §4.8, C2).
+  let fetched = false;
+  const result = await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: ["products"],
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products", offset: "50" } }),
+    },
+    dependencies(() => {
+      fetched = true;
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+  assertEquals(result.ok, false);
+  assertEquals((result as { error: { code: string } }).error.code, "supabase_order_required");
+  assertEquals(fetched, false, "must refuse before any vendor request");
+});
+
+Deno.test("without order_by the loop refuses to page and says why", async () => {
+  // Offset paging with no deterministic ORDER BY duplicates and skips rows.
+  const f = pagingFetch([rows(0, 200), rows(200, 200)], { total: 900 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: ["products"],
+          max_rows: "500",
+          page_size: "200",
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals(f.urls.length, 1);
+  assertEquals(data.row_count, 200);
+  assertEquals(data.truncated_by, "unordered");
+  assertEquals(data.has_more, true);
+});
+
+Deno.test("an unordered read that already covered the table is not has_more", async () => {
+  const f = pagingFetch([rows(0, 30)], { total: 30 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: ["products"],
+          max_rows: "500",
+          page_size: "200",
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals(data.truncated_by, "unordered");
+  assertEquals(data.has_more, false);
+  assertEquals(data.next_offset, null);
+});
+
+Deno.test("the character budget stops on a whole row and says so", async () => {
+  const fat = Array.from({ length: 200 }, (_, i) => ({ id: i, blob: "x".repeat(400) }));
+  const f = pagingFetch([fat, fat, fat, fat], { total: 5000 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "1000", page_size: "200" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  // C10: assert rows actually arrived, or the budget assertions pass vacuously.
+  assertEquals(data.row_count > 0, true);
+  assertEquals(data.truncated_by, "char_budget");
+  assertEquals(data.has_more, true);
+  assertEquals(data.next_offset, data.row_count);
+  // The old failure was a String.slice through the middle of an object.
+  for (const row of data.rows) {
+    assertEquals(typeof (row as { id: number }).id, "number");
+    assertEquals(typeof (row as { blob: string }).blob, "string");
+  }
+  assertEquals(JSON.stringify(data.rows).length <= SUPABASE_CHAR_BUDGET, true);
+});
+
+Deno.test("an upstream failure mid-loop keeps the rows already fetched", async () => {
+  const f = pagingFetch([rows(0, 200)], { total: 900, failAfter: 1 });
+  const result = await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "200" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  );
+  assertEquals(result.ok, true);
+  const data = envelopeOf(result);
+  assertEquals(data.row_count, 200);
+  assertEquals(data.truncated_by, "upstream_error");
+  assertEquals(data.has_more, true);
+});
+
+Deno.test("an upstream failure on the first page is still a hard failure", async () => {
+  const f = pagingFetch([], { failAfter: 0 });
+  const result = await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  );
+  assertEquals(result.ok, false);
+  assertEquals((result as { error: { code: string } }).error.code, "supabase_http_error");
+});
+
+Deno.test("a first row larger than the whole budget stops instead of looping", async () => {
+  // Otherwise the cursor never advances and next_offset repeats forever. C10:
+  // one long string is cut to 160 chars by trimValue before accounting, so the
+  // row must be oversized by COLUMN COUNT, with every cell already at the cap.
+  const huge = [Object.fromEntries(Array.from({ length: 400 }, (_, i) => [`c${i}`, "x".repeat(160)]))];
+  const f = pagingFetch([huge, huge, huge], { total: 900 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "1" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals(data.truncated_by, "no_progress");
+  assertEquals(data.row_count, 0);
+  // C5: never hand the model a repeatable offset.
+  assertEquals(data.has_more, false);
+  assertEquals(data.next_offset, null);
+});
+
+Deno.test("count mode issues exactly one HEAD request and reads no rows", async () => {
+  const methods: string[] = [];
+  const f = ((url: string | URL, init?: RequestInit) => {
+    methods.push(init?.method ?? "GET");
+    return Promise.resolve(new Response(null, {
+      status: 200,
+      headers: { "Content-Range": "*/4213" },
+    }));
+  }) as unknown as typeof fetch;
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products", mode: "count" } }),
+    },
+    dependencies(f),
+  ));
+  assertEquals(methods, ["HEAD"]);
+  assertEquals(data.total, 4213);
+  assertEquals(data.row_count, 0);
+  assertEquals(data.rows.length, 0);
+});
+
+Deno.test("an unconfigured connector still emits limit=25 in one request", async () => {
+  const f = pagingFetch([rows(0, 25)], { total: 25 });
+  await executeConnector(
+    {
+      tool: supabaseTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  );
+  assertEquals(f.urls.length, 1);
+  assertStringIncludes(f.urls[0], "limit=25");
+});
+
+Deno.test("the loop refuses to start a hop it has no time to finish", async () => {
+  // C1/C10: budget arithmetic is not enough; the deadline must actually bite.
+  // A caller with almost nothing left gets zero requests, not one more.
+  const f = pagingFetch([rows(0, 10)], { total: 900 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "10" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    { ...dependencies(f.impl), callBudgetMs: 2_000 },
+  ));
+  assertEquals(f.urls.length, 0);
+  assertEquals(data.row_count, 0);
+  assertEquals(data.truncated_by, "time_budget");
+});
+
+Deno.test("a page whose body never arrives is abandoned and earlier rows survive", async () => {
+  // C1: the deadline covers the body read, not just the fetch; C4: page one
+  // survives. A never-delivered body on page two must not discard page one.
+  const firstPage = jsonResponse(rows(0, 50), 200, { "Content-Range": "0-49/900" });
+  const neverDelivered = new Response(
+    new ReadableStream({ start() { /* never enqueues */ } }),
+    { status: 200, headers: { "Content-Type": "application/json", "Content-Range": "50-899/900" } },
+  );
+  let call = 0;
+  const impl = (() => {
+    const index = call++;
+    return Promise.resolve(index === 0 ? firstPage : neverDelivered);
+  }) as unknown as typeof fetch;
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ max_rows: "500", page_size: "50" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    { ...dependencies(impl), callBudgetMs: 3_200 },
+  ));
+  assertEquals(data.row_count, 50);
+  assertEquals(data.truncated_by, "upstream_error");
+  assertEquals(data.has_more, true);
 });

@@ -46,6 +46,13 @@ export interface AdapterDependencies {
   timeoutMs: number;
   maxRedirects: number;
   log(event: AdapterLogEvent): void;
+  /**
+   * Wall-clock budget the CALLER grants the whole adapter call, when it knows
+   * one. The Supabase page loop derives its absolute deadline from this so it
+   * cannot overrun a request that is nearly out of time (C1). Optional: the
+   * vendor's own ceiling applies when absent.
+   */
+  callBudgetMs?: number;
 }
 
 export interface ConnectorFailure {

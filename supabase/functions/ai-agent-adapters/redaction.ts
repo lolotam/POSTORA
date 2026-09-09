@@ -59,6 +59,45 @@ function replaceCredentialValues(value: unknown, sensitiveValues: string[]): unk
   return value;
 }
 
+// A deeply nested JSONB column must not recurse without a bound.
+const REDACTION_MAX_DEPTH = 10;
+
+function stripCredentialValue(value: unknown, secrets: string[], depth = 0): unknown {
+  if (depth > REDACTION_MAX_DEPTH) return REDACTED;
+  if (typeof value === "string") {
+    // Keep the generic bearer-token rule: a token in a customer row is still a
+    // token, even when it is not one of ours.
+    if (/^Bearer\s+\S/i.test(value)) return REDACTED;
+    return secrets.reduce((acc, secret) => acc.split(secret).join(REDACTED), value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripCredentialValue(entry, secrets, depth + 1));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .map(([key, entry]) => [key, stripCredentialValue(entry, secrets, depth + 1)]),
+    );
+  }
+  return value;
+}
+
+/**
+ * Replaces every occurrence of the supplied credentials (raw, URL-encoded and
+ * Bearer forms included, via credentialRepresentations) inside an arbitrary
+ * JSON value, plus a generic leading Bearer-token rule, bounded by depth.
+ *
+ * C7: the Supabase page loop calls this BEFORE per-cell truncation, so a
+ * credential longer than the cell cap cannot be cut into an unmatchable
+ * prefix that then survives trimming.
+ */
+export function stripCredentialValues(
+  value: unknown,
+  credentials: Record<string, unknown>,
+): unknown {
+  return stripCredentialValue(value, credentialRepresentations(credentials));
+}
+
 export function redactConnectorOutput(
   value: unknown,
   credentials: Record<string, unknown>,

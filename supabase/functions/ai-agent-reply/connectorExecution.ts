@@ -1,5 +1,9 @@
 import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import {
+  ADAPTER_CALL_TIMEOUT_MS,
+  SUPABASE_CALL_TIMEOUT_MS,
+} from "../_shared/connectorBudgets.ts";
+import {
   recordConnectorCall,
   resolveWorkspaceForCall,
 } from "../_shared/connectorTelemetry.ts";
@@ -19,14 +23,36 @@ import type { ComposioReadyTool } from "./composioTools.ts";
 // deadline caps adapter waiting at 30s of the 60s worker lifetime, leaving the
 // other half for model calls and final logging. It wraps the full internal call,
 // so the reply and vendor deadlines are not additive.
-const ADAPTER_CALL_TIMEOUT_MS = 6_000;
+// C8: these stay in _shared so the separately deployed adapters function can
+// read the same numbers without importing this module's graph.
+export {
+  ADAPTER_CALL_TIMEOUT_MS,
+  SUPABASE_CALL_TIMEOUT_MS,
+} from "../_shared/connectorBudgets.ts";
 // 8000 characters (~2000 tokens). 2000 was tuned for one-product answers and
 // silently cut a whole-catalog result mid-JSON: the Supabase adapter returns
 // per-cell-trimmed rows at up to ~290 characters each, so a 25-row table needs the
 // larger allowance, and a truncated table is answered by the model FILLING THE
 // GAPS from stale indexed knowledge -- confidently, and wrong (2026-09-01).
 // The prompt already runs 4-13k tokens; this is a bounded, deliberate spend.
+// C8: unchanged for every vendor; the Supabase-specific cap is separate.
 export const ADAPTER_OUTPUT_LIMIT = 8000;
+// The Supabase adapter enforces its own 60k character budget on a row boundary
+// and reports `truncated_by`, so this backstop only needs to sit above it.
+export const SUPABASE_ADAPTER_OUTPUT_LIMIT = 80_000;
+
+/**
+ * C8: vendor-aware. The ceiling a tool call may spend on its adapter, clamped
+ * to the request's REMAINING model budget. The agent's model budget is elapsed
+ * time (logic.ts subtracts now - startedAt), not a fresh allowance per call, so
+ * a tool call late in a conversation must shrink rather than assume the full
+ * ceiling, or it overruns the worker and the customer gets nothing.
+ */
+export function adapterCallBudget(connectorType: string, remainingMs: number): number {
+  const ceiling = connectorType === "supabase" ? SUPABASE_CALL_TIMEOUT_MS : ADAPTER_CALL_TIMEOUT_MS;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 0;
+  return Math.min(ceiling, Math.trunc(remainingMs));
+}
 
 /** The snake_case row _shared/connectorTelemetry.ts inserts; asserted in tests. */
 export interface ConnectorCallRow {
@@ -49,6 +75,8 @@ interface AdapterCallDependencies {
   fetch?: typeof fetch;
   getEnv?: (name: string) => string | undefined;
   timeoutMs?: number;
+  /** Milliseconds the request still has left; shrinks the call's deadline. */
+  remainingBudgetMs?: number;
 }
 
 interface RoutedCustomToolDependencies {
@@ -197,9 +225,14 @@ export async function executeAdapterTool(
   const request = adapterRequest({ context, tool, args, config, signal: controller.signal });
   if (!request) return adapterFailure(tool.name, "the requested capability is missing.");
 
+  // MAX_SAFE_INTEGER means "caller did not say", so the vendor's own ceiling
+  // applies and existing call sites keep today's behaviour. adapterCallBudget
+  // itself maps non-finite input to 0, so the default is resolved here.
+  const remainingBudgetMs = dependencies.remainingBudgetMs ?? Number.MAX_SAFE_INTEGER;
   const timeout = setTimeout(
     () => controller.abort(),
-    dependencies.timeoutMs ?? ADAPTER_CALL_TIMEOUT_MS,
+    dependencies.timeoutMs ??
+      adapterCallBudget(tool.connector_type ?? "custom_rest", remainingBudgetMs),
   );
   try {
     // SUPABASE_URL is the in-cluster gateway; using the public hostname here
@@ -277,6 +310,8 @@ export async function executeRoutedCustomTool(
   tool: CustomTool,
   args: Record<string, unknown>,
   dependencies: RoutedCustomToolDependencies = {},
+  /** The request's remaining model budget, threaded into the adapter call. */
+  remainingBudgetMs?: number,
 ): Promise<ToolResult> {
   // Composio first: executeComposioTool meters itself (refusals included), so
   // wrapping it here would write every call twice.
@@ -289,7 +324,9 @@ export async function executeRoutedCustomTool(
     );
   }
   const run = shouldUseAdapter(tool)
-    ? () => (dependencies.executeAdapter ?? executeAdapterTool)(context, tool, args)
+    ? () => (dependencies.executeAdapter
+      ? dependencies.executeAdapter(context, tool, args)
+      : executeAdapterTool(context, tool, args, { remainingBudgetMs }))
     : () => (dependencies.executeLegacy ?? executeCustomTool)(context, tool, args);
   // The sandbox never touches the ledger, exactly as it never touches a vendor.
   if (context.dryRun) return await run();
