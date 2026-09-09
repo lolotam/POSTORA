@@ -242,6 +242,11 @@ export function resolveColumns(
     const map = parsed as Record<string, unknown>;
     const entry = map[table];
     if (entry !== undefined) {
+      // "*" is an explicit "no restriction on this table", so a map can name
+      // every allowed table without the ones nobody narrowed being refused.
+      if (typeof entry === "string" && entry.trim() === "*") {
+        return { select: "*", explicit: false };
+      }
       const columns = splitColumns(entry);
       if (columns.length === 0) {
         throw new SupabaseValidationError(
@@ -395,24 +400,28 @@ class SupabaseDeadlineError extends Error {
 }
 
 /**
- * @param cancelOnTimeout a response whose body must be released if the deadline
- * wins. Reading JSON resolves parsed JSON, not the Response, so the resolved
- * value alone cannot be used to find the socket still holding a stalled body.
+ * @param abortOnTimeout the hop's controller. Aborting the underlying fetch is
+ * the only way to stop a stalled body: reading JSON locks the stream, and a
+ * locked stream cannot be cancelled, so the socket would otherwise stay busy
+ * past the deadline this function advertises.
  */
-function withDeadline<T>(work: Promise<T>, ms: number, cancelOnTimeout?: Response): Promise<T> {
+function withDeadline<T>(
+  work: Promise<T>,
+  ms: number,
+  abortOnTimeout?: AbortController,
+): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const signal = AbortSignal.timeout(Math.max(0, ms));
     const onAbort = () => {
-      cancelOnTimeout?.body?.cancel().catch(() => {});
+      abortOnTimeout?.abort();
       reject(new SupabaseDeadlineError());
     };
     signal.addEventListener("abort", onAbort, { once: true });
     work.then(
       (value) => {
         signal.removeEventListener("abort", onAbort);
-        if (signal.aborted && value instanceof Response) {
-          // The race already rejected; drop the body rather than leak it.
-          value.body?.cancel().catch(() => {});
+        if (signal.aborted) {
+          // The race already rejected; the hop was aborted with it.
           return;
         }
         resolve(value);
@@ -507,11 +516,19 @@ async function readPages(
       timeoutMs: Math.max(0, Math.min(dependencies.timeoutMs, deadline - Date.now())),
     };
 
+    // One controller for the whole hop: the fetch AND the body read. Cancelling
+    // the body afterwards is not possible once `.json()` has locked it.
+    const hopAbort = new AbortController();
     let response: Response;
     try {
       response = await withDeadline(
-        safeVendorFetch(url.toString(), { method: "GET", headers: pageHeaders }, hopDependencies),
+        safeVendorFetch(
+          url.toString(),
+          { method: "GET", headers: pageHeaders, signal: hopAbort.signal },
+          hopDependencies,
+        ),
         deadline - Date.now(),
+        hopAbort,
       );
     } catch (cause) {
       // A rejected fetch, an abort or a DNS failure on page two must not throw
@@ -542,7 +559,7 @@ async function readPages(
 
     let payload: unknown;
     try {
-      payload = await withDeadline(readJson(response), deadline - Date.now(), response);
+      payload = await withDeadline(readJson(response), deadline - Date.now(), hopAbort);
     } catch (cause) {
       if (collected.length === 0) throw cause;
       pageErrorCode = "supabase_request_failed";
@@ -733,13 +750,19 @@ async function callSupabase(
           (dependencies.callBudgetMs ?? SUPABASE_CALL_TIMEOUT_MS) - SUPABASE_MIN_HOP_MS,
         ),
       );
+      const countAbort = new AbortController();
       const response = await withDeadline(
         safeVendorFetch(
           baseUrl.toString(),
-          { method: "HEAD", headers: { ...headers, Prefer: "count=exact" } },
+          {
+            method: "HEAD",
+            headers: { ...headers, Prefer: "count=exact" },
+            signal: countAbort.signal,
+          },
           { ...dependencies, timeoutMs: countBudget },
         ),
         countBudget,
+        countAbort,
       );
       if (!response.ok) {
         throw new SupabaseValidationError("supabase_http_error", "Supabase rejected the request.", response.status);

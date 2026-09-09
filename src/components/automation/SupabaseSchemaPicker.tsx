@@ -88,19 +88,35 @@ export function SupabaseSchemaPicker({
 
   const columnsFor = (table: string): string[] => {
     const mapped = parsedMap[table];
+    // "*" means the operator explicitly left this table unrestricted.
+    if (mapped && mapped.length === 1 && mapped[0] === "*") return [];
     if (mapped) return mapped;
     // Before any per-table choice exists, the flat list is what applies.
     return selectedColumns;
   };
 
+  // The adapter refuses any table an active map does not name, so narrowing one
+  // table must not silently deny the others. Every allowed table is therefore
+  // always represented: narrowed ones by their column list, the rest by "*",
+  // which the adapter reads as "no restriction on this table".
   const emitMap = (table: string, column: string) => {
-    const next = { ...parsedMap, [table]: toggled(columnsFor(table), column) };
-    for (const key of Object.keys(next)) {
-      if (next[key].length === 0) delete next[key];
+    const chosen: Record<string, string[]> = {};
+    for (const allowed of selectedTables) {
+      const columns = allowed === table ? toggled(columnsFor(allowed), column) : columnsFor(allowed);
+      if (columns.length > 0) chosen[allowed] = columns;
     }
-    // "{}" rather than "" so a cleared map actually reaches the server; a blank
-    // value is dropped before save and the old restriction would survive.
-    onPatch({ column_map: Object.keys(next).length === 0 ? "{}" : JSON.stringify(next) });
+    if (Object.keys(chosen).length === 0) {
+      // Nothing is narrowed any more, so there is no map to enforce. "{}"
+      // rather than "" because a blank value is dropped before save and the
+      // old restriction would survive the settings merge.
+      onPatch({ column_map: "{}" });
+      return;
+    }
+    const next: Record<string, string[] | string> = { ...chosen };
+    for (const allowed of selectedTables) {
+      if (!(allowed in chosen)) next[allowed] = "*";
+    }
+    onPatch({ column_map: JSON.stringify(next) });
   };
 
   const sampleTypedTables = async () => {

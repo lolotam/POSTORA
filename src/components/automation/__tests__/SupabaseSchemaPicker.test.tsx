@@ -121,6 +121,19 @@ describe("SupabaseSchemaPicker", () => {
     });
   });
 
+  it("narrowing one table leaves the others explicitly unrestricted", async () => {
+    // The adapter refuses any table an active map omits, so a partial map
+    // would silently disable every table the operator had not narrowed yet.
+    const onPatch = renderPicker({ tableAllowList: "price_table, orders", columnMap: "" });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("price_table.price")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("price_table.price"));
+    expect(onPatch).toHaveBeenCalledWith({
+      column_map: '{"price_table":["price"],"orders":"*"}',
+    });
+  });
+
   it("clearing a table's last column sends the empty-map sentinel", async () => {
     // A blank value is dropped before save, so the old restriction would
     // otherwise survive forever.

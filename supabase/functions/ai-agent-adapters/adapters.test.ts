@@ -961,6 +961,18 @@ Deno.test("column_map wins over the flat select_columns list", () => {
   assertEquals(resolveColumns(settings, "orders", null).select, "id,total");
 });
 
+Deno.test("a table mapped to * is explicitly unrestricted, not refused", () => {
+  // The picker names every allowed table so narrowing one cannot deny another;
+  // the ones nobody narrowed carry "*".
+  const settings = { column_map: '{"products":["id"],"orders":"*"}' };
+  assertEquals(resolveColumns(settings, "orders", null).select, "*");
+  // And it is not operator approval of any particular column, so the
+  // structural redaction pass still applies to those rows.
+  assertEquals(resolveColumns(settings, "orders", null).explicit, false);
+  assertEquals(resolveColumns(settings, "products", null).select, "id");
+  assertEquals(resolveColumns(settings, "products", null).explicit, true);
+});
+
 Deno.test("a table an active map does not name is refused, not widened", () => {
   // Deleting or mistyping a table's entry must not take the agent from a
   // scoped list to every column.
