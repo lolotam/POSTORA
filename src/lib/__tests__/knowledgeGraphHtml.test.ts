@@ -67,6 +67,47 @@ describe("buildGraphHtml executed", () => {
     expect(buildGraphHtml(ENTITIES, RELATIONS)).not.toMatch(/https?:\/\//);
   });
 
+  it("keeps the highest-degree entities at the cap and drops their orphaned edges", () => {
+    // 101 entities, so 21 are cut. "Zulu" sorts near-last by name but has the
+    // most relations, so degree must carry it past entities that beat it
+    // alphabetically. "Zzz Orphan" has no relations and sorts last, so the
+    // name tie-break must drop it. Without relations every degree is 0 and the
+    // primary sort key is never exercised at all.
+    const many = Array.from({ length: 99 }, (_, i) => ({
+      id: `e${i}`,
+      name: `Entity ${String(i).padStart(3, "0")}`,
+      type: "t",
+      description: "d",
+    }));
+    const hub = { id: "hub", name: "Zulu", type: "t", description: "d" };
+    const orphan = { id: "orphan", name: "Zzz Orphan", type: "t", description: "d" };
+    // The hub links to the last 30 entities, which are the ones the cap cuts.
+    const links = many.slice(-30).map((entity) => ({
+      source_entity_id: "hub",
+      target_entity_id: entity.id,
+      relation: "links",
+    }));
+
+    const dom = new JSDOM(buildGraphHtml([orphan, ...many, hub], links), {
+      runScripts: "dangerously",
+    });
+    const doc = dom.window.document;
+    const labels = [...doc.querySelectorAll("text.node-label")].map((n) => n.textContent);
+
+    expect(labels).toContain("Zulu");
+    expect(labels).not.toContain("Zzz Orphan");
+    expect(doc.querySelectorAll("g[data-entity-id]").length).toBe(80);
+
+    // Every drawn edge ends at a node that survived the cap.
+    const retained = new Set(
+      [...doc.querySelectorAll("g[data-entity-id]")].map((n) => n.getAttribute("data-entity-id")),
+    );
+    for (const line of doc.querySelectorAll("line.edge")) {
+      expect(retained.has(line.getAttribute("data-source"))).toBe(true);
+      expect(retained.has(line.getAttribute("data-target"))).toBe(true);
+    }
+  });
+
   it("caps the payload and says how many were omitted", () => {
     const many = Array.from({ length: 100 }, (_, i) => ({
       id: `e${i}`,

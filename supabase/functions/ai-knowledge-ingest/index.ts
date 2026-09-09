@@ -44,6 +44,7 @@ import {
   locateKnowledgeFile,
   type KnowledgeFileOwner,
 } from "../_shared/knowledgeSourceFiles.ts";
+import { publicSupabaseUrl } from "../_shared/publicSupabaseUrl.ts";
 import { validateKnowledgeUrl } from "../_shared/knowledgeUrl.ts";
 import {
   firecrawlCancelCrawl,
@@ -633,25 +634,35 @@ async function handleRequest(req: Request): Promise<Response> {
       });
       if (!location) return errorResponse("Knowledge source not found", 404);
       if (location.kind === "cloudinary") {
-        // Cloudinary serves a raw asset inline, and the caller navigates to
-        // whatever URL comes back -- without this the browser would leave the
-        // app and render the file instead of saving it. `fl_attachment` sets
-        // Content-Disposition at the CDN, which is the only place it can be set
-        // for a cross-origin URL. A URL that does not match the expected
-        // delivery shape is returned untouched rather than corrupted.
-        const withAttachment = location.url.replace(
-          /(\/raw\/upload\/)(v\d+\/)/,
-          "$1fl_attachment/$2",
-        );
-        return jsonResponse({ url: withAttachment });
+        // Returned as-is, per the agreed contract. An `fl_attachment` rewrite
+        // would name the file, but no production row reaches this branch today
+        // (every stored file_path is a supabase:// reference), and injecting a
+        // transformation breaks delivery outright on an account with strict
+        // transformations enabled. A legacy Cloudinary row therefore opens
+        // inline rather than downloading -- worse than naming it, better than
+        // an unexercised rewrite that can 401 at the CDN.
+        return jsonResponse({ url: location.url });
       }
       const fileName = source.file_name || source.id;
-      const { data: signed, error: signError } = await admin.storage
+      // Signed through a client bound to the PUBLIC base, not `admin`: storage-js
+      // builds the returned URL absolutely from its client's base, and `admin`
+      // is built from the in-cluster SUPABASE_URL (http://kong:8000). Signing is
+      // a POST to the storage API, so the host only decides the string that
+      // comes back -- but that string is what the browser navigates to.
+      const signer = createClient(publicSupabaseUrl(), serviceKey);
+      const { data: signed, error: signError } = await signer.storage
         .from(location.bucket)
         .createSignedUrl(location.path, 60, { download: fileName });
       if (signError || !signed?.signedUrl) {
+        await logKnowledgeEvent(admin, user.id, "download_source", false, {
+          source_id: source.id,
+          reason: "sign_failed",
+        });
         return errorResponse("Knowledge source not found", 404);
       }
+      await logKnowledgeEvent(admin, user.id, "download_source", true, {
+        source_id: source.id,
+      });
       return jsonResponse({ url: signed.signedUrl });
     }
     if (action === "delete_source") {

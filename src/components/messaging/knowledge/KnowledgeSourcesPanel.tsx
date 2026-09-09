@@ -22,7 +22,7 @@ interface NamedAccount {
 }
 
 /** The source types ingested from an uploaded object, and so the only ones with
- *  something to hand back. An allow-list mirroring the one `reingest_source`
+ *  something to hand back. An allow-list mirroring the one `ingest_source`
  *  accepts: a future source type that carries no file then defaults to no
  *  download button, rather than to a button that always 404s. The fileless
  *  types today are website, catalog and profile_text. */

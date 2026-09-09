@@ -50,7 +50,11 @@ function flattenIndexedAt(row: SourceRow): AiKnowledgeSource {
 export async function requestSourceDownloadUrl(sourceId: string): Promise<string> {
   const data = await callAiKnowledgeApi("download_source", { source_id: sourceId });
   const url = data?.url;
-  if (typeof url !== "string" || url.length === 0) {
+  // The caller navigates to this, so the scheme is checked here rather than
+  // trusted from three files away: locateKnowledgeFile already refuses
+  // javascript:, data: and scheme-relative paths, and this keeps that
+  // guarantee local to the navigation.
+  if (typeof url !== "string" || !/^https:\/\//.test(url)) {
     throw new Error("Download link is unavailable");
   }
   return url;

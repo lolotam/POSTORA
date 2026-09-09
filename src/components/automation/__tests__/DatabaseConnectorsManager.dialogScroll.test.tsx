@@ -82,6 +82,11 @@ describe("connector dialog scroll region — normal connector form", () => {
     expect(tokens).toContain("overflow-hidden");
     expect(tokens).not.toContain("overflow-y-auto");
     expect(tokens).not.toContain("overflow-auto");
+    // DialogContent ships `grid` by default; the whole layout depends on
+    // twMerge dropping it for the `flex` passed here. Without this line a
+    // tailwind-merge change could silently restore display:grid, the footer
+    // would leave the viewport again, and every other assertion would pass.
+    expect(tokens).not.toContain("grid");
   });
 
   it("scrolls exactly one body region that may shrink below its content", () => {
@@ -130,6 +135,11 @@ describe("connector dialog scroll region — Higgsfield branch", () => {
     expect(tokens).toContain("overflow-hidden");
     expect(tokens).not.toContain("overflow-y-auto");
     expect(tokens).not.toContain("overflow-auto");
+    // DialogContent ships `grid` by default; the whole layout depends on
+    // twMerge dropping it for the `flex` passed here. Without this line a
+    // tailwind-merge change could silently restore display:grid, the footer
+    // would leave the viewport again, and every other assertion would pass.
+    expect(tokens).not.toContain("grid");
   });
 
   it("scrolls exactly one body region that may shrink below its content", () => {
