@@ -131,10 +131,16 @@ export function SupabaseSchemaPicker({
       next[allowed] = narrowed ? current : "*";
     }
     const restricts = Object.values(next).some((value) => Array.isArray(value));
-    // Nothing is restricted any more, so there is no map to enforce. "{}"
-    // rather than "" because a blank value is dropped before save and the old
-    // restriction would survive the settings merge.
-    onPatch({ column_map: restricts ? JSON.stringify(next) : "{}" });
+    // Collapsing to "{}" hands control back to the flat select_columns list.
+    // That is right when there is no flat list, and wrong when there is one:
+    // the tables just left as "*" would silently inherit its columns instead of
+    // staying unrestricted, so the wildcard entries are kept.
+    const legacyFlatList = selectedColumns.length > 0;
+    // "{}" rather than "" because a blank value is dropped before save and the
+    // old restriction would survive the settings merge.
+    onPatch({
+      column_map: restricts || legacyFlatList ? JSON.stringify(next) : "{}",
+    });
   };
 
   const sampleTypedTables = async () => {

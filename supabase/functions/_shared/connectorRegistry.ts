@@ -193,7 +193,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         kind: "text",
         required: false,
         help:
-          "JSON mapping each table to the columns the agent may read, e.g. {\"products\":[\"id\",\"price\"]}. Overrides the single list above for the tables it names. A table mapped to an empty list is refused, not widened.",
+          "JSON mapping EVERY allowed table to the columns the agent may read, e.g. {\"products\":[\"id\",\"price\"],\"orders\":\"*\"}. Once set it replaces the single list above. Use \"*\" for a table you do not want to narrow: a table this map omits is refused, and a table mapped to an empty list is refused too. The picker below fills this in for you.",
       },
       {
         key: "order_by",
