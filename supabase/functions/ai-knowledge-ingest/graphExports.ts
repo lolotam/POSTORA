@@ -147,10 +147,25 @@ export async function createGraphExports(admin: AdminClient, userId: string, use
       userEmail,
     ),
   ]);
+  // The counts are what lets the nightly refresh see a *deletion*: removing an
+  // entity moves no created_at, so a timestamp comparison alone would never
+  // notice the 03:15 orphan prune had changed the graph.
   const { error } = await (admin as any).from("ai_knowledge_graph_exports").upsert(
-    { user_id: userId, html_url: htmlUrl, vault_url: vaultUrl, generated_at: new Date().toISOString() },
+    {
+      user_id: userId,
+      html_url: htmlUrl,
+      vault_url: vaultUrl,
+      generated_at: new Date().toISOString(),
+      entity_count: graphEntities.length,
+      relation_count: graphRelations.length,
+    },
     { onConflict: "user_id" },
   );
   if (error) throw error;
-  return { html_url: htmlUrl, vault_url: vaultUrl, entity_count: graphEntities.length };
+  return {
+    html_url: htmlUrl,
+    vault_url: vaultUrl,
+    entity_count: graphEntities.length,
+    relation_count: graphRelations.length,
+  };
 }
