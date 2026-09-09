@@ -26,11 +26,27 @@ interface SupabaseSchemaPickerProps {
   schema: string;
   tableAllowList: string;
   selectColumns: string;
+  columnMap: string;
   onPatch: (patch: Record<string, string>) => void;
 }
 
 function parseList(value: string): string[] {
   return value.split(/[,\n]/).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function parseColumnMap(value: string): Record<string, string[]> {
+  if (!value.trim()) return {};
+  try {
+    const parsed = JSON.parse(value) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(
+      Object.entries(parsed).map(([table, columns]) => [table, parseList(String(columns))]),
+    );
+  } catch {
+    // A hand-edited map that will not parse must not blank the picker; the
+    // adapter refuses it loudly at call time.
+    return {};
+  }
 }
 
 function toggled(list: string[], entry: string): string[] {
@@ -43,6 +59,7 @@ export function SupabaseSchemaPicker({
   schema,
   tableAllowList,
   selectColumns,
+  columnMap,
   onPatch,
 }: SupabaseSchemaPickerProps) {
   const [introspection, setIntrospection] = useState<SupabaseIntrospection | null>(null);
@@ -57,13 +74,74 @@ export function SupabaseSchemaPicker({
   const selectedTables = parseList(tableAllowList);
   const selectedColumns = parseList(selectColumns);
 
-  // Columns are offered from the SELECTED tables only; with none selected yet,
-  // every table's columns would be one undifferentiated pile.
-  const offeredColumns = introspection
-    ? [...new Set(
-      selectedTables.flatMap((table) => introspection.columnsByTable[table] ?? []),
-    )]
-    : [];
+  // Columns are offered per SELECTED table. Unioning them was wrong once a
+  // connector allowed two tables: picking products.price and orders.total sent
+  // "price,total" to BOTH, so each query failed on the column its table lacks,
+  // and adding a second table broke access that already worked.
+  const columnsByTable: Record<string, string[]> = introspection
+    ? Object.fromEntries(
+      selectedTables.map((table) => [table, introspection.columnsByTable[table] ?? []]),
+    )
+    : {};
+
+  const parsedMap = parseColumnMap(columnMap);
+
+  const columnsFor = (table: string): string[] => {
+    const mapped = parsedMap[table];
+    // "*" means the operator explicitly left this table unrestricted.
+    if (mapped && mapped.length === 1 && mapped[0] === "*") return [];
+    if (mapped) return mapped;
+    // Before any per-table choice exists, the flat list is what applies.
+    return selectedColumns;
+  };
+
+  // The adapter refuses any table an active map does not name, so narrowing one
+  // table must not silently deny the others. Every allowed table is therefore
+  // always represented: narrowed ones by their column list, the rest by "*",
+  // which the adapter reads as "no restriction on this table".
+  // An active map denies any table it does not name, so selecting a table has
+  // to add it -- as "*", since no narrower choice has been made yet. Without
+  // this the picker shows a table as allowed while the adapter refuses it.
+  const patchTables = (tables: string[]): Record<string, string> => {
+    const patch: Record<string, string> = { table_allow_list: tables.join(", ") };
+    if (Object.keys(parsedMap).length === 0) return patch;
+    const next: Record<string, string[] | string> = {};
+    for (const table of tables) {
+      const columns = parsedMap[table];
+      next[table] = columns && columns.length > 0 && columns[0] !== "*" ? columns : "*";
+    }
+    const narrowed = Object.values(next).some((value) => Array.isArray(value));
+    patch.column_map = narrowed ? JSON.stringify(next) : "{}";
+    return patch;
+  };
+
+  // A click never WIDENS access. Unchecking a table's last column leaves it
+  // with an empty list, which the adapter refuses, rather than promoting it to
+  // every column -- removing a permission must not grant a broader one. Saying
+  // "all columns" is a separate, deliberate act: clear the raw field.
+  const emitMap = (table: string, column: string) => {
+    const next: Record<string, string[] | string> = {};
+    for (const allowed of selectedTables) {
+      if (allowed === table) {
+        next[allowed] = toggled(columnsFor(allowed), column);
+        continue;
+      }
+      const current = parsedMap[allowed];
+      const narrowed = current && current.length > 0 && current[0] !== "*";
+      next[allowed] = narrowed ? current : "*";
+    }
+    const restricts = Object.values(next).some((value) => Array.isArray(value));
+    // Collapsing to "{}" hands control back to the flat select_columns list.
+    // That is right when there is no flat list, and wrong when there is one:
+    // the tables just left as "*" would silently inherit its columns instead of
+    // staying unrestricted, so the wildcard entries are kept.
+    const legacyFlatList = selectedColumns.length > 0;
+    // "{}" rather than "" because a blank value is dropped before save and the
+    // old restriction would survive the settings merge.
+    onPatch({
+      column_map: restricts || legacyFlatList ? JSON.stringify(next) : "{}",
+    });
+  };
 
   const sampleTypedTables = async () => {
     if (selectedTables.length === 0) {
@@ -161,7 +239,7 @@ export function SupabaseSchemaPicker({
                   <Checkbox
                     checked={selectedTables.includes(table)}
                     onCheckedChange={() =>
-                      onPatch({ table_allow_list: toggled(selectedTables, table).join(", ") })}
+                      onPatch(patchTables(toggled(selectedTables, table)))}
                   />
                   <span className="truncate font-mono">{table}</span>
                 </label>
@@ -170,27 +248,37 @@ export function SupabaseSchemaPicker({
           </div>
 
           {selectedTables.length > 0 && (
-            <div className="space-y-1">
+            <div className="space-y-2">
               <p className="text-[10px] font-medium text-muted-foreground">
-                Columns the AI agent reads ({selectedColumns.length === 0
-                  ? "all"
-                  : selectedColumns.length} selected)
+                Columns the AI agent reads, per table
               </p>
-              <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-40 overflow-y-auto">
-                {offeredColumns.map((column) => (
-                  <label key={column} className="flex items-center gap-2 text-xs cursor-pointer">
-                    <Checkbox
-                      checked={selectedColumns.includes(column)}
-                      onCheckedChange={() =>
-                        onPatch({ select_columns: toggled(selectedColumns, column).join(", ") })}
-                    />
-                    <span className="truncate font-mono">{column}</span>
-                  </label>
-                ))}
-              </div>
+              {selectedTables.map((table) => (
+                <div key={table} className="space-y-1">
+                  <p className="text-[10px] font-mono text-muted-foreground">
+                    {table} ({columnsFor(table).length === 0 ? "all" : columnsFor(table).length}
+                    {" selected"})
+                  </p>
+                  <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-32 overflow-y-auto">
+                    {(columnsByTable[table] ?? []).map((column) => (
+                      <label
+                        key={`${table}.${column}`}
+                        className="flex items-center gap-2 text-xs cursor-pointer"
+                      >
+                        <Checkbox
+                          aria-label={`${table}.${column}`}
+                          checked={columnsFor(table).includes(column)}
+                          onCheckedChange={() => emitMap(table, column)}
+                        />
+                        <span className="truncate font-mono">{column}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
               <p className="text-[10px] text-muted-foreground">
-                Selecting none returns every column. Fewer columns means smaller prompts and
-                cheaper replies.
+                Deselecting every column for a table stops the agent reading that table at
+                all. To let a table return all its columns again, clear the column map field.
+                Fewer columns means smaller prompts and cheaper replies.
               </p>
             </div>
           )}

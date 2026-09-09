@@ -8,6 +8,15 @@ async function fetchOneHop(
   dependencies: AdapterDependencies,
 ): Promise<Response> {
   const controller = new AbortController();
+  // Chain the caller's signal in. Once a response has returned, `.json()` locks
+  // the body, and a locked stream cannot be cancelled -- aborting the fetch is
+  // the only way to stop a stalled read. Callers that pass no signal (every
+  // other adapter) are unaffected.
+  const callerSignal = init.signal;
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort();
+    else callerSignal.addEventListener("abort", () => controller.abort(), { once: true });
+  }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timedOut = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => {

@@ -37,6 +37,7 @@ function renderPicker(overrides: Partial<Parameters<typeof SupabaseSchemaPicker>
       schema="public"
       tableAllowList=""
       selectColumns=""
+      columnMap=""
       onPatch={onPatch}
       {...overrides}
     />,
@@ -91,7 +92,7 @@ describe("SupabaseSchemaPicker", () => {
     expect(onPatch).toHaveBeenCalledWith({ table_allow_list: "price_table" });
   });
 
-  it("offers only the selected tables' columns and writes select_columns", async () => {
+  it("offers only the selected tables' columns and writes a per-table map", async () => {
     const onPatch = renderPicker({ tableAllowList: "price_table" });
     fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
     await waitFor(() => expect(screen.getByText("type_name")).toBeInTheDocument());
@@ -99,8 +100,66 @@ describe("SupabaseSchemaPicker", () => {
     // orders' columns are not offered while orders is unselected.
     expect(screen.queryByText("total")).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByText("price"));
-    expect(onPatch).toHaveBeenCalledWith({ select_columns: "price" });
+    fireEvent.click(screen.getByLabelText("price_table.price"));
+    expect(onPatch).toHaveBeenCalledWith({ column_map: '{"price_table":["price"]}' });
+  });
+
+  it("keeps each table's columns separate instead of unioning them", async () => {
+    // Unioning sent "price,total" to BOTH tables, so each query failed on the
+    // column its own table lacks: adding a second table broke access that
+    // already worked.
+    const onPatch = renderPicker({
+      tableAllowList: "price_table, orders",
+      columnMap: '{"price_table":["price"]}',
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("orders.total")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("orders.total"));
+    expect(onPatch).toHaveBeenCalledWith({
+      column_map: '{"price_table":["price"],"orders":["total"]}',
+    });
+  });
+
+  it("narrowing one table leaves the others explicitly unrestricted", async () => {
+    // The adapter refuses any table an active map omits, so a partial map
+    // would silently disable every table the operator had not narrowed yet.
+    const onPatch = renderPicker({ tableAllowList: "price_table, orders", columnMap: "" });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("price_table.price")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("price_table.price"));
+    expect(onPatch).toHaveBeenCalledWith({
+      column_map: '{"price_table":["price"],"orders":"*"}',
+    });
+  });
+
+  it("unchecking a table's last column denies it rather than widening it", async () => {
+    // Removing a permission must never grant a broader one: going from one
+    // allowed column to every column is the opposite of what the click means.
+    const onPatch = renderPicker({
+      tableAllowList: "price_table",
+      columnMap: '{"price_table":["price"]}',
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("price_table.price")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("price_table.price"));
+    expect(onPatch).toHaveBeenCalledWith({ column_map: '{"price_table":[]}' });
+  });
+
+  it("unchecking one table's last column leaves the others as they were", async () => {
+    const onPatch = renderPicker({
+      tableAllowList: "price_table, orders",
+      columnMap: '{"price_table":["price"],"orders":["total"]}',
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("price_table.price")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("price_table.price"));
+    expect(onPatch).toHaveBeenCalledWith({
+      column_map: '{"price_table":[],"orders":["total"]}',
+    });
   });
 
   it("shows the introspection error instead of an empty picker", async () => {

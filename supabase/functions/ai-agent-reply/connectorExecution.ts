@@ -1,5 +1,12 @@
 import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import {
+  ADAPTER_CALL_TIMEOUT_MS,
+  ADAPTER_OUTPUT_LIMIT,
+  POST_TOOL_RESERVE_MS,
+  SUPABASE_ADAPTER_OUTPUT_LIMIT,
+  SUPABASE_CALL_TIMEOUT_MS,
+} from "../_shared/connectorBudgets.ts";
+import {
   recordConnectorCall,
   resolveWorkspaceForCall,
 } from "../_shared/connectorTelemetry.ts";
@@ -19,14 +26,36 @@ import type { ComposioReadyTool } from "./composioTools.ts";
 // deadline caps adapter waiting at 30s of the 60s worker lifetime, leaving the
 // other half for model calls and final logging. It wraps the full internal call,
 // so the reply and vendor deadlines are not additive.
-const ADAPTER_CALL_TIMEOUT_MS = 6_000;
-// 8000 characters (~2000 tokens). 2000 was tuned for one-product answers and
-// silently cut a whole-catalog result mid-JSON: the Supabase adapter returns
-// per-cell-trimmed rows at up to ~290 characters each, so a 25-row table needs the
-// larger allowance, and a truncated table is answered by the model FILLING THE
-// GAPS from stale indexed knowledge -- confidently, and wrong (2026-09-01).
-// The prompt already runs 4-13k tokens; this is a bounded, deliberate spend.
-export const ADAPTER_OUTPUT_LIMIT = 8000;
+// These live in _shared so the separately deployed adapters function can read
+// the same numbers without importing this module's graph. Re-exported here
+// because existing call sites and tests import them from this module.
+export {
+  ADAPTER_CALL_TIMEOUT_MS,
+  ADAPTER_OUTPUT_LIMIT,
+  POST_TOOL_RESERVE_MS,
+  SUPABASE_ADAPTER_OUTPUT_LIMIT,
+  SUPABASE_CALL_TIMEOUT_MS,
+} from "../_shared/connectorBudgets.ts";
+
+/**
+ * C8: vendor-aware. The ceiling a tool call may spend on its adapter, clamped
+ * to the request's REMAINING model budget. The agent's model budget is elapsed
+ * time (logic.ts subtracts now - startedAt), not a fresh allowance per call, so
+ * a tool call late in a conversation must shrink rather than assume the full
+ * ceiling, or it overruns the worker and the customer gets nothing.
+ */
+export function adapterCallBudget(connectorType: string, remainingMs: number): number {
+  const ceiling = connectorType === "supabase" ? SUPABASE_CALL_TIMEOUT_MS : ADAPTER_CALL_TIMEOUT_MS;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 0;
+  // Hold back the reply turn. Spending everything here returns rows the model
+  // then has no time to say anything about, so the customer gets the outage
+  // response despite a successful read. Never below zero, and never so small
+  // that a connector call is pointless -- if the reserve would leave nothing,
+  // the caller has effectively run out of budget anyway.
+  const spendable = Math.trunc(remainingMs) - POST_TOOL_RESERVE_MS;
+  if (spendable <= 0) return 0;
+  return Math.min(ceiling, spendable);
+}
 
 /** The snake_case row _shared/connectorTelemetry.ts inserts; asserted in tests. */
 export interface ConnectorCallRow {
@@ -49,6 +78,8 @@ interface AdapterCallDependencies {
   fetch?: typeof fetch;
   getEnv?: (name: string) => string | undefined;
   timeoutMs?: number;
+  /** Milliseconds the request still has left; shrinks the call's deadline. */
+  remainingBudgetMs?: number;
 }
 
 interface RoutedCustomToolDependencies {
@@ -70,6 +101,8 @@ interface AdapterRequestInput {
   args: Record<string, unknown>;
   config: AdapterCallConfig;
   signal: AbortSignal;
+  /** The budget granted to this call, forwarded so the callee can size its own work. */
+  callBudgetMs?: number;
 }
 
 function adapterFailure(toolName: string, detail: string): ToolResult {
@@ -96,7 +129,7 @@ function adapterCallConfig(
 }
 
 function adapterRequest(input: AdapterRequestInput): Request | null {
-  const { context, tool, args, config, signal } = input;
+  const { context, tool, args, config, signal, callBudgetMs } = input;
   if (typeof args.capability !== "string") return null;
   const parameters = isRecord(args.parameters) ? args.parameters : {};
   return new Request(
@@ -114,6 +147,12 @@ function adapterRequest(input: AdapterRequestInput): Request | null {
         action: "execute",
         capability: args.capability,
         parameters,
+        // Tell the callee how long it really has. Without this the adapter
+        // assumes its full ceiling and plans a loop the caller will abort,
+        // discarding every page already fetched.
+        ...(typeof callBudgetMs === "number" && callBudgetMs > 0
+          ? { call_budget_ms: Math.trunc(callBudgetMs) }
+          : {}),
       }),
       signal,
     },
@@ -150,9 +189,21 @@ function structuredAdapterResult(
   if (serializedPayload === undefined) {
     return adapterFailure(tool.name, "adapter returned an invalid response.");
   }
+  // A paged Supabase envelope legitimately runs to the adapter's own 60k
+  // character budget; the generic cap would cut it mid-JSON. Every other vendor
+  // keeps the cap it has always had.
+  const outputLimit = tool.connector_type === "supabase"
+    ? SUPABASE_ADAPTER_OUTPUT_LIMIT
+    : ADAPTER_OUTPUT_LIMIT;
+  // A blind slice hands the model invalid JSON with no signal anything was
+  // dropped, and the model then fills the gap from stale indexed knowledge --
+  // confidently, and wrong. Say it instead.
+  const capped = serializedPayload.length > outputLimit
+    ? `${serializedPayload.slice(0, outputLimit)} …[output truncated: ${serializedPayload.length} characters]`
+    : serializedPayload;
   return {
     output: redactKnownSecrets(
-      `Connector "${tool.name}" returned: ${serializedPayload.slice(0, ADAPTER_OUTPUT_LIMIT)}`,
+      `Connector "${tool.name}" returned: ${capped}`,
       [serviceRoleKey, tool.secret],
     ),
   };
@@ -194,12 +245,28 @@ export async function executeAdapterTool(
   if (!config) return adapterFailure(tool.name, "connector service is unavailable.");
 
   const controller = new AbortController();
-  const request = adapterRequest({ context, tool, args, config, signal: controller.signal });
+  // MAX_SAFE_INTEGER means "caller did not say", so the vendor's own ceiling
+  // applies and existing call sites keep today's behaviour. adapterCallBudget
+  // itself maps non-finite input to 0, so the default is resolved here.
+  const remainingBudgetMs = dependencies.remainingBudgetMs ?? Number.MAX_SAFE_INTEGER;
+  const grantedBudgetMs = adapterCallBudget(
+    tool.connector_type ?? "custom_rest",
+    remainingBudgetMs,
+  );
+
+  const request = adapterRequest({
+    context,
+    tool,
+    args,
+    config,
+    signal: controller.signal,
+    callBudgetMs: grantedBudgetMs,
+  });
   if (!request) return adapterFailure(tool.name, "the requested capability is missing.");
 
   const timeout = setTimeout(
     () => controller.abort(),
-    dependencies.timeoutMs ?? ADAPTER_CALL_TIMEOUT_MS,
+    dependencies.timeoutMs ?? grantedBudgetMs,
   );
   try {
     // SUPABASE_URL is the in-cluster gateway; using the public hostname here
@@ -277,6 +344,8 @@ export async function executeRoutedCustomTool(
   tool: CustomTool,
   args: Record<string, unknown>,
   dependencies: RoutedCustomToolDependencies = {},
+  /** The request's remaining model budget, threaded into the adapter call. */
+  remainingBudgetMs?: number,
 ): Promise<ToolResult> {
   // Composio first: executeComposioTool meters itself (refusals included), so
   // wrapping it here would write every call twice.
@@ -289,7 +358,9 @@ export async function executeRoutedCustomTool(
     );
   }
   const run = shouldUseAdapter(tool)
-    ? () => (dependencies.executeAdapter ?? executeAdapterTool)(context, tool, args)
+    ? () => (dependencies.executeAdapter
+      ? dependencies.executeAdapter(context, tool, args)
+      : executeAdapterTool(context, tool, args, { remainingBudgetMs }))
     : () => (dependencies.executeLegacy ?? executeCustomTool)(context, tool, args);
   // The sandbox never touches the ledger, exactly as it never touches a vendor.
   if (context.dryRun) return await run();

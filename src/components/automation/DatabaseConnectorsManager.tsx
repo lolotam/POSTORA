@@ -1268,10 +1268,28 @@ function DatabaseConnectorsEditor({
 
     // Only non-blank values are submitted: an omitted key keeps whatever the
     // server already holds, for both the settings merge and the Vault merge.
+    //
+    // That merge makes clearing a field impossible on its own, because a blank
+    // value is simply dropped and the old one survives. Two Supabase settings
+    // need a real "off": a stale max_rows keeps returning more rows than the
+    // operator now wants, and a stale column_map keeps restricting tables they
+    // meant to release. Both have a value that means "unset", so a cleared
+    // field is submitted as that rather than omitted.
+    const CLEARED_SENTINELS: Record<string, string> = {
+      max_rows: "0",
+      page_size: "0",
+      column_map: "{}",
+      // "-" cannot be a column name, so it unambiguously means "no ordering".
+      order_by: "-",
+    };
     const credentials: Record<string, string> = {};
     for (const field of fields) {
       const value = (form.credentials[field.key] ?? "").trim();
-      if (value !== "") credentials[field.key] = value;
+      if (value !== "") {
+        credentials[field.key] = value;
+      } else if (field.key in CLEARED_SENTINELS && editingTool) {
+        credentials[field.key] = CLEARED_SENTINELS[field.key];
+      }
     }
 
     const payload: AiAgentToolInput = {
@@ -2161,6 +2179,7 @@ function DatabaseConnectorsEditor({
                       schema={form.credentials.schema ?? "public"}
                       tableAllowList={form.credentials.table_allow_list ?? ""}
                       selectColumns={form.credentials.select_columns ?? ""}
+                      columnMap={form.credentials.column_map ?? ""}
                       onPatch={(patch) =>
                         setForm((prev) => ({
                           ...prev,

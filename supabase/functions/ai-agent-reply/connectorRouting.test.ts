@@ -14,7 +14,19 @@ import {
   executeRoutedCustomTool,
   type ConnectorCallRow,
 } from "./connectorExecution.ts";
+import {
+  ADAPTER_CALL_TIMEOUT_MS,
+  ADAPTER_OUTPUT_LIMIT,
+  POST_TOOL_RESERVE_MS,
+  SUPABASE_CALL_TIMEOUT_MS,
+  adapterCallBudget,
+} from "./connectorExecution.ts";
+import {
+  SUPABASE_LOOP_BUDGET_MS,
+  SUPABASE_MIN_HOP_MS,
+} from "../ai-agent-adapters/supabase.ts";
 import type { ComposioReadyTool } from "./composioTools.ts";
+import type { ComposioExecutionDependencies } from "./composioExecution.ts";
 
 const legacyTool: CustomTool = {
   id: "11111111-1111-4111-8111-111111111111",
@@ -248,6 +260,10 @@ Deno.test("adapter call uses the in-cluster URL and service-role internal contra
     action: "execute",
     capability: "search_products",
     parameters: { query: "hat" },
+    // The callee sizes its own work from this. Without it the adapter assumes
+    // its full ceiling and plans a loop this caller will abort, discarding
+    // every page already fetched. 6000 is WooCommerce's ceiling, unchanged.
+    call_budget_ms: ADAPTER_CALL_TIMEOUT_MS,
   });
 });
 
@@ -550,10 +566,12 @@ Deno.test("the composio branch writes exactly one agent ledger row", async () =>
     { capability: "GOOGLESHEETS_BATCH_GET", parameters: { spreadsheet_id: "s1" } },
     {
       composio: {
+        // Cast because ComposioClient carries private #fields; only the
+        // executeTool seam is exercised here (pre-existing stub, type-only fix).
         client: {
           executeTool: () =>
             Promise.resolve({ successful: true, data: { rows: [["a"]] } }),
-        },
+        } as unknown as ComposioExecutionDependencies["client"],
         admin: ledgerAdmin(composioLedger),
       },
     },
@@ -601,7 +619,7 @@ Deno.test("a dryRun context writes no ledger row on any branch", async () => {
           executeTool: () => {
             throw new Error("client must not be called in dry run");
           },
-        },
+        } as unknown as ComposioExecutionDependencies["client"],
       },
     },
   );
@@ -609,4 +627,42 @@ Deno.test("a dryRun context writes no ledger row on any branch", async () => {
 
   assertEquals(state.rows.length, 0);
   assertEquals(composioLedger.rows.length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Budget plumbing (plan 2026-09-09, revision 3 correction C8): the constants
+// are scoped per vendor, so raising Supabase's ceiling cannot change
+// WooCommerce's behaviour.
+// ---------------------------------------------------------------------------
+
+Deno.test("the caller's ceiling leaves room for the adapter's own loop", () => {
+  // An inverted budget aborts the callee mid-loop and throws away rows already
+  // fetched, surfacing as "request timed out" with no partial result.
+  assertEquals(SUPABASE_CALL_TIMEOUT_MS > SUPABASE_LOOP_BUDGET_MS + SUPABASE_MIN_HOP_MS, true);
+});
+
+Deno.test("a tool call never spends the reply turn's allowance", () => {
+  // Consuming everything returns rows the model then has no time to speak
+  // about, so the customer gets the outage response after a successful read.
+  assertEquals(adapterCallBudget("supabase", 40_000), SUPABASE_CALL_TIMEOUT_MS);
+  assertEquals(adapterCallBudget("supabase", 14_000) < 14_000, true);
+  assertEquals(adapterCallBudget("supabase", POST_TOOL_RESERVE_MS), 0);
+  assertEquals(adapterCallBudget("supabase", POST_TOOL_RESERVE_MS - 1), 0);
+});
+
+Deno.test("the call budget never exceeds the request's remaining time", () => {
+  // The model budget is elapsed, not a fresh per-call allowance, so a tool call
+  // late in a conversation must shrink rather than overrun the worker.
+  assertEquals(adapterCallBudget("supabase", 40_000), SUPABASE_CALL_TIMEOUT_MS);
+  assertEquals(adapterCallBudget("supabase", 18_000), 18_000 - POST_TOOL_RESERVE_MS);
+  assertEquals(adapterCallBudget("supabase", 0), 0);
+  assertEquals(adapterCallBudget("supabase", -5_000), 0);
+});
+
+Deno.test("WooCommerce keeps its 6s budget and 8000-character output cap", () => {
+  // C8: the shared constants keep their current values; only Supabase gets new
+  // ones, so a WooCommerce call taking 5.5s keeps working exactly as today.
+  assertEquals(ADAPTER_CALL_TIMEOUT_MS, 6_000);
+  assertEquals(ADAPTER_OUTPUT_LIMIT, 8_000);
+  assertEquals(adapterCallBudget("woocommerce", 40_000), 6_000);
 });

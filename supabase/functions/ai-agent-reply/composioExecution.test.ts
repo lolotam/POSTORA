@@ -3,7 +3,7 @@ import {
   assertStringIncludes,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
-import { ComposioError } from "../_shared/composioClient.ts";
+import { ComposioError, type ComposioClient } from "../_shared/composioClient.ts";
 import type { ConnectorCallRow } from "./connectorExecution.ts";
 import { executeComposioTool } from "./composioExecution.ts";
 import type { ComposioReadyTool } from "./composioTools.ts";
@@ -88,8 +88,10 @@ function fakeClient(
     input: RecordedExecute,
     signal: AbortSignal,
   ) => Promise<{ successful: boolean; data?: unknown; error?: string }>,
-) {
+): { calls: RecordedExecute[] } & ComposioClient {
   const calls: RecordedExecute[] = [];
+  // Cast because ComposioClient carries private #fields; only the executeTool
+  // seam is exercised here (type-only fix, no behavioural change).
   return {
     calls,
     executeTool: (input: {
@@ -104,7 +106,7 @@ function fakeClient(
       calls.push(recorded);
       return respond(recorded, signal);
     },
-  };
+  } as unknown as { calls: RecordedExecute[] } & ComposioClient;
 }
 
 Deno.test("dryRun performs no network call and writes no ledger row", async () => {

@@ -154,14 +154,56 @@ describe("registry-driven credential fields", () => {
     expect(screen.queryByLabelText(/API Endpoint/i)).not.toBeInTheDocument();
   });
 
-  it("renders exactly the registry's four fields for supabase", () => {
+  it("renders every registry field for supabase, paging settings included", () => {
     tools = [SUPA];
     renderManager();
     openEdit("supa_catalog");
-    for (const label of ["Project URL", "Anon key", "Schema", "Table allow-list"]) {
+    for (
+      const label of [
+        "Project URL",
+        "Anon key",
+        "Schema",
+        "Table allow-list",
+        "Columns per table (optional)",
+        "Order by column",
+        "Maximum rows per answer",
+        "Rows per request (optional)",
+      ]
+    ) {
       expect(screen.getByLabelText(label)).toBeInTheDocument();
     }
     expect(screen.queryByLabelText(/API Endpoint/i)).not.toBeInTheDocument();
+  });
+
+  it("submits a sentinel for a cleared row ceiling instead of omitting it", () => {
+    // A blank value is dropped before save and the server merges settings, so
+    // omitting a cleared field leaves the old ceiling in place forever. "0"
+    // and "{}" both resolve to the default on the adapter side.
+    tools = [tool({
+      id: "supa-2",
+      name: "supa_catalog",
+      connector_type: "supabase",
+      settings: {
+        project_url: "https://project.example.com",
+        schema: "public",
+        table_allow_list: "products",
+        max_rows: "500",
+        column_map: '{"products":["id"]}',
+      },
+      configured_secret_fields: ["anon_key"],
+    })];
+    renderManager();
+    openEdit("supa_catalog");
+
+    fireEvent.change(screen.getByLabelText("Maximum rows per answer"), { target: { value: "" } });
+    fireEvent.change(screen.getByLabelText("Columns per table (optional)"), { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: /save|update/i }));
+
+    const saved = upsertTool.mutate.mock.calls.at(-1)?.[0] as
+      | { credentials?: Record<string, string> }
+      | undefined;
+    expect(saved?.credentials?.max_rows).toBe("0");
+    expect(saved?.credentials?.column_map).toBe("{}");
   });
 
   it("keeps the generic endpoint input only for types without a url credential field", () => {
