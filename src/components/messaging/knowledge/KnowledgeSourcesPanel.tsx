@@ -132,17 +132,29 @@ export function KnowledgeSourcesPanel({
   onDelete,
   onToggleShare,
 }: KnowledgeSourcesPanelProps) {
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  // A set, not one id: the row being resolved is the only one disabled, so a
+  // second download can start while the first is still in flight. With a single
+  // id the later click overwrote the earlier one and whichever settled first
+  // cleared the shared state, showing the other row as idle while it ran.
+  const [downloadingIds, setDownloadingIds] = useState<ReadonlySet<string>>(new Set());
+
+  const markDownloading = (sourceId: string, active: boolean) =>
+    setDownloadingIds((current) => {
+      const next = new Set(current);
+      if (active) next.add(sourceId);
+      else next.delete(sourceId);
+      return next;
+    });
 
   const downloadSource = async (sourceId: string) => {
-    setDownloadingId(sourceId);
+    markDownloading(sourceId, true);
     try {
       const url = await requestSourceDownloadUrl(sourceId);
       window.location.assign(url);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not download source");
     } finally {
-      setDownloadingId(null);
+      markDownloading(sourceId, false);
     }
   };
 
@@ -234,11 +246,11 @@ export function KnowledgeSourcesPanel({
                     size="icon"
                     variant="outline"
                     aria-label="Download source"
-                    disabled={busy || downloadingId === source.id}
+                    disabled={busy || downloadingIds.has(source.id)}
                     title="Download"
                     onClick={() => void downloadSource(source.id)}
                   >
-                    {downloadingId === source.id ? (
+                    {downloadingIds.has(source.id) ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
                     ) : (
                       <Download className="h-4 w-4" />

@@ -154,3 +154,39 @@ describe("KnowledgeSourcesPanel source download", () => {
     expect(control).toBeEnabled();
   });
 });
+
+describe("KnowledgeSourcesPanel concurrent downloads", () => {
+  beforeEach(() => {
+    callAiKnowledgeApi.mockReset();
+    errorToast.mockClear();
+    assign.mockClear();
+    Object.defineProperty(window, "location", {
+      value: { assign },
+      writable: true,
+      configurable: true,
+    });
+  });
+
+  it("keeps each row's pending state independent when two downloads overlap", async () => {
+    const first = deferred<{ url: string }>();
+    const second = deferred<{ url: string }>();
+    callAiKnowledgeApi
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    renderPanel([source({ id: "s1" }), source({ id: "s2" })]);
+
+    fireEvent.click(downloadButtons()[0]);
+    fireEvent.click(downloadButtons()[1]);
+    expect(downloadButtons()[0]).toBeDisabled();
+    expect(downloadButtons()[1]).toBeDisabled();
+
+    // The second settles first. With a single shared id this cleared both, and
+    // row one showed as idle while its request was still in flight.
+    second.resolve({ url: "https://cdn.example.com/menu.pdf" });
+    await waitFor(() => expect(downloadButtons()[1]).toBeEnabled());
+    expect(downloadButtons()[0]).toBeDisabled();
+
+    first.resolve({ url: "https://cdn.example.com/prices.csv" });
+    await waitFor(() => expect(downloadButtons()[0]).toBeEnabled());
+  });
+});
