@@ -45,6 +45,11 @@ import {
   type KnowledgeFileOwner,
 } from "../_shared/knowledgeSourceFiles.ts";
 import { publicSupabaseUrl } from "../_shared/publicSupabaseUrl.ts";
+import {
+  resolveSourceDownload,
+  type SignerLike,
+  type SourceReader,
+} from "./downloadSource.ts";
 import { validateKnowledgeUrl } from "../_shared/knowledgeUrl.ts";
 import {
   firecrawlCancelCrawl,
@@ -615,55 +620,28 @@ async function handleRequest(req: Request): Promise<Response> {
       return jsonResponse({ ok: true, ...urls, generated_at: exportRow.generated_at });
     }
     if (action === "download_source") {
-      // Unknown, not-ours, and unresolvable all 404 with the same body so a
-      // caller cannot probe whether an id exists in someone else's library.
-      const sourceId = body.source_id;
-      if (typeof sourceId !== "string" || !sourceId) {
-        return errorResponse("Knowledge source not found", 404);
-      }
-      const { data: source } = await (admin as any)
-        .from("ai_knowledge_sources")
-        .select("id, file_path, file_name")
-        .eq("id", sourceId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-      if (!source) return errorResponse("Knowledge source not found", 404);
-      const location = locateKnowledgeFile(source.file_path, {
-        userId: user.id,
-        email: user.email,
-      });
-      if (!location) return errorResponse("Knowledge source not found", 404);
-      if (location.kind === "cloudinary") {
-        // Returned as-is, per the agreed contract. An `fl_attachment` rewrite
-        // would name the file, but no production row reaches this branch today
-        // (every stored file_path is a supabase:// reference), and injecting a
-        // transformation breaks delivery outright on an account with strict
-        // transformations enabled. A legacy Cloudinary row therefore opens
-        // inline rather than downloading -- worse than naming it, better than
-        // an unexercised rewrite that can 401 at the CDN.
-        return jsonResponse({ url: location.url });
-      }
-      const fileName = source.file_name || source.id;
-      // Signed through a client bound to the PUBLIC base, not `admin`: storage-js
-      // builds the returned URL absolutely from its client's base, and `admin`
-      // is built from the in-cluster SUPABASE_URL (http://kong:8000). Signing is
-      // a POST to the storage API, so the host only decides the string that
-      // comes back -- but that string is what the browser navigates to.
+      // Ownership and the uniform 404 live in downloadSource.ts so they can be
+      // tested without a live Supabase; this block is transport only.
       const signer = createClient(publicSupabaseUrl(), serviceKey);
-      const { data: signed, error: signError } = await signer.storage
-        .from(location.bucket)
-        .createSignedUrl(location.path, 60, { download: fileName });
-      if (signError || !signed?.signedUrl) {
-        await logKnowledgeEvent(admin, user.id, "download_source", false, {
-          source_id: source.id,
-          reason: "sign_failed",
-        });
+      const outcome = await resolveSourceDownload(
+        admin as unknown as SourceReader,
+        signer as unknown as SignerLike,
+        { userId: user.id, email: user.email },
+        body.source_id,
+      );
+      if (!outcome.ok) {
+        if (outcome.reason === "sign_failed") {
+          await logKnowledgeEvent(admin, user.id, "download_source", false, {
+            source_id: outcome.sourceId,
+            reason: "sign_failed",
+          });
+        }
         return errorResponse("Knowledge source not found", 404);
       }
       await logKnowledgeEvent(admin, user.id, "download_source", true, {
-        source_id: source.id,
+        source_id: outcome.sourceId,
       });
-      return jsonResponse({ url: signed.signedUrl });
+      return jsonResponse({ url: outcome.url });
     }
     if (action === "delete_source") {
       const { data: source } = await (admin as any)
