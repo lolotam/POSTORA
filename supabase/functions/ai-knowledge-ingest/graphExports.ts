@@ -150,6 +150,12 @@ export async function createGraphExports(admin: AdminClient, userId: string, use
   // The counts are what lets the nightly refresh see a *deletion*: removing an
   // entity moves no created_at, so a timestamp comparison alone would never
   // notice the 03:15 orphan prune had changed the graph.
+  //
+  // These two columns are a hard deploy-order dependency. The write is
+  // unconditional and throws, and this function also backs the interactive
+  // Export Graph action, so shipping this file ahead of
+  // 20260909170000_ai_knowledge_graph_export_counts.sql breaks Export Graph for
+  // every user, not only the new worker.
   const { error } = await (admin as any).from("ai_knowledge_graph_exports").upsert(
     {
       user_id: userId,

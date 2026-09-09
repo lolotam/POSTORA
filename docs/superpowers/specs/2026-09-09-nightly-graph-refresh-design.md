@@ -112,6 +112,22 @@ already used by `drain-ai-knowledge-queue`.
 
 Both migrations route to OpenCode Muse Spark per the standing lane rule.
 
+## Release order
+
+The columns migration is a hard prerequisite for the code, not a companion to
+it. `createGraphExports` writes both counts unconditionally and throws on the
+write error, and it backs the **existing** Export Graph button as well as the new
+worker, so deploying the code first breaks a working feature for every user with
+a PostgREST unknown-column error.
+
+1. Apply `20260909170000_ai_knowledge_graph_export_counts.sql`.
+2. Apply `20260909170100_ai_knowledge_graph_refresh_cron.sql`.
+3. `NOTIFY pgrst, 'reload schema'` — the new columns and the new RPC are
+   invisible to PostgREST until it reloads.
+4. Deploy all five files. `_shared/cloudinarySignature.ts` is easy to miss and
+   both functions fail to import without it.
+5. Merge.
+
 ## Bounds
 
 The edge worker is killed at 60 seconds. Each user costs one entity read, one
@@ -119,6 +135,14 @@ relation read, a zip build and two uploads. The worker stops starting new users
 at 45 seconds elapsed and caps a run at 25 users. Anything not reached is due
 again tomorrow and nothing is lost, because due-ness is derived from the data
 rather than from a queue.
+
+`uploadGraphExport` deletes the previous Openinary object before uploading its
+replacement, because Openinary suffixes a collision rather than overwriting it.
+That has always left a window where a failed upload leaves the row pointing at a
+deleted object; what is new is that the nightly run opens that window for every
+stale user at once. A user caught by an Openinary outage at 03:45 has a dead
+graph link until the next night's run, which repairs it under `unrenderable_host`
+or `count_changed` without anyone intervening.
 
 ## What did not need changing
 
@@ -133,7 +157,7 @@ a user stale. Entities are upserted on conflict, so a description rewrite is
 possible in principle. It does not warrant a hash column; the user is refreshed
 the next time anything is added or removed.
 
-## Decisions to confirm
+## Decisions taken
 
 **Folder name.** Exports currently live at
 `postora.cloud/media/<account>/knowledge-graph/`. The request asked for a folder
@@ -141,7 +165,12 @@ named `Graphify`. Renaming is cheap but strands the existing objects in the old
 folder and changes every stored URL. Recommendation: keep `knowledge-graph`,
 which already sits under the account name.
 
-**The Openinary URL is public.** It is unauthenticated and derivable from the
-account email. That is what makes it a live, shareable link, and it is what was
-asked for, but it is a real change in exposure compared with a 30-minute signed
-URL. Storage signing stays as the fallback for anything Openinary rejects.
+**The Openinary URL is public — accepted knowingly on 2026-09-09.** It is
+unauthenticated and derivable from the account email. That is what makes it a
+live, shareable page, which is what was asked for.
+
+The scope change deserves stating plainly, because the nightly job is what makes
+it universal. Before this work, a public URL appeared only when a user chose to
+click Export Graph. Afterwards the cron republishes every stale user onto one
+automatically. The requester was shown this and chose to land it. Storage signing
+remains the fallback for anything Openinary rejects.

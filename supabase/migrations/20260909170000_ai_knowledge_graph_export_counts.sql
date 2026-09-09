@@ -1,5 +1,12 @@
 -- Staleness counters for the nightly graph-refresh worker.
 --
+-- APPLY THIS BEFORE DEPLOYING EITHER EDGE FUNCTION, and reload the PostgREST
+-- schema cache afterwards (NOTIFY pgrst, 'reload schema'). createGraphExports
+-- writes both columns unconditionally and throws on the write error, and it
+-- backs the *existing* Export Graph button as well as the new worker. Deploying
+-- the code first therefore breaks a working feature for every user with a
+-- PostgREST unknown-column error until this lands.
+--
 -- NULL is load-bearing: it means "this row predates the columns". The refresh
 -- worker's count_changed staleness rule treats a NULL count as changed, so
 -- every legacy row rebuilds exactly once. A default of 0 would silently mark

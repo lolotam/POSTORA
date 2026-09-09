@@ -102,6 +102,11 @@ async function handleRequest(req: Request): Promise<Response> {
   const auth = verifyCronAuth(req);
   if (!auth.ok) return auth.response;
 
+  // Started before the reads, not after them: the budget below exists to keep
+  // the run inside the 60s worker kill, and a slow rollup spends that same
+  // budget. Timing only the rebuild loop would quietly overrun on a bad night.
+  const startedAt = Date.now();
+
   const admin = createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
@@ -153,7 +158,6 @@ async function handleRequest(req: Request): Promise<Response> {
     if (reason) due.push({ row, reason });
   }
 
-  const startedAt = Date.now();
   const outcomes: RefreshOutcome[] = [];
   let deferred = 0;
 
