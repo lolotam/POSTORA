@@ -36,3 +36,11 @@ export const ADAPTER_OUTPUT_LIMIT = 8_000;
  * 2026-09-01 incident this family of constants exists to prevent.
  */
 export const SUPABASE_ADAPTER_OUTPUT_LIMIT = 80_000;
+
+/**
+ * Held back from every connector call so the model still has room to turn the
+ * rows into a reply. A tool call that consumes the whole remaining budget
+ * leaves the next chat completion nothing, and the customer gets the outage
+ * response even though the rows were fetched successfully.
+ */
+export const POST_TOOL_RESERVE_MS = 8_000;

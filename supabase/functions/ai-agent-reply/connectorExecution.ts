@@ -2,6 +2,7 @@ import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import {
   ADAPTER_CALL_TIMEOUT_MS,
   ADAPTER_OUTPUT_LIMIT,
+  POST_TOOL_RESERVE_MS,
   SUPABASE_ADAPTER_OUTPUT_LIMIT,
   SUPABASE_CALL_TIMEOUT_MS,
 } from "../_shared/connectorBudgets.ts";
@@ -31,6 +32,7 @@ import type { ComposioReadyTool } from "./composioTools.ts";
 export {
   ADAPTER_CALL_TIMEOUT_MS,
   ADAPTER_OUTPUT_LIMIT,
+  POST_TOOL_RESERVE_MS,
   SUPABASE_ADAPTER_OUTPUT_LIMIT,
   SUPABASE_CALL_TIMEOUT_MS,
 } from "../_shared/connectorBudgets.ts";
@@ -45,7 +47,14 @@ export {
 export function adapterCallBudget(connectorType: string, remainingMs: number): number {
   const ceiling = connectorType === "supabase" ? SUPABASE_CALL_TIMEOUT_MS : ADAPTER_CALL_TIMEOUT_MS;
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 0;
-  return Math.min(ceiling, Math.trunc(remainingMs));
+  // Hold back the reply turn. Spending everything here returns rows the model
+  // then has no time to say anything about, so the customer gets the outage
+  // response despite a successful read. Never below zero, and never so small
+  // that a connector call is pointless -- if the reserve would leave nothing,
+  // the caller has effectively run out of budget anyway.
+  const spendable = Math.trunc(remainingMs) - POST_TOOL_RESERVE_MS;
+  if (spendable <= 0) return 0;
+  return Math.min(ceiling, spendable);
 }
 
 /** The snake_case row _shared/connectorTelemetry.ts inserts; asserted in tests. */

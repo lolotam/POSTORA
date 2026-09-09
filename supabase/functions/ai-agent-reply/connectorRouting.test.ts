@@ -17,6 +17,7 @@ import {
 import {
   ADAPTER_CALL_TIMEOUT_MS,
   ADAPTER_OUTPUT_LIMIT,
+  POST_TOOL_RESERVE_MS,
   SUPABASE_CALL_TIMEOUT_MS,
   adapterCallBudget,
 } from "./connectorExecution.ts";
@@ -640,11 +641,20 @@ Deno.test("the caller's ceiling leaves room for the adapter's own loop", () => {
   assertEquals(SUPABASE_CALL_TIMEOUT_MS > SUPABASE_LOOP_BUDGET_MS + SUPABASE_MIN_HOP_MS, true);
 });
 
+Deno.test("a tool call never spends the reply turn's allowance", () => {
+  // Consuming everything returns rows the model then has no time to speak
+  // about, so the customer gets the outage response after a successful read.
+  assertEquals(adapterCallBudget("supabase", 40_000), SUPABASE_CALL_TIMEOUT_MS);
+  assertEquals(adapterCallBudget("supabase", 14_000) < 14_000, true);
+  assertEquals(adapterCallBudget("supabase", POST_TOOL_RESERVE_MS), 0);
+  assertEquals(adapterCallBudget("supabase", POST_TOOL_RESERVE_MS - 1), 0);
+});
+
 Deno.test("the call budget never exceeds the request's remaining time", () => {
   // The model budget is elapsed, not a fresh per-call allowance, so a tool call
   // late in a conversation must shrink rather than overrun the worker.
   assertEquals(adapterCallBudget("supabase", 40_000), SUPABASE_CALL_TIMEOUT_MS);
-  assertEquals(adapterCallBudget("supabase", 7_000), 7_000);
+  assertEquals(adapterCallBudget("supabase", 18_000), 18_000 - POST_TOOL_RESERVE_MS);
   assertEquals(adapterCallBudget("supabase", 0), 0);
   assertEquals(adapterCallBudget("supabase", -5_000), 0);
 });

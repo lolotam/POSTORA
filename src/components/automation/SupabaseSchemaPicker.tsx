@@ -99,6 +99,22 @@ export function SupabaseSchemaPicker({
   // table must not silently deny the others. Every allowed table is therefore
   // always represented: narrowed ones by their column list, the rest by "*",
   // which the adapter reads as "no restriction on this table".
+  // An active map denies any table it does not name, so selecting a table has
+  // to add it -- as "*", since no narrower choice has been made yet. Without
+  // this the picker shows a table as allowed while the adapter refuses it.
+  const patchTables = (tables: string[]): Record<string, string> => {
+    const patch: Record<string, string> = { table_allow_list: tables.join(", ") };
+    if (Object.keys(parsedMap).length === 0) return patch;
+    const next: Record<string, string[] | string> = {};
+    for (const table of tables) {
+      const columns = parsedMap[table];
+      next[table] = columns && columns.length > 0 && columns[0] !== "*" ? columns : "*";
+    }
+    const narrowed = Object.values(next).some((value) => Array.isArray(value));
+    patch.column_map = narrowed ? JSON.stringify(next) : "{}";
+    return patch;
+  };
+
   const emitMap = (table: string, column: string) => {
     const chosen: Record<string, string[]> = {};
     for (const allowed of selectedTables) {
@@ -215,7 +231,7 @@ export function SupabaseSchemaPicker({
                   <Checkbox
                     checked={selectedTables.includes(table)}
                     onCheckedChange={() =>
-                      onPatch({ table_allow_list: toggled(selectedTables, table).join(", ") })}
+                      onPatch(patchTables(toggled(selectedTables, table)))}
                   />
                   <span className="truncate font-mono">{table}</span>
                 </label>

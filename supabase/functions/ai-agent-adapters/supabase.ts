@@ -657,6 +657,18 @@ async function readPages(
   // honest either way: more rows may well exist, we just cannot page to them.
   const continuable = limits.orderBy !== null && cursor > limits.startOffset;
 
+  if (stop === "time_budget") {
+    // Returns an ok envelope, so the dispatcher's failure logging never fires
+    // and reply-side metering counts it as a success. Repeated database
+    // slowness would otherwise leave no trace an administrator could find.
+    dependencies.log({
+      event: "connector_failure",
+      vendor: "supabase",
+      operation: limits.operation,
+      error_code: "supabase_time_budget_exhausted",
+    });
+  }
+
   if (stop === "upstream_error") {
     // A page that failed mid-loop still returns a SUCCESSFUL envelope, so the
     // dispatcher's failure logging never fires and a short answer reaches the
