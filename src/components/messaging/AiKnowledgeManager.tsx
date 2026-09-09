@@ -271,28 +271,37 @@ export function AiKnowledgeManager({
   };
   const openExport = async (kind: "html" | "vault") => {
     // The tab is opened synchronously, inside the click's user activation, and
-    // pointed at the signed URL once it arrives. Calling window.open after the
+    // pointed at the export URL once it arrives. Calling window.open after the
     // await instead would be treated as an unsolicited popup and silently
     // blocked, so the button would appear to do nothing.
-    const tab = window.open("", "_blank", "noopener,noreferrer");
+    //
+    // The feature string must NOT contain `noopener`: with it, window.open
+    // returns null by specification even though the tab opens. The handle was
+    // therefore always null here, every click fell through to the same-tab
+    // fallback that used to live below, and the tab that did open stayed blank
+    // forever -- one blank tab plus the app navigated away, on every click.
+    // `opener` is severed on the handle instead, which gives the same
+    // protection while keeping the reference this needs.
+    const tab = window.open("", "_blank");
+    if (!tab) {
+      toast.error("Allow pop-ups for this site to open the export.");
+      return;
+    }
+    tab.opener = null;
     try {
       const urls = await resolveExportUrls.mutateAsync();
       const url = kind === "html" ? urls.html_url : urls.vault_url;
       if (!url) {
-        tab?.close();
+        tab.close();
         setUnresolvable((prev) => ({ ...prev, [kind]: true }));
         toast.error("Export link is unavailable — regenerate the exports.");
         return;
       }
-      if (tab) {
-        tab.location.replace(url);
-      } else {
-        // The browser blocked the pre-opened tab; fall back to this one rather
-        // than losing the link the user just waited for.
-        window.location.assign(url);
-      }
+      // replace, not assign: the blank entry never becomes a history step, so
+      // the new tab's Back button is not a dead end.
+      tab.location.replace(url);
     } catch (error) {
-      tab?.close();
+      tab.close();
       toast.error(
         error instanceof Error ? error.message : "Could not open export",
       );
