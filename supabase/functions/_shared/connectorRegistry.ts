@@ -131,6 +131,16 @@ const SUPABASE_PARAMETERS: ConnectorParameterSchema = {
       description: "Exact-match column filters using string, number, or boolean values.",
       additionalProperties: { type: ["string", "number", "boolean"] },
     },
+    offset: {
+      type: "string",
+      description:
+        "Row offset to start from. When a result says has_more, call again with offset set to its next_offset value to read the following page.",
+    },
+    mode: {
+      type: "string",
+      description:
+        "Use \"count\" to return only how many rows match, without reading them. Defaults to \"rows\".",
+    },
   },
   additionalProperties: false,
 };
@@ -177,11 +187,42 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         required: false,
         help: "Comma-separated columns the AI agent reads, e.g. type_name, price. Leave empty to return every column. Fewer columns means smaller prompts and cheaper replies.",
       },
+      {
+        key: "column_map",
+        label: "Columns per table (optional)",
+        kind: "text",
+        required: false,
+        help:
+          "JSON mapping each table to the columns the agent may read, e.g. {\"products\":[\"id\",\"price\"]}. Overrides the single list above for the tables it names. A table mapped to an empty list is refused, not widened.",
+      },
+      {
+        key: "order_by",
+        label: "Order by column",
+        kind: "text",
+        required: false,
+        help:
+          "A single column, ideally the primary key. Required to read more than one page: without a stable order, paging can repeat or skip rows.",
+      },
+      {
+        key: "max_rows",
+        label: "Maximum rows per answer",
+        kind: "text",
+        required: false,
+        help:
+          "How many rows one lookup may return. Defaults to 25, up to 1000. Only rows this connector's key is allowed to see are returned.",
+      },
+      {
+        key: "page_size",
+        label: "Rows per request (optional)",
+        kind: "text",
+        required: false,
+        help: "How many rows to fetch per database request while paging. Defaults to 200.",
+      },
     ],
     usageGuide: {
       whenToUse: "Live rows exposed by this Supabase project's PostgREST API. Prefer it when the answer depends on current database state.",
       requestExamples: ["find the current booking for this phone number", "look up this product's availability"],
-      limits: "Anon-key access only. The target project's RLS and configured schema and table allow-list constrain results.",
+      limits: "Anon-key access only, so only rows this connector's key may see are returned; the target project's RLS and the configured schema and table allow-list constrain results. Large tables come back in pages: when a result says has_more, call again with offset set to its next_offset value. To answer how many rows match, pass mode \"count\" instead of reading them.",
     },
     capabilities: CONNECTOR_CAPABILITY_NAMES.map((name) => ({
       name,

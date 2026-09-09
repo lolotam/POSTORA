@@ -1,6 +1,8 @@
 import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import {
   ADAPTER_CALL_TIMEOUT_MS,
+  ADAPTER_OUTPUT_LIMIT,
+  SUPABASE_ADAPTER_OUTPUT_LIMIT,
   SUPABASE_CALL_TIMEOUT_MS,
 } from "../_shared/connectorBudgets.ts";
 import {
@@ -23,23 +25,15 @@ import type { ComposioReadyTool } from "./composioTools.ts";
 // deadline caps adapter waiting at 30s of the 60s worker lifetime, leaving the
 // other half for model calls and final logging. It wraps the full internal call,
 // so the reply and vendor deadlines are not additive.
-// C8: these stay in _shared so the separately deployed adapters function can
-// read the same numbers without importing this module's graph.
+// These live in _shared so the separately deployed adapters function can read
+// the same numbers without importing this module's graph. Re-exported here
+// because existing call sites and tests import them from this module.
 export {
   ADAPTER_CALL_TIMEOUT_MS,
+  ADAPTER_OUTPUT_LIMIT,
+  SUPABASE_ADAPTER_OUTPUT_LIMIT,
   SUPABASE_CALL_TIMEOUT_MS,
 } from "../_shared/connectorBudgets.ts";
-// 8000 characters (~2000 tokens). 2000 was tuned for one-product answers and
-// silently cut a whole-catalog result mid-JSON: the Supabase adapter returns
-// per-cell-trimmed rows at up to ~290 characters each, so a 25-row table needs the
-// larger allowance, and a truncated table is answered by the model FILLING THE
-// GAPS from stale indexed knowledge -- confidently, and wrong (2026-09-01).
-// The prompt already runs 4-13k tokens; this is a bounded, deliberate spend.
-// C8: unchanged for every vendor; the Supabase-specific cap is separate.
-export const ADAPTER_OUTPUT_LIMIT = 8000;
-// The Supabase adapter enforces its own 60k character budget on a row boundary
-// and reports `truncated_by`, so this backstop only needs to sit above it.
-export const SUPABASE_ADAPTER_OUTPUT_LIMIT = 80_000;
 
 /**
  * C8: vendor-aware. The ceiling a tool call may spend on its adapter, clamped
@@ -186,9 +180,21 @@ function structuredAdapterResult(
   if (serializedPayload === undefined) {
     return adapterFailure(tool.name, "adapter returned an invalid response.");
   }
+  // A paged Supabase envelope legitimately runs to the adapter's own 60k
+  // character budget; the generic cap would cut it mid-JSON. Every other vendor
+  // keeps the cap it has always had.
+  const outputLimit = tool.connector_type === "supabase"
+    ? SUPABASE_ADAPTER_OUTPUT_LIMIT
+    : ADAPTER_OUTPUT_LIMIT;
+  // A blind slice hands the model invalid JSON with no signal anything was
+  // dropped, and the model then fills the gap from stale indexed knowledge --
+  // confidently, and wrong. Say it instead.
+  const capped = serializedPayload.length > outputLimit
+    ? `${serializedPayload.slice(0, outputLimit)} …[output truncated: ${serializedPayload.length} characters]`
+    : serializedPayload;
   return {
     output: redactKnownSecrets(
-      `Connector "${tool.name}" returned: ${serializedPayload.slice(0, ADAPTER_OUTPUT_LIMIT)}`,
+      `Connector "${tool.name}" returned: ${capped}`,
       [serviceRoleKey, tool.secret],
     ),
   };
