@@ -115,24 +115,26 @@ export function SupabaseSchemaPicker({
     return patch;
   };
 
+  // A click never WIDENS access. Unchecking a table's last column leaves it
+  // with an empty list, which the adapter refuses, rather than promoting it to
+  // every column -- removing a permission must not grant a broader one. Saying
+  // "all columns" is a separate, deliberate act: clear the raw field.
   const emitMap = (table: string, column: string) => {
-    const chosen: Record<string, string[]> = {};
+    const next: Record<string, string[] | string> = {};
     for (const allowed of selectedTables) {
-      const columns = allowed === table ? toggled(columnsFor(allowed), column) : columnsFor(allowed);
-      if (columns.length > 0) chosen[allowed] = columns;
+      if (allowed === table) {
+        next[allowed] = toggled(columnsFor(allowed), column);
+        continue;
+      }
+      const current = parsedMap[allowed];
+      const narrowed = current && current.length > 0 && current[0] !== "*";
+      next[allowed] = narrowed ? current : "*";
     }
-    if (Object.keys(chosen).length === 0) {
-      // Nothing is narrowed any more, so there is no map to enforce. "{}"
-      // rather than "" because a blank value is dropped before save and the
-      // old restriction would survive the settings merge.
-      onPatch({ column_map: "{}" });
-      return;
-    }
-    const next: Record<string, string[] | string> = { ...chosen };
-    for (const allowed of selectedTables) {
-      if (!(allowed in chosen)) next[allowed] = "*";
-    }
-    onPatch({ column_map: JSON.stringify(next) });
+    const restricts = Object.values(next).some((value) => Array.isArray(value));
+    // Nothing is restricted any more, so there is no map to enforce. "{}"
+    // rather than "" because a blank value is dropped before save and the old
+    // restriction would survive the settings merge.
+    onPatch({ column_map: restricts ? JSON.stringify(next) : "{}" });
   };
 
   const sampleTypedTables = async () => {
@@ -268,8 +270,9 @@ export function SupabaseSchemaPicker({
                 </div>
               ))}
               <p className="text-[10px] text-muted-foreground">
-                Selecting none for a table returns every column it has. Fewer columns means
-                smaller prompts and cheaper replies.
+                Deselecting every column for a table stops the agent reading that table at
+                all. To let a table return all its columns again, clear the column map field.
+                Fewer columns means smaller prompts and cheaper replies.
               </p>
             </div>
           )}

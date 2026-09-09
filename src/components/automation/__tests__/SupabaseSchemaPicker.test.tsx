@@ -134,9 +134,9 @@ describe("SupabaseSchemaPicker", () => {
     });
   });
 
-  it("clearing a table's last column sends the empty-map sentinel", async () => {
-    // A blank value is dropped before save, so the old restriction would
-    // otherwise survive forever.
+  it("unchecking a table's last column denies it rather than widening it", async () => {
+    // Removing a permission must never grant a broader one: going from one
+    // allowed column to every column is the opposite of what the click means.
     const onPatch = renderPicker({
       tableAllowList: "price_table",
       columnMap: '{"price_table":["price"]}',
@@ -145,7 +145,21 @@ describe("SupabaseSchemaPicker", () => {
     await waitFor(() => expect(screen.getByLabelText("price_table.price")).toBeInTheDocument());
 
     fireEvent.click(screen.getByLabelText("price_table.price"));
-    expect(onPatch).toHaveBeenCalledWith({ column_map: "{}" });
+    expect(onPatch).toHaveBeenCalledWith({ column_map: '{"price_table":[]}' });
+  });
+
+  it("unchecking one table's last column leaves the others as they were", async () => {
+    const onPatch = renderPicker({
+      tableAllowList: "price_table, orders",
+      columnMap: '{"price_table":["price"],"orders":["total"]}',
+    });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("price_table.price")).toBeInTheDocument());
+
+    fireEvent.click(screen.getByLabelText("price_table.price"));
+    expect(onPatch).toHaveBeenCalledWith({
+      column_map: '{"price_table":[],"orders":["total"]}',
+    });
   });
 
   it("shows the introspection error instead of an empty picker", async () => {
