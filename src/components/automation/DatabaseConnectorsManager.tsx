@@ -1277,7 +1277,10 @@ function DatabaseConnectorsEditor({
     // field is submitted as that rather than omitted.
     const CLEARED_SENTINELS: Record<string, string> = {
       max_rows: "0",
+      page_size: "0",
       column_map: "{}",
+      // "-" cannot be a column name, so it unambiguously means "no ordering".
+      order_by: "-",
     };
     const credentials: Record<string, string> = {};
     for (const field of fields) {

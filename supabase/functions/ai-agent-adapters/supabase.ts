@@ -1,3 +1,4 @@
+import { redactSensitive } from "../_shared/logging.ts";
 import { readJson, safeVendorFetch } from "./http.ts";
 import { credentialSecrets, stripCredentialValues } from "./redaction.ts";
 import {
@@ -170,9 +171,18 @@ export function resolveOffset(parameters: Record<string, unknown>): number {
 export function resolveOrderBy(settings: Record<string, unknown>): string | null {
   const raw = settings.order_by;
   if (typeof raw !== "string") return null;
-  const trimmed = raw.trim();
-  if (!trimmed || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(trimmed)) return null;
-  return trimmed;
+  // "-" is the card's cleared-field marker: a blank value is dropped before
+  // save, so clearing the input has to travel as something. It can never be a
+  // column name, unlike any bare identifier.
+  if (raw.trim() === "-") return null;
+  const columns = raw.split(",").map((column) => column.trim()).filter(Boolean);
+  // A comma-separated list is accepted so a non-unique lead column can carry a
+  // unique tie-breaker: `status,id` orders deterministically where `status`
+  // alone does not, and Postgres may reorder equal values between the separate
+  // queries this loop issues. Only bare identifiers, never raw query syntax.
+  if (columns.length === 0) return null;
+  if (!columns.every((column) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(column))) return null;
+  return columns.join(",");
 }
 
 function splitColumns(raw: unknown): string[] {
@@ -219,7 +229,8 @@ export function resolveColumns(
         "This connector's per-table column list is not valid JSON.",
       );
     }
-    const entry = (parsed as Record<string, unknown>)[table];
+    const map = parsed as Record<string, unknown>;
+    const entry = map[table];
     if (entry !== undefined) {
       const columns = splitColumns(entry);
       if (columns.length === 0) {
@@ -229,6 +240,16 @@ export function resolveColumns(
         );
       }
       return columns.join(",");
+    }
+    // An ACTIVE map that does not name this table is refused, not widened.
+    // Deleting or mistyping a table's entry would otherwise take the agent
+    // from a scoped column list to every column, which is the opposite of what
+    // editing a restriction should do. An empty map means "no restriction".
+    if (Object.keys(map).length > 0) {
+      throw new SupabaseValidationError(
+        "supabase_columns_unmapped",
+        `This connector's per-table column list does not cover "${table}".`,
+      );
     }
   }
   const flat = splitColumns(settings.select_columns);
@@ -266,7 +287,7 @@ function validateResource(table: string, select: string, allowList: string[]): v
   }
 }
 
-function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string } {
+function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string; select: string } {
   const projectUrl = requiredString(invocation.tool.settings, "project_url");
   const schema = requiredString(invocation.tool.settings, "schema");
   const allowList = tableAllowList(invocation.tool.settings);
@@ -330,7 +351,7 @@ function buildUrl(invocation: ConnectorInvocation): { url: URL; schema: string }
   }
   // No limit/offset here: the test-connection probe sets limit=1 itself and
   // the page loop owns paging (spec §5.1).
-  return { url, schema };
+  return { url, schema, select };
 }
 
 /** PostgREST answers `0-24/4213`, or `*` in place of the range on a count probe. */
@@ -362,10 +383,18 @@ class SupabaseDeadlineError extends Error {
   }
 }
 
-function withDeadline<T>(work: Promise<T>, ms: number): Promise<T> {
+/**
+ * @param cancelOnTimeout a response whose body must be released if the deadline
+ * wins. Reading JSON resolves parsed JSON, not the Response, so the resolved
+ * value alone cannot be used to find the socket still holding a stalled body.
+ */
+function withDeadline<T>(work: Promise<T>, ms: number, cancelOnTimeout?: Response): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const signal = AbortSignal.timeout(Math.max(0, ms));
-    const onAbort = () => reject(new SupabaseDeadlineError());
+    const onAbort = () => {
+      cancelOnTimeout?.body?.cancel().catch(() => {});
+      reject(new SupabaseDeadlineError());
+    };
     signal.addEventListener("abort", onAbort, { once: true });
     work.then(
       (value) => {
@@ -422,6 +451,8 @@ async function readPages(
     startOffset: number;
     orderBy: string | null;
     operation: string;
+    /** True when the operator named the columns, rather than falling back to `*`. */
+    columnsExplicit: boolean;
   },
 ): Promise<SupabaseReadEnvelope> {
   // The caller may have less than 12s left, so the loop cannot assume 8s. The
@@ -500,7 +531,7 @@ async function readPages(
 
     let payload: unknown;
     try {
-      payload = await withDeadline(readJson(response), deadline - Date.now());
+      payload = await withDeadline(readJson(response), deadline - Date.now(), response);
     } catch (cause) {
       if (collected.length === 0) throw cause;
       pageErrorCode = "supabase_request_failed";
@@ -542,7 +573,13 @@ async function readPages(
     let budgetHit = false;
     let acceptedFromPage = 0;
     for (const row of payload) {
-      const stripped = stripCredentialValues(row, secrets);
+      // When the operator named the columns they vouched for them, so the
+      // rows pass through and a column called `key` or `token` stays readable.
+      // When they did not -- `select=*` -- the row may carry a `password`,
+      // `refresh_token` or cookie nobody chose to expose, so the structural
+      // key-name pass still applies.
+      const vetted = limits.columnsExplicit ? row : redactSensitive(row);
+      const stripped = stripCredentialValues(vetted, secrets);
       const trimmed = (trimRows([stripped]) as unknown[])[0];
       const cost = JSON.stringify(trimmed).length + (collected.length ? 1 : 0);
       if (chars + cost > SUPABASE_CHAR_BUDGET) { budgetHit = true; break; }
@@ -625,7 +662,7 @@ async function callSupabase(
 
   try {
     validateSupabaseAnonKey(anonKey);
-    const { url: baseUrl, schema } = buildUrl(invocation);
+    const { url: baseUrl, schema, select } = buildUrl(invocation);
     const headers = {
       Accept: "application/json",
       apikey: anonKey,
@@ -710,6 +747,7 @@ async function callSupabase(
       startOffset,
       orderBy,
       operation: capability,
+      columnsExplicit: select !== "*",
     });
     return { ok: true, vendor: "supabase", action: "execute", capability, data: envelope };
   } catch (error) {

@@ -936,8 +936,14 @@ Deno.test("order_by is null unless a single valid identifier is configured", () 
   assertEquals(resolveOrderBy({ order_by: " created_at " }), "created_at");
   // Anything that is not a bare identifier is dropped rather than injected
   // into the query string.
-  assertEquals(resolveOrderBy({ order_by: "id desc, name" }), null);
+  
   assertEquals(resolveOrderBy({ order_by: "id;drop" }), null);
+  // A tie-breaker makes a non-unique lead column deterministic across the
+  // separate queries offset paging issues.
+  assertEquals(resolveOrderBy({ order_by: "status,id" }), "status,id");
+  assertEquals(resolveOrderBy({ order_by: "status, id " }), "status,id");
+  // The card's cleared-field marker.
+  assertEquals(resolveOrderBy({ order_by: "-" }), null);
 });
 
 // ---------------------------------------------------------------------------
@@ -955,9 +961,15 @@ Deno.test("column_map wins over the flat select_columns list", () => {
   assertEquals(resolveColumns(settings, "orders", null), "id,total");
 });
 
-Deno.test("a table the map does not name falls back to the flat list", () => {
+Deno.test("a table an active map does not name is refused, not widened", () => {
+  // Deleting or mistyping a table's entry must not take the agent from a
+  // scoped list to every column.
   const settings = { column_map: '{"products":["id"]}', select_columns: "name, price" };
-  assertEquals(resolveColumns(settings, "invoices", null), "name,price");
+  const error = assertThrows(
+    () => resolveColumns(settings, "invoices", null),
+    SupabaseValidationError,
+  ) as SupabaseValidationError;
+  assertEquals(error.code, "supabase_columns_unmapped");
 });
 
 Deno.test("with nothing configured the model's select is used, else star", () => {
@@ -1474,11 +1486,11 @@ Deno.test("a page whose body never arrives is abandoned and earlier rows survive
 // survive, in any representation.
 // ---------------------------------------------------------------------------
 
-Deno.test("a customer column named token survives a successful Supabase read", async () => {
+Deno.test("a customer column named token survives when the operator named it", async () => {
   const f = pagingFetch([[{ id: 1, token: "ABC-123", api_key: "plain", key: "k1" }]], { total: 1 });
   const data = envelopeOf(await executeConnector(
     {
-      tool: pagedTool(),
+      tool: pagedTool({ select_columns: "id, token, api_key, key" }),
       credentials: { anon_key: SUPABASE_ANON_KEY },
       request: request({ parameters: { table: "products" } }),
     },
@@ -1489,9 +1501,26 @@ Deno.test("a customer column named token survives a successful Supabase read", a
   assertEquals((data.rows[0] as { key: string }).key, "k1");
 });
 
-Deno.test("a 64-character hex column is customer data, not a leaked secret", async () => {
+Deno.test("a 64-character hex column is customer data when the operator named it", async () => {
   const digest = "a".repeat(64);
   const f = pagingFetch([[{ id: 1, sha256: digest }]], { total: 1 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool({ select_columns: "id, sha256" }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals((data.rows[0] as { sha256: string }).sha256, digest);
+});
+
+Deno.test("with no column list configured a secret-looking column is still redacted", async () => {
+  // The operator vouched for nothing here, so a row may carry a password or a
+  // refresh token nobody chose to expose. Only a named column skips this pass.
+  const f = pagingFetch([[{ id: 1, password: "hunter2", refresh_token: "rt-9", name: "widget" }]], {
+    total: 1,
+  });
   const data = envelopeOf(await executeConnector(
     {
       tool: pagedTool(),
@@ -1500,7 +1529,10 @@ Deno.test("a 64-character hex column is customer data, not a leaked secret", asy
     },
     dependencies(f.impl),
   ));
-  assertEquals((data.rows[0] as { sha256: string }).sha256, digest);
+  const row = data.rows[0] as Record<string, unknown>;
+  assertEquals(row.password, "[REDACTED]");
+  assertEquals(row.refresh_token, "[REDACTED]");
+  assertEquals(row.name, "widget");
 });
 
 Deno.test("the connector's own anon key is still stripped if a row echoes it", async () => {

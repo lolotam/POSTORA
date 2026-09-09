@@ -186,7 +186,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         kind: "text",
         required: false,
         help:
-          "A single column, ideally the primary key. Required to read more than one page: without a stable order, paging can repeat or skip rows.",
+          "The column to order by, required to read more than one page. It must be unique, or paging can repeat and skip rows: add a unique tie-breaker as a second column if it is not, e.g. \"status,id\".",
       },
       {
         key: "max_rows",
