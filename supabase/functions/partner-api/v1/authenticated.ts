@@ -115,9 +115,28 @@ export function withPartnerAuth(
     };
 
     try {
-      // The same header the document declares and the alias reads. A missing
-      // or unknown key is indistinguishable from a malformed one, by design.
-      record = await authenticatePartnerKey(admin, req.headers.get("x-postora-key") ?? "");
+      // x-postora-key ONLY. The published contract states it outright:
+      // "NOT `Authorization: Bearer` -- that header is never read by the
+      // alias and does not exist as a key transport", and adding it requires
+      // updating Access-Control-Allow-Headers and re-checking
+      // docs/decisions/2026-08-30-partner-api-cors.md.
+      //
+      // Reading Authorization here would also be actively unsafe: this
+      // function runs behind a gateway that can attach its own Authorization
+      // header, so preferring it would make every existing workspace call
+      // authenticate against the wrong value.
+      const presented = req.headers.get("x-postora-key") ?? "";
+
+      // Wrong tier: a platform credential must not learn that the workspace
+      // door rejected it as a KEY -- it learns nothing at all. A platform key
+      // sent as Bearer simply presents no credential here and gets the
+      // ordinary 401, which leaks nothing either.
+      if (presented.startsWith("pl_")) {
+        console.warn(`[partner-api] wrong-tier credential at workspace door (request ${requestId})`);
+        return ledgered(v1ErrorResponse("resource_not_found", requestId));
+      }
+
+      record = await authenticatePartnerKey(admin, presented);
 
       const satisfying = satisfyingScopesFor(action);
       if (satisfying === undefined) {
