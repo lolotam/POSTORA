@@ -24,8 +24,9 @@ function fakeAdmin(rows: Row[]) {
     Object.entries(eq).every(([column, value]) => row[column] === value) &&
     Object.entries(neq).every(([column, value]) => row[column] !== value);
 
+  // The builder is self-referential, so its return type cannot name itself.
   // deno-lint-ignore no-explicit-any
-  const builder = (state: { eq: Row; neq: Row; values?: Row }): any => ({
+  const builder = (state: { eq: Row; neq: Row; values?: Row }): any => ({ // eslint-disable-line @typescript-eslint/no-explicit-any
     select: () => builder(state),
     update: (values: Row) => builder({ ...state, values }),
     eq: (column: string, value: unknown) => builder({ ...state, eq: { ...state.eq, [column]: value } }),

@@ -62,7 +62,7 @@ export interface ReconnectResult {
 }
 
 // deno-lint-ignore no-explicit-any
-type SupabaseClient = any;
+type SupabaseClient = any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 interface StoredIdentity {
   platform_user_id: string;
