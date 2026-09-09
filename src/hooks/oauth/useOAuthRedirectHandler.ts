@@ -47,6 +47,9 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
         errorMessage = "You denied the required permissions. Please try again and accept all permissions to connect your account.";
       } else if (error === "invalid_scope") {
         errorMessage = `Invalid scope requested. ${errorType ? `Type: ${errorType}` : ""} This usually means the app doesn't have permission for video.upload/video.publish scopes.`;
+      } else if (error === "reconnect_account_mismatch") {
+        errorTitle = "Different account";
+        errorMessage = "You signed in to a different account than the one you are reconnecting. Sign in with the same account, or connect the new one separately.";
       } else if (errorDescription) {
         errorMessage = decodeURIComponent(errorDescription.replace(/\+/g, " "));
       }
