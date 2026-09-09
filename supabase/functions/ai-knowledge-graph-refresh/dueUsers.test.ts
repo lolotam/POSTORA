@@ -155,3 +155,18 @@ Deno.test("a foreign-bucket URL is not treated as renderable", () => {
     "unrenderable_host",
   );
 });
+
+Deno.test("a user whose graph is now empty is due once, then quiet", () => {
+  // The worker feeds this shape for a user the activity rollup no longer covers
+  // because they have neither entities nor relations left -- what the 03:15
+  // prune does to a user whose extraction produced no relations. Without it
+  // their graph of deleted data stays on a public URL forever.
+  const emptied = activity({ entityCount: 0, relationCount: 0, newestActivity: null });
+
+  assertEquals(refreshReasonFor(emptied, published()), "count_changed");
+  // And once the empty graph is published, they stop being reported every night.
+  assertEquals(
+    refreshReasonFor(emptied, published({ entityCount: 0, relationCount: 0 })),
+    null,
+  );
+});

@@ -82,6 +82,20 @@ function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * The email for a user the rollup did not cover. Returns null rather than
+ * throwing: a rebuild under the id-named folder is a worse outcome than one
+ * skipped user, and the caller decides.
+ */
+async function lookUpEmail(admin: any, userId: string): Promise<string | null> {
+  const { data, error } = await admin.auth.admin.getUserById(userId);
+  if (error) {
+    console.warn(`[graph-refresh] email lookup failed for ${userId}:`, error.message);
+    return null;
+  }
+  return data?.user?.email ?? null;
+}
+
 async function handleRequest(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -115,9 +129,27 @@ async function handleRequest(req: Request): Promise<Response> {
     ((exportRows ?? []) as ExportRow[]).map((row) => [row.user_id, toPublished(row)]),
   );
 
+  // The rollup only returns users who still have an entity or a relation. A user
+  // who has since deleted everything -- or whose entities the 03:15 prune
+  // removed, which is what happens when extraction produced no relations between
+  // them -- would never be looked at, and their graph of deleted data would stay
+  // on a public URL forever. So the due list is the union of both sides, and an
+  // absent activity row means a graph that is now empty.
+  const activity = new Map<string, ActivityRow>(
+    ((activityRows ?? []) as ActivityRow[]).map((row) => [row.user_id, row]),
+  );
+  const emptied: ActivityRow = {
+    user_id: "",
+    email: null,
+    entity_count: 0,
+    relation_count: 0,
+    newest_activity: null,
+  };
+
   const due: Array<{ row: ActivityRow; reason: RefreshReason }> = [];
-  for (const row of (activityRows ?? []) as ActivityRow[]) {
-    const reason = refreshReasonFor(toActivity(row), published.get(row.user_id) ?? null);
+  for (const userId of new Set([...activity.keys(), ...published.keys()])) {
+    const row = activity.get(userId) ?? { ...emptied, user_id: userId };
+    const reason = refreshReasonFor(toActivity(row), published.get(userId) ?? null);
     if (reason) due.push({ row, reason });
   }
 
@@ -131,10 +163,12 @@ async function handleRequest(req: Request): Promise<Response> {
       break;
     }
     try {
-      // The email is what names the per-account folder. Falling back to the id
-      // matches what the interactive export_graph action does, so a user with no
-      // email keeps the same folder either way rather than growing a second one.
-      await createGraphExports(admin, row.user_id, row.email || row.user_id);
+      // The email names the per-account folder, so getting it wrong writes the
+      // rebuilt graph beside the old one instead of over it. The rollup omits it
+      // for a user with nothing left, which is exactly the case that most needs
+      // to overwrite, so look it up rather than falling back to the id.
+      const email = row.email || await lookUpEmail(admin, row.user_id);
+      await createGraphExports(admin, row.user_id, email || row.user_id);
       outcomes.push({ userId: row.user_id, reason, ok: true });
     } catch (error) {
       // One user's failure must not end the run: the rest are independent, and
