@@ -374,7 +374,7 @@ Guards: `clean-code-guard` on production code, `test-guard` on tests.
 ## 9. Deployment
 
 The PR touches the frontend (auto-deploys on merge) and two edge functions.
-Order: deploy `ai-agent-adapters` **and `messaging-api`** from the branch via
+Order: deploy `ai-agent-adapters`, `ai-agent-reply` and `messaging-api` from the branch via
 `ssh-contabo-mcp`, verify against a live connector, then merge.
 
 ## 10. Risks

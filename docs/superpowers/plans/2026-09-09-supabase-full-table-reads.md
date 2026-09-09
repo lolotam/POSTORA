@@ -34,6 +34,143 @@
 
 ---
 
+## Revision 3 corrections — these OVERRIDE the task bodies below
+
+Adversarial review round 2 resolved objections 2, 3, 7 and 11 and confirmed the
+`has_more` truth table, but raised ten implementation blockers. Each is answered
+here. **Where this section and a task body disagree, this section wins.**
+
+**C1 — One deadline, and it must cover redirects and the body read.**
+`safeVendorFetch` restarts its timer per redirect hop and clears it before
+`readJson` (`http.ts:19, 44, 67`), so `timeoutMs` does not bound a hop. The loop
+therefore carries an **absolute** deadline and wraps each hop in its own
+`AbortSignal.timeout`, and the loop deadline is derived from the caller's budget
+rather than assumed:
+
+```ts
+// The caller may have less than 12s left, so the loop cannot assume 8s.
+const callerBudget = dependencies.callBudgetMs ?? ADAPTER_CALL_TIMEOUT_MS;
+const deadline = Date.now() + Math.min(SUPABASE_LOOP_BUDGET_MS, callerBudget - SUPABASE_MIN_HOP_MS);
+```
+
+Each hop gets `timeoutMs: Math.max(0, Math.min(dependencies.timeoutMs, deadline - Date.now()))`,
+and the whole hop — validation, redirects and `readJson` — is raced against
+`AbortSignal.timeout(deadline - Date.now())` so a slow body cannot outlive it.
+
+**C2 — Ordering governs continuation, not the row ceiling.** The `maxRows > pageSize`
+test is wrong: PostgREST's own row cap can force a second request even when
+`maxRows <= pageSize`, and a non-zero `offset` is itself a continuation. Replace
+it with:
+
+- `orderBy === null` ⇒ the loop issues **exactly one** request and never
+  continues, whatever the numbers say. `truncated_by: "unordered"` only if the
+  page did not already cover the table (see the has_more rule already added).
+- `orderBy === null` **and** `resolveOffset(parameters) > 0` ⇒ refuse the call
+  with `supabase_order_required`. Continuing from an offset with no stable order
+  returns a differently-shuffled window, which is worse than an error.
+- The `order_by` help text must say to use a unique column. Ties under a
+  non-unique column are not deterministic; the help text is the mitigation, and
+  §4.8 of the spec says so.
+
+**C3 — Count mode is routed FIRST**, before the unordered branch and before the
+loop. A count needs no ordering and reads no rows.
+
+**C4 — Transport and JSON failures preserve the rows already fetched.** Only an
+HTTP status was handled. Wrap the hop:
+
+```ts
+    let response: Response;
+    try {
+      response = await safeVendorFetch(url.toString(), { method: "GET", headers: pageHeaders }, hopDependencies);
+    } catch (cause) {
+      // A rejected fetch, an abort or a DNS failure on page two must not throw
+      // away page one; the dispatcher would turn it into connector_request_failed.
+      if (collected.length === 0) throw cause;
+      stop = "upstream_error";
+      break;
+    }
+```
+
+and the same shape around `readJson`.
+
+**C5 — `no_progress` must be actionable.** Returning `has_more: true` with an
+unchanged offset tells the model to retry the same offset forever. When
+`stop === "no_progress"`, return `has_more: false` and `next_offset: null`, and
+put the reason in the envelope so the model can say something useful rather than
+loop.
+
+**C6 — Real symbols only.** The task bodies name several things that do not
+exist. Use these instead:
+- `safeFetch` → **`safeVendorFetch(rawUrl: string, init, dependencies)`** — note
+  it takes a **string**, not a `URL`.
+- `SupabaseHttpError` → there is no such class. Return the existing
+  `supabaseFailure("supabase_http_error", …, response.status)` on a first-page
+  failure, exactly as the current code does.
+- Task 6's `toolContext` / `supabaseCustomTool` / `stubAdapterReturning` and
+  Task 8's `supabaseConnectorTool` are invented. Build the test from the real
+  seams in `connectorRouting.test.ts`, driving `executeAdapterTool` with an
+  injected HTTP stub so the serializer under test actually runs.
+- `connectorUsageGuide()` returns `UsageGuide | undefined`
+  (`connectorRegistry.ts:703`), not a string. Assert on its fields.
+- Task 5 must **not** change the existing PostgREST-error response code; the
+  assertion at `adapters.test.ts:245` covers it and is not in the rewrite list.
+
+**C7 — Redaction interface.** `stripCredentialValues` is a **new export** of
+`redaction.ts` (the "no new exports" line in Task 7 is wrong). It keeps the
+depth bound and the generic `Bearer` rule already added. Redaction runs
+**before** `trimValue`, so ordering is: fetch → strip credentials → trim cells →
+accumulate. Task 5's loop must call them in that order.
+
+**C8 — Shared constants are scoped per vendor.** Raising
+`ADAPTER_CALL_TIMEOUT_MS` and `ADAPTER_OUTPUT_LIMIT` changes WooCommerce too,
+contradicting this plan's own claim. Make both vendor-aware:
+
+```ts
+export const ADAPTER_CALL_TIMEOUT_MS = 6_000;          // unchanged default
+export const SUPABASE_CALL_TIMEOUT_MS = 12_000;
+export const ADAPTER_OUTPUT_LIMIT = 8_000;             // unchanged default
+export const SUPABASE_ADAPTER_OUTPUT_LIMIT = 80_000;
+
+export function adapterCallBudget(connectorType: string, remainingMs: number): number {
+  const ceiling = connectorType === "supabase" ? SUPABASE_CALL_TIMEOUT_MS : ADAPTER_CALL_TIMEOUT_MS;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 0;
+  return Math.min(ceiling, Math.trunc(remainingMs));
+}
+```
+
+Add a WooCommerce regression test asserting its budget and output cap are
+unchanged.
+
+**C9 — The UI must actually implement the reset sentinel.** Task 9 claimed the
+parent needed no change beyond `columnMap`. It does: blank values are dropped
+before save (`DatabaseConnectorsManager.tsx:1269-1274`), so clearing `max_rows`
+or `column_map` leaves the old value stored. The parent converts a cleared
+`max_rows` to `"0"` and a cleared `column_map` to `"{}"` before building the
+payload, with a test for each.
+
+**C10 — Six tests would pass for the wrong reason. Fix them.**
+- The WooCommerce redaction test passes without any redaction, because Woo's
+  product projection already drops `token` (`woocommerce.ts:104`). Assert on a
+  field the projection keeps.
+- The Supabase failure-redaction test injects nothing that needs redacting. Make
+  the failure path carry the credential.
+- The `no_progress` fixture cannot trigger: its huge string is cut to 160 chars
+  by `trimValue` before accounting. Use a row that is still oversized *after*
+  trimming — many columns, not one long string.
+- The credential-ordering test uses a JWT short enough to survive trimming, so it
+  cannot prove redaction precedes truncation. Use a credential longer than
+  `MAX_VALUE_CHARS` and assert no prefix of it leaks.
+- The budget tests assert arithmetic only. Add one that proves a slow hop is
+  actually abandoned and partial rows survive.
+- The character-budget test passes vacuously if zero rows are returned. Assert
+  `data.row_count > 0` first.
+
+**C11 — Deploy `ai-agent-reply` too.** Tasks 4 and 6 change it. The deploy step
+covers `ai-agent-adapters`, `messaging-api` **and `ai-agent-reply`**; an old
+reply deployment keeps the 6-second budget and the 8000-character slice.
+
+---
+
 ### Task 1: Settings resolution helpers
 
 Pure functions. No network. `ROW_LIMIT` stays in place — it is still referenced at `supabase.ts:177` and is not removed until Task 5.
