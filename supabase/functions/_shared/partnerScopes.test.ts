@@ -5,6 +5,7 @@ import { assertActionAuthorized, type PartnerKeyRecord } from "./partnerApiKeys.
 import {
   describeScopeRejection,
   GENERIC_SCOPES,
+  type GenericScope,
   LEGACY_SCOPE_CAPABILITY,
   LEGACY_SCOPES,
   scopeIsMintable,
@@ -173,4 +174,26 @@ Deno.test("T7: the enforced generic vocabulary equals the published one in opena
     [...doc.components.schemas.LegacyScope.enum].sort(),
     "the code's legacy scopes and docs/api/openapi.yaml LegacyScope disagree",
   );
+});
+
+// --- Platform tier (Task 1: principals, platform keys, atomic provisioning) ---
+
+Deno.test("T8: platform scopes are generic, never legacy", () => {
+  const platformScopes = [
+    "platform:workspaces.read",
+    "platform:workspaces.manage",
+    "platform:keys.manage",
+  ];
+  for (const scope of platformScopes) {
+    assertEquals(
+      GENERIC_SCOPES.includes(scope as GenericScope),
+      true,
+      `${scope} must be a generic scope, or issuance rejects it`,
+    );
+    assertEquals(
+      (LEGACY_SCOPES as readonly string[]).includes(scope),
+      false,
+      `${scope} must never be legacy`,
+    );
+  }
 });

@@ -1470,6 +1470,9 @@ components:
         - media:write
         - messages:read
         - messages:send
+        - platform:keys.manage
+        - platform:workspaces.manage
+        - platform:workspaces.read
         - posts:publish
         - posts:read
         - posts:schedule
