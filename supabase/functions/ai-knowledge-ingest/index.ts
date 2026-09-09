@@ -437,16 +437,19 @@ async function createGraphExports(admin: AdminClient, userId: string, userEmail:
 
 // Stored export values are durable references or external delivery URLs, never
 // browser-ready storage links — resolve them to signed URLs for the owner.
+// `signer` must be bound to the public base URL: a client built from the
+// in-cluster SUPABASE_URL mints http://kong:8000 links, which resolve nowhere
+// in a browser. That is what "Show Graph" returned for storage-backed rows.
 async function resolveExportUrlsForRow(
-  admin: AdminClient,
+  signer: AdminClient,
   userEmail: string,
   htmlUrl: string | null,
   vaultUrl: string | null,
 ) {
   const ownerFolder = `media/${cloudinaryFolderForEmail(userEmail)}`;
   const [resolvedHtml, resolvedVault] = await Promise.all([
-    resolveExportUrl(admin, htmlUrl, { bucket: BUCKET, ownerFolder }),
-    resolveExportUrl(admin, vaultUrl, { bucket: BUCKET, ownerFolder }),
+    resolveExportUrl(signer, htmlUrl, { bucket: BUCKET, ownerFolder }),
+    resolveExportUrl(signer, vaultUrl, { bucket: BUCKET, ownerFolder }),
   ]);
   return { html_url: resolvedHtml, vault_url: resolvedVault };
 }
@@ -556,6 +559,12 @@ async function handleRequest(req: Request): Promise<Response> {
     const token = authHeader.replace(/^Bearer\s+/i, "");
     const anon = createClient(url, anonKey);
     const admin = createClient(url, serviceKey);
+    // Same service role, different base. `admin` reaches Kong in-cluster; this
+    // client exists only to mint links a browser will follow, because
+    // storage-js builds a signed URL absolutely from its client's base and
+    // `url` is http://kong:8000 in this container. Every URL handed back to a
+    // caller is signed with this one.
+    const publicSigner = createClient(publicSupabaseUrl(), serviceKey);
     // Carries the caller's JWT, so auth.uid() resolves inside SECURITY DEFINER
     // functions that derive ownership from it. create_ai_knowledge_source is
     // one: called through `admin` it raises "Not authenticated" before doing
@@ -584,7 +593,7 @@ async function handleRequest(req: Request): Promise<Response> {
         // The row stores durable references; the response carries signed URLs
         // so a client that opens the export right away gets a working link.
         const urls = await resolveExportUrlsForRow(
-          admin,
+          publicSigner,
           user.email || user.id,
           exported.html_url,
           exported.vault_url,
@@ -608,7 +617,7 @@ async function handleRequest(req: Request): Promise<Response> {
         .maybeSingle();
       if (!exportRow) return errorResponse("Knowledge graph exports not found", 404);
       const urls = await resolveExportUrlsForRow(
-        admin,
+        publicSigner,
         user.email || user.id,
         exportRow.html_url,
         exportRow.vault_url,
@@ -622,10 +631,9 @@ async function handleRequest(req: Request): Promise<Response> {
     if (action === "download_source") {
       // Ownership and the uniform 404 live in downloadSource.ts so they can be
       // tested without a live Supabase; this block is transport only.
-      const signer = createClient(publicSupabaseUrl(), serviceKey);
       const outcome = await resolveSourceDownload(
         admin as unknown as SourceReader,
-        signer as unknown as SignerLike,
+        publicSigner as unknown as SignerLike,
         { userId: user.id, email: user.email },
         body.source_id,
       );
