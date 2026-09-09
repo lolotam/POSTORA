@@ -21,9 +21,11 @@ bash /etc/dokploy/postora-edge-deploy.sh
 The script is versioned in this repo at [`scripts/deploy/postora-edge-deploy.sh`](../../scripts/deploy/postora-edge-deploy.sh).
 It reads its own clone at `/etc/dokploy/postora-runtime` (deploy key `/etc/dokploy/ssh/postora_edge_deploy`),
 mirrors `git archive origin/main` into `$VOL`, restarts `functions`, restarts
-`ai-knowledge-excel-worker` when `_shared/` changed, and health-checks
-`get-public-config`. A run that fails to come back healthy **rolls the volume back to the previous
-commit** and exits non-zero so Dokploy flags it red.
+`ai-knowledge-excel-worker` when `_shared/` changed, health-checks `get-public-config`, and then
+sends an `OPTIONS` to **each changed function** to prove it boots. That last step matters because a
+function whose module fails to load answers 5xx only on its own path, while `get-public-config` keeps
+returning 200 — which is how `generate-caption` stayed broken for ten weeks. A run that fails either
+check **rolls the volume back to the previous commit** and exits non-zero so Dokploy flags it red.
 
 **A failed commit is parked, not retried.** The script writes the bad SHA to
 `/etc/dokploy/postora-edge-deploy.failed` and every later tick skips it, so a bad merge cannot become
@@ -34,14 +36,37 @@ cat /etc/dokploy/postora-edge-deploy.failed   # which commit is parked
 rm /etc/dokploy/postora-edge-deploy.failed    # allow the next tick to retry
 ```
 
+### Pause it before any server-only hotfix
+
+The reconciler compares the volume against `origin/main` on **every** tick, not only when a new
+commit lands. Anything you write straight into `$VOL` that is not in git — the classic
+server-only hotfix — is overwritten or deleted within two minutes. Park the schedule first:
+
+```bash
+touch /etc/dokploy/postora-edge-deploy.paused   # ticks now exit without touching the volume
+# ... apply the hotfix, verify it ...
+rm /etc/dokploy/postora-edge-deploy.paused      # resume; the next tick reconciles to origin/main
+```
+
+**Removing the pause reverts the hotfix.** A pause buys time to land the same fix in git, it does
+not preserve anything. Leave the marker in place until the fix is merged, and say so in the incident
+notes, because a paused schedule silently stops deploying everyone else's merges too.
+
 Read a run's output in Dokploy under Schedules, or on disk:
 
 ```bash
 ls -t /etc/dokploy/schedules/*/*.log | head -3
 ```
 
-**Migrations are not covered.** They stay manual, and a merge carrying both a migration and a
-function change deploys the function first — see the Task Execution Workflow in [`CLAUDE.md`](../../CLAUDE.md).
+**Migrations are not covered, and the schedule will not wait for one.** A merge carrying both a
+migration and a function that needs the new schema deploys the function within two minutes, against
+the old database. Nothing detects this: the function boots fine and only fails when it touches the
+missing column, so the health check and the boot probes both pass.
+
+**Apply the migration before you merge the function**, not after. That ordering is the only thing
+standing between a schema change and a live failure window, and it is the same rule the manual path
+always had — see the Task Execution Workflow in [`CLAUDE.md`](../../CLAUDE.md). If a migration cannot
+be applied ahead of the merge, pause the schedule (below) until it has been.
 
 `/root/postora-runtime` is a **separate** checkout kept for the manual sections below. The schedule
 never touches it, so it will fall behind `main`. That is harmless: every path here reads

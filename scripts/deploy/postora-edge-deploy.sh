@@ -26,7 +26,8 @@ STACK="/etc/dokploy/compose/postorasupabase-supabase-j8axyh/code"
 RUNTIME="/etc/dokploy/postora-runtime"
 SSH_KEY="/etc/dokploy/ssh/postora_edge_deploy"
 KNOWN_HOSTS="/etc/dokploy/ssh/known_hosts"
-HEALTH_URL="https://api.postora.cloud/functions/v1/get-public-config"
+FUNCTIONS_BASE="https://api.postora.cloud/functions/v1"
+HEALTH_URL="$FUNCTIONS_BASE/get-public-config"
 WORKER="ai-knowledge-excel-worker"
 
 LOCKFILE="/tmp/postora-deploy.lock"
@@ -34,12 +35,16 @@ TMP_SYNC="/tmp/postora-functions-sync"
 RSYNC_RAW="/tmp/postora-functions-sync.itemized"
 CHANGES="/tmp/postora-functions-sync.changes"
 ROLLBACK_CHANGES="/tmp/postora-functions-sync.rollback"
-# Persisted outside /tmp so it survives a Dokploy container restart.
+# Persisted outside /tmp so they survive a Dokploy container restart.
 FAILED_MARKER="/etc/dokploy/postora-edge-deploy.failed"
+# Hand-created by an operator before a server-only hotfix. `rsync --delete` would
+# otherwise revert that hotfix within one tick, whether or not a commit landed.
+PAUSE_MARKER="/etc/dokploy/postora-edge-deploy.paused"
 
 LOCK_WAIT=180          # seconds to wait for a concurrent run to release the lock
 FETCH_TIMEOUT=30       # seconds before giving up on git fetch
 HEALTH_ATTEMPTS=3      # healthcheck retries, 3s apart
+PROBE_LIMIT=15         # most changed functions to boot-probe in one deploy
 
 # ------------------------------- helpers -------------------------------------
 log() { echo "[$(date -u '+%H:%M:%S')] $*"; }
@@ -54,6 +59,34 @@ healthcheck() {
         [ "$status" = "200" ] && return 0
     done
     return 1
+}
+
+# probe_changed_functions <changes-file>
+# A module that fails to load — a bad import, a top-level throw — answers 5xx on
+# every request, but only for its own function. The shared healthcheck above hits
+# get-public-config, which keeps returning 200 while a sibling is dead, so a
+# broken deploy would otherwise be accepted (that is how generate-caption stayed
+# down for ten weeks). OPTIONS is used because it is side-effect free: it reaches
+# the CORS preamble on a healthy function and never a webhook's body handler.
+probe_changed_functions() {
+    local fn code failed=0
+    local -a functions
+    mapfile -t functions < <(
+        awk '{print $NF}' "$1" | cut -d/ -f1 | grep -vx '_shared' | sort -u | head -"$PROBE_LIMIT"
+    )
+
+    for fn in "${functions[@]}"; do
+        # Skip a directory the sync just deleted; there is nothing left to boot.
+        [ -d "$VOL/$fn" ] || continue
+        code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -X OPTIONS "$FUNCTIONS_BASE/$fn" || echo 000)"
+        if [ "$code" = "000" ] || [ "$code" -ge 500 ]; then
+            log "  probe $fn -> HTTP $code   FAILED"
+            failed=1
+        else
+            log "  probe $fn -> HTTP $code"
+        fi
+    done
+    return "$failed"
 }
 
 # sync_volume <git-ref> <changes-file>
@@ -121,6 +154,12 @@ fi
 echo "=========================================="
 log "Postora Edge Functions sync"
 echo "=========================================="
+
+if [ -f "$PAUSE_MARKER" ]; then
+    log "Paused by $PAUSE_MARKER - not touching the volume."
+    log "Remove that file to resume automatic deploys."
+    exit 0
+fi
 
 TARGET=""
 WORKER_TOUCHED=0
@@ -204,6 +243,12 @@ fi
 log "Verifying $HEALTH_URL ..."
 if ! healthcheck "$HEALTH_ATTEMPTS"; then
     log "ERROR: healthcheck failed after $HEALTH_ATTEMPTS attempts."
+    rollback
+fi
+
+log "Boot-probing the changed functions ..."
+if ! probe_changed_functions "$CHANGES"; then
+    log "ERROR: a changed function does not boot."
     rollback
 fi
 
