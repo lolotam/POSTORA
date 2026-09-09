@@ -1044,7 +1044,36 @@ async function readPages(
 
 In `callSupabase`, before the loop: if `maxRows > pageSize` (more than one page
 possible) and `orderBy === null`, run a single page and return
-`truncated_by: "unordered"` with `has_more: true`. Then handle `mode === "count"`
+`truncated_by: "unordered"`. **`has_more` on that path is `total === null ||
+startOffset + rows.length < total`, not an unconditional `true`** — a single
+page that already covered the whole table must not claim there is more. Add:
+
+```ts
+Deno.test("an unordered read that already covered the table is not has_more", async () => {
+  const f = pagingFetch([rows(0, 30)], { total: 30 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: supabaseTool({
+        settings: {
+          project_url: "https://project.example.com",
+          schema: "public",
+          table_allow_list: ["products"],
+          max_rows: "500",
+          page_size: "200",
+        },
+      }),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertEquals(data.truncated_by, "unordered");
+  assertEquals(data.has_more, false);
+  assertEquals(data.next_offset, null);
+});
+```
+
+Then handle `mode === "count"`
 with one HEAD request. Finally delete `ROW_LIMIT`, whose only reference was
 `:177`. `test_connection` keeps its own single `limit=1` path.
 
@@ -1289,10 +1318,57 @@ export function redactConnectorOutput(
 ```
 
 `stripCredentialValues` reuses the existing `credentialRepresentations(credentials)`
-helper (`redaction.ts:5-38`) so nested and URL-encoded forms are still caught, and
-runs **before** `trimValue` has a chance to cut a credential into an unmatchable
-prefix — i.e. call it on the raw row inside `readPages` if `trimValue` would
-otherwise run first, or reorder so redaction precedes truncation.
+helper (`redaction.ts:5-38`) so nested, URL-encoded and Basic-encoded forms are
+still caught, and runs **before** `trimValue` has a chance to cut a credential
+into an unmatchable prefix — i.e. reorder so redaction precedes truncation.
+
+Two properties of `redactSensitive` that are NOT about key names must be carried
+over, or skipping it loses them (`_shared/logging.ts:30-55`):
+
+```ts
+const MAX_DEPTH = 10;
+
+function stripCredentialValues(value: unknown, secrets: string[], depth = 0): unknown {
+  // A deeply nested JSONB column must not recurse without a bound; the pass
+  // being replaced had exactly this guard.
+  if (depth > MAX_DEPTH) return REDACTED;
+  if (typeof value === "string") {
+    // Keep the generic bearer-token rule: a token in a customer row is still a
+    // token, even when it is not one of ours.
+    if (/^Bearer\s+\S/i.test(value)) return REDACTED;
+    return secrets.reduce((acc, secret) => acc.split(secret).join(REDACTED), value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => stripCredentialValues(entry, secrets, depth + 1));
+  }
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .map(([key, entry]) => [key, stripCredentialValues(entry, secrets, depth + 1)]),
+    );
+  }
+  return value;
+}
+```
+
+Add a test for the depth guard so it cannot be dropped later:
+
+```ts
+Deno.test("a deeply nested JSONB column is bounded, not recursed forever", async () => {
+  let nested: Record<string, unknown> = { leaf: "ok" };
+  for (let i = 0; i < 40; i++) nested = { child: nested };
+  const f = pagingFetch([[{ id: 1, payload: nested }]], { total: 1 });
+  const data = envelopeOf(await executeConnector(
+    {
+      tool: pagedTool(),
+      credentials: { anon_key: SUPABASE_ANON_KEY },
+      request: request({ parameters: { table: "products" } }),
+    },
+    dependencies(f.impl),
+  ));
+  assertStringIncludes(JSON.stringify(data.rows[0]), "[REDACTED]");
+});
+```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
