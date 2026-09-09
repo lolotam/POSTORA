@@ -46,7 +46,16 @@ export interface DownloadOwner {
 
 export type DownloadOutcome =
   | { ok: true; url: string; sourceId: string }
-  | { ok: false; reason: "not_found" | "sign_failed"; sourceId: string | null };
+  | {
+    ok: false;
+    reason: "not_found" | "sign_failed" | "read_failed";
+    sourceId: string | null;
+  };
+
+/** Anything that is not a uuid cannot name a row, so it is refused before the
+ *  query. Without this, PostgREST's 22P02 cast error would be indistinguishable
+ *  from a database outage once read errors stop being swallowed. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** How long a minted link stays valid. Long enough for the navigation, no longer. */
 export const DOWNLOAD_URL_TTL_SECONDS = 60;
@@ -58,7 +67,9 @@ export const DOWNLOAD_URL_TTL_SECONDS = 60;
  * "exists but not yours" would confirm that an id exists.
  *
  * `sign_failed` is separated only so the caller can log it; it must still be
- * reported to the client as the same 404.
+ * reported to the client as the same 404. `read_failed` is the one failure that
+ * is NOT a 404: the row's existence is unknown, so claiming it is missing would
+ * be a lie, and a transient backend fault is not the caller's to interpret.
  */
 export async function resolveSourceDownload(
   reader: SourceReader,
@@ -66,18 +77,22 @@ export async function resolveSourceDownload(
   owner: DownloadOwner,
   sourceId: unknown,
 ): Promise<DownloadOutcome> {
-  if (typeof sourceId !== "string" || !sourceId) {
+  if (typeof sourceId !== "string" || !UUID.test(sourceId)) {
     return { ok: false, reason: "not_found", sourceId: null };
   }
 
   // Scoped by user_id on the read itself rather than checked afterwards, so a
   // row belonging to someone else is never in hand to leak through a later bug.
-  const { data: source } = await reader
+  const { data: source, error: readError } = await reader
     .from("ai_knowledge_sources")
     .select("id, file_path, file_name")
     .eq("id", sourceId)
     .eq("user_id", owner.userId)
     .maybeSingle();
+  // A failed read is not an absent row. Swallowing it would tell the owner of
+  // an existing source that it is gone whenever PostgREST times out. The id is
+  // already known to be a uuid, so nothing here is the caller's fault.
+  if (readError) return { ok: false, reason: "read_failed", sourceId };
   if (!source) return { ok: false, reason: "not_found", sourceId };
 
   const location = locateKnowledgeFile(source.file_path, {

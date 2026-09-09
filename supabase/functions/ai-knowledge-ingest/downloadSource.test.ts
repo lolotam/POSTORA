@@ -160,3 +160,42 @@ Deno.test("a signing failure is reported separately but is still not a success",
   // Distinct from not_found only so the caller can log it; both are 404s.
   assertNotEquals(outcome.ok, true);
 });
+
+Deno.test("a failed read is reported as read_failed, not as a missing row", async () => {
+  const failingQuery: Record<string, unknown> = {};
+  failingQuery.select = () => failingQuery;
+  failingQuery.eq = () => failingQuery;
+  failingQuery.maybeSingle = () =>
+    Promise.resolve({ data: null, error: new Error("statement timeout") });
+  const failing = { from: () => failingQuery } as unknown as SourceReader;
+  const { signer, calls } = fakeSigner("https://api.example.com/signed");
+
+  const outcome = await resolveSourceDownload(failing, signer, OWNER, SOURCE_ID);
+
+  // Telling the owner of an existing source that it is gone, because PostgREST
+  // timed out, is the failure this separates out.
+  assertEquals(outcome, { ok: false, reason: "read_failed", sourceId: SOURCE_ID });
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("a source id that is not a uuid is refused before the query runs", async () => {
+  let queried = false;
+  const watchedQuery: Record<string, unknown> = {};
+  watchedQuery.select = () => watchedQuery;
+  watchedQuery.eq = () => watchedQuery;
+  watchedQuery.maybeSingle = () => Promise.resolve({ data: null });
+  const watching = {
+    from: () => {
+      queried = true;
+      return watchedQuery;
+    },
+  } as unknown as SourceReader;
+  const { signer } = fakeSigner("https://api.example.com/signed");
+
+  const outcome = await resolveSourceDownload(watching, signer, OWNER, "not-a-uuid");
+
+  // Refused up front so PostgREST's 22P02 cast error stays distinguishable from
+  // a genuine outage now that read errors are propagated.
+  assertEquals(outcome, { ok: false, reason: "not_found", sourceId: null });
+  assertEquals(queried, false);
+});

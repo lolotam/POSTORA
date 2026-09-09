@@ -630,11 +630,18 @@ async function handleRequest(req: Request): Promise<Response> {
         body.source_id,
       );
       if (!outcome.ok) {
-        if (outcome.reason === "sign_failed") {
-          await logKnowledgeEvent(admin, user.id, "download_source", false, {
-            source_id: outcome.sourceId,
-            reason: "sign_failed",
-          });
+        // Every refusal is logged, not just the signing failures: a run of
+        // not_found against ids this user does not own is what a cross-tenant
+        // probe looks like, and it left no trace at all before. The id is
+        // recorded, never the caller's guess at a path.
+        await logKnowledgeEvent(admin, user.id, "download_source", false, {
+          source_id: outcome.sourceId,
+          reason: outcome.reason,
+        });
+        // A failed read is the one refusal that is not a 404 -- the row's
+        // existence is unknown, so reporting it as missing would be a lie.
+        if (outcome.reason === "read_failed") {
+          return errorResponse("Could not read the knowledge source", 503);
         }
         return errorResponse("Knowledge source not found", 404);
       }
