@@ -1,0 +1,4 @@
+# Shell scripts must stay LF. scripts/deploy/postora-edge-deploy.sh is executed by
+# bash on the Contabo VPS, and a CRLF shebang line fails with "bad interpreter".
+# core.autocrlf=true on Windows checkouts would otherwise hand out CRLF copies.
+*.sh text eol=lf
