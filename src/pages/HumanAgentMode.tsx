@@ -13,10 +13,10 @@ import type { GradientKey } from "@/components/fx";
 import { useWhatsAppAgents, useConversationAssignments, useAssignmentHistory } from "@/hooks/useWhatsAppAgents";
 import { useMessagingAccounts, useConversations, type Conversation, type MessagingAccount } from "@/hooks/useMessaging";
 import { AccountSelector } from "@/components/messaging/AccountSelector";
+import { WaitingQueueFilter } from "@/components/messaging/human-agent/WaitingQueueFilter";
+import { emptyQueueCopy, resolveQueueFilter, type Platform, type QueueFilter } from "@/components/messaging/human-agent/queueFilter";
 import { useState } from "react";
 import { formatDistanceToNow, isToday } from "date-fns";
-
-type Platform = "whatsapp" | "facebook" | "instagram";
 
 // Conversations expose a different join key per platform: WhatsApp's own id is already stable,
 // while Facebook/Instagram use assignment_key (see useMessaging.ts) since Meta's conversation id
@@ -38,6 +38,7 @@ export default function HumanAgentMode() {
   // accounts can switch — otherwise the queue silently only ever showed
   // whichever account happened to be first, with no way to see the others.
   const [selectedAccountIds, setSelectedAccountIds] = useState<Partial<Record<Platform, string>>>({});
+  const [queueFilter, setQueueFilter] = useState<QueueFilter>("all");
 
   const accountFor = (platform: Platform): MessagingAccount | undefined => {
     const matchingAccounts = accounts.filter((a) => a.platform === platform);
@@ -75,6 +76,22 @@ export default function HumanAgentMode() {
     .map((a) => ({ assignment: a, match: allConversations.find((c) => c.key === a.conversation_id) }));
 
   const waitingQueue = allConversations.filter((c) => !assignedKeys.has(c.key));
+
+  // Waiting-queue platform filter. availablePlatforms keeps the account-selector
+  // row's display order; counts stay derived from the unfiltered queue so the
+  // chips and the "Waiting" stat card never disagree about the workload.
+  const availablePlatforms = (["facebook", "instagram", "whatsapp"] as Platform[]).filter((platform) =>
+    accounts.some((a) => a.platform === platform)
+  );
+  const activeFilter = resolveQueueFilter(queueFilter, availablePlatforms);
+  const visibleQueue = activeFilter === "all"
+    ? waitingQueue
+    : waitingQueue.filter((c) => c.platform === activeFilter);
+  const waitingCounts: Record<Platform, number> = { facebook: 0, instagram: 0, whatsapp: 0 };
+  for (const { platform } of waitingQueue) {
+    waitingCounts[platform] += 1;
+  }
+  const emptyCopy = emptyQueueCopy(activeFilter, waitingQueue.length);
 
   const resolvedToday = history.filter(
     (h) => h.action === "unassigned" && h.from_agent_id === myAgent?.id && isToday(new Date(h.created_at))
@@ -235,16 +252,23 @@ export default function HumanAgentMode() {
                 <Inbox className="h-5 w-5 text-rose-500" />
                 Waiting Queue
               </div>
-              <p className="text-sm text-muted-foreground">Unclaimed conversations across WhatsApp, Facebook, and Instagram.</p>
+              <p className="text-sm text-muted-foreground">Unclaimed conversations across WhatsApp, Facebook, and Instagram, from the accounts selected above.</p>
             </div>
-            {waitingQueue.length === 0 ? (
+            <WaitingQueueFilter
+              platforms={availablePlatforms}
+              counts={waitingCounts}
+              totalCount={waitingQueue.length}
+              value={activeFilter}
+              onChange={setQueueFilter}
+            />
+            {visibleQueue.length === 0 ? (
               <div className="text-center py-6 text-muted-foreground">
-                <p className="font-medium">Nothing waiting</p>
-                <p className="text-sm mt-1">All conversations are either claimed or handled by auto-reply.</p>
+                <p className="font-medium">{emptyCopy.title}</p>
+                <p className="text-sm mt-1">{emptyCopy.subtitle}</p>
               </div>
             ) : (
               <div className="space-y-2">
-                {waitingQueue.map(({ platform, conv, key }) => (
+                {visibleQueue.map(({ platform, conv, key }) => (
                   <div key={key} className="flex items-center justify-between gap-3 rounded-xl border border-border/40 bg-card/40 p-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
