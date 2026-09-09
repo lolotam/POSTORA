@@ -161,31 +161,28 @@ export function useAIRateLimit(): UseAIRateLimitReturn {
       const imageLimits = getEffectiveLimits("generate-image");
       const hashtagLimits = getEffectiveLimits("generate-hashtags");
 
-      // Query api_logs to count recent requests for each endpoint (hourly and daily)
-      const hourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      // Fetch all six api_logs counts (3 endpoints × hour/day) in a single RPC
+      // to avoid the N+1 pattern of firing one query per endpoint per window.
+      const { data: counts, error: countsError } = await supabase
+        .rpc("get_ai_rate_limit_counts")
+        .single();
 
-      const [
-        { data: captionLogsHour },
-        { data: captionLogsDay },
-        { data: imageLogsHour },
-        { data: imageLogsDay },
-        { data: hashtagLogsHour },
-        { data: hashtagLogsDay },
-      ] = await Promise.all([
-        supabase.from("api_logs").select("id").eq("user_id", user.id).eq("endpoint", "/generate-caption").gte("created_at", hourAgo),
-        supabase.from("api_logs").select("id").eq("user_id", user.id).eq("endpoint", "/generate-caption").gte("created_at", dayAgo),
-        supabase.from("api_logs").select("id").eq("user_id", user.id).eq("endpoint", "/generate-image").gte("created_at", hourAgo),
-        supabase.from("api_logs").select("id").eq("user_id", user.id).eq("endpoint", "/generate-image").gte("created_at", dayAgo),
-        supabase.from("api_logs").select("id").eq("user_id", user.id).eq("endpoint", "/generate-hashtags").gte("created_at", hourAgo),
-        supabase.from("api_logs").select("id").eq("user_id", user.id).eq("endpoint", "/generate-hashtags").gte("created_at", dayAgo),
-      ]);
+      if (countsError) {
+        console.error("Failed to fetch AI rate limit counts:", countsError);
+      }
+
+      const captionHour  = counts?.caption_hour  ?? 0;
+      const captionDay   = counts?.caption_day   ?? 0;
+      const imageHour    = counts?.image_hour    ?? 0;
+      const imageDay     = counts?.image_day     ?? 0;
+      const hashtagHour  = counts?.hashtag_hour  ?? 0;
+      const hashtagDay   = counts?.hashtag_day   ?? 0;
 
       setCaptionLimit({
         limitPerHour: captionLimits.maxPerHour,
         limitPerDay: captionLimits.maxPerDay,
-        remainingHour: Math.max(0, captionLimits.maxPerHour - (captionLogsHour?.length || 0)),
-        remainingDay: Math.max(0, captionLimits.maxPerDay - (captionLogsDay?.length || 0)),
+        remainingHour: Math.max(0, captionLimits.maxPerHour - captionHour),
+        remainingDay: Math.max(0, captionLimits.maxPerDay - captionDay),
         resetTimeHour: null,
         resetTimeDay: null,
         planSlug,
@@ -194,8 +191,8 @@ export function useAIRateLimit(): UseAIRateLimitReturn {
       setImageLimit({
         limitPerHour: imageLimits.maxPerHour,
         limitPerDay: imageLimits.maxPerDay,
-        remainingHour: Math.max(0, imageLimits.maxPerHour - (imageLogsHour?.length || 0)),
-        remainingDay: Math.max(0, imageLimits.maxPerDay - (imageLogsDay?.length || 0)),
+        remainingHour: Math.max(0, imageLimits.maxPerHour - imageHour),
+        remainingDay: Math.max(0, imageLimits.maxPerDay - imageDay),
         resetTimeHour: null,
         resetTimeDay: null,
         planSlug,
@@ -204,8 +201,8 @@ export function useAIRateLimit(): UseAIRateLimitReturn {
       setHashtagLimit({
         limitPerHour: hashtagLimits.maxPerHour,
         limitPerDay: hashtagLimits.maxPerDay,
-        remainingHour: Math.max(0, hashtagLimits.maxPerHour - (hashtagLogsHour?.length || 0)),
-        remainingDay: Math.max(0, hashtagLimits.maxPerDay - (hashtagLogsDay?.length || 0)),
+        remainingHour: Math.max(0, hashtagLimits.maxPerHour - hashtagHour),
+        remainingDay: Math.max(0, hashtagLimits.maxPerDay - hashtagDay),
         resetTimeHour: null,
         resetTimeDay: null,
         planSlug,
