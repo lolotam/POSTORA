@@ -1183,6 +1183,76 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "whatsapp",
+      "item": [
+        {
+          "name": "Get one bound WhatsApp number",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Reads a pending, connected or disconnected WhatsApp number. Requires\nserver-side WhatsApp entitlement before resolving the key's binding.\nA disabled feature returns `feature_not_entitled` (403). An id outside\nthe binding returns `resource_not_found` (404) without an account query.\nMissing accounts and accounts from another platform also return 404.\n\nThe id is the raw account UUID returned as `account_id` by this\ncollection, not a Meta phone number id or a prefixed `/v1/accounts` id.\nScope `whats"
+          },
+          "response": []
+        },
+        {
+          "name": "List bound WhatsApp numbers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers"
+              ]
+            },
+            "description": "Reads WhatsApp accounts in this workspace that are bound to the key,\nincluding pending and disconnected numbers. Requires server-side\nWhatsApp entitlement; a disabled feature returns `feature_not_entitled`\n(403) before any binding or account lookup.\n\nOrdered by `updated_at` descending, then by id descending. Connection\ntransitions update this ordering even when `connected_at` is unchanged.\nUse the opaque cursor to traverse pages; restart from the first page\nto reconcile later changes. The cursor"
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "variable": [

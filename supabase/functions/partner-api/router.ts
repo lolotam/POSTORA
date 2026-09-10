@@ -32,6 +32,9 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   // These are /v1 ROUTE policies, not alias actions -- see ALIAS_ACTIONS.
   list_accounts: ["accounts:read"],
   get_account: ["accounts:read"],
+  // Generic despite the prefix: neither action accepts a LegacyScope.
+  list_whatsapp_numbers: ["whatsapp:numbers.read"],
+  get_whatsapp_number: ["whatsapp:numbers.read"],
   list_conversations: ["conversations:read"],
   get_conversation: ["conversations:read"],
   list_conversation_messages: ["messages:read"],
@@ -102,6 +105,8 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   // which is the asymmetry D7 exists to encode.
   list_accounts: "A",
   get_account: "A",
+  list_whatsapp_numbers: "A",
+  get_whatsapp_number: "A",
   list_conversations: "A",
   get_conversation: "A",
   list_conversation_messages: "A",

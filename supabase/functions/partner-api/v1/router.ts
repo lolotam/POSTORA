@@ -37,6 +37,7 @@ import {
 import { getTemplates } from "./templates.ts";
 import { executeTool } from "./tools.ts";
 import { getUsage } from "./usage.ts";
+import { getNumber, listNumbers } from "./whatsappNumbers.ts";
 import {
   createWebhook,
   deleteWebhook,
@@ -126,6 +127,18 @@ export const V1_ROUTES: V1Route[] = [
     pattern: "/v1/accounts/{id}",
     methods: {
       GET: withPartnerAuth("get_account", "A", getAccount),
+    },
+  },
+  {
+    pattern: "/v1/whatsapp/numbers",
+    methods: {
+      GET: withPartnerAuth("list_whatsapp_numbers", "A", listNumbers),
+    },
+  },
+  {
+    pattern: "/v1/whatsapp/numbers/{id}",
+    methods: {
+      GET: withPartnerAuth("get_whatsapp_number", "A", getNumber),
     },
   },
   {

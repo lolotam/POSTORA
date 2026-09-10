@@ -310,6 +310,84 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/whatsapp/numbers:
+    get:
+      operationId: listWhatsAppNumbers
+      summary: List bound WhatsApp numbers
+      description: |
+        Reads WhatsApp accounts in this workspace that are bound to the key,
+        including pending and disconnected numbers. Requires server-side
+        WhatsApp entitlement; a disabled feature returns `feature_not_entitled`
+        (403) before any binding or account lookup.
+
+        Ordered by `updated_at` descending, then by id descending. Connection
+        transitions update this ordering even when `connected_at` is unchanged.
+        Use the opaque cursor to traverse pages; restart from the first page
+        to reconcile later changes. The cursor is not a snapshot or an event log.
+
+        Scope `whatsapp:numbers.read`. D7 class A. Legacy WhatsApp scopes do
+        not authorize this operation.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The page of bound WhatsApp numbers.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CollectionEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/WhatsAppNumber'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}:
+    get:
+      operationId: getWhatsAppNumber
+      summary: Get one bound WhatsApp number
+      description: |
+        Reads a pending, connected or disconnected WhatsApp number. Requires
+        server-side WhatsApp entitlement before resolving the key's binding.
+        A disabled feature returns `feature_not_entitled` (403). An id outside
+        the binding returns `resource_not_found` (404) without an account query.
+        Missing accounts and accounts from another platform also return 404.
+
+        The id is the raw account UUID returned as `account_id` by this
+        collection, not a Meta phone number id or a prefixed `/v1/accounts` id.
+        Scope `whatsapp:numbers.read`. D7 class A. Legacy WhatsApp scopes do
+        not authorize this operation.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The bound WhatsApp number.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WhatsAppNumber'
+                  - type: object
+                    required: [request_id]
+                    properties:
+                      request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/accounts:
     get:
       operationId: listAccounts
@@ -1746,6 +1824,7 @@ components:
         - usage:read
         - webhooks:manage
         - webhooks:read
+        - whatsapp:numbers.read
 
     LegacyScope:
       type: string
@@ -1761,6 +1840,38 @@ components:
 
     # ---- Identifiers — spec §7.1 ----
     # ---- Read-surface resources (deliverables 2.3-2.6) ----
+    WhatsAppNumber:
+      type: object
+      description: A workspace's WhatsApp account within the key's binding.
+      required: [account_id, phone_number, display_name, connection_mode, status, connected_at]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+          description: Raw social account UUID, used by the WhatsApp number item route.
+        phone_number:
+          type: [string, 'null']
+          description: |
+            Linked number for Direct QR; account metadata's display_phone_number
+            for Cloud API and coexistence. Null until identity resolves or when
+            no display number is recorded. Never a connection label or Meta id.
+        display_name:
+          type: [string, 'null']
+          description: Metadata display name, falling back to the account's label or username.
+        connection_mode:
+          type: [string, 'null']
+          description: Connection mode from the account, falling back to account metadata.
+        status:
+          type: string
+          enum: [connected, disconnected, pending]
+          description: |
+            An unresolved identity (including pending_ placeholders) is pending,
+            even when active. Resolved active accounts are connected; resolved
+            inactive accounts are disconnected.
+        connected_at:
+          type: [string, 'null']
+          format: date-time
+
     Account:
       type: object
       description: |

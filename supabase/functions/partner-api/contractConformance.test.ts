@@ -15,10 +15,10 @@ import { handleRequest } from "./index.ts";
 // a contract test. Every assertion below reads a fact out of the document and
 // checks it against the real handler.
 //
-// THESE TESTS EXERCISE THE ALIAS, NOT /v1. /v1 has no endpoints. The alias's
+// These tests drive the frozen alias and selected /v1 error paths. The alias's
 // error envelope differs from the documented /v1 envelope ON PURPOSE
 // (decision D2): the alias emits {success:false, error:{...}, request_id} and
-// /v1 will emit {error:{..., request_id}}. Assertions below are written
+// /v1 emits {error:{..., request_id}}. Alias assertions below are written
 // against the ALIAS's actual shape; where that diverges from the document, the
 // divergence is deliberate and is noted at the assertion.
 //
@@ -50,12 +50,6 @@ const DOCUMENTED_AUTH_HEADER: string = doc.components.securitySchemes.PartnerApi
  * and belong in the reached set.
  */
 const UNREACHABLE_WHILE_SEND_IS_SUSPENDED: Record<string, string> = {
-  // REMOVE THIS ENTRY IN TASK 7. assertEntitled exists and is tested in
-  // _shared/partnerEntitlement.test.ts, but no route calls it yet, so the
-  // alias these tests drive cannot emit the code. The first WhatsApp handler
-  // wires it, and at that point this belongs in the reached set above.
-  feature_not_entitled:
-    "server-side entitlement is implemented but not yet wired to a route; the first /v1/whatsapp handler reaches it",
   invalid_request: "body validation for send_template, downstream of the suspension gate",
   missing_idempotency_key: "send-only requirement, downstream of the suspension gate",
   idempotency_conflict: "idempotency claim runs only for send actions",
@@ -130,8 +124,27 @@ function stubClient(opts: StubOptions = {}) {
       return Promise.resolve({ error: null });
     },
     from(table: string) {
-      if (table === "partner_api_usage") {
+      if (table === "partner_api_usage" || table === "system_logs") {
         return { insert: () => Promise.resolve({ error: null }) };
+      }
+      if (table === "app_settings" || table === "user_feature_overrides") {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          in() {
+            return Promise.resolve({
+              data: table === "app_settings" ? [{ key: "feature_msg_whatsapp", value: false }] : [],
+              error: null,
+            });
+          },
+        };
+      }
+      if (table === "partner_provisioned_workspaces") {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          maybeSingle() { return Promise.resolve({ data: { owner_user_id: "owner-1" }, error: null }); },
+        };
       }
       const row = table === "partner_api_keys" ? keyRow : ACCOUNT_ROW;
       const err = table === "partner_api_keys" ? keyLookupError : null;
@@ -199,6 +212,16 @@ Deno.test("every error code the handler actually emits is documented in the Open
       body: JSON.stringify({ type: "sticker", recipient_phone: "+10000000000" }),
     }),
   );
+
+  // Task 7 makes entitlement reachable through a real /v1 number route.
+  const entitlementCode = await codeFrom(
+    new Request("https://partner.example/functions/v1/partner-api/v1/whatsapp/numbers", {
+      headers: { "x-postora-key": "pk_live_test" },
+    }),
+    { keyRow: { ...KEY_ROW, scopes: ["whatsapp:numbers.read"] } },
+  );
+  assertEquals(entitlementCode, "feature_not_entitled");
+  reached.add(entitlementCode!);
 
   // Authentication verdicts, one per key state.
   await add(post("get_status"), { keyRow: { ...KEY_ROW, revoked_at: "2020-01-01T00:00:00Z" } });
