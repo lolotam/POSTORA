@@ -50,6 +50,7 @@ const DOCUMENTED_AUTH_HEADER: string = doc.components.securitySchemes.PartnerApi
  * and belong in the reached set.
  */
 const UNREACHABLE_WHILE_SEND_IS_SUSPENDED: Record<string, string> = {
+  sync_already_running: "POST /v1/whatsapp/numbers/{id}/history-sync domain lease refusal; no alias route; exercised in v1/whatsappNumbers.test.ts",
   invalid_request: "body validation for send_template, downstream of the suspension gate",
   missing_idempotency_key: "send-only requirement, downstream of the suspension gate",
   idempotency_conflict: "idempotency claim runs only for send actions",

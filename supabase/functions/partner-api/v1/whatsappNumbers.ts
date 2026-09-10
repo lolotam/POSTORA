@@ -8,7 +8,7 @@ import { readPageRequest } from "./pagination.ts";
 import { assertEntitled } from "../../_shared/partnerEntitlement.ts";
 import { getWhatsAppNumber, listWhatsAppNumbers } from "../../_shared/whatsappNumberOps.ts";
 import type { V1AuthedContext } from "./authenticated.ts";
-import { endSession, historySyncStatus, pairingStatus, registerNumber, startPairing } from "../../_shared/whatsappPairingOps.ts";
+import { endSession, historySyncStatus, pairingStatus, registerNumber, startHistorySync, startPairing } from "../../_shared/whatsappPairingOps.ts";
 import { WhatsAppOpError } from "../../_shared/whatsappPartnerOps.ts";
 import { claimIdempotency, completeIdempotency, hashRequest, markIndeterminate } from "../../_shared/partnerApiIdempotency.ts";
 
@@ -186,4 +186,19 @@ export async function historySyncStatusRoute(_req: Request, authed: V1AuthedCont
   } catch (error) {
     return error instanceof WhatsAppOpError ? pairingError(error, requestId) : v1ErrorResponse("internal_error", requestId);
   }
+}
+
+export async function startHistorySyncRoute(
+  req: Request, authed: V1AuthedContext, params: Record<string, string>,
+): Promise<Response> {
+  const { admin, record, requestId } = authed;
+  const denied = await assertEntitled(admin, record.workspaceId, "start_whatsapp_history_sync", requestId);
+  if (denied) return denied;
+  return await numberWrite(req, authed, { action: "start_whatsapp_history_sync", accountId: params.id }, async (body) => {
+    if (Object.keys(body).length) return v1ErrorResponse("invalid_request", requestId, { message: "History sync takes an empty body" });
+    const bound = await boundAccountIds(authed);
+    if (!bound.ok) return bound.res;
+    const result = await startHistorySync({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, params.id);
+    return v1JsonResponse({ ...result, request_id: requestId }, requestId, 202);
+  });
 }

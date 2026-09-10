@@ -194,6 +194,12 @@ export const V1_ERROR_POLICY = {
     status: 404, retryable: false,
     message: "Resource not found",
   },
+  // A domain lease can be held by the webhook or poller without any partner
+  // idempotency key. Wait for that sweep before starting a new request.
+  sync_already_running: {
+    status: 409, retryable: true,
+    message: "History sync is already running; poll history-sync for progress",
+  },
   template_not_approved: {
     status: 422, retryable: false,
     message: "Template rejected by Meta",

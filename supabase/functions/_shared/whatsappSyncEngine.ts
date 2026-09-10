@@ -407,25 +407,30 @@ const LEASE_SECONDS = 300;
 /** What the setup page shows for a sweep that threw; the cause is only in the server log. */
 export const SYNC_FAILED_MESSAGE = "The import stopped unexpectedly. Try again in a minute.";
 
+export type HistorySyncStartOutcome =
+  | "claimed"
+  | "skipped_no_workspace"
+  | "skipped_unresolved_number"
+  | "skipped_lease_held";
+
 export async function importEvolutionHistory(deps: {
   admin: any;
   api: EvolutionApi;
   account: SyncAccount;
   instanceName: string;
   deadlineAt?: number;
-}): Promise<void> {
+}): Promise<HistorySyncStartOutcome> {
   const { admin, account, instanceName } = deps;
-  // Both exits are silent by nature -- a misconfigured account and a sweep already running
-  // look identical to a caller that only sees "started".
+  // Report skips separately so callers can distinguish a refusal from a claimed sweep.
   if (!account.workspace_id) {
     console.log(`[whatsapp-sync] ${instanceName}: skipped, account has no workspace`);
-    return;
+    return "skipped_no_workspace";
   }
   // Conversation ids embed this value, so importing under the provisional placeholder would
   // write every chat under an id the reply path cannot parse and then mark the sweep done.
   if (account.platform_user_id.startsWith("pending_")) {
     console.log(`[whatsapp-sync] ${instanceName}: skipped, owner number not resolved yet`);
-    return;
+    return "skipped_unresolved_number";
   }
   const { data: claimed, error: claimError } = await admin.rpc("claim_whatsapp_history_sync", {
     p_social_account_id: account.id,
@@ -434,12 +439,11 @@ export async function importEvolutionHistory(deps: {
   if (claimError) throw claimError;
   if (claimed !== true) {
     console.log(`[whatsapp-sync] ${instanceName}: skipped, another sweep holds the lease`);
-    return;
+    return "skipped_lease_held";
   }
 
   // The lease is released even when the sweep throws. Without this a single failure holds it
-  // for its full duration, and because a held lease returns early and silently, every retry
-  // in that window reports success while doing nothing.
+  // for its full duration, so every retry in that window would skip doing work.
   const completion: Record<string, unknown> = { sync_started_at: null };
   try {
     const outcome = await syncEvolutionHistory(deps);
@@ -476,4 +480,5 @@ export async function importEvolutionHistory(deps: {
       console.error(`[whatsapp-sync] ${instanceName}: completion write failed:`, completionError.message ?? completionError);
     }
   }
+  return "claimed";
 }

@@ -45,6 +45,7 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 |---|---|---|---|---|
 | `DELETE` | `/v1/whatsapp/numbers/{id}/session` | `whatsapp:numbers.manage` | C | End a Direct QR session |
 | `GET` | `/v1/whatsapp/numbers/{id}/history-sync` | `whatsapp:numbers.read` | A | Read the recorded history sync outcome |
+| `POST` | `/v1/whatsapp/numbers/{id}/history-sync` | `whatsapp:numbers.manage` | C | Request a history sweep for a paired Direct QR number |
 | `GET` | `/v1/usage` | `usage:read` | A | Get quota and usage for this key |
 | `GET` | `/v1/accounts` | `accounts:read` | A | List the accounts bound to this key |
 | `GET` | `/v1/accounts/{id}` | `accounts:read` | A | Get one bound account |
@@ -117,6 +118,7 @@ Derived from `V1_ERROR_POLICY`. The retry verdict is the `retryable` flag, never
 | `quota_exceeded` | 429 | no | Monthly quota exhausted for this key |
 | `rate_limited` | 429 | yes | Rate limit exceeded |
 | `resource_not_found` | 404 | no | Resource not found |
+| `sync_already_running` | 409 | yes | History sync is already running; poll history-sync for progress |
 | `template_not_approved` | 422 | no | Template rejected by Meta |
 | `temporarily_unavailable` | 503 | no | This action is temporarily suspended; see the Partner API changelog. Retrying will not succeed until it is re-enabled |
 | `tool_execution_failed` | 502 | yes | The connector request could not be completed |

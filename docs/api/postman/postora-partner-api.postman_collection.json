@@ -1421,6 +1421,57 @@
           "response": []
         },
         {
+          "name": "Request a history sweep for a paired Direct QR number",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/history-sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "history-sync"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Requires WhatsApp entitlement before idempotency or binding lookup.\nScope `whatsapp:numbers.manage`. D7 class C. Accepts an empty body or {}.\nThe number must be a Direct QR number bound to this workspace key.\nUnbound numbers and absent instances return `resource_not_found`.\nOther connection modes and numbers that have not finished pairing return\n`unsupported_capability` (422). Missing workspace data is `internal_error`.\n\nThe engine owns the lease claim. A held lease returns `sync_already_running",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
           "name": "Start or refresh Direct QR pairing",
           "request": {
             "method": "POST",

@@ -20,6 +20,7 @@ function database(opts: {
   badRpcResult?: boolean; settleFails?: boolean;
   limiterFails?: boolean;
   deactivationFails?: boolean; mode?: string; syncOutcome?: unknown;
+  leaseHeld?: boolean; unresolved?: boolean; noWorkspace?: boolean;
 } = {}) {
   const reads: URL[] = [];
   const writes: Array<{ table: string; row: Record<string, unknown> }> = [];
@@ -49,6 +50,10 @@ function database(opts: {
         if (opts.lostRpc) return Promise.reject(new Error("RPC response lost"));
         return Promise.resolve(opts.rpcError ? Response.json(opts.rpcError, { status: 400 }) :
           Response.json(opts.badRpcResult ? {} : { account_id: ID }));
+      }
+      if (table === "claim_whatsapp_history_sync") {
+        writes.push({ table, row: JSON.parse(String(init?.body)) });
+        return Promise.resolve(Response.json(!opts.leaseHeld));
       }
       if (table === "partner_api_idempotency" && init?.method === "PATCH") {
         const row = JSON.parse(String(init.body));
@@ -82,7 +87,9 @@ function database(opts: {
           { key: "feature_wa_evolution_qr_enabled", value: opts.qrEntitled ?? true }],
         user_feature_overrides: [],
         partner_api_key_accounts: [{ social_account_id: ID }],
-        social_accounts: url.searchParams.get("id")?.startsWith("eq.") ? [{ ...ROW, connection_mode: opts.mode ?? ROW.connection_mode }] :
+        social_accounts: url.searchParams.get("id")?.startsWith("eq.") ? [{ ...ROW, connection_mode: opts.mode ?? ROW.connection_mode,
+          user_id: "owner-1", workspace_id: opts.noWorkspace ? null : ROW.workspace_id,
+          platform_user_id: opts.unresolved ? `pending_${ID}` : ROW.platform_user_id }] :
           [ROW, { ...ROW, id: OTHER }],
         whatsapp_evolution_instances: [{ instance_name: `postora_${ID}`, jwt_key: "private-key", last_qr: null,
           sync_started_at: null, last_sync_at: null, last_sync_outcome: opts.syncOutcome ?? null }],
@@ -201,7 +208,7 @@ function mutation(suffix = "", body: unknown = REGISTRATION, key: string | null 
   });
 }
 
-for (const suffix of ["", `/${ID}/pairing`]) {
+for (const suffix of ["", `/${ID}/pairing`, `/${ID}/history-sync`]) {
   for (const claim of ["replay", "conflict", "in_progress", "indeterminate"]) {
     Deno.test(`write ${suffix || "registration"} handles ${claim} without dispatch`, async () => {
       const db = database({ scopes: WRITE_SCOPES, claim });
@@ -412,6 +419,7 @@ Deno.test("missing pairing configuration settles a definite refusal without prov
 for (const [method, resource, action] of [
   ["DELETE", "session", "end_whatsapp_session"],
   ["GET", "history-sync", "get_whatsapp_history_sync"],
+  ["POST", "history-sync", "start_whatsapp_history_sync"],
 ]) {
   Deno.test(`${action} refuses entitlement and unbound accounts with a usage row`, async () => {
     for (const entitled of [false, true]) {
@@ -508,6 +516,86 @@ Deno.test("history status remains a local class A read during a limiter outage",
   assertEquals(db.settlements.length, 0);
 });
 
+for (const [scenario, options, expectedStatus, expectedCode] of [
+  ["claimed", {}, 202, null],
+  ["held lease", { leaseHeld: true }, 409, "sync_already_running"],
+  ["unresolved number", { unresolved: true }, 422, "unsupported_capability"],
+  ["missing workspace", { noWorkspace: true }, 500, "internal_error"],
+  ["sweep throws", {}, 409, "idempotency_indeterminate"],
+  ["settlement fails", { settleFails: true }, 409, "idempotency_indeterminate"],
+  ["limiter outage", { limiterFails: true }, 503, "limiter_unavailable"],
+] as const) {
+  Deno.test(`history POST ${scenario} reports and settles the actual outcome`, async () => {
+    const db = database({ scopes: WRITE_SCOPES, ...options });
+    const savedFetch = globalThis.fetch;
+    const savedEnv = ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"].map((name) => [name, Deno.env.get(name)] as const);
+    const calls: string[] = [];
+    Deno.env.set("EVOLUTION_API_URL", "https://evolution.example");
+    Deno.env.set("EVOLUTION_API_KEY", "test-key");
+    globalThis.fetch = (input) => {
+      const url = String(input);
+      assert(url.startsWith("https://evolution.example/chat/"));
+      calls.push(url);
+      return scenario === "sweep throws" ? Promise.reject(new Error("private provider failure")) : Promise.resolve(Response.json([]));
+    };
+    try {
+      // Exercise the real routed POST with no body as well as the {} replay.
+      const req = new Request(`https://partner.example/functions/v1/partner-api/v1/whatsapp/numbers/${ID}/history-sync`, {
+        method: "POST", headers: { "x-postora-key": "pk_live_test", "Idempotency-Key": "sync-key" },
+      });
+      const res = await handleRequest(req, () => db.admin);
+      const body = await res.json();
+      assertEquals(res.status, expectedStatus);
+      if (expectedCode) {
+        assertEquals(body.error.code, expectedCode);
+        assertEquals(body.state, undefined);
+        if (scenario === "held lease") assertEquals(body.error.retryable, true);
+      } else assertEquals(body, { state: "running", request_id: res.headers.get("X-Postora-Request-Id") });
+      assert(!JSON.stringify(body).includes("private"));
+      const swept = ["claimed", "sweep throws", "settlement fails"].includes(scenario);
+      assertEquals(calls.length, swept ? 2 : 0);
+      const claims = db.writes.filter((write) => write.table === "claim_whatsapp_history_sync");
+      assertEquals(claims.length, swept || scenario === "held lease" ? 1 : 0);
+      const completions = db.writes.filter((write) => write.table === "whatsapp_evolution_instances");
+      assertEquals(completions.length, swept ? 1 : 0);
+      if (swept) assertEquals(completions[0].row.sync_started_at, null);
+      if (scenario === "limiter outage") {
+        assertEquals(db.claims.length, 0);
+        assertEquals(db.settlements.length, 0);
+      } else {
+        const settled = db.settlements.at(-1)!;
+        assertEquals(settled.url.searchParams.get("attempt_token"), "eq.attempt-1");
+        assertEquals(settled.row.state, expectedCode === "idempotency_indeterminate" ? "indeterminate" : "completed");
+        if (settled.row.state === "completed") {
+          assertEquals(settled.row.http_status, expectedStatus);
+          assertEquals(settled.row.response_body, body);
+          const replay = await handleRequest(mutation(`/${ID}/history-sync`, {}, "sync-key"), () => db.admin);
+          assertEquals(replay.status, expectedStatus);
+          assertEquals(await replay.json(), body);
+          assertEquals(replay.headers.get("Idempotency-Replayed"), "true");
+          assertEquals(db.writes.filter((write) => write.table === "claim_whatsapp_history_sync").length, claims.length);
+        }
+      }
+      const usage = db.writes.find((write) => write.table === "partner_api_usage")!.row;
+      assertEquals(usage.action, "start_whatsapp_history_sync");
+      assertEquals(usage.error_code ?? null, expectedCode);
+    } finally {
+      globalThis.fetch = savedFetch;
+      for (const [name, value] of savedEnv) {
+        if (value === undefined) Deno.env.delete(name); else Deno.env.set(name, value);
+      }
+    }
+  });
+}
+
+Deno.test("history POST rejects unexpected body fields before binding or the lease claim", async () => {
+  const db = database({ scopes: WRITE_SCOPES });
+  const res = await handleRequest(mutation(`/${ID}/history-sync`, { owner_id: "foreign-owner" }), () => db.admin);
+  assertEquals((await res.json()).error.code, "invalid_request");
+  assert(!db.reads.some((url) => /\/(social_accounts|partner_api_key_accounts)$/.test(url.pathname)));
+  assertEquals(db.settlements[0].row.http_status, 400);
+});
+
 for (const [body, key, expected] of [[{}, null, "missing_idempotency_key"], [{ unexpected: true }, "key", "invalid_request"]] as const) {
   Deno.test(`session DELETE rejects ${expected} before teardown`, async () => {
     const db = database({ scopes: WRITE_SCOPES });
@@ -518,7 +606,7 @@ for (const [body, key, expected] of [[{}, null, "missing_idempotency_key"], [{ u
   });
 }
 
-for (const [method, resource] of [["DELETE", "session"], ["GET", "history-sync"]]) {
+for (const [method, resource] of [["DELETE", "session"], ["GET", "history-sync"], ["POST", "history-sync"]]) {
   Deno.test(`${method} ${resource} refuses legacy scopes and non-QR modes`, async () => {
     for (const legacy of [true, false]) {
       const db = database({ scopes: legacy ? ["whatsapp:template.send", "whatsapp:templates.read", "whatsapp:webhooks.manage"] : WRITE_SCOPES, mode: "cloud_api" });

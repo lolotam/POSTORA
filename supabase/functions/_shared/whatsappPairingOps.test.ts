@@ -1,9 +1,9 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { DIRECT_QR_CONSENT_VERSION, endSession, historySyncStatus, pairingStatus, registerNumber, startPairing } from "./whatsappPairingOps.ts";
+import { DIRECT_QR_CONSENT_VERSION, endSession, historySyncStatus, pairingStatus, registerNumber, startHistorySync, startPairing } from "./whatsappPairingOps.ts";
 import { WhatsAppOpError } from "./whatsappPartnerOps.ts";
-import { EvolutionApiError } from "./evolutionApi.ts";
+import { createEvolutionApi, EvolutionApiError } from "./evolutionApi.ts";
 
 const ID = "22222222-2222-4222-8222-222222222222";
 const CONSENT = { accepted: true, accepted_by: "tenant-admin@example.com", accepted_at: "2026-09-10T09:00:00Z", accepted_ip: "203.0.113.9" };
@@ -50,7 +50,7 @@ Deno.test("registration passes the attestation and version to the atomic RPC", a
   }
 });
 
-for (const operation of [startPairing, pairingStatus, endSession, historySyncStatus]) {
+for (const operation of [startPairing, pairingStatus, endSession, historySyncStatus, startHistorySync]) {
   Deno.test(`${operation.name} refuses an unbound account before any query`, async () => {
     await assertRejects(() => operation({ ...CTX, admin: {} }, "foreign-account"), WhatsAppOpError, "Number not found");
   });
@@ -140,7 +140,7 @@ for (const [data, error, expected] of [
   });
 }
 
-function fixture(options: { existing?: boolean; active?: boolean; resolved?: boolean; failTable?: string; mode?: string } = {}) {
+function fixture(options: { existing?: boolean; active?: boolean; resolved?: boolean; failTable?: string; mode?: string; leaseHeld?: boolean; noWorkspace?: boolean } = {}) {
   const calls: Array<{ url: URL; method: string; body: Record<string, unknown> }> = [];
   const metadata = { display_name: "Support", risk_consent: CONSENT, arbitrary_marker: "preserve" };
   const admin = createClient("https://database.example", "test-key", {
@@ -153,9 +153,11 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
       calls.push({ url, method, body });
       if (options.failTable === table) return Promise.resolve(Response.json({ code: "57014", message: "private failure" }, { status: 500 }));
       if (table === "activate_evolution_qr_account") return Promise.resolve(Response.json("15550001111"));
+      if (table === "claim_whatsapp_history_sync") return Promise.resolve(Response.json(!options.leaseHeld));
       if (method !== "GET") return Promise.resolve(new Response(null, { status: 204 }));
       if (table === "social_accounts") return Promise.resolve(Response.json([{
         id: ID, connection_mode: options.mode ?? "evolution_qr", is_active: options.active ?? false,
+        user_id: "owner-from-account", workspace_id: options.noWorkspace ? null : CTX.workspaceId,
         platform_user_id: options.resolved ? "15550001111" : `pending_${ID}`, account_metadata: metadata,
       }]));
       assertEquals(table, "whatsapp_evolution_instances");
@@ -163,6 +165,45 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
     } },
   });
   return { admin, calls, metadata };
+}
+
+for (const [label, options, expected] of [
+  ["claimed", { existing: true, resolved: true }, null],
+  ["lease held", { existing: true, resolved: true, leaseHeld: true }, "sync_already_running"],
+  ["unresolved", { existing: true }, "unsupported_capability"],
+  ["missing workspace", { existing: true, resolved: true, noWorkspace: true }, "internal_error"],
+  ["wrong mode", { mode: "cloud_api" }, "unsupported_capability"],
+  ["missing instance", { resolved: true }, "resource_not_found"],
+  ["account read failed", { failTable: "social_accounts" }, "internal_error"],
+  ["instance read failed", { existing: true, failTable: "whatsapp_evolution_instances" }, "internal_error"],
+] as const) {
+  Deno.test(`history start ${label} reports the engine outcome without a second lease claim`, async () => {
+    const db = fixture(options);
+    const providerCalls: string[] = [];
+    const api = createEvolutionApi((input) => {
+      providerCalls.push(String(input));
+      return Promise.resolve(Response.json([]));
+    }, { baseUrl: "https://evolution.example", apiKey: "test-key" });
+    if (expected) {
+      const caught = await assertRejects(() => startHistorySync({ ...CTX, admin: db.admin }, ID, { api }), WhatsAppOpError);
+      assertEquals(caught.code, expected);
+      assertEquals(providerCalls, []);
+      assert(!db.calls.some((call) => call.method === "PATCH"));
+    } else {
+      assertEquals(await startHistorySync({ ...CTX, admin: db.admin }, ID, { api }), { state: "running" });
+      assertEquals(providerCalls.length, 2);
+      const completion = db.calls.at(-1)!.body;
+      assertEquals(completion.sync_started_at, null);
+      assertEquals(typeof (completion.last_sync_outcome as Record<string, unknown>).finished_at, "string");
+    }
+    const claims = db.calls.filter((call) => call.url.pathname.endsWith("/claim_whatsapp_history_sync"));
+    assertEquals(claims.length, label === "claimed" || label === "lease held" ? 1 : 0);
+    for (const call of db.calls.filter((call) => call.url.pathname.endsWith("/social_accounts"))) {
+      assertEquals(call.url.searchParams.get("workspace_id"), "eq.ws-1");
+      assertEquals(call.url.searchParams.get("id"), `eq.${ID}`);
+      assert(!call.url.searchParams.has("user_id"));
+    }
+  });
 }
 
 function provider(state = "connecting") {

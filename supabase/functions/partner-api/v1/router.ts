@@ -37,7 +37,7 @@ import {
 import { getTemplates } from "./templates.ts";
 import { executeTool } from "./tools.ts";
 import { getUsage } from "./usage.ts";
-import { endSessionRoute, historySyncStatusRoute, getNumber, listNumbers, registerNumberRoute, startPairingRoute, pairingStatusRoute } from "./whatsappNumbers.ts";
+import { endSessionRoute, historySyncStatusRoute, startHistorySyncRoute, getNumber, listNumbers, registerNumberRoute, startPairingRoute, pairingStatusRoute } from "./whatsappNumbers.ts";
 import {
   createWebhook,
   deleteWebhook,
@@ -121,6 +121,7 @@ export const V1_ROUTES: V1Route[] = [
     pattern: "/v1/whatsapp/numbers/{id}/history-sync",
     methods: {
       GET: withPartnerAuth("get_whatsapp_history_sync", "A", historySyncStatusRoute),
+      POST: withPartnerAuth("start_whatsapp_history_sync", "C", startHistorySyncRoute),
     },
   },
   {

@@ -341,7 +341,7 @@ Deno.test("importEvolutionHistory records the outcome with the lease release", a
     if (fn === "claim_whatsapp_history_sync") return Promise.resolve({ data: true, error: null });
     return baseRpc(fn, args);
   };
-  await importEvolutionHistory({
+  const startOutcome = await importEvolutionHistory({
     admin,
     api: fakeApi({
       chats: [chat("96555683677@s.whatsapp.net")],
@@ -351,12 +351,36 @@ Deno.test("importEvolutionHistory records the outcome with the lease release", a
     instanceName: "postora_acc-1",
   });
   const completion = rowsFor(admin, "whatsapp_evolution_instances")[0];
+  assertEquals(startOutcome, "claimed");
   assertEquals(completion.sync_started_at, null);
   assertEquals(typeof completion.last_sync_at, "string");
   assertEquals(completion.last_sync_outcome.chatsImported, 1);
   assertEquals(completion.last_sync_outcome.messagesWritten, 1);
   assertEquals(typeof completion.last_sync_outcome.finished_at, "string");
 });
+
+for (const [account, expected, claims] of [
+  [{ ...ACCOUNT, workspace_id: "" }, "skipped_no_workspace", 0],
+  [{ ...ACCOUNT, platform_user_id: "pending_acc-1" }, "skipped_unresolved_number", 0],
+  [ACCOUNT, "skipped_lease_held", 1],
+] as const) {
+  Deno.test(`history entry reports ${expected} without sweep or completion writes`, async () => {
+    let claimCount = 0;
+    const admin = {
+      rpc: (name: string, args: Record<string, unknown>) => {
+        claimCount++;
+        assertEquals(name, "claim_whatsapp_history_sync");
+        assertEquals(args, { p_social_account_id: ACCOUNT.id, p_lease_seconds: 300 });
+        return Promise.resolve({ data: false, error: null });
+      },
+      from: () => { throw new Error("A skipped sweep must not write completion"); },
+    };
+    const api = fakeApi();
+    api.findChats = api.findContacts = () => { throw new Error("A skipped sweep must not reach Evolution"); };
+    assertEquals(await importEvolutionHistory({ admin, api, account, instanceName: "postora_acc-1" }), expected);
+    assertEquals(claimCount, claims);
+  });
+}
 
 Deno.test("a sweep that throws still records the error for the setup page", async () => {
   const admin = fakeAdmin();

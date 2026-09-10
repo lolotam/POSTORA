@@ -258,7 +258,7 @@ async function createAndGetQr(context: Awaited<ReturnType<typeof authenticateReq
   }
 }
 
-function importHistory(admin: any, account: any, instanceName: string): Promise<void> {
+function importHistory(admin: any, account: any, instanceName: string): ReturnType<typeof importEvolutionHistory> {
   return importEvolutionHistory({ admin, api: createEvolutionApi(), account, instanceName });
 }
 

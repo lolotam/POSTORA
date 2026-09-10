@@ -5,6 +5,7 @@ import { normalizeConnectionName, syncEvolutionAccountConnection } from "./evolu
 import { createEvolutionApi, EvolutionApiError, type EvolutionApi } from "./evolutionApi.ts";
 import { WhatsAppOpError } from "./whatsappPartnerOps.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectDeps } from "./whatsappDisconnect.ts";
+import { importEvolutionHistory, type SyncAccount } from "./whatsappSyncEngine.ts";
 
 export const DIRECT_QR_CONSENT_VERSION = "direct-qr-2026-09-10";
 
@@ -253,6 +254,36 @@ export async function endSession(
       ? "Local session status could not be updated"
       : "Remote logout could not be confirmed; the session may still be live"),
   };
+}
+
+export async function startHistorySync(
+  ctx: WhatsAppNumberContext, accountId: string, deps: { api?: EvolutionApi } = {},
+) {
+  await pairingAccount(ctx, accountId);
+  // Resolve the owner internally, after the workspace/binding gate. No owner id
+  // is accepted from the route or reused as the authorization boundary.
+  const { data: account, error } = await ctx.admin.from("social_accounts")
+    .select("id, user_id, workspace_id, platform_user_id")
+    .eq("workspace_id", ctx.workspaceId).eq("platform", "whatsapp").eq("id", accountId).maybeSingle();
+  if (error) throw new WhatsAppOpError("Unable to read number", "internal_error", 500);
+  if (!account) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
+  const instance = await pairingInstance(ctx, accountId);
+  if (!instance) throw new WhatsAppOpError("History sync instance not found", "resource_not_found", 404);
+  let api: EvolutionApi;
+  try { api = deps.api ?? createEvolutionApi(); } catch {
+    throw new WhatsAppOpError("History sync is not configured", "internal_error", 500);
+  }
+  const outcome = await importEvolutionHistory({ admin: ctx.admin, api,
+    account: account as SyncAccount, instanceName: instance.instance_name });
+  switch (outcome) {
+    case "claimed": return { state: "running" as const };
+    case "skipped_lease_held":
+      throw new WhatsAppOpError("History sync is already running; poll history-sync for progress", "sync_already_running", 409);
+    case "skipped_unresolved_number":
+      throw new WhatsAppOpError("Finish pairing the number before syncing history", "unsupported_capability", 422);
+    case "skipped_no_workspace":
+      throw new WhatsAppOpError("History sync account has no workspace", "internal_error", 500);
+  }
 }
 
 interface HistorySyncInstance {

@@ -546,6 +546,61 @@ paths:
           $ref: '#/components/responses/V1Error'
 
   /functions/v1/partner-api/v1/whatsapp/numbers/{id}/history-sync:
+    post:
+      operationId: startWhatsAppHistorySync
+      summary: Request a history sweep for a paired Direct QR number
+      description: |
+        Requires WhatsApp entitlement before idempotency or binding lookup.
+        Scope `whatsapp:numbers.manage`. D7 class C. Accepts an empty body or {}.
+        The number must be a Direct QR number bound to this workspace key.
+        Unbound numbers and absent instances return `resource_not_found`.
+        Other connection modes and numbers that have not finished pairing return
+        `unsupported_capability` (422). Missing workspace data is `internal_error`.
+
+        The engine owns the lease claim. A held lease returns `sync_already_running`
+        (409, retryable:true), even if a webhook or poller owns it. Poll this path
+        with GET; after that sweep finishes, use a new Idempotency-Key for a new
+        attempt. Reusing the refused key replays its original refusal.
+
+        Idempotency-Key is required. Its claim can return `idempotency_conflict`,
+        `idempotency_in_progress`, or `idempotency_indeterminate` independently of
+        the domain lease. Settled retries replay the original status and body.
+        An uncertain sweep or settlement marks the request indeterminate; reconcile
+        with GET before attempting another sweep.
+
+        A claimed sweep returns 202 with state running and request_id, with no job id.
+        The existing engine is awaited through its completion write, so the sweep
+        may already be finished when 202 arrives. GET reports persisted progress;
+        the account and its lease identify the sweep.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '202':
+          description: The engine claimed and ran the sweep; GET reports its latest progress.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, request_id]
+                properties:
+                  state: { type: string, enum: [running] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
     get:
       operationId: getWhatsAppHistorySync
       summary: Read the recorded history sync outcome
@@ -1939,6 +1994,10 @@ components:
           `unknown_action` (no action protocol) but keeps it expressible so
           the two surfaces share one code list.
 
+        - `_shared/whatsappPairingOps.ts`: `sync_already_running` (409, retryable)
+          when the history-sync domain lease is held by any trigger. This is distinct
+          from `idempotency_in_progress`, which refers to a particular request key.
+
         THIS ENUM IS THE AUTHORITATIVE LIST. Other documents describe the
         error surface in prose; where any of them disagrees with this enum,
         this enum is right and the other is stale. The "exhaustive" table in
@@ -1980,6 +2039,7 @@ components:
         - quota_exceeded
         - rate_limited
         - resource_not_found
+        - sync_already_running
         - template_not_approved
         - temporarily_unavailable
         - tool_execution_failed
