@@ -14,6 +14,7 @@ export const ACTION_FEATURE_KEYS: Record<string, readonly string[]> = {
   end_whatsapp_session: ["feature_msg_whatsapp"],
   start_whatsapp_history_sync: ["feature_msg_whatsapp"],
   get_whatsapp_history_sync: ["feature_msg_whatsapp"],
+  // Business profiles are a Cloud API capability, independent of the QR flag.
   get_whatsapp_profile: ["feature_msg_whatsapp"],
   update_whatsapp_profile: ["feature_msg_whatsapp"],
 };

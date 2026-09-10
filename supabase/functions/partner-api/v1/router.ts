@@ -37,7 +37,7 @@ import {
 import { getTemplates } from "./templates.ts";
 import { executeTool } from "./tools.ts";
 import { getUsage } from "./usage.ts";
-import { endSessionRoute, historySyncStatusRoute, startHistorySyncRoute, getNumber, listNumbers, registerNumberRoute, startPairingRoute, pairingStatusRoute } from "./whatsappNumbers.ts";
+import { endSessionRoute, historySyncStatusRoute, startHistorySyncRoute, getNumber, listNumbers, registerNumberRoute, startPairingRoute, pairingStatusRoute, getProfileRoute, updateProfileRoute } from "./whatsappNumbers.ts";
 import {
   createWebhook,
   deleteWebhook,
@@ -111,6 +111,13 @@ export interface V1Route {
  * asserts against.
  */
 export const V1_ROUTES: V1Route[] = [
+  {
+    pattern: "/v1/whatsapp/numbers/{id}/profile",
+    methods: {
+      GET: withPartnerAuth("get_whatsapp_profile", "B", getProfileRoute),
+      PATCH: withPartnerAuth("update_whatsapp_profile", "C", updateProfileRoute),
+    },
+  },
   {
     pattern: "/v1/whatsapp/numbers/{id}/session",
     methods: {

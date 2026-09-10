@@ -1341,6 +1341,43 @@
           "response": []
         },
         {
+          "name": "Read a Cloud API number's business profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "profile"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `whatsapp:profile.read`. D7 class B because this calls Meta.\nRequires WhatsApp entitlement, independently of the Direct QR flag.\nThe number must be bound to this workspace key. Unbound targets return\n`resource_not_found` before any account query. Inactive or non-WhatsApp\naccounts return `account_not_connected`; expired tokens or needs_reauth\nreturn `account_needs_reauth` through the shared account preflight.\n\nDirect QR numbers return `unsupported_capability` (422): the business\nprofile is "
+          },
+          "response": []
+        },
+        {
           "name": "Read the recorded history sync outcome",
           "request": {
             "method": "GET",
@@ -1513,6 +1550,57 @@
             "body": {
               "mode": "raw",
               "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update selected Cloud API business profile fields",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "profile"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `whatsapp:profile.manage`. D7 class C. Requires WhatsApp entitlement\nand the same bound-account preflight and Cloud API capability as GET.\nDirect QR returns `unsupported_capability` (422), regardless of its QR flag.\n\nOnly supplied writable fields are sent to Meta; absent fields are never\nblanked. Unknown fields are ignored. An empty or unknown-only patch is\n`invalid_request` (400). profile_picture_url is read-only. An empty email\nstring or websites list explicitly clears that value. Invali",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"about\": \"Welcome to our business\"\n}",
               "options": {
                 "raw": {
                   "language": "json"

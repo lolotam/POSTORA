@@ -43,6 +43,8 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 
 | Method | Path | Scope | Limiter class | What it does |
 |---|---|---|---|---|
+| `GET` | `/v1/whatsapp/numbers/{id}/profile` | `whatsapp:profile.read` | B | Read a Cloud API number's business profile |
+| `PATCH` | `/v1/whatsapp/numbers/{id}/profile` | `whatsapp:profile.manage` | C | Update selected Cloud API business profile fields |
 | `DELETE` | `/v1/whatsapp/numbers/{id}/session` | `whatsapp:numbers.manage` | C | End a Direct QR session |
 | `GET` | `/v1/whatsapp/numbers/{id}/history-sync` | `whatsapp:numbers.read` | A | Read the recorded history sync outcome |
 | `POST` | `/v1/whatsapp/numbers/{id}/history-sync` | `whatsapp:numbers.manage` | C | Request a history sweep for a paired Direct QR number |

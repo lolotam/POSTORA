@@ -7,10 +7,46 @@ import { boundAccountIds } from "./binding.ts";
 import { readPageRequest } from "./pagination.ts";
 import { assertEntitled } from "../../_shared/partnerEntitlement.ts";
 import { getWhatsAppNumber, listWhatsAppNumbers } from "../../_shared/whatsappNumberOps.ts";
-import type { V1AuthedContext } from "./authenticated.ts";
+import { resolveWhatsAppAccount, type V1AuthedContext } from "./authenticated.ts";
+import { getBusinessProfile, updateBusinessProfile } from "../../_shared/whatsappProfileOps.ts";
 import { endSession, historySyncStatus, pairingStatus, registerNumber, startHistorySync, startPairing } from "../../_shared/whatsappPairingOps.ts";
 import { WhatsAppOpError } from "../../_shared/whatsappPartnerOps.ts";
 import { claimIdempotency, completeIdempotency, hashRequest, markIndeterminate } from "../../_shared/partnerApiIdempotency.ts";
+
+function profileAccount(req: Request, authed: V1AuthedContext, params: Record<string, string>) {
+  const queryIds = new URL(req.url).searchParams.getAll("account_id");
+  if (queryIds.some((id) => id !== params.id)) {
+    return Promise.resolve({ ok: false as const, res: v1ErrorResponse("resource_not_found", authed.requestId) });
+  }
+  return resolveWhatsAppAccount(authed, params.id);
+}
+
+export async function getProfileRoute(req: Request, authed: V1AuthedContext, params: Record<string, string>): Promise<Response> {
+  const { admin, record, requestId } = authed;
+  const denied = await assertEntitled(admin, record.workspaceId, "get_whatsapp_profile", requestId);
+  if (denied) return denied;
+  const account = await profileAccount(req, authed, params);
+  if (!account.ok) return account.res;
+  try {
+    const profile = await getBusinessProfile(account.ctx);
+    return v1JsonResponse({ ...profile, request_id: requestId }, requestId);
+  } catch (error) {
+    return error instanceof WhatsAppOpError ? pairingError(error, requestId) : v1ErrorResponse("internal_error", requestId);
+  }
+}
+
+export async function updateProfileRoute(req: Request, authed: V1AuthedContext, params: Record<string, string>): Promise<Response> {
+  const { admin, record, requestId } = authed;
+  const denied = await assertEntitled(admin, record.workspaceId, "update_whatsapp_profile", requestId);
+  if (denied) return denied;
+  // Resolve before claiming: even a replay must honor the currently bound target.
+  const account = await profileAccount(req, authed, params);
+  if (!account.ok) return account.res;
+  return await numberWrite(req, authed, { action: "update_whatsapp_profile", accountId: params.id }, async (body) => {
+    const result = await updateBusinessProfile(account.ctx, body);
+    return v1JsonResponse({ ...result, request_id: requestId }, requestId);
+  });
+}
 
 export async function listNumbers(
   req: Request,

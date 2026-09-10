@@ -270,18 +270,28 @@ function authErrorToResponse(err: unknown, requestId: string): Response {
  */
 export async function resolveWhatsAppAccount(
   authed: V1AuthedContext,
+  accountId?: string,
 ): Promise<
   | { ok: true; ctx: WhatsAppOpsContext; wabaId: string | null }
   | { ok: false; res: Response }
 > {
   const { admin, record, requestId } = authed;
+  // Explicit targets must be bound BEFORE querying the account. Composite FKs
+  // prove workspace ownership; legacy callers keep their pinned-account path.
+  if (accountId !== undefined) {
+    const { data: binding, error } = await admin.from("partner_api_key_accounts")
+      .select("social_account_id").eq("key_id", record.id)
+      .eq("workspace_id", record.workspaceId).eq("social_account_id", accountId).maybeSingle();
+    if (error) return { ok: false, res: v1ErrorResponse("internal_error", requestId) };
+    if (!binding) return { ok: false, res: v1ErrorResponse("resource_not_found", requestId) };
+  }
   const { data: account, error } = await admin
     .from("social_accounts")
     .select(
       "id, user_id, workspace_id, platform, platform_user_id, access_token, " +
         "connection_mode, is_active, needs_reauth, token_expires_at, account_metadata",
     )
-    .eq("id", record.socialAccountId)
+    .eq("id", accountId ?? record.socialAccountId)
     .maybeSingle();
 
   if (error) return { ok: false, res: v1ErrorResponse("internal_error", requestId) };

@@ -11,6 +11,7 @@ const OTHER = "11111111-1111-4111-8111-111111111111";
 const ROW = {
   id: ID, workspace_id: "ws-1", platform: "whatsapp", platform_user_id: "15550001111",
   platform_username: "Support", connection_mode: "evolution_qr", account_metadata: {},
+  access_token: "test-token",
   is_active: true, connected_at: "2026-09-01T00:00:00Z", updated_at: "2026-09-10T00:00:00Z",
 };
 
@@ -21,6 +22,7 @@ function database(opts: {
   limiterFails?: boolean;
   deactivationFails?: boolean; mode?: string; syncOutcome?: unknown;
   leaseHeld?: boolean; unresolved?: boolean; noWorkspace?: boolean;
+  accountPatch?: Record<string, unknown>;
 } = {}) {
   const reads: URL[] = [];
   const writes: Array<{ table: string; row: Record<string, unknown> }> = [];
@@ -86,10 +88,10 @@ function database(opts: {
         app_settings: [{ key: "feature_msg_whatsapp", value: opts.entitled ?? true },
           { key: "feature_wa_evolution_qr_enabled", value: opts.qrEntitled ?? true }],
         user_feature_overrides: [],
-        partner_api_key_accounts: [{ social_account_id: ID }],
+        partner_api_key_accounts: url.searchParams.has("social_account_id") && url.searchParams.get("social_account_id") !== `eq.${ID}` ? [] : [{ social_account_id: ID }],
         social_accounts: url.searchParams.get("id")?.startsWith("eq.") ? [{ ...ROW, connection_mode: opts.mode ?? ROW.connection_mode,
           user_id: "owner-1", workspace_id: opts.noWorkspace ? null : ROW.workspace_id,
-          platform_user_id: opts.unresolved ? `pending_${ID}` : ROW.platform_user_id }] :
+          platform_user_id: opts.unresolved ? `pending_${ID}` : ROW.platform_user_id, ...opts.accountPatch }] :
           [ROW, { ...ROW, id: OTHER }],
         whatsapp_evolution_instances: [{ instance_name: `postora_${ID}`, jwt_key: "private-key", last_qr: null,
           sync_started_at: null, last_sync_at: null, last_sync_outcome: opts.syncOutcome ?? null }],
@@ -614,6 +616,164 @@ for (const [method, resource] of [["DELETE", "session"], ["GET", "history-sync"]
       const res = await handleRequest(method === "GET" ? request(suffix) : mutation(suffix, {}, "key", method), () => db.admin);
       assertEquals((await res.json()).error.code, legacy ? "insufficient_scope" : "unsupported_capability");
       assert(!db.reads.some((url) => url.pathname.endsWith("/whatsapp_evolution_instances")));
+    }
+  });
+}
+
+const PROFILE_SCOPES = ["whatsapp:profile.read", "whatsapp:profile.manage"];
+const profileRequest = (method: string, suffix = `/${ID}/profile`, body: unknown = { about: "New about" }, key: string | null = "profile-key") =>
+  method === "GET" ? request(suffix) : mutation(suffix, body, key, method);
+
+for (const method of ["GET", "PATCH"]) {
+  const action = method === "GET" ? "get_whatsapp_profile" : "update_whatsapp_profile";
+  Deno.test(`${method} profile entitlement refuses with its own action before account or idempotency reads`, async () => {
+    const db = database({ scopes: PROFILE_SCOPES, entitled: false });
+    const res = await handleRequest(profileRequest(method), () => db.admin);
+    assertEquals((await res.json()).error.code, "feature_not_entitled");
+    assert(!db.reads.some((url) => /\/(social_accounts|partner_api_key_accounts)$/.test(url.pathname)));
+    assertEquals(db.claims.length, 0);
+    assertEquals(db.writes.find((write) => write.table === "partner_api_usage")?.row.action, action);
+    assertEquals((db.writes.find((write) => write.table === "system_logs")?.row.metadata as Record<string, unknown>).action, action);
+  });
+
+  for (const suffix of [`/${OTHER}/profile`, `/${ID}/profile?account_id=${OTHER}`]) {
+    Deno.test(`${method} profile unbound path/query ${suffix} refuses before querying an account`, async () => {
+      const db = database({ scopes: PROFILE_SCOPES });
+      const res = await handleRequest(profileRequest(method, suffix), () => db.admin);
+      assertEquals(res.status, 404);
+      assertEquals((await res.json()).error.code, "resource_not_found");
+      assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
+      assertEquals(db.claims.length, 0);
+      assertEquals(db.writes.find((write) => write.table === "partner_api_usage")?.row.error_code, "resource_not_found");
+    });
+  }
+
+  for (const [accountPatch, code] of [
+    [{ needs_reauth: true }, "account_needs_reauth"],
+    [{ token_expires_at: "2000-01-01T00:00:00Z" }, "account_needs_reauth"],
+    [{ platform: "facebook" }, "account_not_connected"],
+    [{ is_active: false }, "account_not_connected"],
+  ] as const) {
+    Deno.test(`${method} profile preflight surfaces ${JSON.stringify(accountPatch)}`, async () => {
+      const db = database({ scopes: PROFILE_SCOPES, accountPatch });
+      const res = await handleRequest(profileRequest(method), () => db.admin);
+      assertEquals((await res.json()).error.code, code);
+      assertEquals(db.claims.length, 0);
+      assertEquals(db.writes.find((write) => write.table === "partner_api_usage")?.row.error_code, code);
+    });
+  }
+
+  Deno.test(`${method} profile QR refusal is logged as unsupported_capability`, async () => {
+    const db = database({ scopes: PROFILE_SCOPES });
+    const res = await handleRequest(profileRequest(method), () => db.admin);
+    assertEquals(res.status, 422);
+    const body = await res.json();
+    assertEquals(body.error.code, "unsupported_capability");
+    assert(body.error.message.includes("Cloud API capability"));
+    assertEquals(db.writes.find((write) => write.table === "partner_api_usage")?.row.error_code, "unsupported_capability");
+  });
+
+  Deno.test(`${method} profile fails closed on limiter outage`, async () => {
+    const db = database({ scopes: PROFILE_SCOPES, limiterFails: true });
+    const res = await handleRequest(profileRequest(method), () => db.admin);
+    assertEquals(res.status, 503);
+    assertEquals((await res.json()).error.code, "limiter_unavailable");
+    assertEquals(db.reads.length, 1);
+  });
+
+  for (const failTable of ["partner_api_key_accounts", "social_accounts"]) {
+    Deno.test(`${method} profile ${failTable} read errors are logged failures`, async () => {
+      const db = database({ scopes: PROFILE_SCOPES, failTable });
+      const res = await handleRequest(profileRequest(method), () => db.admin);
+      assertEquals(res.status, 500);
+      assertEquals((await res.json()).error.code, "internal_error");
+      assertEquals(db.claims.length, 0);
+      assertEquals(db.writes.find((write) => write.table === "partner_api_usage")?.row.error_code, "internal_error");
+    });
+  }
+
+  Deno.test(`${method} profile does not inherit legacy or number scopes`, async () => {
+    const db = database({ scopes: [...WRITE_SCOPES, "whatsapp:templates.read", "whatsapp:template.send"] });
+    const res = await handleRequest(profileRequest(method), () => db.admin);
+    assertEquals((await res.json()).error.code, "insufficient_scope");
+    assertEquals(db.reads.length, 1);
+  });
+}
+
+for (const claim of ["replay", "conflict", "in_progress", "indeterminate"]) {
+  Deno.test(`profile PATCH ${claim} avoids provider dispatch and settlement`, async () => {
+    const db = database({ scopes: PROFILE_SCOPES, claim, mode: "cloud_api" });
+    const res = await handleRequest(profileRequest("PATCH"), () => db.admin);
+    const body = await res.json();
+    if (claim === "replay") {
+      assertEquals(res.status, 202);
+      assertEquals(body, { saved: "original outcome", request_id: "original-request" });
+      assertEquals(res.headers.get("Idempotency-Replayed"), "true");
+    } else assertEquals(body.error.code, `idempotency_${claim}`);
+    assertEquals(db.settlements.length, 0);
+  });
+}
+
+Deno.test("profile PATCH requires idempotency and settles an empty patch as a definite refusal", async () => {
+  for (const key of [null, "key"]) {
+    const db = database({ scopes: PROFILE_SCOPES, mode: "cloud_api" });
+    const res = await handleRequest(profileRequest("PATCH", undefined, {}, key), () => db.admin);
+    assertEquals((await res.json()).error.code, key === null ? "missing_idempotency_key" : "invalid_request");
+    assertEquals(db.settlements.length, key === null ? 0 : 1);
+    if (key) assertEquals(db.settlements[0].row.state, "completed");
+  }
+});
+
+for (const scenario of ["get", "update", "rejected", "5xx", "unparseable", "settle-failed"]) {
+  Deno.test(`profile ${scenario} preserves provider and idempotency outcomes with QR flag disabled`, async () => {
+    const db = database({ scopes: PROFILE_SCOPES, mode: "cloud_api", qrEntitled: false, settleFails: scenario === "settle-failed" });
+    const savedFetch = globalThis.fetch;
+    const calls: string[] = [];
+    globalThis.fetch = (input, init) => {
+      calls.push(String(input));
+      assert(String(input).startsWith(`https://graph.facebook.com/v21.0/${ROW.platform_user_id}/whatsapp_business_profile`));
+      if (scenario !== "get") assertEquals(JSON.parse(String(init?.body)), { messaging_product: "whatsapp", about: "New about" });
+      return Promise.resolve(scenario === "get" ? Response.json({ data: [{ about: "Current about" }] }) :
+        scenario === "unparseable" ? new Response("broken response") :
+        scenario === "5xx" ? Response.json({ error: { code: 2 } }, { status: 503 }) :
+        scenario === "rejected" ? Response.json({ error: { code: 100, message: "private details" } }, { status: 400 }) :
+        Response.json({ success: true }));
+    };
+    try {
+      const send = () => profileRequest(scenario === "get" ? "GET" : "PATCH", `/${ID}/profile?account_id=${ID}`);
+      const res = await handleRequest(send(), () => db.admin);
+      const body = await res.json();
+      assertEquals(calls.length, 1);
+      const accountRead = db.reads.find((url) => url.pathname.endsWith("/social_accounts"))!;
+      assertEquals(accountRead.searchParams.get("id"), `eq.${ID}`); // primary account is OTHER
+      const binding = db.reads.find((url) => url.pathname.endsWith("/partner_api_key_accounts"))!;
+      assertEquals(binding.searchParams.get("workspace_id"), "eq.ws-1");
+      assertEquals(binding.searchParams.get("key_id"), "eq.key-1");
+      assertEquals(binding.searchParams.get("social_account_id"), `eq.${ID}`);
+      if (scenario === "get") {
+        assertEquals(res.status, 200);
+        assertEquals(body.about, "Current about");
+        assertEquals(body.websites, []);
+        assertEquals(db.claims.length, 0);
+      } else if (scenario === "update" || scenario === "rejected") {
+        assertEquals(res.status, scenario === "update" ? 200 : 422);
+        if (scenario === "update") assertEquals(body.success, true);
+        else assertEquals(body.error.code, "meta_error");
+        assertEquals(db.settlements[0].row.state, "completed");
+        assertEquals(db.settlements[0].url.searchParams.get("attempt_token"), "eq.attempt-1");
+        assertEquals(await (await handleRequest(send(), () => db.admin)).json(), body);
+        assertEquals(calls.length, 1);
+        const conflict = await handleRequest(profileRequest("PATCH", undefined, { about: "Different" }), () => db.admin);
+        assertEquals((await conflict.json()).error.code, "idempotency_conflict");
+      } else {
+        assertEquals(res.status, 409);
+        assertEquals(body.error.code, "idempotency_indeterminate");
+        assertEquals(body.error.retryable, false);
+        assertEquals(db.settlements.at(-1)!.row.state, "indeterminate");
+      }
+      assert(!JSON.stringify(body).includes("private details"));
+    } finally {
+      globalThis.fetch = savedFetch;
     }
   });
 }

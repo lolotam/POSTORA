@@ -646,6 +646,96 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}/profile:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: account_id
+        in: query
+        description: Optional explicit account selector; must match the path id. A mismatch returns resource_not_found before an account read.
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getWhatsAppProfile
+      summary: Read a Cloud API number's business profile
+      description: |
+        Scope `whatsapp:profile.read`. D7 class B because this calls Meta.
+        Requires WhatsApp entitlement, independently of the Direct QR flag.
+        The number must be bound to this workspace key. Unbound targets return
+        `resource_not_found` before any account query. Inactive or non-WhatsApp
+        accounts return `account_not_connected`; expired tokens or needs_reauth
+        return `account_needs_reauth` through the shared account preflight.
+
+        Direct QR numbers return `unsupported_capability` (422): the business
+        profile is a Cloud API capability. Phase 1 registers Direct QR only, so
+        these endpoints serve pre-existing Cloud API or coexistence numbers.
+        Failed or malformed Meta reads are errors, never an empty profile.
+      responses:
+        '200':
+          description: Current Meta business profile. Missing optional values are null or an empty websites list.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WhatsAppBusinessProfile'
+                  - type: object
+                    required: [request_id]
+                    properties:
+                      request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+    patch:
+      operationId: updateWhatsAppProfile
+      summary: Update selected Cloud API business profile fields
+      description: |
+        Scope `whatsapp:profile.manage`. D7 class C. Requires WhatsApp entitlement
+        and the same bound-account preflight and Cloud API capability as GET.
+        Direct QR returns `unsupported_capability` (422), regardless of its QR flag.
+
+        Only supplied writable fields are sent to Meta; absent fields are never
+        blanked. Unknown fields are ignored. An empty or unknown-only patch is
+        `invalid_request` (400). profile_picture_url is read-only. An empty email
+        string or websites list explicitly clears that value. Invalid field
+        lengths, email syntax or website URLs are refused before any provider call.
+
+        Idempotency-Key is required. Settled retries replay their original status
+        and body; a different body conflicts. Claims may return
+        `idempotency_conflict`, `idempotency_in_progress`, or
+        `idempotency_indeterminate`. A Meta 5xx, an unparseable or unconfirmed
+        response, transport failure, or failed settlement makes the write
+        indeterminate, never safely retryable. Reconcile the profile with GET.
+        Account binding and preflight are checked before a cached response is replayed.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhatsAppBusinessProfilePatch'
+      responses:
+        '200':
+          description: Meta confirmed the profile update.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, request_id]
+                properties:
+                  success: { type: boolean, const: true }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/whatsapp/numbers/{id}:
     get:
       operationId: getWhatsAppNumber
@@ -2127,6 +2217,8 @@ components:
         - webhooks:read
         - whatsapp:numbers.read
         - whatsapp:numbers.manage
+        - whatsapp:profile.read
+        - whatsapp:profile.manage
 
     LegacyScope:
       type: string
@@ -2142,6 +2234,46 @@ components:
 
     # ---- Identifiers — spec §7.1 ----
     # ---- Read-surface resources (deliverables 2.3-2.6) ----
+    WhatsAppBusinessProfile:
+      type: object
+      required: [about, address, description, email, websites, vertical, profile_picture_url]
+      properties:
+        about: { type: [string, 'null'] }
+        address: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        websites:
+          type: array
+          items: { type: string }
+        vertical: { type: [string, 'null'] }
+        profile_picture_url: { type: [string, 'null'], readOnly: true }
+
+    WhatsAppBusinessProfilePatch:
+      type: object
+      minProperties: 1
+      description: At least one recognized writable field is required. Unknown fields are ignored; null is not accepted.
+      anyOf:
+        - required: [about]
+          example: { about: 'Welcome to our business' }
+        - required: [address]
+        - required: [description]
+        - required: [email]
+        - required: [websites]
+        - required: [vertical]
+      properties:
+        about: { type: string, maxLength: 139 }
+        address: { type: string, maxLength: 256 }
+        description: { type: string, maxLength: 512 }
+        email:
+          anyOf:
+            - { type: string, format: email, maxLength: 128 }
+            - { type: string, const: '' }
+        websites:
+          type: array
+          maxItems: 2
+          items: { type: string, format: uri }
+        vertical: { type: string, maxLength: 128 }
+
     RegisterWhatsAppNumberRequest:
       type: object
       required: [connection_name, connection_mode, risk_consent]
