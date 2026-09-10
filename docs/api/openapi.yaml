@@ -311,6 +311,65 @@ paths:
           $ref: '#/components/responses/V1Error'
 
   /functions/v1/partner-api/v1/whatsapp/numbers:
+    post:
+      operationId: registerWhatsAppNumber
+      summary: Register a Direct QR WhatsApp number
+      description: |
+        Registers a pending number and binds it to the calling workspace key.
+        Requires both WhatsApp and Direct QR entitlement before processing
+        the request. Scope `whatsapp:numbers.manage`. D7 class C.
+
+        Phase 1 supports only `evolution_qr`. `cloud_api` and `coexistence`
+        onboarding return `unsupported_capability` (422); they need Meta
+        credential exchange, phone-number/WABA association and business
+        verification that this API cannot drive yet.
+
+        Consent is a partner attestation, not an acceptance witnessed by
+        Postora. The server records the acting key, receipt time and consent
+        version `direct-qr-2026-09-10`. That version covers acceptance of
+        unofficial WhatsApp access and its account restriction/ban risk.
+        The reported identity, timestamp and optional IP are stored as evidence.
+
+        Idempotency-Key is required (`missing_idempotency_key` otherwise).
+        Every outcome-changing field, including consent, is hashed. Reusing a
+        key with changed input returns `idempotency_conflict`; a settled retry
+        returns its original body and status without creating another number.
+        `idempotency_in_progress` means an attempt is running.
+        `idempotency_indeterminate` means the write may have committed: do not
+        repeat it with a new key; reconcile the bound numbers with Postora.
+
+        Invalid name/consent/key returns `invalid_request`, owner account quota
+        exhaustion returns `quota_exceeded`. An unprovisioned workspace fails
+        entitlement first; if its owner disappears after that check, the RPC
+        refusal returns `invalid_request` explaining the missing service owner.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterWhatsAppNumberRequest'
+      responses:
+        '201':
+          description: Pending number registered and bound to this key; start pairing next.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, connection_mode, status, request_id]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  connection_mode: { type: string, enum: [evolution_qr] }
+                  status: { type: string, enum: [pending] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
     get:
       operationId: listWhatsAppNumbers
       summary: List bound WhatsApp numbers
@@ -347,6 +406,88 @@ paths:
                         type: array
                         items:
                           $ref: '#/components/schemas/WhatsAppNumber'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}/pairing:
+    post:
+      operationId: createWhatsAppPairing
+      summary: Start or refresh Direct QR pairing
+      description: |
+        Creates the number's Direct QR session or refreshes an existing QR.
+        Requires both WhatsApp and Direct QR entitlement, then a binding to
+        this workspace key. An unbound id returns `resource_not_found` before
+        querying that account. Non-QR modes return `unsupported_capability`.
+        Scope `whatsapp:numbers.manage`. D7 class C. Legacy scopes do not apply.
+
+        Idempotency-Key is required. Replays return the stored body and status
+        without contacting the provider, even if that QR has since expired.
+        Use a new key for an intentional refresh. Action and account id are
+        included in the request hash; keys cannot be reused across numbers.
+        An uncertain write returns `idempotency_indeterminate`; do not retry
+        with a new key until the account's state has been reconciled.
+        The body may be omitted or must be an empty JSON object.
+        This operation does not tear down sessions or repair webhooks.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: Pairing response; QR can be null when none is available.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhatsAppPairing'
+        default:
+          $ref: '#/components/responses/V1Error'
+    get:
+      operationId: getWhatsAppPairing
+      summary: Poll Direct QR connection status
+      description: |
+        Polls the provider and reconciles the account's linked number and
+        connection state. Requires both WhatsApp and Direct QR entitlement
+        before resolving the binding. An unbound id returns
+        `resource_not_found` before querying that account. A number without
+        a pairing session also returns `resource_not_found`; start pairing first.
+        Scope `whatsapp:numbers.read`. D7 class B because this polls the provider.
+        No Idempotency-Key is needed. This read does not refresh the QR,
+        start history sync or repair webhooks. Raw connection states include
+        `connecting`, `open` and `close`; a closed connection alone is not proof
+        of a timed QR expiry. The phone number is null until identity resolves.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Latest connection state and resolved phone number.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, state, phone_number, request_id]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  state: { type: string }
+                  phone_number: { type: [string, 'null'] }
+                  request_id: { type: string }
         default:
           $ref: '#/components/responses/V1Error'
 
@@ -1825,6 +1966,7 @@ components:
         - webhooks:manage
         - webhooks:read
         - whatsapp:numbers.read
+        - whatsapp:numbers.manage
 
     LegacyScope:
       type: string
@@ -1840,6 +1982,60 @@ components:
 
     # ---- Identifiers — spec §7.1 ----
     # ---- Read-surface resources (deliverables 2.3-2.6) ----
+    RegisterWhatsAppNumberRequest:
+      type: object
+      required: [connection_name, connection_mode, risk_consent]
+      properties:
+        connection_name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Connection label; trimmed before checking the 1-60 character limit.
+          example: Support
+        connection_mode:
+          type: string
+          enum: [evolution_qr]
+        risk_consent:
+          type: object
+          required: [accepted, accepted_by, accepted_at]
+          properties:
+            accepted:
+              type: boolean
+              enum: [true]
+              description: Acceptance of unofficial Direct QR access and its WhatsApp account restriction/ban risk.
+            accepted_by:
+              type: string
+              minLength: 1
+              description: Identity of the person who accepted; whitespace-only is refused.
+              example: tenant-admin@example.com
+            accepted_at:
+              type: string
+              format: date-time
+              example: '2026-09-10T09:00:00Z'
+            accepted_ip:
+              type: [string, 'null']
+              description: Optional IP reported by the partner, not observed by Postora.
+
+    WhatsAppPairing:
+      type: object
+      required: [account_id, qr, state, request_id]
+      properties:
+        account_id: { type: string, format: uuid }
+        qr:
+          type: [object, 'null']
+          required: [code, expires_at]
+          properties:
+            code:
+              type: string
+              description: QR image/base64 or code as supplied by the pairing provider.
+            expires_at:
+              type: 'null'
+              description: No reliable expiry timestamp is supplied; never an invented TTL.
+        state:
+          type: [string, 'null']
+          description: Raw connection state, such as connecting, open or close, when supplied.
+        request_id: { type: string }
+
     WhatsAppNumber:
       type: object
       description: A workspace's WhatsApp account within the key's binding.

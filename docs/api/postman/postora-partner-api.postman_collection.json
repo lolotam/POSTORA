@@ -1251,6 +1251,137 @@
             "description": "Reads WhatsApp accounts in this workspace that are bound to the key,\nincluding pending and disconnected numbers. Requires server-side\nWhatsApp entitlement; a disabled feature returns `feature_not_entitled`\n(403) before any binding or account lookup.\n\nOrdered by `updated_at` descending, then by id descending. Connection\ntransitions update this ordering even when `connected_at` is unchanged.\nUse the opaque cursor to traverse pages; restart from the first page\nto reconcile later changes. The cursor"
           },
           "response": []
+        },
+        {
+          "name": "Poll Direct QR connection status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/pairing",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "pairing"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Polls the provider and reconciles the account's linked number and\nconnection state. Requires both WhatsApp and Direct QR entitlement\nbefore resolving the binding. An unbound id returns\n`resource_not_found` before querying that account. A number without\na pairing session also returns `resource_not_found`; start pairing first.\nScope `whatsapp:numbers.read`. D7 class B because this polls the provider.\nNo Idempotency-Key is needed. This read does not refresh the QR,\nstart history sync or repair webh"
+          },
+          "response": []
+        },
+        {
+          "name": "Register a Direct QR WhatsApp number",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers"
+              ]
+            },
+            "description": "Registers a pending number and binds it to the calling workspace key.\nRequires both WhatsApp and Direct QR entitlement before processing\nthe request. Scope `whatsapp:numbers.manage`. D7 class C.\n\nPhase 1 supports only `evolution_qr`. `cloud_api` and `coexistence`\nonboarding return `unsupported_capability` (422); they need Meta\ncredential exchange, phone-number/WABA association and business\nverification that this API cannot drive yet.\n\nConsent is a partner attestation, not an acceptance witnessed",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"connection_name\": \"Support\",\n  \"connection_mode\": \"evolution_qr\",\n  \"risk_consent\": {\n    \"accepted\": true,\n    \"accepted_by\": \"tenant-admin@example.com\",\n    \"accepted_at\": \"2026-09-10T09:00:00Z\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Start or refresh Direct QR pairing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/pairing",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "pairing"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Creates the number's Direct QR session or refreshes an existing QR.\nRequires both WhatsApp and Direct QR entitlement, then a binding to\nthis workspace key. An unbound id returns `resource_not_found` before\nquerying that account. Non-QR modes return `unsupported_capability`.\nScope `whatsapp:numbers.manage`. D7 class C. Legacy scopes do not apply.\n\nIdempotency-Key is required. Replays return the stored body and status\nwithout contacting the provider, even if that QR has since expired.\nUse a new ke",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
         }
       ]
     }

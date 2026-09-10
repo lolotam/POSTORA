@@ -37,7 +37,7 @@ import {
 import { getTemplates } from "./templates.ts";
 import { executeTool } from "./tools.ts";
 import { getUsage } from "./usage.ts";
-import { getNumber, listNumbers } from "./whatsappNumbers.ts";
+import { getNumber, listNumbers, registerNumberRoute, startPairingRoute, pairingStatusRoute } from "./whatsappNumbers.ts";
 import {
   createWebhook,
   deleteWebhook,
@@ -130,9 +130,17 @@ export const V1_ROUTES: V1Route[] = [
     },
   },
   {
+    pattern: "/v1/whatsapp/numbers/{id}/pairing",
+    methods: {
+      POST: withPartnerAuth("create_whatsapp_pairing", "C", startPairingRoute),
+      GET: withPartnerAuth("get_whatsapp_pairing", "B", pairingStatusRoute),
+    },
+  },
+  {
     pattern: "/v1/whatsapp/numbers",
     methods: {
       GET: withPartnerAuth("list_whatsapp_numbers", "A", listNumbers),
+      POST: withPartnerAuth("register_whatsapp_number", "C", registerNumberRoute),
     },
   },
   {

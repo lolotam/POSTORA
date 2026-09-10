@@ -63,6 +63,7 @@ export const GENERIC_SCOPES = [
   "webhooks:manage",
   "webhooks:read",
   "whatsapp:numbers.read",
+  "whatsapp:numbers.manage",
 ] as const;
 
 /** The frozen provider-prefixed vocabulary. Accepted at exactly the capability

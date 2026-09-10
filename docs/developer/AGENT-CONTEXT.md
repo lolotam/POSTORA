@@ -46,7 +46,10 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 | `GET` | `/v1/usage` | `usage:read` | A | Get quota and usage for this key |
 | `GET` | `/v1/accounts` | `accounts:read` | A | List the accounts bound to this key |
 | `GET` | `/v1/accounts/{id}` | `accounts:read` | A | Get one bound account |
+| `POST` | `/v1/whatsapp/numbers/{id}/pairing` | `whatsapp:numbers.manage` | C | Start or refresh Direct QR pairing |
+| `GET` | `/v1/whatsapp/numbers/{id}/pairing` | `whatsapp:numbers.read` | B | Poll Direct QR connection status |
 | `GET` | `/v1/whatsapp/numbers` | `whatsapp:numbers.read` | A | List bound WhatsApp numbers |
+| `POST` | `/v1/whatsapp/numbers` | `whatsapp:numbers.manage` | C | Register a Direct QR WhatsApp number |
 | `GET` | `/v1/whatsapp/numbers/{id}` | `whatsapp:numbers.read` | A | Get one bound WhatsApp number |
 | `GET` | `/v1/conversations` | `conversations:read` | A | List WhatsApp conversations across the bound accounts |
 | `GET` | `/v1/conversations/{id}` | `conversations:read` | A | Get one conversation |
