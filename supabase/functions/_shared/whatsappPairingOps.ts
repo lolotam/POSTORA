@@ -4,6 +4,7 @@ import type { WhatsAppNumberContext } from "./whatsappNumberOps.ts";
 import { normalizeConnectionName, syncEvolutionAccountConnection } from "./evolutionQrAccount.ts";
 import { createEvolutionApi, EvolutionApiError, type EvolutionApi } from "./evolutionApi.ts";
 import { WhatsAppOpError } from "./whatsappPartnerOps.ts";
+import { disconnectWhatsAppAccount, type WhatsAppDisconnectDeps } from "./whatsappDisconnect.ts";
 
 export const DIRECT_QR_CONSENT_VERSION = "direct-qr-2026-09-10";
 
@@ -112,7 +113,7 @@ async function pairingAccount(ctx: WhatsAppNumberContext, accountId: string): Pr
   if (error) throw new WhatsAppOpError("Unable to read number", "internal_error", 500);
   if (!data) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
   if (data.connection_mode !== "evolution_qr") {
-    throw new WhatsAppOpError("Pairing is available only for Direct QR numbers", "unsupported_capability", 422);
+    throw new WhatsAppOpError("This operation is available only for Direct QR numbers", "unsupported_capability", 422);
   }
   return data;
 }
@@ -222,4 +223,67 @@ async function reconcileAccountConnection(
   }
   if (state === "close" && account.is_active) await syncEvolutionAccountConnection(scopedAdmin, account, state, null);
   return account.platform_user_id;
+}
+
+export async function endSession(
+  ctx: WhatsAppNumberContext, accountId: string,
+  deps: { evolution?: WhatsAppDisconnectDeps["evolution"]; disconnect?: typeof disconnectWhatsAppAccount } = {},
+) {
+  await pairingAccount(ctx, accountId);
+  let evolution = deps.evolution;
+  if (!evolution) {
+    try { evolution = createEvolutionApi(); } catch {
+      // Missing provider configuration must still allow mandatory local teardown.
+      evolution = undefined;
+    }
+  }
+  const result = await (deps.disconnect ?? disconnectWhatsAppAccount)({
+    accountId, workspaceId: ctx.workspaceId, connectionMode: "evolution_qr",
+  }, { admin: ctx.admin, evolution });
+  if (!result.deactivated) throw new WhatsAppOpError("Number was not deactivated", "internal_error", 500);
+  return {
+    local_deactivated: result.deactivated, remote_logout: result.evolution,
+    // The shared teardown includes raw provider/DB exception text. Preserve each
+    // warning's meaning without exposing hosts, credentials or query details.
+    warnings: result.warnings.map((warning) => warning.startsWith("Evolution logout failed:")
+      ? "Remote logout failed; the session may still be live"
+      : warning.startsWith("Evolution instance delete failed:")
+      ? "Remote instance removal failed; the session may still be live"
+      : warning.startsWith("Evolution instance row not updated:")
+      ? "Local session status could not be updated"
+      : "Remote logout could not be confirmed; the session may still be live"),
+  };
+}
+
+interface HistorySyncInstance {
+  sync_started_at: string | null;
+  last_sync_at: string | null;
+  last_sync_outcome: unknown;
+}
+
+function recordedHistoryState(instance: HistorySyncInstance): "idle" | "running" | "completed" | "partial" | "failed" {
+  if (instance.sync_started_at) return "running";
+  if (instance.last_sync_outcome === null) return instance.last_sync_at ? "completed" : "idle";
+  const outcome = object(instance.last_sync_outcome);
+  if (typeof outcome.error === "string" && outcome.error) return "failed";
+  const counts = ["chatsDiscovered", "chatsImported", "chatsSkipped", "chatsAwaitingLid",
+    "chatsLidResolved", "messagesWritten", "chatFailures"];
+  if (!counts.every((key) => typeof outcome[key] === "number" && Number.isInteger(outcome[key]) && Number(outcome[key]) >= 0) ||
+    typeof outcome.truncated !== "boolean") {
+    throw new WhatsAppOpError("Stored history sync outcome is not recognized", "internal_error", 500);
+  }
+  return outcome.truncated || Number(outcome.chatFailures) > 0 || Number(outcome.chatsAwaitingLid) > 0 ||
+      outcome.chatsImported === 0 || outcome.messagesWritten === 0 ? "partial" : "completed";
+}
+
+export async function historySyncStatus(ctx: WhatsAppNumberContext, accountId: string) {
+  await pairingAccount(ctx, accountId);
+  const { data, error } = await ctx.admin.from("whatsapp_evolution_instances")
+    .select("sync_started_at, last_sync_at, last_sync_outcome").eq("social_account_id", accountId).maybeSingle();
+  if (error) throw new WhatsAppOpError("Unable to read history sync", "internal_error", 500);
+  if (!data) throw new WhatsAppOpError("History sync instance not found", "resource_not_found", 404);
+  const instance = data as HistorySyncInstance;
+  const outcome = object(instance.last_sync_outcome);
+  return { account_id: accountId, state: recordedHistoryState(instance), started_at: instance.sync_started_at,
+    finished_at: typeof outcome.finished_at === "string" ? outcome.finished_at : instance.last_sync_at };
 }

@@ -3,6 +3,8 @@ import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.t
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { handleRequest } from "../index.ts";
 import { decodeCursor } from "./pagination.ts";
+import { endSessionRoute } from "./whatsappNumbers.ts";
+import { withPartnerAuth } from "./authenticated.ts";
 
 const ID = "22222222-2222-4222-8222-222222222222";
 const OTHER = "11111111-1111-4111-8111-111111111111";
@@ -17,6 +19,7 @@ function database(opts: {
   claim?: string; rpcError?: { code: string; message: string }; lostRpc?: boolean;
   badRpcResult?: boolean; settleFails?: boolean;
   limiterFails?: boolean;
+  deactivationFails?: boolean; mode?: string; syncOutcome?: unknown;
 } = {}) {
   const reads: URL[] = [];
   const writes: Array<{ table: string; row: Record<string, unknown> }> = [];
@@ -54,8 +57,9 @@ function database(opts: {
         settled = row;
         return Promise.resolve(new Response(null, { status: 204 }));
       }
-      if (table === "whatsapp_evolution_instances" && init?.method === "PATCH") {
+      if (["whatsapp_evolution_instances", "social_accounts"].includes(table) && init?.method === "PATCH") {
         writes.push({ table, row: JSON.parse(String(init.body)) });
+        if (table === "social_accounts" && opts.deactivationFails) return Promise.resolve(Response.json({ message: "private failure" }, { status: 500 }));
         return Promise.resolve(new Response(null, { status: 204 }));
       }
       if (init?.method === "POST") {
@@ -78,9 +82,10 @@ function database(opts: {
           { key: "feature_wa_evolution_qr_enabled", value: opts.qrEntitled ?? true }],
         user_feature_overrides: [],
         partner_api_key_accounts: [{ social_account_id: ID }],
-        social_accounts: url.searchParams.get("id")?.startsWith("eq.") ? [ROW] :
+        social_accounts: url.searchParams.get("id")?.startsWith("eq.") ? [{ ...ROW, connection_mode: opts.mode ?? ROW.connection_mode }] :
           [ROW, { ...ROW, id: OTHER }],
-        whatsapp_evolution_instances: [{ instance_name: `postora_${ID}`, jwt_key: "private-key", last_qr: null }],
+        whatsapp_evolution_instances: [{ instance_name: `postora_${ID}`, jwt_key: "private-key", last_qr: null,
+          sync_started_at: null, last_sync_at: null, last_sync_outcome: opts.syncOutcome ?? null }],
       };
       assert(Object.hasOwn(rows, table), `unexpected read of ${table}`);
       return Promise.resolve(Response.json(rows[table]));
@@ -189,9 +194,9 @@ const REGISTRATION = { connection_name: "Support", connection_mode: "evolution_q
   accepted: true, accepted_by: "tenant@example.com", accepted_at: "2026-09-10T09:00:00Z", accepted_ip: "203.0.113.9",
 } };
 const WRITE_SCOPES = ["whatsapp:numbers.manage", "whatsapp:numbers.read"];
-function mutation(suffix = "", body: unknown = REGISTRATION, key: string | null = "registration-key") {
+function mutation(suffix = "", body: unknown = REGISTRATION, key: string | null = "registration-key", method = "POST") {
   return new Request(`https://partner.example/functions/v1/partner-api/v1/whatsapp/numbers${suffix}`, {
-    method: "POST", headers: { "x-postora-key": "pk_live_test", "Content-Type": "application/json",
+    method, headers: { "x-postora-key": "pk_live_test", "Content-Type": "application/json",
       ...(key === null ? {} : { "Idempotency-Key": key }) }, body: JSON.stringify(body),
   });
 }
@@ -403,3 +408,124 @@ Deno.test("missing pairing configuration settles a definite refusal without prov
     if (saved !== undefined) Deno.env.set("EVOLUTION_API_URL", saved);
   }
 });
+
+for (const [method, resource, action] of [
+  ["DELETE", "session", "end_whatsapp_session"],
+  ["GET", "history-sync", "get_whatsapp_history_sync"],
+]) {
+  Deno.test(`${action} refuses entitlement and unbound accounts with a usage row`, async () => {
+    for (const entitled of [false, true]) {
+      const db = database({ scopes: WRITE_SCOPES, entitled });
+      const suffix = `/${OTHER}/${resource}`;
+      const res = await handleRequest(method === "GET" ? request(suffix) : mutation(suffix, {}, "key", method), () => db.admin);
+      const code = entitled ? "resource_not_found" : "feature_not_entitled";
+      assertEquals((await res.json()).error.code, code);
+      assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
+      if (!entitled) assertEquals(db.claims.length, 0);
+      const usage = db.writes.find((write) => write.table === "partner_api_usage")!.row;
+      assertEquals(usage.action, action);
+      assertEquals(usage.error_code, code);
+    }
+  });
+}
+
+for (const claim of ["replay", "conflict", "in_progress", "indeterminate"]) {
+  Deno.test(`session DELETE handles ${claim} without teardown`, async () => {
+    const db = database({ scopes: WRITE_SCOPES, claim });
+    const res = await handleRequest(mutation(`/${ID}/session`, {}, "key", "DELETE"), () => db.admin);
+    const body = await res.json();
+    if (claim === "replay") {
+      assertEquals(res.status, 202);
+      assertEquals(body.saved, "original outcome");
+      assertEquals(res.headers.get("Idempotency-Replayed"), "true");
+    } else assertEquals(body.error.code, `idempotency_${claim}`);
+    assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
+    assertEquals(db.settlements.length, 0);
+  });
+}
+
+for (const scenario of ["remote-failed", "remote-ok", "deactivation-failed", "settlement-failed"] as const) {
+  Deno.test(`session DELETE ${scenario} reports and persists its actual outcome`, async () => {
+    const db = database({ scopes: WRITE_SCOPES, deactivationFails: scenario === "deactivation-failed", settleFails: scenario === "settlement-failed" });
+    const savedFetch = globalThis.fetch;
+    const savedEnv = ["EVOLUTION_API_URL", "EVOLUTION_API_KEY"].map((name) => [name, Deno.env.get(name)] as const);
+    const calls: string[] = [];
+    Deno.env.set("EVOLUTION_API_URL", "https://evolution.example");
+    Deno.env.set("EVOLUTION_API_KEY", "provider-test-key");
+    globalThis.fetch = (input) => {
+      calls.push(String(input));
+      return scenario === "remote-failed" ? Promise.reject(new Error("private provider token")) : Promise.resolve(Response.json({}));
+    };
+    try {
+      const req = () => mutation(`/${ID}/session`, {}, "key", "DELETE");
+      const res = await handleRequest(req(), () => db.admin);
+      const body = await res.json();
+      assertEquals(calls.length, 2);
+      if (scenario === "remote-failed" || scenario === "remote-ok") {
+        assertEquals(res.status, 200);
+        assertEquals(body.local_deactivated, true);
+        assertEquals(body.remote_logout, scenario === "remote-failed" ? "failed" : "ok");
+        assertEquals(body.warnings.length > 0, scenario === "remote-failed");
+        assertEquals(body.request_id, res.headers.get("X-Postora-Request-Id"));
+        assertEquals(db.settlements[0].row.state, "completed");
+        assertEquals(db.settlements[0].row.response_body, body);
+        assertEquals(await (await handleRequest(req(), () => db.admin)).json(), body);
+        assertEquals(calls.length, 2);
+      } else {
+        assertEquals(res.status, 409);
+        assertEquals(body.error.code, "idempotency_indeterminate");
+        assertEquals(db.settlements.at(-1)!.row.state, "indeterminate");
+      }
+      assert(!JSON.stringify(body).includes("private"));
+      assertEquals(db.settlements.at(-1)!.url.searchParams.get("attempt_token"), "eq.attempt-1");
+    } finally {
+      globalThis.fetch = savedFetch;
+      for (const [name, value] of savedEnv) {
+        if (value === undefined) Deno.env.delete(name); else Deno.env.set(name, value);
+      }
+    }
+  });
+}
+
+Deno.test("a teardown returning deactivated false cannot produce a 200", async () => {
+  const db = database({ scopes: WRITE_SCOPES });
+  const handler = withPartnerAuth("end_whatsapp_session", "C", (req, ctx, params) => endSessionRoute(req, ctx, params, {
+    disconnect: () => Promise.resolve({ deactivated: false, evolution: "ok", graph: "skipped", warnings: [] }),
+  }), () => db.admin);
+  const res = await handler(mutation(`/${ID}/session`, {}, "key", "DELETE"), "test-request", { id: ID });
+  assertEquals(res.status, 500);
+  assertEquals((await res.json()).error.code, "internal_error");
+  assertEquals(db.settlements[0].row.state, "completed");
+  assertEquals(db.writes.find((write) => write.table === "partner_api_usage")!.row.error_code, "internal_error");
+});
+
+Deno.test("history status remains a local class A read during a limiter outage", async () => {
+  const db = database({ limiterFails: true, syncOutcome: { finished_at: "2026-09-10T11:00:00Z", error: "The import stopped unexpectedly. Try again in a minute." } });
+  const res = await handleRequest(request(`/${ID}/history-sync`), () => db.admin);
+  assertEquals(res.status, 200);
+  assertEquals((await res.json()).state, "failed");
+  assertEquals(db.claims.length, 0);
+  assertEquals(db.settlements.length, 0);
+});
+
+for (const [body, key, expected] of [[{}, null, "missing_idempotency_key"], [{ unexpected: true }, "key", "invalid_request"]] as const) {
+  Deno.test(`session DELETE rejects ${expected} before teardown`, async () => {
+    const db = database({ scopes: WRITE_SCOPES });
+    const res = await handleRequest(mutation(`/${ID}/session`, body, key, "DELETE"), () => db.admin);
+    assertEquals((await res.json()).error.code, expected);
+    assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
+    assertEquals(db.writes.find((write) => write.table === "partner_api_usage")!.row.error_code, expected);
+  });
+}
+
+for (const [method, resource] of [["DELETE", "session"], ["GET", "history-sync"]]) {
+  Deno.test(`${method} ${resource} refuses legacy scopes and non-QR modes`, async () => {
+    for (const legacy of [true, false]) {
+      const db = database({ scopes: legacy ? ["whatsapp:template.send", "whatsapp:templates.read", "whatsapp:webhooks.manage"] : WRITE_SCOPES, mode: "cloud_api" });
+      const suffix = `/${ID}/${resource}`;
+      const res = await handleRequest(method === "GET" ? request(suffix) : mutation(suffix, {}, "key", method), () => db.admin);
+      assertEquals((await res.json()).error.code, legacy ? "insufficient_scope" : "unsupported_capability");
+      assert(!db.reads.some((url) => url.pathname.endsWith("/whatsapp_evolution_instances")));
+    }
+  });
+}

@@ -491,6 +491,106 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}/session:
+    delete:
+      operationId: endWhatsAppSession
+      summary: End a Direct QR session
+      description: |
+        Requires WhatsApp entitlement and a number bound to this workspace key.
+        Scope `whatsapp:numbers.manage`. D7 class C. Legacy scopes do not apply.
+        An unbound number returns `resource_not_found` before its account is queried;
+        non-Direct-QR numbers return `unsupported_capability`.
+
+        Local deactivation is mandatory. A 200 response reports local deactivation
+        and the separate remote logout result (`ok`, `failed`, or `skipped`).
+        Remote failure or a missing session produces warnings at 200 because local
+        deactivation succeeded; it does not claim that the device session ended.
+        Failure to deactivate locally never returns 200.
+
+        Idempotency-Key is required. All deterministic outcomes, including failed
+        remote logout, settle and replay the original body/status. To retry remote
+        teardown intentionally, use a new key. An uncertain write or failed
+        settlement returns `idempotency_indeterminate`; reconcile before retrying.
+        Action and account id are included in the request hash.
+        The body may be omitted or must be an empty JSON object.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: Local deactivation succeeded; inspect remote_logout and warnings.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [local_deactivated, remote_logout, warnings, request_id]
+                properties:
+                  local_deactivated: { type: boolean, const: true }
+                  remote_logout: { type: string, enum: [ok, failed, skipped] }
+                  warnings: { type: array, items: { type: string } }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}/history-sync:
+    get:
+      operationId: getWhatsAppHistorySync
+      summary: Read the recorded history sync outcome
+      description: |
+        Requires WhatsApp entitlement and a Direct QR number bound to this workspace
+        key. Scope `whatsapp:numbers.read`. D7 class A: local database reads only,
+        with no provider call. Legacy scopes do not apply. An unbound number or
+        absent instance returns `resource_not_found`; other connection modes return
+        `unsupported_capability`. Failed database reads return `internal_error`.
+
+        A non-null sync start reports `running`. With no recorded outcome, a previous
+        successful sync reports `completed`, otherwise `idle`. Recorded worker errors
+        report `failed`. Normal worker counts report `partial` for truncation, chat
+        failures, unresolved LID chats, zero imported chats or zero written messages;
+        a clean sweep with imported messages reports `completed`. A prior successful
+        timestamp never overrides a newer partial or failed outcome. Unrecognized
+        outcome records return `internal_error` rather than claiming completion.
+        started_at is the active lease timestamp; finished_at is the latest worker
+        finish time, falling back to the previous successful sync time for legacy rows.
+        There is no job_id: the account and its lease identify the sweep.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Latest locally recorded sweep state.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, state, started_at, finished_at, request_id]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  state: { type: string, enum: [idle, running, completed, partial, failed] }
+                  started_at: { type: [string, 'null'], format: date-time }
+                  finished_at: { type: [string, 'null'], format: date-time }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/whatsapp/numbers/{id}:
     get:
       operationId: getWhatsAppNumber

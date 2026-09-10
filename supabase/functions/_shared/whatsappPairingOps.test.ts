@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
-import { DIRECT_QR_CONSENT_VERSION, pairingStatus, registerNumber, startPairing } from "./whatsappPairingOps.ts";
+import { DIRECT_QR_CONSENT_VERSION, endSession, historySyncStatus, pairingStatus, registerNumber, startPairing } from "./whatsappPairingOps.ts";
 import { WhatsAppOpError } from "./whatsappPartnerOps.ts";
 import { EvolutionApiError } from "./evolutionApi.ts";
 
@@ -50,9 +50,93 @@ Deno.test("registration passes the attestation and version to the atomic RPC", a
   }
 });
 
-for (const operation of [startPairing, pairingStatus]) {
+for (const operation of [startPairing, pairingStatus, endSession, historySyncStatus]) {
   Deno.test(`${operation.name} refuses an unbound account before any query`, async () => {
     await assertRejects(() => operation({ ...CTX, admin: {} }, "foreign-account"), WhatsAppOpError, "Number not found");
+  });
+}
+
+for (const mode of ["cloud_api", "coexistence"]) {
+  Deno.test(`session end refuses ${mode} without teardown`, async () => {
+    const db = fixture({ mode });
+    const error = await assertRejects(() => endSession({ ...CTX, admin: db.admin }, ID), WhatsAppOpError);
+    assertEquals(error.code, "unsupported_capability");
+    assertEquals(db.calls.length, 1);
+  });
+}
+
+Deno.test("session teardown preserves local success when Evolution is unreachable", async () => {
+  const db = fixture({ existing: true });
+  const result = await endSession({ ...CTX, admin: db.admin }, ID, { evolution: {
+    logout: () => Promise.reject(new Error("secret https://private-host")),
+    deleteInstance: () => Promise.reject(new Error("secret provider token")),
+  } });
+  assertEquals(result.local_deactivated, true);
+  assertEquals(result.remote_logout, "failed");
+  assertEquals(result.warnings.length, 2);
+  assert(!JSON.stringify(result).includes("secret"));
+  const update = db.calls.at(-1)!;
+  assertEquals(update.body, { is_active: false });
+  assertEquals(update.url.searchParams.get("workspace_id"), "eq.ws-1");
+  assertEquals(update.url.searchParams.get("id"), `eq.${ID}`);
+});
+
+Deno.test("session with no remote instance reports skipped and a warning", async () => {
+  const db = fixture();
+  const result = await endSession({ ...CTX, admin: db.admin }, ID);
+  assertEquals(result.remote_logout, "skipped");
+  assertEquals(result.local_deactivated, true);
+  assert(result.warnings.length > 0);
+});
+
+const FINISHED = "2026-09-10T10:00:00Z";
+const COMPLETE_OUTCOME = { chatsDiscovered: 1, chatsImported: 1, chatsSkipped: 0,
+  chatsAwaitingLid: 0, chatsLidResolved: 0, messagesWritten: 2, chatFailures: 0,
+  truncated: false, finished_at: FINISHED };
+
+for (const [label, outcome, started, lastSync, state] of [
+  ["never started", null, null, null, "idle"],
+  ["lease held", { error: "previous failure" }, FINISHED, null, "running"],
+  ["legacy completion", null, null, FINISHED, "completed"],
+  ["clean sweep", COMPLETE_OUTCOME, null, FINISHED, "completed"],
+  ["truncated", { ...COMPLETE_OUTCOME, truncated: true }, null, FINISHED, "partial"],
+  ["chat failures", { ...COMPLETE_OUTCOME, chatFailures: 1 }, null, FINISHED, "partial"],
+  ["unresolved LIDs", { ...COMPLETE_OUTCOME, chatsAwaitingLid: 1 }, null, FINISHED, "partial"],
+  ["warming messages", { ...COMPLETE_OUTCOME, messagesWritten: 0 }, null, FINISHED, "partial"],
+  ["empty discovery", { ...COMPLETE_OUTCOME, chatsDiscovered: 0, chatsImported: 0, messagesWritten: 0 }, null, null, "partial"],
+  ["worker exception", { error: "The import stopped unexpectedly. Try again in a minute.", finished_at: FINISHED }, null, "2026-09-01T00:00:00Z", "failed"],
+] as const) {
+  Deno.test(`history status maps ${label} from the instance row`, async () => {
+    const calls: string[] = [];
+    const admin = { from(table: string) {
+      calls.push(table);
+      return { select() { return this; }, eq() { return this; }, maybeSingle() {
+        return Promise.resolve({ data: table === "social_accounts" ? { id: ID, connection_mode: "evolution_qr" } :
+          { sync_started_at: started, last_sync_at: lastSync, last_sync_outcome: outcome }, error: null });
+      } };
+    } };
+    const result = await historySyncStatus({ ...CTX, admin }, ID);
+    assertEquals(result.state, state);
+    assertEquals(result.started_at, started);
+    assertEquals(result.finished_at, outcome && "finished_at" in outcome ? outcome.finished_at : lastSync);
+    assertEquals(calls, ["social_accounts", "whatsapp_evolution_instances"]);
+  });
+}
+
+for (const [data, error, expected] of [
+  [null, { message: "private database failure" }, "internal_error"],
+  [null, null, "resource_not_found"],
+  [{ sync_started_at: null, last_sync_at: FINISHED, last_sync_outcome: { status: "future-value" } }, null, "internal_error"],
+] as const) {
+  Deno.test(`history status refuses ${JSON.stringify({ data, error })}`, async () => {
+    const admin = { from(table: string) {
+      return { select() { return this; }, eq() { return this; }, maybeSingle() {
+        return Promise.resolve(table === "social_accounts" ? { data: { connection_mode: "evolution_qr" }, error: null } : { data, error });
+      } };
+    } };
+    const caught = await assertRejects(() => historySyncStatus({ ...CTX, admin }, ID), WhatsAppOpError);
+    assertEquals(caught.code, expected);
+    assert(!caught.message.includes("private"));
   });
 }
 

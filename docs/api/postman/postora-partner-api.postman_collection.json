@@ -1188,6 +1188,57 @@
       "name": "whatsapp",
       "item": [
         {
+          "name": "End a Direct QR session",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/session",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "session"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Requires WhatsApp entitlement and a number bound to this workspace key.\nScope `whatsapp:numbers.manage`. D7 class C. Legacy scopes do not apply.\nAn unbound number returns `resource_not_found` before its account is queried;\nnon-Direct-QR numbers return `unsupported_capability`.\n\nLocal deactivation is mandatory. A 200 response reports local deactivation\nand the separate remote logout result (`ok`, `failed`, or `skipped`).\nRemote failure or a missing session produces warnings at 200 because local\nd",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
           "name": "Get one bound WhatsApp number",
           "request": {
             "method": "GET",
@@ -1286,6 +1337,43 @@
               ]
             },
             "description": "Polls the provider and reconciles the account's linked number and\nconnection state. Requires both WhatsApp and Direct QR entitlement\nbefore resolving the binding. An unbound id returns\n`resource_not_found` before querying that account. A number without\na pairing session also returns `resource_not_found`; start pairing first.\nScope `whatsapp:numbers.read`. D7 class B because this polls the provider.\nNo Idempotency-Key is needed. This read does not refresh the QR,\nstart history sync or repair webh"
+          },
+          "response": []
+        },
+        {
+          "name": "Read the recorded history sync outcome",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/history-sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "history-sync"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Requires WhatsApp entitlement and a Direct QR number bound to this workspace\nkey. Scope `whatsapp:numbers.read`. D7 class A: local database reads only,\nwith no provider call. Legacy scopes do not apply. An unbound number or\nabsent instance returns `resource_not_found`; other connection modes return\n`unsupported_capability`. Failed database reads return `internal_error`.\n\nA non-null sync start reports `running`. With no recorded outcome, a previous\nsuccessful sync reports `completed`, otherwise `"
           },
           "response": []
         },

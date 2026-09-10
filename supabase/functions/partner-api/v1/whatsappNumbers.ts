@@ -8,7 +8,7 @@ import { readPageRequest } from "./pagination.ts";
 import { assertEntitled } from "../../_shared/partnerEntitlement.ts";
 import { getWhatsAppNumber, listWhatsAppNumbers } from "../../_shared/whatsappNumberOps.ts";
 import type { V1AuthedContext } from "./authenticated.ts";
-import { pairingStatus, registerNumber, startPairing } from "../../_shared/whatsappPairingOps.ts";
+import { endSession, historySyncStatus, pairingStatus, registerNumber, startPairing } from "../../_shared/whatsappPairingOps.ts";
 import { WhatsAppOpError } from "../../_shared/whatsappPartnerOps.ts";
 import { claimIdempotency, completeIdempotency, hashRequest, markIndeterminate } from "../../_shared/partnerApiIdempotency.ts";
 
@@ -54,7 +54,7 @@ export async function getNumber(
   return v1JsonResponse({ ...result.number, request_id: requestId }, requestId);
 }
 
-// Both writes use the same claim/settle cycle. The action and account are part
+// Number writes use the same claim/settle cycle. The action and account are part
 // of the hash because keys share one idempotency namespace across routes.
 async function numberWrite(
   req: Request,
@@ -68,8 +68,8 @@ async function numberWrite(
   let body: Record<string, unknown>;
   try {
     const raw = await req.text();
-    const emptyPairingBody = raw.length === 0 && target.accountId !== undefined;
-    const parsed: unknown = emptyPairingBody ? {} : JSON.parse(raw);
+    const emptyNumberBody = raw.length === 0 && target.accountId !== undefined;
+    const parsed: unknown = emptyNumberBody ? {} : JSON.parse(raw);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("object required");
     body = parsed as Record<string, unknown>;
   } catch {
@@ -104,7 +104,7 @@ async function numberWrite(
     try {
       await markIndeterminate(admin, record.id, key, claim.attemptToken);
     } catch {
-      console.error(`[partner-api] pairing/registration indeterminate persistence failed (request ${requestId})`);
+      console.error(`[partner-api] number write indeterminate persistence failed (request ${requestId})`);
     }
     return v1ErrorResponse("idempotency_indeterminate", requestId);
   }
@@ -152,6 +152,36 @@ export async function pairingStatusRoute(_req: Request, authed: V1AuthedContext,
   if (!bound.ok) return bound.res;
   try {
     const result = await pairingStatus({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, params.id);
+    return v1JsonResponse({ ...result, request_id: requestId }, requestId);
+  } catch (error) {
+    return error instanceof WhatsAppOpError ? pairingError(error, requestId) : v1ErrorResponse("internal_error", requestId);
+  }
+}
+
+export async function endSessionRoute(
+  req: Request, authed: V1AuthedContext, params: Record<string, string>,
+  deps: Parameters<typeof endSession>[2] = {},
+): Promise<Response> {
+  const { admin, record, requestId } = authed;
+  const denied = await assertEntitled(admin, record.workspaceId, "end_whatsapp_session", requestId);
+  if (denied) return denied;
+  return await numberWrite(req, authed, { action: "end_whatsapp_session", accountId: params.id }, async (body) => {
+    if (Object.keys(body).length) return v1ErrorResponse("invalid_request", requestId, { message: "Session end takes an empty body" });
+    const bound = await boundAccountIds(authed);
+    if (!bound.ok) return bound.res;
+    const result = await endSession({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, params.id, deps);
+    return v1JsonResponse({ ...result, request_id: requestId }, requestId);
+  });
+}
+
+export async function historySyncStatusRoute(_req: Request, authed: V1AuthedContext, params: Record<string, string>): Promise<Response> {
+  const { admin, record, requestId } = authed;
+  const denied = await assertEntitled(admin, record.workspaceId, "get_whatsapp_history_sync", requestId);
+  if (denied) return denied;
+  const bound = await boundAccountIds(authed);
+  if (!bound.ok) return bound.res;
+  try {
+    const result = await historySyncStatus({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, params.id);
     return v1JsonResponse({ ...result, request_id: requestId }, requestId);
   } catch (error) {
     return error instanceof WhatsAppOpError ? pairingError(error, requestId) : v1ErrorResponse("internal_error", requestId);

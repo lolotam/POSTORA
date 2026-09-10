@@ -43,6 +43,8 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 
 | Method | Path | Scope | Limiter class | What it does |
 |---|---|---|---|---|
+| `DELETE` | `/v1/whatsapp/numbers/{id}/session` | `whatsapp:numbers.manage` | C | End a Direct QR session |
+| `GET` | `/v1/whatsapp/numbers/{id}/history-sync` | `whatsapp:numbers.read` | A | Read the recorded history sync outcome |
 | `GET` | `/v1/usage` | `usage:read` | A | Get quota and usage for this key |
 | `GET` | `/v1/accounts` | `accounts:read` | A | List the accounts bound to this key |
 | `GET` | `/v1/accounts/{id}` | `accounts:read` | A | Get one bound account |
