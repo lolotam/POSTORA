@@ -363,7 +363,8 @@ const MOUNT = "/functions/v1/partner-api";
 const SERVED_BUT_UNDOCUMENTED: Record<string, string> = {};
 
 Deno.test("the document describes no path the router does not serve, and the gap is enumerated", async () => {
-  const routerSrc = await Deno.readTextFile(new URL("./v1/router.ts", import.meta.url));
+  const routerSrc = await Deno.readTextFile(new URL("./v1/router.ts", import.meta.url)) + "\n" +
+    await Deno.readTextFile(new URL("./platform/router.ts", import.meta.url));
   const registered = [...routerSrc.matchAll(/^ {4}pattern: "([^"]+)",$/gm)].map((m) => m[1] as string);
 
   // Anti-false-green: a reformat of the route table would make this sweep

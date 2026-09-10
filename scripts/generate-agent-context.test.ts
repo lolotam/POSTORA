@@ -52,7 +52,7 @@ Deno.test("every developer page is in the bundle, once, in reading order, with t
 Deno.test("every served /v1 route appears in the endpoint table, and nothing else does", async () => {
   const inputs = await readInputs();
   const context = buildContext(inputs);
-  const served = parseRoutes(inputs.routerSource);
+  const served = [...parseRoutes(inputs.routerSource), ...parseRoutes(inputs.platformRouterSource)];
   assertEquals(served.length >= 20, true, "the route sweep found suspiciously few routes");
   const table = context.slice(context.indexOf("## Endpoints"), context.indexOf("## Error codes"));
   const rows = table.split("\n").filter((l) => l.startsWith("| `"));
@@ -60,6 +60,16 @@ Deno.test("every served /v1 route appears in the endpoint table, and nothing els
   for (const r of served) {
     assertMatch(table, new RegExp(`\\| \`${r.method}\` \\| \`${r.path.replace(/[{}]/g, "\\$&")}\` \\|`));
   }
+});
+
+Deno.test("the published bundle includes all five platform endpoints, scopes and their authentication", async () => {
+  const inputs = await readInputs();
+  const context = buildContext(inputs);
+  assertEquals(parseRoutes(inputs.platformRouterSource).length, 5);
+  for (const scope of ["platform:keys.manage", "platform:workspaces.read", "platform:workspaces.manage"]) {
+    assertEquals(context.includes(`\`${scope}\``), true);
+  }
+  assertEquals(context.includes("Authorization: Bearer pl_live_"), true);
 });
 
 Deno.test("the rules name the traps the bundle exists for", () => {

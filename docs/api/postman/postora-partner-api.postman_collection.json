@@ -947,6 +947,196 @@
       ]
     },
     {
+      "name": "platform",
+      "item": [
+        {
+          "name": "Get a workspace in the principal's estate",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/workspaces/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "workspaces",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `platform:workspaces.read`. Risk class A. Malformed ids and\nworkspaces outside the principal's estate answer resource_not_found.\nReturns metadata only; bootstrap secrets cannot be retrieved.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Issue a bound workspace key within the principal's estate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/workspaces/:id/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "workspaces",
+                ":id",
+                "keys"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `platform:keys.manage`. Risk class C. account_id is required and\nmust belong to the named workspace. The estate check, account binding,\nkey creation and audit commit atomically. All platform: scopes, legacy\nscopes, unknown scopes and non-string scope entries are invalid_request.\nAn account or workspace outside the estate answers resource_not_found.\nThe secret is returned once; this operation does not replay secrets.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"account_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"scopes\": [\n    \"accounts:read\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List workspaces in the principal's estate",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/workspaces",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "workspaces"
+              ]
+            },
+            "description": "Scope `platform:workspaces.read`. Risk class A. Ownership is by principal,\nso rotating the platform credential preserves the estate. Descending\nkeyset pagination on (created_at, workspace_id); never returns keys.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Provision a workspace and its bootstrap key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/workspaces",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "workspaces"
+              ]
+            },
+            "description": "Scope `platform:workspaces.manage`. Risk class C. Creates an Auth\nservice owner, then atomically creates the workspace, Direct QR account\nplaceholder, bound workspace key and audit row. No plan is assigned;\nthe new owner's signup quota override or free allowance gates its first account.\nThe partner attests it collected the supplied Direct QR risk consent;\nPostora records this as partner_attestation, not a witnessed acceptance.\n\nThe bootstrap secret is returned ONLY on the initial 201; store it s",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"connection_name\": \"string\",\n  \"risk_consent\": {\n    \"accepted\": true,\n    \"accepted_by\": \"string\",\n    \"accepted_at\": \"2026-01-01T00:00:00Z\",\n    \"accepted_ip\": \"192.0.2.1\"\n  },\n  \"consent_version\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke a workspace key within the principal's estate",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/keys/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "keys",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `platform:keys.manage`. Risk class C. Revocation and its audit\nrow commit atomically. An outside-estate key and an already-revoked\nkey both answer resource_not_found; repeat revocation is not success.\n"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "tools",
       "item": [
         {
@@ -1004,6 +1194,11 @@
     {
       "key": "partnerApiKey",
       "value": "pk_live_REPLACE_ME",
+      "type": "string"
+    },
+    {
+      "key": "platformApiKey",
+      "value": "pl_live_REPLACE_ME",
       "type": "string"
     }
   ]

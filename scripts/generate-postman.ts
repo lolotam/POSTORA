@@ -219,9 +219,11 @@ export function buildCollection(doc: Any): Any {
         // also check $ref to IdempotencyKey
         if (isObj(p) && typeof p.$ref === "string" && p.$ref.includes("IdempotencyKey")) needsIdempotency = true;
       }
-      const headers: Any[] = [
-        { key: "x-postora-key", value: "{{partnerApiKey}}", type: "text" },
-      ];
+      const security = (op.security ?? doc.security ?? []) as Array<Record<string, unknown>>;
+      const platformAuth = security.some((requirement) => Object.hasOwn(requirement, "PlatformApiKey"));
+      const headers: Any[] = [platformAuth
+        ? { key: "Authorization", value: "Bearer {{platformApiKey}}", type: "text" }
+        : { key: "x-postora-key", value: "{{partnerApiKey}}", type: "text" }];
       if (needsIdempotency) {
         headers.push({ key: "Idempotency-Key", value: "{{$guid}}", type: "text" });
       }
@@ -322,6 +324,7 @@ export function buildCollection(doc: Any): Any {
     variable: [
       { key: "baseUrl", value: "https://api.postora.cloud", type: "string" },
       { key: "partnerApiKey", value: "pk_live_REPLACE_ME", type: "string" },
+      { key: "platformApiKey", value: "pl_live_REPLACE_ME", type: "string" },
     ],
   };
 
@@ -340,6 +343,7 @@ export function buildEnvironments(): Record<string, Any> {
       values: [
         { key: "baseUrl", value: "http://localhost:54321", enabled: true },
         { key: "partnerApiKey", value: "pk_test_REPLACE_ME", enabled: true },
+        { key: "platformApiKey", value: "pl_test_REPLACE_ME", enabled: true },
       ],
       _postman_variable_scope: "environment",
       _postman_exported_using: "Postman/10.0.0",
@@ -350,6 +354,7 @@ export function buildEnvironments(): Record<string, Any> {
       values: [
         { key: "baseUrl", value: "https://staging-api.postora.cloud", enabled: true },
         { key: "partnerApiKey", value: "pk_test_REPLACE_ME", enabled: true },
+        { key: "platformApiKey", value: "pl_test_REPLACE_ME", enabled: true },
       ],
       _postman_variable_scope: "environment",
       _postman_exported_using: "Postman/10.0.0",
@@ -360,6 +365,7 @@ export function buildEnvironments(): Record<string, Any> {
       values: [
         { key: "baseUrl", value: "https://api.postora.cloud", enabled: true },
         { key: "partnerApiKey", value: "pk_live_REPLACE_ME", enabled: true },
+        { key: "platformApiKey", value: "pl_live_REPLACE_ME", enabled: true },
       ],
       _postman_variable_scope: "environment",
       _postman_exported_using: "Postman/10.0.0",

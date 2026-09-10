@@ -16,6 +16,7 @@
 
 import { v1ErrorResponse } from "./errors.ts";
 import { withPartnerAuth } from "./authenticated.ts";
+import { PLATFORM_ROUTES } from "../platform/router.ts";
 import { getAccount, listAccounts } from "./accounts.ts";
 import {
   getConversation,
@@ -323,7 +324,10 @@ export async function handleV1Request(
   // deno-lint-ignore no-explicit-any
   createAdminClient?: () => any,
 ): Promise<Response> {
-  const resolution = resolveV1Route(V1_ROUTES, subPath, req.method);
+  const platformResolution = resolveV1Route(PLATFORM_ROUTES, subPath, req.method);
+  const resolution = platformResolution.kind === "not_found"
+    ? resolveV1Route(V1_ROUTES, subPath, req.method)
+    : platformResolution;
   if (resolution.kind === "routed") {
     const handler = resolution.route.methods[req.method.toUpperCase()]!;
     try {

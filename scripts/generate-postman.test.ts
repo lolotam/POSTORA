@@ -6,6 +6,28 @@ const DOC_PATH = new URL("../docs/api/openapi.yaml", import.meta.url);
 const COLLECTION_PATH = new URL("../docs/api/postman/postora-partner-api.postman_collection.json", import.meta.url);
 const ENV_DIR = new URL("../docs/api/postman/", import.meta.url);
 
+Deno.test("platform requests use their own Bearer credential and workspace requests keep x-postora-key", async () => {
+  const doc = parse(await Deno.readTextFile(DOC_PATH));
+  const collection = buildCollection(doc);
+  let platformCount = 0;
+  for (const folder of collection.item) {
+    for (const item of folder.item) {
+      const platform = item.request.url.raw.includes("/v1/platform/");
+      if (platform) platformCount++;
+      const auth = item.request.header.filter((header: { key: string }) =>
+        ["Authorization", "x-postora-key"].includes(header.key));
+      assertEquals(auth, [platform
+        ? { key: "Authorization", value: "Bearer {{platformApiKey}}", type: "text" }
+        : { key: "x-postora-key", value: "{{partnerApiKey}}", type: "text" }]);
+    }
+  }
+  assertEquals(platformCount, 5);
+  for (const [name, env] of Object.entries(buildEnvironments())) {
+    assertEquals(env.values.find((v: { key: string }) => v.key === "platformApiKey")?.value,
+      name.startsWith("production") ? "pl_live_REPLACE_ME" : "pl_test_REPLACE_ME");
+  }
+});
+
 function stableStringify(obj: unknown): string {
   return JSON.stringify(obj, null, 2) + "\n";
 }

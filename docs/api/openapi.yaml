@@ -82,11 +82,14 @@ info:
     scheduling), OAuth, contacts, analytics and AI surfaces. Everything else
     the PRD names for v1 is served and described here.
 
-    Every `/v1` read is tenant-scoped to the accounts BOUND to the presented
+    Every workspace-tier `/v1` read is tenant-scoped to the accounts BOUND to the presented
     key (`partner_api_key_accounts`, spec D4) — not to the key's workspace,
     of which the binding may be a strict subset. A resource outside the
     binding answers `resource_not_found`, never a distinct forbidden code
     (D11): a separate answer would confirm the resource exists.
+
+    Platform reads under `/v1/platform/` are scoped to the authenticated
+    principal's estate instead; they use the separate PlatformApiKey scheme.
 
     Every component is named and every enum is enumerated explicitly so a
     structural diff is meaningful. Descriptions carry provenance, not contract.
@@ -120,6 +123,193 @@ servers:
 # Adding a path is additive under the 0.8 drift gate and needs no
 # acknowledgement; REMOVING one, or narrowing a published field, does.
 paths:
+  /functions/v1/partner-api/v1/platform/workspaces:
+    post:
+      operationId: createWorkspace
+      summary: Provision a workspace and its bootstrap key
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:workspaces.manage`. Risk class C. Creates an Auth
+        service owner, then atomically creates the workspace, Direct QR account
+        placeholder, bound workspace key and audit row. No plan is assigned;
+        the new owner's signup quota override or free allowance gates its first account.
+        The partner attests it collected the supplied Direct QR risk consent;
+        Postora records this as partner_attestation, not a witnessed acceptance.
+
+        The bootstrap secret is returned ONLY on the initial 201; store it safely.
+        Its scopes are whatsapp:numbers.read, whatsapp:numbers.manage,
+        conversations:read, messages:read and messages:send. Number management
+        routes are delivered separately; provisioning alone does not pair a number.
+        Reuse external_ref to recover a completed workspace with 200 and no key.
+        Pending/failed attempts require reconciliation and answer
+        idempotency_indeterminate. A lost RPC response with a committed tenant
+        also answers idempotency_indeterminate; list/get the estate and issue a
+        new key if needed. Failed read-back answers internal_error and leaves
+        the owner intact. Without external_ref, retries are independent creates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformWorkspaceCreate'
+      responses:
+        '201':
+          description: Created; the key is returned once and must not be cached.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformWorkspaceCreated'
+        '200':
+          description: An existing external_ref; workspace metadata only, no secret.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlatformWorkspace'
+                  - type: object
+                    required: [request_id]
+                    properties:
+                      request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+    get:
+      operationId: listPlatformWorkspaces
+      summary: List workspaces in the principal's estate
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:workspaces.read`. Risk class A. Ownership is by principal,
+        so rotating the platform credential preserves the estate. Descending
+        keyset pagination on (created_at, workspace_id); never returns keys.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            $ref: '#/components/schemas/LimitParameter'
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: One page of the principal's workspaces.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor, request_id]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlatformWorkspace'
+                  next_cursor: { type: [string, 'null'] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/platform/workspaces/{id}:
+    get:
+      operationId: getPlatformWorkspace
+      summary: Get a workspace in the principal's estate
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:workspaces.read`. Risk class A. Malformed ids and
+        workspaces outside the principal's estate answer resource_not_found.
+        Returns metadata only; bootstrap secrets cannot be retrieved.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The workspace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlatformWorkspace'
+                  - type: object
+                    required: [request_id]
+                    properties:
+                      request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/platform/workspaces/{id}/keys:
+    post:
+      operationId: issueWorkspaceKey
+      summary: Issue a bound workspace key within the principal's estate
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:keys.manage`. Risk class C. account_id is required and
+        must belong to the named workspace. The estate check, account binding,
+        key creation and audit commit atomically. All platform: scopes, legacy
+        scopes, unknown scopes and non-string scope entries are invalid_request.
+        An account or workspace outside the estate answers resource_not_found.
+        The secret is returned once; this operation does not replay secrets.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformWorkspaceKeyCreate'
+      responses:
+        '201':
+          description: Created; store the key safely, it cannot be retrieved later.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, key, key_prefix, scopes, workspace_id, account_id, request_id]
+                properties:
+                  id: { type: string, format: uuid }
+                  key: { type: string, description: One-time workspace secret. }
+                  key_prefix: { type: string }
+                  scopes:
+                    type: array
+                    items: { type: string }
+                  workspace_id: { type: string, format: uuid }
+                  account_id: { type: string, format: uuid }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/platform/keys/{id}:
+    delete:
+      operationId: revokeWorkspaceKey
+      summary: Revoke a workspace key within the principal's estate
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:keys.manage`. Risk class C. Revocation and its audit
+        row commit atomically. An outside-estate key and an already-revoked
+        key both answer resource_not_found; repeat revocation is not success.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Key revoked; no response body.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/accounts:
     get:
       operationId: listAccounts
@@ -1221,6 +1411,17 @@ paths:
 
 components:
   securitySchemes:
+    PlatformApiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: Postora platform key
+      description: |
+        Platform routes only: Authorization: Bearer pl_live_… in production,
+        pl_test_… in staging. The platform door also accepts the same credential
+        in x-postora-key. If both are sent, a Bearer Authorization value takes
+        precedence. These keys belong to a principal, not a workspace, and may
+        carry only platform scopes. Workspace keys cannot authenticate here.
+        This transport does not change the PartnerApiKey workspace scheme.
     PartnerApiKey:
       type: apiKey
       in: header
@@ -1243,6 +1444,62 @@ components:
         (`index.ts:74-76, 493`).
 
   schemas:
+    PlatformWorkspace:
+      type: object
+      required: [workspace_id, external_ref, created_at]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        external_ref: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    PlatformWorkspaceCreate:
+      type: object
+      required: [name, connection_name, risk_consent, consent_version]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        connection_name: { type: string, minLength: 1, maxLength: 200 }
+        external_ref:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 200
+          description: Stable reference unique to the principal; use it to recover timed-out provisioning.
+        risk_consent:
+          type: object
+          required: [accepted, accepted_by, accepted_at, accepted_ip]
+          properties:
+            accepted: { type: boolean, enum: [true] }
+            accepted_by: { type: string, minLength: 1, maxLength: 200 }
+            accepted_at: { type: string, format: date-time }
+            accepted_ip:
+              type: string
+              description: IPv4 or IPv6 address reported by the partner.
+              example: 192.0.2.1
+        consent_version:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Identifies the Direct QR risk text accepted by the tenant.
+    PlatformWorkspaceCreated:
+      type: object
+      required: [workspace_id, account_id, key_id, key, external_ref, request_id]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        key_id: { type: string, format: uuid }
+        key: { type: string, description: Bootstrap secret returned only on creation. }
+        external_ref: { type: [string, 'null'] }
+        request_id: { type: string }
+    PlatformWorkspaceKeyCreate:
+      type: object
+      required: [name, account_id, scopes]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        account_id: { type: string, format: uuid }
+        scopes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [accounts:read, connectors:manage, connectors:read, conversations:read, media:read, media:write, messages:read, messages:send, posts:publish, posts:read, posts:schedule, posts:write, templates:read, tools:execute, usage:read, webhooks:manage, webhooks:read]
     # ---- Error envelope (v1) — spec D2 ----
     V1ErrorEnvelope:
       type: object
