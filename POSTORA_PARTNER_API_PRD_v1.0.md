@@ -1,9 +1,8 @@
-> # ⚠️ STATUS: DEFERRED — DO NOT IMPLEMENT YET
+> # STATUS: ACTIVE — the Partner API is live, and section expansion is in progress
 >
-> This PRD is **not** scheduled work. It is parked until the core application is stable.
->
-> **This describes the v1 target for the partner API that ALREADY EXISTS — it is not a greenfield build.**
-> Live since 2026-08-14:
+> This PRD describes the v1 target for a partner API that **already exists and
+> serves production traffic**. It is not a greenfield build. Do not create a
+> parallel implementation; extend these modules:
 >
 > ```text
 > supabase/functions/partner-api/
@@ -12,27 +11,25 @@
 > supabase/functions/_shared/partnerApiIdempotency.ts
 > ```
 >
-> **Do NOT create a parallel implementation.** Any future work here extends those modules.
+> **The canonical contract is `docs/api/openapi.yaml`**, not the `openapi/`
+> directory this document describes below. It is guarded in CI by
+> `scripts/check-openapi-drift.ts` against `docs/api/openapi.baseline.yaml`,
+> and it drives the generated Postman collection and the agent hand-off bundle.
+> Earlier revisions of this banner said that directory had never been created;
+> the directory it named does not exist, but the contract does.
 >
-> Not yet created: the `openapi/` directory this document treats as the canonical contract.
+> **The five "open contract questions" this banner used to list are closed.**
 >
-> The `.md` is canonical; `POSTORA_PARTNER_API_PRD_v1.0.docx` is a stale export and is not maintained.
+> | Question | Where it is answered |
+> |---|---|
+> | Account selection | `partner-api/v1/binding.ts` — a key binds to many accounts; collection reads default to all bound accounts, `?account_id=` selects one, and an unbound id answers `resource_not_found` |
+> | Webhook HMAC | `process-partner-webhooks/worker.ts` — `signWebhookPayload(secret, timestampSeconds, body)`, with a bounded overlap after rotation |
+> | Event identifier naming | `_shared/partnerWebhookEvents.ts` — `CERTIFIED_EVENT_TYPES`, and `occurrenceId` identifies the transition rather than the resource |
+> | Idempotency | `_shared/partnerApiIdempotency.ts` — claim, settle, and an explicit `indeterminate` outcome that never downgrades a settled success |
+> | Legacy scope mapping | **capability pinning, not exclusion.** `whatsapp:templates.read` does satisfy `list_templates`; a legacy scope grants exactly the capability it held when D3 froze it and no new one. `partnerScopes.test.ts` asserts that pinning. Removing an existing legacy grant is a breaking change needing its own review. |
 >
-> **Open contract questions — resolve before any implementation starts.**
-> Automated review of this document (PR #23) flagged five under-specified areas.
-> They are recorded rather than answered, because settling them is spec design,
-> not documentation work:
->
-> 1. **Account selection** (§13) — the contract for choosing which connected
->    account an operation targets is not defined.
-> 2. **Legacy → v1 scope mapping** (§13) — compatibility is claimed but the
->    mapping from existing partner-api scopes is not stated.
-> 3. **Webhook HMAC** (§22) — signature encoding and the replay window are
->    unspecified.
-> 4. **Event identifier naming** (§22–23) — the webhook contract uses more than
->    one name for the same event id.
-> 5. **Idempotency** (§24) — public behavior for indeterminate outcomes and for
->    key expiry is undefined.
+> Current work, including the platform credential tier and the WhatsApp
+> section: `docs/superpowers/specs/2026-09-10-partner-api-sections-design.md`.
 
 ---
 
@@ -62,7 +59,7 @@ The Partner API will expose business capabilities through stable contracts while
 The OpenAPI 3.1 specification will be the canonical public API contract:
 
 ```text
-openapi/postora-partner-api-v1.yaml
+docs/api/openapi.yaml
 ```
 
 That contract will drive API documentation, request/response validation, contract tests, Postman collections, SDK generation, and client libraries.
@@ -350,8 +347,8 @@ Provider-specific business logic must not accumulate inside the HTTP entrypoint.
 # 10. Proposed Repository Structure
 
 ```text
-openapi/
-├── postora-partner-api-v1.yaml
+docs/api/
+├── openapi.yaml
 ├── schemas/
 └── examples/
 
@@ -1093,7 +1090,7 @@ Audit logs must identify actor, workspace, action, target, timestamp, and reques
 Canonical file:
 
 ```text
-openapi/postora-partner-api-v1.yaml
+docs/api/openapi.yaml
 ```
 
 It must define:
