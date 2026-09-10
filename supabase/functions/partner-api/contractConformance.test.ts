@@ -50,6 +50,12 @@ const DOCUMENTED_AUTH_HEADER: string = doc.components.securitySchemes.PartnerApi
  * and belong in the reached set.
  */
 const UNREACHABLE_WHILE_SEND_IS_SUSPENDED: Record<string, string> = {
+  // REMOVE THIS ENTRY IN TASK 7. assertEntitled exists and is tested in
+  // _shared/partnerEntitlement.test.ts, but no route calls it yet, so the
+  // alias these tests drive cannot emit the code. The first WhatsApp handler
+  // wires it, and at that point this belongs in the reached set above.
+  feature_not_entitled:
+    "server-side entitlement is implemented but not yet wired to a route; the first /v1/whatsapp handler reaches it",
   invalid_request: "body validation for send_template, downstream of the suspension gate",
   missing_idempotency_key: "send-only requirement, downstream of the suspension gate",
   idempotency_conflict: "idempotency claim runs only for send actions",

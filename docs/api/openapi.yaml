@@ -1570,6 +1570,12 @@ components:
         if a recorded decision ever changes that.
 
         Provenance (grep `supabase/functions/partner-api` + `_shared`):
+        - `partnerEntitlement.ts` (section expansion Task 6):
+          `feature_not_entitled` (403, not retryable) for a missing provisioned
+          owner or a disabled/missing required feature. Distinct from
+          `insufficient_scope` at the same status; partners branch on the code.
+          `details.missing_feature_keys` lists the unsatisfied flags when known.
+          The resolver is prepared here; production consumers arrive in Task 7.
         - `partnerApiKeys.ts`: `invalid_key`, `key_revoked`, `key_expired`,
           `insufficient_scope`, `internal_error`
         - `partnerApiMetering.ts`: `rate_limited` (`RateLimitedError`), `limiter_unavailable`,
@@ -1631,6 +1637,7 @@ components:
         - connector_type_not_connectable
         - connector_unavailable
         - connector_write_not_allowed
+        - feature_not_entitled
         - idempotency_conflict
         - idempotency_in_progress
         - idempotency_indeterminate

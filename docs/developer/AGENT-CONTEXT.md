@@ -88,6 +88,7 @@ Derived from `V1_ERROR_POLICY`. The retry verdict is the `retryable` flag, never
 | `connector_type_not_connectable` | 400 | no | That connector type cannot be connected through this endpoint |
 | `connector_unavailable` | 503 | yes | The connector service is unavailable; retry shortly |
 | `connector_write_not_allowed` | 403 | no | This connector is not allowed to change data in the connected account |
+| `feature_not_entitled` | 403 | no | This workspace is not entitled to that feature |
 | `idempotency_conflict` | 409 | no | This Idempotency-Key was used with a different body |
 | `idempotency_in_progress` | 409 | yes | An identical request is still processing |
 | `idempotency_indeterminate` | 409 | no | A previous attempt may have been delivered; resolve it before retrying |

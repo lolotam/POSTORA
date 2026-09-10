@@ -80,6 +80,12 @@ export const V1_ERROR_POLICY = {
     status: 403, retryable: false,
     message: "This connector is not allowed to change data in the connected account",
   },
+  // Entitlement is distinct from key scope; both refusals use 403 and the
+  // partner discriminates on the code. This does not imply a payment flow.
+  feature_not_entitled: {
+    status: 403, retryable: false,
+    message: "This workspace is not entitled to that feature",
+  },
   idempotency_conflict: {
     status: 409, retryable: false,
     message: "This Idempotency-Key was used with a different body",
