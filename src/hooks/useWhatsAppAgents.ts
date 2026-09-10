@@ -136,7 +136,7 @@ export function useWhatsAppAgents() {
   return { agents, agentsLoading, myAgent, registerAgent, updateStatus, updateMaxConversations };
 }
 
-export function useConversationAssignments() {
+export function useConversationAssignments(workspaceId?: string) {
   const { session } = useAuth();
   const qc = useQueryClient();
 
@@ -157,42 +157,68 @@ export function useConversationAssignments() {
 
   const assignConversation = useMutation({
     mutationFn: async (params: { conversationId: string; agentId: string; notes?: string }) => {
+      const { data: agent, error: agentError } = await supabase
+        .from("whatsapp_agents")
+        .select("workspace_id")
+        .eq("id", params.agentId)
+        .single();
+      if (agentError) throw agentError;
+      if (!agent?.workspace_id) throw new Error("No workspace found for this agent");
+      const workspaceId = agent.workspace_id;
+      const { data: conversation, error: conversationError } = await supabase
+        .from("messaging_cache")
+        .select("id")
+        .eq("workspace_id", workspaceId)
+        .eq("conversation_id", params.conversationId)
+        .maybeSingle();
+      if (conversationError) throw conversationError;
+
       // Unassign existing
-      const { data: existing } = await supabase
+      const { data: existing, error: existingError } = await supabase
         .from("whatsapp_conversation_assignments")
         .select("id, agent_id")
         .eq("conversation_id", params.conversationId)
+        .eq("workspace_id", workspaceId)
         .is("unassigned_at", null)
         .maybeSingle();
+      if (existingError) throw existingError;
 
       if (existing) {
-        await supabase
+        const { error: unassignError } = await supabase
           .from("whatsapp_conversation_assignments")
           .update({ unassigned_at: new Date().toISOString() })
-          .eq("id", existing.id);
+          .eq("id", existing.id)
+          .eq("workspace_id", workspaceId);
+        if (unassignError) throw unassignError;
 
         // Log transfer
-        await supabase.from("whatsapp_assignment_history").insert({
+        const { error: historyError } = await supabase.from("whatsapp_assignment_history").insert({
+          workspace_id: workspaceId,
           conversation_id: params.conversationId,
           action: "transferred",
           from_agent_id: existing.agent_id,
           to_agent_id: params.agentId,
           performed_by: session!.user.id,
         });
+        if (historyError) throw historyError;
       } else {
         // Log new assignment
-        await supabase.from("whatsapp_assignment_history").insert({
+        const { error: historyError } = await supabase.from("whatsapp_assignment_history").insert({
+          workspace_id: workspaceId,
           conversation_id: params.conversationId,
           action: "assigned",
           to_agent_id: params.agentId,
           performed_by: session!.user.id,
         });
+        if (historyError) throw historyError;
       }
 
       // Create new assignment
       const { data, error } = await supabase
         .from("whatsapp_conversation_assignments")
         .insert({
+          workspace_id: workspaceId,
+          conversation_cache_id: conversation?.id || null,
           conversation_id: params.conversationId,
           agent_id: params.agentId,
           assigned_by: session!.user.id,
@@ -211,26 +237,33 @@ export function useConversationAssignments() {
 
   const unassignConversation = useMutation({
     mutationFn: async (params: { conversationId: string; reason?: string }) => {
-      const { data: existing } = await supabase
+      if (!workspaceId) throw new Error("No workspace found for the current agent");
+      const { data: existing, error: existingError } = await supabase
         .from("whatsapp_conversation_assignments")
         .select("id, agent_id")
         .eq("conversation_id", params.conversationId)
+        .eq("workspace_id", workspaceId)
         .is("unassigned_at", null)
         .maybeSingle();
+      if (existingError) throw existingError;
 
       if (existing) {
-        await supabase
+        const { error: unassignError } = await supabase
           .from("whatsapp_conversation_assignments")
           .update({ unassigned_at: new Date().toISOString() })
-          .eq("id", existing.id);
+          .eq("id", existing.id)
+          .eq("workspace_id", workspaceId);
+        if (unassignError) throw unassignError;
 
-        await supabase.from("whatsapp_assignment_history").insert({
+        const { error: historyError } = await supabase.from("whatsapp_assignment_history").insert({
+          workspace_id: workspaceId,
           conversation_id: params.conversationId,
           action: "unassigned",
           from_agent_id: existing.agent_id,
           performed_by: session!.user.id,
           reason: params.reason || null,
         });
+        if (historyError) throw historyError;
       }
     },
     onSuccess: () => {

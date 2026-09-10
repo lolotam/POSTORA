@@ -29,7 +29,7 @@ export default function HumanAgentMode() {
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const { session } = useAuth();
   const { myAgent, registerAgent, updateStatus, updateMaxConversations } = useWhatsAppAgents();
-  const { assignments, assignConversation, unassignConversation } = useConversationAssignments();
+  const { assignments, assignConversation, unassignConversation } = useConversationAssignments(myAgent?.workspace_id);
   const { data: history = [] } = useAssignmentHistory();
   const { accounts } = useMessagingAccounts();
 

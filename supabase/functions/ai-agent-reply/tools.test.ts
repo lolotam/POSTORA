@@ -3,6 +3,121 @@ import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { customToolDefinitions, escalateConversation, executeTool, type CustomTool, type ToolContext } from "./tools.ts";
 import { composioBinding } from "../_shared/connectorRegistry.ts";
 
+type EscalationRow = Record<string, unknown>;
+
+function escalationDatabase(existing: EscalationRow[] = [], fail?: string) {
+  const tables: Record<string, EscalationRow[]> = {
+    workspaces: [{ id: "workspace-a", owner_id: "owner-a", is_personal: true }],
+    // The foreign agent is online and less busy: an unscoped selection picks it.
+    whatsapp_agents: [
+      { id: "agent-b", workspace_id: "workspace-b", user_id: "owner-b", status: "online", current_conversations: 0 },
+      { id: "agent-a", workspace_id: "workspace-a", user_id: "teammate-a", status: "online", current_conversations: 2 },
+    ],
+    whatsapp_conversation_assignments: existing,
+    whatsapp_assignment_history: [],
+    ai_conversation_modes: [],
+  };
+  const writes: { table: string; payload: EscalationRow }[] = [];
+  const admin = {
+    from(table: string) {
+      const filters: [string, unknown][] = [];
+      let operation = "select";
+      let payload: EscalationRow = {};
+      let single = false;
+      const result = () => {
+        if (fail === `${table}:${operation}`) return { data: null, error: { message: "database failed", code: "57014" } };
+        const matches = tables[table].filter((row) => filters.every(([key, value]) => row[key] === value));
+        if (operation === "insert" || operation === "upsert") {
+          tables[table].push(payload);
+          writes.push({ table, payload });
+        }
+        if (operation === "update") matches.forEach((row) => Object.assign(row, payload));
+        return { data: single ? matches[0] ?? null : matches, error: null };
+      };
+      const query = {
+        select: () => query,
+        eq: (key: string, value: unknown) => { filters.push([key, value]); return query; },
+        is: (key: string, value: unknown) => { filters.push([key, value]); return query; },
+        insert: (row: EscalationRow) => { operation = "insert"; payload = row; return query; },
+        upsert: (row: EscalationRow) => { operation = "upsert"; payload = row; return query; },
+        update: (row: EscalationRow) => { operation = "update"; payload = row; return query; },
+        maybeSingle: () => { single = true; return query; },
+        abortSignal: () => query,
+        then: (resolve: (value: ReturnType<typeof result>) => unknown) => Promise.resolve(result()).then(resolve),
+      };
+      return query;
+    },
+  };
+  return { admin, tables, writes };
+}
+
+function escalationTarget(admin: ReturnType<typeof escalationDatabase>["admin"]) {
+  return {
+    admin, userId: "owner-a", platform: "whatsapp", conversationId: "shared-key",
+    cachedConversation: { id: "cache-a", workspace_id: "workspace-a" },
+    customerName: "Customer", adminPhoneNumbers: [], sendWhatsAppText: () => Promise.resolve(),
+  };
+}
+
+Deno.test("AI assignment and history carry tenancy and cache IDs without touching a foreign same-key assignment", async () => {
+  const foreign = { id: "assignment-b", workspace_id: "workspace-b", conversation_id: "shared-key", agent_id: "agent-b", unassigned_at: null };
+  const db = escalationDatabase([foreign]);
+  const outcome = await escalateConversation(escalationTarget(db.admin), "Customer requested help");
+  assertEquals(outcome.assigned, true);
+  assertEquals(foreign.unassigned_at, null);
+  assertEquals(db.writes.find((write) => write.table === "whatsapp_conversation_assignments")?.payload, {
+    workspace_id: "workspace-a", conversation_cache_id: "cache-a", conversation_id: "shared-key",
+    agent_id: "agent-a", assigned_by: "owner-a", notes: "AI escalation: Customer requested help",
+  });
+  assertEquals(db.writes.find((write) => write.table === "whatsapp_assignment_history")?.payload, {
+    workspace_id: "workspace-a", conversation_id: "shared-key", action: "assigned",
+    from_agent_id: null, to_agent_id: "agent-a", performed_by: "owner-a", reason: "AI escalation: Customer requested help",
+  });
+});
+
+Deno.test("AI cache-less escalation resolves the owner's personal workspace", async () => {
+  const db = escalationDatabase();
+  const outcome = await escalateConversation({ ...escalationTarget(db.admin), cachedConversation: null }, "help");
+  assertEquals(outcome.assigned, true);
+  const assignment = db.writes.find((write) => write.table === "whatsapp_conversation_assignments")!.payload;
+  assertEquals(assignment.workspace_id, "workspace-a");
+  assertEquals(assignment.conversation_cache_id, null);
+});
+
+Deno.test("AI transfer retires its own assignment and records tenant-scoped history", async () => {
+  const own = { id: "assignment-a", workspace_id: "workspace-a", conversation_id: "shared-key", agent_id: "old-agent", unassigned_at: null };
+  const db = escalationDatabase([own]);
+  const outcome = await escalateConversation(escalationTarget(db.admin), "help");
+  assertEquals(outcome.assigned, true);
+  assertEquals(typeof own.unassigned_at, "string");
+  const history = db.writes.find((write) => write.table === "whatsapp_assignment_history")!.payload;
+  assertEquals(history.workspace_id, "workspace-a");
+  assertEquals(history.action, "transferred");
+  assertEquals(history.from_agent_id, "old-agent");
+});
+
+for (const fail of ["workspaces:select", "whatsapp_agents:select", "whatsapp_conversation_assignments:select", "whatsapp_conversation_assignments:update"]) {
+  Deno.test(`AI ${fail} failure is surfaced without claiming assignment or losing the mute`, async () => {
+    const own = { id: "assignment-a", workspace_id: "workspace-a", conversation_id: "shared-key", agent_id: "old-agent", unassigned_at: null };
+    const db = escalationDatabase([own], fail);
+    const errors: unknown[][] = [];
+    const originalError = console.error;
+    console.error = (...args: unknown[]) => { errors.push(args); };
+    try {
+      const outcome = await escalateConversation({
+        ...escalationTarget(db.admin),
+        cachedConversation: fail.startsWith("workspaces") ? null : { id: "cache-a", workspace_id: "workspace-a" },
+      }, "help");
+      assertEquals(outcome.assigned, false);
+      assertEquals(own.unassigned_at, null);
+      assertEquals(db.writes.map((write) => write.table), ["ai_conversation_modes"]);
+      assertEquals(errors.some((args) => args.includes("database failed")), true);
+    } finally {
+      console.error = originalError;
+    }
+  });
+}
+
 function context(overrides: Partial<ToolContext>): ToolContext {
   return {
     admin: {},
@@ -119,6 +234,7 @@ Deno.test("escalateConversation mutes the conversation before anything else", as
     userId: "00000000-0000-0000-0000-000000000001",
     platform: "instagram",
     conversationId: "ig-conversation",
+    cachedConversation: { id: "cache-1", workspace_id: "workspace-1" },
     customerName: "Test customer",
     adminPhoneNumbers: [],
     sendWhatsAppText: () => Promise.resolve(),
@@ -150,6 +266,7 @@ Deno.test("escalateConversation notifies every configured admin number", async (
     userId: "00000000-0000-0000-0000-000000000001",
     platform: "whatsapp",
     conversationId: "wa-conversation",
+    cachedConversation: { id: "cache-1", workspace_id: "workspace-1" },
     customerName: "Test customer",
     adminPhoneNumbers: ["+96500000001", "+96500000002"],
     sendWhatsAppText: (recipient) => { notified.push(recipient); return Promise.resolve(); },

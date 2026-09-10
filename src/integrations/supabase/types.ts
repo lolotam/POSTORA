@@ -6080,6 +6080,7 @@ export type Database = {
           performed_by: string | null
           reason: string | null
           to_agent_id: string | null
+          workspace_id: string | null
         }
         Insert: {
           action: string
@@ -6090,6 +6091,7 @@ export type Database = {
           performed_by?: string | null
           reason?: string | null
           to_agent_id?: string | null
+          workspace_id?: string | null
         }
         Update: {
           action?: string
@@ -6100,8 +6102,15 @@ export type Database = {
           performed_by?: string | null
           reason?: string | null
           to_agent_id?: string | null
+          workspace_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "whatsapp_assignment_history_workspace_id_fkey"
+            columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "whatsapp_assignment_history_from_agent_id_fkey"
             columns: ["from_agent_id"]

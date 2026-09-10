@@ -434,10 +434,15 @@ workspace column. No migration is needed: every runtime reader derives `user_id`
 from the account row, and the partner door derives the same owner from that row.
 A `workspace_id` column would be inert at runtime.
 
+**Correction.** `whatsapp_agents.workspace_id` is already `NOT NULL` (migration
+`20260726000001`, line 167). Only the existing assignments column is nullable;
+history has no workspace column. NULL-workspace assignments bypass the active
+unique index, so both writers must populate tenancy before §7.7's guarantee holds.
+
 **The human-agent migration delta is small, and one part of it is a trap.**
 
-1. The added columns are **nullable**, and existing assignment writers still
-   omit `workspace_id`. Making it `NOT NULL` immediately would break them.
+1. `whatsapp_conversation_assignments.workspace_id` is **nullable**, and existing
+   assignment writers still omit it. Making it `NOT NULL` immediately would break them.
    Sequence it as expand, backfill, fix writers, then contract — never in one
    migration.
 2. `whatsapp_assignment_history` was not covered by that migration and still
