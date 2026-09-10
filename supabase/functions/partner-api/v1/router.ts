@@ -15,6 +15,7 @@
 // handleV1Request and v1/router.test.ts.
 
 import { listCommentsRoute, getCommentRoute, replyCommentRoute, hideCommentRoute, deleteCommentRoute } from "./comments.ts";
+import { getAgentConfigRoute, updateAgentConfigRoute, listAgentToolsRoute, upsertAgentToolRoute, deleteAgentToolRoute, setToolAccountsRoute } from "./automation.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { withPartnerAuth } from "./authenticated.ts";
 import { PLATFORM_ROUTES } from "../platform/router.ts";
@@ -112,6 +113,28 @@ export interface V1Route {
  * asserts against.
  */
 export const V1_ROUTES: V1Route[] = [
+  {
+    pattern: "/v1/automation/tools/{id}/accounts",
+    methods: { PUT: withPartnerAuth("set_tool_accounts", "C", setToolAccountsRoute) },
+  },
+  {
+    pattern: "/v1/automation/tools/{id}",
+    methods: {
+      PUT: withPartnerAuth("upsert_agent_tool", "C", upsertAgentToolRoute),
+      DELETE: withPartnerAuth("delete_agent_tool", "C", deleteAgentToolRoute),
+    },
+  },
+  {
+    pattern: "/v1/automation/tools",
+    methods: { GET: withPartnerAuth("list_agent_tools", "A", listAgentToolsRoute) },
+  },
+  {
+    pattern: "/v1/automation/agent",
+    methods: {
+      GET: withPartnerAuth("get_agent_config", "A", getAgentConfigRoute),
+      PUT: withPartnerAuth("update_agent_config", "C", updateAgentConfigRoute),
+    },
+  },
   {
     pattern: "/v1/comments/{id}/reply",
     methods: { POST: withPartnerAuth("reply_comment", "C", replyCommentRoute) },

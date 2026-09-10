@@ -68,10 +68,71 @@ export type SharingAdminClient = {
   rpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: unknown }>;
 };
 
+/** Partner authority is a workspace and its key's bindings, never a JWT subject. */
+export interface WorkspaceToolScope {
+  workspaceId: string;
+  accountIds: string[];
+}
+
+// A whole-tool mutation also changes every explicit share. Refuse rather than
+// silently changing an agent outside the key's authority (including unsharing).
+export async function assertToolSharesBound(
+  admin: Pick<SharingAdminClient, "from">,
+  toolId: string,
+  scope: WorkspaceToolScope,
+): Promise<void> {
+  const { data, error } = await admin.from("ai_agent_tool_accounts")
+    .select("social_account_id").eq("tool_id", toolId);
+  if (error) throw error;
+  const sharedIds = (data ?? []).map((row) => String(row.social_account_id));
+  if (sharedIds.some((id) => !scope.accountIds.includes(id))) {
+    throw new ToolSharingError("Connector affects an account outside this binding", 404);
+  }
+  if (!sharedIds.length) return;
+  const { data: accounts, error: accountError } = await admin.from("social_accounts")
+    .select("id").eq("workspace_id", scope.workspaceId).in("id", sharedIds);
+  if (accountError) throw accountError;
+  if (accounts?.length !== sharedIds.length) throw new ToolSharingError("Account not found", 404);
+}
+
+async function setWorkspaceToolAccounts(
+  admin: SharingAdminClient,
+  scope: WorkspaceToolScope,
+  input: SetToolAccountsInput,
+): Promise<void> {
+  if (input.socialAccountIds.some((id) => !scope.accountIds.includes(id))) {
+    throw new ToolSharingError("Account not found", 404);
+  }
+  const { data: accounts, error: accountError } = await admin.from("social_accounts")
+    .select("id").eq("workspace_id", scope.workspaceId).in("id", scope.accountIds);
+  if (accountError) throw accountError;
+  const ids = (accounts ?? []).map((row) => String(row.id));
+  if (input.socialAccountIds.some((id) => !ids.includes(id))) {
+    throw new ToolSharingError("Account not found", 404);
+  }
+  const { data, error } = await admin.from("ai_agent_tools")
+    .select("id, user_id").eq("id", input.toolId).eq("scope", "account")
+    .in("social_account_id", ids).maybeSingle();
+  if (error) throw error;
+  const tool = data as { user_id?: string } | null;
+  if (!tool?.user_id) throw new ToolSharingError("Connector not found", 404);
+  await assertToolSharesBound(admin, input.toolId, { workspaceId: scope.workspaceId, accountIds: ids });
+  // The existing transactional RPC owns collision checks and replaces the set.
+  // Its legacy owner column is derived from the workspace-scoped row above;
+  // it is persistence metadata, never caller authority or a lookup predicate.
+  const { error: rpcError } = await admin.rpc("set_ai_agent_tool_accounts", {
+    p_user_id: tool.user_id, p_tool_id: input.toolId,
+    p_social_account_ids: input.socialAccountIds,
+  });
+  if (rpcError) throw rpcError;
+}
+
 export async function setToolAccounts(
   admin: SharingAdminClient,
-  { userId, input }: { userId: string; input: SetToolAccountsInput },
+  args: ({ userId: string } | WorkspaceToolScope) & { input: SetToolAccountsInput },
 ): Promise<void> {
+  if ("workspaceId" in args) return await setWorkspaceToolAccounts(admin, args, args.input);
+  const { userId, input } = args;
   const { data: tool, error: toolError } = await admin
     .from("ai_agent_tools")
     .select("id")

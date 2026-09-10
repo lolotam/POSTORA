@@ -774,6 +774,240 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/automation/agent:
+    get:
+      operationId: getAgentConfig
+      summary: Read an account agent config
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the agent setup flag for platform (default whatsapp):
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Omit account_id only if the key binds exactly one account. The account
+        must be active and match platform. No cross-account config fallback exists.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentConfigResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+    put:
+      operationId: updateAgentConfig
+      summary: Update only submitted agent config fields
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the agent setup flag for platform (default whatsapp):
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Omit account_id only if the key binds exactly one account. The account
+        must be active and match platform. No cross-account config fallback exists.
+        PUT has partial-update semantics: omitted fields remain unchanged. Unknown
+        fields are rejected. Clearing a non-empty persona_instructions or
+        business_profile_text requires confirm_clear=true; otherwise returns 409
+        invalid_request with details.blanked_fields. Structured business_profile
+        renders business_profile_text server-side and is checked by the same guard.
+        A text-only profile update synchronizes the structured profile. Model names
+        must be active entries in the admin-curated model allow-list.
+        Read failures return internal_error and never write an empty config.
+        Idempotency-Key is required. Replays return the stored body and never repeat
+        the write. The request hash includes action, resource, account, platform,
+        binding and all body fields. Changed input conflicts. Unknown mutation or
+        settlement outcomes are fenced as idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentConfigUpdate' }
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentConfigResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/tools:
+    get:
+      operationId: listAgentTools
+      summary: List account-owned agent tools
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the agent setup flag for platform (default whatsapp):
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Only account-owned tools are exposed; legacy all_accounts tools are excluded.
+        Tool responses omit secret values, Vault ids and owner identity. Credentials
+        are accepted only via the connector registry and merged by the existing Vault
+        path. A whole-tool mutation refuses tools shared outside the key binding.
+        Every platform affected by a shared-tool write must also pass its agent
+        setup feature flag for this action, including platforms of existing shares.
+        Without account_id, lists tools owned by all bound accounts on platform.
+        Results are ordered by created_at and id descending with cursor pagination.
+        This is an ownership listing, not an effective-runtime-tools listing.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentToolsResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/tools/{id}/accounts:
+    put:
+      operationId: setToolAccounts
+      summary: Replace a tool share set
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the agent setup flag for platform (default whatsapp):
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Only account-owned tools are exposed; legacy all_accounts tools are excluded.
+        Tool responses omit secret values, Vault ids and owner identity. Credentials
+        are accepted only via the connector registry and merged by the existing Vault
+        path. A whole-tool mutation refuses tools shared outside the key binding.
+        Every platform affected by a shared-tool write must also pass its agent
+        setup feature flag for this action, including platforms of existing shares.
+        social_account_ids replaces the complete explicit share set. Omission or
+        an empty array removes all shares. Duplicates are collapsed. Every target
+        must be bound to this key and in its workspace; unbound targets are refused.
+        The existing transactional sharing RPC also enforces owner and name-collision
+        rules. The owning account retains access without an explicit share row.
+        Idempotency-Key is required. Replays return the stored body and never repeat
+        the write. The request hash includes action, resource, account, platform,
+        binding and all body fields. Changed input conflicts. Unknown mutation or
+        settlement outcomes are fenced as idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentToolAccountsUpdate' }
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationWriteResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/tools/{id}:
+    put:
+      operationId: upsertAgentTool
+      summary: Create or update a tool at its UUID
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the agent setup flag for platform (default whatsapp):
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Omit account_id only if the key binds exactly one account. The account
+        must be active and match platform. No cross-account config fallback exists.
+        Only account-owned tools are exposed; legacy all_accounts tools are excluded.
+        Tool responses omit secret values, Vault ids and owner identity. Credentials
+        are accepted only via the connector registry and merged by the existing Vault
+        path. A whole-tool mutation refuses tools shared outside the key binding.
+        Every platform affected by a shared-tool write must also pass its agent
+        setup feature flag for this action, including platforms of existing shares.
+        id is a caller-chosen UUID for creation, or the existing tool UUID for
+        updates. Supply the complete tool definition; omitted credential fields
+        preserve stored values. An existing tool cannot be moved between accounts.
+        Idempotency-Key is required. Replays return the stored body and never repeat
+        the write. The request hash includes action, resource, account, platform,
+        binding and all body fields. Changed input conflicts. Unknown mutation or
+        settlement outcomes are fenced as idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentToolUpdate' }
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentToolResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+    delete:
+      operationId: deleteAgentTool
+      summary: Delete an account-owned tool
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the agent setup flag for platform (default whatsapp):
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Only account-owned tools are exposed; legacy all_accounts tools are excluded.
+        Tool responses omit secret values, Vault ids and owner identity. Credentials
+        are accepted only via the connector registry and merged by the existing Vault
+        path. A whole-tool mutation refuses tools shared outside the key binding.
+        Every platform affected by a shared-tool write must also pass its agent
+        setup feature flag for this action, including platforms of existing shares.
+        Idempotency-Key is required. Replays return the stored body and never repeat
+        the write. The request hash includes action, resource, account, platform,
+        binding and all body fields. Changed input conflicts. Unknown mutation or
+        settlement outcomes are fenced as idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationWriteResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/comments:
     get:
       operationId: listComments
@@ -2380,6 +2614,151 @@ components:
         platform_comment_id: { type: string }
         request_id: { type: string }
 
+    AgentConfigUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        is_enabled: { type: boolean }
+        default_mode: { type: string, enum: [ai_first, human_first, human_then_ai] }
+        persona_instructions: { type: [string, 'null'] }
+        business_profile_text: { type: [string, 'null'] }
+        language_mode: { type: string, enum: [auto, ar, en] }
+        model: { type: string, minLength: 1 }
+        fallback_model_1: { type: [string, 'null'] }
+        fallback_model_2: { type: [string, 'null'] }
+        temperature: { type: number, minimum: 0, maximum: 2 }
+        admin_phone_numbers:
+          type: array
+          items: { type: string, description: International number beginning with +. }
+        daily_message_cap: { type: integer, minimum: 0 }
+        reply_cooldown_seconds: { type: integer, minimum: 0 }
+        max_tool_iterations: { type: integer, minimum: 0 }
+        handoff_on_request: { type: boolean }
+        handoff_on_low_confidence: { type: boolean }
+        business_profile: { $ref: '#/components/schemas/AgentBusinessProfile' }
+        agent_behavior: { $ref: '#/components/schemas/AgentBehavior' }
+        confirm_clear: { type: boolean, description: Required true to deliberately clear a protected non-empty field; never persisted. }
+    AgentBusinessProfile:
+      type: object
+      additionalProperties: false
+      properties:
+        industry: { type: string, enum: [ecommerce, clinic, b2b_services, restaurant, other] }
+        products: { type: string }
+        notes: { type: string }
+        policies:
+          type: object
+          additionalProperties: false
+          properties:
+            returns: { type: string }
+            shipping: { type: string }
+            warranty: { type: string }
+        faqs:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [q, a]
+            properties:
+              q: { type: string }
+              a: { type: string }
+    AgentBehavior:
+      type: object
+      additionalProperties: false
+      properties:
+        tone: { type: string, enum: [friendly_professional, formal, enthusiastic, concise] }
+        response_length: { type: string, enum: [short, medium, detailed] }
+        greeting: { type: string, maxLength: 500 }
+        goals:
+          type: array
+          items: { type: string, enum: [recommend_products, answer_pricing, handle_complaints, capture_leads] }
+        instruction_blocks:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            required: [title, body]
+            properties:
+              title: { type: string, maxLength: 120 }
+              body: { type: string, maxLength: 2000 }
+    AgentConfigResponse:
+      type: object
+      required: [account_id, config, request_id]
+      properties:
+        account_id: { type: string, format: uuid }
+        config:
+          type: [object, 'null']
+          description: Stored account config fields, excluding owner identity. Null means no config exists; failed reads never return null.
+        request_id: { type: string }
+    AgentToolUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, description, connector_type]
+      properties:
+        name: { type: string, pattern: '^[a-z][a-z0-9_]{2,40}$' }
+        description: { type: string, minLength: 1 }
+        connector_type: { type: string, description: Must exist in the server connector registry. }
+        url: { type: string, format: uri, description: Required public HTTPS URL for native connectors; Composio connectors use connection_id. }
+        connection_id: { type: string, format: uuid, description: Required for Composio; must be active in this workspace with matching connector type. }
+        permissions:
+          type: object
+          properties:
+            search_products: { type: boolean }
+            check_stock: { type: boolean }
+            lookup_orders: { type: boolean }
+        is_enabled: { type: boolean, default: true }
+        admin_only: { type: boolean, default: false }
+        read_only_mode: { type: boolean, default: true }
+        enable_cache: { type: boolean, default: true }
+        secret: { type: string, writeOnly: true }
+        clear_secret: { type: boolean, default: false }
+        credentials:
+          type: object
+          writeOnly: true
+          additionalProperties: { type: string }
+          description: Registry-declared credential fields only. Unsubmitted fields preserve stored values.
+    AgentTool:
+      type: object
+      required: [id, account_id, name, has_secret]
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        connector_type: { type: string }
+        is_enabled: { type: boolean }
+        has_secret: { type: boolean }
+        configured_secret_fields: { type: array, items: { type: string } }
+        settings: { type: object, description: Non-secret connector settings. }
+    AgentToolResponse:
+      type: object
+      required: [tool, request_id]
+      properties:
+        tool: { $ref: '#/components/schemas/AgentTool' }
+        request_id: { type: string }
+    AgentToolsResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AgentTool' } }
+        next_cursor: { type: [string, 'null'] }
+        request_id: { type: string }
+    AgentToolAccountsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        social_account_ids:
+          type: array
+          items: { type: string, format: uuid }
+    AutomationWriteResponse:
+      type: object
+      required: [success, request_id]
+      properties:
+        success: { type: boolean, const: true }
+        request_id: { type: string }
+
     GenericScope:
       type: string
       description: |
@@ -2400,6 +2779,8 @@ components:
         would turn zero capability into full webhook CRUD + SSRF amplifier).
       enum:
         - accounts:read
+        - automation:read
+        - automation:manage
         - comments:read
         - comments:manage
         - connectors:manage
@@ -3663,6 +4044,14 @@ components:
       example: eyJpZCI6Im1zZ18wMUgifQ
 
   parameters:
+    AgentPlatform:
+      name: platform
+      in: query
+      schema:
+        type: string
+        enum: [whatsapp, facebook, instagram, threads, youtube]
+        default: whatsapp
+      description: Agent setup surface; must match the targeted account. Its feature flag is checked first.
     IdempotencyKey:
       name: Idempotency-Key
       in: header

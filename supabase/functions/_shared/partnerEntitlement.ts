@@ -3,6 +3,25 @@
 import { logToDatabase } from "./logging.ts";
 import { v1ErrorResponse } from "../partner-api/v1/errors.ts";
 
+// UnifiedAgentSetupPage.PLATFORM_FLAG -> useFeatureFlags.FLAG_KEY_MAP.
+// There is no universal automation flag. A requested platform is checked before
+// binding resolution, then matched to the account by agentConfigOps.
+export const AGENT_PLATFORM_FEATURE_KEYS: Record<string, readonly string[]> = {
+  whatsapp: ["feature_msg_whatsapp"],
+  facebook: ["feature_msg_facebook"],
+  instagram: ["feature_msg_instagram"],
+  threads: ["feature_msg_threads"],
+  youtube: ["feature_youtube_comments"],
+};
+const AGENT_ACTION_FEATURE_KEYS: Record<string, typeof AGENT_PLATFORM_FEATURE_KEYS> = {
+  get_agent_config: AGENT_PLATFORM_FEATURE_KEYS,
+  update_agent_config: AGENT_PLATFORM_FEATURE_KEYS,
+  list_agent_tools: AGENT_PLATFORM_FEATURE_KEYS,
+  upsert_agent_tool: AGENT_PLATFORM_FEATURE_KEYS,
+  delete_agent_tool: AGENT_PLATFORM_FEATURE_KEYS,
+  set_tool_accounts: AGENT_PLATFORM_FEATURE_KEYS,
+};
+
 // Keys verified against useFeatureFlags.FLAG_KEYS / FLAG_KEY_MAP. Each action
 // requires ALL listed keys; pairing and registration also require Direct QR.
 export const ACTION_FEATURE_KEYS: Record<string, readonly string[]> = {
@@ -35,6 +54,7 @@ export async function assertEntitled(
   workspaceId: string,
   action: string,
   requestId: string,
+  platform?: string,
 ): Promise<Response | null> {
   const refuse = async (
     code: "feature_not_entitled" | "internal_error",
@@ -58,7 +78,15 @@ export async function assertEntitled(
   };
 
   // Own-property lookup prevents Object.prototype names from becoming policy.
-  const requiredKeys = Object.hasOwn(ACTION_FEATURE_KEYS, action) ? ACTION_FEATURE_KEYS[action] : [];
+  const agentPolicy = Object.hasOwn(AGENT_ACTION_FEATURE_KEYS, action) ? AGENT_ACTION_FEATURE_KEYS[action] : null;
+  // No default platform: a per-platform action whose caller omits one would
+  // otherwise be checked against whichever platform the default names, granting
+  // on a flag the request never concerned. Absent is refused like an unknown one.
+  if (agentPolicy && (platform === undefined || !Object.hasOwn(agentPolicy, platform))) {
+    return await refuse("feature_not_entitled", "unsupported_agent_platform");
+  }
+  const requiredKeys = agentPolicy ? agentPolicy[platform!]
+    : Object.hasOwn(ACTION_FEATURE_KEYS, action) ? ACTION_FEATURE_KEYS[action] : [];
   if (requiredKeys.length === 0) return await refuse("internal_error", "missing_action_policy");
 
   let readStage = "provisioning";

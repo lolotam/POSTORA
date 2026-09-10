@@ -17,6 +17,7 @@ import {
   SERVER_CONNECTOR_TYPES,
 } from "../_shared/connectorRegistry.ts";
 import { loadActiveConnection } from "../_shared/composioConnections.ts";
+import { assertToolSharesBound, type WorkspaceToolScope } from "./toolSharing.ts";
 
 // Carries the HTTP status the Edge Function should answer with. Expected
 // business refusals must not surface as opaque 500s.
@@ -264,18 +265,22 @@ interface AccountRow {
 
 async function resolveToolAccount(
   admin: ToolAdminClient,
-  userId: string,
+  scope: { userId: string } | WorkspaceToolScope,
   socialAccountId: string,
 ): Promise<AccountRow> {
-  const { data, error } = await admin
+  if ("workspaceId" in scope && !scope.accountIds.includes(socialAccountId)) {
+    throw new ToolWriteError("Account not found", 404);
+  }
+  let query = admin
     .from("social_accounts")
     .select("id, user_id, platform, workspace_id")
-    .eq("id", socialAccountId)
-    .maybeSingle();
+    .eq("id", socialAccountId);
+  if ("workspaceId" in scope) query = query.eq("workspace_id", scope.workspaceId);
+  const { data, error } = await query.maybeSingle();
   if (error) throw error;
   const account = data as AccountRow | null;
   if (!account) throw new ToolWriteError("Account not found", 404);
-  if (account.user_id !== userId) {
+  if ("userId" in scope && account.user_id !== scope.userId) {
     throw new ToolWriteError("Account does not belong to the caller", 403);
   }
   return account;
@@ -315,22 +320,25 @@ interface ExistingToolRow {
 export async function upsertAccountScopedTool(
   admin: ToolAdminClient,
   vault: CredentialVault,
-  { userId, input }: { userId: string; input: ParsedUpsertToolInput },
+  args: ({ userId: string } | (WorkspaceToolScope & { toolId: string })) & { input: ParsedUpsertToolInput },
 ): Promise<Record<string, unknown>> {
-  const account = await resolveToolAccount(admin, userId, input.socialAccountId);
+  const { input } = args;
+  const account = await resolveToolAccount(admin, args, input.socialAccountId);
 
   if (input.authStrategy === "composio_oauth") {
     if (!account.workspace_id || !input.connectionId) {
       throw new ToolWriteError("connection_forbidden", 403);
     }
-    const { data: membership, error: membershipError } = await admin
+    if ("userId" in args) {
+      const { data: membership, error: membershipError } = await admin
       .from("workspace_members")
       .select("workspace_id")
       .eq("workspace_id", account.workspace_id)
-      .eq("user_id", userId)
+      .eq("user_id", args.userId)
       .maybeSingle();
     if (membershipError) throw membershipError;
     if (!membership) throw new ToolWriteError("connection_forbidden", 403);
+    }
 
     const lookup = await loadActiveConnection(admin, input.connectionId, account.workspace_id);
     if (!lookup.ok) {
@@ -344,14 +352,17 @@ export async function upsertAccountScopedTool(
     }
   }
 
-  const { data: toolRows, error: readError } = await admin
+  let toolQuery = admin
     .from("ai_agent_tools")
     .select("id, name, settings, credentials_secret_id")
-    .eq("user_id", userId)
-    .eq("social_account_id", account.id)
-    .eq("name", input.name);
+    .eq("social_account_id", account.id);
+  toolQuery = "userId" in args
+    ? toolQuery.eq("user_id", args.userId).eq("name", input.name)
+    : toolQuery.eq("id", args.toolId).eq("scope", "account");
+  const { data: toolRows, error: readError } = await toolQuery;
   if (readError) throw readError;
-  const existing = ((toolRows ?? []).find((row) => row.name === input.name) ?? null) as ExistingToolRow | null;
+  const existing = ((toolRows ?? []).find((row) => "userId" in args ? row.name === input.name : row.id === args.toolId) ?? null) as ExistingToolRow | null;
+  if (existing && "workspaceId" in args) await assertToolSharesBound(admin, existing.id, args);
 
   // Vault first. configured_secret_fields is derived from the blob on every
   // write (the SQL returns the merged key list) -- never accepted from the
@@ -361,7 +372,7 @@ export async function upsertAccountScopedTool(
     : null;
 
   const values: Record<string, unknown> = {
-    user_id: userId,
+    user_id: account.user_id,
     name: input.name,
     description: input.description.slice(0, 500),
     tool_type: "n8n_webhook",
@@ -408,13 +419,14 @@ export async function upsertAccountScopedTool(
   let data: Record<string, unknown> | null;
   let error: unknown;
   if (existing) {
-    ({ data, error } = await admin
+    let updateQuery = admin
       .from("ai_agent_tools")
       .update(values)
-      .eq("id", existing.id)
-      .select()
-      .single());
+      .eq("id", existing.id);
+    if ("workspaceId" in args) updateQuery = updateQuery.eq("social_account_id", account.id).eq("scope", "account");
+    ({ data, error } = await updateQuery.select().single());
   } else {
+    if ("workspaceId" in args) values.id = args.toolId;
     ({ data, error } = await admin
       .from("ai_agent_tools")
       .insert(values)
@@ -454,7 +466,7 @@ export async function listToolsForUser(
     .eq("user_id", userId)
     .order("name", { ascending: true });
   if (error) throw error;
-  return (data ?? []).map(({ secret, credentials_secret_id, ...tool }) => ({
+  return (data ?? []).map(({ secret, credentials_secret_id: _credentialsSecretId, ...tool }) => ({
     ...tool,
     has_secret: !!secret,
   }));
@@ -471,26 +483,38 @@ export async function listToolsForUser(
 export async function deleteAccountScopedTool(
   admin: ToolAdminClient,
   vault: CredentialVault,
-  { userId, toolId }: { userId: string; toolId: string },
+  args: ({ userId: string } | WorkspaceToolScope) & { toolId: string },
 ): Promise<void> {
-  const { data, error } = await admin
+  const { toolId } = args;
+  let ids: string[] = [];
+  if ("workspaceId" in args) {
+    const { data, error } = await admin.from("social_accounts").select("id")
+      .eq("workspace_id", args.workspaceId).in("id", args.accountIds);
+    if (error) throw error;
+    ids = (data ?? []).map((row) => String(row.id));
+  }
+  let query = admin
     .from("ai_agent_tools")
     .select("id, credentials_secret_id")
-    .eq("id", toolId)
-    .eq("user_id", userId)
-    .maybeSingle();
+    .eq("id", toolId);
+  query = "userId" in args ? query.eq("user_id", args.userId)
+    : query.in("social_account_id", ids).eq("scope", "account");
+  const { data, error } = await query.maybeSingle();
   if (error) throw error;
   const row = data as { credentials_secret_id?: string | null } | null;
   if (!row) throw new ToolWriteError("Tool not found", 404);
+  if ("workspaceId" in args) await assertToolSharesBound(admin, toolId, args);
 
   if (row.credentials_secret_id) {
     await vault.deleteCredentials(row.credentials_secret_id);
   }
 
-  const { error: deleteError } = await admin
+  let deletion = admin
     .from("ai_agent_tools")
     .delete()
-    .eq("id", toolId)
-    .eq("user_id", userId);
+    .eq("id", toolId);
+  deletion = "userId" in args ? deletion.eq("user_id", args.userId)
+    : deletion.in("social_account_id", ids).eq("scope", "account");
+  const { error: deleteError } = await deletion;
   if (deleteError) throw deleteError;
 }

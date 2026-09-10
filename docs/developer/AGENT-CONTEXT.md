@@ -43,6 +43,10 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 
 | Method | Path | Scope | Limiter class | What it does |
 |---|---|---|---|---|
+| `PUT` | `/v1/automation/tools/{id}` | `automation:manage` | C | Create or update a tool at its UUID |
+| `DELETE` | `/v1/automation/tools/{id}` | `automation:manage` | C | Delete an account-owned tool |
+| `GET` | `/v1/automation/agent` | `automation:read` | A | Read an account agent config |
+| `PUT` | `/v1/automation/agent` | `automation:manage` | C | Update only submitted agent config fields |
 | `GET` | `/v1/comments/{id}` | `comments:read` | B | Read a comment from its provider |
 | `DELETE` | `/v1/comments/{id}` | `comments:manage` | C | Delete a Facebook or Instagram comment |
 | `GET` | `/v1/whatsapp/numbers/{id}/profile` | `whatsapp:profile.read` | B | Read a Cloud API number's business profile |
