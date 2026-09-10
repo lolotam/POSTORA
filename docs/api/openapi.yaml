@@ -2891,8 +2891,11 @@ components:
     CertifiedEventType:
       type: string
       description: |
-        An event whose transition, stable identifier and **transactional**
-        producer are all defined (decision D6). Phase 5 shipped the delivery
+        An event whose transition, identifier and producer are defined.
+        The original events have transactional producers (decision D6).
+        The WhatsApp number lifecycle and history-sync events are best-effort
+        observations after persistence: enqueue failures are logged and do not
+        fail activation or the sweep. Phase 5 shipped the delivery
         substrate and certified `webhook.test`; Phase 6 certified the six
         messaging/account events; Phase 8 certified `post.scheduled`.
         `post.published` / `post.failed` follow once the Phase 7 publishing
@@ -2912,6 +2915,15 @@ components:
         | `message.delivered` / `.read` / `.failed` | Meta status callback | near-real-time — **WhatsApp Cloud accounts ONLY; these events never fire for Evolution QR accounts** |
         | `account.reauthorization_required` | the token-refresh cron | **bounded by the cron cadence — not real-time** |
         | `post.scheduled` | a database trigger on schedule writes (API **and** Postora UI) | near-real-time |
+        | `whatsapp_number.connected` / `whatsapp_number.disconnected` | shared Evolution QR connection helper (poll, webhook, partner pairing) | after an observed active-state transition; best-effort |
+        | `history_sync.completed` | Evolution QR history sweep completion record | after a sweep settles; best-effort |
+
+        Number lifecycle events carry `account_id` and `is_active`.
+        `history_sync.completed` carries `account_id`, `outcome` (all sweep
+        counters, `truncated`, and `finished_at`), and `last_sync_at` (null
+        when the sweep did not establish a complete import). An empty or
+        partial sweep can settle; a thrown sweep does not emit this event.
+        These three events are specific to the WhatsApp account and workspace.
 
         `message.accepted` fires for **Partner-API-originated sends only**.
         Messages sent from the Postora UI, broadcasts, scheduled sends and
@@ -2926,6 +2938,9 @@ components:
         - message.failed
         - account.reauthorization_required
         - post.scheduled
+        - whatsapp_number.connected
+        - whatsapp_number.disconnected
+        - history_sync.completed
 
     WebhookCreateRequest:
       type: object

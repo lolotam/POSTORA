@@ -142,6 +142,8 @@ for (const [data, error, expected] of [
 
 function fixture(options: { existing?: boolean; active?: boolean; resolved?: boolean; failTable?: string; mode?: string; leaseHeld?: boolean; noWorkspace?: boolean } = {}) {
   const calls: Array<{ url: URL; method: string; body: Record<string, unknown> }> = [];
+  // Advances per read, standing in for Postgres bumping updated_at on write.
+  let accountReads = 0;
   const metadata = { display_name: "Support", risk_consent: CONSENT, arbitrary_marker: "preserve" };
   const admin = createClient("https://database.example", "test-key", {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -154,11 +156,24 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
       if (options.failTable === table) return Promise.resolve(Response.json({ code: "57014", message: "private failure" }, { status: 500 }));
       if (table === "activate_evolution_qr_account") return Promise.resolve(Response.json("15550001111"));
       if (table === "claim_whatsapp_history_sync") return Promise.resolve(Response.json(!options.leaseHeld));
+      if (table === "partner_webhooks") {
+        assertEquals(url.searchParams.get("workspace_id"), "eq.ws-1");
+        assertEquals(url.searchParams.get("id"), null);
+        return Promise.resolve(Response.json([
+          { id: "matching", secret_version: 1, platform: "whatsapp", social_account_id: ID },
+          { id: "other-number", secret_version: 1, platform: "whatsapp", social_account_id: "other-account" },
+        ]));
+      }
+      if (table === "partner_webhook_deliveries") return Promise.resolve(Response.json([{ id: "delivery" }]));
       if (method !== "GET") return Promise.resolve(new Response(null, { status: 204 }));
       if (table === "social_accounts") return Promise.resolve(Response.json([{
         id: ID, connection_mode: options.mode ?? "evolution_qr", is_active: options.active ?? false,
         user_id: "owner-from-account", workspace_id: options.noWorkspace ? null : CTX.workspaceId,
         platform_user_id: options.resolved ? "15550001111" : `pending_${ID}`, account_metadata: metadata,
+        // Postgres advances this on every write, and the connection emitter
+        // keys its occurrence id on it so a poll and a webhook observing the
+        // SAME transition deduplicate in the outbox.
+        updated_at: `2026-09-10T00:00:0${accountReads++}.000Z`,
       }]));
       assertEquals(table, "whatsapp_evolution_instances");
       return Promise.resolve(Response.json(options.existing ? [{ instance_name: `postora_${ID}`, jwt_key: "stored-secret", last_qr: "old-qr" }] : []));
@@ -192,9 +207,12 @@ for (const [label, options, expected] of [
     } else {
       assertEquals(await startHistorySync({ ...CTX, admin: db.admin }, ID, { api }), { state: "running" });
       assertEquals(providerCalls.length, 2);
-      const completion = db.calls.at(-1)!.body;
+      const completion = db.calls.find((call) => call.method === "PATCH" && call.url.pathname.endsWith("/whatsapp_evolution_instances"))!.body;
       assertEquals(completion.sync_started_at, null);
       assertEquals(typeof (completion.last_sync_outcome as Record<string, unknown>).finished_at, "string");
+      const delivery = db.calls.find((call) => call.url.pathname.endsWith("/partner_webhook_deliveries"))!.body as unknown as Record<string, unknown>[];
+      assertEquals(delivery.length, 1);
+      assertEquals(delivery[0].event_type, "history_sync.completed");
     }
     const claims = db.calls.filter((call) => call.url.pathname.endsWith("/claim_whatsapp_history_sync"));
     assertEquals(claims.length, label === "claimed" || label === "lease held" ? 1 : 0);
@@ -255,9 +273,14 @@ for (const state of ["open", "close"]) {
       assert(!call.url.searchParams.has("user_id"));
     }
     if (state === "open") {
-      assertEquals(db.calls.at(-1)!.body, { p_account_id: ID, p_owner_number: "15550001111" });
+      assertEquals(db.calls.find((call) => call.url.pathname.endsWith("/activate_evolution_qr_account"))!.body, { p_account_id: ID, p_owner_number: "15550001111" });
       assert(!db.calls.some((call) => "platform_username" in call.body));
-    } else assertEquals(db.calls.at(-1)!.body, { is_active: false });
+    } else assertEquals(db.calls.find((call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts"))!.body, { is_active: false });
+    const delivery = db.calls.find((call) => call.url.pathname.endsWith("/partner_webhook_deliveries"))!.body as unknown as Record<string, unknown>[];
+    assertEquals(delivery.length, 1);
+    assertEquals(delivery[0].event_type, state === "open" ? "whatsapp_number.connected" : "whatsapp_number.disconnected");
+    assertEquals(delivery[0].webhook_id, "matching");
+    assertEquals(delivery[0].workspace_id, CTX.workspaceId);
   });
 }
 
@@ -266,7 +289,8 @@ Deno.test("reconciliation merges mismatch metadata without erasing consent or th
   const remote = provider("open");
   remote.api.fetchInstance = () => Promise.resolve({ ownerJid: "15550002222@s.whatsapp.net", profileName: "Other Name" });
   await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
-  assertEquals(db.calls.at(-1)!.body, { is_active: true, account_metadata: { ...db.metadata, number_mismatch: true } });
+  assertEquals(db.calls.find((call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts"))!.body,
+    { is_active: true, account_metadata: { ...db.metadata, number_mismatch: true } });
 });
 
 for (const failTable of ["social_accounts", "whatsapp_evolution_instances"]) {

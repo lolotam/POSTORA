@@ -212,10 +212,15 @@ async function reconcileAccountConnection(
   // Keep all reads/metadata merges/writes in the existing reconciler scoped to
   // this workspace too. No user identity crosses this application boundary.
   const scopedAdmin = {
-    from: (table: string) => ({
-      select: (columns: string) => ctx.admin.from(table).select(columns).eq("workspace_id", ctx.workspaceId).eq("id", account.id),
-      update: (patch: Record<string, unknown>) => ctx.admin.from(table).update(patch).eq("workspace_id", ctx.workspaceId).eq("id", account.id),
-    }),
+    from: (table: string) => {
+      // Fan-out scopes subscriptions/deliveries itself. Their ids are not
+      // social-account ids, so applying the account filter would suppress events.
+      if (table === "partner_webhooks" || table === "partner_webhook_deliveries") return ctx.admin.from(table);
+      return {
+        select: (columns: string) => ctx.admin.from(table).select(columns).eq("workspace_id", ctx.workspaceId).eq("id", account.id),
+        update: (patch: Record<string, unknown>) => ctx.admin.from(table).update(patch).eq("workspace_id", ctx.workspaceId).eq("id", account.id),
+      };
+    },
     rpc: (name: string, args: Record<string, unknown>) => ctx.admin.rpc(name, args),
   };
   if (state === "open") {

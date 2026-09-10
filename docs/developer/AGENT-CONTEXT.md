@@ -35,7 +35,7 @@ Read these before the reference. Each one is a mistake an implementation makes w
 - **Error envelope:** `{ "error": { "code", "message", "retryable", "request_id", "details"? } }`.
 - **Correlation:** `X-Postora-Request-Id` on every response.
 - **Rate limit headers:** `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`; `Retry-After` on 429 when computed.
-- **Certified webhook events:** `webhook.test`, `message.received`, `message.accepted`, `message.delivered`, `message.read`, `message.failed`, `account.reauthorization_required`, `post.scheduled`.
+- **Certified webhook events:** `webhook.test`, `message.received`, `message.accepted`, `message.delivered`, `message.read`, `message.failed`, `account.reauthorization_required`, `post.scheduled`, `whatsapp_number.connected`, `whatsapp_number.disconnected`, `history_sync.completed`.
 
 ## Endpoints (served today)
 
