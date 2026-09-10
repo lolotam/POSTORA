@@ -7590,6 +7590,10 @@ export type Database = {
         Args: { p_source_id: string; p_social_account_id: string; p_platform: string }
         Returns: string
       }
+      partner_write_conversation_assignment: {
+        Args: { p_workspace_id: string; p_key_id: string; p_conversation_cache_id: string; p_agent_id: string | null; p_notes: string | null; p_unassign: boolean }
+        Returns: Json
+      }
       provision_partner_agent: {
         Args: { p_workspace_id: string; p_user_id: string; p_display_name: string; p_max_conversations: number }
         Returns: Json

@@ -7,6 +7,9 @@ import { decodeId } from "./ids.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { readPageRequest } from "./pagination.ts";
 import { v1JsonResponse } from "./respond.ts";
+import { loadBoundConversation } from "./conversations.ts";
+import type { ModeConversation } from "./conversationModes.ts";
+import { assignmentInput, getConversationAssignment, listAssignmentHistory, writeConversationAssignment } from "./conversationAssignments.ts";
 
 function context(authed: V1AuthedContext): HumanAgentContext {
   return { admin: authed.admin, workspaceId: authed.record.workspaceId, requestId: authed.requestId };
@@ -27,7 +30,7 @@ async function readAgents(req: Request, authed: V1AuthedContext, id?: string) {
     return v1JsonResponse({ ...await listHumanAgents(ctx, page.page), request_id: authed.requestId }, authed.requestId);
   } catch (error) { return failure(error, authed.requestId); }
 }
-type WriteAction = "create_agent" | "update_agent" | "delete_agent";
+type WriteAction = "create_agent" | "update_agent" | "delete_agent" | "assign_conversation" | "unassign_conversation";
 async function identityAttemptId(keyId: string, key: string): Promise<string> {
   // A lease takeover changes its attempt token. Keep the Auth email stable
   // across that takeover so a process death cannot mint a second identity.
@@ -40,18 +43,28 @@ async function agentWrite(req: Request, authed: V1AuthedContext, action: WriteAc
   const denied = await assertEntitled(admin, record.workspaceId, action, requestId);
   if (denied) return denied;
   try {
-    if (id !== undefined && !decodeId("agent", id)) return v1ErrorResponse("resource_not_found", requestId);
+    const assignment = action === "assign_conversation" || action === "unassign_conversation";
+    let conversation: ModeConversation | undefined;
+    if (assignment) {
+      // Prove the current binding even for a replay, as the mode sibling does.
+      const loaded = await loadBoundConversation(authed, id ?? "");
+      if (!loaded.ok) return loaded.res;
+      conversation = loaded.row;
+    } else if (id !== undefined && !decodeId("agent", id)) return v1ErrorResponse("resource_not_found", requestId);
     const key = req.headers.get("idempotency-key")?.trim();
     if (!key) return v1ErrorResponse("missing_idempotency_key", requestId);
     let body: unknown;
     try { const raw = await req.text(); body = raw ? JSON.parse(raw) : {}; }
     catch { return v1ErrorResponse("invalid_request", requestId); }
-    if (action === "delete_agent") {
+    if (assignment) assignmentInput(body, action === "unassign_conversation");
+    else if (action === "delete_agent") {
       if (!body || typeof body !== "object" || Array.isArray(body) || Object.keys(body).length) return v1ErrorResponse("invalid_request", requestId);
     } else agentInput(body, action === "create_agent");
     // Include workspace authority, resource and every submitted field. A replay
     // is resolved before any Auth call (and before a deleted resource lookup).
-    const claim = await claimIdempotency(admin, record.id, key, await hashRequest({ action, id, workspaceId: record.workspaceId, body }));
+    const claim = await claimIdempotency(admin, record.id, key, await hashRequest({ action, id, workspaceId: record.workspaceId, body,
+      ...(conversation ? { accountId: conversation.social_account_id, owner: conversation.user_id, conversationKey: conversation.conversation_id, platform: conversation.platform } : {}),
+    }));
     switch (claim.outcome) {
       case "replay": {
         const response = v1JsonResponse(claim.body, requestId, claim.httpStatus);
@@ -66,7 +79,8 @@ async function agentWrite(req: Request, authed: V1AuthedContext, action: WriteAc
       let response: Response;
       try {
         const ctx = context(authed);
-        const result = action === "create_agent" ? await createHumanAgent(ctx, body, await identityAttemptId(record.id, key))
+        const result = assignment ? await writeConversationAssignment(ctx, record.id, conversation!, body, action === "unassign_conversation")
+          : action === "create_agent" ? await createHumanAgent(ctx, body, await identityAttemptId(record.id, key))
           : action === "update_agent" ? await updateHumanAgent(ctx, id!, body) : await deleteHumanAgent(ctx, id!);
         response = v1JsonResponse({ ...result, request_id: requestId }, requestId, action === "create_agent" ? 201 : 200);
       } catch (error) {
@@ -87,3 +101,21 @@ export const getAgentRoute = (req: Request, authed: V1AuthedContext, params: Rec
 export const createAgentRoute = (req: Request, authed: V1AuthedContext) => agentWrite(req, authed, "create_agent");
 export const updateAgentRoute = (req: Request, authed: V1AuthedContext, params: Record<string, string>) => agentWrite(req, authed, "update_agent", params.id);
 export const deleteAgentRoute = (req: Request, authed: V1AuthedContext, params: Record<string, string>) => agentWrite(req, authed, "delete_agent", params.id);
+
+async function readAssignment(req: Request, authed: V1AuthedContext, action: "get_assignment" | "list_assignment_history", id: string) {
+  const denied = await assertEntitled(authed.admin, authed.record.workspaceId, action, authed.requestId);
+  if (denied) return denied;
+  try {
+    const loaded = await loadBoundConversation(authed, id);
+    if (!loaded.ok) return loaded.res;
+    const ctx = context(authed);
+    if (action === "get_assignment") return v1JsonResponse({ ...await getConversationAssignment(ctx, loaded.row), request_id: authed.requestId }, authed.requestId);
+    const page = readPageRequest(req, authed.requestId);
+    if (!page.ok) return page.res;
+    return v1JsonResponse({ ...await listAssignmentHistory(ctx, loaded.row, page.page), request_id: authed.requestId }, authed.requestId);
+  } catch (error) { return failure(error, authed.requestId); }
+}
+export const getAssignmentRoute = (req: Request, authed: V1AuthedContext, params: Record<string, string>) => readAssignment(req, authed, "get_assignment", params.id);
+export const listAssignmentHistoryRoute = (req: Request, authed: V1AuthedContext, params: Record<string, string>) => readAssignment(req, authed, "list_assignment_history", params.id);
+export const assignConversationRoute = (req: Request, authed: V1AuthedContext, params: Record<string, string>) => agentWrite(req, authed, "assign_conversation", params.id);
+export const unassignConversationRoute = (req: Request, authed: V1AuthedContext, params: Record<string, string>) => agentWrite(req, authed, "unassign_conversation", params.id);

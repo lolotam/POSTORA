@@ -35,7 +35,7 @@ Read these before the reference. Each one is a mistake an implementation makes w
 - **Error envelope:** `{ "error": { "code", "message", "retryable", "request_id", "details"? } }`.
 - **Correlation:** `X-Postora-Request-Id` on every response.
 - **Rate limit headers:** `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`; `Retry-After` on 429 when computed.
-- **Certified webhook events:** `webhook.test`, `message.received`, `message.accepted`, `message.delivered`, `message.read`, `message.failed`, `account.reauthorization_required`, `post.scheduled`, `whatsapp_number.connected`, `whatsapp_number.disconnected`, `history_sync.completed`.
+- **Certified webhook events:** `webhook.test`, `message.received`, `message.accepted`, `message.delivered`, `message.read`, `message.failed`, `account.reauthorization_required`, `post.scheduled`, `whatsapp_number.connected`, `whatsapp_number.disconnected`, `history_sync.completed`, `conversation.assigned`, `conversation.unassigned`.
 
 ## Endpoints (served today)
 
@@ -77,6 +77,10 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 | `GET` | `/v1/conversations/{id}/mode` | `automation:read` | A | Read a conversation mode |
 | `PUT` | `/v1/conversations/{id}/mode` | `automation:manage` | C | Set or clear a conversation mode |
 | `GET` | `/v1/conversations/{id}/messages` | `messages:read` | A | List the messages in one conversation |
+| `GET` | `/v1/conversations/{id}/assignment` | `agents:read` | A | Read the active assignment |
+| `PUT` | `/v1/conversations/{id}/assignment` | `agents:manage` | C | Assign or reassign a conversation |
+| `DELETE` | `/v1/conversations/{id}/assignment` | `agents:manage` | C | Close the active assignment |
+| `GET` | `/v1/conversations/{id}/assignment-history` | `agents:read` | A | List assignment history |
 | `GET` | `/v1/conversations/{id}` | `conversations:read` | A | Get one conversation |
 | `POST` | `/v1/connectors/{type}/connect-link` | `connectors:manage` | C | Mint a link that connects a third-party account |
 | `GET` | `/v1/connectors` | `connectors:read` | A | List the connected tools this key can reach |

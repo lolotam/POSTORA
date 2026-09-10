@@ -14,7 +14,7 @@
 // routing, so an unmatched path still 404s without a Supabase client. See
 // handleV1Request and v1/router.test.ts.
 
-import { listAgentsRoute, getAgentRoute, createAgentRoute, updateAgentRoute, deleteAgentRoute } from "./agents.ts";
+import { getAssignmentRoute, assignConversationRoute, unassignConversationRoute, listAssignmentHistoryRoute, listAgentsRoute, getAgentRoute, createAgentRoute, updateAgentRoute, deleteAgentRoute } from "./agents.ts";
 import { listCommentsRoute, getCommentRoute, replyCommentRoute, hideCommentRoute, deleteCommentRoute } from "./comments.ts";
 import { getAgentConfigRoute, getAutomationHandlersRoute, getAudienceRoute, updateAgentConfigRoute, listAgentToolsRoute, upsertAgentToolRoute, deleteAgentToolRoute, setToolAccountsRoute, setAutomationHandlersRoute } from "./automation.ts";
 import { listConversationModesRoute, getConversationModeRoute, setConversationModeRoute, listAutoRepliesRoute, createAutoReplyRoute, updateAutoReplyRoute, deleteAutoReplyRoute } from "./automation.ts";
@@ -275,6 +275,20 @@ export const V1_ROUTES: V1Route[] = [
     pattern: "/v1/conversations/{id}/messages",
     methods: {
       GET: withPartnerAuth("list_conversation_messages", "A", listConversationMessages),
+    },
+  },
+  {
+    pattern: "/v1/conversations/{id}/assignment",
+    methods: {
+      GET: withPartnerAuth("get_assignment", "A", getAssignmentRoute),
+      PUT: withPartnerAuth("assign_conversation", "C", assignConversationRoute),
+      DELETE: withPartnerAuth("unassign_conversation", "C", unassignConversationRoute),
+    },
+  },
+  {
+    pattern: "/v1/conversations/{id}/assignment-history",
+    methods: {
+      GET: withPartnerAuth("list_assignment_history", "A", listAssignmentHistoryRoute),
     },
   },
   {

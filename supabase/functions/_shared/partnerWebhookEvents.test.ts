@@ -231,9 +231,11 @@ Deno.test("F5: the certified allowlist matches the migration in its published or
     "whatsapp_number.connected",
     "whatsapp_number.disconnected",
     "history_sync.completed",
+    "conversation.assigned",
+    "conversation.unassigned",
   ]);
   const migration = await Deno.readTextFile(new URL(
-    "../../migrations/20260910130000_partner_connection_events.sql", import.meta.url,
+    "../../migrations/20260910170000_partner_assignment_events.sql", import.meta.url,
   ));
   const allowed = migration.match(/AND events <@ ARRAY\[([\s\S]*?)\]/)![1];
   assertEquals(CERTIFIED_EVENT_TYPES, [...allowed.matchAll(/'([^']+)'/g)].map((match) => match[1]));
@@ -244,4 +246,5 @@ Deno.test("F5: the certified allowlist matches the migration in its published or
   assert(!isCertifiedEventType("account.disconnected"));
   assert(!isCertifiedEventType("post.published"));
   assert(!isCertifiedEventType("whatsapp_number.pairing_expired"));
+  assert(!isCertifiedEventType("conversation.mode_changed"));
 });

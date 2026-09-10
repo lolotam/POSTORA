@@ -906,6 +906,97 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/conversations/{id}/assignment:
+    get:
+      operationId: getAssignment
+      summary: Read the active assignment
+      description: |
+        Scope `agents:read`. Risk class A.
+        Requires feature_human_agent before any resource lookup. No platform selector is required.
+        The conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.
+        Responses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user identities are never published.
+        Returns resource_not_found when there is no active assignment.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' } }
+      responses:
+        '200':
+          description: Read the active assignment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationAssignmentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    put:
+      operationId: assignConversation
+      summary: Assign or reassign a conversation
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before any resource lookup. No platform selector is required.
+        The conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.
+        Responses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user identities are never published.
+        Idempotency-Key is required. Hashes action, conversation surrogate, workspace, resolved account, owner, private key, platform and every body field. The current account binding is checked even on replay. Replays return the stored body without another write. Unknown write or settlement outcomes return idempotency_indeterminate.
+        PUT closes the active assignment and opens a new one in one SQL transaction with history. The new row always carries workspace_id and conversation_cache_id. The unique index enforces one active assignment for non-null workspaces; legacy null-workspace rows are outside this guarantee. Agent must belong to the same workspace. Omitted notes become null.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConversationAssignmentUpdate' }
+      responses:
+        '200':
+          description: Assign or reassign a conversation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationAssignmentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    delete:
+      operationId: unassignConversation
+      summary: Close the active assignment
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before any resource lookup. No platform selector is required.
+        The conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.
+        Responses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user identities are never published.
+        Idempotency-Key is required. Hashes action, conversation surrogate, workspace, resolved account, owner, private key, platform and every body field. The current account binding is checked even on replay. Replays return the stored body without another write. Unknown write or settlement outcomes return idempotency_indeterminate.
+        DELETE sets unassigned_at and records history; it never deletes the assignment. No active assignment returns resource_not_found without assignment/history writes. The request body must be empty or an empty object.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: Close the active assignment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationAssignmentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/conversations/{id}/assignment-history:
+    get:
+      operationId: listAssignmentHistory
+      summary: List assignment history
+      description: |
+        Scope `agents:read`. Risk class A.
+        Requires feature_human_agent before any resource lookup. No platform selector is required.
+        The conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.
+        Responses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user identities are never published.
+        Filters by workspace and the resolved conversation. Newest first on (created_at, id), with an opaque cursor and limit + 1 lookahead. Legacy rows with null created_at or workspace_id are excluded. Equal timestamps resume by id.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: List assignment history.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssignmentHistoryResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/conversations/{id}/mode:
     get:
       operationId: getConversationMode
@@ -2987,6 +3078,48 @@ components:
         platform_comment_id: { type: string }
         request_id: { type: string }
 
+    ConversationAssignmentUpdate:
+      type: object
+      additionalProperties: false
+      required: [agent_id]
+      properties:
+        agent_id: { $ref: '#/components/schemas/HumanAgentId' }
+        notes: { type: string, nullable: true, maxLength: 10000 }
+    ConversationAssignment:
+      type: object
+      additionalProperties: false
+      required: [id, agent_id, assigned_at, unassigned_at, notes]
+      properties:
+        id: { type: string, pattern: '^assignment_[0-9a-fA-F-]{36}$' }
+        agent_id: { type: string, nullable: true, pattern: '^agent_[0-9a-fA-F-]{36}$' }
+        assigned_at: { type: string, format: date-time, nullable: true }
+        unassigned_at: { type: string, format: date-time, nullable: true }
+        notes: { type: string, nullable: true }
+    ConversationAssignmentResponse:
+      type: object
+      required: [assignment, request_id]
+      properties:
+        assignment: { $ref: '#/components/schemas/ConversationAssignment' }
+        request_id: { type: string }
+    AssignmentHistoryEntry:
+      type: object
+      additionalProperties: false
+      required: [id, action, from_agent_id, to_agent_id, notes, created_at]
+      properties:
+        id: { type: string, pattern: '^assignment_history_[0-9a-fA-F-]{36}$' }
+        action: { type: string, enum: [assigned, unassigned, transferred] }
+        from_agent_id: { type: string, nullable: true, pattern: '^agent_[0-9a-fA-F-]{36}$' }
+        to_agent_id: { type: string, nullable: true, pattern: '^agent_[0-9a-fA-F-]{36}$' }
+        notes: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    AssignmentHistoryResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AssignmentHistoryEntry' } }
+        next_cursor: { type: string, nullable: true }
+        request_id: { type: string }
+
     ConversationMode:
       type: object
       required: [id, platform, mode, updated_at]
@@ -4087,6 +4220,19 @@ components:
         | `whatsapp_number.connected` / `whatsapp_number.disconnected` | shared Evolution QR connection helper (poll, webhook, partner pairing) | after an observed active-state transition; best-effort |
         | `history_sync.completed` | Evolution QR history sweep completion record | after a sweep settles; best-effort |
 
+        Assignment events are produced by the assignment table trigger for browser,
+        escalation and /v1 writes. INSERT of an active row emits conversation.assigned;
+        changing unassigned_at from null to non-null emits conversation.unassigned.
+        Other updates emit nothing. Emission is best-effort on failure so assignment
+        writes still commit. Once enqueued, normal outbox retries apply.
+        Payload fields are id (assignment_ UUID), conversation (conv_ cache UUID),
+        agent_id (agent_ UUID, nullable), assigned_at and unassigned_at.
+        Rows with null workspace_id, conversation_cache_id or transition timestamp,
+        or without an attributable WhatsApp cache row, emit nothing.
+        Occurrence ids include event type, assignment UUID and transition timestamp
+        rendered in UTC with microseconds; reassignment therefore has distinct events.
+        Assignment history is the paginated reconciliation surface.
+
         Number lifecycle events carry `account_id` and `is_active`.
         `history_sync.completed` carries `account_id`, `outcome` (all sweep
         counters, `truncated`, and `finished_at`), and `last_sync_at` (null
@@ -4110,6 +4256,8 @@ components:
         - whatsapp_number.connected
         - whatsapp_number.disconnected
         - history_sync.completed
+        - conversation.assigned
+        - conversation.unassigned
 
     WebhookCreateRequest:
       type: object

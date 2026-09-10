@@ -61,6 +61,9 @@ export const CERTIFIED_EVENT_TYPES = [
   "whatsapp_number.connected",
   "whatsapp_number.disconnected",
   "history_sync.completed",
+  // Table trigger covers browser, escalation and /v1; emission failures do not block writers.
+  "conversation.assigned",
+  "conversation.unassigned",
 ] as const;
 
 export type CertifiedEventType = typeof CERTIFIED_EVENT_TYPES[number];

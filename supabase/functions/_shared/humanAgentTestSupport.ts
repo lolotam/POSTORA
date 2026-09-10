@@ -8,7 +8,7 @@ export const IDENTITY_ID = "22222222-2222-4222-8222-222222222222";
 export const ATTEMPT_ID = "33333333-3333-4333-8333-333333333333";
 type Row = Record<string, unknown>;
 export const AGENT_ROW = { id: AGENT_ID, workspace_id: "ws", user_id: IDENTITY_ID, display_name: "Support", status: "offline", max_conversations: 10, current_conversations: 2, last_seen_at: null, created_at: "2026-09-10T00:00:00Z", updated_at: "2026-09-10T00:00:00Z" };
-export function humanAgentFixture(opts: { entitled?: boolean; claim?: string; failRead?: string; rpcFails?: boolean; responseLost?: boolean; cleanupFails?: boolean; createFails?: boolean; settleFails?: boolean; deleteRace?: boolean; incompleteRecovery?: boolean } = {}) {
+export function humanAgentFixture(opts: { entitled?: boolean; claim?: string; failRead?: string; rpcFails?: boolean; responseLost?: boolean; cleanupFails?: boolean; createFails?: boolean; settleFails?: boolean; deleteRace?: boolean; incompleteRecovery?: boolean; assignmentRpcFails?: boolean } = {}) {
   const reads: URL[] = [];
   const writes: { table: string; method: string; row: Row; url: URL }[] = [];
   const creates: Row[] = [], deletes: string[] = [], claims: Row[] = [];
@@ -18,7 +18,7 @@ export function humanAgentFixture(opts: { entitled?: boolean; claim?: string; fa
     partner_api_keys: [{ id: "key", workspace_id: "ws", social_account_id: "account", key_prefix: "pk_live_test", scopes: ["agents:read", "agents:manage"], rate_limit_per_min: 60, monthly_quota: null, revoked_at: null, expires_at: null }],
     partner_provisioned_workspaces: [{ workspace_id: "ws", owner_user_id: "owner" }],
     app_settings: [{ key: "feature_human_agent", value: opts.entitled ?? true }], user_feature_overrides: [],
-    whatsapp_agents: [{ ...AGENT_ROW }], whatsapp_conversation_assignments: [], system_logs: [], partner_api_usage: [], partner_api_idempotency: [],
+    whatsapp_agents: [{ ...AGENT_ROW }], whatsapp_conversation_assignments: [], whatsapp_assignment_history: [], messaging_cache: [], partner_api_key_accounts: [], system_logs: [], partner_api_usage: [], partner_api_idempotency: [],
   };
   const NON_PREDICATE = new Set(["select", "order", "limit", "offset", "on_conflict", "columns"]);
   const matches = (row: Row, url: URL) => [...url.searchParams].every(([key, value]) => {
@@ -61,6 +61,20 @@ export function humanAgentFixture(opts: { entitled?: boolean; claim?: string; fa
     }
     if (method !== "GET") {
       writes.push({ table, method, row, url });
+      if (table === "partner_write_conversation_assignment") {
+        if (opts.assignmentRpcFails) return Response.json({ message: "private SQL failure" }, { status: 500 });
+        const conversation = rows.messaging_cache.find((c) => c.id === row.p_conversation_cache_id && c.workspace_id === row.p_workspace_id && c.platform === "whatsapp" && rows.partner_api_key_accounts.some((b) => b.key_id === row.p_key_id && b.workspace_id === c.workspace_id && b.social_account_id === c.social_account_id));
+        const agent = rows.whatsapp_agents.find((a) => a.id === row.p_agent_id && a.workspace_id === row.p_workspace_id);
+        if (!conversation || (!row.p_unassign && !agent)) return Response.json({ error: "resource_not_found" });
+        const previous = rows.whatsapp_conversation_assignments.find((a) => a.workspace_id === row.p_workspace_id && a.conversation_id === conversation.conversation_id && a.unassigned_at === null);
+        if (row.p_unassign && !previous) return Response.json({ error: "resource_not_found" });
+        const now = new Date().toISOString();
+        if (previous) { previous.unassigned_at = now; previous.conversation_cache_id = row.p_conversation_cache_id; }
+        const assignment = row.p_unassign ? previous! : { id: crypto.randomUUID(), workspace_id: row.p_workspace_id, conversation_cache_id: row.p_conversation_cache_id, conversation_id: conversation.conversation_id, agent_id: row.p_agent_id, assigned_at: now, unassigned_at: null, notes: row.p_notes };
+        if (!row.p_unassign) rows.whatsapp_conversation_assignments.push(assignment);
+        rows.whatsapp_assignment_history.push({ id: crypto.randomUUID(), workspace_id: row.p_workspace_id, conversation_id: conversation.conversation_id, action: row.p_unassign ? "unassigned" : previous ? "transferred" : "assigned", from_agent_id: previous?.agent_id ?? null, to_agent_id: row.p_unassign ? null : row.p_agent_id, reason: row.p_notes, created_at: now });
+        return Response.json(assignment);
+      }
       if (table === "provision_partner_agent") {
         if (opts.responseLost || !opts.rpcFails) rows.whatsapp_agents.push({ ...AGENT_ROW, display_name: row.p_display_name, max_conversations: row.p_max_conversations });
         if (opts.rpcFails || opts.responseLost) return Response.json({ message: "private SQL failure" }, { status: 500 });

@@ -78,6 +78,97 @@
       "name": "conversations",
       "item": [
         {
+          "name": "Assign or reassign a conversation",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/assignment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "assignment"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before any resource lookup. No platform selector is required.\nThe conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.\nResponses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user ide",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agent_id\": \"agent_11111111-1111-4111-8111-111111111111\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Close the active assignment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/assignment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "assignment"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before any resource lookup. No platform selector is required.\nThe conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.\nResponses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user ide"
+          },
+          "response": []
+        },
+        {
           "name": "Get one conversation",
           "request": {
             "method": "GET",
@@ -109,6 +200,42 @@
               ]
             },
             "description": "A conversation belonging to a bound account whose platform is not\n`whatsapp` answers `unsupported_capability` (422), not\n`resource_not_found`: the account IS in the binding and\n`GET /v1/accounts` lists it, so denying its existence would be\nmisleading. There is no per-message table to read for it.\n\nScope `conversations:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "List assignment history",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/assignment-history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "assignment-history"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `agents:read`. Risk class A.\nRequires feature_human_agent before any resource lookup. No platform selector is required.\nThe conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.\nResponses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user ident"
           },
           "response": []
         },
@@ -209,6 +336,42 @@
               ]
             },
             "description": "Scope `automation:read`. Risk class A.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nThe conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only; a"
+          },
+          "response": []
+        },
+        {
+          "name": "Read the active assignment",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/assignment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "assignment"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `agents:read`. Risk class A.\nRequires feature_human_agent before any resource lookup. No platform selector is required.\nThe conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.\nResponses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user ident"
           },
           "response": []
         },

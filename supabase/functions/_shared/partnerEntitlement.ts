@@ -35,6 +35,10 @@ const AGENT_ACTION_FEATURE_KEYS: Record<string, typeof AGENT_PLATFORM_FEATURE_KE
 // Keys verified against useFeatureFlags.FLAG_KEYS / FLAG_KEY_MAP. Each action
 // requires ALL listed keys; pairing and registration also require Direct QR.
 export const ACTION_FEATURE_KEYS: Record<string, readonly string[]> = {
+  get_assignment: ["feature_human_agent"],
+  assign_conversation: ["feature_human_agent"],
+  unassign_conversation: ["feature_human_agent"],
+  list_assignment_history: ["feature_human_agent"],
   list_agents: ["feature_human_agent"],
   get_agent: ["feature_human_agent"],
   create_agent: ["feature_human_agent"],
