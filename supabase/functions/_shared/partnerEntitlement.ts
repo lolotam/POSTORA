@@ -14,6 +14,9 @@ export const AGENT_PLATFORM_FEATURE_KEYS: Record<string, readonly string[]> = {
   youtube: ["feature_youtube_comments"],
 };
 const AGENT_ACTION_FEATURE_KEYS: Record<string, typeof AGENT_PLATFORM_FEATURE_KEYS> = {
+  get_automation_handlers: AGENT_PLATFORM_FEATURE_KEYS,
+  set_automation_handlers: AGENT_PLATFORM_FEATURE_KEYS,
+  get_audience: AGENT_PLATFORM_FEATURE_KEYS,
   get_agent_config: AGENT_PLATFORM_FEATURE_KEYS,
   update_agent_config: AGENT_PLATFORM_FEATURE_KEYS,
   list_agent_tools: AGENT_PLATFORM_FEATURE_KEYS,

@@ -428,7 +428,13 @@ agent uniqueness with `(workspace_id, user_id)`, and scopes the active-assignmen
 index by workspace. The original `CREATE TABLE` statements do not show this,
 which is how the error was made.
 
-**The remaining delta is small, and one part of it is a trap.**
+**Correction.** Human-agent is not the only tenancy delta. `ai_conversation_modes`,
+`whatsapp_auto_replies` and `messenger_auto_replies` are keyed by `user_id` with no
+workspace column. No migration is needed: every runtime reader derives `user_id`
+from the account row, and the partner door derives the same owner from that row.
+A `workspace_id` column would be inert at runtime.
+
+**The human-agent migration delta is small, and one part of it is a trap.**
 
 1. The added columns are **nullable**, and existing assignment writers still
    omit `workspace_id`. Making it `NOT NULL` immediately would break them.
@@ -590,6 +596,12 @@ work.
 | `PATCH /v1/automation/auto-replies/{id}` | `update_auto_reply` | `automation:manage` | C |
 | `DELETE /v1/automation/auto-replies/{id}` | `delete_auto_reply` | `automation:manage` | C |
 | `GET /v1/automation/audience` | `get_audience` | `automation:read` | B |
+
+**Correction.** Auto-reply rules have no account column: a rule applies to every
+account its owner holds on that platform. For provisioned tenants this is contained
+by `partner_provisioned_workspaces.owner_user_id`, a per-workspace service identity
+with interactive authentication disabled. `assertEntitled` refuses workspaces
+without that identity.
 
 `update_agent_config` is the highest-risk write in this spec: it changes what an
 autonomous agent says to end customers. It carries `automation:manage`, class C,

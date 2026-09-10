@@ -15,7 +15,7 @@
 // handleV1Request and v1/router.test.ts.
 
 import { listCommentsRoute, getCommentRoute, replyCommentRoute, hideCommentRoute, deleteCommentRoute } from "./comments.ts";
-import { getAgentConfigRoute, updateAgentConfigRoute, listAgentToolsRoute, upsertAgentToolRoute, deleteAgentToolRoute, setToolAccountsRoute } from "./automation.ts";
+import { getAgentConfigRoute, getAutomationHandlersRoute, getAudienceRoute, updateAgentConfigRoute, listAgentToolsRoute, upsertAgentToolRoute, deleteAgentToolRoute, setToolAccountsRoute, setAutomationHandlersRoute } from "./automation.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { withPartnerAuth } from "./authenticated.ts";
 import { PLATFORM_ROUTES } from "../platform/router.ts";
@@ -113,6 +113,17 @@ export interface V1Route {
  * asserts against.
  */
 export const V1_ROUTES: V1Route[] = [
+  {
+    pattern: "/v1/automation/handlers",
+    methods: {
+      GET: withPartnerAuth("get_automation_handlers", "A", getAutomationHandlersRoute),
+      PUT: withPartnerAuth("set_automation_handlers", "C", setAutomationHandlersRoute),
+    },
+  },
+  {
+    pattern: "/v1/automation/audience",
+    methods: { GET: withPartnerAuth("get_audience", "B", getAudienceRoute) },
+  },
   {
     pattern: "/v1/automation/tools/{id}/accounts",
     methods: { PUT: withPartnerAuth("set_tool_accounts", "C", setToolAccountsRoute) },

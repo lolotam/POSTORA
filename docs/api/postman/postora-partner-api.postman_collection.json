@@ -903,7 +903,7 @@
                 }
               ]
             },
-            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for platform (default whatsapp):\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. No cros",
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. N",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"name\": \"string\",\n  \"description\": \"string\",\n  \"connector_type\": \"string\"\n}",
@@ -953,7 +953,7 @@
                 }
               ]
             },
-            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for platform (default whatsapp):\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret values, "
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret va"
           },
           "response": []
         },
@@ -982,7 +982,36 @@
                 "tools"
               ]
             },
-            "description": "Scope `automation:read`. Risk class A.\nRequires the agent setup flag for platform (default whatsapp):\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret values, Va"
+            "description": "Scope `automation:read`. Risk class A.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret valu"
+          },
+          "response": []
+        },
+        {
+          "name": "List audience contacts for bound accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/audience",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "audience"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class B (conservative published contract,\neven though this reads a local table). Requires the agent setup feature\nflag for platform. Only facebook, instagram, threads and youtube are\naccepted; missing or unsupported platform returns invalid_request before\nentitlement or audience queries. Filters social_contacts by bound\nsocial_account_id, not its nullable workspace_id. Accounts are resolved\ninside the key workspace and requested platform. An explicit unbound or\nmism"
           },
           "response": []
         },
@@ -1011,7 +1040,36 @@
                 "agent"
               ]
             },
-            "description": "Scope `automation:read`. Risk class A.\nRequires the agent setup flag for platform (default whatsapp):\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. No cross-"
+            "description": "Scope `automation:read`. Risk class A.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. No "
+          },
+          "response": []
+        },
+        {
+          "name": "Read automation handlers for an account",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/handlers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "handlers"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A. Requires the agent setup feature\nflag for the explicitly requested platform. Missing or unknown platform\nreturns feature_not_entitled. The account must be active, bound to the\nkey, in its workspace and match platform; otherwise resource_not_found.\nOmit account_id only when the key binds exactly one account.\nReturns all three settings with their documented defaults for unset keys.\n"
           },
           "response": []
         },
@@ -1053,7 +1111,7 @@
                 }
               ]
             },
-            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for platform (default whatsapp):\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret values, ",
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret va",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"social_account_ids\": [\n    \"550e8400-e29b-41d4-a716-446655440000\"\n  ]\n}",
@@ -1096,10 +1154,53 @@
                 "agent"
               ]
             },
-            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for platform (default whatsapp):\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. No cros",
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. N",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"is_enabled\": true,\n  \"default_mode\": \"ai_first\",\n  \"persona_instructions\": \"string\",\n  \"business_profile_text\": \"string\",\n  \"language_mode\": \"auto\",\n  \"model\": \"string\",\n  \"fallback_model_1\": \"string\",\n  \"fallback_model_2\": \"string\",\n  \"temperature\": 0,\n  \"admin_phone_numbers\": [\n    \"+15550000000\"\n  ],\n  \"daily_message_cap\": 0,\n  \"reply_cooldown_seconds\": 0,\n  \"max_tool_iterations\": 0,\n  \"handoff_on_request\": true,\n  \"handoff_on_low_confidence\": true,\n  \"business_profile\": {\n    \"industry\": \"ecommerce\",\n    \"products\": \"string\",\n    \"notes\": \"string\",\n    \"policies\": {\n      \"returns\": \"string\",\n      \"shipping\": \"string\",\n      \"warranty\": \"string\"\n    },\n    \"faqs\": [\n      {\n        \"q\": \"string\",\n        \"a\": \"string\"\n      }\n    ]\n  },\n  \"agent_behavior\": {\n    \"tone\": \"friendly_professional\",\n    \"response_length\": \"short\",\n    \"greeting\": \"string\",\n    \"goals\": [\n      \"recommend_products\"\n    ],\n    \"instruction_blocks\": [\n      {\n        \"title\": \"string\",\n        \"body\": \"string\"\n      }\n    ]\n  },\n  \"confirm_clear\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update only submitted automation handler settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/handlers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "handlers"
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C. Requires the agent setup feature\nflag for the explicitly requested platform. Missing or unknown platform\nreturns feature_not_entitled. Account resolution follows the GET rules.\nPUT is partial: only submitted keys are merged atomically under the account\nrow lock. Unknown fields, invalid values and an empty patch return\ninvalid_request. All three resolved settings are returned, including\nmedia_understanding. Unrelated account metadata is never exposed.\nIdem",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"automation_handler\": \"internal\",\n  \"comment_automation_handler\": \"off\",\n  \"media_understanding\": \"off\"\n}",
               "options": {
                 "raw": {
                   "language": "json"

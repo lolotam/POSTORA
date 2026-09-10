@@ -1,6 +1,8 @@
 // Account-bound automation use cases. The JWT helpers remain compatible, but
 // this door takes only workspace authority and the key's bound account set.
 import { parseNamedAccountId } from "./aiConfigScope.ts";
+import { MESSAGE_AUTOMATION_HANDLERS, COMMENT_AUTOMATION_HANDLERS, resolveAutomationHandler, resolveCommentAutomationHandler } from "./automationHandler.ts";
+import { MEDIA_UNDERSTANDING_MODES, resolveMediaUnderstandingMode } from "./mediaUnderstandingMode.ts";
 import { blankedFields, GUARDED_FIELDS } from "./configBlanking.ts";
 import { parseBusinessProfile, renderBusinessProfileText } from "./businessProfileText.ts";
 import { parseAgentBehavior } from "./agentBehavior.ts";
@@ -35,7 +37,7 @@ export function validateToolId(id: string): string {
   return id;
 }
 
-interface AgentAccount { id: string; platform: string; user_id: string; }
+interface AgentAccount { id: string; platform: string; user_id: string; account_metadata: unknown; }
 export async function resolveAgentAccount(ctx: AgentConfigContext, requested: unknown): Promise<AgentAccount> {
   const named = parseNamedAccountId(requested);
   if ("invalid" in named) invalid("account_id must be a non-empty string");
@@ -44,11 +46,70 @@ export async function resolveAgentAccount(ctx: AgentConfigContext, requested: un
   // Refuse before querying a caller-named foreign account, even on a replay.
   if (!ctx.accountIds.includes(id)) notFound();
   const { data, error } = await ctx.admin.from("social_accounts")
-    .select("id, platform, user_id").eq("id", id)
+    .select("id, platform, user_id, account_metadata").eq("id", id)
     .eq("workspace_id", ctx.workspaceId).eq("platform", ctx.platform).eq("is_active", true).maybeSingle();
   if (error) failedRead();
   if (!data) notFound();
   return data as AgentAccount;
+}
+
+function resolvedHandlers(account: AgentAccount, metadata: unknown) {
+  return {
+    account_id: account.id, platform: account.platform,
+    automation_handler: resolveAutomationHandler(metadata),
+    comment_automation_handler: resolveCommentAutomationHandler(metadata),
+    media_understanding: resolveMediaUnderstandingMode(metadata),
+  };
+}
+export async function getAutomationHandlers(ctx: AgentConfigContext, requested?: unknown) {
+  const account = await resolveAgentAccount(ctx, requested);
+  return resolvedHandlers(account, account.account_metadata);
+}
+function handlerPatch(body: Record<string, unknown>): Record<string, string> {
+  const allowed: Record<string, readonly unknown[]> = {
+    automation_handler: MESSAGE_AUTOMATION_HANDLERS,
+    comment_automation_handler: COMMENT_AUTOMATION_HANDLERS,
+    media_understanding: MEDIA_UNDERSTANDING_MODES,
+  };
+  const patch: Record<string, string> = {};
+  for (const [key, value] of Object.entries(body)) {
+    if (!Object.hasOwn(allowed, key) || typeof value !== "string" || !allowed[key].includes(value)) invalid(`Invalid handler field: ${key}`);
+    patch[key] = value as string;
+  }
+  if (!Object.keys(patch).length) invalid("Supply at least one handler field");
+  return patch;
+}
+export async function setAutomationHandlers(ctx: AgentConfigContext, requested: unknown, body: Record<string, unknown>) {
+  const account = await resolveAgentAccount(ctx, requested);
+  const patch = handlerPatch(body);
+  // Never merge the resolver's snapshot here: the RPC merges under the row lock.
+  const { data, error } = await ctx.admin.rpc("patch_account_metadata_in_workspace", {
+    p_account_id: account.id, p_workspace_id: ctx.workspaceId, p_patch: patch,
+  });
+  if (error || !data) throw new Error("Handler write outcome unknown");
+  return resolvedHandlers(account, data);
+}
+
+export function validateAudiencePlatform(platform: string): void {
+  // Mirrors social_contacts' CHECK; WhatsApp contacts live in a separate table.
+  if (!["facebook", "instagram", "threads", "youtube"].includes(platform)) invalid("Invalid audience platform");
+}
+export async function getAudience(ctx: AgentConfigContext, requested: unknown, page: PageRequest) {
+  validateAudiencePlatform(ctx.platform);
+  const ids = await workspaceAccountIds(ctx, requested);
+  if (!ids.length) return { data: [], next_cursor: null };
+  // workspace_id on contacts is nullable. Only the account binding grants access.
+  let query = ctx.admin.from("social_contacts")
+    .select("id, social_account_id, platform, platform_user_id, identity_kind, display_name, username, profile_url, email, phone_number, company, notes, source, tags, whatsapp_contact_id, total_comments_count, first_interacted_at, last_interacted_at, last_comment_text, last_post_id, created_at, updated_at")
+    .in("social_account_id", ids).eq("platform", ctx.platform)
+    .order("last_interacted_at", { ascending: false }).order("id", { ascending: false }).limit(page.limit + 1);
+  if (page.cursor) query = query.or(keysetFilter("last_interacted_at", page.cursor));
+  const { data, error } = await query;
+  if (error) failedRead();
+  const rows = data ?? [];
+  const selected = rows.slice(0, page.limit);
+  const last = selected.at(-1);
+  return { data: selected, next_cursor: rows.length > page.limit && last ? encodeCursor({ timestamp: last.last_interacted_at, id: last.id }) : null };
 }
 
 const CONFIG_FIELDS = [

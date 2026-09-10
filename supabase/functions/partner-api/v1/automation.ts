@@ -1,7 +1,7 @@
 // Entitlement -> binding -> shared operation -> response. withPartnerAuth
 // records every refusal in partner_api_usage, including caught exceptions.
 import { assertEntitled } from "../../_shared/partnerEntitlement.ts";
-import { agentConfigFailure, agentToolAffectedPlatforms, deleteAgentTool, getAgentConfig, listAgentTools, resolveAgentAccount, setAgentToolAccounts, updateAgentConfig, upsertAgentTool, type AgentConfigContext } from "../../_shared/agentConfigOps.ts";
+import { agentConfigFailure, agentToolAffectedPlatforms, deleteAgentTool, getAgentConfig, getAutomationHandlers, getAudience, listAgentTools, resolveAgentAccount, setAgentToolAccounts, setAutomationHandlers, updateAgentConfig, upsertAgentTool, validateAudiencePlatform, type AgentConfigContext } from "../../_shared/agentConfigOps.ts";
 import { claimIdempotency, completeIdempotency, hashRequest, markIndeterminate } from "../../_shared/partnerApiIdempotency.ts";
 import { parseSetToolAccountsInput } from "../../_shared/toolSharing.ts";
 import type { V1AuthedContext } from "./authenticated.ts";
@@ -10,7 +10,7 @@ import { v1ErrorResponse } from "./errors.ts";
 import { v1JsonResponse } from "./respond.ts";
 import { readPageRequest } from "./pagination.ts";
 
-function platform(req: Request): string { return new URL(req.url).searchParams.get("platform") ?? "whatsapp"; }
+function platform(req: Request): string { return new URL(req.url).searchParams.get("platform") ?? ""; }
 function failure(error: unknown, requestId: string): Response {
   const known = agentConfigFailure(error);
   return known ? v1ErrorResponse(known.code, requestId, { message: known.message, status: known.status, details: known.details })
@@ -48,7 +48,32 @@ export async function listAgentToolsRoute(req: Request, authed: V1AuthedContext)
   } catch (error) { return failure(error, authed.requestId); }
 }
 
-type WriteAction = "update_agent_config" | "upsert_agent_tool" | "delete_agent_tool" | "set_tool_accounts";
+export async function getAutomationHandlersRoute(req: Request, authed: V1AuthedContext): Promise<Response> {
+  const denied = await assertEntitled(authed.admin, authed.record.workspaceId, "get_automation_handlers", authed.requestId, platform(req));
+  if (denied) return denied;
+  try {
+    const ctx = await context(req, authed);
+    if (ctx instanceof Response) return ctx;
+    const result = await getAutomationHandlers(ctx, requestedAccount(req));
+    return v1JsonResponse({ ...result, request_id: authed.requestId }, authed.requestId);
+  } catch (error) { return failure(error, authed.requestId); }
+}
+export async function getAudienceRoute(req: Request, authed: V1AuthedContext): Promise<Response> {
+  try { validateAudiencePlatform(platform(req)); }
+  catch (error) { return failure(error, authed.requestId); }
+  const denied = await assertEntitled(authed.admin, authed.record.workspaceId, "get_audience", authed.requestId, platform(req));
+  if (denied) return denied;
+  try {
+    const ctx = await context(req, authed);
+    if (ctx instanceof Response) return ctx;
+    const page = readPageRequest(req, authed.requestId);
+    if (!page.ok) return page.res;
+    const result = await getAudience(ctx, requestedAccount(req), page.page);
+    return v1JsonResponse({ ...result, request_id: authed.requestId }, authed.requestId);
+  } catch (error) { return failure(error, authed.requestId); }
+}
+
+type WriteAction = "update_agent_config" | "upsert_agent_tool" | "delete_agent_tool" | "set_tool_accounts" | "set_automation_handlers";
 async function automationWrite(req: Request, authed: V1AuthedContext, action: WriteAction, id?: string): Promise<Response> {
   const { admin, record, requestId } = authed;
   const denied = await assertEntitled(admin, record.workspaceId, action, requestId, platform(req));
@@ -59,7 +84,7 @@ async function automationWrite(req: Request, authed: V1AuthedContext, action: Wr
     const requested = requestedAccount(req);
     // Every account selector is checked before a claim, including replays.
     let accountId: string | null = requested;
-    if (action === "update_agent_config" || action === "upsert_agent_tool") {
+    if (action === "update_agent_config" || action === "upsert_agent_tool" || action === "set_automation_handlers") {
       accountId = (await resolveAgentAccount(ctx, requested)).id;
     } else if (requested !== null && !ctx.accountIds.includes(requested)) {
       return v1ErrorResponse("resource_not_found", requestId);
@@ -106,6 +131,7 @@ async function automationWrite(req: Request, authed: V1AuthedContext, action: Wr
       let response: Response;
       try {
         const result = action === "update_agent_config" ? await updateAgentConfig(ctx, accountId, body)
+          : action === "set_automation_handlers" ? await setAutomationHandlers(ctx, accountId, body)
           : action === "upsert_agent_tool" ? await upsertAgentTool(ctx, id!, accountId, body)
           : action === "delete_agent_tool" ? await deleteAgentTool(ctx, id!, accountId)
           : await setAgentToolAccounts(ctx, id!, accountId, body);
@@ -125,6 +151,9 @@ async function automationWrite(req: Request, authed: V1AuthedContext, action: Wr
 }
 export function updateAgentConfigRoute(req: Request, authed: V1AuthedContext) {
   return automationWrite(req, authed, "update_agent_config");
+}
+export function setAutomationHandlersRoute(req: Request, authed: V1AuthedContext) {
+  return automationWrite(req, authed, "set_automation_handlers");
 }
 export function upsertAgentToolRoute(req: Request, authed: V1AuthedContext, params: Record<string, string>) {
   return automationWrite(req, authed, "upsert_agent_tool", params.id);

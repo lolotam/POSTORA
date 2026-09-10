@@ -10,7 +10,7 @@ const routes = [
   ["GET", "tools", "list_agent_tools"], ["PUT", `tools/${TOOL_ID}`, "upsert_agent_tool"],
   ["DELETE", `tools/${TOOL_ID}`, "delete_agent_tool"], ["PUT", `tools/${TOOL_ID}/accounts`, "set_tool_accounts"],
 ] as const;
-function request(method = "PUT", suffix = "agent", body?: unknown, query = `account_id=${ACCOUNT_ID}`) {
+function request(method = "PUT", suffix = "agent", body?: unknown, query = `account_id=${ACCOUNT_ID}&platform=whatsapp`) {
   return new Request(`https://partner.example/functions/v1/partner-api/v1/automation/${suffix}?${query}`, {
     method, headers: { "x-postora-key": "pk_live_test", "idempotency-key": "idem-1" },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -78,7 +78,7 @@ Deno.test("blanking refusal and failed reads are stable errors with usage rows",
   }
 });
 Deno.test("unbound selector and sharing target refuse without looking them up or claiming", async () => {
-  for (const req of [request("PUT", "agent", { is_enabled: false }, `account_id=${OTHER_ID}`), request("PUT", `tools/${TOOL_ID}/accounts`, { social_account_ids: [OTHER_ID] })]) {
+  for (const req of [request("PUT", "agent", { is_enabled: false }, `account_id=${OTHER_ID}&platform=whatsapp`), request("PUT", `tools/${TOOL_ID}/accounts`, { social_account_ids: [OTHER_ID] })]) {
     const f = agentFixture(); const response = await drive(f, req);
     assertEquals(response.status, 404); assertEquals((await response.json()).error.code, "resource_not_found");
     assert(!f.reads.some((url) => url.toString().includes(OTHER_ID)));

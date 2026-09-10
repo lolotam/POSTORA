@@ -43,6 +43,8 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 
 | Method | Path | Scope | Limiter class | What it does |
 |---|---|---|---|---|
+| `GET` | `/v1/automation/handlers` | `automation:read` | A | Read automation handlers for an account |
+| `PUT` | `/v1/automation/handlers` | `automation:manage` | C | Update only submitted automation handler settings |
 | `PUT` | `/v1/automation/tools/{id}` | `automation:manage` | C | Create or update a tool at its UUID |
 | `DELETE` | `/v1/automation/tools/{id}` | `automation:manage` | C | Delete an account-owned tool |
 | `GET` | `/v1/automation/agent` | `automation:read` | A | Read an account agent config |

@@ -23,9 +23,15 @@ export function agentFixture(opts: { failTable?: string; writeFails?: boolean; c
     ai_agent_tools: opts.noTool ? [] : [{ id: TOOL_ID, user_id: "owner", social_account_id: ACCOUNT_ID, platform: "whatsapp", name: "brand_tool", scope: "account", settings: { store_url: "https://store.example" }, secret: "never-expose", credentials_secret_id: "vault-id", created_at: "2026-09-10T00:00:00Z" }],
     ai_agent_tool_accounts: opts.sharedOutside ? [{ tool_id: TOOL_ID, social_account_id: OTHER_ID }] : [],
     ai_agent_allowed_models: [{ provider: "openai", model_id: "approved", is_active: true }],
+    social_contacts: [],
     system_logs: [], partner_api_usage: [], partner_api_idempotency: [],
   };
   const matches = (row: Row, url: URL) => [...url.searchParams].every(([key, value]) => {
+    if (key === "or") {
+      const cursor = value.match(/^\((\w+)\.lt\.([^,]+),and\(\1\.eq\.\2,id\.lt\.([^()]+)\)\)$/);
+      assert(cursor, `Unsupported fixture filter: ${value}`);
+      return String(row[cursor[1]]) < cursor[2] || (String(row[cursor[1]]) === cursor[2] && String(row.id) < cursor[3]);
+    }
     if (value.startsWith("eq.")) return key === "key_hash" || String(row[key]) === value.slice(3);
     if (value === "is.null") return row[key] == null;
     if (value.startsWith("in.(")) return value.slice(4, -1).split(",").map((item) => item.replaceAll('"', "")).includes(String(row[key]));
@@ -46,7 +52,13 @@ export function agentFixture(opts: { failTable?: string; writeFails?: boolean; c
     if (method !== "GET" && method !== "HEAD") {
       const row = init?.body ? JSON.parse(String(init.body)) : {};
       writes.push({ table, row, url, method });
-      if (opts.writeFails && table === "ai_agent_configs") return Response.json({ message: "private write failure" }, { status: 500 });
+      if (opts.writeFails && ["ai_agent_configs", "patch_account_metadata_in_workspace"].includes(table)) return Response.json({ message: "private write failure" }, { status: 500 });
+      if (table === "patch_account_metadata_in_workspace") {
+        const account = rows.social_accounts.find((stored) => stored.id === row.p_account_id && stored.workspace_id === row.p_workspace_id);
+        if (!account) return Response.json({ message: "Account not found or access denied" }, { status: 400 });
+        account.account_metadata = { ...(account.account_metadata as Row ?? {}), ...row.p_patch as Row };
+        return Response.json(account.account_metadata);
+      }
       if (table === "partner_api_idempotency") {
         if (opts.settleFails && row.state === "completed") return Response.json({ message: "private settlement failure" }, { status: 500 });
         settled = row;
@@ -69,7 +81,22 @@ export function agentFixture(opts: { failTable?: string; writeFails?: boolean; c
     reads.push(url);
     if (table === opts.failTable) return Response.json({ message: "private read failure" }, { status: 500 });
     assert(Object.hasOwn(rows, table), table);
-    return Response.json(rows[table].filter((row) => matches(row, url)).slice(0, Number(url.searchParams.get("limit") ?? 1000)));
+    let selected = rows[table].filter((row) => matches(row, url));
+    const order = url.searchParams.get("order")?.split(",") ?? [];
+    selected.sort((a, b) => {
+      for (const term of order) {
+        const [column, direction] = term.split(".");
+        const comparison = String(a[column]).localeCompare(String(b[column]));
+        if (comparison) return direction === "desc" ? -comparison : comparison;
+      }
+      return 0;
+    });
+    selected = selected.slice(0, Number(url.searchParams.get("limit") ?? 1000));
+    if (table === "social_contacts") {
+      const columns = url.searchParams.get("select")!.split(",");
+      selected = selected.map((row) => Object.fromEntries(columns.map((column) => [column, row[column]])));
+    }
+    return Response.json(selected);
   } } });
   const ctx: AgentConfigContext = { admin, workspaceId: "ws", accountIds: [ACCOUNT_ID], requestId: "req", platform: opts.platform ?? "whatsapp" };
   return { admin, ctx, rows, reads, writes, claims };

@@ -774,13 +774,104 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/automation/handlers:
+    get:
+      operationId: getAutomationHandlers
+      summary: Read automation handlers for an account
+      description: |
+        Scope `automation:read`. Risk class A. Requires the agent setup feature
+        flag for the explicitly requested platform. Missing or unknown platform
+        returns feature_not_entitled. The account must be active, bound to the
+        key, in its workspace and match platform; otherwise resource_not_found.
+        Omit account_id only when the key binds exactly one account.
+        Returns all three settings with their documented defaults for unset keys.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+      responses:
+        '200':
+          description: Resolved automation handlers.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationHandlersResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    put:
+      operationId: setAutomationHandlers
+      summary: Update only submitted automation handler settings
+      description: |
+        Scope `automation:manage`. Risk class C. Requires the agent setup feature
+        flag for the explicitly requested platform. Missing or unknown platform
+        returns feature_not_entitled. Account resolution follows the GET rules.
+        PUT is partial: only submitted keys are merged atomically under the account
+        row lock. Unknown fields, invalid values and an empty patch return
+        invalid_request. All three resolved settings are returned, including
+        media_understanding. Unrelated account metadata is never exposed.
+        Idempotency-Key is required. Replays return the stored body without a
+        second mutation. The hash covers action, account, platform, binding and
+        every body field. Changed input conflicts. Unknown mutation or settlement
+        outcomes return idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AutomationHandlersUpdate' }
+      responses:
+        '200':
+          description: All resolved automation handlers after the atomic merge.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationHandlersResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/audience:
+    get:
+      operationId: getAudience
+      summary: List audience contacts for bound accounts
+      description: |
+        Scope `automation:read`. Risk class B (conservative published contract,
+        even though this reads a local table). Requires the agent setup feature
+        flag for platform. Only facebook, instagram, threads and youtube are
+        accepted; missing or unsupported platform returns invalid_request before
+        entitlement or audience queries. Filters social_contacts by bound
+        social_account_id, not its nullable workspace_id. Accounts are resolved
+        inside the key workspace and requested platform. An explicit unbound or
+        mismatched account_id returns resource_not_found. Omit account_id to list
+        across the binding on that platform. Read failures return internal_error.
+        Pages order by last_interacted_at DESC then id DESC. next_cursor is null
+        only when the listing is exhausted. Owner identity and internal metadata
+        are omitted from responses.
+      parameters:
+        - name: platform
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [facebook, instagram, threads, youtube]
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of account-bound audience contacts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationAudienceResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/automation/agent:
     get:
       operationId: getAgentConfig
       summary: Read an account agent config
       description: |
         Scope `automation:read`. Risk class A.
-        Requires the agent setup flag for platform (default whatsapp):
+        Requires the agent setup flag for the explicitly requested platform:
         feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
         feature_msg_threads, or feature_youtube_comments respectively.
         Entitlement is checked before account or tool resolution. account_id must
@@ -804,7 +895,7 @@ paths:
       summary: Update only submitted agent config fields
       description: |
         Scope `automation:manage`. Risk class C.
-        Requires the agent setup flag for platform (default whatsapp):
+        Requires the agent setup flag for the explicitly requested platform:
         feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
         feature_msg_threads, or feature_youtube_comments respectively.
         Entitlement is checked before account or tool resolution. account_id must
@@ -847,7 +938,7 @@ paths:
       summary: List account-owned agent tools
       description: |
         Scope `automation:read`. Risk class A.
-        Requires the agent setup flag for platform (default whatsapp):
+        Requires the agent setup flag for the explicitly requested platform:
         feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
         feature_msg_threads, or feature_youtube_comments respectively.
         Entitlement is checked before account or tool resolution. account_id must
@@ -881,7 +972,7 @@ paths:
       summary: Replace a tool share set
       description: |
         Scope `automation:manage`. Risk class C.
-        Requires the agent setup flag for platform (default whatsapp):
+        Requires the agent setup flag for the explicitly requested platform:
         feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
         feature_msg_threads, or feature_youtube_comments respectively.
         Entitlement is checked before account or tool resolution. account_id must
@@ -929,7 +1020,7 @@ paths:
       summary: Create or update a tool at its UUID
       description: |
         Scope `automation:manage`. Risk class C.
-        Requires the agent setup flag for platform (default whatsapp):
+        Requires the agent setup flag for the explicitly requested platform:
         feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
         feature_msg_threads, or feature_youtube_comments respectively.
         Entitlement is checked before account or tool resolution. account_id must
@@ -976,7 +1067,7 @@ paths:
       summary: Delete an account-owned tool
       description: |
         Scope `automation:manage`. Risk class C.
-        Requires the agent setup flag for platform (default whatsapp):
+        Requires the agent setup flag for the explicitly requested platform:
         feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
         feature_msg_threads, or feature_youtube_comments respectively.
         Entitlement is checked before account or tool resolution. account_id must
@@ -2614,6 +2705,69 @@ components:
         platform_comment_id: { type: string }
         request_id: { type: string }
 
+    AutomationHandlersUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        automation_handler:
+          type: string
+          enum: [internal, n8n, 'off']
+          description: Message automation. Unset stored keys resolve to internal.
+        comment_automation_handler:
+          type: string
+          enum: ['off', internal, n8n]
+          description: Comment automation. Unset stored keys resolve to off.
+        media_understanding:
+          type: string
+          enum: ['off', audio, 'audio+image', 'audio+image+document']
+          description: Inbound media understanding. Unset stored keys resolve to off.
+
+    AutomationHandlersResponse:
+      type: object
+      required: [account_id, platform, automation_handler, comment_automation_handler, media_understanding, request_id]
+      properties:
+        account_id: { type: string, format: uuid }
+        platform: { type: string, enum: [whatsapp, facebook, instagram, threads, youtube] }
+        automation_handler: { $ref: '#/components/schemas/AutomationHandlersUpdate/properties/automation_handler' }
+        comment_automation_handler: { $ref: '#/components/schemas/AutomationHandlersUpdate/properties/comment_automation_handler' }
+        media_understanding: { $ref: '#/components/schemas/AutomationHandlersUpdate/properties/media_understanding' }
+        request_id: { type: string }
+
+    AutomationAudienceContact:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        social_account_id: { type: string, format: uuid }
+        platform: { type: string, enum: [facebook, instagram, threads, youtube] }
+        platform_user_id: { type: string }
+        identity_kind: { type: string, enum: [id, username] }
+        display_name: { type: string }
+        username: { type: string, nullable: true }
+        profile_url: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        phone_number: { type: string, nullable: true }
+        company: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        source: { type: string, enum: [organic_comment, workflow_lead] }
+        tags: { type: array, items: { type: string } }
+        whatsapp_contact_id: { type: string, format: uuid, nullable: true }
+        total_comments_count: { type: integer, minimum: 0 }
+        first_interacted_at: { type: string, format: date-time }
+        last_interacted_at: { type: string, format: date-time }
+        last_comment_text: { type: string, nullable: true }
+        last_post_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AutomationAudienceResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AutomationAudienceContact' } }
+        next_cursor: { type: string, nullable: true }
+        request_id: { type: string }
+
     AgentConfigUpdate:
       type: object
       additionalProperties: false
@@ -4047,10 +4201,10 @@ components:
     AgentPlatform:
       name: platform
       in: query
+      required: true
       schema:
         type: string
         enum: [whatsapp, facebook, instagram, threads, youtube]
-        default: whatsapp
       description: Agent setup surface; must match the targeted account. Its feature flag is checked first.
     IdempotencyKey:
       name: Idempotency-Key

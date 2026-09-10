@@ -21,6 +21,9 @@ import type { LimiterRiskClass } from "../_shared/partnerApiMetering.ts";
  * drift apart — an action missing from either would be a silent policy gap.
  */
 export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
+  get_automation_handlers: ["automation:read"],
+  set_automation_handlers: ["automation:manage"],
+  get_audience: ["automation:read"],
   get_agent_config: ["automation:read"],
   update_agent_config: ["automation:manage"],
   list_agent_tools: ["automation:read"],
@@ -115,6 +118,9 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
  *  get_status reads local social_accounts fields (A); list_templates calls the
  *  Meta Graph API (B); send_template spends money and reaches a customer (C). */
 export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
+  get_automation_handlers: "A",
+  set_automation_handlers: "C",
+  get_audience: "B",
   get_agent_config: "A",
   update_agent_config: "C",
   list_agent_tools: "A",

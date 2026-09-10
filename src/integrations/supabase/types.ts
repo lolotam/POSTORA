@@ -8212,6 +8212,10 @@ export type Database = {
         Args: { p_user_id: string; p_upload_date: string }
         Returns: number
       }
+      patch_account_metadata_in_workspace: {
+        Args: { p_account_id: string; p_workspace_id: string; p_patch: Json }
+        Returns: Json
+      }
       prune_ai_knowledge_entities: {
         Args: { p_user_id: string }
         Returns: undefined
