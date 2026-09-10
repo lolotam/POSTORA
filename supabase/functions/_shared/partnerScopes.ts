@@ -43,6 +43,8 @@
  *  one is a capability grant and a deliberate review, never a convenience. */
 export const GENERIC_SCOPES = [
   "accounts:read",
+  "comments:read",
+  "comments:manage",
   "connectors:manage",
   "connectors:read",
   "conversations:read",

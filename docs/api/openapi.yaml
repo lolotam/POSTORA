@@ -774,6 +774,181 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/comments:
+    get:
+      operationId: listComments
+      summary: List comments across bound Facebook, Instagram and YouTube accounts
+      description: |
+        Scope `comments:read`. Risk class B. Requires `feature_comment_manager`.
+        Reads live provider feeds, not a local update-time table. Accounts are
+        traversed in id order; Meta post feeds and comment edges use Graph after
+        cursors, YouTube uses nextPageToken. A page may be short or empty while
+        next_cursor is non-null. Continue until null; restart from the beginning
+        to reconcile changes. This is not an update-time or snapshot guarantee.
+        Facebook includes stream replies. Instagram and YouTube traverse
+        top-level comments followed by separately paginated reply edges. No
+        private replies or browser video-picker endpoint is exposed.
+        post_id is a Postora post_ id addressable through /v1/posts, resolved to
+        published provider posts on bound accounts. Posts without a bound
+        published target and outside-workspace posts answer resource_not_found.
+        Cursors are signed and tied to the workspace and identical filters.
+        Comment ids are signed cmt. references issued by this feed, stable while
+        the account identity and server signing secret remain unchanged. Raw
+        provider ids cannot be used as item ids. Rotating the service-role secret
+        invalidates references and cursors; restart listing to obtain new ones.
+        All comment routes require the current workspace/account binding, even
+        for idempotent replays. YouTube requires its existing force-ssl capability
+        (or Composio); reconnect_required maps to account_needs_reauth.
+        Comment webhook events are not yet certified.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: platform
+          in: query
+          schema: { type: string, enum: [facebook, instagram, youtube] }
+        - name: post_id
+          in: query
+          schema: { type: string }
+        - name: account_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Live provider page; continue even after an empty page if next_cursor is present.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor, request_id]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Comment' }
+                  next_cursor: { type: [string, 'null'] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/comments/{id}/reply:
+    post:
+      operationId: replyComment
+      summary: Reply publicly to a comment
+      description: |
+        Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.
+        Use the opaque id returned by listComments. Unbound, forged or foreign
+        references answer resource_not_found before contacting any provider.
+        Idempotency-Key is required. All provider failures whose outcome cannot
+        be proven are fenced as idempotency_indeterminate; do not resend them.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Successful provider response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentActionResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/comments/{id}/hide:
+    post:
+      operationId: hideComment
+      summary: Hide or unhide a comment
+      description: |
+        Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.
+        Use the opaque id returned by listComments. Unbound, forged or foreign
+        references answer resource_not_found before contacting any provider.
+        Idempotency-Key is required. All provider failures whose outcome cannot
+        be proven are fenced as idempotency_indeterminate; do not resend them.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                hidden: { type: boolean, default: true, description: YouTube maps true to rejected and false to published. }
+      responses:
+        '200':
+          description: Successful provider response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentActionResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/comments/{id}:
+    get:
+      operationId: getComment
+      summary: Read a comment from its provider
+      description: |
+        Scope `comments:read`. Risk class B. Requires `feature_comment_manager`.
+        Use the opaque id returned by listComments. Unbound, forged or foreign
+        references answer resource_not_found before contacting any provider.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Successful provider response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+    delete:
+      operationId: deleteComment
+      summary: Delete a Facebook or Instagram comment
+      description: |
+        Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.
+        Use the opaque id returned by listComments. Unbound, forged or foreign
+        references answer resource_not_found before contacting any provider.
+        YouTube delete returns unsupported_capability (422); use hide instead.
+        Idempotency-Key is required. All provider failures whose outcome cannot
+        be proven are fenced as idempotency_indeterminate; do not resend them.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Successful provider response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentActionResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/accounts:
     get:
       operationId: listAccounts
@@ -2176,6 +2351,35 @@ components:
           additionalProperties: true
 
     # ---- Scopes — spec D3 + §7 ----
+    Comment:
+      type: object
+      required: [id, account_id, platform, platform_comment_id, platform_post_id, text, created_at, parent_comment_id, author_name, hidden]
+      properties:
+        id: { type: string, description: Signed opaque cmt. resource reference from listComments. }
+        account_id: { type: string, format: uuid }
+        platform: { type: string, enum: [facebook, instagram, youtube] }
+        platform_comment_id: { type: string }
+        platform_post_id: { type: string }
+        text: { type: string }
+        created_at: { type: [string, 'null'] }
+        parent_comment_id: { type: [string, 'null'] }
+        author_name: { type: [string, 'null'] }
+        hidden: { type: [boolean, 'null'] }
+    CommentResponse:
+      allOf:
+        - $ref: '#/components/schemas/Comment'
+        - type: object
+          required: [request_id]
+          properties:
+            request_id: { type: string }
+    CommentActionResponse:
+      type: object
+      required: [success, platform_comment_id, request_id]
+      properties:
+        success: { type: boolean, const: true }
+        platform_comment_id: { type: string }
+        request_id: { type: string }
+
     GenericScope:
       type: string
       description: |
@@ -2196,6 +2400,8 @@ components:
         would turn zero capability into full webhook CRUD + SSRF amplifier).
       enum:
         - accounts:read
+        - comments:read
+        - comments:manage
         - connectors:manage
         - connectors:read
         - conversations:read

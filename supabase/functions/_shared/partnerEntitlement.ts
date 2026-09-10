@@ -6,6 +6,13 @@ import { v1ErrorResponse } from "../partner-api/v1/errors.ts";
 // Keys verified against useFeatureFlags.FLAG_KEYS / FLAG_KEY_MAP. Each action
 // requires ALL listed keys; pairing and registration also require Direct QR.
 export const ACTION_FEATURE_KEYS: Record<string, readonly string[]> = {
+  // Manual inbox actions; comment_workflow gates the separate automation page.
+  list_comments: ["feature_comment_manager"],
+  get_comment: ["feature_comment_manager"],
+  reply_comment: ["feature_comment_manager"],
+  hide_comment: ["feature_comment_manager"],
+  delete_comment: ["feature_comment_manager"],
+
   list_whatsapp_numbers: ["feature_msg_whatsapp"],
   get_whatsapp_number: ["feature_msg_whatsapp"],
   register_whatsapp_number: ["feature_msg_whatsapp", "feature_wa_evolution_qr_enabled"],

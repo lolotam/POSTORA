@@ -43,6 +43,8 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 
 | Method | Path | Scope | Limiter class | What it does |
 |---|---|---|---|---|
+| `GET` | `/v1/comments/{id}` | `comments:read` | B | Read a comment from its provider |
+| `DELETE` | `/v1/comments/{id}` | `comments:manage` | C | Delete a Facebook or Instagram comment |
 | `GET` | `/v1/whatsapp/numbers/{id}/profile` | `whatsapp:profile.read` | B | Read a Cloud API number's business profile |
 | `PATCH` | `/v1/whatsapp/numbers/{id}/profile` | `whatsapp:profile.manage` | C | Update selected Cloud API business profile fields |
 | `DELETE` | `/v1/whatsapp/numbers/{id}/session` | `whatsapp:numbers.manage` | C | End a Direct QR session |
@@ -127,7 +129,7 @@ Derived from `V1_ERROR_POLICY`. The retry verdict is the `retryable` flag, never
 | `tool_execution_timeout` | 504 | yes | The connector request timed out |
 | `tool_not_found` | 404 | no | Tool not found |
 | `unknown_action` | 400 | no | Unknown action |
-| `unsupported_capability` | 422 | no | That message type is not supported for this account |
+| `unsupported_capability` | 422 | no | That capability is not supported for this account |
 | `unsupported_direct_qr` | 400 | no | Template messages are not supported in Direct QR mode |
 
 ---

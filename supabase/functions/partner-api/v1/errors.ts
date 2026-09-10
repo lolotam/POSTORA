@@ -245,7 +245,7 @@ export const V1_ERROR_POLICY = {
   // mode rather than the request's shape (PRD 15.4).
   unsupported_capability: {
     status: 422, retryable: false,
-    message: "That message type is not supported for this account",
+    message: "That capability is not supported for this account",
   },
   unsupported_direct_qr: {
     status: 400, retryable: false,

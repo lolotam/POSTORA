@@ -14,6 +14,7 @@
 // routing, so an unmatched path still 404s without a Supabase client. See
 // handleV1Request and v1/router.test.ts.
 
+import { listCommentsRoute, getCommentRoute, replyCommentRoute, hideCommentRoute, deleteCommentRoute } from "./comments.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { withPartnerAuth } from "./authenticated.ts";
 import { PLATFORM_ROUTES } from "../platform/router.ts";
@@ -111,6 +112,25 @@ export interface V1Route {
  * asserts against.
  */
 export const V1_ROUTES: V1Route[] = [
+  {
+    pattern: "/v1/comments/{id}/reply",
+    methods: { POST: withPartnerAuth("reply_comment", "C", replyCommentRoute) },
+  },
+  {
+    pattern: "/v1/comments/{id}/hide",
+    methods: { POST: withPartnerAuth("hide_comment", "C", hideCommentRoute) },
+  },
+  {
+    pattern: "/v1/comments/{id}",
+    methods: {
+      GET: withPartnerAuth("get_comment", "B", getCommentRoute),
+      DELETE: withPartnerAuth("delete_comment", "C", deleteCommentRoute),
+    },
+  },
+  {
+    pattern: "/v1/comments",
+    methods: { GET: withPartnerAuth("list_comments", "B", listCommentsRoute) },
+  },
   {
     pattern: "/v1/whatsapp/numbers/{id}/profile",
     methods: {

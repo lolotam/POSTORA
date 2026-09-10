@@ -864,6 +864,214 @@
       ]
     },
     {
+      "name": "comments",
+      "item": [
+        {
+          "name": "Delete a Facebook or Instagram comment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.\nUse the opaque id returned by listComments. Unbound, forged or foreign\nreferences answer resource_not_found before contacting any provider.\nYouTube delete returns unsupported_capability (422); use hide instead.\nIdempotency-Key is required. All provider failures whose outcome cannot\nbe proven are fenced as idempotency_indeterminate; do not resend them.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Hide or unhide a comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments/:id/hide",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments",
+                ":id",
+                "hide"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.\nUse the opaque id returned by listComments. Unbound, forged or foreign\nreferences answer resource_not_found before contacting any provider.\nIdempotency-Key is required. All provider failures whose outcome cannot\nbe proven are fenced as idempotency_indeterminate; do not resend them.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hidden\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List comments across bound Facebook, Instagram and YouTube accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments"
+              ]
+            },
+            "description": "Scope `comments:read`. Risk class B. Requires `feature_comment_manager`.\nReads live provider feeds, not a local update-time table. Accounts are\ntraversed in id order; Meta post feeds and comment edges use Graph after\ncursors, YouTube uses nextPageToken. A page may be short or empty while\nnext_cursor is non-null. Continue until null; restart from the beginning\nto reconcile changes. This is not an update-time or snapshot guarantee.\nFacebook includes stream replies. Instagram and YouTube traverse\nt"
+          },
+          "response": []
+        },
+        {
+          "name": "Read a comment from its provider",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Scope `comments:read`. Risk class B. Requires `feature_comment_manager`.\nUse the opaque id returned by listComments. Unbound, forged or foreign\nreferences answer resource_not_found before contacting any provider.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Reply publicly to a comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments/:id/reply",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments",
+                ":id",
+                "reply"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.\nUse the opaque id returned by listComments. Unbound, forged or foreign\nreferences answer resource_not_found before contacting any provider.\nIdempotency-Key is required. All provider failures whose outcome cannot\nbe proven are fenced as idempotency_indeterminate; do not resend them.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "connectors",
       "item": [
         {

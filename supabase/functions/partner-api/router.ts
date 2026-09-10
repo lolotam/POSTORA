@@ -21,6 +21,12 @@ import type { LimiterRiskClass } from "../_shared/partnerApiMetering.ts";
  * drift apart — an action missing from either would be a silent policy gap.
  */
 export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
+  list_comments: ["comments:read"],
+  get_comment: ["comments:read"],
+  reply_comment: ["comments:manage"],
+  hide_comment: ["comments:manage"],
+  delete_comment: ["comments:manage"],
+
   get_status: null,
   send_template: ["whatsapp:template.send", "messages:send"],
   list_templates: ["whatsapp:templates.read", "templates:read"],
@@ -103,6 +109,12 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
  *  get_status reads local social_accounts fields (A); list_templates calls the
  *  Meta Graph API (B); send_template spends money and reaches a customer (C). */
 export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
+  list_comments: "B",
+  get_comment: "B",
+  reply_comment: "C",
+  hide_comment: "C",
+  delete_comment: "C",
+
   get_status: "A",
   list_templates: "B",
   send_template: "C",
