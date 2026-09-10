@@ -43,6 +43,11 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 
 | Method | Path | Scope | Limiter class | What it does |
 |---|---|---|---|---|
+| `GET` | `/v1/agents` | `agents:read` | A | List human agents |
+| `POST` | `/v1/agents` | `agents:manage` | C | Create human agent |
+| `GET` | `/v1/agents/{id}` | `agents:read` | A | Get human agent |
+| `PATCH` | `/v1/agents/{id}` | `agents:manage` | C | Update human agent |
+| `DELETE` | `/v1/agents/{id}` | `agents:manage` | C | Delete human agent |
 | `PATCH` | `/v1/automation/auto-replies/{id}` | `automation:manage` | C | Update an owner-wide auto-reply rule |
 | `DELETE` | `/v1/automation/auto-replies/{id}` | `automation:manage` | C | Delete an owner-wide auto-reply rule |
 | `GET` | `/v1/automation/auto-replies` | `automation:read` | A | List owner-wide auto-reply rules |

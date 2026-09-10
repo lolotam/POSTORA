@@ -950,6 +950,205 @@
       ]
     },
     {
+      "name": "agents",
+      "item": [
+        {
+          "name": "Create human agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents"
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nMints an unconfirmed, passwordless Auth service identity, then atomically inserts agent membership and profile. Default status is offline and capacity is 10. Recovery deletes the identity only after a complete read pr",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete human agent",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "agent_11111111-1111-4111-8111-111111111111"
+                }
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nReturns 409 invalid_request when ANY retained conversation assignment references the agent, including active, ended or legacy assignments. A database NO ACTION foreign key prevents concurrent assignments from being si"
+          },
+          "response": []
+        },
+        {
+          "name": "Get human agent",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "agent_11111111-1111-4111-8111-111111111111"
+                }
+              ]
+            },
+            "description": "Scope `agents:read`. Risk class A.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nReturns the agent profile.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "List human agents",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents"
+              ]
+            },
+            "description": "Scope `agents:read`. Risk class A.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nPages order by created_at DESC, id DESC; legacy rows without created_at are excluded.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Update human agent",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "agent_11111111-1111-4111-8111-111111111111"
+                }
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nPartial PATCH changes only submitted display_name, status or max_conversations. Unknown fields, empty patches, current_conversations and statuses outside online/away/offline return invalid_request.\nIdempotency-Key is ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"string\",\n  \"max_conversations\": 1,\n  \"status\": \"online\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "automation",
       "item": [
         {

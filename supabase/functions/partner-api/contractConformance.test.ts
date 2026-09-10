@@ -445,21 +445,24 @@ Deno.test("the page-size bounds the code enforces are the ones the document publ
   assertEquals(constOf("LIMIT_DEFAULT"), documented.default);
 });
 
-Deno.test("every id prefix the code can emit is accepted by the document's PrefixedId pattern", async () => {
+Deno.test("every id prefix the code can emit is accepted by its documented resource schema", async () => {
   const src = await Deno.readTextFile(new URL("./v1/ids.ts", import.meta.url));
   const listed = src.match(/export const ID_PREFIXES = \[([^\]]+)\]/);
   assertEquals(listed !== null, true, "ID_PREFIXES not found in ids.ts");
   const prefixes = [...listed![1].matchAll(/"([a-z]+)"/g)].map((m) => m[1] as string);
   assertEquals(prefixes.length >= 7, true, `ID_PREFIXES sweep found only ${prefixes.length}`);
 
-  const pattern = new RegExp(doc.components.schemas.PrefixedId.pattern);
   // A prefix the code emits but the pattern rejects would make the published
-  // contract call Postora's own ids malformed.
-  const rejected = prefixes.filter((p) => !pattern.test(`${p}_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1`));
+  // contract call Postora's own ids malformed. New resource-specific schemas
+  // must not widen the existing resources' published PrefixedId contract.
+  const rejected = prefixes.filter((p) => {
+    const schema = p === "agent" ? doc.components.schemas.HumanAgentId : doc.components.schemas.PrefixedId;
+    return !new RegExp(schema.pattern).test(`${p}_11111111-1111-4111-8111-111111111111`);
+  });
   assertEquals(
     rejected,
     [],
-    `ids.ts can emit prefix(es) the document's PrefixedId pattern rejects: ${rejected.join(", ")}.`,
+    `ids.ts can emit prefix(es) their documented schema rejects: ${rejected.join(", ")}.`,
   );
 });
 

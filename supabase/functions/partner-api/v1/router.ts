@@ -14,6 +14,7 @@
 // routing, so an unmatched path still 404s without a Supabase client. See
 // handleV1Request and v1/router.test.ts.
 
+import { listAgentsRoute, getAgentRoute, createAgentRoute, updateAgentRoute, deleteAgentRoute } from "./agents.ts";
 import { listCommentsRoute, getCommentRoute, replyCommentRoute, hideCommentRoute, deleteCommentRoute } from "./comments.ts";
 import { getAgentConfigRoute, getAutomationHandlersRoute, getAudienceRoute, updateAgentConfigRoute, listAgentToolsRoute, upsertAgentToolRoute, deleteAgentToolRoute, setToolAccountsRoute, setAutomationHandlersRoute } from "./automation.ts";
 import { listConversationModesRoute, getConversationModeRoute, setConversationModeRoute, listAutoRepliesRoute, createAutoReplyRoute, updateAutoReplyRoute, deleteAutoReplyRoute } from "./automation.ts";
@@ -114,6 +115,21 @@ export interface V1Route {
  * asserts against.
  */
 export const V1_ROUTES: V1Route[] = [
+  {
+    pattern: "/v1/agents",
+    methods: {
+      GET: withPartnerAuth("list_agents", "A", listAgentsRoute),
+      POST: withPartnerAuth("create_agent", "C", createAgentRoute),
+    },
+  },
+  {
+    pattern: "/v1/agents/{id}",
+    methods: {
+      GET: withPartnerAuth("get_agent", "A", getAgentRoute),
+      PATCH: withPartnerAuth("update_agent", "C", updateAgentRoute),
+      DELETE: withPartnerAuth("delete_agent", "C", deleteAgentRoute),
+    },
+  },
   {
     pattern: "/v1/automation/conversation-modes",
     methods: { GET: withPartnerAuth("list_conversation_modes", "A", listConversationModesRoute) },

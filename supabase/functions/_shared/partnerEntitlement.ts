@@ -35,6 +35,11 @@ const AGENT_ACTION_FEATURE_KEYS: Record<string, typeof AGENT_PLATFORM_FEATURE_KE
 // Keys verified against useFeatureFlags.FLAG_KEYS / FLAG_KEY_MAP. Each action
 // requires ALL listed keys; pairing and registration also require Direct QR.
 export const ACTION_FEATURE_KEYS: Record<string, readonly string[]> = {
+  list_agents: ["feature_human_agent"],
+  get_agent: ["feature_human_agent"],
+  create_agent: ["feature_human_agent"],
+  update_agent: ["feature_human_agent"],
+  delete_agent: ["feature_human_agent"],
   // Manual inbox actions; comment_workflow gates the separate automation page.
   list_comments: ["feature_comment_manager"],
   get_comment: ["feature_comment_manager"],

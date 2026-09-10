@@ -42,6 +42,8 @@
  *  drift apart. Values come from the spec's section 7 endpoint table; adding
  *  one is a capability grant and a deliberate review, never a convenience. */
 export const GENERIC_SCOPES = [
+  "agents:read",
+  "agents:manage",
   "accounts:read",
   "automation:read",
   "automation:manage",

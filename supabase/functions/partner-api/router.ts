@@ -21,6 +21,11 @@ import type { LimiterRiskClass } from "../_shared/partnerApiMetering.ts";
  * drift apart — an action missing from either would be a silent policy gap.
  */
 export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
+  list_agents: ["agents:read"],
+  get_agent: ["agents:read"],
+  create_agent: ["agents:manage"],
+  update_agent: ["agents:manage"],
+  delete_agent: ["agents:manage"],
   list_conversation_modes: ["automation:read"],
   get_conversation_mode: ["automation:read"],
   set_conversation_mode: ["automation:manage"],
@@ -125,6 +130,11 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
  *  get_status reads local social_accounts fields (A); list_templates calls the
  *  Meta Graph API (B); send_template spends money and reaches a customer (C). */
 export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
+  list_agents: "A",
+  get_agent: "A",
+  create_agent: "C",
+  update_agent: "C",
+  delete_agent: "C",
   list_conversation_modes: "A",
   get_conversation_mode: "A",
   set_conversation_mode: "C",

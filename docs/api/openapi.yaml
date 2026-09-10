@@ -123,6 +123,113 @@ servers:
 # Adding a path is additive under the 0.8 drift gate and needs no
 # acknowledgement; REMOVING one, or narrowing a published field, does.
 paths:
+  /functions/v1/partner-api/v1/agents:
+    get:
+      operationId: listAgents
+      summary: List human agents
+      description: |
+        Scope `agents:read`. Risk class A.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Pages order by created_at DESC, id DESC; legacy rows without created_at are excluded.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Agent list result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentsResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    post:
+      operationId: createAgent
+      summary: Create human agent
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Mints an unconfirmed, passwordless Auth service identity, then atomically inserts agent membership and profile. Default status is offline and capacity is 10. Recovery deletes the identity only after a complete read proves provisioning did not commit; otherwise preserves it for reconciliation.
+        The service email is stable for the key and Idempotency-Key, preventing a second identity after a crashed attempt is taken over. An Auth uniqueness refusal is indeterminate and requires reconciliation. Use a fresh Idempotency-Key for each new agent.
+        Idempotency-Key is required. Hash covers action, agent ID, workspace and every submitted body field. Replays return the stored response without another mutation or Auth identity. Unknown outcomes return idempotency_indeterminate.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HumanAgentCreate' }
+      responses:
+        '201':
+          description: Agent create result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/agents/{id}:
+    get:
+      operationId: getAgent
+      summary: Get human agent
+      description: |
+        Scope `agents:read`. Risk class A.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Returns the agent profile.
+      parameters:
+        - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/HumanAgentId' } }
+      responses:
+        '200':
+          description: Agent get result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    patch:
+      operationId: updateAgent
+      summary: Update human agent
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Partial PATCH changes only submitted display_name, status or max_conversations. Unknown fields, empty patches, current_conversations and statuses outside online/away/offline return invalid_request.
+        Idempotency-Key is required. Hash covers action, agent ID, workspace and every submitted body field. Replays return the stored response without another mutation or Auth identity. Unknown outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/HumanAgentId' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HumanAgentPatch' }
+      responses:
+        '200':
+          description: Agent update result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    delete:
+      operationId: deleteAgent
+      summary: Delete human agent
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Returns 409 invalid_request when ANY retained conversation assignment references the agent, including active, ended or legacy assignments. A database NO ACTION foreign key prevents concurrent assignments from being silently detached. Assignment history retains its ON DELETE SET NULL behavior. Deletes only the agent profile; Auth identity and workspace membership remain. No request fields are accepted.
+        Idempotency-Key is required. Hash covers action, agent ID, workspace and every submitted body field. Replays return the stored response without another mutation or Auth identity. Unknown outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/HumanAgentId' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Agent delete result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentDeleteResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+
   /functions/v1/partner-api/v1/platform/workspaces:
     post:
       operationId: createWorkspace
@@ -3180,6 +3287,58 @@ components:
         success: { type: boolean, const: true }
         request_id: { type: string }
 
+    HumanAgentId:
+      type: string
+      pattern: '^agent_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+      example: agent_11111111-1111-4111-8111-111111111111
+    HumanAgentCreate:
+      type: object
+      additionalProperties: false
+      required: [display_name]
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 200 }
+        max_conversations: { type: integer, minimum: 1, maximum: 2147483647, default: 10 }
+    HumanAgentPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 200 }
+        max_conversations: { type: integer, minimum: 1, maximum: 2147483647 }
+        status: { type: string, enum: [online, away, offline] }
+    HumanAgent:
+      type: object
+      additionalProperties: false
+      required: [id, display_name, status, max_conversations, current_conversations, last_seen_at, created_at, updated_at]
+      properties:
+        id: { $ref: '#/components/schemas/HumanAgentId' }
+        display_name: { type: string }
+        status: { type: string, enum: [online, away, offline] }
+        max_conversations: { type: [integer, 'null'] }
+        current_conversations: { type: [integer, 'null'], readOnly: true }
+        last_seen_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: [string, 'null'], format: date-time }
+        updated_at: { type: [string, 'null'], format: date-time }
+    HumanAgentResponse:
+      type: object
+      required: [agent, request_id]
+      properties:
+        agent: { $ref: '#/components/schemas/HumanAgent' }
+        request_id: { type: string }
+    HumanAgentsResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/HumanAgent' } }
+        next_cursor: { type: [string, 'null'] }
+        request_id: { type: string }
+    HumanAgentDeleteResponse:
+      type: object
+      required: [success, request_id]
+      properties:
+        success: { type: boolean, const: true }
+        request_id: { type: string }
+
     GenericScope:
       type: string
       description: |
@@ -3200,6 +3359,8 @@ components:
         would turn zero capability into full webhook CRUD + SSRF amplifier).
       enum:
         - accounts:read
+        - agents:read
+        - agents:manage
         - automation:read
         - automation:manage
         - comments:read

@@ -25,9 +25,9 @@
 // `/v1` therefore publishes `messaging_cache.id`, the surrogate UUID, and the
 // text key never leaves the server. See conversations.ts.
 
-/** The prefixes §7.1 fixes. Adding one is a contract change; the OpenAPI
- *  document's `PrefixedId` pattern must be updated in the same commit. */
-export const ID_PREFIXES = ["acc", "conv", "msg", "post", "media", "evt", "wh"] as const;
+/** Each prefix needs a matching OpenAPI schema. Existing resources keep the
+ *  published PrefixedId pattern; agents use the additive HumanAgentId schema. */
+export const ID_PREFIXES = ["acc", "conv", "msg", "post", "media", "evt", "wh", "agent"] as const;
 
 export type IdPrefix = typeof ID_PREFIXES[number];
 
