@@ -16,6 +16,7 @@
 
 import { listCommentsRoute, getCommentRoute, replyCommentRoute, hideCommentRoute, deleteCommentRoute } from "./comments.ts";
 import { getAgentConfigRoute, getAutomationHandlersRoute, getAudienceRoute, updateAgentConfigRoute, listAgentToolsRoute, upsertAgentToolRoute, deleteAgentToolRoute, setToolAccountsRoute, setAutomationHandlersRoute } from "./automation.ts";
+import { listConversationModesRoute, getConversationModeRoute, setConversationModeRoute, listAutoRepliesRoute, createAutoReplyRoute, updateAutoReplyRoute, deleteAutoReplyRoute } from "./automation.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { withPartnerAuth } from "./authenticated.ts";
 import { PLATFORM_ROUTES } from "../platform/router.ts";
@@ -113,6 +114,24 @@ export interface V1Route {
  * asserts against.
  */
 export const V1_ROUTES: V1Route[] = [
+  {
+    pattern: "/v1/automation/conversation-modes",
+    methods: { GET: withPartnerAuth("list_conversation_modes", "A", listConversationModesRoute) },
+  },
+  {
+    pattern: "/v1/automation/auto-replies/{id}",
+    methods: {
+      PATCH: withPartnerAuth("update_auto_reply", "C", updateAutoReplyRoute),
+      DELETE: withPartnerAuth("delete_auto_reply", "C", deleteAutoReplyRoute),
+    },
+  },
+  {
+    pattern: "/v1/automation/auto-replies",
+    methods: {
+      GET: withPartnerAuth("list_auto_replies", "A", listAutoRepliesRoute),
+      POST: withPartnerAuth("create_auto_reply", "C", createAutoReplyRoute),
+    },
+  },
   {
     pattern: "/v1/automation/handlers",
     methods: {
@@ -230,15 +249,22 @@ export const V1_ROUTES: V1Route[] = [
     },
   },
   {
-    pattern: "/v1/conversations/{id}",
+    pattern: "/v1/conversations/{id}/mode",
     methods: {
-      GET: withPartnerAuth("get_conversation", "A", getConversation),
+      GET: withPartnerAuth("get_conversation_mode", "A", getConversationModeRoute),
+      PUT: withPartnerAuth("set_conversation_mode", "C", setConversationModeRoute),
     },
   },
   {
     pattern: "/v1/conversations/{id}/messages",
     methods: {
       GET: withPartnerAuth("list_conversation_messages", "A", listConversationMessages),
+    },
+  },
+  {
+    pattern: "/v1/conversations/{id}",
+    methods: {
+      GET: withPartnerAuth("get_conversation", "A", getConversation),
     },
   },
   // Hybrid connectors (spec §8.2). The sub-resource route is registered before

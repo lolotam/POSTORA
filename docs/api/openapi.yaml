@@ -774,6 +774,181 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/automation/conversation-modes:
+    get:
+      operationId: listConversationModes
+      summary: List conversation mode overrides
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        WhatsApp only, matching readable conversations; other table-supported platforms return unsupported_capability. Optional account_id narrows the bound set.
+        Publishes messaging_cache surrogate UUIDs as id (conv_ prefixed), never private conversation keys or owners. Modes without a matching conversation in the workspace and bound account set are omitted.
+        Keyset ordering is messaging_cache.last_message_at DESC, id DESC, not mode updated_at. Cache rows without last_message_at are excluded just as on the parent resource. Only resolvable overrides are returned.
+        Scans batches of 100 conversations up to 500 per request. A full result page uses its last returned conversation as the cursor when another override exists. At the scan budget, the cursor advances to the last scanned conversation. Sparse pages can be short or empty with a non-null cursor; continue until next_cursor is null. No offset is used.
+      parameters:
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: List conversation mode overrides.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationModesResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/conversations/{id}/mode:
+    get:
+      operationId: getConversationMode
+      summary: Read a conversation mode
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        The conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only; a bound conversation on another platform returns unsupported_capability with the same refusal as its parent resource.
+        The public id is the conversation surrogate. Owner and private conversation key are derived from the resolved row and never returned. mode is null when the agent config default is inherited.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' }, description: Published conversation surrogate id. }
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+      responses:
+        '200':
+          description: Read a conversation mode.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationModeResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    put:
+      operationId: setConversationMode
+      summary: Set or clear a conversation mode
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        The conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only; a bound conversation on another platform returns unsupported_capability with the same refusal as its parent resource.
+        The public id is the conversation surrogate. Owner and private conversation key are derived from the resolved row and never returned. mode is null when the agent config default is inherited.
+        mode accepts ai_first, human_first or human_then_ai. null or default deletes the override and returns mode null; default is never stored. Unknown fields and invalid modes return invalid_request without a mode write.
+        Idempotency-Key is required. The hash covers action, resource, platform, resolved account and owner, current binding and every body field. Replays return the stored body without another mutation. Unknown write or settlement outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' }, description: Published conversation surrogate id. }
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConversationModeUpdate' }
+      responses:
+        '200':
+          description: Set or clear a conversation mode.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationModeResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/auto-replies:
+    get:
+      operationId: listAutoReplies
+      summary: List owner-wide auto-reply rules
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        Rules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the key binds multiple accounts; it selects an active bound account in the key workspace and derives the owner from that account. No caller-supplied owner is accepted.
+        platform selects whatsapp_auto_replies for whatsapp or messenger_auto_replies for facebook/instagram. Pages order by created_at DESC, id DESC using a keyset cursor. Legacy rows with null created_at are excluded because they have no cursor position.
+      parameters:
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: List owner-wide auto-reply rules.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutoRepliesResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    post:
+      operationId: createAutoReply
+      summary: Create an owner-wide auto-reply rule
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        Rules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the key binds multiple accounts; it selects an active bound account in the key workspace and derives the owner from that account. No caller-supplied owner is accepted.
+        Writes user_id from the resolved account, matching both webhook readers. Required fields are name, rule_type and reply_message. Optional fields follow table defaults.
+        Idempotency-Key is required. The hash covers action, resource, platform, resolved account and owner, current binding and every body field. Replays return the stored body without another mutation. Unknown write or settlement outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AutoReplyCreate' }
+      responses:
+        '200':
+          description: Create an owner-wide auto-reply rule.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutoReplyResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/auto-replies/{id}:
+    patch:
+      operationId: updateAutoReply
+      summary: Update an owner-wide auto-reply rule
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        Rules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the key binds multiple accounts; it selects an active bound account in the key workspace and derives the owner from that account. No caller-supplied owner is accepted.
+        A rule outside the resolved owner and platform returns resource_not_found before mutation. Both the lookup and update are owner-scoped. PATCH changes only submitted fields; unknown fields, invalid values and an empty patch return invalid_request.
+        Idempotency-Key is required. The hash covers action, resource, platform, resolved account and owner, current binding and every body field. Replays return the stored body without another mutation. Unknown write or settlement outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: Auto-reply rule UUID. }
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AutoReplyUpdate' }
+      responses:
+        '200':
+          description: Update an owner-wide auto-reply rule.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutoReplyResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    delete:
+      operationId: deleteAutoReply
+      summary: Delete an owner-wide auto-reply rule
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        Rules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the key binds multiple accounts; it selects an active bound account in the key workspace and derives the owner from that account. No caller-supplied owner is accepted.
+        A rule outside the resolved owner and platform returns resource_not_found before mutation. Both the lookup and delete are owner-scoped. No request body fields are accepted.
+        Idempotency-Key is required. The hash covers action, resource, platform, resolved account and owner, current binding and every body field. Replays return the stored body without another mutation. Unknown write or settlement outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: Auto-reply rule UUID. }
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Delete an owner-wide auto-reply rule.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutoReplyDeleteResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/automation/handlers:
     get:
       operationId: getAutomationHandlers
@@ -2704,6 +2879,98 @@ components:
         success: { type: boolean, const: true }
         platform_comment_id: { type: string }
         request_id: { type: string }
+
+    ConversationMode:
+      type: object
+      required: [id, platform, mode, updated_at]
+      properties:
+        id: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' }
+        platform: { type: string, enum: [whatsapp] }
+        mode: { type: [string, 'null'], enum: [ai_first, human_first, human_then_ai, null] }
+        updated_at: { type: [string, 'null'], format: date-time }
+    ConversationModeResponse:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/ConversationMode'
+        - type: object
+          required: [request_id]
+          properties:
+            request_id: { type: string }
+    ConversationModesResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/ConversationMode' } }
+        next_cursor: { type: [string, 'null'] }
+        request_id: { type: string }
+    ConversationModeUpdate:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode: { type: [string, 'null'], enum: [ai_first, human_first, human_then_ai, default, null] }
+    AutoReplyUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        rule_type: { type: string, enum: [away, keyword] }
+        reply_message: { type: string, minLength: 1 }
+        keywords: { type: [array, 'null'], items: { type: string } }
+        is_active: { type: boolean }
+        schedule_start:
+          type: [string, 'null']
+          pattern: '^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$'
+        schedule_end:
+          type: [string, 'null']
+          pattern: '^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$'
+        schedule_days:
+          type: [array, 'null']
+          items: { type: integer, minimum: 0, maximum: 6 }
+          description: Sunday is 0 and Saturday is 6. Times use the webhook server clock.
+    AutoReplyCreate:
+      allOf:
+        - $ref: '#/components/schemas/AutoReplyUpdate'
+        - type: object
+          required: [name, rule_type, reply_message]
+    AutoReply:
+      type: object
+      additionalProperties: false
+      required: [id, platform, name, rule_type, reply_message, keywords, is_active, schedule_start, schedule_end, schedule_days, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string, enum: [whatsapp, facebook, instagram] }
+        name: { type: string }
+        rule_type: { type: string, enum: [away, keyword] }
+        reply_message: { type: string }
+        keywords: { type: [array, 'null'], items: { type: string } }
+        is_active: { type: [boolean, 'null'] }
+        schedule_start: { type: [string, 'null'] }
+        schedule_end: { type: [string, 'null'] }
+        schedule_days: { type: [array, 'null'], items: { type: integer } }
+        created_at: { type: [string, 'null'], format: date-time }
+        updated_at: { type: [string, 'null'], format: date-time }
+    AutoReplyResponse:
+      type: object
+      required: [rule, request_id]
+      properties:
+        rule: { $ref: '#/components/schemas/AutoReply' }
+        request_id: { type: string }
+    AutoRepliesResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AutoReply' } }
+        next_cursor: { type: [string, 'null'] }
+        request_id: { type: string }
+    AutoReplyDeleteResponse:
+      type: object
+      required: [success, request_id]
+      properties:
+        success: { type: boolean, const: true }
+        request_id: { type: string }
+
 
     AutomationHandlersUpdate:
       type: object

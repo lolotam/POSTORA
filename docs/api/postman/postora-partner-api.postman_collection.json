@@ -175,6 +175,92 @@
             "description": "Ordered by `last_message_at` descending, then by id — the pair, not\nthe timestamp alone, because timestamps collide during history sync\nand a cursor on the timestamp alone would either re-emit a whole\ncolliding group or drop all but one of it.\n\nConversations with no `last_message_at` are excluded: that column is\nthe cursor's sort key.\n\nDefault scope is ALL bound accounts, each row labelled with\n`account_id` (spec D11) — never an implicit single-account default,\nwhich would change meaning the day"
           },
           "response": []
+        },
+        {
+          "name": "Read a conversation mode",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/mode",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "mode"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nThe conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only; a"
+          },
+          "response": []
+        },
+        {
+          "name": "Set or clear a conversation mode",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/mode",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "mode"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nThe conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only;",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"ai_first\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
         }
       ]
     },
@@ -867,6 +953,49 @@
       "name": "automation",
       "item": [
         {
+          "name": "Create an owner-wide auto-reply rule",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/auto-replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "auto-replies"
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nRules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"rule_type\": \"away\",\n  \"reply_message\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
           "name": "Create or update a tool at its UUID",
           "request": {
             "method": "PUT",
@@ -958,6 +1087,47 @@
           "response": []
         },
         {
+          "name": "Delete an owner-wide auto-reply rule",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/auto-replies/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "auto-replies",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nRules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the"
+          },
+          "response": []
+        },
+        {
           "name": "List account-owned agent tools",
           "request": {
             "method": "GET",
@@ -1012,6 +1182,64 @@
               ]
             },
             "description": "Scope `automation:read`. Risk class B (conservative published contract,\neven though this reads a local table). Requires the agent setup feature\nflag for platform. Only facebook, instagram, threads and youtube are\naccepted; missing or unsupported platform returns invalid_request before\nentitlement or audience queries. Filters social_contacts by bound\nsocial_account_id, not its nullable workspace_id. Accounts are resolved\ninside the key workspace and requested platform. An explicit unbound or\nmism"
+          },
+          "response": []
+        },
+        {
+          "name": "List conversation mode overrides",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/conversation-modes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "conversation-modes"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nWhatsApp only, matching readable conversations; other table-supported platforms return unsupported_capability. Optional account_id narrows the bound set.\nPublishes messaging_cache surrogate UU"
+          },
+          "response": []
+        },
+        {
+          "name": "List owner-wide auto-reply rules",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/auto-replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "auto-replies"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nRules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the k"
           },
           "response": []
         },
@@ -1115,6 +1343,56 @@
             "body": {
               "mode": "raw",
               "raw": "{\n  \"social_account_ids\": [\n    \"550e8400-e29b-41d4-a716-446655440000\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update an owner-wide auto-reply rule",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/auto-replies/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "auto-replies",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nRules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"rule_type\": \"away\",\n  \"reply_message\": \"string\",\n  \"keywords\": [\n    \"string\"\n  ],\n  \"is_active\": true,\n  \"schedule_start\": \"string\",\n  \"schedule_end\": \"string\",\n  \"schedule_days\": [\n    0\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"

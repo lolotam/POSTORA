@@ -13,7 +13,14 @@ export const AGENT_PLATFORM_FEATURE_KEYS: Record<string, readonly string[]> = {
   threads: ["feature_msg_threads"],
   youtube: ["feature_youtube_comments"],
 };
+// These tables predate threads/youtube agent support. Reject their invalid
+// platform grammar at the entitlement boundary, before any database query.
+const RULE_ACTIONS = new Set([
+  "list_conversation_modes", "get_conversation_mode", "set_conversation_mode",
+  "list_auto_replies", "create_auto_reply", "update_auto_reply", "delete_auto_reply",
+]);
 const AGENT_ACTION_FEATURE_KEYS: Record<string, typeof AGENT_PLATFORM_FEATURE_KEYS> = {
+  ...Object.fromEntries([...RULE_ACTIONS].map((action) => [action, AGENT_PLATFORM_FEATURE_KEYS])),
   get_automation_handlers: AGENT_PLATFORM_FEATURE_KEYS,
   set_automation_handlers: AGENT_PLATFORM_FEATURE_KEYS,
   get_audience: AGENT_PLATFORM_FEATURE_KEYS,
@@ -60,7 +67,7 @@ export async function assertEntitled(
   platform?: string,
 ): Promise<Response | null> {
   const refuse = async (
-    code: "feature_not_entitled" | "internal_error",
+    code: "feature_not_entitled" | "internal_error" | "invalid_request",
     reason: string,
     missing?: string[],
   ): Promise<Response> => {
@@ -82,6 +89,9 @@ export async function assertEntitled(
 
   // Own-property lookup prevents Object.prototype names from becoming policy.
   const agentPolicy = Object.hasOwn(AGENT_ACTION_FEATURE_KEYS, action) ? AGENT_ACTION_FEATURE_KEYS[action] : null;
+  if (RULE_ACTIONS.has(action) && platform && !["whatsapp", "facebook", "instagram"].includes(platform)) {
+    return await refuse("invalid_request", "unsupported_rule_platform");
+  }
   // No default platform: a per-platform action whose caller omits one would
   // otherwise be checked against whichever platform the default names, granting
   // on a flag the request never concerned. Absent is refused like an unknown one.

@@ -24,6 +24,8 @@ export function agentFixture(opts: { failTable?: string; writeFails?: boolean; c
     ai_agent_tool_accounts: opts.sharedOutside ? [{ tool_id: TOOL_ID, social_account_id: OTHER_ID }] : [],
     ai_agent_allowed_models: [{ provider: "openai", model_id: "approved", is_active: true }],
     social_contacts: [],
+    messaging_cache: [], ai_conversation_modes: [], whatsapp_auto_replies: [], messenger_auto_replies: [],
+    whatsapp_messages: [],
     system_logs: [], partner_api_usage: [], partner_api_idempotency: [],
   };
   const matches = (row: Row, url: URL) => [...url.searchParams].every(([key, value]) => {
@@ -34,25 +36,29 @@ export function agentFixture(opts: { failTable?: string; writeFails?: boolean; c
     }
     if (value.startsWith("eq.")) return key === "key_hash" || String(row[key]) === value.slice(3);
     if (value === "is.null") return row[key] == null;
+    if (value === "not.is.null") return row[key] != null;
     if (value.startsWith("in.(")) return value.slice(4, -1).split(",").map((item) => item.replaceAll('"', "")).includes(String(row[key]));
     return true;
   });
-  let settled: Row | undefined;
-  let originalHash: unknown;
+  const settlements = new Map<string, Row>();
+  const hashes = new Map<string, unknown>();
   const admin = createClient("https://database.example", "test", { auth: { persistSession: false }, global: { fetch: async (input, init) => {
     const url = new URL(String(input)); const table = url.pathname.split("/").at(-1)!;
     const method = init?.method ?? "GET";
     if (table === "consume_partner_rate_v2") return Response.json({ allowed: true, remaining: 59, reset_seconds: 40 });
     if (table === "claim_partner_idempotency") {
       const row = JSON.parse(String(init?.body)); claims.push(row);
+      const key = String(row.p_idempotency_key);
+      const settled = settlements.get(key);
+      const originalHash = hashes.get(key);
       const outcome = originalHash && originalHash !== row.p_request_hash ? "conflict" : opts.claim ?? (settled ? "replay" : "claimed");
-      originalHash ??= row.p_request_hash;
+      if (!hashes.has(key)) hashes.set(key, row.p_request_hash);
       return Response.json({ outcome, attempt_token: "attempt-1", http_status: settled?.http_status ?? 200, response_body: settled?.response_body ?? { stored: true } });
     }
     if (method !== "GET" && method !== "HEAD") {
       const row = init?.body ? JSON.parse(String(init.body)) : {};
       writes.push({ table, row, url, method });
-      if (opts.writeFails && ["ai_agent_configs", "patch_account_metadata_in_workspace"].includes(table)) return Response.json({ message: "private write failure" }, { status: 500 });
+      if (opts.writeFails && ["ai_agent_configs", "patch_account_metadata_in_workspace", "ai_conversation_modes", "whatsapp_auto_replies", "messenger_auto_replies"].includes(table)) return Response.json({ message: "private write failure" }, { status: 500 });
       if (table === "patch_account_metadata_in_workspace") {
         const account = rows.social_accounts.find((stored) => stored.id === row.p_account_id && stored.workspace_id === row.p_workspace_id);
         if (!account) return Response.json({ message: "Account not found or access denied" }, { status: 400 });
@@ -61,7 +67,7 @@ export function agentFixture(opts: { failTable?: string; writeFails?: boolean; c
       }
       if (table === "partner_api_idempotency") {
         if (opts.settleFails && row.state === "completed") return Response.json({ message: "private settlement failure" }, { status: 500 });
-        settled = row;
+        settlements.set(url.searchParams.get("idempotency_key")!.slice(3), row);
         return new Response(null, { status: 204 });
       }
       if (table === "upsert_connector_credential_secret") return Response.json([{ secret_id: "vault-id", configured_fields: Object.keys(row.p_secret as Row) }]);
@@ -71,8 +77,19 @@ export function agentFixture(opts: { failTable?: string; writeFails?: boolean; c
       const affected = rows[table].filter((stored) => matches(stored, url));
       if (method === "DELETE") rows[table] = rows[table].filter((stored) => !matches(stored, url));
       else if (method === "PATCH") affected.forEach((stored) => Object.assign(stored, row));
-      else rows[table].push(row);
-      const selected = method === "PATCH" ? affected : rows[table].filter((stored) => matches(stored, url));
+      else if (method === "POST" && ["ai_conversation_modes", "whatsapp_auto_replies", "messenger_auto_replies"].includes(table)) {
+        const conflict = url.searchParams.get("on_conflict")?.split(",");
+        const existing = conflict && rows[table].find((stored) => conflict.every((column) => stored[column] === row[column]));
+        if (existing) Object.assign(existing, row);
+        else rows[table].push({ id: crypto.randomUUID(), created_at: "2026-09-10T00:00:00Z", updated_at: "2026-09-10T00:00:00Z", is_active: true, ...row });
+      } else rows[table].push(row);
+      let selected = method === "PATCH" ? affected : rows[table].filter((stored) => matches(stored, url));
+      if (["ai_conversation_modes", "whatsapp_auto_replies", "messenger_auto_replies"].includes(table) && method === "POST") selected = selected.filter((stored) => Object.entries(row).every(([key, value]) => JSON.stringify(stored[key]) === JSON.stringify(value)));
+      if (url.searchParams.has("select") && ["ai_conversation_modes", "whatsapp_auto_replies", "messenger_auto_replies"].includes(table)) {
+        const columns = url.searchParams.get("select")!.split(",").map((column) => column.trim());
+        assert(!columns.includes("*"), "Rule writes must select explicit fields");
+        selected = selected.map((stored) => Object.fromEntries(columns.map((column) => [column, stored[column]])));
+      }
       if (table === "system_logs" || table === "partner_api_usage") return new Response(null, { status: 204 });
       const accept = new Headers(init?.headers).get("accept") ?? "";
       if (accept.includes("vnd.pgrst.object") && !selected.length) return Response.json({ code: "PGRST116", message: "No rows" }, { status: 406 });
@@ -92,8 +109,9 @@ export function agentFixture(opts: { failTable?: string; writeFails?: boolean; c
       return 0;
     });
     selected = selected.slice(0, Number(url.searchParams.get("limit") ?? 1000));
-    if (table === "social_contacts") {
-      const columns = url.searchParams.get("select")!.split(",");
+    if (["social_contacts", "messaging_cache", "ai_conversation_modes", "whatsapp_auto_replies", "messenger_auto_replies"].includes(table)) {
+      const columns = url.searchParams.get("select")!.split(",").map((column) => column.trim());
+      assert(!columns.includes("*"), "Resource reads must select explicit fields");
       selected = selected.map((row) => Object.fromEntries(columns.map((column) => [column, row[column]])));
     }
     return Response.json(selected);

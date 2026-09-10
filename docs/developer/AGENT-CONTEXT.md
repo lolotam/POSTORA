@@ -43,6 +43,10 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 
 | Method | Path | Scope | Limiter class | What it does |
 |---|---|---|---|---|
+| `PATCH` | `/v1/automation/auto-replies/{id}` | `automation:manage` | C | Update an owner-wide auto-reply rule |
+| `DELETE` | `/v1/automation/auto-replies/{id}` | `automation:manage` | C | Delete an owner-wide auto-reply rule |
+| `GET` | `/v1/automation/auto-replies` | `automation:read` | A | List owner-wide auto-reply rules |
+| `POST` | `/v1/automation/auto-replies` | `automation:manage` | C | Create an owner-wide auto-reply rule |
 | `GET` | `/v1/automation/handlers` | `automation:read` | A | Read automation handlers for an account |
 | `PUT` | `/v1/automation/handlers` | `automation:manage` | C | Update only submitted automation handler settings |
 | `PUT` | `/v1/automation/tools/{id}` | `automation:manage` | C | Create or update a tool at its UUID |
@@ -65,8 +69,10 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 | `POST` | `/v1/whatsapp/numbers` | `whatsapp:numbers.manage` | C | Register a Direct QR WhatsApp number |
 | `GET` | `/v1/whatsapp/numbers/{id}` | `whatsapp:numbers.read` | A | Get one bound WhatsApp number |
 | `GET` | `/v1/conversations` | `conversations:read` | A | List WhatsApp conversations across the bound accounts |
-| `GET` | `/v1/conversations/{id}` | `conversations:read` | A | Get one conversation |
+| `GET` | `/v1/conversations/{id}/mode` | `automation:read` | A | Read a conversation mode |
+| `PUT` | `/v1/conversations/{id}/mode` | `automation:manage` | C | Set or clear a conversation mode |
 | `GET` | `/v1/conversations/{id}/messages` | `messages:read` | A | List the messages in one conversation |
+| `GET` | `/v1/conversations/{id}` | `conversations:read` | A | Get one conversation |
 | `POST` | `/v1/connectors/{type}/connect-link` | `connectors:manage` | C | Mint a link that connects a third-party account |
 | `GET` | `/v1/connectors` | `connectors:read` | A | List the connected tools this key can reach |
 | `POST` | `/v1/media` | `media:write` | C | Upload a file for later use in a message |

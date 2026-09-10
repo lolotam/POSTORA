@@ -41,7 +41,13 @@ import type { V1AuthedContext } from "./authenticated.ts";
 
 /** The only platform whose per-message rows this surface can read. See the
  *  header: this is a data-model fact, not a policy choice. */
-const READABLE_PLATFORM = "whatsapp";
+export const READABLE_PLATFORM = "whatsapp";
+
+export function unreadableConversation(requestId: string): Response {
+  return v1ErrorResponse("unsupported_capability", requestId, {
+    message: `Conversations are readable for ${READABLE_PLATFORM} accounts only`,
+  });
+}
 
 const CONVERSATION_COLUMNS =
   "id, social_account_id, platform, participant_name, last_message_preview, " +
@@ -109,9 +115,7 @@ async function accountFilterFrom(
   if (account && account.platform !== READABLE_PLATFORM) {
     return {
       ok: false,
-      res: v1ErrorResponse("unsupported_capability", requestId, {
-        message: `Conversations are readable for ${READABLE_PLATFORM} accounts only`,
-      }),
+      res: unreadableConversation(requestId),
     };
   }
   return selected;
@@ -184,7 +188,7 @@ export async function listConversations(
  * checked the binding less strictly than its parent would be a tenancy hole
  * reachable by appending one path segment.
  */
-async function loadBoundConversation(
+export async function loadBoundConversation(
   authed: V1AuthedContext,
   rawId: string,
 ): Promise<
@@ -206,7 +210,9 @@ async function loadBoundConversation(
 
   const { data, error } = await admin
     .from("messaging_cache")
-    .select(CONVERSATION_COLUMNS)
+    // Private persistence keys are used only by sub-resources. Presenters
+    // explicitly whitelist public fields and never spread this row.
+    .select(CONVERSATION_COLUMNS + ", user_id, conversation_id")
     .eq("id", conversationId)
     .eq("workspace_id", record.workspaceId)
     // The same exclusion the listing applies, for a different reason. There
@@ -233,9 +239,7 @@ async function loadBoundConversation(
     // has no per-message table for it. See the file header.
     return {
       ok: false,
-      res: v1ErrorResponse("unsupported_capability", requestId, {
-        message: `Conversations are readable for ${READABLE_PLATFORM} accounts only`,
-      }),
+      res: unreadableConversation(requestId),
     };
   }
   return { ok: true, row: data };
