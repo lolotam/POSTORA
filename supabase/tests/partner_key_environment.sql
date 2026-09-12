@@ -595,6 +595,53 @@ BEGIN
   RAISE NOTICE 'PASS E8c: matching-environment issue and revoke succeed';
 END $e8c$;
 
+-- E8e — provisioning rechecks the acting platform key in SQL: a staging
+-- key provisioning a production tenant, and a caller that names no key at
+-- all, both raise no_data_found. The door checked the key once; a key
+-- revoked or swapped between that check and this statement must not
+-- provision, and the function runs under service_role where nothing else
+-- would stop it.
+DO $e8e$
+DECLARE
+  v_pr    uuid := (SELECT id FROM e8_ids WHERE k='principal');
+  v_owner uuid := (SELECT id FROM e8_ids WHERE k='owner');
+  v_pstag uuid := (SELECT id FROM e8_ids WHERE k='plat_stag');
+BEGIN
+  PERFORM pg_temp.act_as(v_owner);
+  BEGIN
+    PERFORM public.provision_partner_tenant(
+      p_principal_id => v_pr, p_owner_user_id => v_owner,
+      p_workspace_name => 'e8e cross-env', p_external_ref => 'e8e-1',
+      p_connection_name => 'e8e', p_key_name => 'e8e bootstrap',
+      p_key_prefix => 'pk_live_e8e1',
+      p_key_hash => 'a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7',
+      p_scopes => ARRAY['messages:send'], p_environment => 'production',
+      p_platform_key_id => v_pstag, p_request_id => 'req-e8e');
+    RAISE EXCEPTION 'E8e: a staging platform key provisioned a production tenant';
+  EXCEPTION WHEN no_data_found THEN
+    NULL;
+  END;
+  BEGIN
+    PERFORM public.provision_partner_tenant(
+      p_principal_id => v_pr, p_owner_user_id => v_owner,
+      p_workspace_name => 'e8e no key', p_external_ref => 'e8e-2',
+      p_connection_name => 'e8e', p_key_name => 'e8e bootstrap',
+      p_key_prefix => 'pk_live_e8e2',
+      p_key_hash => 'b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8',
+      p_scopes => ARRAY['messages:send'], p_environment => 'production',
+      p_platform_key_id => NULL, p_request_id => 'req-e8e2');
+    RAISE EXCEPTION 'E8e: provisioning without an acting platform key was accepted';
+  EXCEPTION WHEN no_data_found THEN
+    NULL;
+  END;
+  PERFORM pg_temp.must(
+    NOT EXISTS (SELECT 1 FROM public.partner_provisioned_workspaces p
+                 JOIN public.workspaces w ON w.id = p.workspace_id
+                WHERE w.name IN ('e8e cross-env', 'e8e no key')),
+    'E8e no tenant was provisioned by a refused call');
+  RAISE NOTICE 'PASS E8e: provisioning rechecks the acting platform key in SQL';
+END $e8e$;
+
 -- E8d — exactly one of each estate function exists. Dropping a DEFAULT
 -- keeps the type list, but any CREATE that adds an overload (rather than
 -- CREATE OR REPLACE) makes the handler's named-parameter call ambiguous:

@@ -97,3 +97,25 @@ $$;
 
 create index if not exists idx_assignment_history_workspace_conversation
   on public.whatsapp_assignment_history (workspace_id, conversation_id);
+
+-- The INSERT policy on whatsapp_assignment_history only checked
+-- performed_by = auth.uid(). With workspace_id now a column that the partner
+-- assignment-history endpoint filters on, that let any authenticated user
+-- insert a history row attributed to an arbitrary workspace, which the
+-- endpoint would then serve as that workspace's history. A row may name a
+-- workspace only when its author is a member of it; unattributed legacy
+-- rows (NULL) stay insertable as before.
+drop policy if exists "Users can create history entries" on public.whatsapp_assignment_history;
+create policy "Users can create history entries"
+  on public.whatsapp_assignment_history for insert to authenticated
+  with check (
+    auth.uid() = performed_by
+    and (
+      workspace_id is null
+      or exists (
+        select 1 from public.workspace_members m
+        where m.workspace_id = whatsapp_assignment_history.workspace_id
+          and m.user_id = auth.uid()
+      )
+    )
+  );

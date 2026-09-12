@@ -315,6 +315,23 @@ BEGIN
       USING ERRCODE = 'check_violation';
   END IF;
 
+  -- The acting platform key is rechecked HERE, not only at the door: a key
+  -- revoked between authenticatePlatformKey() and this statement, or one
+  -- belonging to another principal or environment, must not provision a
+  -- tenant. Answered as not-found so nothing is enumerable. The parameter
+  -- keeps its DEFAULT NULL only so the signature (and its REVOKE/GRANT
+  -- lines) stays put; a NULL is refused all the same.
+  IF p_platform_key_id IS NULL OR NOT EXISTS (
+    SELECT 1 FROM public.partner_platform_keys pk
+     WHERE pk.id = p_platform_key_id
+       AND pk.principal_id = p_principal_id
+       AND pk.environment = p_environment
+       AND pk.revoked_at IS NULL
+  ) THEN
+    RAISE EXCEPTION 'no such platform key for this principal and environment'
+      USING ERRCODE = 'no_data_found';
+  END IF;
+
   INSERT INTO public.workspaces (name, owner_id, is_personal)
   VALUES (p_workspace_name, p_owner_user_id, false)
   RETURNING id INTO v_workspace_id;

@@ -39,7 +39,7 @@ Read these before the reference. Each one is a mistake an implementation makes w
 
 ## Endpoints (served today)
 
-Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "Limiter class" is D7: A = a bounded local read that still answers during a rate-limiter outage; B and C refuse (503 `limiter_unavailable`, retryable) because they reach a provider or change state. The legacy template scopes remain capability-pinned. Bootstrap keys also reserve `whatsapp:numbers.read` and `whatsapp:numbers.manage` for the later number routes; those routes are not served in this slice.
+Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "Limiter class" is D7: A = a bounded local read that still answers during a rate-limiter outage; B and C refuse (503 `limiter_unavailable`, retryable) because they reach a provider or change state. The legacy template scopes remain capability-pinned.
 
 | Method | Path | Scope | Limiter class | What it does |
 |---|---|---|---|---|

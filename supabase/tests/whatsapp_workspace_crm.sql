@@ -2,7 +2,7 @@ create extension if not exists pgtap with schema extensions;
 begin;
 
 set local search_path = public, extensions, auth, pg_temp;
-select plan(60);
+select plan(61);
 
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -626,6 +626,17 @@ select throws_ok(
        where id = '63000000-0000-0000-0000-000000000001'$sql$,
   '23503', null,
   'deleting an agent with an active assignment is refused'
+);
+
+-- 61. The history INSERT policy binds a named workspace to the author's
+-- membership (20260910140000): performed_by alone let any user stamp any
+-- workspace_id, which the partner assignment-history endpoint then served.
+select ok(
+  (select with_check from pg_policies
+    where schemaname = 'public' and tablename = 'whatsapp_assignment_history'
+      and policyname = 'Users can create history entries' and cmd = 'INSERT')
+    ~* 'workspace_members',
+  'history INSERT policy requires membership of the named workspace'
 );
 
 select * from finish();
