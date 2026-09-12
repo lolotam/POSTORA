@@ -4,7 +4,7 @@
 export interface Field {
   key: string;
   label: string;
-  kind: "text" | "secret" | "url";
+  kind: "text" | "secret" | "url" | "hidden";
   required: boolean;
   help: string;
 }
@@ -179,6 +179,14 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
         required: false,
         help:
           "JSON mapping EVERY allowed table to the columns the agent may read, e.g. {\"products\":[\"id\",\"price\"],\"orders\":\"*\"}. Once set it replaces the single list above. Use \"*\" for a table you do not want to narrow: a table this map omits is refused, and a table mapped to an empty list is refused too. The picker below fills this in for you.",
+      },
+      {
+        key: "column_catalog",
+        label: "Column catalog",
+        kind: "hidden",
+        required: false,
+        help:
+          "The tables and columns the picker last read from the project, kept so an edit can show every column with the saved ones ticked before the key is re-entered. Written by the picker; never read by the adapter.",
       },
       {
         key: "order_by",

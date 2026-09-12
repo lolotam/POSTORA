@@ -2291,7 +2291,10 @@ function DatabaseConnectorsEditor({
                   {/* Registry-driven credential fields: exactly what
                       connectorDefinition(type).credentials declares, so a new
                       registry type is configurable here with no form change. */}
-                  {safeCredentialFields(form.connector_type).map((field) => {
+                  {/* A hidden field is state the picker keeps (the column catalog):
+                      it rides in `credentials` like any setting but is never
+                      typed by hand. */}
+                  {safeCredentialFields(form.connector_type).filter((field) => field.kind !== "hidden").map((field) => {
                     const inputId = `connector-credential-${field.key}`;
                     const isStoredSecret =
                       field.kind === "secret" &&
@@ -2344,6 +2347,7 @@ function DatabaseConnectorsEditor({
                       tableAllowList={form.credentials.table_allow_list ?? ""}
                       selectColumns={form.credentials.select_columns ?? ""}
                       columnMap={form.credentials.column_map ?? ""}
+                      columnCatalog={form.credentials.column_catalog ?? ""}
                       onPatch={(patch) =>
                         setForm((prev) => ({
                           ...prev,
