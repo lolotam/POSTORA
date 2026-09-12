@@ -110,6 +110,10 @@ CREATE TABLE public.partner_provisioned_workspaces (
   workspace_id      UUID PRIMARY KEY REFERENCES public.workspaces(id) ON DELETE CASCADE,
   principal_id      UUID NOT NULL REFERENCES public.partner_principals(id) ON DELETE RESTRICT,
   owner_user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE RESTRICT,
+  -- Which door provisioned this workspace. Estate checks join on it: a
+  -- staging platform key must neither issue nor revoke production keys, so
+  -- the environment travels with the estate link, not just the key.
+  environment       TEXT NOT NULL CHECK (environment IN ('production', 'staging')),
   external_ref      TEXT,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (principal_id, external_ref)
@@ -319,8 +323,8 @@ BEGIN
   VALUES (v_workspace_id, p_owner_user_id, 'owner');
 
   INSERT INTO public.partner_provisioned_workspaces
-    (workspace_id, principal_id, owner_user_id, external_ref)
-  VALUES (v_workspace_id, p_principal_id, p_owner_user_id, p_external_ref);
+    (workspace_id, principal_id, owner_user_id, environment, external_ref)
+  VALUES (v_workspace_id, p_principal_id, p_owner_user_id, p_environment, p_external_ref);
 
   -- The placeholder the key binds to. pending_ id and empty token are filled
   -- in by pairing; is_active stays false until reconciliation activates it.
@@ -437,11 +441,11 @@ CREATE OR REPLACE FUNCTION public.issue_partner_key_in_estate(
   p_key_prefix        TEXT,
   p_key_hash          TEXT,
   p_scopes            TEXT[],
+  p_platform_key_id   UUID,
   p_rate_limit_per_min INTEGER DEFAULT 60,
   p_monthly_quota     INTEGER DEFAULT NULL,
   p_expires_at        TIMESTAMPTZ DEFAULT NULL,
   p_environment       TEXT DEFAULT 'production',
-  p_platform_key_id   UUID DEFAULT NULL,
   p_request_id        TEXT DEFAULT NULL
 ) RETURNS UUID
 LANGUAGE plpgsql
@@ -451,13 +455,25 @@ AS $$
 DECLARE
   v_key_id UUID;
 BEGIN
-  -- Estate check first: the workspace must belong to the calling principal.
-  -- Answered as not-found, so workspace ids are not enumerable across
-  -- principals.
+  -- Estate check first: the workspace must belong to the calling principal
+  -- AND the acting platform key must be a live key of that principal in the
+  -- SAME environment as the workspace and the key being issued. A staging
+  -- platform key therefore cannot mint a production key, even in its own
+  -- principal's estate. Answered as not-found in every mismatch branch, so
+  -- workspace ids, key ids and environments are not enumerable across
+  -- principals. p_platform_key_id is REQUIRED (no default): audit-only
+  -- metadata that callers may omit is exactly how the cross-environment mint
+  -- survived review.
   IF NOT EXISTS (
-    SELECT 1 FROM public.partner_provisioned_workspaces p
-     WHERE p.workspace_id = p_workspace_id
-       AND p.principal_id = p_principal_id
+    SELECT 1
+      FROM public.partner_provisioned_workspaces w
+      JOIN public.partner_platform_keys pk ON pk.id = p_platform_key_id
+     WHERE w.workspace_id = p_workspace_id
+       AND w.principal_id = p_principal_id
+       AND w.environment = p_environment
+       AND pk.principal_id = p_principal_id
+       AND pk.environment = p_environment
+       AND pk.revoked_at IS NULL
   ) THEN
     RAISE EXCEPTION 'no such workspace in this principal''s estate'
       USING ERRCODE = 'no_data_found';
@@ -534,10 +550,10 @@ END;
 $$;
 
 REVOKE ALL ON FUNCTION public.issue_partner_key_in_estate(
-  UUID, UUID, UUID, TEXT, TEXT, TEXT, TEXT[], INTEGER, INTEGER, TIMESTAMPTZ, TEXT, UUID, TEXT
+  UUID, UUID, UUID, TEXT, TEXT, TEXT, TEXT[], UUID, INTEGER, INTEGER, TIMESTAMPTZ, TEXT, TEXT
 ) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.issue_partner_key_in_estate(
-  UUID, UUID, UUID, TEXT, TEXT, TEXT, TEXT[], INTEGER, INTEGER, TIMESTAMPTZ, TEXT, UUID, TEXT
+  UUID, UUID, UUID, TEXT, TEXT, TEXT, TEXT[], UUID, INTEGER, INTEGER, TIMESTAMPTZ, TEXT, TEXT
 ) TO service_role;
 
 -- ===========================================================================
@@ -557,7 +573,7 @@ CREATE OR REPLACE FUNCTION public.revoke_partner_key_in_estate(
   p_principal_id UUID,
   p_key_id       UUID,
   p_reason       TEXT,
-  p_platform_key_id UUID DEFAULT NULL,
+  p_platform_key_id UUID,
   p_request_id   TEXT DEFAULT NULL
 ) RETURNS BOOLEAN
 LANGUAGE plpgsql
@@ -568,12 +584,22 @@ DECLARE
   v_updated      INTEGER;
   v_workspace_id UUID;
 BEGIN
+  -- The acting platform key must be a live key of the calling principal in
+  -- the SAME environment as the key being revoked: a staging platform key
+  -- cannot revoke production keys, even in its own principal's estate.
+  -- p_platform_key_id is REQUIRED (no default) for the same reason as in
+  -- issue_partner_key_in_estate. A mismatch revokes nothing and returns
+  -- false, so key ids and environments are not enumerable across principals.
   UPDATE public.partner_api_keys AS k
   SET revoked_at = now(), revoked_reason = p_reason
   FROM public.partner_provisioned_workspaces AS p
+  JOIN public.partner_platform_keys AS pk ON pk.id = p_platform_key_id
   WHERE k.id = p_key_id
     AND k.workspace_id = p.workspace_id
     AND p.principal_id = p_principal_id
+    AND k.environment = pk.environment
+    AND pk.principal_id = p_principal_id
+    AND pk.revoked_at IS NULL
     AND k.revoked_at IS NULL
   RETURNING k.workspace_id INTO v_workspace_id;
 
