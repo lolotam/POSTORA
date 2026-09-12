@@ -23,11 +23,12 @@ const deleteTool = { mutate: vi.fn(), isPending: false };
 let tools: AiAgentTool[] = [];
 let links: Array<{ tool_id: string; social_account_id: string }> = [];
 let linksReady = true;
+let linksError: unknown = null;
 const setToolAccounts = { mutateAsync: vi.fn().mockResolvedValue({}) };
 
 vi.mock("@/hooks/useAiAgentTools", () => ({
   useAiAgentTools: () => ({ tools, isLoading: false, upsertTool, deleteTool }),
-  useAiToolAccountLinks: () => ({ links, linksReady, linksError: null, setToolAccounts }),
+  useAiToolAccountLinks: () => ({ links, linksReady, linksError, setToolAccounts }),
 }));
 
 const ACCOUNTS = [
@@ -120,6 +121,7 @@ describe("DatabaseConnectorsManager account scoping", () => {
     tools = [];
     links = [];
     linksReady = true;
+    linksError = null;
     socialAccounts = { data: ACCOUNTS, isSuccess: true, error: null };
   });
 
@@ -254,6 +256,21 @@ describe("DatabaseConnectorsManager account scoping", () => {
     expect(toolCardElement("woo_own")).toBeInTheDocument();
   });
 
+  it("says the link read failed instead of claiming nothing is connected", () => {
+    // PR #173 Codex P1. An account that owns nothing and only receives
+    // shares has no card to carry the per-card error, so a failed read
+    // showed "No servers connected yet" — an invitation to reconnect a
+    // connector that is live.
+    tools = [tool({ id: "t1", name: "woo_store", social_account_id: "wa-1", platform: "whatsapp" })];
+    links = [];
+    linksReady = false;
+    linksError = new Error("timeout");
+    renderManager({ platform: "facebook", accountId: "fb-1" });
+
+    expect(screen.getByRole("alert").textContent).toMatch(/sharing could not be loaded/i);
+    expect(screen.queryByText("No servers connected yet")).not.toBeInTheDocument();
+  });
+
   it("offers no sharing strip on a legacy all_accounts connector", () => {
     // Such a row reaches every agent through its scope, not through link rows,
     // so a strip would draw ticks that no toggle can change — and it has no
@@ -325,6 +342,7 @@ describe("DatabaseConnectorsManager read-only overview (Settings)", () => {
     tools = [];
     links = [];
     linksReady = true;
+    linksError = null;
     socialAccounts = { data: ACCOUNTS, isSuccess: true, error: null };
   });
 

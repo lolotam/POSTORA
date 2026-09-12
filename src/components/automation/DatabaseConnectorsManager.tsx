@@ -1776,7 +1776,21 @@ function DatabaseConnectorsEditor({
           </p>
         </div>
 
-        {connectedCount === 0 ? (
+        {/* Said once, above the list, not only inside cards: when the link
+            read fails the list falls back to owned connectors, and an account
+            that only RECEIVES shares then has no card to carry the message.
+            It would see "No servers connected yet" and reconnect a live one. */}
+        {(linksError || accountsError) && (
+          <p
+            role="alert"
+            className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
+          >
+            Connector sharing could not be loaded, so connectors shared from other accounts
+            are not listed here. Refresh to try again.
+          </p>
+        )}
+
+        {connectedCount === 0 && !linksError && !accountsError ? (
           <Card className="border-dashed border-border/60 bg-card/30">
             <CardContent className="flex flex-col items-center justify-center py-10 text-center space-y-3">
               <div className="h-12 w-12 rounded-2xl bg-muted/60 flex items-center justify-center text-muted-foreground">
