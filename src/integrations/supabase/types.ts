@@ -6080,6 +6080,7 @@ export type Database = {
           performed_by: string | null
           reason: string | null
           to_agent_id: string | null
+          workspace_id: string | null
         }
         Insert: {
           action: string
@@ -6090,6 +6091,7 @@ export type Database = {
           performed_by?: string | null
           reason?: string | null
           to_agent_id?: string | null
+          workspace_id?: string | null
         }
         Update: {
           action?: string
@@ -6100,8 +6102,15 @@ export type Database = {
           performed_by?: string | null
           reason?: string | null
           to_agent_id?: string | null
+          workspace_id?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "whatsapp_assignment_history_workspace_id_fkey"
+            columns: ["workspace_id"]
+            referencedRelation: "workspaces"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "whatsapp_assignment_history_from_agent_id_fkey"
             columns: ["from_agent_id"]
@@ -7581,6 +7590,14 @@ export type Database = {
         Args: { p_source_id: string; p_social_account_id: string; p_platform: string }
         Returns: string
       }
+      partner_write_conversation_assignment: {
+        Args: { p_workspace_id: string; p_key_id: string; p_conversation_cache_id: string; p_agent_id: string | null; p_notes: string | null; p_unassign: boolean }
+        Returns: Json
+      }
+      provision_partner_agent: {
+        Args: { p_workspace_id: string; p_user_id: string; p_display_name: string; p_max_conversations: number }
+        Returns: Json
+      }
       website_setup_target_allowed: {
         Args: { p_user: string; p_source: string; p_account: string; p_platform: string }
         Returns: boolean
@@ -8211,6 +8228,10 @@ export type Database = {
       next_media_seq: {
         Args: { p_user_id: string; p_upload_date: string }
         Returns: number
+      }
+      patch_account_metadata_in_workspace: {
+        Args: { p_account_id: string; p_workspace_id: string; p_patch: Json }
+        Returns: Json
       }
       prune_ai_knowledge_entities: {
         Args: { p_user_id: string }

@@ -199,7 +199,7 @@ Deno.test("F6b: the restriction can only narrow, never widen", async () => {
   assertEquals(admin.deliveries.length, 0);
 });
 
-Deno.test("F5: the certified allowlist contains exactly the Phase 5 + 6 + 8 events", () => {
+Deno.test("F5: the certified allowlist matches the migration in its published order", async () => {
   // Not a tautology: the closed allowlist is the mechanism that stops the
   // substrate becoming an implicit promise. Widening it is a deliberate act
   // with a producer ledger row behind it, and this fails when someone widens
@@ -228,11 +228,23 @@ Deno.test("F5: the certified allowlist contains exactly the Phase 5 + 6 + 8 even
     "message.failed",
     "account.reauthorization_required",
     "post.scheduled",
+    "whatsapp_number.connected",
+    "whatsapp_number.disconnected",
+    "history_sync.completed",
+    "conversation.assigned",
+    "conversation.unassigned",
   ]);
+  const migration = await Deno.readTextFile(new URL(
+    "../../migrations/20260910170000_partner_assignment_events.sql", import.meta.url,
+  ));
+  const allowed = migration.match(/AND events <@ ARRAY\[([\s\S]*?)\]/)![1];
+  assertEquals(CERTIFIED_EVENT_TYPES, [...allowed.matchAll(/'([^']+)'/g)].map((match) => match[1]));
   assert(isCertifiedEventType("webhook.test"));
   assert(isCertifiedEventType("message.received"));
   assert(isCertifiedEventType("account.reauthorization_required"));
   assert(!isCertifiedEventType("account.connected"));
   assert(!isCertifiedEventType("account.disconnected"));
   assert(!isCertifiedEventType("post.published"));
+  assert(!isCertifiedEventType("whatsapp_number.pairing_expired"));
+  assert(!isCertifiedEventType("conversation.mode_changed"));
 });

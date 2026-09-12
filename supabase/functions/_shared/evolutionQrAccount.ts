@@ -3,6 +3,8 @@
 // drift and store different platform_user_id values for the same linked session --
 // conversation ids are built from that value, so a mismatch would split a chat in two.
 
+import { enqueuePartnerWebhookEvent } from "./partnerWebhookEvents.ts";
+
 export interface EvolutionQrAccount {
   id: string;
   platform_user_id: string;
@@ -85,20 +87,84 @@ export async function findOwnedEvolutionAccount(
 // sites (bridge open, bridge close reconciliation, webhook connection.update). Reading the
 // metadata there rather than taking it as an argument means no caller can silently omit it
 // and let the phone profile clobber the user's name on a reconnect.
-async function loadAccountMetadata(
+interface ConnectionSnapshot {
+  metadata: Record<string, unknown>;
+  isActive: boolean | null;
+  workspaceId: string | null;
+}
+
+async function loadAccountConnection(
   admin: any,
   accountId: string,
-): Promise<Record<string, unknown>> {
+): Promise<ConnectionSnapshot> {
   const { data, error } = await admin
     .from("social_accounts")
-    .select("account_metadata")
+    .select("account_metadata, is_active, workspace_id")
     .eq("id", accountId)
     .maybeSingle();
   if (error) throw error;
   const stored = data?.account_metadata;
-  return stored && typeof stored === "object" && !Array.isArray(stored)
-    ? { ...(stored as Record<string, unknown>) }
-    : {};
+  return {
+    metadata: stored && typeof stored === "object" && !Array.isArray(stored)
+      ? { ...(stored as Record<string, unknown>) }
+      : {},
+    isActive: data?.is_active ?? null,
+    workspaceId: data?.workspace_id ?? null,
+  };
+}
+
+// Observation is best effort: a failed subscription lookup or outbox insert must
+// never undo the successful activation/identity claim that callers depend on.
+async function emitConnectionTransition(
+  admin: Parameters<typeof enqueuePartnerWebhookEvent>[0],
+  accountId: string,
+  previous: ConnectionSnapshot,
+  active: boolean,
+): Promise<void> {
+  if (previous.isActive === active) return;
+  if (previous.isActive === null || !previous.workspaceId) {
+    console.log(`[evolution-qr] account ${accountId}: connection event skipped, prior state or workspace unavailable`);
+    return;
+  }
+  const eventType = active ? "whatsapp_number.connected" : "whatsapp_number.disconnected";
+
+  // The occurrence id must be STABLE for one transition and distinct across
+  // transitions, because `UNIQUE (webhook_id, event_occurrence_id)` on the
+  // outbox is what makes delivery at-least-once rather than at-least-twice.
+  //
+  // A random nonce would separate two real cycles finishing in the same
+  // millisecond, but it defeats deduplication entirely -- and the routine case
+  // is the opposite one: the status poll and the webhook both observe the SAME
+  // connect, and a partner would receive it twice. So the key is derived from
+  // the row the transition wrote, which both observers read identically.
+  const { data: written, error: readbackError } = await admin
+    .from("social_accounts")
+    .select("updated_at")
+    .eq("id", accountId)
+    .maybeSingle();
+
+  if (readbackError || !written?.updated_at) {
+    // Without a stable key there is no safe id to emit under: a fabricated one
+    // would duplicate, and reusing the last would collide with a prior cycle.
+    console.error(`[evolution-qr] account ${accountId}: ${eventType} skipped, transition timestamp unavailable`);
+    return;
+  }
+
+  const occurredAt = String(written.updated_at);
+  try {
+    await enqueuePartnerWebhookEvent(admin, {
+      workspaceId: previous.workspaceId,
+      eventType,
+      occurrenceId: `${eventType}:${accountId}:${occurredAt}`,
+      payload: { account_id: accountId, is_active: active },
+      platform: "whatsapp",
+      accountId,
+      occurredAt,
+    });
+  } catch {
+    // Raw database errors can contain subscription secrets or payload values.
+    console.error(`[evolution-qr] account ${accountId}: ${eventType} enqueue failed after connection write`);
+  }
 }
 
 // Returns the owner number now stored for the account. Callers need it because activation
@@ -112,15 +178,17 @@ export async function syncEvolutionAccountConnection(
   identity: unknown,
 ): Promise<string> {
   const connection = state.toLowerCase();
+  if (connection !== "open" && connection !== "close") return account.platform_user_id;
+  const previous = await loadAccountConnection(admin, account.id);
   if (connection === "close") {
     const { error } = await admin
       .from("social_accounts")
       .update({ is_active: false })
       .eq("id", account.id);
     if (error) throw error;
+    await emitConnectionTransition(admin, account.id, previous, false);
     return account.platform_user_id;
   }
-  if (connection !== "open") return account.platform_user_id;
 
   const ownerJid = extractOwnerJid(identity);
   const ownerNumber = ownerJid ? ownerNumberFromJid(ownerJid) : null;
@@ -131,7 +199,7 @@ export async function syncEvolutionAccountConnection(
   // reply path cannot address, which is the state this function exists to prevent.
   const claimsIdentity = isProvisional && ownerNumber !== null;
   const updates: Record<string, unknown> = claimsIdentity ? {} : { is_active: true };
-  const metadata = await loadAccountMetadata(admin, account.id);
+  const metadata = previous.metadata;
 
   // Re-pairing a different number leaves platform_user_id at the old value (the claim
   // below is gated on the pending_ placeholder), and a rename can mask that. Migration is
@@ -174,7 +242,10 @@ export async function syncEvolutionAccountConnection(
   // keeps it even when a different phone pairs into the session -- the mismatch flag above
   // is the record of that, because rewriting the number would orphan every conversation id
   // already derived from it.
-  if (!claimsIdentity) return account.platform_user_id;
+  if (!claimsIdentity) {
+    await emitConnectionTransition(admin, account.id, previous, true);
+    return account.platform_user_id;
+  }
 
   // Identity is claimed in SQL because resolving that collision is a multi-statement merge
   // (move the older session's messages, release its unique key, take the number) and a
@@ -184,5 +255,6 @@ export async function syncEvolutionAccountConnection(
     p_owner_number: ownerNumber,
   });
   if (claimError) throw claimError;
+  await emitConnectionTransition(admin, account.id, previous, true);
   return (claimed as string | null) ?? account.platform_user_id;
 }

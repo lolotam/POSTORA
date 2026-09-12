@@ -41,7 +41,7 @@ const COMPOSIO_THREAD_PAGE = 20;
 
 export interface YouTubeCommentAccount {
   id: string;
-  user_id: string;
+  user_id?: string;
   platform: string;
   auth_provider?: string | null;
   access_token: string | null;
@@ -289,8 +289,9 @@ async function workspaceForLedger(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
 ): Promise<string> {
-  return account.workspace_id ??
-    await resolveWorkspaceForCall(deps.admin, { userId: account.user_id });
+  if (account.workspace_id) return account.workspace_id;
+  if (!account.user_id) throw new Error("workspace_unresolved");
+  return await resolveWorkspaceForCall(deps.admin, { userId: account.user_id });
 }
 
 async function callComposio(
@@ -489,31 +490,43 @@ export async function listReplies(
   deps: YouTubeCommentsDeps,
   parentId: string,
 ): Promise<YouTubeResult<YouTubeCommentItem[]>> {
+  const result = await listYouTubeRepliesPage(account, deps, { parentId, maxResults: 100 });
+  return result.ok ? { ok: true, value: result.value.items } : result;
+}
+
+export async function listYouTubeRepliesPage(
+  account: YouTubeCommentAccount,
+  deps: YouTubeCommentsDeps,
+  args: { parentId: string; maxResults: number; pageToken?: string },
+): Promise<YouTubeResult<{ items: YouTubeCommentItem[]; nextPageToken: string | null }>> {
   const result = await callYouTube(account, deps, {
     method: "GET",
     path: "comments",
     query: {
       part: "snippet",
-      parentId,
-      maxResults: "100",
+      parentId: args.parentId,
+      maxResults: String(args.maxResults),
       textFormat: "plainText",
+      ...(args.pageToken ? { pageToken: args.pageToken } : {}),
     },
     composio: {
       slug: "YOUTUBE_LIST_COMMENTS",
       arguments: {
         part: "snippet",
-        parentId,
-        maxResults: 100,
+        parentId: args.parentId,
+        maxResults: args.maxResults,
         textFormat: "plainText",
+        ...(args.pageToken ? { pageToken: args.pageToken } : {}),
       },
     },
   });
   if (!result.ok) return result;
   return {
     ok: true,
-    value: (Array.isArray(result.value?.items) ? result.value.items : []).map(
-      parseComment,
-    ),
+    value: {
+      items: (Array.isArray(result.value?.items) ? result.value.items : []).map(parseComment),
+      nextPageToken: result.value?.nextPageToken ? String(result.value.nextPageToken) : null,
+    },
   };
 }
 
@@ -566,12 +579,12 @@ export async function setModerationStatus(
 
 // One comments.list?id= call (1 unit) answering the two facts an action needs about its
 // target: who wrote it, and whether it is itself a reply.
-async function commentSnippet(
+export async function getYouTubeComment(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
   commentId: string,
 ): Promise<
-  YouTubeResult<{ authorChannelId: string | null; parentId: string | null }>
+  YouTubeResult<YouTubeCommentItem>
 > {
   const result = await callYouTube(account, deps, {
     method: "GET",
@@ -590,9 +603,11 @@ async function commentSnippet(
   const parsed = parseComment(item);
   return {
     ok: true,
-    value: { authorChannelId: parsed.authorChannelId, parentId: parsed.parentId },
+    value: parsed,
   };
 }
+
+const commentSnippet = getYouTubeComment;
 
 // comments.delete only works on the authenticated channel's own comments. For anyone else's
 // comment the moderation status is the supported tool, so refuse locally with useful copy.

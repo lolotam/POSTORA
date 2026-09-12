@@ -1,0 +1,194 @@
+// Server-side entitlement for partner actions (section expansion spec §10).
+// The browser's flag cache and admin elevation do not apply to partner keys.
+import { logToDatabase } from "./logging.ts";
+import { v1ErrorResponse } from "../partner-api/v1/errors.ts";
+
+// UnifiedAgentSetupPage.PLATFORM_FLAG -> useFeatureFlags.FLAG_KEY_MAP.
+// There is no universal automation flag. A requested platform is checked before
+// binding resolution, then matched to the account by agentConfigOps.
+export const AGENT_PLATFORM_FEATURE_KEYS: Record<string, readonly string[]> = {
+  whatsapp: ["feature_msg_whatsapp"],
+  facebook: ["feature_msg_facebook"],
+  instagram: ["feature_msg_instagram"],
+  threads: ["feature_msg_threads"],
+  youtube: ["feature_youtube_comments"],
+};
+// These tables predate threads/youtube agent support. Reject their invalid
+// platform grammar at the entitlement boundary, before any database query.
+const RULE_ACTIONS = new Set([
+  "list_conversation_modes", "get_conversation_mode", "set_conversation_mode",
+  "list_auto_replies", "create_auto_reply", "update_auto_reply", "delete_auto_reply",
+]);
+const MODE_ACTIONS = new Set(["start_whatsapp_history_sync", "get_whatsapp_history_sync", "end_whatsapp_session"]);
+export const WHATSAPP_MODE_FEATURE_KEYS: Record<string, readonly string[]> = {
+  evolution_qr: ["feature_wa_evolution_qr_enabled"],
+  cloud_api: ["feature_wa_cloud_api_enabled"],
+  coexistence: ["feature_wa_cloud_api_enabled"],
+};
+export const COMMENT_PLATFORM_FEATURE_KEYS: Record<string, readonly string[]> = {
+  // FLAG_KEYS has no dedicated Facebook, Instagram or Threads comments flag.
+  // Their manual comment actions require only feature_comment_manager.
+  facebook: [], instagram: [], threads: [], youtube: ["feature_youtube_comments"],
+};
+const COMMENT_ACTIONS = new Set(["list_comments", "get_comment", "reply_comment", "hide_comment", "delete_comment"]);
+const AGENT_ACTION_FEATURE_KEYS: Record<string, typeof AGENT_PLATFORM_FEATURE_KEYS> = {
+  ...Object.fromEntries([...RULE_ACTIONS].map((action) => [action, AGENT_PLATFORM_FEATURE_KEYS])),
+  get_automation_handlers: AGENT_PLATFORM_FEATURE_KEYS,
+  set_automation_handlers: AGENT_PLATFORM_FEATURE_KEYS,
+  get_audience: AGENT_PLATFORM_FEATURE_KEYS,
+  get_agent_config: AGENT_PLATFORM_FEATURE_KEYS,
+  update_agent_config: AGENT_PLATFORM_FEATURE_KEYS,
+  list_agent_tools: AGENT_PLATFORM_FEATURE_KEYS,
+  upsert_agent_tool: AGENT_PLATFORM_FEATURE_KEYS,
+  delete_agent_tool: AGENT_PLATFORM_FEATURE_KEYS,
+  set_tool_accounts: AGENT_PLATFORM_FEATURE_KEYS,
+};
+
+// Keys verified against useFeatureFlags.FLAG_KEYS / FLAG_KEY_MAP. Each action
+// requires ALL listed keys; pairing and registration also require Direct QR.
+export const ACTION_FEATURE_KEYS: Record<string, readonly string[]> = {
+  get_assignment: ["feature_human_agent"],
+  assign_conversation: ["feature_human_agent"],
+  unassign_conversation: ["feature_human_agent"],
+  list_assignment_history: ["feature_human_agent"],
+  list_agents: ["feature_human_agent"],
+  get_agent: ["feature_human_agent"],
+  create_agent: ["feature_human_agent"],
+  update_agent: ["feature_human_agent"],
+  delete_agent: ["feature_human_agent"],
+  // Manual inbox actions; comment_workflow gates the separate automation page.
+  list_comments: ["feature_comment_manager"],
+  get_comment: ["feature_comment_manager"],
+  reply_comment: ["feature_comment_manager"],
+  hide_comment: ["feature_comment_manager"],
+  delete_comment: ["feature_comment_manager"],
+
+  list_whatsapp_numbers: ["feature_msg_whatsapp"],
+  get_whatsapp_number: ["feature_msg_whatsapp"],
+  register_whatsapp_number: ["feature_msg_whatsapp", "feature_wa_evolution_qr_enabled"],
+  create_whatsapp_pairing: ["feature_msg_whatsapp", "feature_wa_evolution_qr_enabled"],
+  get_whatsapp_pairing: ["feature_msg_whatsapp", "feature_wa_evolution_qr_enabled"],
+  end_whatsapp_session: ["feature_msg_whatsapp"],
+  start_whatsapp_history_sync: ["feature_msg_whatsapp"],
+  get_whatsapp_history_sync: ["feature_msg_whatsapp"],
+  // Business profiles are a Cloud API capability, independent of the QR flag.
+  get_whatsapp_profile: ["feature_msg_whatsapp", "feature_wa_cloud_api_enabled"],
+  update_whatsapp_profile: ["feature_msg_whatsapp", "feature_wa_cloud_api_enabled"],
+};
+
+/** The authenticated workspace's provisioned owner is its entitlement subject.
+ *  Returns a logged refusal, or null only when every required key is enabled. */
+export async function assertEntitled(
+  // Supabase client versions differ between Edge Functions (infrastructure seam).
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  workspaceId: string,
+  action: string,
+  requestId: string,
+  platform?: string,
+  connectionMode?: string,
+): Promise<Response | null> {
+  const refuse = async (
+    code: "feature_not_entitled" | "internal_error" | "invalid_request",
+    reason: string,
+    missing?: string[],
+  ): Promise<Response> => {
+    await logToDatabase(admin, {
+      level: code === "internal_error" ? "error" : "warn",
+      category: "auth",
+      source: "partner-api",
+      message: "Partner feature entitlement refused",
+      metadata: {
+        event: "partner_entitlement_refused", workspace_id: workspaceId,
+        action, request_id: requestId, error_code: code, reason,
+        ...(missing ? { missing_feature_keys: missing } : {}),
+      },
+    });
+    return v1ErrorResponse(code, requestId, missing
+      ? { details: { missing_feature_keys: missing } }
+      : {});
+  };
+
+  // Own-property lookup prevents Object.prototype names from becoming policy.
+  const agentPolicy = Object.hasOwn(AGENT_ACTION_FEATURE_KEYS, action) ? AGENT_ACTION_FEATURE_KEYS[action] : null;
+  if (RULE_ACTIONS.has(action) && platform && !["whatsapp", "facebook", "instagram"].includes(platform)) {
+    return await refuse("invalid_request", "unsupported_rule_platform");
+  }
+  // No default platform: a per-platform action whose caller omits one would
+  // otherwise be checked against whichever platform the default names, granting
+  // on a flag the request never concerned. Absent is refused like an unknown one.
+  if (agentPolicy && (platform === undefined || !Object.hasOwn(agentPolicy, platform))) {
+    return await refuse("feature_not_entitled", "unsupported_agent_platform");
+  }
+  if (MODE_ACTIONS.has(action) && (!connectionMode || !Object.hasOwn(WHATSAPP_MODE_FEATURE_KEYS, connectionMode))) {
+    return await refuse("feature_not_entitled", "unsupported_connection_mode");
+  }
+  if (COMMENT_ACTIONS.has(action) && platform !== undefined && !Object.hasOwn(COMMENT_PLATFORM_FEATURE_KEYS, platform)) {
+    return await refuse("feature_not_entitled", "unsupported_comment_platform");
+  }
+  const requiredKeys = [
+    ...(agentPolicy ? agentPolicy[platform!]
+      : Object.hasOwn(ACTION_FEATURE_KEYS, action) ? ACTION_FEATURE_KEYS[action] : []),
+    ...(MODE_ACTIONS.has(action) ? WHATSAPP_MODE_FEATURE_KEYS[connectionMode!] : []),
+    ...(COMMENT_ACTIONS.has(action) && platform ? COMMENT_PLATFORM_FEATURE_KEYS[platform] : []),
+  ];
+  if (requiredKeys.length === 0) return await refuse("internal_error", "missing_action_policy");
+
+  let readStage = "provisioning";
+  try {
+    const { data: provisioning, error: provisioningError } = await admin
+      .from("partner_provisioned_workspaces")
+      .select("owner_user_id")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+    if (provisioningError) return await refuse("internal_error", "provisioning_read_failed");
+    if (!provisioning?.owner_user_id) return await refuse("feature_not_entitled", "missing_provisioned_owner");
+
+    readStage = "global";
+    const { data: globalRows, error: globalError } = await admin
+      .from("app_settings")
+      .select("key, value")
+      .in("key", requiredKeys);
+    if (globalError) return await refuse("internal_error", "global_read_failed");
+
+    const state = new Map<string, boolean>();
+    for (const row of globalRows ?? []) state.set(row.key, coerceFlag(row.value));
+
+    readStage = "override";
+    const { data: overrides, error: overrideError } = await admin
+      .from("user_feature_overrides")
+      .select("feature_key, enabled, expires_at")
+      .eq("user_id", provisioning.owner_user_id)
+      .in("feature_key", requiredKeys);
+    if (overrideError) return await refuse("internal_error", "override_read_failed");
+
+    const now = Date.now();
+    for (const override of overrides ?? []) {
+      // Invalid timestamps cannot establish an unexpired grant either.
+      if (override.expires_at !== null && !(Date.parse(override.expires_at) > now)) continue;
+      // An override may change an existing setting, but a missing global row
+      // is a configuration gap and must still refuse, even with an override.
+      if (state.has(override.feature_key)) state.set(override.feature_key, override.enabled === true);
+    }
+
+    const missing = requiredKeys.filter((key) => state.get(key) !== true);
+    if (missing.length > 0) return await refuse("feature_not_entitled", "disabled_or_missing_flags", missing);
+    return null;
+  } catch {
+    // Transport failures may throw instead of returning PostgREST's error.
+    // Record the stage, never a raw exception or database response.
+    return await refuse("internal_error", `${readStage}_read_threw`);
+  }
+}
+
+/** Match useFeatureFlags: parse a string ONCE, then accept true or "true". */
+function coerceFlag(value: unknown): boolean {
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch {
+      // The browser keeps an unparseable string unchanged.
+    }
+  }
+  return value === true || value === "true";
+}

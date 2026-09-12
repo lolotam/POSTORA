@@ -828,18 +828,24 @@ Deno.serve(async (req) => {
       adminNotifier ??= buildAdminNotifier(admin, request);
       return await (await adminNotifier)(recipientPhone, text);
     };
-    const { data: cachedConversation } = await admin
+    let cachedConversationQuery = admin
       .from("messaging_cache")
-      .select("participant_name")
+      .select("id, workspace_id, participant_name")
       .eq("user_id", request.user_id)
-      .eq("conversation_id", request.conversation_id)
-      .maybeSingle();
+      .eq("platform", request.platform)
+      .eq("conversation_id", request.conversation_id);
+    if (UUID_PATTERN.test(request.social_account_id)) {
+      cachedConversationQuery = cachedConversationQuery.eq("social_account_id", request.social_account_id);
+    }
+    const { data: cachedConversation, error: cachedConversationError } = await cachedConversationQuery.maybeSingle();
+    if (cachedConversationError) throw cachedConversationError;
 
     const toolContext: ToolContext = {
       admin,
       userId: request.user_id,
       platform: request.platform,
       conversationId: request.conversation_id,
+      cachedConversation,
       customerName: cachedConversation?.participant_name || request.recipient_phone,
       adminPhoneNumbers: config.admin_phone_numbers || [],
       dryRun,

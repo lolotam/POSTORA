@@ -24,42 +24,167 @@ interface RecordedRpc {
 // which is what activate_evolution_qr_account returns once the merge resolves.
 function recordingAdmin(
   metadata: Record<string, unknown> | null = null,
-  overrides: { updateError?: unknown; rpcError?: unknown } = {},
+  overrides: {
+    updateError?: unknown; rpcError?: unknown; readError?: unknown;
+    active?: boolean; workspaceId?: string | null; updatedAt?: string;
+    emissionFailure?: "lookup" | "insert";
+  } = {},
 ) {
   const updates: RecordedUpdate[] = [];
   const rpcs: RecordedRpc[] = [];
+  const deliveries: Record<string, unknown>[] = [];
+  let active = overrides.active ?? false;
+  // Stands in for Postgres advancing updated_at on every write.
+  let writeTick = 0;
   return {
     updates,
     rpcs,
+    deliveries,
+    get active() { return active; },
     rpc: (name: string, args: Record<string, unknown>) => {
       rpcs.push({ name, args });
+      if (!overrides.rpcError) { active = true; writeTick += 1; }
       return Promise.resolve(
         overrides.rpcError
           ? { data: null, error: overrides.rpcError }
           : { data: args.p_owner_number as string, error: null },
       );
     },
-    from: (table: string) => ({
-      update: (values: Record<string, unknown>) => ({
-        eq: (_column: string, id: unknown) => {
-          updates.push({ table, values, id });
-          return Promise.resolve({ error: overrides.updateError ?? null });
-        },
-      }),
-      select: () => ({
-        eq: () => ({
-          maybeSingle: () =>
-            Promise.resolve({
-              data: metadata === null ? null : { account_metadata: metadata },
-              error: null,
-            }),
+    from: (table: string) => {
+      if (table === "partner_webhooks") {
+        const chain = {
+          select: () => chain,
+          eq: () => chain,
+          contains: () => Promise.resolve({
+            data: [
+              { id: "matching", secret_version: 1, platform: "whatsapp", social_account_id: "acc-1" },
+              { id: "wrong-platform", secret_version: 1, platform: "instagram", social_account_id: null },
+              { id: "wrong-account", secret_version: 1, platform: null, social_account_id: "acc-other" },
+            ],
+            error: overrides.emissionFailure === "lookup" ? { message: "lookup failed" } : null,
+          }),
+        };
+        return chain;
+      }
+      if (table === "partner_webhook_deliveries") return {
+        upsert: (rows: Record<string, unknown>[]) => ({
+          select: () => {
+            if (overrides.emissionFailure === "insert") return Promise.resolve({ error: { message: "insert failed" } });
+            deliveries.push(...rows);
+            return Promise.resolve({ data: rows, error: null });
+          },
         }),
-      }),
-    }),
+      };
+      return {
+        update: (values: Record<string, unknown>) => ({
+          eq: (_column: string, id: unknown) => {
+            updates.push({ table, values, id });
+            if (!overrides.updateError && typeof values.is_active === "boolean") {
+              active = values.is_active;
+              // Postgres advances updated_at on every write. The emitter keys
+              // the occurrence id on it, so modelling it as fixed would make
+              // two real cycles look like one repeated delivery.
+              writeTick += 1;
+            }
+            return Promise.resolve({ error: overrides.updateError ?? null });
+          },
+        }),
+        select: () => ({
+          eq: () => ({
+            maybeSingle: () =>
+              Promise.resolve({
+                data: {
+                  account_metadata: metadata, is_active: active,
+                  workspace_id: overrides.workspaceId === undefined ? "ws-1" : overrides.workspaceId,
+                  // The transition's own timestamp. The emitter keys the
+                  // occurrence id on this, so a poll and a webhook observing
+                  // the SAME connect produce the same id and the outbox's
+                  // UNIQUE (webhook_id, event_occurrence_id) dedupes them.
+                  updated_at: overrides.updatedAt ?? new Date(Date.UTC(2026, 8, 10, 0, 0, writeTick)).toISOString(),
+                },
+                error: overrides.readError ?? null,
+              }),
+          }),
+        }),
+      };
+    },
   };
 }
 
 const PENDING = { id: "acc-1", platform_user_id: "pending_acc-1" };
+
+Deno.test("connection cycles emit once per transition and respect account/platform filters", async () => {
+  const admin = recordingAdmin();
+  let account = PENDING;
+  for (let cycle = 0; cycle < 2; cycle++) {
+    const number = await syncEvolutionAccountConnection(admin, account, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+    account = { ...account, platform_user_id: number };
+    assertEquals(admin.active, true);
+    assertEquals(admin.deliveries.length, cycle * 2 + 1);
+    await syncEvolutionAccountConnection(admin, account, "open", null);
+    assertEquals(admin.deliveries.length, cycle * 2 + 1);
+    await syncEvolutionAccountConnection(admin, account, "close", null);
+    assertEquals(admin.active, false);
+    assertEquals(admin.deliveries.length, cycle * 2 + 2);
+    await syncEvolutionAccountConnection(admin, account, "close", null);
+    assertEquals(admin.deliveries.length, cycle * 2 + 2);
+  }
+  assertEquals(admin.deliveries.map((row) => row.event_type), [
+    "whatsapp_number.connected", "whatsapp_number.disconnected",
+    "whatsapp_number.connected", "whatsapp_number.disconnected",
+  ]);
+  assertEquals(new Set(admin.deliveries.map((row) => row.event_occurrence_id)).size, 4);
+  for (const row of admin.deliveries) {
+    assertEquals(row.webhook_id, "matching");
+    assertEquals(row.workspace_id, "ws-1");
+    assertEquals(row.payload, { account_id: "acc-1", is_active: row.event_type === "whatsapp_number.connected" });
+    assertEquals(row.event_occurrence_id, `${row.event_type}:acc-1:${row.occurred_at}`);
+  }
+});
+
+Deno.test("an already-connected poll emits nothing", async () => {
+  const admin = recordingAdmin(null, { active: true });
+  await syncEvolutionAccountConnection(admin, { ...PENDING, platform_user_id: "96597950350" }, "open", null);
+  assertEquals(admin.deliveries, []);
+});
+
+Deno.test("connection emission failures are logged without preventing activation", async (t) => {
+  for (const emissionFailure of ["lookup", "insert"] as const) {
+    for (const identity of [null, { ownerJid: "96597950350@s.whatsapp.net" }]) {
+      await t.step(`${emissionFailure}, ${identity ? "identity claim" : "direct activation"}`, async () => {
+        const admin = recordingAdmin(null, { emissionFailure });
+        const logs: unknown[][] = [];
+        const original = console.error;
+        console.error = (...args: unknown[]) => { logs.push(args); };
+        try {
+          const number = await syncEvolutionAccountConnection(admin, PENDING, "open", identity);
+          assertEquals(number, identity ? "96597950350" : PENDING.platform_user_id);
+        } finally {
+          console.error = original;
+        }
+        assertEquals(admin.active, true);
+        assertEquals(admin.deliveries, []);
+        assertEquals(logs.length, 1);
+      });
+    }
+  }
+});
+
+Deno.test("workspace-less accounts still connect and disconnect without events", async () => {
+  const admin = recordingAdmin(null, { workspaceId: null });
+  await syncEvolutionAccountConnection(admin, PENDING, "open", null);
+  assertEquals(admin.active, true);
+  await syncEvolutionAccountConnection(admin, PENDING, "close", null);
+  assertEquals(admin.active, false);
+  assertEquals(admin.deliveries, []);
+});
+
+Deno.test("a failed connection read is never treated as inactive or workspace-less", async () => {
+  const admin = recordingAdmin(null, { readError: new Error("read failed") });
+  await assertRejects(() => syncEvolutionAccountConnection(admin, PENDING, "open", null), Error, "read failed");
+  assertEquals(admin.updates, []);
+  assertEquals(admin.deliveries, []);
+});
 
 Deno.test("a linked session names the account from whichever identity source reported it", async (t) => {
   // fetchInstances (the poller path) and connection.update (the webhook path) carry the
@@ -157,6 +282,7 @@ Deno.test("a rejected write is surfaced instead of being swallowed", async (t) =
       await assertRejects(() => syncEvolutionAccountConnection(admin, PENDING, state, identity));
       // The identity claim is never attempted once the row itself could not be written.
       assertEquals(admin.rpcs, []);
+      assertEquals(admin.deliveries, []);
     });
   }
 });
@@ -179,6 +305,7 @@ Deno.test("a rejected identity claim leaves the account unactivated", async () =
     () => syncEvolutionAccountConnection(admin, PENDING, "open", { ownerJid: "96597950350@s.whatsapp.net" }),
   );
   assertEquals(admin.updates.filter((update) => update.values.is_active === true), []);
+  assertEquals(admin.deliveries, []);
 });
 
 Deno.test("a linked session with no identity payload still activates the account", async () => {

@@ -1,3 +1,15 @@
+> **VENDORED SNAPSHOT — NOT AUTHORITATIVE.**
+>
+> This is an archived copy, restored for reference. The maintained document is
+> `POSTORA_PARTNER_API_PRD_v1.0.md` in the repository root; read that one.
+>
+> Two claims below are stale and should not be acted on from this file:
+> the Partner API is **live and serving production traffic**, not proposed, and
+> the canonical contract is **`docs/api/openapi.yaml`**, not the `openapi/`
+> directory this copy names, which does not exist.
+
+---
+
 # POSTORA Partner API
 ## Product Requirements Document (PRD) v1.0
 

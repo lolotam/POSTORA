@@ -9,8 +9,10 @@
  * The events a subscription may name -- a CLOSED allowlist, and the mechanism
  * that stops this phase becoming an implicit promise.
  *
- * D6 ships an event only once its transition, stable identifier and
- * TRANSACTIONAL producer are all defined. `webhook.test` is certifiable
+ * D6 originally shipped events only once their transition, stable identifier and
+ * TRANSACTIONAL producer were defined. The WhatsApp lifecycle additions below
+ * are explicitly best-effort observations after persistence: an outbox failure
+ * must not block activation or history completion. `webhook.test` is certifiable
  * precisely because it has no external producer: its transition is "a partner
  * asked", its occurrence id is minted at request time, and its enqueue is the
  * request's own write. There is nothing to crash between.
@@ -54,6 +56,14 @@ export const CERTIFIED_EVENT_TYPES = [
   // the owner's observation gate. Certify them by widening the DB CHECK and
   // this list together, nothing else.
   "post.scheduled",
+  // Number lifecycle: syncEvolutionAccountConnection; history: importEvolutionHistory.
+  // These cover the shared Evolution QR paths, not generic account.* writers.
+  "whatsapp_number.connected",
+  "whatsapp_number.disconnected",
+  "history_sync.completed",
+  // Table trigger covers browser, escalation and /v1; emission failures do not block writers.
+  "conversation.assigned",
+  "conversation.unassigned",
 ] as const;
 
 export type CertifiedEventType = typeof CERTIFIED_EVENT_TYPES[number];

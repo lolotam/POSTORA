@@ -26,6 +26,7 @@ function target(overrides: Partial<EscalationTarget> = {}): EscalationTarget {
     userId: "00000000-0000-0000-0000-000000000001",
     platform: "instagram",
     conversationId: "conversation-1",
+    cachedConversation: { id: "cache-1", workspace_id: "workspace-1" },
     customerName: "Test customer",
     adminPhoneNumbers: [],
     sendWhatsAppText: () => Promise.resolve(),

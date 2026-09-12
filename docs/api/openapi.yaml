@@ -82,11 +82,14 @@ info:
     scheduling), OAuth, contacts, analytics and AI surfaces. Everything else
     the PRD names for v1 is served and described here.
 
-    Every `/v1` read is tenant-scoped to the accounts BOUND to the presented
+    Every workspace-tier `/v1` read is tenant-scoped to the accounts BOUND to the presented
     key (`partner_api_key_accounts`, spec D4) — not to the key's workspace,
     of which the binding may be a strict subset. A resource outside the
     binding answers `resource_not_found`, never a distinct forbidden code
     (D11): a separate answer would confirm the resource exists.
+
+    Platform reads under `/v1/platform/` are scoped to the authenticated
+    principal's estate instead; they use the separate PlatformApiKey scheme.
 
     Every component is named and every enum is enumerated explicitly so a
     structural diff is meaningful. Descriptions carry provenance, not contract.
@@ -120,6 +123,1530 @@ servers:
 # Adding a path is additive under the 0.8 drift gate and needs no
 # acknowledgement; REMOVING one, or narrowing a published field, does.
 paths:
+  /functions/v1/partner-api/v1/agents:
+    get:
+      operationId: listAgents
+      summary: List human agents
+      description: |
+        Scope `agents:read`. Risk class A.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Pages order by created_at DESC, id DESC; legacy rows without created_at are excluded.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Agent list result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentsResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    post:
+      operationId: createAgent
+      summary: Create human agent
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Mints an unconfirmed, passwordless Auth service identity, then atomically inserts agent membership and profile. Default status is offline and capacity is 10. Recovery deletes the identity only after a complete read proves provisioning did not commit; otherwise preserves it for reconciliation.
+        The service email is stable for the key and Idempotency-Key, preventing a second identity after a crashed attempt is taken over. An Auth uniqueness refusal is indeterminate and requires reconciliation. Use a fresh Idempotency-Key for each new agent.
+        Idempotency-Key is required. Hash covers action, agent ID, workspace and every submitted body field. Replays return the stored response without another mutation or Auth identity. Unknown outcomes return idempotency_indeterminate.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HumanAgentCreate' }
+      responses:
+        '201':
+          description: Agent create result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/agents/{id}:
+    get:
+      operationId: getAgent
+      summary: Get human agent
+      description: |
+        Scope `agents:read`. Risk class A.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Returns the agent profile.
+      parameters:
+        - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/HumanAgentId' } }
+      responses:
+        '200':
+          description: Agent get result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    patch:
+      operationId: updateAgent
+      summary: Update human agent
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Partial PATCH changes only submitted display_name, status or max_conversations. Unknown fields, empty patches, current_conversations and statuses outside online/away/offline return invalid_request.
+        Idempotency-Key is required. Hash covers action, agent ID, workspace and every submitted body field. Replays return the stored response without another mutation or Auth identity. Unknown outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/HumanAgentId' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HumanAgentPatch' }
+      responses:
+        '200':
+          description: Agent update result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    delete:
+      operationId: deleteAgent
+      summary: Delete human agent
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.
+        Returns 409 invalid_request when ANY retained conversation assignment references the agent, including active, ended or legacy assignments. A database NO ACTION foreign key prevents concurrent assignments from being silently detached. Assignment history retains its ON DELETE SET NULL behavior. Deletes only the agent profile; Auth identity and workspace membership remain. No request fields are accepted.
+        Idempotency-Key is required. Hash covers action, agent ID, workspace and every submitted body field. Replays return the stored response without another mutation or Auth identity. Unknown outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { $ref: '#/components/schemas/HumanAgentId' } }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Agent delete result.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HumanAgentDeleteResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+
+  /functions/v1/partner-api/v1/platform/workspaces:
+    post:
+      operationId: createWorkspace
+      summary: Provision a workspace and its bootstrap key
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:workspaces.manage`. Risk class C. Creates an Auth
+        service owner, then atomically creates the workspace, Direct QR account
+        placeholder, bound workspace key and audit row. No plan is assigned;
+        the new owner's signup quota override or free allowance gates its first account.
+        The partner attests it collected the supplied Direct QR risk consent;
+        Postora records this as partner_attestation, not a witnessed acceptance.
+
+        The bootstrap secret is returned ONLY on the initial 201; store it safely.
+        Its scopes are whatsapp:numbers.read, whatsapp:numbers.manage,
+        conversations:read, messages:read and messages:send. Number management
+        routes are delivered separately; provisioning alone does not pair a number.
+        Reuse external_ref to recover a completed workspace with 200 and no key.
+        Pending/failed attempts require reconciliation and answer
+        idempotency_indeterminate. A lost RPC response with a committed tenant
+        also answers idempotency_indeterminate; list/get the estate and issue a
+        new key if needed. Failed read-back answers internal_error and leaves
+        the owner intact. Without external_ref, retries are independent creates.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformWorkspaceCreate'
+      responses:
+        '201':
+          description: Created; the key is returned once and must not be cached.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlatformWorkspaceCreated'
+        '200':
+          description: An existing external_ref; workspace metadata only, no secret.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlatformWorkspace'
+                  - type: object
+                    required: [request_id]
+                    properties:
+                      request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+    get:
+      operationId: listPlatformWorkspaces
+      summary: List workspaces in the principal's estate
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:workspaces.read`. Risk class A. Ownership is by principal,
+        so rotating the platform credential preserves the estate. Descending
+        keyset pagination on (created_at, workspace_id); never returns keys.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            $ref: '#/components/schemas/LimitParameter'
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        '200':
+          description: One page of the principal's workspaces.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor, request_id]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PlatformWorkspace'
+                  next_cursor: { type: [string, 'null'] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/platform/workspaces/{id}:
+    get:
+      operationId: getPlatformWorkspace
+      summary: Get a workspace in the principal's estate
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:workspaces.read`. Risk class A. Malformed ids and
+        workspaces outside the principal's estate answer resource_not_found.
+        Returns metadata only; bootstrap secrets cannot be retrieved.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The workspace.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PlatformWorkspace'
+                  - type: object
+                    required: [request_id]
+                    properties:
+                      request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/platform/workspaces/{id}/keys:
+    post:
+      operationId: issueWorkspaceKey
+      summary: Issue a bound workspace key within the principal's estate
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:keys.manage`. Risk class C. account_id is required and
+        must belong to the named workspace. The estate check, account binding,
+        key creation and audit commit atomically. All platform: scopes, legacy
+        scopes, unknown scopes and non-string scope entries are invalid_request.
+        An account or workspace outside the estate answers resource_not_found.
+        The secret is returned once; this operation does not replay secrets.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PlatformWorkspaceKeyCreate'
+      responses:
+        '201':
+          description: Created; store the key safely, it cannot be retrieved later.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, key, key_prefix, scopes, workspace_id, account_id, request_id]
+                properties:
+                  id: { type: string, format: uuid }
+                  key: { type: string, description: One-time workspace secret. }
+                  key_prefix: { type: string }
+                  scopes:
+                    type: array
+                    items: { type: string }
+                  workspace_id: { type: string, format: uuid }
+                  account_id: { type: string, format: uuid }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/platform/keys/{id}:
+    delete:
+      operationId: revokeWorkspaceKey
+      summary: Revoke a workspace key within the principal's estate
+      security:
+        - PlatformApiKey: []
+      description: |
+        Scope `platform:keys.manage`. Risk class C. Revocation and its audit
+        row commit atomically. An outside-estate key and an already-revoked
+        key both answer resource_not_found; repeat revocation is not success.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '204':
+          description: Key revoked; no response body.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers:
+    post:
+      operationId: registerWhatsAppNumber
+      summary: Register a Direct QR WhatsApp number
+      description: |
+        Registers a pending number and binds it to the calling workspace key.
+        Requires both WhatsApp and Direct QR entitlement before processing
+        the request. Scope `whatsapp:numbers.manage`. D7 class C.
+
+        Phase 1 supports only `evolution_qr`. `cloud_api` and `coexistence`
+        onboarding return `unsupported_capability` (422); they need Meta
+        credential exchange, phone-number/WABA association and business
+        verification that this API cannot drive yet.
+
+        Consent is a partner attestation, not an acceptance witnessed by
+        Postora. The server records the acting key, receipt time and consent
+        version `direct-qr-2026-09-10`. That version covers acceptance of
+        unofficial WhatsApp access and its account restriction/ban risk.
+        The reported identity, timestamp and optional IP are stored as evidence.
+
+        Idempotency-Key is required (`missing_idempotency_key` otherwise).
+        Every outcome-changing field, including consent, is hashed. Reusing a
+        key with changed input returns `idempotency_conflict`; a settled retry
+        returns its original body and status without creating another number.
+        `idempotency_in_progress` means an attempt is running.
+        `idempotency_indeterminate` means the write may have committed: do not
+        repeat it with a new key; reconcile the bound numbers with Postora.
+
+        Invalid name/consent/key returns `invalid_request`, owner account quota
+        exhaustion returns `quota_exceeded`. An unprovisioned workspace fails
+        entitlement first; if its owner disappears after that check, the RPC
+        refusal returns `invalid_request` explaining the missing service owner.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterWhatsAppNumberRequest'
+      responses:
+        '201':
+          description: Pending number registered and bound to this key; start pairing next.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, connection_mode, status, request_id]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  connection_mode: { type: string, enum: [evolution_qr] }
+                  status: { type: string, enum: [pending] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+    get:
+      operationId: listWhatsAppNumbers
+      summary: List bound WhatsApp numbers
+      description: |
+        Reads WhatsApp accounts in this workspace that are bound to the key,
+        including pending and disconnected numbers. Requires server-side
+        WhatsApp entitlement; a disabled feature returns `feature_not_entitled`
+        (403) before any binding or account lookup.
+
+        Ordered by `updated_at` descending, then by id descending. Connection
+        transitions update this ordering even when `connected_at` is unchanged.
+        Use the opaque cursor to traverse pages; restart from the first page
+        to reconcile later changes. The cursor is not a snapshot or an event log.
+
+        Scope `whatsapp:numbers.read`. D7 class A. Legacy WhatsApp scopes do
+        not authorize this operation.
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: The page of bound WhatsApp numbers.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/CollectionEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/WhatsAppNumber'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}/pairing:
+    post:
+      operationId: createWhatsAppPairing
+      summary: Start or refresh Direct QR pairing
+      description: |
+        Creates the number's Direct QR session or refreshes an existing QR.
+        Requires both WhatsApp and Direct QR entitlement, then a binding to
+        this workspace key. An unbound id returns `resource_not_found` before
+        querying that account. Non-QR modes return `unsupported_capability`.
+        Scope `whatsapp:numbers.manage`. D7 class C. Legacy scopes do not apply.
+
+        Idempotency-Key is required. Replays return the stored body and status
+        without contacting the provider, even if that QR has since expired.
+        Use a new key for an intentional refresh. Action and account id are
+        included in the request hash; keys cannot be reused across numbers.
+        An uncertain write returns `idempotency_indeterminate`; do not retry
+        with a new key until the account's state has been reconciled.
+        The body may be omitted or must be an empty JSON object.
+        This operation does not tear down sessions or repair webhooks.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: Pairing response; QR can be null when none is available.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WhatsAppPairing'
+        default:
+          $ref: '#/components/responses/V1Error'
+    get:
+      operationId: getWhatsAppPairing
+      summary: Poll Direct QR connection status
+      description: |
+        Polls the provider and reconciles the account's linked number and
+        connection state. Requires both WhatsApp and Direct QR entitlement
+        before resolving the binding. An unbound id returns
+        `resource_not_found` before querying that account. A number without
+        a pairing session also returns `resource_not_found`; start pairing first.
+        Scope `whatsapp:numbers.read`. D7 class B because this polls the provider.
+        No Idempotency-Key is needed. This read does not refresh the QR,
+        start history sync or repair webhooks. Raw connection states include
+        `connecting`, `open` and `close`; a closed connection alone is not proof
+        of a timed QR expiry. The phone number is null until identity resolves.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Latest connection state and resolved phone number.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, state, phone_number, request_id]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  state: { type: string }
+                  phone_number: { type: [string, 'null'] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}/session:
+    delete:
+      operationId: endWhatsAppSession
+      summary: End a Direct QR session
+      description: |
+        Requires WhatsApp entitlement and a number bound to this workspace key.
+        Scope `whatsapp:numbers.manage`. D7 class C. Legacy scopes do not apply.
+        An unbound number returns `resource_not_found` before its account is queried;
+        non-Direct-QR numbers return `unsupported_capability`.
+
+        Local deactivation is mandatory. A 200 response reports local deactivation
+        and the separate remote logout result (`ok`, `failed`, or `skipped`).
+        Remote failure or a missing session produces warnings at 200 because local
+        deactivation succeeded; it does not claim that the device session ended.
+        Failure to deactivate locally never returns 200.
+
+        Idempotency-Key is required. All deterministic outcomes, including failed
+        remote logout, settle and replay the original body/status. To retry remote
+        teardown intentionally, use a new key. An uncertain write or failed
+        settlement returns `idempotency_indeterminate`; reconcile before retrying.
+        Action and account id are included in the request hash.
+        The body may be omitted or must be an empty JSON object.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '200':
+          description: Local deactivation succeeded; inspect remote_logout and warnings.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [local_deactivated, remote_logout, warnings, request_id]
+                properties:
+                  local_deactivated: { type: boolean, const: true }
+                  remote_logout: { type: string, enum: [ok, failed, skipped] }
+                  warnings: { type: array, items: { type: string } }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}/history-sync:
+    post:
+      operationId: startWhatsAppHistorySync
+      summary: Request a history sweep for a paired Direct QR number
+      description: |
+        Requires WhatsApp entitlement before idempotency or binding lookup.
+        Scope `whatsapp:numbers.manage`. D7 class C. Accepts an empty body or {}.
+        The number must be a Direct QR number bound to this workspace key.
+        Unbound numbers and absent instances return `resource_not_found`.
+        Other connection modes and numbers that have not finished pairing return
+        `unsupported_capability` (422). Missing workspace data is `internal_error`.
+
+        The engine owns the lease claim. A held lease returns `sync_already_running`
+        (409, retryable:true), even if a webhook or poller owns it. Poll this path
+        with GET; after that sweep finishes, use a new Idempotency-Key for a new
+        attempt. Reusing the refused key replays its original refusal.
+
+        Idempotency-Key is required. Its claim can return `idempotency_conflict`,
+        `idempotency_in_progress`, or `idempotency_indeterminate` independently of
+        the domain lease. Settled retries replay the original status and body.
+        An uncertain sweep or settlement marks the request indeterminate; reconcile
+        with GET before attempting another sweep.
+
+        A claimed sweep returns 202 with state running and request_id, with no job id.
+        The existing engine is awaited through its completion write, so the sweep
+        may already be finished when 202 arrives. GET reports persisted progress;
+        the account and its lease identify the sweep.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false }
+      responses:
+        '202':
+          description: The engine claimed and ran the sweep; GET reports its latest progress.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [state, request_id]
+                properties:
+                  state: { type: string, enum: [running] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+    get:
+      operationId: getWhatsAppHistorySync
+      summary: Read the recorded history sync outcome
+      description: |
+        Requires WhatsApp entitlement and a Direct QR number bound to this workspace
+        key. Scope `whatsapp:numbers.read`. D7 class A: local database reads only,
+        with no provider call. Legacy scopes do not apply. An unbound number or
+        absent instance returns `resource_not_found`; other connection modes return
+        `unsupported_capability`. Failed database reads return `internal_error`.
+
+        A non-null sync start reports `running`. With no recorded outcome, a previous
+        successful sync reports `completed`, otherwise `idle`. Recorded worker errors
+        report `failed`. Normal worker counts report `partial` for truncation, chat
+        failures, unresolved LID chats, zero imported chats or zero written messages;
+        a clean sweep with imported messages reports `completed`. A prior successful
+        timestamp never overrides a newer partial or failed outcome. Unrecognized
+        outcome records return `internal_error` rather than claiming completion.
+        started_at is the active lease timestamp; finished_at is the latest worker
+        finish time, falling back to the previous successful sync time for legacy rows.
+        There is no job_id: the account and its lease identify the sweep.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Latest locally recorded sweep state.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [account_id, state, started_at, finished_at, request_id]
+                properties:
+                  account_id: { type: string, format: uuid }
+                  state: { type: string, enum: [idle, running, completed, partial, failed] }
+                  started_at: { type: [string, 'null'], format: date-time }
+                  finished_at: { type: [string, 'null'], format: date-time }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}/profile:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+      - name: account_id
+        in: query
+        description: Optional explicit account selector; must match the path id. A mismatch returns resource_not_found before an account read.
+        schema: { type: string, format: uuid }
+    get:
+      operationId: getWhatsAppProfile
+      summary: Read a Cloud API number's business profile
+      description: |
+        Scope `whatsapp:profile.read`. D7 class B because this calls Meta.
+        Requires WhatsApp entitlement, independently of the Direct QR flag.
+        The number must be bound to this workspace key. Unbound targets return
+        `resource_not_found` before any account query. Inactive or non-WhatsApp
+        accounts return `account_not_connected`; expired tokens or needs_reauth
+        return `account_needs_reauth` through the shared account preflight.
+
+        Direct QR numbers return `unsupported_capability` (422): the business
+        profile is a Cloud API capability. Phase 1 registers Direct QR only, so
+        these endpoints serve pre-existing Cloud API or coexistence numbers.
+        Failed or malformed Meta reads are errors, never an empty profile.
+      responses:
+        '200':
+          description: Current Meta business profile. Missing optional values are null or an empty websites list.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WhatsAppBusinessProfile'
+                  - type: object
+                    required: [request_id]
+                    properties:
+                      request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+    patch:
+      operationId: updateWhatsAppProfile
+      summary: Update selected Cloud API business profile fields
+      description: |
+        Scope `whatsapp:profile.manage`. D7 class C. Requires WhatsApp entitlement
+        and the same bound-account preflight and Cloud API capability as GET.
+        Direct QR returns `unsupported_capability` (422), regardless of its QR flag.
+
+        Only supplied writable fields are sent to Meta; absent fields are never
+        blanked. Unknown fields are ignored. An empty or unknown-only patch is
+        `invalid_request` (400). profile_picture_url is read-only. An empty email
+        string or websites list explicitly clears that value. Invalid field
+        lengths, email syntax or website URLs are refused before any provider call.
+
+        Idempotency-Key is required. Settled retries replay their original status
+        and body; a different body conflicts. Claims may return
+        `idempotency_conflict`, `idempotency_in_progress`, or
+        `idempotency_indeterminate`. A Meta 5xx, an unparseable or unconfirmed
+        response, transport failure, or failed settlement makes the write
+        indeterminate, never safely retryable. Reconcile the profile with GET.
+        Account binding and preflight are checked before a cached response is replayed.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WhatsAppBusinessProfilePatch'
+      responses:
+        '200':
+          description: Meta confirmed the profile update.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+            Idempotency-Replayed:
+              $ref: '#/components/headers/Idempotency-Replayed'
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, request_id]
+                properties:
+                  success: { type: boolean, const: true }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/whatsapp/numbers/{id}:
+    get:
+      operationId: getWhatsAppNumber
+      summary: Get one bound WhatsApp number
+      description: |
+        Reads a pending, connected or disconnected WhatsApp number. Requires
+        server-side WhatsApp entitlement before resolving the key's binding.
+        A disabled feature returns `feature_not_entitled` (403). An id outside
+        the binding returns `resource_not_found` (404) without an account query.
+        Missing accounts and accounts from another platform also return 404.
+
+        The id is the raw account UUID returned as `account_id` by this
+        collection, not a Meta phone number id or a prefixed `/v1/accounts` id.
+        Scope `whatsapp:numbers.read`. D7 class A. Legacy WhatsApp scopes do
+        not authorize this operation.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: The bound WhatsApp number.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/WhatsAppNumber'
+                  - type: object
+                    required: [request_id]
+                    properties:
+                      request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/conversation-modes:
+    get:
+      operationId: listConversationModes
+      summary: List conversation mode overrides
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        WhatsApp only, matching readable conversations; other table-supported platforms return unsupported_capability. Optional account_id narrows the bound set.
+        Publishes messaging_cache surrogate UUIDs as id (conv_ prefixed), never private conversation keys or owners. Modes without a matching conversation in the workspace and bound account set are omitted.
+        Keyset ordering is messaging_cache.last_message_at DESC, id DESC, not mode updated_at. Cache rows without last_message_at are excluded just as on the parent resource. Only resolvable overrides are returned.
+        Scans batches of 100 conversations up to 500 per request. A full result page uses its last returned conversation as the cursor when another override exists. At the scan budget, the cursor advances to the last scanned conversation. Sparse pages can be short or empty with a non-null cursor; continue until next_cursor is null. No offset is used.
+      parameters:
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: List conversation mode overrides.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationModesResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/conversations/{id}/assignment:
+    get:
+      operationId: getAssignment
+      summary: Read the active assignment
+      description: |
+        Scope `agents:read`. Risk class A.
+        Requires feature_human_agent before any resource lookup. No platform selector is required.
+        The conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.
+        Responses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user identities are never published.
+        Returns resource_not_found when there is no active assignment.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' } }
+      responses:
+        '200':
+          description: Read the active assignment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationAssignmentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    put:
+      operationId: assignConversation
+      summary: Assign or reassign a conversation
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before any resource lookup. No platform selector is required.
+        The conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.
+        Responses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user identities are never published.
+        Idempotency-Key is required. Hashes action, conversation surrogate, workspace, resolved account, owner, private key, platform and every body field. The current account binding is checked even on replay. Replays return the stored body without another write. Unknown write or settlement outcomes return idempotency_indeterminate.
+        PUT closes the active assignment and opens a new one in one SQL transaction with history. The new row always carries workspace_id and conversation_cache_id. The unique index enforces one active assignment for non-null workspaces; legacy null-workspace rows are outside this guarantee. Agent must belong to the same workspace. Omitted notes become null.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConversationAssignmentUpdate' }
+      responses:
+        '200':
+          description: Assign or reassign a conversation.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationAssignmentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    delete:
+      operationId: unassignConversation
+      summary: Close the active assignment
+      description: |
+        Scope `agents:manage`. Risk class C.
+        Requires feature_human_agent before any resource lookup. No platform selector is required.
+        The conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.
+        Responses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user identities are never published.
+        Idempotency-Key is required. Hashes action, conversation surrogate, workspace, resolved account, owner, private key, platform and every body field. The current account binding is checked even on replay. Replays return the stored body without another write. Unknown write or settlement outcomes return idempotency_indeterminate.
+        DELETE sets unassigned_at and records history; it never deletes the assignment. No active assignment returns resource_not_found without assignment/history writes. The request body must be empty or an empty object.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' } }
+        - { $ref: '#/components/parameters/IdempotencyKey' }
+      responses:
+        '200':
+          description: Close the active assignment.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationAssignmentResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/conversations/{id}/assignment-history:
+    get:
+      operationId: listAssignmentHistory
+      summary: List assignment history
+      description: |
+        Scope `agents:read`. Risk class A.
+        Requires feature_human_agent before any resource lookup. No platform selector is required.
+        The conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.
+        Responses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user identities are never published.
+        Filters by workspace and the resolved conversation. Newest first on (created_at, id), with an opaque cursor and limit + 1 lookahead. Legacy rows with null created_at or workspace_id are excluded. Equal timestamps resume by id.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' } }
+        - { $ref: '#/components/parameters/Limit' }
+        - { $ref: '#/components/parameters/Cursor' }
+      responses:
+        '200':
+          description: List assignment history.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AssignmentHistoryResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/conversations/{id}/mode:
+    get:
+      operationId: getConversationMode
+      summary: Read a conversation mode
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        The conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only; a bound conversation on another platform returns unsupported_capability with the same refusal as its parent resource.
+        The public id is the conversation surrogate. Owner and private conversation key are derived from the resolved row and never returned. mode is null when the agent config default is inherited.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' }, description: Published conversation surrogate id. }
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+      responses:
+        '200':
+          description: Read a conversation mode.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationModeResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    put:
+      operationId: setConversationMode
+      summary: Set or clear a conversation mode
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        The conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only; a bound conversation on another platform returns unsupported_capability with the same refusal as its parent resource.
+        The public id is the conversation surrogate. Owner and private conversation key are derived from the resolved row and never returned. mode is null when the agent config default is inherited.
+        mode accepts ai_first, human_first or human_then_ai. null or default deletes the override and returns mode null; default is never stored. Unknown fields and invalid modes return invalid_request without a mode write.
+        Idempotency-Key is required. The hash covers action, resource, platform, resolved account and owner, current binding and every body field. Replays return the stored body without another mutation. Unknown write or settlement outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' }, description: Published conversation surrogate id. }
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConversationModeUpdate' }
+      responses:
+        '200':
+          description: Set or clear a conversation mode.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConversationModeResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/auto-replies:
+    get:
+      operationId: listAutoReplies
+      summary: List owner-wide auto-reply rules
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        Rules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the key binds multiple accounts; it selects an active bound account in the key workspace and derives the owner from that account. No caller-supplied owner is accepted.
+        platform selects whatsapp_auto_replies for whatsapp or messenger_auto_replies for facebook/instagram. Pages order by created_at DESC, id DESC using a keyset cursor. Legacy rows with null created_at are excluded because they have no cursor position.
+      parameters:
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: List owner-wide auto-reply rules.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutoRepliesResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    post:
+      operationId: createAutoReply
+      summary: Create an owner-wide auto-reply rule
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        Rules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the key binds multiple accounts; it selects an active bound account in the key workspace and derives the owner from that account. No caller-supplied owner is accepted.
+        Writes user_id from the resolved account, matching both webhook readers. Required fields are name, rule_type and reply_message. Optional fields follow table defaults.
+        Idempotency-Key is required. The hash covers action, resource, platform, resolved account and owner, current binding and every body field. Replays return the stored body without another mutation. Unknown write or settlement outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AutoReplyCreate' }
+      responses:
+        '200':
+          description: Create an owner-wide auto-reply rule.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutoReplyResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/auto-replies/{id}:
+    patch:
+      operationId: updateAutoReply
+      summary: Update an owner-wide auto-reply rule
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        Rules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the key binds multiple accounts; it selects an active bound account in the key workspace and derives the owner from that account. No caller-supplied owner is accepted.
+        A rule outside the resolved owner and platform returns resource_not_found before mutation. Both the lookup and update are owner-scoped. PATCH changes only submitted fields; unknown fields, invalid values and an empty patch return invalid_request.
+        Idempotency-Key is required. The hash covers action, resource, platform, resolved account and owner, current binding and every body field. Replays return the stored body without another mutation. Unknown write or settlement outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: Auto-reply rule UUID. }
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AutoReplyUpdate' }
+      responses:
+        '200':
+          description: Update an owner-wide auto-reply rule.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutoReplyResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    delete:
+      operationId: deleteAutoReply
+      summary: Delete an owner-wide auto-reply rule
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.
+        Rules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the key binds multiple accounts; it selects an active bound account in the key workspace and derives the owner from that account. No caller-supplied owner is accepted.
+        A rule outside the resolved owner and platform returns resource_not_found before mutation. Both the lookup and delete are owner-scoped. No request body fields are accepted.
+        Idempotency-Key is required. The hash covers action, resource, platform, resolved account and owner, current binding and every body field. Replays return the stored body without another mutation. Unknown write or settlement outcomes return idempotency_indeterminate.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: Auto-reply rule UUID. }
+        - { name: platform, in: query, required: true, schema: { type: string, enum: [whatsapp, facebook, instagram] } }
+        - { name: account_id, in: query, schema: { type: string }, description: 'Bound account UUID or acc_ prefixed UUID; required for multiple bindings on auto-reply routes.' }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Delete an owner-wide auto-reply rule.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutoReplyDeleteResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/handlers:
+    get:
+      operationId: getAutomationHandlers
+      summary: Read automation handlers for an account
+      description: |
+        Scope `automation:read`. Risk class A. Requires the agent setup feature
+        flag for the explicitly requested platform. Missing or unknown platform
+        returns feature_not_entitled. The account must be active, bound to the
+        key, in its workspace and match platform; otherwise resource_not_found.
+        Omit account_id only when the key binds exactly one account.
+        Returns all three settings with their documented defaults for unset keys.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+      responses:
+        '200':
+          description: Resolved automation handlers.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationHandlersResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+    put:
+      operationId: setAutomationHandlers
+      summary: Update only submitted automation handler settings
+      description: |
+        Scope `automation:manage`. Risk class C. Requires the agent setup feature
+        flag for the explicitly requested platform. Missing or unknown platform
+        returns feature_not_entitled. Account resolution follows the GET rules.
+        PUT is partial: only submitted keys are merged atomically under the account
+        row lock. Unknown fields, invalid values and an empty patch return
+        invalid_request. All three resolved settings are returned, including
+        media_understanding. Unrelated account metadata is never exposed.
+        Idempotency-Key is required. Replays return the stored body without a
+        second mutation. The hash covers action, account, platform, binding and
+        every body field. Changed input conflicts. Unknown mutation or settlement
+        outcomes return idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AutomationHandlersUpdate' }
+      responses:
+        '200':
+          description: All resolved automation handlers after the atomic merge.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationHandlersResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/audience:
+    get:
+      operationId: getAudience
+      summary: List audience contacts for bound accounts
+      description: |
+        Scope `automation:read`. Risk class B (conservative published contract,
+        even though this reads a local table). Requires the agent setup feature
+        flag for platform. Only facebook, instagram, threads and youtube are
+        accepted; missing or unsupported platform returns invalid_request before
+        entitlement or audience queries. Filters social_contacts by bound
+        social_account_id, not its nullable workspace_id. Accounts are resolved
+        inside the key workspace and requested platform. An explicit unbound or
+        mismatched account_id returns resource_not_found. Omit account_id to list
+        across the binding on that platform. Read failures return internal_error.
+        Pages order by last_interacted_at DESC then id DESC. next_cursor is null
+        only when the listing is exhausted. Owner identity and internal metadata
+        are omitted from responses.
+      parameters:
+        - name: platform
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [facebook, instagram, threads, youtube]
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: A page of account-bound audience contacts.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationAudienceResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/agent:
+    get:
+      operationId: getAgentConfig
+      summary: Read an account agent config
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the agent setup flag for the explicitly requested platform:
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Omit account_id only if the key binds exactly one account. The account
+        must be active and match platform. No cross-account config fallback exists.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentConfigResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+    put:
+      operationId: updateAgentConfig
+      summary: Update only submitted agent config fields
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the agent setup flag for the explicitly requested platform:
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Omit account_id only if the key binds exactly one account. The account
+        must be active and match platform. No cross-account config fallback exists.
+        PUT has partial-update semantics: omitted fields remain unchanged. Unknown
+        fields are rejected. Clearing a non-empty persona_instructions or
+        business_profile_text requires confirm_clear=true; otherwise returns 409
+        invalid_request with details.blanked_fields. Structured business_profile
+        renders business_profile_text server-side and is checked by the same guard.
+        A text-only profile update synchronizes the structured profile. Model names
+        must be active entries in the admin-curated model allow-list.
+        Read failures return internal_error and never write an empty config.
+        Idempotency-Key is required. Replays return the stored body and never repeat
+        the write. The request hash includes action, resource, account, platform,
+        binding and all body fields. Changed input conflicts. Unknown mutation or
+        settlement outcomes are fenced as idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentConfigUpdate' }
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentConfigResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/tools:
+    get:
+      operationId: listAgentTools
+      summary: List account-owned agent tools
+      description: |
+        Scope `automation:read`. Risk class A.
+        Requires the agent setup flag for the explicitly requested platform:
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Only account-owned tools are exposed; legacy all_accounts tools are excluded.
+        Tool responses omit secret values, Vault ids and owner identity. Credentials
+        are accepted only via the connector registry and merged by the existing Vault
+        path. A whole-tool mutation refuses tools shared outside the key binding.
+        Every platform affected by a shared-tool write must also pass its agent
+        setup feature flag for this action, including platforms of existing shares.
+        Without account_id, lists tools owned by all bound accounts on platform.
+        Results are ordered by created_at and id descending with cursor pagination.
+        This is an ownership listing, not an effective-runtime-tools listing.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentToolsResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/tools/{id}/accounts:
+    put:
+      operationId: setToolAccounts
+      summary: Replace a tool share set
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the agent setup flag for the explicitly requested platform:
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Only account-owned tools are exposed; legacy all_accounts tools are excluded.
+        Tool responses omit secret values, Vault ids and owner identity. Credentials
+        are accepted only via the connector registry and merged by the existing Vault
+        path. A whole-tool mutation refuses tools shared outside the key binding.
+        Every platform affected by a shared-tool write must also pass its agent
+        setup feature flag for this action, including platforms of existing shares.
+        social_account_ids replaces the complete explicit share set. Omission or
+        an empty array removes all shares. Duplicates are collapsed. Every target
+        must be bound to this key and in its workspace; unbound targets are refused.
+        The existing transactional sharing RPC also enforces owner and name-collision
+        rules. The owning account retains access without an explicit share row.
+        Idempotency-Key is required. Replays return the stored body and never repeat
+        the write. The request hash includes action, resource, account, platform,
+        binding and all body fields. Changed input conflicts. Unknown mutation or
+        settlement outcomes are fenced as idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentToolAccountsUpdate' }
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationWriteResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/automation/tools/{id}:
+    put:
+      operationId: upsertAgentTool
+      summary: Create or update a tool at its UUID
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the agent setup flag for the explicitly requested platform:
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Omit account_id only if the key binds exactly one account. The account
+        must be active and match platform. No cross-account config fallback exists.
+        Only account-owned tools are exposed; legacy all_accounts tools are excluded.
+        Tool responses omit secret values, Vault ids and owner identity. Credentials
+        are accepted only via the connector registry and merged by the existing Vault
+        path. A whole-tool mutation refuses tools shared outside the key binding.
+        Every platform affected by a shared-tool write must also pass its agent
+        setup feature flag for this action, including platforms of existing shares.
+        id is a caller-chosen UUID for creation, or the existing tool UUID for
+        updates. Supply the complete tool definition; omitted credential fields
+        preserve stored values. An existing tool cannot be moved between accounts.
+        Idempotency-Key is required. Replays return the stored body and never repeat
+        the write. The request hash includes action, resource, account, platform,
+        binding and all body fields. Changed input conflicts. Unknown mutation or
+        settlement outcomes are fenced as idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AgentToolUpdate' }
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AgentToolResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+    delete:
+      operationId: deleteAgentTool
+      summary: Delete an account-owned tool
+      description: |
+        Scope `automation:manage`. Risk class C.
+        Requires the agent setup flag for the explicitly requested platform:
+        feature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,
+        feature_msg_threads, or feature_youtube_comments respectively.
+        Entitlement is checked before account or tool resolution. account_id must
+        belong to the current workspace and key binding; otherwise resource_not_found.
+        Only account-owned tools are exposed; legacy all_accounts tools are excluded.
+        Tool responses omit secret values, Vault ids and owner identity. Credentials
+        are accepted only via the connector registry and merged by the existing Vault
+        path. A whole-tool mutation refuses tools shared outside the key binding.
+        Every platform affected by a shared-tool write must also pass its agent
+        setup feature flag for this action, including platforms of existing shares.
+        Idempotency-Key is required. Replays return the stored body and never repeat
+        the write. The request hash includes action, resource, account, platform,
+        binding and all body fields. Changed input conflicts. Unknown mutation or
+        settlement outcomes are fenced as idempotency_indeterminate; do not resend.
+      parameters:
+        - $ref: '#/components/parameters/AgentPlatform'
+        - $ref: '#/components/parameters/AccountIdFilter'
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Successful automation response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AutomationWriteResponse' }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/comments:
+    get:
+      operationId: listComments
+      summary: List comments across bound Facebook, Instagram and YouTube accounts
+      description: |
+        Scope `comments:read`. Risk class B. Requires `feature_comment_manager`.
+        Reads live provider feeds, not a local update-time table. Accounts are
+        traversed in id order; Meta post feeds and comment edges use Graph after
+        cursors, YouTube uses nextPageToken. A page may be short or empty while
+        next_cursor is non-null. Continue until null; restart from the beginning
+        to reconcile changes. This is not an update-time or snapshot guarantee.
+        Facebook includes stream replies. Instagram and YouTube traverse
+        top-level comments followed by separately paginated reply edges. No
+        private replies or browser video-picker endpoint is exposed.
+        post_id is a Postora post_ id addressable through /v1/posts, resolved to
+        published provider posts on bound accounts. Posts without a bound
+        published target and outside-workspace posts answer resource_not_found.
+        Cursors are signed and tied to the workspace and identical filters.
+        Comment ids are signed cmt. references issued by this feed, stable while
+        the account identity and server signing secret remain unchanged. Raw
+        provider ids cannot be used as item ids. Rotating the service-role secret
+        invalidates references and cursors; restart listing to obtain new ones.
+        All comment routes require the current workspace/account binding, even
+        for idempotent replays. YouTube requires its existing force-ssl capability
+        (or Composio); reconnect_required maps to account_needs_reauth.
+        Comment webhook events are not yet certified.
+      parameters:
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Cursor'
+        - name: platform
+          in: query
+          schema: { type: string, enum: [facebook, instagram, youtube] }
+        - name: post_id
+          in: query
+          schema: { type: string }
+        - name: account_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Live provider page; continue even after an empty page if next_cursor is present.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, next_cursor, request_id]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Comment' }
+                  next_cursor: { type: [string, 'null'] }
+                  request_id: { type: string }
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/comments/{id}/reply:
+    post:
+      operationId: replyComment
+      summary: Reply publicly to a comment
+      description: |
+        Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.
+        Use the opaque id returned by listComments. Unbound, forged or foreign
+        references answer resource_not_found before contacting any provider.
+        Idempotency-Key is required. All provider failures whose outcome cannot
+        be proven are fenced as idempotency_indeterminate; do not resend them.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1 }
+      responses:
+        '200':
+          description: Successful provider response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentActionResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/comments/{id}/hide:
+    post:
+      operationId: hideComment
+      summary: Hide or unhide a comment
+      description: |
+        Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.
+        Use the opaque id returned by listComments. Unbound, forged or foreign
+        references answer resource_not_found before contacting any provider.
+        Idempotency-Key is required. All provider failures whose outcome cannot
+        be proven are fenced as idempotency_indeterminate; do not resend them.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                hidden: { type: boolean, default: true, description: YouTube maps true to rejected and false to published. }
+      responses:
+        '200':
+          description: Successful provider response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentActionResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+  /functions/v1/partner-api/v1/comments/{id}:
+    get:
+      operationId: getComment
+      summary: Read a comment from its provider
+      description: |
+        Scope `comments:read`. Risk class B. Requires `feature_comment_manager`.
+        Use the opaque id returned by listComments. Unbound, forged or foreign
+        references answer resource_not_found before contacting any provider.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: Successful provider response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
+    delete:
+      operationId: deleteComment
+      summary: Delete a Facebook or Instagram comment
+      description: |
+        Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.
+        Use the opaque id returned by listComments. Unbound, forged or foreign
+        references answer resource_not_found before contacting any provider.
+        YouTube delete returns unsupported_capability (422); use hide instead.
+        Idempotency-Key is required. All provider failures whose outcome cannot
+        be proven are fenced as idempotency_indeterminate; do not resend them.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: Successful provider response.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentActionResponse'
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/accounts:
     get:
       operationId: listAccounts
@@ -1221,6 +2748,17 @@ paths:
 
 components:
   securitySchemes:
+    PlatformApiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: Postora platform key
+      description: |
+        Platform routes only: Authorization: Bearer pl_live_… in production,
+        pl_test_… in staging. The platform door also accepts the same credential
+        in x-postora-key. If both are sent, a Bearer Authorization value takes
+        precedence. These keys belong to a principal, not a workspace, and may
+        carry only platform scopes. Workspace keys cannot authenticate here.
+        This transport does not change the PartnerApiKey workspace scheme.
     PartnerApiKey:
       type: apiKey
       in: header
@@ -1243,6 +2781,62 @@ components:
         (`index.ts:74-76, 493`).
 
   schemas:
+    PlatformWorkspace:
+      type: object
+      required: [workspace_id, external_ref, created_at]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        external_ref: { type: [string, 'null'] }
+        created_at: { type: string, format: date-time }
+    PlatformWorkspaceCreate:
+      type: object
+      required: [name, connection_name, risk_consent, consent_version]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        connection_name: { type: string, minLength: 1, maxLength: 200 }
+        external_ref:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 200
+          description: Stable reference unique to the principal; use it to recover timed-out provisioning.
+        risk_consent:
+          type: object
+          required: [accepted, accepted_by, accepted_at, accepted_ip]
+          properties:
+            accepted: { type: boolean, enum: [true] }
+            accepted_by: { type: string, minLength: 1, maxLength: 200 }
+            accepted_at: { type: string, format: date-time }
+            accepted_ip:
+              type: string
+              description: IPv4 or IPv6 address reported by the partner.
+              example: 192.0.2.1
+        consent_version:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Identifies the Direct QR risk text accepted by the tenant.
+    PlatformWorkspaceCreated:
+      type: object
+      required: [workspace_id, account_id, key_id, key, external_ref, request_id]
+      properties:
+        workspace_id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        key_id: { type: string, format: uuid }
+        key: { type: string, description: Bootstrap secret returned only on creation. }
+        external_ref: { type: [string, 'null'] }
+        request_id: { type: string }
+    PlatformWorkspaceKeyCreate:
+      type: object
+      required: [name, account_id, scopes]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200 }
+        account_id: { type: string, format: uuid }
+        scopes:
+          type: array
+          minItems: 1
+          items:
+            type: string
+            enum: [accounts:read, connectors:manage, connectors:read, conversations:read, media:read, media:write, messages:read, messages:send, posts:publish, posts:read, posts:schedule, posts:write, templates:read, tools:execute, usage:read, webhooks:manage, webhooks:read]
     # ---- Error envelope (v1) — spec D2 ----
     V1ErrorEnvelope:
       type: object
@@ -1313,6 +2907,12 @@ components:
         if a recorded decision ever changes that.
 
         Provenance (grep `supabase/functions/partner-api` + `_shared`):
+        - `partnerEntitlement.ts` (section expansion Task 6):
+          `feature_not_entitled` (403, not retryable) for a missing provisioned
+          owner or a disabled/missing required feature. Distinct from
+          `insufficient_scope` at the same status; partners branch on the code.
+          `details.missing_feature_keys` lists the unsatisfied flags when known.
+          The resolver is prepared here; production consumers arrive in Task 7.
         - `partnerApiKeys.ts`: `invalid_key`, `key_revoked`, `key_expired`,
           `insufficient_scope`, `internal_error`
         - `partnerApiMetering.ts`: `rate_limited` (`RateLimitedError`), `limiter_unavailable`,
@@ -1357,6 +2957,10 @@ components:
           `unknown_action` (no action protocol) but keeps it expressible so
           the two surfaces share one code list.
 
+        - `_shared/whatsappPairingOps.ts`: `sync_already_running` (409, retryable)
+          when the history-sync domain lease is held by any trigger. This is distinct
+          from `idempotency_in_progress`, which refers to a particular request key.
+
         THIS ENUM IS THE AUTHORITATIVE LIST. Other documents describe the
         error surface in prose; where any of them disagrees with this enum,
         this enum is right and the other is stale. The "exhaustive" table in
@@ -1374,6 +2978,7 @@ components:
         - connector_type_not_connectable
         - connector_unavailable
         - connector_write_not_allowed
+        - feature_not_entitled
         - idempotency_conflict
         - idempotency_in_progress
         - idempotency_indeterminate
@@ -1397,6 +3002,7 @@ components:
         - quota_exceeded
         - rate_limited
         - resource_not_found
+        - sync_already_running
         - template_not_approved
         - temporarily_unavailable
         - tool_execution_failed
@@ -1443,6 +3049,429 @@ components:
           additionalProperties: true
 
     # ---- Scopes — spec D3 + §7 ----
+    Comment:
+      type: object
+      required: [id, account_id, platform, platform_comment_id, platform_post_id, text, created_at, parent_comment_id, author_name, hidden]
+      properties:
+        id: { type: string, description: Signed opaque cmt. resource reference from listComments. }
+        account_id: { type: string, format: uuid }
+        platform: { type: string, enum: [facebook, instagram, youtube] }
+        platform_comment_id: { type: string }
+        platform_post_id: { type: string }
+        text: { type: string }
+        created_at: { type: [string, 'null'] }
+        parent_comment_id: { type: [string, 'null'] }
+        author_name: { type: [string, 'null'] }
+        hidden: { type: [boolean, 'null'] }
+    CommentResponse:
+      allOf:
+        - $ref: '#/components/schemas/Comment'
+        - type: object
+          required: [request_id]
+          properties:
+            request_id: { type: string }
+    CommentActionResponse:
+      type: object
+      required: [success, platform_comment_id, request_id]
+      properties:
+        success: { type: boolean, const: true }
+        platform_comment_id: { type: string }
+        request_id: { type: string }
+
+    ConversationAssignmentUpdate:
+      type: object
+      additionalProperties: false
+      required: [agent_id]
+      properties:
+        agent_id: { $ref: '#/components/schemas/HumanAgentId' }
+        notes: { type: string, nullable: true, maxLength: 10000 }
+    ConversationAssignment:
+      type: object
+      additionalProperties: false
+      required: [id, agent_id, assigned_at, unassigned_at, notes]
+      properties:
+        id: { type: string, pattern: '^assignment_[0-9a-fA-F-]{36}$' }
+        agent_id: { type: string, nullable: true, pattern: '^agent_[0-9a-fA-F-]{36}$' }
+        assigned_at: { type: string, format: date-time, nullable: true }
+        unassigned_at: { type: string, format: date-time, nullable: true }
+        notes: { type: string, nullable: true }
+    ConversationAssignmentResponse:
+      type: object
+      required: [assignment, request_id]
+      properties:
+        assignment: { $ref: '#/components/schemas/ConversationAssignment' }
+        request_id: { type: string }
+    AssignmentHistoryEntry:
+      type: object
+      additionalProperties: false
+      required: [id, action, from_agent_id, to_agent_id, notes, created_at]
+      properties:
+        id: { type: string, pattern: '^assignment_history_[0-9a-fA-F-]{36}$' }
+        action: { type: string, enum: [assigned, unassigned, transferred] }
+        from_agent_id: { type: string, nullable: true, pattern: '^agent_[0-9a-fA-F-]{36}$' }
+        to_agent_id: { type: string, nullable: true, pattern: '^agent_[0-9a-fA-F-]{36}$' }
+        notes: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    AssignmentHistoryResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AssignmentHistoryEntry' } }
+        next_cursor: { type: string, nullable: true }
+        request_id: { type: string }
+
+    ConversationMode:
+      type: object
+      required: [id, platform, mode, updated_at]
+      properties:
+        id: { type: string, pattern: '^conv_[0-9a-fA-F-]{36}$' }
+        platform: { type: string, enum: [whatsapp] }
+        mode: { type: [string, 'null'], enum: [ai_first, human_first, human_then_ai, null] }
+        updated_at: { type: [string, 'null'], format: date-time }
+    ConversationModeResponse:
+      unevaluatedProperties: false
+      allOf:
+        - $ref: '#/components/schemas/ConversationMode'
+        - type: object
+          required: [request_id]
+          properties:
+            request_id: { type: string }
+    ConversationModesResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/ConversationMode' } }
+        next_cursor: { type: [string, 'null'] }
+        request_id: { type: string }
+    ConversationModeUpdate:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode: { type: [string, 'null'], enum: [ai_first, human_first, human_then_ai, default, null] }
+    AutoReplyUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        rule_type: { type: string, enum: [away, keyword] }
+        reply_message: { type: string, minLength: 1 }
+        keywords: { type: [array, 'null'], items: { type: string } }
+        is_active: { type: boolean }
+        schedule_start:
+          type: [string, 'null']
+          pattern: '^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$'
+        schedule_end:
+          type: [string, 'null']
+          pattern: '^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$'
+        schedule_days:
+          type: [array, 'null']
+          items: { type: integer, minimum: 0, maximum: 6 }
+          description: Sunday is 0 and Saturday is 6. Times use the webhook server clock.
+    AutoReplyCreate:
+      allOf:
+        - $ref: '#/components/schemas/AutoReplyUpdate'
+        - type: object
+          required: [name, rule_type, reply_message]
+    AutoReply:
+      type: object
+      additionalProperties: false
+      required: [id, platform, name, rule_type, reply_message, keywords, is_active, schedule_start, schedule_end, schedule_days, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string, enum: [whatsapp, facebook, instagram] }
+        name: { type: string }
+        rule_type: { type: string, enum: [away, keyword] }
+        reply_message: { type: string }
+        keywords: { type: [array, 'null'], items: { type: string } }
+        is_active: { type: [boolean, 'null'] }
+        schedule_start: { type: [string, 'null'] }
+        schedule_end: { type: [string, 'null'] }
+        schedule_days: { type: [array, 'null'], items: { type: integer } }
+        created_at: { type: [string, 'null'], format: date-time }
+        updated_at: { type: [string, 'null'], format: date-time }
+    AutoReplyResponse:
+      type: object
+      required: [rule, request_id]
+      properties:
+        rule: { $ref: '#/components/schemas/AutoReply' }
+        request_id: { type: string }
+    AutoRepliesResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AutoReply' } }
+        next_cursor: { type: [string, 'null'] }
+        request_id: { type: string }
+    AutoReplyDeleteResponse:
+      type: object
+      required: [success, request_id]
+      properties:
+        success: { type: boolean, const: true }
+        request_id: { type: string }
+
+
+    AutomationHandlersUpdate:
+      type: object
+      minProperties: 1
+      additionalProperties: false
+      properties:
+        automation_handler:
+          type: string
+          enum: [internal, n8n, 'off']
+          description: Message automation. Unset stored keys resolve to internal.
+        comment_automation_handler:
+          type: string
+          enum: ['off', internal, n8n]
+          description: Comment automation. Unset stored keys resolve to off.
+        media_understanding:
+          type: string
+          enum: ['off', audio, 'audio+image', 'audio+image+document']
+          description: Inbound media understanding. Unset stored keys resolve to off.
+
+    AutomationHandlersResponse:
+      type: object
+      required: [account_id, platform, automation_handler, comment_automation_handler, media_understanding, request_id]
+      properties:
+        account_id: { type: string, format: uuid }
+        platform: { type: string, enum: [whatsapp, facebook, instagram, threads, youtube] }
+        automation_handler: { $ref: '#/components/schemas/AutomationHandlersUpdate/properties/automation_handler' }
+        comment_automation_handler: { $ref: '#/components/schemas/AutomationHandlersUpdate/properties/comment_automation_handler' }
+        media_understanding: { $ref: '#/components/schemas/AutomationHandlersUpdate/properties/media_understanding' }
+        request_id: { type: string }
+
+    AutomationAudienceContact:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        social_account_id: { type: string, format: uuid }
+        platform: { type: string, enum: [facebook, instagram, threads, youtube] }
+        platform_user_id: { type: string }
+        identity_kind: { type: string, enum: [id, username] }
+        display_name: { type: string }
+        username: { type: string, nullable: true }
+        profile_url: { type: string, nullable: true }
+        email: { type: string, nullable: true }
+        phone_number: { type: string, nullable: true }
+        company: { type: string, nullable: true }
+        notes: { type: string, nullable: true }
+        source: { type: string, enum: [organic_comment, workflow_lead] }
+        tags: { type: array, items: { type: string } }
+        whatsapp_contact_id: { type: string, format: uuid, nullable: true }
+        total_comments_count: { type: integer, minimum: 0 }
+        first_interacted_at: { type: string, format: date-time }
+        last_interacted_at: { type: string, format: date-time }
+        last_comment_text: { type: string, nullable: true }
+        last_post_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AutomationAudienceResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AutomationAudienceContact' } }
+        next_cursor: { type: string, nullable: true }
+        request_id: { type: string }
+
+    AgentConfigUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        is_enabled: { type: boolean }
+        default_mode: { type: string, enum: [ai_first, human_first, human_then_ai] }
+        persona_instructions: { type: [string, 'null'] }
+        business_profile_text: { type: [string, 'null'] }
+        language_mode: { type: string, enum: [auto, ar, en] }
+        model: { type: string, minLength: 1 }
+        fallback_model_1: { type: [string, 'null'] }
+        fallback_model_2: { type: [string, 'null'] }
+        temperature: { type: number, minimum: 0, maximum: 2 }
+        admin_phone_numbers:
+          type: array
+          items: { type: string, description: International number beginning with +. }
+        daily_message_cap: { type: integer, minimum: 0 }
+        reply_cooldown_seconds: { type: integer, minimum: 0 }
+        max_tool_iterations: { type: integer, minimum: 0 }
+        handoff_on_request: { type: boolean }
+        handoff_on_low_confidence: { type: boolean }
+        business_profile: { $ref: '#/components/schemas/AgentBusinessProfile' }
+        agent_behavior: { $ref: '#/components/schemas/AgentBehavior' }
+        confirm_clear: { type: boolean, description: Required true to deliberately clear a protected non-empty field; never persisted. }
+    AgentBusinessProfile:
+      type: object
+      additionalProperties: false
+      properties:
+        industry: { type: string, enum: [ecommerce, clinic, b2b_services, restaurant, other] }
+        products: { type: string }
+        notes: { type: string }
+        policies:
+          type: object
+          additionalProperties: false
+          properties:
+            returns: { type: string }
+            shipping: { type: string }
+            warranty: { type: string }
+        faqs:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            additionalProperties: false
+            required: [q, a]
+            properties:
+              q: { type: string }
+              a: { type: string }
+    AgentBehavior:
+      type: object
+      additionalProperties: false
+      properties:
+        tone: { type: string, enum: [friendly_professional, formal, enthusiastic, concise] }
+        response_length: { type: string, enum: [short, medium, detailed] }
+        greeting: { type: string, maxLength: 500 }
+        goals:
+          type: array
+          items: { type: string, enum: [recommend_products, answer_pricing, handle_complaints, capture_leads] }
+        instruction_blocks:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            required: [title, body]
+            properties:
+              title: { type: string, maxLength: 120 }
+              body: { type: string, maxLength: 2000 }
+    AgentConfigResponse:
+      type: object
+      required: [account_id, config, request_id]
+      properties:
+        account_id: { type: string, format: uuid }
+        config:
+          type: [object, 'null']
+          description: Stored account config fields, excluding owner identity. Null means no config exists; failed reads never return null.
+        request_id: { type: string }
+    AgentToolUpdate:
+      type: object
+      additionalProperties: false
+      required: [name, description, connector_type]
+      properties:
+        name: { type: string, pattern: '^[a-z][a-z0-9_]{2,40}$' }
+        description: { type: string, minLength: 1 }
+        connector_type: { type: string, description: Must exist in the server connector registry. }
+        url: { type: string, format: uri, description: Required public HTTPS URL for native connectors; Composio connectors use connection_id. }
+        connection_id: { type: string, format: uuid, description: Required for Composio; must be active in this workspace with matching connector type. }
+        permissions:
+          type: object
+          properties:
+            search_products: { type: boolean }
+            check_stock: { type: boolean }
+            lookup_orders: { type: boolean }
+        is_enabled: { type: boolean, default: true }
+        admin_only: { type: boolean, default: false }
+        read_only_mode: { type: boolean, default: true }
+        enable_cache: { type: boolean, default: true }
+        secret: { type: string, writeOnly: true }
+        clear_secret: { type: boolean, default: false }
+        credentials:
+          type: object
+          writeOnly: true
+          additionalProperties: { type: string }
+          description: Registry-declared credential fields only. Unsubmitted fields preserve stored values.
+    AgentTool:
+      type: object
+      required: [id, account_id, name, has_secret]
+      properties:
+        id: { type: string, format: uuid }
+        account_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string }
+        connector_type: { type: string }
+        is_enabled: { type: boolean }
+        has_secret: { type: boolean }
+        configured_secret_fields: { type: array, items: { type: string } }
+        settings: { type: object, description: Non-secret connector settings. }
+    AgentToolResponse:
+      type: object
+      required: [tool, request_id]
+      properties:
+        tool: { $ref: '#/components/schemas/AgentTool' }
+        request_id: { type: string }
+    AgentToolsResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AgentTool' } }
+        next_cursor: { type: [string, 'null'] }
+        request_id: { type: string }
+    AgentToolAccountsUpdate:
+      type: object
+      additionalProperties: false
+      properties:
+        social_account_ids:
+          type: array
+          items: { type: string, format: uuid }
+    AutomationWriteResponse:
+      type: object
+      required: [success, request_id]
+      properties:
+        success: { type: boolean, const: true }
+        request_id: { type: string }
+
+    HumanAgentId:
+      type: string
+      pattern: '^agent_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+      example: agent_11111111-1111-4111-8111-111111111111
+    HumanAgentCreate:
+      type: object
+      additionalProperties: false
+      required: [display_name]
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 200 }
+        max_conversations: { type: integer, minimum: 1, maximum: 2147483647, default: 10 }
+    HumanAgentPatch:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        display_name: { type: string, minLength: 1, maxLength: 200 }
+        max_conversations: { type: integer, minimum: 1, maximum: 2147483647 }
+        status: { type: string, enum: [online, away, offline] }
+    HumanAgent:
+      type: object
+      additionalProperties: false
+      required: [id, display_name, status, max_conversations, current_conversations, last_seen_at, created_at, updated_at]
+      properties:
+        id: { $ref: '#/components/schemas/HumanAgentId' }
+        display_name: { type: string }
+        status: { type: string, enum: [online, away, offline] }
+        max_conversations: { type: [integer, 'null'] }
+        current_conversations: { type: [integer, 'null'], readOnly: true }
+        last_seen_at: { type: [string, 'null'], format: date-time }
+        created_at: { type: [string, 'null'], format: date-time }
+        updated_at: { type: [string, 'null'], format: date-time }
+    HumanAgentResponse:
+      type: object
+      required: [agent, request_id]
+      properties:
+        agent: { $ref: '#/components/schemas/HumanAgent' }
+        request_id: { type: string }
+    HumanAgentsResponse:
+      type: object
+      required: [data, next_cursor, request_id]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/HumanAgent' } }
+        next_cursor: { type: [string, 'null'] }
+        request_id: { type: string }
+    HumanAgentDeleteResponse:
+      type: object
+      required: [success, request_id]
+      properties:
+        success: { type: boolean, const: true }
+        request_id: { type: string }
+
     GenericScope:
       type: string
       description: |
@@ -1463,6 +3492,12 @@ components:
         would turn zero capability into full webhook CRUD + SSRF amplifier).
       enum:
         - accounts:read
+        - agents:read
+        - agents:manage
+        - automation:read
+        - automation:manage
+        - comments:read
+        - comments:manage
         - connectors:manage
         - connectors:read
         - conversations:read
@@ -1470,6 +3505,9 @@ components:
         - media:write
         - messages:read
         - messages:send
+        - platform:keys.manage
+        - platform:workspaces.manage
+        - platform:workspaces.read
         - posts:publish
         - posts:read
         - posts:schedule
@@ -1479,6 +3517,10 @@ components:
         - usage:read
         - webhooks:manage
         - webhooks:read
+        - whatsapp:numbers.read
+        - whatsapp:numbers.manage
+        - whatsapp:profile.read
+        - whatsapp:profile.manage
 
     LegacyScope:
       type: string
@@ -1494,6 +3536,132 @@ components:
 
     # ---- Identifiers — spec §7.1 ----
     # ---- Read-surface resources (deliverables 2.3-2.6) ----
+    WhatsAppBusinessProfile:
+      type: object
+      required: [about, address, description, email, websites, vertical, profile_picture_url]
+      properties:
+        about: { type: [string, 'null'] }
+        address: { type: [string, 'null'] }
+        description: { type: [string, 'null'] }
+        email: { type: [string, 'null'] }
+        websites:
+          type: array
+          items: { type: string }
+        vertical: { type: [string, 'null'] }
+        profile_picture_url: { type: [string, 'null'], readOnly: true }
+
+    WhatsAppBusinessProfilePatch:
+      type: object
+      minProperties: 1
+      description: At least one recognized writable field is required. Unknown fields are ignored; null is not accepted.
+      anyOf:
+        - required: [about]
+          example: { about: 'Welcome to our business' }
+        - required: [address]
+        - required: [description]
+        - required: [email]
+        - required: [websites]
+        - required: [vertical]
+      properties:
+        about: { type: string, maxLength: 139 }
+        address: { type: string, maxLength: 256 }
+        description: { type: string, maxLength: 512 }
+        email:
+          anyOf:
+            - { type: string, format: email, maxLength: 128 }
+            - { type: string, const: '' }
+        websites:
+          type: array
+          maxItems: 2
+          items: { type: string, format: uri }
+        vertical: { type: string, maxLength: 128 }
+
+    RegisterWhatsAppNumberRequest:
+      type: object
+      required: [connection_name, connection_mode, risk_consent]
+      properties:
+        connection_name:
+          type: string
+          minLength: 1
+          maxLength: 60
+          description: Connection label; trimmed before checking the 1-60 character limit.
+          example: Support
+        connection_mode:
+          type: string
+          enum: [evolution_qr]
+        risk_consent:
+          type: object
+          required: [accepted, accepted_by, accepted_at]
+          properties:
+            accepted:
+              type: boolean
+              enum: [true]
+              description: Acceptance of unofficial Direct QR access and its WhatsApp account restriction/ban risk.
+            accepted_by:
+              type: string
+              minLength: 1
+              description: Identity of the person who accepted; whitespace-only is refused.
+              example: tenant-admin@example.com
+            accepted_at:
+              type: string
+              format: date-time
+              example: '2026-09-10T09:00:00Z'
+            accepted_ip:
+              type: [string, 'null']
+              description: Optional IP reported by the partner, not observed by Postora.
+
+    WhatsAppPairing:
+      type: object
+      required: [account_id, qr, state, request_id]
+      properties:
+        account_id: { type: string, format: uuid }
+        qr:
+          type: [object, 'null']
+          required: [code, expires_at]
+          properties:
+            code:
+              type: string
+              description: QR image/base64 or code as supplied by the pairing provider.
+            expires_at:
+              type: 'null'
+              description: No reliable expiry timestamp is supplied; never an invented TTL.
+        state:
+          type: [string, 'null']
+          description: Raw connection state, such as connecting, open or close, when supplied.
+        request_id: { type: string }
+
+    WhatsAppNumber:
+      type: object
+      description: A workspace's WhatsApp account within the key's binding.
+      required: [account_id, phone_number, display_name, connection_mode, status, connected_at]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+          description: Raw social account UUID, used by the WhatsApp number item route.
+        phone_number:
+          type: [string, 'null']
+          description: |
+            Linked number for Direct QR; account metadata's display_phone_number
+            for Cloud API and coexistence. Null until identity resolves or when
+            no display number is recorded. Never a connection label or Meta id.
+        display_name:
+          type: [string, 'null']
+          description: Metadata display name, falling back to the account's label or username.
+        connection_mode:
+          type: [string, 'null']
+          description: Connection mode from the account, falling back to account metadata.
+        status:
+          type: string
+          enum: [connected, disconnected, pending]
+          description: |
+            An unresolved identity (including pending_ placeholders) is pending,
+            even when active. Resolved active accounts are connected; resolved
+            inactive accounts are disconnected.
+        connected_at:
+          type: [string, 'null']
+          format: date-time
+
     Account:
       type: object
       description: |
@@ -2025,8 +4193,11 @@ components:
     CertifiedEventType:
       type: string
       description: |
-        An event whose transition, stable identifier and **transactional**
-        producer are all defined (decision D6). Phase 5 shipped the delivery
+        An event whose transition, identifier and producer are defined.
+        The original events have transactional producers (decision D6).
+        The WhatsApp number lifecycle and history-sync events are best-effort
+        observations after persistence: enqueue failures are logged and do not
+        fail activation or the sweep. Phase 5 shipped the delivery
         substrate and certified `webhook.test`; Phase 6 certified the six
         messaging/account events; Phase 8 certified `post.scheduled`.
         `post.published` / `post.failed` follow once the Phase 7 publishing
@@ -2046,6 +4217,28 @@ components:
         | `message.delivered` / `.read` / `.failed` | Meta status callback | near-real-time — **WhatsApp Cloud accounts ONLY; these events never fire for Evolution QR accounts** |
         | `account.reauthorization_required` | the token-refresh cron | **bounded by the cron cadence — not real-time** |
         | `post.scheduled` | a database trigger on schedule writes (API **and** Postora UI) | near-real-time |
+        | `whatsapp_number.connected` / `whatsapp_number.disconnected` | shared Evolution QR connection helper (poll, webhook, partner pairing) | after an observed active-state transition; best-effort |
+        | `history_sync.completed` | Evolution QR history sweep completion record | after a sweep settles; best-effort |
+
+        Assignment events are produced by the assignment table trigger for browser,
+        escalation and /v1 writes. INSERT of an active row emits conversation.assigned;
+        changing unassigned_at from null to non-null emits conversation.unassigned.
+        Other updates emit nothing. Emission is best-effort on failure so assignment
+        writes still commit. Once enqueued, normal outbox retries apply.
+        Payload fields are id (assignment_ UUID), conversation (conv_ cache UUID),
+        agent_id (agent_ UUID, nullable), assigned_at and unassigned_at.
+        Rows with null workspace_id, conversation_cache_id or transition timestamp,
+        or without an attributable WhatsApp cache row, emit nothing.
+        Occurrence ids include event type, assignment UUID and transition timestamp
+        rendered in UTC with microseconds; reassignment therefore has distinct events.
+        Assignment history is the paginated reconciliation surface.
+
+        Number lifecycle events carry `account_id` and `is_active`.
+        `history_sync.completed` carries `account_id`, `outcome` (all sweep
+        counters, `truncated`, and `finished_at`), and `last_sync_at` (null
+        when the sweep did not establish a complete import). An empty or
+        partial sweep can settle; a thrown sweep does not emit this event.
+        These three events are specific to the WhatsApp account and workspace.
 
         `message.accepted` fires for **Partner-API-originated sends only**.
         Messages sent from the Postora UI, broadcasts, scheduled sends and
@@ -2060,6 +4253,11 @@ components:
         - message.failed
         - account.reauthorization_required
         - post.scheduled
+        - whatsapp_number.connected
+        - whatsapp_number.disconnected
+        - history_sync.completed
+        - conversation.assigned
+        - conversation.unassigned
 
     WebhookCreateRequest:
       type: object
@@ -2576,6 +4774,14 @@ components:
       example: eyJpZCI6Im1zZ18wMUgifQ
 
   parameters:
+    AgentPlatform:
+      name: platform
+      in: query
+      required: true
+      schema:
+        type: string
+        enum: [whatsapp, facebook, instagram, threads, youtube]
+      description: Agent setup surface; must match the targeted account. Its feature flag is checked first.
     IdempotencyKey:
       name: Idempotency-Key
       in: header

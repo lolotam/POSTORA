@@ -80,6 +80,12 @@ export const V1_ERROR_POLICY = {
     status: 403, retryable: false,
     message: "This connector is not allowed to change data in the connected account",
   },
+  // Entitlement is distinct from key scope; both refusals use 403 and the
+  // partner discriminates on the code. This does not imply a payment flow.
+  feature_not_entitled: {
+    status: 403, retryable: false,
+    message: "This workspace is not entitled to that feature",
+  },
   idempotency_conflict: {
     status: 409, retryable: false,
     message: "This Idempotency-Key was used with a different body",
@@ -188,6 +194,12 @@ export const V1_ERROR_POLICY = {
     status: 404, retryable: false,
     message: "Resource not found",
   },
+  // A domain lease can be held by the webhook or poller without any partner
+  // idempotency key. Wait for that sweep before starting a new request.
+  sync_already_running: {
+    status: 409, retryable: true,
+    message: "History sync is already running; poll history-sync for progress",
+  },
   template_not_approved: {
     status: 422, retryable: false,
     message: "Template rejected by Meta",
@@ -233,7 +245,7 @@ export const V1_ERROR_POLICY = {
   // mode rather than the request's shape (PRD 15.4).
   unsupported_capability: {
     status: 422, retryable: false,
-    message: "That message type is not supported for this account",
+    message: "That capability is not supported for this account",
   },
   unsupported_direct_qr: {
     status: 400, retryable: false,

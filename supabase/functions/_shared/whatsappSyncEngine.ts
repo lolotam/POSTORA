@@ -9,6 +9,7 @@ import type { EvolutionApi } from "./evolutionApi.ts";
 import { addressableJid, buildEvolutionMessageRow, remoteNumberFor } from "./evolutionMessage.ts";
 import { cacheAvatarToCloudinary } from "./avatar-cache.ts";
 import { backfillWhatsAppParticipantAvatars } from "./whatsappAvatarEnrichment.ts";
+import { enqueuePartnerWebhookEvent } from "./partnerWebhookEvents.ts";
 
 const AVATAR_BACKFILL_BUDGET_MS = 10_000;
 const LID_JID_SUFFIX = "@lid";
@@ -407,25 +408,30 @@ const LEASE_SECONDS = 300;
 /** What the setup page shows for a sweep that threw; the cause is only in the server log. */
 export const SYNC_FAILED_MESSAGE = "The import stopped unexpectedly. Try again in a minute.";
 
+export type HistorySyncStartOutcome =
+  | "claimed"
+  | "skipped_no_workspace"
+  | "skipped_unresolved_number"
+  | "skipped_lease_held";
+
 export async function importEvolutionHistory(deps: {
   admin: any;
   api: EvolutionApi;
   account: SyncAccount;
   instanceName: string;
   deadlineAt?: number;
-}): Promise<void> {
+}): Promise<HistorySyncStartOutcome> {
   const { admin, account, instanceName } = deps;
-  // Both exits are silent by nature -- a misconfigured account and a sweep already running
-  // look identical to a caller that only sees "started".
+  // Report skips separately so callers can distinguish a refusal from a claimed sweep.
   if (!account.workspace_id) {
     console.log(`[whatsapp-sync] ${instanceName}: skipped, account has no workspace`);
-    return;
+    return "skipped_no_workspace";
   }
   // Conversation ids embed this value, so importing under the provisional placeholder would
   // write every chat under an id the reply path cannot parse and then mark the sweep done.
   if (account.platform_user_id.startsWith("pending_")) {
     console.log(`[whatsapp-sync] ${instanceName}: skipped, owner number not resolved yet`);
-    return;
+    return "skipped_unresolved_number";
   }
   const { data: claimed, error: claimError } = await admin.rpc("claim_whatsapp_history_sync", {
     p_social_account_id: account.id,
@@ -434,18 +440,20 @@ export async function importEvolutionHistory(deps: {
   if (claimError) throw claimError;
   if (claimed !== true) {
     console.log(`[whatsapp-sync] ${instanceName}: skipped, another sweep holds the lease`);
-    return;
+    return "skipped_lease_held";
   }
 
   // The lease is released even when the sweep throws. Without this a single failure holds it
-  // for its full duration, and because a held lease returns early and silently, every retry
-  // in that window reports success while doing nothing.
+  // for its full duration, so every retry in that window would skip doing work.
   const completion: Record<string, unknown> = { sync_started_at: null };
+  let completedSweep: (SyncOutcome & { finished_at: string }) | undefined;
+  const sweepId = crypto.randomUUID();
   try {
     const outcome = await syncEvolutionHistory(deps);
     console.log(`[whatsapp-sync] ${instanceName}: ${JSON.stringify(outcome)}`);
     // The setup page polls this to tell the user what the button they pressed achieved.
-    completion.last_sync_outcome = { ...outcome, finished_at: new Date().toISOString() };
+    completedSweep = { ...outcome, finished_at: new Date().toISOString() };
+    completion.last_sync_outcome = completedSweep;
     // Completion needs evidence the history was actually there. Baileys can publish the chat
     // list before it has loaded any messages, so a sweep that found 300 conversations and
     // zero messages has not succeeded -- recording it would permanently disable the retry
@@ -474,6 +482,27 @@ export async function importEvolutionHistory(deps: {
       .eq("social_account_id", account.id);
     if (completionError) {
       console.error(`[whatsapp-sync] ${instanceName}: completion write failed:`, completionError.message ?? completionError);
+    } else if (completedSweep) {
+      // A settled sweep may be partial or empty; only last_sync_at means the
+      // import is complete. Preserve that distinction in the partner payload.
+      try {
+        await enqueuePartnerWebhookEvent(admin, {
+          workspaceId: account.workspace_id,
+          eventType: "history_sync.completed",
+          occurrenceId: `history_sync.completed:${account.id}:${completedSweep.finished_at}:${sweepId}`,
+          payload: {
+            account_id: account.id,
+            outcome: completedSweep,
+            last_sync_at: completion.last_sync_at ?? null,
+          },
+          platform: "whatsapp",
+          accountId: account.id,
+          occurredAt: completedSweep.finished_at,
+        });
+      } catch {
+        console.error(`[whatsapp-sync] account ${account.id}: history_sync.completed enqueue failed after completion write`);
+      }
     }
   }
+  return "claimed";
 }

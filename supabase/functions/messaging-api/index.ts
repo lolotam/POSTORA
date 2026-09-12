@@ -9,13 +9,13 @@ import {
   resolveConfigWriteAccount,
   resolveOwnedAccountId,
   writeAccountScopedConfig,
-} from "./aiConfigScope.ts";
+} from "../_shared/aiConfigScope.ts";
 import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
-import { blankedFields } from "./configBlanking.ts";
+import { blankedFields } from "../_shared/configBlanking.ts";
 import { parseBusinessProfile, renderBusinessProfileText } from "../_shared/businessProfileText.ts";
 import { parseAgentBehavior } from "../_shared/agentBehavior.ts";
-import { parseCredentialUpsertResult } from "./credentialVaultRpc.ts";
+import { parseCredentialUpsertResult } from "../_shared/credentialVaultRpc.ts";
 import {
   type CredentialVault,
   deleteAccountScopedTool,
@@ -24,13 +24,13 @@ import {
   type ToolAdminClient,
   ToolWriteError,
   upsertAccountScopedTool,
-} from "./toolWrites.ts";
+} from "../_shared/toolWrites.ts";
 import {
   parseSetToolAccountsInput,
   type SharingAdminClient,
   setToolAccounts,
   ToolSharingError,
-} from "./toolSharing.ts";
+} from "../_shared/toolSharing.ts";
 import {
   MEDIA_UNDERSTANDING_MODES,
   resolveMediaUnderstandingMode,

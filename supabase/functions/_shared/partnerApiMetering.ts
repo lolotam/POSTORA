@@ -178,7 +178,19 @@ export async function checkRateLimit(
   record: PartnerKeyRecord,
   riskClass: LimiterRiskClass | undefined,
 ): Promise<RateLimitDecision> {
-  const { data, error } = await client.rpc("consume_partner_rate_v2", {
+  return await checkRateLimitWithRpc(client, record, riskClass, "consume_partner_rate_v2");
+}
+
+/** Both tiers share the verdict and outage policy; their bucket foreign keys
+ *  require different persistence RPCs. */
+export async function checkRateLimitWithRpc(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  record: Pick<PartnerKeyRecord, "id" | "rateLimitPerMin">,
+  riskClass: LimiterRiskClass | undefined,
+  rpcName: "consume_partner_rate_v2" | "consume_partner_platform_rate",
+): Promise<RateLimitDecision> {
+  const { data, error } = await client.rpc(rpcName, {
     p_key_id: record.id,
     p_limit: record.rateLimitPerMin,
   });

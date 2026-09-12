@@ -78,6 +78,97 @@
       "name": "conversations",
       "item": [
         {
+          "name": "Assign or reassign a conversation",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/assignment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "assignment"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before any resource lookup. No platform selector is required.\nThe conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.\nResponses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user ide",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"agent_id\": \"agent_11111111-1111-4111-8111-111111111111\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Close the active assignment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/assignment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "assignment"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before any resource lookup. No platform selector is required.\nThe conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.\nResponses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user ide"
+          },
+          "response": []
+        },
+        {
           "name": "Get one conversation",
           "request": {
             "method": "GET",
@@ -109,6 +200,42 @@
               ]
             },
             "description": "A conversation belonging to a bound account whose platform is not\n`whatsapp` answers `unsupported_capability` (422), not\n`resource_not_found`: the account IS in the binding and\n`GET /v1/accounts` lists it, so denying its existence would be\nmisleading. There is no per-message table to read for it.\n\nScope `conversations:read`. D7 class A.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "List assignment history",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/assignment-history",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "assignment-history"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `agents:read`. Risk class A.\nRequires feature_human_agent before any resource lookup. No platform selector is required.\nThe conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.\nResponses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user ident"
           },
           "response": []
         },
@@ -173,6 +300,128 @@
               ]
             },
             "description": "Ordered by `last_message_at` descending, then by id — the pair, not\nthe timestamp alone, because timestamps collide during history sync\nand a cursor on the timestamp alone would either re-emit a whole\ncolliding group or drop all but one of it.\n\nConversations with no `last_message_at` are excluded: that column is\nthe cursor's sort key.\n\nDefault scope is ALL bound accounts, each row labelled with\n`account_id` (spec D11) — never an implicit single-account default,\nwhich would change meaning the day"
+          },
+          "response": []
+        },
+        {
+          "name": "Read a conversation mode",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/mode",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "mode"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nThe conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only; a"
+          },
+          "response": []
+        },
+        {
+          "name": "Read the active assignment",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/assignment",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "assignment"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `agents:read`. Risk class A.\nRequires feature_human_agent before any resource lookup. No platform selector is required.\nThe conv_ surrogate resolves under workspace AND bound account predicates, exactly as its parent. Unbound or missing conversations return resource_not_found; bound non-WhatsApp conversations return unsupported_capability. Read failures return internal_error.\nResponses whitelist assignment/history fields and prefixed agent ids. Private conversation text keys and user ident"
+          },
+          "response": []
+        },
+        {
+          "name": "Set or clear a conversation mode",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/conversations/:id/mode",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "conversations",
+                ":id",
+                "mode"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "conv_000000000000000000000000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nThe conv_ id resolves messaging_cache.id under BOTH workspace and bound account predicates before any mode query. A missing or unbound conversation returns resource_not_found. WhatsApp only;",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mode\": \"ai_first\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
           },
           "response": []
         }
@@ -864,6 +1113,954 @@
       ]
     },
     {
+      "name": "agents",
+      "item": [
+        {
+          "name": "Create human agent",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents"
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nMints an unconfirmed, passwordless Auth service identity, then atomically inserts agent membership and profile. Default status is offline and capacity is 10. Recovery deletes the identity only after a complete read pr",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete human agent",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "agent_11111111-1111-4111-8111-111111111111"
+                }
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nReturns 409 invalid_request when ANY retained conversation assignment references the agent, including active, ended or legacy assignments. A database NO ACTION foreign key prevents concurrent assignments from being si"
+          },
+          "response": []
+        },
+        {
+          "name": "Get human agent",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "agent_11111111-1111-4111-8111-111111111111"
+                }
+              ]
+            },
+            "description": "Scope `agents:read`. Risk class A.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nReturns the agent profile.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "List human agents",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents"
+              ]
+            },
+            "description": "Scope `agents:read`. Risk class A.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nPages order by created_at DESC, id DESC; legacy rows without created_at are excluded.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Update human agent",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/agents/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "agents",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "agent_11111111-1111-4111-8111-111111111111"
+                }
+              ]
+            },
+            "description": "Scope `agents:manage`. Risk class C.\nRequires feature_human_agent before resource lookup. Authority is the key workspace, with no platform argument. Foreign or malformed agent IDs return resource_not_found. Read failures return internal_error. Service identities are never returned.\nPartial PATCH changes only submitted display_name, status or max_conversations. Unknown fields, empty patches, current_conversations and statuses outside online/away/offline return invalid_request.\nIdempotency-Key is ",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"display_name\": \"string\",\n  \"max_conversations\": 1,\n  \"status\": \"online\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "automation",
+      "item": [
+        {
+          "name": "Create an owner-wide auto-reply rule",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/auto-replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "auto-replies"
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nRules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"rule_type\": \"away\",\n  \"reply_message\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Create or update a tool at its UUID",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/tools/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "tools",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. N",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"description\": \"string\",\n  \"connector_type\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Delete an account-owned tool",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/tools/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "tools",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret va"
+          },
+          "response": []
+        },
+        {
+          "name": "Delete an owner-wide auto-reply rule",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/auto-replies/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "auto-replies",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nRules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the"
+          },
+          "response": []
+        },
+        {
+          "name": "List account-owned agent tools",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/tools",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "tools"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret valu"
+          },
+          "response": []
+        },
+        {
+          "name": "List audience contacts for bound accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/audience",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "audience"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class B (conservative published contract,\neven though this reads a local table). Requires the agent setup feature\nflag for platform. Only facebook, instagram, threads and youtube are\naccepted; missing or unsupported platform returns invalid_request before\nentitlement or audience queries. Filters social_contacts by bound\nsocial_account_id, not its nullable workspace_id. Accounts are resolved\ninside the key workspace and requested platform. An explicit unbound or\nmism"
+          },
+          "response": []
+        },
+        {
+          "name": "List conversation mode overrides",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/conversation-modes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "conversation-modes"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nWhatsApp only, matching readable conversations; other table-supported platforms return unsupported_capability. Optional account_id narrows the bound set.\nPublishes messaging_cache surrogate UU"
+          },
+          "response": []
+        },
+        {
+          "name": "List owner-wide auto-reply rules",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/auto-replies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "auto-replies"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nRules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the k"
+          },
+          "response": []
+        },
+        {
+          "name": "Read an account agent config",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/agent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "agent"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. No "
+          },
+          "response": []
+        },
+        {
+          "name": "Read automation handlers for an account",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/handlers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "handlers"
+              ]
+            },
+            "description": "Scope `automation:read`. Risk class A. Requires the agent setup feature\nflag for the explicitly requested platform. Missing or unknown platform\nreturns feature_not_entitled. The account must be active, bound to the\nkey, in its workspace and match platform; otherwise resource_not_found.\nOmit account_id only when the key binds exactly one account.\nReturns all three settings with their documented defaults for unset keys.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Replace a tool share set",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/tools/:id/accounts",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "tools",
+                ":id",
+                "accounts"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOnly account-owned tools are exposed; legacy all_accounts tools are excluded.\nTool responses omit secret va",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"social_account_ids\": [\n    \"550e8400-e29b-41d4-a716-446655440000\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update an owner-wide auto-reply rule",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/auto-replies/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "auto-replies",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the feature flag for the explicitly requested platform before resource lookup. Missing platform returns feature_not_entitled; platforms outside whatsapp, facebook and instagram return invalid_request before database reads. Read failures return internal_error.\nRules apply to every account the resolved owner holds on the selected platform, not just account_id. Provisioned tenants use a per-workspace service identity. account_id is required when the",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"rule_type\": \"away\",\n  \"reply_message\": \"string\",\n  \"keywords\": [\n    \"string\"\n  ],\n  \"is_active\": true,\n  \"schedule_start\": \"string\",\n  \"schedule_end\": \"string\",\n  \"schedule_days\": [\n    0\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update only submitted agent config fields",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/agent",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "agent"
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. N",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"is_enabled\": true,\n  \"default_mode\": \"ai_first\",\n  \"persona_instructions\": \"string\",\n  \"business_profile_text\": \"string\",\n  \"language_mode\": \"auto\",\n  \"model\": \"string\",\n  \"fallback_model_1\": \"string\",\n  \"fallback_model_2\": \"string\",\n  \"temperature\": 0,\n  \"admin_phone_numbers\": [\n    \"+15550000000\"\n  ],\n  \"daily_message_cap\": 0,\n  \"reply_cooldown_seconds\": 0,\n  \"max_tool_iterations\": 0,\n  \"handoff_on_request\": true,\n  \"handoff_on_low_confidence\": true,\n  \"business_profile\": {\n    \"industry\": \"ecommerce\",\n    \"products\": \"string\",\n    \"notes\": \"string\",\n    \"policies\": {\n      \"returns\": \"string\",\n      \"shipping\": \"string\",\n      \"warranty\": \"string\"\n    },\n    \"faqs\": [\n      {\n        \"q\": \"string\",\n        \"a\": \"string\"\n      }\n    ]\n  },\n  \"agent_behavior\": {\n    \"tone\": \"friendly_professional\",\n    \"response_length\": \"short\",\n    \"greeting\": \"string\",\n    \"goals\": [\n      \"recommend_products\"\n    ],\n    \"instruction_blocks\": [\n      {\n        \"title\": \"string\",\n        \"body\": \"string\"\n      }\n    ]\n  },\n  \"confirm_clear\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update only submitted automation handler settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/automation/handlers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "automation",
+                "handlers"
+              ]
+            },
+            "description": "Scope `automation:manage`. Risk class C. Requires the agent setup feature\nflag for the explicitly requested platform. Missing or unknown platform\nreturns feature_not_entitled. Account resolution follows the GET rules.\nPUT is partial: only submitted keys are merged atomically under the account\nrow lock. Unknown fields, invalid values and an empty patch return\ninvalid_request. All three resolved settings are returned, including\nmedia_understanding. Unrelated account metadata is never exposed.\nIdem",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"automation_handler\": \"internal\",\n  \"comment_automation_handler\": \"off\",\n  \"media_understanding\": \"off\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "comments",
+      "item": [
+        {
+          "name": "Delete a Facebook or Instagram comment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.\nUse the opaque id returned by listComments. Unbound, forged or foreign\nreferences answer resource_not_found before contacting any provider.\nYouTube delete returns unsupported_capability (422); use hide instead.\nIdempotency-Key is required. All provider failures whose outcome cannot\nbe proven are fenced as idempotency_indeterminate; do not resend them.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Hide or unhide a comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments/:id/hide",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments",
+                ":id",
+                "hide"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.\nUse the opaque id returned by listComments. Unbound, forged or foreign\nreferences answer resource_not_found before contacting any provider.\nIdempotency-Key is required. All provider failures whose outcome cannot\nbe proven are fenced as idempotency_indeterminate; do not resend them.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"hidden\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List comments across bound Facebook, Instagram and YouTube accounts",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments"
+              ]
+            },
+            "description": "Scope `comments:read`. Risk class B. Requires `feature_comment_manager`.\nReads live provider feeds, not a local update-time table. Accounts are\ntraversed in id order; Meta post feeds and comment edges use Graph after\ncursors, YouTube uses nextPageToken. A page may be short or empty while\nnext_cursor is non-null. Continue until null; restart from the beginning\nto reconcile changes. This is not an update-time or snapshot guarantee.\nFacebook includes stream replies. Instagram and YouTube traverse\nt"
+          },
+          "response": []
+        },
+        {
+          "name": "Read a comment from its provider",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Scope `comments:read`. Risk class B. Requires `feature_comment_manager`.\nUse the opaque id returned by listComments. Unbound, forged or foreign\nreferences answer resource_not_found before contacting any provider.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Reply publicly to a comment",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/comments/:id/reply",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "comments",
+                ":id",
+                "reply"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "string"
+                }
+              ]
+            },
+            "description": "Scope `comments:manage`. Risk class C. Requires `feature_comment_manager`.\nUse the opaque id returned by listComments. Unbound, forged or foreign\nreferences answer resource_not_found before contacting any provider.\nIdempotency-Key is required. All provider failures whose outcome cannot\nbe proven are fenced as idempotency_indeterminate; do not resend them.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"message\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "connectors",
       "item": [
         {
@@ -947,6 +2144,196 @@
       ]
     },
     {
+      "name": "platform",
+      "item": [
+        {
+          "name": "Get a workspace in the principal's estate",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/workspaces/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "workspaces",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `platform:workspaces.read`. Risk class A. Malformed ids and\nworkspaces outside the principal's estate answer resource_not_found.\nReturns metadata only; bootstrap secrets cannot be retrieved.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Issue a bound workspace key within the principal's estate",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/workspaces/:id/keys",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "workspaces",
+                ":id",
+                "keys"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `platform:keys.manage`. Risk class C. account_id is required and\nmust belong to the named workspace. The estate check, account binding,\nkey creation and audit commit atomically. All platform: scopes, legacy\nscopes, unknown scopes and non-string scope entries are invalid_request.\nAn account or workspace outside the estate answers resource_not_found.\nThe secret is returned once; this operation does not replay secrets.\n",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"account_id\": \"550e8400-e29b-41d4-a716-446655440000\",\n  \"scopes\": [\n    \"accounts:read\"\n  ]\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "List workspaces in the principal's estate",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/workspaces",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "workspaces"
+              ]
+            },
+            "description": "Scope `platform:workspaces.read`. Risk class A. Ownership is by principal,\nso rotating the platform credential preserves the estate. Descending\nkeyset pagination on (created_at, workspace_id); never returns keys.\n"
+          },
+          "response": []
+        },
+        {
+          "name": "Provision a workspace and its bootstrap key",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/workspaces",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "workspaces"
+              ]
+            },
+            "description": "Scope `platform:workspaces.manage`. Risk class C. Creates an Auth\nservice owner, then atomically creates the workspace, Direct QR account\nplaceholder, bound workspace key and audit row. No plan is assigned;\nthe new owner's signup quota override or free allowance gates its first account.\nThe partner attests it collected the supplied Direct QR risk consent;\nPostora records this as partner_attestation, not a witnessed acceptance.\n\nThe bootstrap secret is returned ONLY on the initial 201; store it s",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"string\",\n  \"connection_name\": \"string\",\n  \"risk_consent\": {\n    \"accepted\": true,\n    \"accepted_by\": \"string\",\n    \"accepted_at\": \"2026-01-01T00:00:00Z\",\n    \"accepted_ip\": \"192.0.2.1\"\n  },\n  \"consent_version\": \"string\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Revoke a workspace key within the principal's estate",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{platformApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/platform/keys/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "platform",
+                "keys",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `platform:keys.manage`. Risk class C. Revocation and its audit\nrow commit atomically. An outside-estate key and an already-revoked\nkey both answer resource_not_found; repeat revocation is not success.\n"
+          },
+          "response": []
+        }
+      ]
+    },
+    {
       "name": "tools",
       "item": [
         {
@@ -993,6 +2380,434 @@
           "response": []
         }
       ]
+    },
+    {
+      "name": "whatsapp",
+      "item": [
+        {
+          "name": "End a Direct QR session",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/session",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "session"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Requires WhatsApp entitlement and a number bound to this workspace key.\nScope `whatsapp:numbers.manage`. D7 class C. Legacy scopes do not apply.\nAn unbound number returns `resource_not_found` before its account is queried;\nnon-Direct-QR numbers return `unsupported_capability`.\n\nLocal deactivation is mandatory. A 200 response reports local deactivation\nand the separate remote logout result (`ok`, `failed`, or `skipped`).\nRemote failure or a missing session produces warnings at 200 because local\nd",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Get one bound WhatsApp number",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Reads a pending, connected or disconnected WhatsApp number. Requires\nserver-side WhatsApp entitlement before resolving the key's binding.\nA disabled feature returns `feature_not_entitled` (403). An id outside\nthe binding returns `resource_not_found` (404) without an account query.\nMissing accounts and accounts from another platform also return 404.\n\nThe id is the raw account UUID returned as `account_id` by this\ncollection, not a Meta phone number id or a prefixed `/v1/accounts` id.\nScope `whats"
+          },
+          "response": []
+        },
+        {
+          "name": "List bound WhatsApp numbers",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers"
+              ]
+            },
+            "description": "Reads WhatsApp accounts in this workspace that are bound to the key,\nincluding pending and disconnected numbers. Requires server-side\nWhatsApp entitlement; a disabled feature returns `feature_not_entitled`\n(403) before any binding or account lookup.\n\nOrdered by `updated_at` descending, then by id descending. Connection\ntransitions update this ordering even when `connected_at` is unchanged.\nUse the opaque cursor to traverse pages; restart from the first page\nto reconcile later changes. The cursor"
+          },
+          "response": []
+        },
+        {
+          "name": "Poll Direct QR connection status",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/pairing",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "pairing"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Polls the provider and reconciles the account's linked number and\nconnection state. Requires both WhatsApp and Direct QR entitlement\nbefore resolving the binding. An unbound id returns\n`resource_not_found` before querying that account. A number without\na pairing session also returns `resource_not_found`; start pairing first.\nScope `whatsapp:numbers.read`. D7 class B because this polls the provider.\nNo Idempotency-Key is needed. This read does not refresh the QR,\nstart history sync or repair webh"
+          },
+          "response": []
+        },
+        {
+          "name": "Read a Cloud API number's business profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "profile"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `whatsapp:profile.read`. D7 class B because this calls Meta.\nRequires WhatsApp entitlement, independently of the Direct QR flag.\nThe number must be bound to this workspace key. Unbound targets return\n`resource_not_found` before any account query. Inactive or non-WhatsApp\naccounts return `account_not_connected`; expired tokens or needs_reauth\nreturn `account_needs_reauth` through the shared account preflight.\n\nDirect QR numbers return `unsupported_capability` (422): the business\nprofile is "
+          },
+          "response": []
+        },
+        {
+          "name": "Read the recorded history sync outcome",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/history-sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "history-sync"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Requires WhatsApp entitlement and a Direct QR number bound to this workspace\nkey. Scope `whatsapp:numbers.read`. D7 class A: local database reads only,\nwith no provider call. Legacy scopes do not apply. An unbound number or\nabsent instance returns `resource_not_found`; other connection modes return\n`unsupported_capability`. Failed database reads return `internal_error`.\n\nA non-null sync start reports `running`. With no recorded outcome, a previous\nsuccessful sync reports `completed`, otherwise `"
+          },
+          "response": []
+        },
+        {
+          "name": "Register a Direct QR WhatsApp number",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers"
+              ]
+            },
+            "description": "Registers a pending number and binds it to the calling workspace key.\nRequires both WhatsApp and Direct QR entitlement before processing\nthe request. Scope `whatsapp:numbers.manage`. D7 class C.\n\nPhase 1 supports only `evolution_qr`. `cloud_api` and `coexistence`\nonboarding return `unsupported_capability` (422); they need Meta\ncredential exchange, phone-number/WABA association and business\nverification that this API cannot drive yet.\n\nConsent is a partner attestation, not an acceptance witnessed",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"connection_name\": \"Support\",\n  \"connection_mode\": \"evolution_qr\",\n  \"risk_consent\": {\n    \"accepted\": true,\n    \"accepted_by\": \"tenant-admin@example.com\",\n    \"accepted_at\": \"2026-09-10T09:00:00Z\"\n  }\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Request a history sweep for a paired Direct QR number",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/history-sync",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "history-sync"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Requires WhatsApp entitlement before idempotency or binding lookup.\nScope `whatsapp:numbers.manage`. D7 class C. Accepts an empty body or {}.\nThe number must be a Direct QR number bound to this workspace key.\nUnbound numbers and absent instances return `resource_not_found`.\nOther connection modes and numbers that have not finished pairing return\n`unsupported_capability` (422). Missing workspace data is `internal_error`.\n\nThe engine owns the lease claim. A held lease returns `sync_already_running",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Start or refresh Direct QR pairing",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/pairing",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "pairing"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Creates the number's Direct QR session or refreshes an existing QR.\nRequires both WhatsApp and Direct QR entitlement, then a binding to\nthis workspace key. An unbound id returns `resource_not_found` before\nquerying that account. Non-QR modes return `unsupported_capability`.\nScope `whatsapp:numbers.manage`. D7 class C. Legacy scopes do not apply.\n\nIdempotency-Key is required. Replays return the stored body and status\nwithout contacting the provider, even if that QR has since expired.\nUse a new ke",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update selected Cloud API business profile fields",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/whatsapp/numbers/:id/profile",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "whatsapp",
+                "numbers",
+                ":id",
+                "profile"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "550e8400-e29b-41d4-a716-446655440000"
+                }
+              ]
+            },
+            "description": "Scope `whatsapp:profile.manage`. D7 class C. Requires WhatsApp entitlement\nand the same bound-account preflight and Cloud API capability as GET.\nDirect QR returns `unsupported_capability` (422), regardless of its QR flag.\n\nOnly supplied writable fields are sent to Meta; absent fields are never\nblanked. Unknown fields are ignored. An empty or unknown-only patch is\n`invalid_request` (400). profile_picture_url is read-only. An empty email\nstring or websites list explicitly clears that value. Invali",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"about\": \"Welcome to our business\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        }
+      ]
     }
   ],
   "variable": [
@@ -1004,6 +2819,11 @@
     {
       "key": "partnerApiKey",
       "value": "pk_live_REPLACE_ME",
+      "type": "string"
+    },
+    {
+      "key": "platformApiKey",
+      "value": "pl_live_REPLACE_ME",
       "type": "string"
     }
   ]

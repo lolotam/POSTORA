@@ -71,10 +71,10 @@ export const RULES = `## Rules and traps for the implementing agent
 
 Read these before the reference. Each one is a mistake an implementation makes when it has the contract and nothing else.
 
-1. **Authenticate with the \`x-postora-key\` header, nothing else.** Not \`Authorization\`, not a query string. A \`pk_test_\` key never works against production and a \`pk_live_\` key never works against staging; both answer the same 401 \`invalid_key\` as an unknown key would.
+1. **Workspace routes authenticate with \`x-postora-key\`, nothing else.** Platform routes under \`/v1/platform/\` use \`Authorization: Bearer pl_live_…\` (or \`x-postora-key\` with that platform key). These are separate credentials and scopes. Test keys (\`pk_test_\` / \`pl_test_\`) never work against production; live keys never work against staging.
 2. **Every \`POST /v1/messages\`, \`POST /v1/media\`, \`POST /v1/posts\`, \`POST /v1/connectors/{type}/connect-link\` and \`POST /v1/tools/execute\` carries an \`Idempotency-Key\`.** Generate one UUID per logical operation, store it with the operation, and reuse it on every retry of that operation. A new key on retry is a duplicate send. \`POST /v1/posts/{id}/schedule\` and the webhook routes do not take one.
 3. **Retry only when \`error.retryable\` is \`true\`.** Never decide from the HTTP status family: \`temporarily_unavailable\` is a 503 that is NOT retryable, \`idempotency_in_progress\` is a 409 that IS. Back off exponentially and honour \`Retry-After\` when present.
-4. **\`idempotency_indeterminate\` means "may have been delivered". Do not resend.** Not with the same key (it will answer the same 409) and not with a new one (that is a second real message to a real customer). Reconcile: wait for the \`message.accepted\` webhook, or list the conversation's messages and match \`provider_message_id\`.
+4. **For messaging, \`idempotency_indeterminate\` means "may have been delivered". Do not resend.** Not with the same key (it will answer the same 409) and not with a new one (that is a second real message to a real customer). Reconcile: wait for the \`message.accepted\` webhook, or list the conversation's messages and match \`provider_message_id\`. For platform provisioning, reconcile the workspace estate as described in rule 16.
 5. **A replay is not a new send.** The same key and the same body return the stored response with \`Idempotency-Replayed: true\`. The same key with a different body is \`idempotency_conflict\`; that is a bug in the caller, not a transient.
 6. **Verify webhook signatures over the exact raw request bytes.** \`X-Postora-Signature\` is \`sha256=<hex>\` of HMAC-SHA256(secret, \`<X-Postora-Timestamp>.<raw body>\`). Sign the bytes you received, before any JSON parsing or re-serialisation; compare in constant time; reject timestamps older than your own replay window (we suggest 5 minutes). Then answer 2xx quickly and process asynchronously: anything else is retried on a 1m / 5m / 30m / 2h / 6h ladder.
 7. **Deduplicate webhooks on \`X-Postora-Event-Id\`.** Delivery is at-least-once and ordering is not guaranteed; a \`message.delivered\` can arrive before the \`message.accepted\` it follows.
@@ -86,6 +86,7 @@ Read these before the reference. Each one is a mistake an implementation makes w
 13. **Page with \`next_cursor\` until it is \`null\`.** It is always present on a listing; \`null\` is the only terminator.
 14. **Tolerate unknown fields and enum values.** The contract is additive-only; a client that fails on a new optional field will break on the next release. Breaking changes only ever arrive under a new path prefix.
 15. **Log \`X-Postora-Request-Id\` with every call** (it is also \`request_id\` in every body, success or error). It is the only handle support has for "this call returned the wrong thing".
+16. **Platform provisioning returns its bootstrap secret once.** Reuse \`external_ref\` to recover existing workspace metadata, then issue a new key with an explicit account UUID if the secret was lost. Unresolved attempts answer \`idempotency_indeterminate\`: reconcile before provisioning again. Platform workspace/account/key ids are bare UUIDs. Ownership belongs to the principal and survives platform credential rotation.
 
 `;
 
@@ -110,15 +111,15 @@ export function parseRoutes(routerSource: string): Route[] {
       pattern = p[1];
       continue;
     }
-    const m = line.match(/^ {6}(GET|POST|PATCH|PUT|DELETE): withPartnerAuth\("(\w+)", "([ABC])"/);
+    const m = line.match(/^ {6}(GET|POST|PATCH|PUT|DELETE): with(?:Partner|Platform)Auth\("(\w+)", "([ABC])"/);
     if (m && pattern) routes.push({ method: m[1], path: pattern, action: m[2], riskClass: m[3] });
   }
   return routes;
 }
 
 /** ACTION_SCOPES: action -> scope list, or null for "no scope required". */
-export function parseActionScopes(policySource: string): Map<string, string[] | null> {
-  const block = policySource.slice(policySource.indexOf("export const ACTION_SCOPES"));
+export function parseActionScopes(policySource: string, table = "ACTION_SCOPES"): Map<string, string[] | null> {
+  const block = policySource.slice(policySource.indexOf(`export const ${table}`));
   const body = block.slice(0, block.indexOf("\n};"));
   const scopes = new Map<string, string[] | null>();
   for (const line of body.split("\n")) {
@@ -218,6 +219,8 @@ export interface BundleInputs {
   pages: Map<string, string>;
   routerSource: string;
   policySource: string;
+  platformRouterSource: string;
+  platformPolicySource: string;
   errorsSource: string;
   eventsSource: string;
   contract: Any;
@@ -245,6 +248,8 @@ export async function readInputs(): Promise<BundleInputs> {
     pages,
     routerSource: await read("supabase/functions/partner-api/v1/router.ts"),
     policySource: await read("supabase/functions/partner-api/router.ts"),
+    platformRouterSource: await read("supabase/functions/partner-api/platform/router.ts"),
+    platformPolicySource: await read("supabase/functions/partner-api/platform/policy.ts"),
     errorsSource: await read("supabase/functions/partner-api/v1/errors.ts"),
     eventsSource: await read("supabase/functions/_shared/partnerWebhookEvents.ts"),
     contract: parse(await read("docs/api/openapi.yaml")),
@@ -252,8 +257,8 @@ export async function readInputs(): Promise<BundleInputs> {
 }
 
 export function buildContext(inputs: BundleInputs): string {
-  const routes = parseRoutes(inputs.routerSource);
-  const scopes = parseActionScopes(inputs.policySource);
+  const routes = [...parseRoutes(inputs.routerSource), ...parseRoutes(inputs.platformRouterSource)];
+  const scopes = new Map([...parseActionScopes(inputs.policySource), ...parseActionScopes(inputs.platformPolicySource, "PLATFORM_ACTION_SCOPES")]);
   const policy = parseErrorPolicy(inputs.errorsSource);
   const events = parseEvents(inputs.eventsSource);
   const summaries = summariesFromContract(inputs.contract);
@@ -271,7 +276,8 @@ This file is GENERATED by \`scripts/generate-agent-context.ts\` from the pages u
 
   const facts = `## Quick facts
 
-- **Auth:** header \`x-postora-key: pk_live_…\` (production) or \`pk_test_…\` (staging). Keys are issued by the Postora operator; there is no self-service portal.
+- **Workspace auth:** header \`x-postora-key: pk_live_…\` (production) or \`pk_test_…\` (staging).
+- **Platform auth:** \`Authorization: Bearer pl_live_…\` (production) or \`pl_test_…\` (staging); \`x-postora-key\` also accepted. Platform credentials provision workspaces and issue/revoke their workspace keys; they cannot access workspace resources.
 - **Success envelope:** the resource, or \`{ "data": [...], "next_cursor": string | null }\` for listings; \`request_id\` in every body.
 - **Error envelope:** \`{ "error": { "code", "message", "retryable", "request_id", "details"? } }\`.
 - **Correlation:** \`X-Postora-Request-Id\` on every response.
@@ -280,7 +286,7 @@ This file is GENERATED by \`scripts/generate-agent-context.ts\` from the pages u
 
 ## Endpoints (served today)
 
-Derived from the route table and \`ACTION_SCOPES\`. "Limiter class" is D7: A = a bounded local read that still answers during a rate-limiter outage; B and C refuse (503 \`limiter_unavailable\`, retryable) because they reach a provider or change state. A \`whatsapp:*\` scope is a frozen legacy vocabulary: it is never issued to new keys and, where listed, satisfies only the template capability it always had — request the generic scope.
+Derived from both route tables, \`ACTION_SCOPES\` and \`PLATFORM_ACTION_SCOPES\`. "Limiter class" is D7: A = a bounded local read that still answers during a rate-limiter outage; B and C refuse (503 \`limiter_unavailable\`, retryable) because they reach a provider or change state. The legacy template scopes remain capability-pinned.
 
 ${endpointTable(routes, scopes, summaries)}
 

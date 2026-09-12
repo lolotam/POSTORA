@@ -115,9 +115,28 @@ export function withPartnerAuth(
     };
 
     try {
-      // The same header the document declares and the alias reads. A missing
-      // or unknown key is indistinguishable from a malformed one, by design.
-      record = await authenticatePartnerKey(admin, req.headers.get("x-postora-key") ?? "");
+      // x-postora-key ONLY. The published contract states it outright:
+      // "NOT `Authorization: Bearer` -- that header is never read by the
+      // alias and does not exist as a key transport", and adding it requires
+      // updating Access-Control-Allow-Headers and re-checking
+      // docs/decisions/2026-08-30-partner-api-cors.md.
+      //
+      // Reading Authorization here would also be actively unsafe: this
+      // function runs behind a gateway that can attach its own Authorization
+      // header, so preferring it would make every existing workspace call
+      // authenticate against the wrong value.
+      const presented = req.headers.get("x-postora-key") ?? "";
+
+      // Wrong tier: a platform credential must not learn that the workspace
+      // door rejected it as a KEY -- it learns nothing at all. A platform key
+      // sent as Bearer simply presents no credential here and gets the
+      // ordinary 401, which leaks nothing either.
+      if (presented.startsWith("pl_")) {
+        console.warn(`[partner-api] wrong-tier credential at workspace door (request ${requestId})`);
+        return ledgered(v1ErrorResponse("resource_not_found", requestId));
+      }
+
+      record = await authenticatePartnerKey(admin, presented);
 
       const satisfying = satisfyingScopesFor(action);
       if (satisfying === undefined) {
@@ -251,18 +270,29 @@ function authErrorToResponse(err: unknown, requestId: string): Response {
  */
 export async function resolveWhatsAppAccount(
   authed: V1AuthedContext,
+  accountId?: string,
 ): Promise<
   | { ok: true; ctx: WhatsAppOpsContext; wabaId: string | null }
   | { ok: false; res: Response }
 > {
   const { admin, record, requestId } = authed;
+  // Explicit targets must be bound BEFORE querying the account. Composite FKs
+  // prove workspace ownership; legacy callers keep their pinned-account path.
+  if (accountId !== undefined) {
+    const { data: binding, error } = await admin.from("partner_api_key_accounts")
+      .select("social_account_id").eq("key_id", record.id)
+      .eq("workspace_id", record.workspaceId).eq("social_account_id", accountId).maybeSingle();
+    if (error) return { ok: false, res: v1ErrorResponse("internal_error", requestId) };
+    if (!binding) return { ok: false, res: v1ErrorResponse("resource_not_found", requestId) };
+  }
   const { data: account, error } = await admin
     .from("social_accounts")
     .select(
       "id, user_id, workspace_id, platform, platform_user_id, access_token, " +
         "connection_mode, is_active, needs_reauth, token_expires_at, account_metadata",
     )
-    .eq("id", record.socialAccountId)
+    .eq("id", accountId ?? record.socialAccountId)
+    .eq("workspace_id", record.workspaceId)
     .maybeSingle();
 
   if (error) return { ok: false, res: v1ErrorResponse("internal_error", requestId) };

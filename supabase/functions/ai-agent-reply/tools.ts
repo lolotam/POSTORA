@@ -17,6 +17,7 @@ export interface ToolContext {
   userId: string;
   platform: string;
   conversationId: string;
+  cachedConversation?: { id: string; workspace_id: string } | null;
   customerName: string;
   adminPhoneNumbers: string[];
   // Test-sandbox runs: read-only tools work normally, but nothing is sent,
@@ -189,6 +190,7 @@ export interface EscalationTarget {
   userId: string;
   platform: string;
   conversationId: string;
+  cachedConversation?: { id: string; workspace_id: string } | null;
   customerName: string;
   adminPhoneNumbers: string[];
   sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
@@ -242,6 +244,22 @@ export async function escalateConversation(
 
   try {
     if (!outOfTime()) {
+      let workspaceId = target.cachedConversation?.workspace_id;
+      if (!workspaceId) {
+        const workspaceQuery = target.admin
+          .from("workspaces")
+          .select("id")
+          .eq("owner_id", target.userId)
+          .eq("is_personal", true)
+          .maybeSingle();
+        const remaining = msLeft();
+        const { data: workspace, error: workspaceError } = remaining === undefined
+          ? await workspaceQuery
+          : await workspaceQuery.abortSignal(AbortSignal.timeout(remaining));
+        if (workspaceError) throw workspaceError;
+        if (!workspace?.id) throw new Error("No personal workspace found for escalation");
+        workspaceId = workspace.id;
+      }
       // Checking the clock before the query is not enough: a query that hangs runs
       // past the deadline anyway and eats the reserve the customer's message needs.
       // Bind the read itself to what is left. The writes below are deliberately NOT
@@ -250,31 +268,39 @@ export async function escalateConversation(
       const remaining = msLeft();
       const agentQuery = target.admin
         .from("whatsapp_agents")
-        .select("id, user_id, status, current_conversations");
-      const { data: agents } = remaining === undefined
+        .select("id, user_id, status, current_conversations")
+        .eq("workspace_id", workspaceId);
+      const { data: agents, error: agentsError } = remaining === undefined
         ? await agentQuery
         : await agentQuery.abortSignal(AbortSignal.timeout(remaining));
+      if (agentsError) throw agentsError;
       const agent = pickEscalationAgent(agents || [], target.userId);
 
       // Re-checked after the lookup: it may itself have spent the remaining budget.
       if (agent && !outOfTime()) {
-        const { data: existing } = await target.admin
+        const { data: existing, error: existingError } = await target.admin
           .from("whatsapp_conversation_assignments")
           .select("id, agent_id")
           .eq("conversation_id", target.conversationId)
+          .eq("workspace_id", workspaceId)
           .is("unassigned_at", null)
           .maybeSingle();
+        if (existingError) throw existingError;
 
         if (existing) {
-          await target.admin
+          const { error: unassignError } = await target.admin
             .from("whatsapp_conversation_assignments")
             .update({ unassigned_at: new Date().toISOString() })
-            .eq("id", existing.id);
+            .eq("id", existing.id)
+            .eq("workspace_id", workspaceId);
+          if (unassignError) throw unassignError;
         }
 
         const { error: assignError } = await target.admin
           .from("whatsapp_conversation_assignments")
           .insert({
+            workspace_id: workspaceId,
+            conversation_cache_id: target.cachedConversation?.id || null,
             conversation_id: target.conversationId,
             agent_id: agent.id,
             assigned_by: target.userId,
@@ -282,7 +308,8 @@ export async function escalateConversation(
           });
         if (assignError) throw assignError;
 
-        await target.admin.from("whatsapp_assignment_history").insert({
+        const { error: historyError } = await target.admin.from("whatsapp_assignment_history").insert({
+          workspace_id: workspaceId,
           conversation_id: target.conversationId,
           action: existing ? "transferred" : "assigned",
           from_agent_id: existing?.agent_id || null,
@@ -290,6 +317,7 @@ export async function escalateConversation(
           performed_by: target.userId,
           reason: `AI escalation: ${reason}`.slice(0, 500),
         });
+        if (historyError) throw historyError;
         assigned = true;
         assignmentNote = "An online team member has been assigned to this conversation.";
       }
@@ -297,7 +325,10 @@ export async function escalateConversation(
   } catch (assignmentError) {
     console.error(
       "[ai-agent-reply] Escalation assignment failed after the conversation was muted:",
-      assignmentError instanceof Error ? assignmentError.message : String(assignmentError),
+      // PostgREST returns plain error objects, not Error instances.
+      typeof assignmentError === "object" && assignmentError !== null && "message" in assignmentError
+        ? String(assignmentError.message)
+        : String(assignmentError),
     );
   }
 

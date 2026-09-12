@@ -1,8 +1,8 @@
 create extension if not exists pgtap with schema extensions;
-
 begin;
+
 set local search_path = public, extensions, auth, pg_temp;
-select plan(52);
+select plan(61);
 
 insert into auth.users (
   instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
@@ -486,6 +486,158 @@ select throws_ok(
 );
 
 reset role;
+
+-- ---------------------------------------------------------------------------
+-- Backfill reconcile + agent FK action (20260910140000 defect B,
+-- 20260910160000 defect C).
+--
+-- Defect B shape: two agents in workspace A, two ACTIVE NULL-workspace
+-- assignments on one conversation. Legal before the backfill (NULLs are
+-- distinct in idx_active_assignment), a 23505 after it. The migration is
+-- already applied by the time suites run, so the reconcile+backfill
+-- statements are re-executed here verbatim (copied from the migration) and
+-- the outcome is asserted: one row closed, one backfilled, index holds.
+-- ---------------------------------------------------------------------------
+insert into public.whatsapp_agents
+  (id, workspace_id, user_id, display_name, status)
+values
+  ('62000000-0000-0000-0000-000000000001', current_setting('test.workspace_a')::uuid,
+   '10000000-0000-0000-0000-000000000001', 'Backfill Agent One', 'online'),
+  ('62000000-0000-0000-0000-000000000002', current_setting('test.workspace_a')::uuid,
+   '30000000-0000-0000-0000-000000000003', 'Backfill Agent Two', 'online');
+insert into public.whatsapp_conversation_assignments
+  (id, workspace_id, conversation_id, agent_id, assigned_at, notes)
+values
+  ('b1000000-0000-0000-0000-000000000001', NULL, 'wa_backfill_dup_rehearsal',
+   '62000000-0000-0000-0000-000000000001', now() - interval '1 hour', NULL),
+  ('b1000000-0000-0000-0000-000000000002', NULL, 'wa_backfill_dup_rehearsal',
+   '62000000-0000-0000-0000-000000000002', now(), NULL);
+
+-- Re-executed verbatim from 20260910140000_human_agent_tenancy.sql.
+do $$
+declare
+  closed_count bigint;
+begin
+  with target as (
+    select assignment.id,
+      agent.workspace_id as target_workspace_id,
+      assignment.conversation_id,
+      row_number() over (
+        partition by agent.workspace_id, assignment.conversation_id
+        order by assignment.assigned_at desc nulls last, assignment.id desc
+      ) as recency_rank,
+      exists (
+        select 1 from public.whatsapp_conversation_assignments as attributed
+        where attributed.workspace_id = agent.workspace_id
+          and attributed.conversation_id = assignment.conversation_id
+          and attributed.unassigned_at is null
+      ) as collides_with_attributed
+    from public.whatsapp_conversation_assignments as assignment
+    join public.whatsapp_agents as agent on agent.id = assignment.agent_id
+    where assignment.workspace_id is null
+      and assignment.unassigned_at is null
+      and assignment.agent_id is not null
+  ),
+  closed as (
+    update public.whatsapp_conversation_assignments as assignment
+    set unassigned_at = now(),
+        notes = coalesce(assignment.notes, 'backfill_duplicate')
+    from target
+    where assignment.id = target.id
+      and (target.recency_rank > 1 or target.collides_with_attributed)
+    returning assignment.id
+  )
+  select count(*) into closed_count from closed;
+
+  raise notice 'Human-agent backfill: closed % duplicate NULL-workspace active assignment(s)', closed_count;
+end;
+$$;
+
+-- Re-executed verbatim from 20260910140000_human_agent_tenancy.sql.
+update public.whatsapp_conversation_assignments as assignment
+set workspace_id = agent.workspace_id
+from public.whatsapp_agents as agent
+where assignment.workspace_id is null
+  and assignment.agent_id = agent.id;
+
+select is(
+  (select count(*) from public.whatsapp_conversation_assignments
+   where conversation_id = 'wa_backfill_dup_rehearsal' and unassigned_at is not null),
+  1::bigint,
+  'the reconcile closes exactly one duplicate NULL-workspace assignment'
+);
+select is(
+  (select workspace_id from public.whatsapp_conversation_assignments
+   where id = 'b1000000-0000-0000-0000-000000000002'),
+  current_setting('test.workspace_a')::uuid,
+  'the surviving (newest) assignment is backfilled to the agents workspace'
+);
+select is(
+  (select notes from public.whatsapp_conversation_assignments
+   where id = 'b1000000-0000-0000-0000-000000000001'),
+  'backfill_duplicate',
+  'the closed duplicate is marked without touching other columns'
+);
+select is(
+  (select count(*) from (
+    select workspace_id, conversation_id
+    from public.whatsapp_conversation_assignments
+    where unassigned_at is null and workspace_id is not null
+    group by workspace_id, conversation_id having count(*) > 1
+  ) t),
+  0::bigint,
+  'post-migration invariant: no (workspace, conversation) pair has two active rows'
+);
+
+-- Defect C: the assignments agent FK must be ON DELETE NO ACTION
+-- (confdeltype 'a'); the two history FKs stay SET NULL ('n').
+select is(
+  (select confdeltype::text from pg_constraint
+   where conrelid = 'public.whatsapp_conversation_assignments'::regclass
+     and confrelid = 'public.whatsapp_agents'::regclass
+     and contype = 'f'),
+  'a',
+  'the conversation-assignment agent FK is ON DELETE NO ACTION'
+);
+select is(
+  (select confdeltype::text from pg_constraint
+   where conname = 'whatsapp_assignment_history_from_agent_id_fkey'),
+  'n',
+  'the history from_agent FK stays ON DELETE SET NULL'
+);
+select is(
+  (select confdeltype::text from pg_constraint
+   where conname = 'whatsapp_assignment_history_to_agent_id_fkey'),
+  'n',
+  'the history to_agent FK stays ON DELETE SET NULL'
+);
+insert into public.whatsapp_agents
+  (id, workspace_id, user_id, display_name, status)
+values
+  ('63000000-0000-0000-0000-000000000001', current_setting('test.workspace_b')::uuid,
+   '10000000-0000-0000-0000-000000000001', 'Nodelete Agent', 'online');
+insert into public.whatsapp_conversation_assignments
+  (workspace_id, conversation_id, agent_id)
+values
+  (current_setting('test.workspace_b')::uuid, 'wa_nodelete_rehearsal',
+   '63000000-0000-0000-0000-000000000001');
+select throws_ok(
+  $sql$delete from public.whatsapp_agents
+       where id = '63000000-0000-0000-0000-000000000001'$sql$,
+  '23503', null,
+  'deleting an agent with an active assignment is refused'
+);
+
+-- 61. The history INSERT policy binds a named workspace to the author's
+-- membership (20260910140000): performed_by alone let any user stamp any
+-- workspace_id, which the partner assignment-history endpoint then served.
+select ok(
+  (select with_check from pg_policies
+    where schemaname = 'public' and tablename = 'whatsapp_assignment_history'
+      and policyname = 'Users can create history entries' and cmd = 'INSERT')
+    ~* 'workspace_members',
+  'history INSERT policy requires membership of the named workspace'
+);
 
 select * from finish();
 rollback;

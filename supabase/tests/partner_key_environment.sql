@@ -417,6 +417,257 @@ BEGIN
 END $e7anon$;
 RESET ROLE;
 
+-- ===========================================================================
+-- E8 — platform-tier environment isolation (20260910100000 defect A fix).
+--
+-- One principal holds a STAGING platform key and a PRODUCTION provisioned
+-- workspace + account + workspace key. A staging platform key must neither
+-- issue a production key in its own estate nor revoke a live production
+-- key; the matching-environment path must still work. p_platform_key_id is
+-- REQUIRED (no default): it is the environment anchor, not audit metadata.
+-- ===========================================================================
+CREATE TEMP TABLE e8_ids (k TEXT PRIMARY KEY, id UUID NOT NULL);
+INSERT INTO e8_ids VALUES
+  ('principal', 'e8000001-0000-4000-8000-000000000001'),
+  ('owner',     'e8000001-0000-4000-8000-000000000002'),
+  ('ws_prod',   'e8000001-0000-4000-8000-000000000003'),
+  ('acct_prod', 'e8000001-0000-4000-8000-000000000004'),
+  ('plat_stag', 'e8000001-0000-4000-8000-000000000005'),
+  ('plat_prod', 'e8000001-0000-4000-8000-000000000006'),
+  ('key_prod',  'e8000001-0000-4000-8000-000000000007');
+
+CREATE OR REPLACE FUNCTION pg_temp.e8_cleanup() RETURNS void
+LANGUAGE plpgsql AS $$
+DECLARE
+  v_ws uuid[] := ARRAY(SELECT id FROM e8_ids WHERE k IN ('ws_prod'));
+  v_us uuid[] := ARRAY(SELECT id FROM e8_ids WHERE k IN ('owner'));
+  v_pr uuid[] := ARRAY(SELECT id FROM e8_ids WHERE k IN ('principal'));
+  v_pk uuid[] := ARRAY(SELECT id FROM e8_ids WHERE k IN ('plat_stag','plat_prod'));
+BEGIN
+  DELETE FROM public.partner_audit_logs WHERE workspace_id = ANY(v_ws);
+  DELETE FROM public.partner_api_key_accounts WHERE workspace_id = ANY(v_ws);
+  UPDATE public.partner_api_keys SET superseded_by_key_id = NULL WHERE workspace_id = ANY(v_ws);
+  DELETE FROM public.partner_api_keys WHERE workspace_id = ANY(v_ws);
+  DELETE FROM public.partner_platform_keys WHERE id = ANY(v_pk);
+  DELETE FROM public.partner_provisioned_workspaces WHERE workspace_id = ANY(v_ws);
+  DELETE FROM public.social_accounts WHERE workspace_id = ANY(v_ws);
+  -- No explicit workspace_members delete: prevent_last_workspace_owner()
+  -- refuses a direct delete of the last owner, but expressly permits the
+  -- cascade from the workspace delete below.
+  DELETE FROM public.workspaces WHERE id = ANY(v_ws);
+  DELETE FROM public.partner_principals WHERE id = ANY(v_pr);
+  DELETE FROM auth.users WHERE id = ANY(v_us);
+END $$;
+
+SELECT pg_temp.e8_cleanup();
+
+DO $e8seed$
+DECLARE
+  v_pr    uuid := (SELECT id FROM e8_ids WHERE k='principal');
+  v_owner uuid := (SELECT id FROM e8_ids WHERE k='owner');
+  v_ws    uuid := (SELECT id FROM e8_ids WHERE k='ws_prod');
+  v_acct  uuid := (SELECT id FROM e8_ids WHERE k='acct_prod');
+  v_pstag uuid := (SELECT id FROM e8_ids WHERE k='plat_stag');
+  v_pprod uuid := (SELECT id FROM e8_ids WHERE k='plat_prod');
+  v_key   uuid := (SELECT id FROM e8_ids WHERE k='key_prod');
+BEGIN
+  INSERT INTO auth.users (id, email) VALUES
+    (v_owner, 'e8-owner@example.invalid')
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO public.partner_principals (id, name) VALUES
+    (v_pr, 'e8 principal')
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO public.workspaces (id, name, owner_id) VALUES
+    (v_ws, 'e8-ws-prod', v_owner)
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO public.workspace_members (workspace_id, user_id, role) VALUES
+    (v_ws, v_owner, 'owner')
+  ON CONFLICT DO NOTHING;
+
+  INSERT INTO public.social_accounts
+    (id, user_id, platform, platform_user_id, access_token, workspace_id)
+  VALUES
+    (v_acct, v_owner, 'whatsapp', 'e8-acct-prod', 'seed-e8', v_ws)
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO public.partner_platform_keys
+    (id, principal_id, name, environment, key_prefix, key_hash, scopes)
+  VALUES
+    (v_pstag, v_pr, 'e8 staging platform', 'staging', 'pl_test_e8stag',
+     'a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1', '{}'),
+    (v_pprod, v_pr, 'e8 production platform', 'production', 'pl_live_e8prod',
+     'b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', '{}')
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO public.partner_provisioned_workspaces
+    (workspace_id, principal_id, owner_user_id, environment, external_ref)
+  VALUES (v_ws, v_pr, v_owner, 'production', 'e8-ext-prod')
+  ON CONFLICT (workspace_id) DO NOTHING;
+
+  INSERT INTO public.partner_api_keys
+    (id, workspace_id, social_account_id, created_by, name, key_prefix, key_hash, environment, scopes)
+  VALUES (v_key, v_ws, v_acct, v_owner, 'e8 prod key', 'pk_live_e800',
+          'c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+          'production', ARRAY['messages:send'])
+  ON CONFLICT (id) DO NOTHING;
+END $e8seed$;
+
+-- E8a — a staging platform key cannot mint in the production estate, in
+-- either direction: production key in production workspace, or staging key
+-- against a production workspace. Both raise no_data_found (nothing
+-- enumerable), never a distinct error.
+DO $e8a$
+DECLARE
+  v_pr    uuid := (SELECT id FROM e8_ids WHERE k='principal');
+  v_owner uuid := (SELECT id FROM e8_ids WHERE k='owner');
+  v_ws    uuid := (SELECT id FROM e8_ids WHERE k='ws_prod');
+  v_acct  uuid := (SELECT id FROM e8_ids WHERE k='acct_prod');
+  v_pstag uuid := (SELECT id FROM e8_ids WHERE k='plat_stag');
+BEGIN
+  PERFORM pg_temp.act_as(v_owner);
+  BEGIN
+    PERFORM public.issue_partner_key_in_estate(
+      v_pr, v_ws, v_acct, 'e8 cross-env', 'pk_live_e801',
+      'd4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4',
+      ARRAY['messages:send'], v_pstag, 60, NULL, NULL, 'production', 'req-e8a');
+    RAISE EXCEPTION 'E8a: a staging platform key minted a production key in its own estate';
+  EXCEPTION WHEN no_data_found THEN
+    NULL;
+  END;
+  BEGIN
+    PERFORM public.issue_partner_key_in_estate(
+      v_pr, v_ws, v_acct, 'e8 cross-env staging', 'pk_test_e802',
+      'e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5',
+      ARRAY['messages:send'], v_pstag, 60, NULL, NULL, 'staging', 'req-e8a2');
+    RAISE EXCEPTION 'E8a: a staging issue against a production workspace was accepted';
+  EXCEPTION WHEN no_data_found THEN
+    NULL;
+  END;
+  RAISE NOTICE 'PASS E8a: staging platform key cannot mint across environments (no_data_found both ways)';
+END $e8a$;
+
+-- E8b — revoking a production key with a staging platform key revokes
+-- nothing: returns FALSE and the key stays live.
+DO $e8b$
+DECLARE
+  v_pr    uuid := (SELECT id FROM e8_ids WHERE k='principal');
+  v_owner uuid := (SELECT id FROM e8_ids WHERE k='owner');
+  v_key   uuid := (SELECT id FROM e8_ids WHERE k='key_prod');
+  v_pstag uuid := (SELECT id FROM e8_ids WHERE k='plat_stag');
+BEGIN
+  PERFORM pg_temp.act_as(v_owner);
+  PERFORM pg_temp.must(
+    public.revoke_partner_key_in_estate(v_pr, v_key, 'e8 hostile', v_pstag, 'req-e8b') = FALSE,
+    'E8b cross-environment revoke returns FALSE');
+  PERFORM pg_temp.must(
+    (SELECT revoked_at FROM public.partner_api_keys WHERE id = v_key) IS NULL,
+    'E8b production key stays live after the staging revoke attempt');
+  RAISE NOTICE 'PASS E8b: staging platform key cannot revoke a production key';
+END $e8b$;
+
+-- E8c — the matching-environment path still works end to end, and the
+-- estate link records the requested environment.
+DO $e8c$
+DECLARE
+  v_pr    uuid := (SELECT id FROM e8_ids WHERE k='principal');
+  v_owner uuid := (SELECT id FROM e8_ids WHERE k='owner');
+  v_ws    uuid := (SELECT id FROM e8_ids WHERE k='ws_prod');
+  v_acct  uuid := (SELECT id FROM e8_ids WHERE k='acct_prod');
+  v_pprod uuid := (SELECT id FROM e8_ids WHERE k='plat_prod');
+  v_new   uuid;
+BEGIN
+  PERFORM pg_temp.act_as(v_owner);
+  PERFORM pg_temp.must(
+    (SELECT environment FROM public.partner_provisioned_workspaces WHERE workspace_id = v_ws) = 'production',
+    'E8c estate link records the requested environment');
+  v_new := public.issue_partner_key_in_estate(
+    v_pr, v_ws, v_acct, 'e8 matching env', 'pk_live_e803',
+    'f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6f6',
+    ARRAY['messages:send'], v_pprod, 60, NULL, NULL, 'production', 'req-e8c');
+  PERFORM pg_temp.must(v_new IS NOT NULL,
+    'E8c matching-environment issue succeeds');
+  PERFORM pg_temp.must(
+    public.revoke_partner_key_in_estate(v_pr, v_new, 'e8 matching revoke', v_pprod, 'req-e8c2') = TRUE,
+    'E8c matching-environment revoke succeeds');
+  RAISE NOTICE 'PASS E8c: matching-environment issue and revoke succeed';
+END $e8c$;
+
+-- E8e — provisioning rechecks the acting platform key in SQL: a staging
+-- key provisioning a production tenant, and a caller that names no key at
+-- all, both raise no_data_found. The door checked the key once; a key
+-- revoked or swapped between that check and this statement must not
+-- provision, and the function runs under service_role where nothing else
+-- would stop it.
+DO $e8e$
+DECLARE
+  v_pr    uuid := (SELECT id FROM e8_ids WHERE k='principal');
+  v_owner uuid := (SELECT id FROM e8_ids WHERE k='owner');
+  v_pstag uuid := (SELECT id FROM e8_ids WHERE k='plat_stag');
+BEGIN
+  PERFORM pg_temp.act_as(v_owner);
+  BEGIN
+    PERFORM public.provision_partner_tenant(
+      p_principal_id => v_pr, p_owner_user_id => v_owner,
+      p_workspace_name => 'e8e cross-env', p_external_ref => 'e8e-1',
+      p_connection_name => 'e8e', p_key_name => 'e8e bootstrap',
+      p_key_prefix => 'pk_live_e8e1',
+      p_key_hash => 'a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7a7',
+      p_scopes => ARRAY['messages:send'], p_environment => 'production',
+      p_platform_key_id => v_pstag, p_request_id => 'req-e8e');
+    RAISE EXCEPTION 'E8e: a staging platform key provisioned a production tenant';
+  EXCEPTION WHEN no_data_found THEN
+    NULL;
+  END;
+  BEGIN
+    PERFORM public.provision_partner_tenant(
+      p_principal_id => v_pr, p_owner_user_id => v_owner,
+      p_workspace_name => 'e8e no key', p_external_ref => 'e8e-2',
+      p_connection_name => 'e8e', p_key_name => 'e8e bootstrap',
+      p_key_prefix => 'pk_live_e8e2',
+      p_key_hash => 'b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8b8',
+      p_scopes => ARRAY['messages:send'], p_environment => 'production',
+      p_platform_key_id => NULL, p_request_id => 'req-e8e2');
+    RAISE EXCEPTION 'E8e: provisioning without an acting platform key was accepted';
+  EXCEPTION WHEN no_data_found THEN
+    NULL;
+  END;
+  PERFORM pg_temp.must(
+    NOT EXISTS (SELECT 1 FROM public.partner_provisioned_workspaces p
+                 JOIN public.workspaces w ON w.id = p.workspace_id
+                WHERE w.name IN ('e8e cross-env', 'e8e no key')),
+    'E8e no tenant was provisioned by a refused call');
+  RAISE NOTICE 'PASS E8e: provisioning rechecks the acting platform key in SQL';
+END $e8e$;
+
+-- E8d — exactly one of each estate function exists. Dropping a DEFAULT
+-- keeps the type list, but any CREATE that adds an overload (rather than
+-- CREATE OR REPLACE) makes the handler's named-parameter call ambiguous:
+-- the E7 single-overload check proved this failure mode once already.
+DO $e8d$
+DECLARE
+  v_n INTEGER;
+BEGIN
+  SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'issue_partner_key_in_estate';
+  PERFORM pg_temp.must(v_n = 1,
+    'E8d issue_partner_key_in_estate has exactly one overload (found ' || v_n || ')');
+  SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'revoke_partner_key_in_estate';
+  PERFORM pg_temp.must(v_n = 1,
+    'E8d revoke_partner_key_in_estate has exactly one overload (found ' || v_n || ')');
+  SELECT count(*) INTO v_n FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'provision_partner_tenant';
+  PERFORM pg_temp.must(v_n = 1,
+    'E8d provision_partner_tenant has exactly one overload (found ' || v_n || ')');
+  RAISE NOTICE 'PASS E8d: one overload each for the three estate functions';
+END $e8d$;
+
+SELECT pg_temp.e8_cleanup();
+DROP FUNCTION IF EXISTS pg_temp.e8_cleanup();
+
 SELECT pg_temp.env_cleanup();
 DROP FUNCTION IF EXISTS pg_temp.act_as(UUID);
 DROP FUNCTION IF EXISTS pg_temp.must(BOOLEAN, TEXT);

@@ -14,8 +14,13 @@
 // routing, so an unmatched path still 404s without a Supabase client. See
 // handleV1Request and v1/router.test.ts.
 
+import { getAssignmentRoute, assignConversationRoute, unassignConversationRoute, listAssignmentHistoryRoute, listAgentsRoute, getAgentRoute, createAgentRoute, updateAgentRoute, deleteAgentRoute } from "./agents.ts";
+import { listCommentsRoute, getCommentRoute, replyCommentRoute, hideCommentRoute, deleteCommentRoute } from "./comments.ts";
+import { getAgentConfigRoute, getAutomationHandlersRoute, getAudienceRoute, updateAgentConfigRoute, listAgentToolsRoute, upsertAgentToolRoute, deleteAgentToolRoute, setToolAccountsRoute, setAutomationHandlersRoute } from "./automation.ts";
+import { listConversationModesRoute, getConversationModeRoute, setConversationModeRoute, listAutoRepliesRoute, createAutoReplyRoute, updateAutoReplyRoute, deleteAutoReplyRoute } from "./automation.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { withPartnerAuth } from "./authenticated.ts";
+import { PLATFORM_ROUTES } from "../platform/router.ts";
 import { getAccount, listAccounts } from "./accounts.ts";
 import {
   getConversation,
@@ -36,6 +41,7 @@ import {
 import { getTemplates } from "./templates.ts";
 import { executeTool } from "./tools.ts";
 import { getUsage } from "./usage.ts";
+import { endSessionRoute, historySyncStatusRoute, startHistorySyncRoute, getNumber, listNumbers, registerNumberRoute, startPairingRoute, pairingStatusRoute, getProfileRoute, updateProfileRoute } from "./whatsappNumbers.ts";
 import {
   createWebhook,
   deleteWebhook,
@@ -110,6 +116,111 @@ export interface V1Route {
  */
 export const V1_ROUTES: V1Route[] = [
   {
+    pattern: "/v1/agents",
+    methods: {
+      GET: withPartnerAuth("list_agents", "A", listAgentsRoute),
+      POST: withPartnerAuth("create_agent", "C", createAgentRoute),
+    },
+  },
+  {
+    pattern: "/v1/agents/{id}",
+    methods: {
+      GET: withPartnerAuth("get_agent", "A", getAgentRoute),
+      PATCH: withPartnerAuth("update_agent", "C", updateAgentRoute),
+      DELETE: withPartnerAuth("delete_agent", "C", deleteAgentRoute),
+    },
+  },
+  {
+    pattern: "/v1/automation/conversation-modes",
+    methods: { GET: withPartnerAuth("list_conversation_modes", "A", listConversationModesRoute) },
+  },
+  {
+    pattern: "/v1/automation/auto-replies/{id}",
+    methods: {
+      PATCH: withPartnerAuth("update_auto_reply", "C", updateAutoReplyRoute),
+      DELETE: withPartnerAuth("delete_auto_reply", "C", deleteAutoReplyRoute),
+    },
+  },
+  {
+    pattern: "/v1/automation/auto-replies",
+    methods: {
+      GET: withPartnerAuth("list_auto_replies", "A", listAutoRepliesRoute),
+      POST: withPartnerAuth("create_auto_reply", "C", createAutoReplyRoute),
+    },
+  },
+  {
+    pattern: "/v1/automation/handlers",
+    methods: {
+      GET: withPartnerAuth("get_automation_handlers", "A", getAutomationHandlersRoute),
+      PUT: withPartnerAuth("set_automation_handlers", "C", setAutomationHandlersRoute),
+    },
+  },
+  {
+    pattern: "/v1/automation/audience",
+    methods: { GET: withPartnerAuth("get_audience", "B", getAudienceRoute) },
+  },
+  {
+    pattern: "/v1/automation/tools/{id}/accounts",
+    methods: { PUT: withPartnerAuth("set_tool_accounts", "C", setToolAccountsRoute) },
+  },
+  {
+    pattern: "/v1/automation/tools/{id}",
+    methods: {
+      PUT: withPartnerAuth("upsert_agent_tool", "C", upsertAgentToolRoute),
+      DELETE: withPartnerAuth("delete_agent_tool", "C", deleteAgentToolRoute),
+    },
+  },
+  {
+    pattern: "/v1/automation/tools",
+    methods: { GET: withPartnerAuth("list_agent_tools", "A", listAgentToolsRoute) },
+  },
+  {
+    pattern: "/v1/automation/agent",
+    methods: {
+      GET: withPartnerAuth("get_agent_config", "A", getAgentConfigRoute),
+      PUT: withPartnerAuth("update_agent_config", "C", updateAgentConfigRoute),
+    },
+  },
+  {
+    pattern: "/v1/comments/{id}/reply",
+    methods: { POST: withPartnerAuth("reply_comment", "C", replyCommentRoute) },
+  },
+  {
+    pattern: "/v1/comments/{id}/hide",
+    methods: { POST: withPartnerAuth("hide_comment", "C", hideCommentRoute) },
+  },
+  {
+    pattern: "/v1/comments/{id}",
+    methods: {
+      GET: withPartnerAuth("get_comment", "B", getCommentRoute),
+      DELETE: withPartnerAuth("delete_comment", "C", deleteCommentRoute),
+    },
+  },
+  {
+    pattern: "/v1/comments",
+    methods: { GET: withPartnerAuth("list_comments", "B", listCommentsRoute) },
+  },
+  {
+    pattern: "/v1/whatsapp/numbers/{id}/profile",
+    methods: {
+      GET: withPartnerAuth("get_whatsapp_profile", "B", getProfileRoute),
+      PATCH: withPartnerAuth("update_whatsapp_profile", "C", updateProfileRoute),
+    },
+  },
+  {
+    pattern: "/v1/whatsapp/numbers/{id}/session",
+    methods: {
+      DELETE: withPartnerAuth("end_whatsapp_session", "C", endSessionRoute),
+    },
+  },
+  {
+    pattern: "/v1/whatsapp/numbers/{id}/history-sync",
+    methods: {
+      GET: withPartnerAuth("get_whatsapp_history_sync", "A", historySyncStatusRoute),
+      POST: withPartnerAuth("start_whatsapp_history_sync", "C", startHistorySyncRoute),
+    },
+  },
+  {
     pattern: "/v1/usage",
     methods: {
       GET: withPartnerAuth("get_usage", "A", getUsage),
@@ -128,21 +239,62 @@ export const V1_ROUTES: V1Route[] = [
     },
   },
   {
+    pattern: "/v1/whatsapp/numbers/{id}/pairing",
+    methods: {
+      POST: withPartnerAuth("create_whatsapp_pairing", "C", startPairingRoute),
+      GET: withPartnerAuth("get_whatsapp_pairing", "B", pairingStatusRoute),
+    },
+  },
+  {
+    pattern: "/v1/whatsapp/numbers",
+    methods: {
+      GET: withPartnerAuth("list_whatsapp_numbers", "A", listNumbers),
+      POST: withPartnerAuth("register_whatsapp_number", "C", registerNumberRoute),
+    },
+  },
+  {
+    pattern: "/v1/whatsapp/numbers/{id}",
+    methods: {
+      GET: withPartnerAuth("get_whatsapp_number", "A", getNumber),
+    },
+  },
+  {
     pattern: "/v1/conversations",
     methods: {
       GET: withPartnerAuth("list_conversations", "A", listConversations),
     },
   },
   {
-    pattern: "/v1/conversations/{id}",
+    pattern: "/v1/conversations/{id}/mode",
     methods: {
-      GET: withPartnerAuth("get_conversation", "A", getConversation),
+      GET: withPartnerAuth("get_conversation_mode", "A", getConversationModeRoute),
+      PUT: withPartnerAuth("set_conversation_mode", "C", setConversationModeRoute),
     },
   },
   {
     pattern: "/v1/conversations/{id}/messages",
     methods: {
       GET: withPartnerAuth("list_conversation_messages", "A", listConversationMessages),
+    },
+  },
+  {
+    pattern: "/v1/conversations/{id}/assignment",
+    methods: {
+      GET: withPartnerAuth("get_assignment", "A", getAssignmentRoute),
+      PUT: withPartnerAuth("assign_conversation", "C", assignConversationRoute),
+      DELETE: withPartnerAuth("unassign_conversation", "C", unassignConversationRoute),
+    },
+  },
+  {
+    pattern: "/v1/conversations/{id}/assignment-history",
+    methods: {
+      GET: withPartnerAuth("list_assignment_history", "A", listAssignmentHistoryRoute),
+    },
+  },
+  {
+    pattern: "/v1/conversations/{id}",
+    methods: {
+      GET: withPartnerAuth("get_conversation", "A", getConversation),
     },
   },
   // Hybrid connectors (spec §8.2). The sub-resource route is registered before
@@ -323,7 +475,10 @@ export async function handleV1Request(
   // deno-lint-ignore no-explicit-any
   createAdminClient?: () => any,
 ): Promise<Response> {
-  const resolution = resolveV1Route(V1_ROUTES, subPath, req.method);
+  const platformResolution = resolveV1Route(PLATFORM_ROUTES, subPath, req.method);
+  const resolution = platformResolution.kind === "not_found"
+    ? resolveV1Route(V1_ROUTES, subPath, req.method)
+    : platformResolution;
   if (resolution.kind === "routed") {
     const handler = resolution.route.methods[req.method.toUpperCase()]!;
     try {

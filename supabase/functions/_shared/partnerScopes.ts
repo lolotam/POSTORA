@@ -42,7 +42,13 @@
  *  drift apart. Values come from the spec's section 7 endpoint table; adding
  *  one is a capability grant and a deliberate review, never a convenience. */
 export const GENERIC_SCOPES = [
+  "agents:read",
+  "agents:manage",
   "accounts:read",
+  "automation:read",
+  "automation:manage",
+  "comments:read",
+  "comments:manage",
   "connectors:manage",
   "connectors:read",
   "conversations:read",
@@ -50,6 +56,9 @@ export const GENERIC_SCOPES = [
   "media:write",
   "messages:read",
   "messages:send",
+  "platform:keys.manage",
+  "platform:workspaces.manage",
+  "platform:workspaces.read",
   "posts:publish",
   "posts:read",
   "posts:schedule",
@@ -59,6 +68,10 @@ export const GENERIC_SCOPES = [
   "usage:read",
   "webhooks:manage",
   "webhooks:read",
+  "whatsapp:numbers.read",
+  "whatsapp:numbers.manage",
+  "whatsapp:profile.read",
+  "whatsapp:profile.manage",
 ] as const;
 
 /** The frozen provider-prefixed vocabulary. Accepted at exactly the capability

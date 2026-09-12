@@ -15,12 +15,17 @@ interface Write {
 
 // Stands in for the Supabase client. The database is a system boundary, so the assertions
 // below are on the rows the sweep would write, not on how the client was called.
-function fakeAdmin(options: { anchors?: Record<string, string> } = {}) {
+function fakeAdmin(options: {
+  anchors?: Record<string, string>;
+  completionError?: boolean;
+  emissionFailure?: "lookup" | "insert";
+} = {}) {
   const writes: Write[] = [];
   const anchors = options.anchors ?? {};
   return {
     writes,
     rpc: (fn: string, args: { p_rows: any[] }) => {
+      if (fn === "claim_whatsapp_history_sync") return Promise.resolve({ data: true, error: null });
       writes.push({ table: fn, rows: args.p_rows });
       return Promise.resolve({ data: args.p_rows.length, error: null });
     },
@@ -36,6 +41,21 @@ function fakeAdmin(options: { anchors?: Record<string, string> } = {}) {
         or: () => chain,
         limit: () => Promise.resolve({ data: [], error: null }),
         maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        contains: () => Promise.resolve({
+          data: [
+            { id: "matching", secret_version: 1, platform: "whatsapp", social_account_id: ACCOUNT.id },
+            { id: "wrong-account", secret_version: 1, platform: null, social_account_id: "acc-other" },
+            { id: "wrong-platform", secret_version: 1, platform: "instagram", social_account_id: null },
+          ],
+          error: options.emissionFailure === "lookup" ? { message: "lookup failed" } : null,
+        }),
+        upsert: (rows: Record<string, unknown>[]) => ({
+          select: () => {
+            if (options.emissionFailure === "insert") return Promise.resolve({ error: { message: "insert failed" } });
+            writes.push({ table, rows });
+            return Promise.resolve({ data: rows, error: null });
+          },
+        }),
         in: (_column: string, values: string[]) =>
           Promise.resolve({
             data: values
@@ -46,7 +66,7 @@ function fakeAdmin(options: { anchors?: Record<string, string> } = {}) {
         update: (values: Record<string, unknown>) => ({
           eq: () => {
             writes.push({ table, rows: [values] });
-            return Promise.resolve({ error: null });
+            return Promise.resolve({ error: options.completionError ? { message: "completion failed" } : null });
           },
         }),
       };
@@ -341,7 +361,7 @@ Deno.test("importEvolutionHistory records the outcome with the lease release", a
     if (fn === "claim_whatsapp_history_sync") return Promise.resolve({ data: true, error: null });
     return baseRpc(fn, args);
   };
-  await importEvolutionHistory({
+  const startOutcome = await importEvolutionHistory({
     admin,
     api: fakeApi({
       chats: [chat("96555683677@s.whatsapp.net")],
@@ -351,12 +371,47 @@ Deno.test("importEvolutionHistory records the outcome with the lease release", a
     instanceName: "postora_acc-1",
   });
   const completion = rowsFor(admin, "whatsapp_evolution_instances")[0];
+  assertEquals(startOutcome, "claimed");
   assertEquals(completion.sync_started_at, null);
   assertEquals(typeof completion.last_sync_at, "string");
   assertEquals(completion.last_sync_outcome.chatsImported, 1);
   assertEquals(completion.last_sync_outcome.messagesWritten, 1);
   assertEquals(typeof completion.last_sync_outcome.finished_at, "string");
+  const deliveries = rowsFor(admin, "partner_webhook_deliveries");
+  assertEquals(deliveries.length, 1);
+  assertEquals(deliveries[0].event_type, "history_sync.completed");
+  assertEquals(deliveries[0].webhook_id, "matching");
+  assertEquals(deliveries[0].workspace_id, ACCOUNT.workspace_id);
+  assertEquals(deliveries[0].occurred_at, completion.last_sync_outcome.finished_at);
+  assertEquals(deliveries[0].payload, {
+    account_id: ACCOUNT.id,
+    outcome: completion.last_sync_outcome,
+    last_sync_at: completion.last_sync_at,
+  });
 });
+
+for (const [account, expected, claims] of [
+  [{ ...ACCOUNT, workspace_id: "" }, "skipped_no_workspace", 0],
+  [{ ...ACCOUNT, platform_user_id: "pending_acc-1" }, "skipped_unresolved_number", 0],
+  [ACCOUNT, "skipped_lease_held", 1],
+] as const) {
+  Deno.test(`history entry reports ${expected} without sweep or completion writes`, async () => {
+    let claimCount = 0;
+    const admin = {
+      rpc: (name: string, args: Record<string, unknown>) => {
+        claimCount++;
+        assertEquals(name, "claim_whatsapp_history_sync");
+        assertEquals(args, { p_social_account_id: ACCOUNT.id, p_lease_seconds: 300 });
+        return Promise.resolve({ data: false, error: null });
+      },
+      from: () => { throw new Error("A skipped sweep must not write completion"); },
+    };
+    const api = fakeApi();
+    api.findChats = api.findContacts = () => { throw new Error("A skipped sweep must not reach Evolution"); };
+    assertEquals(await importEvolutionHistory({ admin, api, account, instanceName: "postora_acc-1" }), expected);
+    assertEquals(claimCount, claims);
+  });
+}
 
 Deno.test("a sweep that throws still records the error for the setup page", async () => {
   const admin = fakeAdmin();
@@ -379,6 +434,43 @@ Deno.test("a sweep that throws still records the error for the setup page", asyn
   // The raw Evolution/Postgres text stays in the log; the browser gets the stable message.
   assertEquals(completion.last_sync_outcome.error, SYNC_FAILED_MESSAGE);
   assertEquals("last_sync_at" in completion, false);
+  assertEquals(rowsFor(admin, "partner_webhook_deliveries"), []);
+});
+
+Deno.test("settled empty sweeps emit distinct outcomes without claiming a full import", async () => {
+  const admin = fakeAdmin();
+  for (let run = 0; run < 2; run++) {
+    await importEvolutionHistory({ admin, api: fakeApi(), account: ACCOUNT, instanceName: "postora_acc-1" });
+  }
+  const deliveries = rowsFor(admin, "partner_webhook_deliveries");
+  assertEquals(deliveries.length, 2);
+  assertEquals(new Set(deliveries.map((row) => row.event_occurrence_id)).size, 2);
+  assertEquals(deliveries[0].payload.last_sync_at, null);
+  assertEquals(deliveries[0].payload.outcome.messagesWritten, 0);
+  assertEquals(deliveries[0].payload.outcome.truncated, false);
+});
+
+Deno.test("failed completion persistence or event enqueue preserves the sweep result", async (t) => {
+  for (const options of [
+    { completionError: true },
+    { emissionFailure: "lookup" as const },
+    { emissionFailure: "insert" as const },
+  ]) {
+    await t.step(JSON.stringify(options), async () => {
+      const admin = fakeAdmin(options);
+      const logs: unknown[][] = [];
+      const original = console.error;
+      console.error = (...args: unknown[]) => { logs.push(args); };
+      try {
+        assertEquals(await importEvolutionHistory({ admin, api: fakeApi(), account: ACCOUNT, instanceName: "postora_acc-1" }), "claimed");
+      } finally {
+        console.error = original;
+      }
+      assertEquals(rowsFor(admin, "partner_webhook_deliveries"), []);
+      assertEquals(rowsFor(admin, "whatsapp_evolution_instances")[0].sync_started_at, null);
+      assertEquals(logs.length, 1);
+    });
+  }
 });
 
 Deno.test("a sweep is not marked complete until history is actually available", async (t) => {
@@ -415,6 +507,7 @@ Deno.test("a sweep is not marked complete until history is actually available", 
             or: () => chain,
             limit: () => Promise.resolve({ data: [], error: null }),
             maybeSingle: () => Promise.resolve({ data: null, error: null }),
+            contains: () => Promise.resolve({ data: [], error: null }),
             in: () => Promise.resolve({ data: [], error: null }),
             update: (values: Record<string, unknown>) => ({
               eq: () => {
