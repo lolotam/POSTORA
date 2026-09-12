@@ -226,4 +226,30 @@ describe("service_role-gated projects (Supabase Cloud)", () => {
     await waitFor(() => expect(screen.getByText("price")).toBeInTheDocument());
     expect(screen.getByText(/"stock" was not found/)).toBeInTheDocument();
   });
+
+  it("draws the saved tables and columns, ticked, before any load and without the key", () => {
+    // The edit case (2026-09-13): a saved connector never gets its anon key
+    // back, so the tree stayed empty until the operator re-entered the key and
+    // reloaded -- editing looked like starting from scratch.
+    renderPicker({
+      anonKey: "",
+      tableAllowList: "commercial_brands, units",
+      columnMap: '{"commercial_brands":["name_en","phone"],"units":"*"}',
+    });
+    expect(fetchSupabaseIntrospection).not.toHaveBeenCalled();
+    expect(screen.getByText(/showing the saved selection/i)).toBeInTheDocument();
+    expect(screen.getByText("commercial_brands")).toBeInTheDocument();
+    expect(screen.getByLabelText("commercial_brands.name_en")).toBeChecked();
+    expect(screen.getByLabelText("commercial_brands.phone")).toBeChecked();
+    expect(screen.getByText(/units \(all selected\)/)).toBeInTheDocument();
+  });
+
+  it("loading adds the project's columns to the saved ones instead of replacing them", async () => {
+    renderPicker({ tableAllowList: "price_table", columnMap: '{"price_table":["legacy_col"]}' });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByLabelText("price_table.price")).toBeInTheDocument());
+    expect(screen.getByLabelText("price_table.legacy_col")).toBeChecked();
+    expect(screen.getByLabelText("price_table.price")).not.toBeChecked();
+    expect(screen.queryByText(/showing the saved selection/i)).not.toBeInTheDocument();
+  });
 });
