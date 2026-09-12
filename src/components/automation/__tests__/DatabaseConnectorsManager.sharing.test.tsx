@@ -23,11 +23,12 @@ const deleteTool = { mutate: vi.fn(), isPending: false };
 let tools: AiAgentTool[] = [];
 let links: Array<{ tool_id: string; social_account_id: string }> = [];
 let linksReady = true;
+let linksError: unknown = null;
 const setToolAccounts = { mutateAsync: vi.fn().mockResolvedValue({}) };
 
 vi.mock("@/hooks/useAiAgentTools", () => ({
   useAiAgentTools: () => ({ tools, isLoading: false, upsertTool, deleteTool }),
-  useAiToolAccountLinks: () => ({ links, linksReady, linksError: null, setToolAccounts }),
+  useAiToolAccountLinks: () => ({ links, linksReady, linksError, setToolAccounts }),
 }));
 
 const ACCOUNTS = [
@@ -120,6 +121,7 @@ describe("DatabaseConnectorsManager account scoping", () => {
     tools = [];
     links = [];
     linksReady = true;
+    linksError = null;
     socialAccounts = { data: ACCOUNTS, isSuccess: true, error: null };
   });
 
@@ -198,6 +200,120 @@ describe("DatabaseConnectorsManager account scoping", () => {
     expect(screen.getByText("Unknown connector type 'stripe_v2'")).toBeInTheDocument();
   });
 
+  it("lists a connector shared in from another account, marked with its origin", () => {
+    // The bug this suite now pins: the strip wrote ai_agent_tool_accounts rows
+    // and ai-agent-reply resolved them, but the list filtered on ownership, so
+    // a WhatsApp-owned connector shared with a Facebook page was invisible on
+    // Facebook while its agent was already calling it.
+    tools = [tool({ id: "t1", name: "woo_store", social_account_id: "wa-1", platform: "whatsapp" })];
+    links = [{ tool_id: "t1", social_account_id: "fb-1" }];
+    renderManager({ platform: "facebook", accountId: "fb-1" });
+
+    const card = toolCard("woo_store");
+    // It says where it came from: a shared connector that looked locally
+    // connected would make its missing Edit button read as a bug.
+    expect(screen.getByTestId("tool-origin-t1").textContent).toContain("Shared from");
+    expect(screen.getByTestId("tool-origin-t1").textContent).toContain("Xsellpoint");
+    // Edit belongs to the owner: the server matches an existing row by
+    // (user, account, name), so a save from here would insert a duplicate.
+    expect(card.queryByRole("button", { name: /edit/i })).toBeNull();
+    // Sharing stays adjustable — unticking Page A is how this account drops it.
+    expect(shareBox(card, "Page A")).toBeEnabled();
+    expect(shareBox(card, "Xsellpoint")).toBeDisabled();
+  });
+
+  it("disconnecting a shared connector warns that it goes for every account", () => {
+    // Delete is not un-share. The row is the owner's, and removing it takes
+    // the connector away from the account that connected it too.
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    tools = [tool({ id: "t1", name: "woo_store", social_account_id: "wa-1", platform: "whatsapp" })];
+    links = [{ tool_id: "t1", social_account_id: "fb-1" }];
+    renderManager({ platform: "facebook", accountId: "fb-1" });
+
+    fireEvent.click(toolCard("woo_store").getByRole("button", { name: /disconnect woo_store/i }));
+
+    expect(confirmSpy.mock.calls[0]?.[0]).toMatch(/every account/i);
+    expect(deleteTool.mutate).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("shows owned connectors only until the link read has settled", () => {
+    // An empty link set from an unsettled read is indistinguishable from
+    // "shared with nobody". Widening the list on it would flash other
+    // accounts' connectors; narrowing to owned is today's behaviour, and the
+    // shared ones appear the moment the links land.
+    tools = [
+      tool({ id: "t-shared", name: "woo_shared", social_account_id: "wa-1", platform: "whatsapp" }),
+      tool({ id: "t-own", name: "woo_own", social_account_id: "fb-1", platform: "facebook" }),
+    ];
+    links = [];
+    linksReady = false;
+    renderManager({ platform: "facebook", accountId: "fb-1" });
+
+    expect(screen.queryByText("woo_shared")).not.toBeInTheDocument();
+    // The owned one still renders — otherwise this test would pass just as
+    // well against a component that drew nothing at all.
+    expect(toolCardElement("woo_own")).toBeInTheDocument();
+  });
+
+  it("says the link read failed instead of claiming nothing is connected", () => {
+    // PR #173 Codex P1. An account that owns nothing and only receives
+    // shares has no card to carry the per-card error, so a failed read
+    // showed "No servers connected yet" — an invitation to reconnect a
+    // connector that is live.
+    tools = [tool({ id: "t1", name: "woo_store", social_account_id: "wa-1", platform: "whatsapp" })];
+    links = [];
+    linksReady = false;
+    linksError = new Error("timeout");
+    renderManager({ platform: "facebook", accountId: "fb-1" });
+
+    expect(screen.getByRole("alert").textContent).toMatch(/sharing could not be loaded/i);
+    expect(screen.queryByText("No servers connected yet")).not.toBeInTheDocument();
+  });
+
+  it("offers no sharing strip on a legacy all_accounts connector", () => {
+    // Such a row reaches every agent through its scope, not through link rows,
+    // so a strip would draw ticks that no toggle can change — and it has no
+    // owning account to save an edit under.
+    tools = [
+      tool({ id: "t-all", name: "legacy_global", scope: "all_accounts", social_account_id: null, platform: null }),
+    ];
+    renderManager({ platform: "facebook", accountId: "fb-1" });
+
+    const card = toolCard("legacy_global");
+    expect(screen.getByTestId("tool-origin-t-all").textContent).toContain("legacy");
+    expect(card.queryByRole("checkbox")).toBeNull();
+    expect(card.queryByRole("button", { name: /edit/i })).toBeNull();
+  });
+
+  it("opens this account's own connector, not the one shared in, for the same type", () => {
+    // Two rows of one type. The form must open the owned one: a shared row's
+    // form would list the wrong workspace's Composio connections, the picker
+    // reading the SELECTED account's workspace while the connection lives in
+    // the owner's.
+    tools = [
+      tool({ id: "t-shared", name: "woo_shared", social_account_id: "wa-1", platform: "whatsapp" }),
+      tool({ id: "t-own", name: "woo_own", social_account_id: "fb-1", platform: "facebook" }),
+    ];
+    links = [{ tool_id: "t-shared", social_account_id: "fb-1" }];
+    renderManager({ platform: "facebook", accountId: "fb-1" });
+
+    // Both are usable here, so both have a card.
+    expect(toolCardElement("woo_shared")).toBeInTheDocument();
+    expect(toolCardElement("woo_own")).toBeInTheDocument();
+
+    // The directory tile opens the owned row. Its title also appears as each
+    // configured card's subtitle, so the tile is reached through its own
+    // clickable container rather than by text alone.
+    const tile = screen
+      .getAllByText("WooCommerce Store")
+      .map((node) => node.closest('[role="button"]'))
+      .find((node): node is HTMLElement => node !== null);
+    if (!tile) throw new Error("no WooCommerce directory tile");
+    fireEvent.click(tile);
+    expect(screen.getByLabelText(/tool name/i)).toHaveValue("woo_own");
+  });
+
   it("renders an account dropdown that scopes the connector list", async () => {
     tools = [
       tool({ id: "t1", name: "woo_first", social_account_id: "wa-1", platform: "whatsapp" }),
@@ -226,6 +342,7 @@ describe("DatabaseConnectorsManager read-only overview (Settings)", () => {
     tools = [];
     links = [];
     linksReady = true;
+    linksError = null;
     socialAccounts = { data: ACCOUNTS, isSuccess: true, error: null };
   });
 

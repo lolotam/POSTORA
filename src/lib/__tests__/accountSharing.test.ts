@@ -26,10 +26,11 @@ const WA = account("wa-1", "whatsapp", "Xsellpoint");
 const FB_A = account("fb-1", "facebook", "Page A");
 const FB_B = account("fb-2", "facebook", "Page B");
 const IG = account("ig-1", "instagram", "xsellpoint_kw");
+const YT = account("yt-1", "youtube", "Xsellpoint TV");
 const TIKTOK = account("tt-1", "tiktok", "xsellpoint");
 
-const ALL = [WA, FB_A, FB_B, IG, TIKTOK];
-const AGENTS = [WA, FB_A, FB_B, IG];
+const ALL = [WA, FB_A, FB_B, IG, YT, TIKTOK];
+const AGENTS = [WA, FB_A, FB_B, IG, YT];
 
 // A connector owned by the WhatsApp account. Ownership is the always-on part.
 const ownedByWa = { id: "t1", scope: "account", social_account_id: "wa-1" } as const;
@@ -60,17 +61,20 @@ describe("effectiveToolAccountIds", () => {
         AGENTS,
         [],
       ),
-    ).toEqual(["wa-1", "fb-1", "fb-2", "ig-1"]);
+    ).toEqual(["wa-1", "fb-1", "fb-2", "ig-1", "yt-1"]);
   });
 
   it("ignores the strip's platform filter — sharing crosses platforms", () => {
     // A WhatsApp-owned connector shared with an Instagram page is the whole
     // point of §12; the effective set is not narrowed to the owner's platform.
+    // YouTube is comments-only but still runs an agent, so it is eligible;
+    // TikTok runs none, so it is dropped.
     expect(agentAccounts(ALL).map((a) => a.id)).toEqual([
       "wa-1",
       "fb-1",
       "fb-2",
       "ig-1",
+      "yt-1",
     ]);
   });
 });
