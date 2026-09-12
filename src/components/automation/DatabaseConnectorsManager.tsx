@@ -25,6 +25,7 @@ import {
   Link2,
   Radio,
   ExternalLink,
+  Share2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -959,15 +960,34 @@ function DatabaseConnectorsEditor({
     }
     return selectableAccounts[0]?.id ?? null;
   }, [accountIdProp, ownSelectedAccountId, selectableAccounts]);
-  const accountTools = useMemo(
-    () =>
-      tools.filter((tool) =>
-        accountId
-          ? tool.social_account_id === accountId
-          : tool.social_account_id === null || tool.social_account_id === undefined,
-      ),
-    [tools, accountId],
-  );
+  // Every connector THIS account's agent can use, not only the ones it owns.
+  //
+  // The sharing model already said so on both sides — the checkbox strip
+  // writes ai_agent_tool_accounts rows, and ai-agent-reply resolves them
+  // through resolveToolsForAccount — but this list filtered on ownership
+  // alone, so a connector shared from WhatsApp to a Facebook page stayed
+  // invisible on Facebook's Tools tab while its agent was already calling it.
+  // effectiveToolAccountIds is the same helper the strip renders from, so the
+  // list and the ticks can no longer disagree.
+  //
+  // Until the links and accounts have actually arrived, fall back to owned
+  // only. An empty link set from an unsettled read is indistinguishable from
+  // "shared with nobody"; the knowledge panel shows everything while it waits,
+  // but here "everything" would be other accounts' connectors, so this waits
+  // on today's behaviour instead and widens once the links land.
+  const accountTools = useMemo(() => {
+    if (!accountId) {
+      return tools.filter(
+        (tool) => tool.social_account_id === null || tool.social_account_id === undefined,
+      );
+    }
+    if (!linksReady || !accountsReady) {
+      return tools.filter((tool) => tool.social_account_id === accountId);
+    }
+    return tools.filter((tool) =>
+      effectiveToolAccountIds(tool, shareAccounts, links).includes(accountId),
+    );
+  }, [tools, accountId, linksReady, accountsReady, shareAccounts, links]);
 
   // Composio connections and usage are workspace-level; the workspace is the
   // selected account's, so switching accounts switches both.
@@ -1109,6 +1129,55 @@ function DatabaseConnectorsEditor({
     return map;
   }, [tools]);
 
+  const accountsById = useMemo(
+    () => new Map(socialAccounts.map((account) => [account.id, account])),
+    [socialAccounts],
+  );
+
+  /**
+   * Whether the selected account OWNS this connector, as opposed to merely
+   * being allowed to use it.
+   *
+   * Ownership is what decides who may edit: upsertAccountScopedTool matches an
+   * existing row by (user_id, social_account_id, name), so saving a shared
+   * connector under the viewing account would INSERT a second row and trip the
+   * legacy UNIQUE (user_id, name); for a Composio-backed connector it would
+   * also 403 `connection_forbidden`, because the connection lives in the
+   * owner's workspace, not this one. A legacy scope='all_accounts' row owns
+   * nothing at all (social_account_id is null) and is never editable here.
+   */
+  const isOwnedHere = useCallback(
+    (tool: AiAgentTool) =>
+      tool.scope !== "all_accounts" &&
+      !!tool.social_account_id &&
+      tool.social_account_id === accountId,
+    [accountId],
+  );
+
+  // Two lookups, because "this account can use one" and "this account can edit
+  // one" are different questions once a connector can be shared in.
+  //
+  // The directory tile asks the first: a Supabase connector shared from
+  // WhatsApp makes Facebook's Supabase tile Connected, which is the whole
+  // point of sharing it. The edit form asks the second, and an owned row wins
+  // over a shared one of the same type — opening a shared row's form here
+  // would list the WRONG workspace's Composio connections, since the picker
+  // reads the selected account's workspace and the connection lives in the
+  // owner's.
+  const ownedByType = useCallback(
+    (connectorType: string) =>
+      accountTools.find(
+        (candidate) => candidate.connector_type === connectorType && isOwnedHere(candidate),
+      ),
+    [accountTools, isOwnedHere],
+  );
+  const usableByType = useCallback(
+    (connectorType: string) =>
+      ownedByType(connectorType)
+      ?? accountTools.find((candidate) => candidate.connector_type === connectorType),
+    [accountTools, ownedByType],
+  );
+
   const sharedByTool = useMemo(() => {
     const map = new Map<string, string[]>();
     for (const tool of accountTools) {
@@ -1162,7 +1231,7 @@ function DatabaseConnectorsEditor({
       return;
     }
 
-    const existingTool = tool ?? accountTools.find((candidate) => candidate.connector_type === preset.id);
+    const existingTool = tool ?? ownedByType(preset.id);
     setSelectedPreset(preset);
     setFormError(null);
 
@@ -1296,7 +1365,11 @@ function DatabaseConnectorsEditor({
       name: form.name,
       description: form.description,
       url: rowUrl,
-      social_account_id: accountId,
+      // The row's OWN owner when editing, the selected account only when
+      // creating. The server matches an existing row by (user_id,
+      // social_account_id, name), so naming any other account turns an update
+      // into a second row; an edit must never reparent a connector.
+      social_account_id: editingTool?.social_account_id ?? accountId,
       is_enabled: form.is_enabled,
       admin_only: form.admin_only,
       connector_type: form.connector_type,
@@ -1548,7 +1621,7 @@ function DatabaseConnectorsEditor({
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
           {filteredDirectory.map((preset) => {
             const isHiggs = preset.id === "higgsfield";
-            const tool = accountTools.find((candidate) => candidate.connector_type === preset.id);
+            const tool = usableByType(preset.id);
             const isConnected = isHiggs ? higgsfieldConnected : Boolean(tool);
 
             return (
@@ -1781,6 +1854,14 @@ function DatabaseConnectorsEditor({
               // Shopify's form.
               const preset = CONNECTOR_DIRECTORY.find((p) => p.id === tool.connector_type)
                 ?? (isComposioType(tool.connector_type) ? composioPreset(tool.connector_type) : CONNECTOR_DIRECTORY[0]);
+              // Owned here, shared in from another account, or a legacy
+              // all_accounts row. Only the first may be edited from this tab;
+              // the other two say where they come from instead.
+              const owned = isOwnedHere(tool);
+              const legacyGlobal = tool.scope === "all_accounts";
+              const ownerAccount = tool.social_account_id
+                ? accountsById.get(tool.social_account_id) ?? null
+                : null;
 
               return (
                 <Card
@@ -1809,6 +1890,32 @@ function DatabaseConnectorsEditor({
                         Connected
                       </Badge>
                     </div>
+
+                    {/* Where a card that this account does not own comes from.
+                        Without it a shared connector is indistinguishable from
+                        one connected here, and its missing Edit button reads
+                        as a bug rather than as someone else's connector. */}
+                    {!owned && (
+                      <p
+                        data-testid={`tool-origin-${tool.id}`}
+                        className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"
+                      >
+                        <Share2 className="h-3 w-3 shrink-0" />
+                        {legacyGlobal ? (
+                          <span>Available to all accounts (legacy connector)</span>
+                        ) : (
+                          <>
+                            <span>Shared from</span>
+                            {ownerAccount && (
+                              <PlatformIcon platform={ownerAccount.platform as Platform} size="xs" />
+                            )}
+                            <span className="font-medium text-foreground/80">
+                              {ownerAccount ? accountLabel(ownerAccount) : "another account"}
+                            </span>
+                          </>
+                        )}
+                      </p>
+                    )}
                   </CardHeader>
 
                   <CardContent className="p-4 pt-0 space-y-3">
@@ -1819,31 +1926,51 @@ function DatabaseConnectorsEditor({
 
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
                       {/* Green Connected Mark & Button */}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleCardClick(preset, tool)}
-                        className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5 cursor-pointer"
-                      >
-                        <Check className="w-3.5 h-3.5 stroke-[3]" />
-                        <span>Connected</span>
-                      </Button>
-
-                      <div className="flex items-center gap-1">
+                      {/* This button opens the settings form, so it belongs to
+                          the owning account alone. The header badge already
+                          says Connected, so a non-owner loses nothing — where
+                          to change it is on the origin line above. */}
+                      {owned && (
                         <Button
-                          variant="ghost"
                           size="sm"
+                          variant="outline"
                           onClick={() => handleCardClick(preset, tool)}
-                          className="h-8 text-xs text-muted-foreground hover:text-foreground"
+                          className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5 cursor-pointer"
                         >
-                          <Pencil className="w-3 h-3 mr-1" /> Edit
+                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          <span>Connected</span>
                         </Button>
+                      )}
+
+                      <div className="ml-auto flex items-center gap-1">
+                        {/* Edit belongs to the owning account only. Saving from
+                            anywhere else cannot update the row — the server
+                            matches on (user, account, name) — so an Edit button
+                            here would promise a write that becomes a duplicate. */}
+                        {owned && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleCardClick(preset, tool)}
+                            className="h-8 text-xs text-muted-foreground hover:text-foreground"
+                          >
+                            <Pencil className="w-3 h-3 mr-1" /> Edit
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
+                          aria-label={`Disconnect ${tool.name}`}
                           onClick={() => {
-                            if (confirm(`Are you sure you want to disconnect '${tool.name}'?`)) {
+                            // Deleting is not un-sharing: the row is gone for
+                            // every account it reaches, including the one that
+                            // connected it. Say so on a card this account does
+                            // not own — untick the box below to just drop it.
+                            const question = owned
+                              ? `Are you sure you want to disconnect '${tool.name}'?`
+                              : `'${tool.name}' is shared from another account. Disconnecting deletes it for every account. Continue?`;
+                            if (confirm(question)) {
                               deleteTool.mutate(tool.id, {
                                 onSuccess: () => toast.success(`Connector '${tool.name}' disconnected`),
                               });
@@ -1855,7 +1982,12 @@ function DatabaseConnectorsEditor({
                       </div>
                     </div>
                     <ConnectorCredentialState tool={tool} />
-                    <ConnectorUsageLine workspaceId={workspaceId} toolId={tool.id} />
+                    {/* Usage is workspace-level and `workspaceId` is the
+                        SELECTED account's. For a connector shared in from
+                        another account the calls are recorded in the owner's
+                        workspace, so a line here would read zero and mean
+                        nothing. It stays on the owner's card. */}
+                    {owned && <ConnectorUsageLine workspaceId={workspaceId} toolId={tool.id} />}
                     <ConnectorTestState
                       tool={tool}
                       testing={testingToolIds.includes(tool.id)}
@@ -1869,6 +2001,15 @@ function DatabaseConnectorsEditor({
                     ) : linksError ? (
                       <p className="border-t pt-3 text-xs text-destructive">
                         Connector sharing could not be loaded. Refresh to try again.
+                      </p>
+                    ) : legacyGlobal ? (
+                      // A scope='all_accounts' row reaches every agent through
+                      // its scope, not through link rows, so a strip here would
+                      // draw ticks that no toggle can change (nextToolSharing
+                      // only ever edits links).
+                      <p className="border-t pt-3 text-xs text-muted-foreground">
+                        Every agent can use this connector. Reconnect it on one account to choose
+                        which agents it reaches.
                       </p>
                     ) : (
                       linksReady && accountsReady && shareAccounts.length > 0 && (
