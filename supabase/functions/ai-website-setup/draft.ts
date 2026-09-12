@@ -1,6 +1,8 @@
 import {
   type BusinessProfile,
+  BUSINESS_INDUSTRIES,
   parseBusinessProfile,
+  POLICY_KEYS,
   renderBusinessProfileText,
 } from "../_shared/businessProfileText.ts";
 import {
@@ -11,9 +13,7 @@ import {
 export const SETUP_FIELDS = [
   "business_profile.industry",
   "business_profile.products",
-  "business_profile.policies.returns",
-  "business_profile.policies.shipping",
-  "business_profile.policies.warranty",
+  ...POLICY_KEYS.map((key) => `business_profile.policies.${key}` as const),
   "business_profile.faqs",
   "business_profile.notes",
   "agent_behavior.tone",
@@ -72,9 +72,7 @@ export function parseDraft(
   const agent_behavior = parseAgentBehavior(value.agent_behavior);
   if (
     business_profile.industry &&
-    !["ecommerce", "clinic", "b2b_services", "restaurant", "other"].includes(
-      business_profile.industry,
-    )
+    !BUSINESS_INDUSTRIES.includes(business_profile.industry)
   ) {
     throw new Error("Invalid business industry");
   }

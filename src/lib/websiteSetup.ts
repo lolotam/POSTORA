@@ -1,6 +1,6 @@
 import {
-  GOAL_OPTIONS, INDUSTRY_OPTIONS, RESPONSE_LENGTH_OPTIONS, TONE_OPTIONS,
-  type AgentBehavior, type BusinessProfile,
+  GOAL_OPTIONS, INDUSTRY_OPTIONS, POLICY_KEYS, POLICY_LABELS, RESPONSE_LENGTH_OPTIONS, TONE_OPTIONS,
+  type AgentBehavior, type BusinessProfile, type BusinessProfilePolicies,
 } from "@/lib/agentProfile";
 
 export interface WebsiteSetupResult {
@@ -38,9 +38,9 @@ const FIELD_DEFINITIONS: FieldDefinition[] = [
     read: (profile) => optionLabel(INDUSTRY_OPTIONS, profile.industry) },
   { path: "business_profile.products", label: "Products and services", suggestion: false,
     read: (profile) => profile.products ?? "" },
-  ...(["returns", "shipping", "warranty"] as const).map((policy) => ({
+  ...POLICY_KEYS.map((policy) => ({
     path: `business_profile.policies.${policy}`,
-    label: `${policy[0].toUpperCase()}${policy.slice(1)} policy`, suggestion: false,
+    label: POLICY_LABELS[policy], suggestion: false,
     read: (profile: BusinessProfile) => profile.policies?.[policy] ?? "",
   })),
   { path: "business_profile.faqs", label: "Frequently asked questions", suggestion: false,
@@ -81,11 +81,10 @@ export function websiteIndexingMessage(response: { queued?: boolean; chunk_count
 export function mergeProfileRefresh(current: BusinessProfile, baseline: BusinessProfile, incoming: BusinessProfile): BusinessProfile {
   const choose = <T,>(local: T, previous: T, next: T): T =>
     JSON.stringify(local) === JSON.stringify(previous) ? next : local;
-  const policies = {
-    returns: choose(current.policies?.returns, baseline.policies?.returns, incoming.policies?.returns),
-    shipping: choose(current.policies?.shipping, baseline.policies?.shipping, incoming.policies?.shipping),
-    warranty: choose(current.policies?.warranty, baseline.policies?.warranty, incoming.policies?.warranty),
-  };
+  const policies: BusinessProfilePolicies = {};
+  for (const key of POLICY_KEYS) {
+    policies[key] = choose(current.policies?.[key], baseline.policies?.[key], incoming.policies?.[key]);
+  }
   return {
     industry: choose(current.industry, baseline.industry, incoming.industry),
     products: choose(current.products, baseline.products, incoming.products),
