@@ -26,12 +26,14 @@ import { HumanHandoffCard } from "@/components/messaging/agent-settings/HumanHan
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
   "is_enabled" | "default_mode" | "language_mode" | "daily_message_cap" | "reply_cooldown_seconds"
+  | "escalation_timeout_minutes"
 >> & AiAgentConfigInput = {
   is_enabled: false,
   default_mode: "human_then_ai",
   language_mode: "auto",
   daily_message_cap: 50,
   reply_cooldown_seconds: 0,
+  escalation_timeout_minutes: 240,
   persona_instructions: "",
   agent_behavior: {},
   admin_phone_numbers: [],
@@ -49,6 +51,7 @@ function toFormValues(config: NonNullable<ReturnType<typeof useAiAgentConfig>["c
     temperature: config.temperature,
     admin_phone_numbers: config.admin_phone_numbers || [],
     daily_message_cap: config.daily_message_cap,
+    escalation_timeout_minutes: config.escalation_timeout_minutes ?? 240,
     reply_cooldown_seconds: config.reply_cooldown_seconds,
     max_tool_iterations: config.max_tool_iterations,
     handoff_on_request: config.handoff_on_request,

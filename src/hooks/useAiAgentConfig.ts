@@ -27,6 +27,7 @@ export interface AiAgentConfig {
   temperature: number;
   admin_phone_numbers: string[];
   daily_message_cap: number;
+  escalation_timeout_minutes: number;
   reply_cooldown_seconds: number;
   max_tool_iterations: number;
   handoff_on_request: boolean;
@@ -51,6 +52,7 @@ const CONFIG_FIELDS = [
   "temperature",
   "admin_phone_numbers",
   "daily_message_cap",
+  "escalation_timeout_minutes",
   "reply_cooldown_seconds",
   "max_tool_iterations",
   "handoff_on_request",

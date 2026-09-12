@@ -1,9 +1,12 @@
-import { Bot } from "lucide-react";
+import { useState } from "react";
+import { Bot, HelpCircle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { AiAgentLanguageMode, AiAgentMode } from "@/hooks/useAiAgentConfig";
 import {
   RESPONSE_LENGTH_OPTIONS,
@@ -18,6 +21,67 @@ const MODE_DESCRIPTIONS: Record<AiAgentMode, string> = {
   human_first: "A team member replies first; the assistant stays on standby.",
   human_then_ai: "A team member gets the first chance, then AI handles the fallback.",
 };
+
+const ESCALATION_TIMEOUT_TOOLTIP =
+  "How long an escalated conversation stays with your team before the override expires and the account default applies again, so the AI can resume answering new messages.";
+const ESCALATION_TIMEOUT_HELP =
+  "When the assistant hands a conversation to your team, this timeout keeps it from staying muted for ever. After it expires the account default applies again to new messages; a message that arrived while the conversation was muted is not answered retroactively.";
+const MAX_ESCALATION_TIMEOUT_MINUTES = 10080;
+
+type TimeoutUnit = "minutes" | "hours";
+
+/** Shown value for the stored minutes: hours as a decimal so 90 minutes reads 1.5, not 2. */
+function displayValue(minutes: number, unit: TimeoutUnit): number {
+  return unit === "hours" ? Math.round((minutes / 60) * 100) / 100 : minutes;
+}
+
+function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChange: (minutes: number) => void }) {
+  // The stored value is always whole minutes; the unit is display state.
+  // Switching the unit never changes the stored value (debate finding 15).
+  const [unit, setUnit] = useState<TimeoutUnit>(minutes >= 60 && minutes % 60 === 0 ? "hours" : "minutes");
+  const max = unit === "hours" ? MAX_ESCALATION_TIMEOUT_MINUTES / 60 : MAX_ESCALATION_TIMEOUT_MINUTES;
+  const commit = (typed: number) => {
+    const asMinutes = unit === "hours" ? typed * 60 : typed;
+    onChange(Math.min(MAX_ESCALATION_TIMEOUT_MINUTES, Math.max(1, Math.round(asMinutes))));
+  };
+  return (
+    <div className="space-y-1.5 pt-1">
+      <div className="flex items-center gap-1.5">
+        <Label htmlFor="escalation-timeout">Escalation fallback timeout</Label>
+        <TooltipProvider>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button type="button" aria-label="What the escalation timeout does" className="text-muted-foreground">
+                <HelpCircle className="h-3.5 w-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent className="max-w-xs">{ESCALATION_TIMEOUT_TOOLTIP}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+      </div>
+      <div className="flex gap-2">
+        <Input
+          id="escalation-timeout"
+          type="number"
+          min={unit === "hours" ? 1 / 60 : 1}
+          max={max}
+          step="any"
+          className="w-28"
+          value={displayValue(minutes, unit)}
+          onChange={(event) => commit(Number(event.target.value) || 0)}
+        />
+        <Select value={unit} onValueChange={(value) => setUnit(value as TimeoutUnit)}>
+          <SelectTrigger className="w-28" aria-label="Timeout unit"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="minutes">Minutes</SelectItem>
+            <SelectItem value="hours">Hours</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <p className="text-sm text-muted-foreground">{ESCALATION_TIMEOUT_HELP}</p>
+    </div>
+  );
+}
 
 export function AgentIdentityCard({ form, update, behavior, updateBehavior }: BehaviorCardProps) {
   const selectedMode = (form.default_mode || "human_then_ai") as AiAgentMode;
@@ -66,6 +130,12 @@ export function AgentIdentityCard({ form, update, behavior, updateBehavior }: Be
               </SelectContent>
             </Select>
             <p className="text-sm text-muted-foreground">{MODE_DESCRIPTIONS[selectedMode]}</p>
+            {selectedMode !== "human_first" && (
+              <EscalationTimeoutField
+                minutes={form.escalation_timeout_minutes ?? 240}
+                onChange={(minutes) => update("escalation_timeout_minutes", minutes)}
+              />
+            )}
           </div>
           <div className="space-y-2">
             <Label>Language</Label>

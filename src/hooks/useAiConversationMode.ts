@@ -9,6 +9,8 @@ export interface AiConversationMode {
   platform: AiAgentPlatform;
   conversation_id: string;
   mode: AiAgentMode;
+  /** Set only by escalation; a manual override never carries it. */
+  expires_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -24,6 +26,9 @@ export function useAiConversationMode(platform: AiAgentPlatform, conversationId:
       return (data.mode || null) as AiConversationMode | null;
     },
     enabled: !!session && !!conversationId,
+    // A badge created or expired while the pane is open updates without a
+    // reload (debate finding 12).
+    refetchInterval: 60_000,
   });
 
   const setConversationMode = useMutation({
