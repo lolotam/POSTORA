@@ -284,4 +284,87 @@ DROP FUNCTION IF EXISTS pg_temp.make_key(UUID, INTEGER, INTEGER, INTEGER, INTEGE
 DROP FUNCTION IF EXISTS pg_temp.must(BOOLEAN, TEXT);
 DROP FUNCTION IF EXISTS pg_temp.cleanup();
 
+-- AI display counters share this post-migration suite. The transaction keeps
+-- clock boundaries exact and rolls back the users, logs, role, and JWT settings.
+BEGIN;
+
+INSERT INTO auth.users (id, email) VALUES
+  ('17100000-0000-4000-8000-000000000001', 'ai-counts-a@example.invalid'),
+  ('17100000-0000-4000-8000-000000000002', 'ai-counts-b@example.invalid');
+
+-- Caption boundaries: inside/exactly at 1h, just outside 1h, exactly at 24h,
+-- and just outside 24h. Image/hashtag counts differ to catch column swaps.
+INSERT INTO public.api_logs (user_id, endpoint, method, created_at)
+SELECT '17100000-0000-4000-8000-000000000001'::uuid, endpoint, 'POST', now() - age
+FROM (VALUES
+  ('generate-caption', interval '30 minutes'),
+  ('generate-caption', interval '1 hour'),
+  ('generate-caption', interval '1 hour 0.000001 seconds'),
+  ('generate-caption', interval '24 hours'),
+  ('generate-caption', interval '24 hours 0.000001 seconds'),
+  ('generate-image', interval '10 minutes'),
+  ('generate-image', interval '3 hours'),
+  ('generate-hashtags', interval '2 hours'),
+  ('generate-hashtags', interval '4 hours'),
+  ('/generate-caption', interval '10 minutes'),
+  ('post-create', interval '10 minutes')
+) AS logs(endpoint, age);
+
+INSERT INTO public.api_logs (user_id, endpoint, method, created_at)
+SELECT '17100000-0000-4000-8000-000000000002'::uuid, endpoint, 'POST', now()
+FROM (VALUES ('generate-caption'), ('generate-image'), ('generate-hashtags')) AS logs(endpoint);
+
+DO $ai_counts_signature$
+BEGIN
+  IF to_regprocedure('public.get_ai_rate_limit_counts()') IS NULL
+     OR to_regprocedure('public.get_ai_rate_limit_counts(uuid)') IS NOT NULL THEN
+    RAISE EXCEPTION 'FAIL: AI counts RPC must have only the zero-argument signature';
+  END IF;
+END $ai_counts_signature$;
+
+SET LOCAL ROLE authenticated;
+-- Clear the legacy subject GUC so auth.uid() reads the PostgREST claims JSON.
+SELECT set_config('request.jwt.claim.sub', '', true);
+SELECT set_config('request.jwt.claims', '{"sub":"17100000-0000-4000-8000-000000000001","role":"authenticated"}', true);
+
+DO $ai_counts_owner$
+DECLARE
+  v_counts integer[];
+BEGIN
+  SELECT ARRAY[caption_hour, caption_day, image_hour, image_day, hashtag_hour, hashtag_day]
+    INTO STRICT v_counts FROM public.get_ai_rate_limit_counts();
+  IF v_counts IS DISTINCT FROM ARRAY[2, 4, 1, 2, 0, 2] THEN
+    RAISE EXCEPTION 'FAIL: AI counts for A were %, expected {2,4,1,2,0,2}', v_counts;
+  END IF;
+  RAISE NOTICE 'PASS AI counts: own rows, endpoint names, and inclusive hour/day boundaries';
+END $ai_counts_owner$;
+
+SELECT set_config('request.jwt.claims', '{}', true);
+DO $ai_counts_no_identity$
+DECLARE
+  v_counts integer[];
+BEGIN
+  IF auth.uid() IS NOT NULL THEN RAISE EXCEPTION 'FAIL: expected a missing JWT subject'; END IF;
+  SELECT ARRAY[caption_hour, caption_day, image_hour, image_day, hashtag_hour, hashtag_day]
+    INTO STRICT v_counts FROM public.get_ai_rate_limit_counts();
+  IF v_counts IS DISTINCT FROM ARRAY[0, 0, 0, 0, 0, 0] THEN
+    RAISE EXCEPTION 'FAIL: missing subject returned AI counts %', v_counts;
+  END IF;
+  RAISE NOTICE 'PASS AI counts: missing subject returns six zeros';
+END $ai_counts_no_identity$;
+
+RESET ROLE;
+SET LOCAL ROLE anon;
+DO $ai_counts_anon$
+BEGIN
+  BEGIN
+    PERFORM public.get_ai_rate_limit_counts();
+    RAISE EXCEPTION 'FAIL: anon executed AI counts RPC';
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'PASS AI counts: anon cannot execute';
+  END;
+END $ai_counts_anon$;
+RESET ROLE;
+ROLLBACK;
+
 \echo '=== partner_usage_counters: ALL CHECKS PASSED ==='
