@@ -26,8 +26,12 @@ describe("PARTNER_SCOPES", () => {
   it("equals the published GenericScope vocabulary", () => {
     expect([...PARTNER_SCOPES.map((s) => s.value)].sort()).toEqual(genericScopesFromOpenApi().sort());
   });
-  it("never offers a legacy whatsapp:* scope", () => {
-    expect(PARTNER_SCOPES.some((s) => s.value.startsWith("whatsapp:"))).toBe(false);
+  it("never offers a frozen legacy scope", () => {
+    // The three LEGACY_SCOPES in supabase/functions/_shared/partnerScopes.ts.
+    // Matched by value, not by the whatsapp: prefix: whatsapp:numbers.* and
+    // whatsapp:profile.* are generic (server test T8) and must be offered.
+    const legacy = ["whatsapp:template.send", "whatsapp:templates.read", "whatsapp:webhooks.manage"];
+    expect(PARTNER_SCOPES.filter((s) => legacy.includes(s.value))).toEqual([]);
   });
   it("describes every scope", () => {
     for (const s of PARTNER_SCOPES) expect(s.description.length).toBeGreaterThan(0);
