@@ -1,6 +1,7 @@
 // Private mode keys never cross this boundary. The published id is always
 // messaging_cache.id, resolved under workspace AND the current bound set.
 import { AgentConfigOpError, type AgentConfigContext } from "../../_shared/agentConfigOps.ts";
+import { activeOverrideMode } from "../../_shared/conversationModeOverride.ts";
 import { encodeId } from "./ids.ts";
 import { encodeCursor, keysetFilter, type PageRequest } from "./pagination.ts";
 
@@ -12,8 +13,8 @@ export interface ModeConversation {
   conversation_id: string;
   last_message_at: string;
 }
-interface ModeRow { mode: string; updated_at: string | null; }
-const MODE_COLUMNS = "mode, updated_at";
+interface ModeRow { mode: string; updated_at: string | null; expires_at?: string | null; }
+const MODE_COLUMNS = "mode, updated_at, expires_at";
 const CACHE_COLUMNS = "id, social_account_id, user_id, platform, conversation_id, last_message_at";
 const STORED_MODES = ["ai_first", "human_first", "human_then_ai"];
 const SCAN_BATCH = 100;
@@ -26,7 +27,15 @@ export function validateRulePlatform(platform: string): void {
   }
 }
 function presentMode(conversation: ModeConversation, row: ModeRow | null) {
-  return { id: encodeId("conv", conversation.id), platform: conversation.platform, mode: row?.mode ?? null, updated_at: row?.updated_at ?? null };
+  // An expired escalation override reads as no override; expires_at is
+  // returned so the caller can tell an escalation window from a manual choice.
+  return {
+    id: encodeId("conv", conversation.id),
+    platform: conversation.platform,
+    mode: row && activeOverrideMode(row, Date.now()) !== null ? row.mode : null,
+    updated_at: row?.updated_at ?? null,
+    expires_at: row?.expires_at ?? null,
+  };
 }
 function scopedMode(ctx: AgentConfigContext, conversation: ModeConversation) {
   return ctx.admin.from("ai_conversation_modes").select(MODE_COLUMNS)
@@ -53,6 +62,7 @@ export async function setConversationMode(ctx: AgentConfigContext, conversation:
   const { data, error } = await ctx.admin.from("ai_conversation_modes").upsert({
     user_id: conversation.user_id, platform: conversation.platform,
     conversation_id: conversation.conversation_id, mode: body.mode,
+    expires_at: null,
   }, { onConflict: "user_id,platform,conversation_id" }).select(MODE_COLUMNS).single();
   if (error || !data) throw new Error("Mode write outcome unknown");
   return presentMode(conversation, data);

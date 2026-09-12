@@ -4,6 +4,7 @@ import { parseNamedAccountId } from "./aiConfigScope.ts";
 import { MESSAGE_AUTOMATION_HANDLERS, COMMENT_AUTOMATION_HANDLERS, resolveAutomationHandler, resolveCommentAutomationHandler } from "./automationHandler.ts";
 import { MEDIA_UNDERSTANDING_MODES, resolveMediaUnderstandingMode } from "./mediaUnderstandingMode.ts";
 import { blankedFields, GUARDED_FIELDS } from "./configBlanking.ts";
+import { MAX_ESCALATION_TIMEOUT_MINUTES } from "./conversationModeOverride.ts";
 import { parseBusinessProfile, renderBusinessProfileText } from "./businessProfileText.ts";
 import { parseAgentBehavior } from "./agentBehavior.ts";
 import { parseCredentialUpsertResult } from "./credentialVaultRpc.ts";
@@ -117,6 +118,7 @@ const CONFIG_FIELDS = [
   "language_mode", "model", "fallback_model_1", "fallback_model_2", "temperature",
   "admin_phone_numbers", "daily_message_cap", "reply_cooldown_seconds", "max_tool_iterations",
   "handoff_on_request", "handoff_on_low_confidence", "business_profile", "agent_behavior",
+  "escalation_timeout_minutes",
 ] as const;
 const CONFIG_SELECT = ["id", "social_account_id", "platform", ...CONFIG_FIELDS, "created_at", "updated_at"].join(", ");
 
@@ -149,6 +151,12 @@ async function configUpdates(ctx: AgentConfigContext, body: Record<string, unkno
   }
   for (const key of ["daily_message_cap", "reply_cooldown_seconds", "max_tool_iterations"]) {
     if (key in updates && (!Number.isInteger(updates[key]) || Number(updates[key]) < 0)) invalid(`${key} must be a non-negative integer`);
+  }
+  if ("escalation_timeout_minutes" in updates) {
+    const minutes = updates.escalation_timeout_minutes;
+    if (!Number.isInteger(minutes) || Number(minutes) < 1 || Number(minutes) > MAX_ESCALATION_TIMEOUT_MINUTES) {
+      invalid(`escalation_timeout_minutes must be an integer between 1 and ${MAX_ESCALATION_TIMEOUT_MINUTES}`);
+    }
   }
   if ("temperature" in updates && (typeof updates.temperature !== "number" || !Number.isFinite(updates.temperature) || updates.temperature < 0 || updates.temperature > 2)) invalid("temperature must be between 0 and 2");
   if ("admin_phone_numbers" in updates) {

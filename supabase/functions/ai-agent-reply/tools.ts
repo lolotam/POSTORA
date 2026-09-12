@@ -1,6 +1,7 @@
 // Tool definitions and executors for the AI agent chat loop.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
+import { escalationOverride } from "../_shared/conversationModeOverride.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { composeToolDescription } from "../_shared/composeToolDescription.ts";
 import {
@@ -42,6 +43,12 @@ export interface ToolContext {
   // and failing over to the configured fallback provider when it is down.
   retrieveKnowledge: (query: string, matchCount: number) => Promise<KnowledgeChunkMatch[]>;
   sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
+  /** The account default; decides whether an unassigned escalation still lets the assistant answer. */
+  defaultMode?: string | null;
+  /** ai_agent_configs.escalation_timeout_minutes; null/undefined/0 means 240. */
+  escalationTimeoutMinutes?: number | null;
+  /** Mute for the whole window whatever the default. The outage floor and outbox recovery set it. */
+  muteRegardless?: boolean;
 }
 
 export interface ToolResult {
@@ -194,12 +201,21 @@ export interface EscalationTarget {
   customerName: string;
   adminPhoneNumbers: string[];
   sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
+  /** The account default; decides whether an unassigned escalation still lets the assistant answer. */
+  defaultMode?: string | null;
+  /** ai_agent_configs.escalation_timeout_minutes; null/undefined/0 means 240. */
+  escalationTimeoutMinutes?: number | null;
+  /** Mute for the whole window whatever the default. The outage floor and outbox recovery set it. */
+  muteRegardless?: boolean;
 }
 
 export interface EscalationOutcome {
   assigned: boolean;
   assignmentNote: string;
   adminsNotified: number;
+  /** The mode confirmed in the row when this returned; "released" if the row is gone. */
+  mode: string;
+  expiresAt: string;
 }
 
 /**
@@ -208,7 +224,12 @@ export interface EscalationOutcome {
  * with.
  *
  * The mode upsert comes first deliberately: it is platform-agnostic and it is
- * what silences the AI for this conversation from the next inbound message on.
+ * what gates the AI for this conversation from the next inbound message on.
+ * Since 2026-09-13 the row it writes is BOUNDED: it expires after the account's
+ * escalation timeout, so an escalation can no longer silence a conversation
+ * for ever. Under human_then_ai the first write deliberately does NOT mute --
+ * the exclusive human window is granted only once a human was actually
+ * assigned, and the row is tightened to human_first afterwards.
  * The assignment tables below it are WhatsApp-shaped, so on other platforms the
  * mode flip plus the admin notification is the whole of the handoff.
  */
@@ -220,6 +241,14 @@ export async function escalateConversation(
   const outOfTime = () => deadlineAt !== undefined && Date.now() >= deadlineAt;
   const msLeft = () => (deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now()));
 
+  const nowMs = Date.now();
+  // The first write happens before assignment, exactly as before, but bounded
+  // by the timeout. Under human_then_ai it deliberately does NOT mute: the
+  // exclusive human window is granted only once a human was actually assigned.
+  // The outage floor and recovery ask for the mute regardless.
+  const first = target.muteRegardless
+    ? { mode: "human_first" as const, expires_at: escalationOverride("ai_first", false, target.escalationTimeoutMinutes, nowMs).expires_at }
+    : escalationOverride(target.defaultMode, false, target.escalationTimeoutMinutes, nowMs);
   const { error: modeError } = await target.admin
     .from("ai_conversation_modes")
     .upsert(
@@ -227,7 +256,8 @@ export async function escalateConversation(
         user_id: target.userId,
         platform: target.platform,
         conversation_id: target.conversationId,
-        mode: "human_first",
+        mode: first.mode,
+        expires_at: first.expires_at,
       },
       { onConflict: "user_id,platform,conversation_id" },
     );
@@ -332,6 +362,48 @@ export async function escalateConversation(
     );
   }
 
+  let persistedMode: string = first.mode;
+  const decided = target.muteRegardless
+    ? first
+    : escalationOverride(target.defaultMode, assigned, target.escalationTimeoutMinutes, nowMs);
+  if (decided.mode !== first.mode) {
+    try {
+      // Conditional on the row still holding what this run wrote: an operator
+      // or a newer escalation that changed it meanwhile wins.
+      const { data: updated, error: decideError } = await target.admin
+        .from("ai_conversation_modes")
+        .update({ mode: decided.mode })
+        .eq("user_id", target.userId)
+        .eq("platform", target.platform)
+        .eq("conversation_id", target.conversationId)
+        .eq("mode", first.mode)
+        .eq("expires_at", first.expires_at)
+        .select("mode")
+        .maybeSingle();
+      if (decideError) throw decideError;
+      if (updated) {
+        persistedMode = updated.mode;
+      } else {
+        const { data: current, error: currentError } = await target.admin
+          .from("ai_conversation_modes")
+          .select("mode")
+          .eq("user_id", target.userId)
+          .eq("platform", target.platform)
+          .eq("conversation_id", target.conversationId)
+          .maybeSingle();
+        if (currentError) throw currentError;
+        persistedMode = current?.mode ?? "released";
+      }
+    } catch (decideFailure) {
+      console.error(
+        "[ai-agent-reply] escalation mode decision failed; the first write stands for at most the window:",
+        typeof decideFailure === "object" && decideFailure !== null && "message" in decideFailure
+          ? String((decideFailure as { message: unknown }).message)
+          : String(decideFailure),
+      );
+    }
+  }
+
   let adminsNotified = 0;
   for (const phone of target.adminPhoneNumbers) {
     // These sends are sequential and admin_phone_numbers has no cap, so an
@@ -355,10 +427,10 @@ export async function escalateConversation(
   }
 
   console.log(
-    `[ai-agent-reply] Escalated conversation (assigned: ${assigned}, admins notified: ${adminsNotified})`,
+    `[ai-agent-reply] Escalated conversation (assigned: ${assigned}, admins notified: ${adminsNotified}, mode: ${persistedMode}, until: ${first.expires_at})`,
   );
 
-  return { assigned, assignmentNote, adminsNotified };
+  return { assigned, assignmentNote, adminsNotified, mode: persistedMode, expiresAt: first.expires_at };
 }
 
 async function escalateToHuman(context: ToolContext, reason: string): Promise<ToolResult> {
@@ -374,7 +446,7 @@ async function escalateToHuman(context: ToolContext, reason: string): Promise<To
 
   return {
     output:
-      `Escalation recorded. ${outcome.assignmentNote} Tell the customer briefly that a team member will follow up.`,
+      `Escalation recorded (mode: ${outcome.mode}, until ${outcome.expiresAt}). ${outcome.assignmentNote} Tell the customer briefly that a team member will follow up.`,
     escalated: true,
     // Carried so the outage floor can tell a real handoff from a bare mute. This
     // returns true whenever the mode write succeeded, even with no online agent and

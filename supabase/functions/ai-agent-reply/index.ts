@@ -9,6 +9,7 @@ import {
   type ToolAccountLink,
 } from "../_shared/toolResolution.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
+import { activeOverrideMode } from "../_shared/conversationModeOverride.ts";
 import {
   buildSystemPrompt,
   completionFailure,
@@ -603,14 +604,44 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, skipped: "agent_disabled" });
     }
 
-    const { data: modeOverride } = await admin
+    const { data: modeOverride, error: modeReadError } = await admin
       .from("ai_conversation_modes")
-      .select("mode")
+      .select("id, mode, expires_at")
       .eq("user_id", request.user_id)
       .eq("platform", request.platform)
       .eq("conversation_id", request.conversation_id)
       .maybeSingle();
-    const mode = resolveEngagementMode(modeOverride?.mode, config.default_mode);
+    // A failed read must not look like "no override": that would let the
+    // assistant answer a chat a human has taken (AGENTS.md reviewer rule 3).
+    if (modeReadError) throw modeReadError;
+    let overrideMode = activeOverrideMode(modeOverride, Date.now());
+    if (modeOverride && overrideMode === null) {
+      // Expired. Delete it so the badge and the outbox stop seeing it -- but only
+      // the exact row observed: an operator may have replaced it meanwhile, and
+      // that newer decision wins. Scoped by user_id because this runs as the
+      // service role (ARCHITECTURE.md §24). Never fatal.
+      const { data: deleted, error: expireError } = await admin
+        .from("ai_conversation_modes")
+        .delete()
+        .eq("id", modeOverride.id)
+        .eq("user_id", request.user_id)
+        .eq("expires_at", modeOverride.expires_at)
+        .select("id");
+      if (expireError) {
+        console.error("[ai-agent-reply] expired override cleanup failed:", expireError.message);
+      } else if (!deleted?.length) {
+        const { data: replaced, error: replacedError } = await admin
+          .from("ai_conversation_modes")
+          .select("mode, expires_at")
+          .eq("user_id", request.user_id)
+          .eq("platform", request.platform)
+          .eq("conversation_id", request.conversation_id)
+          .maybeSingle();
+        if (replacedError) throw replacedError;
+        overrideMode = activeOverrideMode(replaced, Date.now());
+      }
+    }
+    const mode = resolveEngagementMode(overrideMode, config.default_mode);
 
     const { data: thread, error: threadError } = await admin
       .from("ai_threads")
@@ -873,6 +904,10 @@ Deno.serve(async (req) => {
         if (dryRun) return;
         await notifyAdmin(recipientPhone, text);
       },
+      // The escalation's first write is bounded by these; under human_then_ai it
+      // does not mute unless a human is actually assigned.
+      defaultMode: config.default_mode ?? null,
+      escalationTimeoutMinutes: config.escalation_timeout_minutes ?? null,
     };
     escalationTarget = toolContext;
 

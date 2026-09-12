@@ -12,6 +12,7 @@ import {
 } from "../_shared/aiConfigScope.ts";
 import { toWhatsAppMessageView } from "../_shared/whatsappMessageView.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
+import { activeOverrideMode, MAX_ESCALATION_TIMEOUT_MINUTES } from "../_shared/conversationModeOverride.ts";
 import { blankedFields } from "../_shared/configBlanking.ts";
 import { parseBusinessProfile, renderBusinessProfileText } from "../_shared/businessProfileText.ts";
 import { parseAgentBehavior } from "../_shared/agentBehavior.ts";
@@ -495,7 +496,7 @@ function isAiAgentPlatform(value: unknown): value is string {
         "temperature", "admin_phone_numbers",
         "daily_message_cap", "reply_cooldown_seconds", "max_tool_iterations",
         "handoff_on_request", "handoff_on_low_confidence",
-        "business_profile", "agent_behavior",
+        "business_profile", "agent_behavior", "escalation_timeout_minutes",
       ];
       const updates: Record<string, unknown> = {};
       for (const field of allowedFields) {
@@ -512,6 +513,17 @@ function isAiAgentPlatform(value: unknown): value is string {
           return jsonResponse({ error: `Invalid admin phone numbers: ${invalid.join(", ")}` }, 400);
         }
         updates.admin_phone_numbers = normalized as string[];
+      }
+
+      // The escalation window is bounded to 1 minute..7 days; anything else
+      // would either never grant a human a window or never release the chat.
+      if (
+        "escalation_timeout_minutes" in updates &&
+        (!Number.isInteger(updates.escalation_timeout_minutes) ||
+          Number(updates.escalation_timeout_minutes) < 1 ||
+          Number(updates.escalation_timeout_minutes) > MAX_ESCALATION_TIMEOUT_MINUTES)
+      ) {
+        return jsonResponse({ error: "escalation_timeout_minutes must be an integer between 1 and 10080" }, 400);
       }
 
       // The structured profile is the INPUT; business_profile_text is the
@@ -674,7 +686,9 @@ function isAiAgentPlatform(value: unknown): value is string {
         .eq("conversation_id", conversation_id)
         .maybeSingle();
       if (error) throw error;
-      return jsonResponse({ mode: data || null });
+      // An expired escalation override reads as no override: the account
+      // default applies again.
+      return jsonResponse({ mode: data && activeOverrideMode(data, Date.now()) !== null ? data : null });
     }
 
     // ACTION: ai_set_conversation_mode
@@ -698,7 +712,7 @@ function isAiAgentPlatform(value: unknown): value is string {
       }
       const { data, error } = await adminClient
         .from("ai_conversation_modes")
-        .upsert({ user_id: user.id, platform, conversation_id, mode }, { onConflict: "user_id,platform,conversation_id" })
+        .upsert({ user_id: user.id, platform, conversation_id, mode, expires_at: null }, { onConflict: "user_id,platform,conversation_id" })
         .select()
         .single();
       if (error) throw error;
@@ -716,7 +730,9 @@ function isAiAgentPlatform(value: unknown): value is string {
         .eq("platform", platform)
         .order("updated_at", { ascending: false });
       if (error) throw error;
-      return jsonResponse({ modes: data || [] });
+      // Expired escalation overrides are hidden: they no longer gate anything.
+      const now = Date.now();
+      return jsonResponse({ modes: (data || []).filter((row) => activeOverrideMode(row, now) !== null) });
     }
 
     // The Vault seam for the tool actions. PostgREST on this stack exposes
