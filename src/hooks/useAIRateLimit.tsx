@@ -1,7 +1,28 @@
 import { useState, useEffect, useCallback } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { supabase } from "@/integrations/supabase/client";
+import type { Database } from "@/integrations/supabase/types";
 import { useAuth } from "./useAuth";
 import { ENTITLED_SUBSCRIPTION_STATUSES } from "@/lib/subscriptionStatus";
+
+// Keep the new RPC typed until the generated database schema includes it.
+type AIRateLimitDatabase = Database & {
+  public: {
+    Functions: {
+      get_ai_rate_limit_counts: {
+        Args: Record<string, never>;
+        Returns: {
+          caption_hour: number;
+          caption_day: number;
+          image_hour: number;
+          image_day: number;
+          hashtag_hour: number;
+          hashtag_day: number;
+        }[];
+      };
+    };
+  };
+};
 
 interface RateLimitState {
   limitPerHour: number;
@@ -163,12 +184,13 @@ export function useAIRateLimit(): UseAIRateLimitReturn {
 
       // Fetch all six api_logs counts (3 endpoints × hour/day) in a single RPC
       // to avoid the N+1 pattern of firing one query per endpoint per window.
-      const { data: counts, error: countsError } = await supabase
+      const { data: counts, error: countsError } = await (supabase as SupabaseClient<AIRateLimitDatabase>)
         .rpc("get_ai_rate_limit_counts")
         .single();
 
       if (countsError) {
         console.error("Failed to fetch AI rate limit counts:", countsError);
+        return;
       }
 
       const captionHour  = counts?.caption_hour  ?? 0;
