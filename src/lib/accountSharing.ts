@@ -23,11 +23,18 @@
 // The platforms that actually run an agent -- the same list as AiAgentPlatform
 // in useAiAgentConfig. A TikTok or Pinterest account has no inbox and no agent,
 // so a checkbox for it would promise retrieval that can never happen.
+//
+// YouTube is comments-only (youtube-poll-comments feeds the agent through
+// commentActions) rather than a DM inbox, but an agent is an agent: it reads
+// knowledge and calls connectors like any other, so it gets a checkbox. It was
+// missing here after AiAgentPlatform gained it, which silently made every
+// YouTube channel unshareable in both strips.
 const AGENT_SHARING_PLATFORMS = [
   "whatsapp",
   "facebook",
   "instagram",
   "threads",
+  "youtube",
 ] as const;
 
 export interface SharingAccount {
