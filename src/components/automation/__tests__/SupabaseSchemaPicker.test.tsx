@@ -38,6 +38,7 @@ function renderPicker(overrides: Partial<Parameters<typeof SupabaseSchemaPicker>
       tableAllowList=""
       selectColumns=""
       columnMap=""
+      columnCatalog=""
       onPatch={onPatch}
       {...overrides}
     />,
@@ -242,6 +243,31 @@ describe("service_role-gated projects (Supabase Cloud)", () => {
     expect(screen.getByLabelText("commercial_brands.name_en")).toBeChecked();
     expect(screen.getByLabelText("commercial_brands.phone")).toBeChecked();
     expect(screen.getByText(/units \(all selected\)/)).toBeInTheDocument();
+  });
+
+  it("draws every column from the stored catalog with only the saved ones ticked", () => {
+    // The follow-up to the saved-selection view (2026-09-13): listing only the
+    // saved columns, all ticked, read as "every column is selected". The
+    // catalog the picker stored on its last load supplies the rest.
+    renderPicker({
+      anonKey: "",
+      tableAllowList: "price_table",
+      columnMap: '{"price_table":["price"]}',
+      columnCatalog: JSON.stringify(INTROSPECTION),
+    });
+    expect(fetchSupabaseIntrospection).not.toHaveBeenCalled();
+    expect(screen.getByText(/as last read from the project/i)).toBeInTheDocument();
+    expect(screen.getByText("orders")).toBeInTheDocument();
+    expect(screen.getByLabelText("price_table.price")).toBeChecked();
+    expect(screen.getByLabelText("price_table.type_name")).not.toBeChecked();
+    expect(screen.getByLabelText("price_table.image_url")).not.toBeChecked();
+  });
+
+  it("stores the catalog on a successful load so the next edit can draw it", async () => {
+    const onPatch = renderPicker({ tableAllowList: "price_table" });
+    fireEvent.click(screen.getByRole("button", { name: /load from project/i }));
+    await waitFor(() => expect(screen.getByText("type_name")).toBeInTheDocument());
+    expect(onPatch).toHaveBeenCalledWith({ column_catalog: JSON.stringify(INTROSPECTION) });
   });
 
   it("loading adds the project's columns to the saved ones instead of replacing them", async () => {

@@ -27,7 +27,45 @@ interface SupabaseSchemaPickerProps {
   tableAllowList: string;
   selectColumns: string;
   columnMap: string;
+  /** The project's tables and columns as the picker last read them (settings.column_catalog). */
+  columnCatalog: string;
   onPatch: (patch: Record<string, string>) => void;
+}
+
+// The catalog is only ever written by this component, from a successful load,
+// so anything that fails to parse is treated as absent rather than reported.
+function parseCatalog(value: string): SupabaseIntrospection | null {
+  if (!value.trim()) return null;
+  try {
+    const parsed = JSON.parse(value) as Partial<SupabaseIntrospection>;
+    if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.tables)) return null;
+    const tables = parsed.tables.filter((table): table is string => typeof table === "string");
+    const columnsByTable: Record<string, string[]> = {};
+    for (const [table, columns] of Object.entries(parsed.columnsByTable ?? {})) {
+      if (Array.isArray(columns)) {
+        columnsByTable[table] = columns.filter((column): column is string => typeof column === "string");
+      }
+    }
+    return { tables, columnsByTable };
+  } catch {
+    return null;
+  }
+}
+
+// A settings value has no size limit, but a whole-project catalog on a large
+// schema is more than an edit needs: past this, only the allowed tables keep
+// their columns and the rest are listed by name.
+const CATALOG_CHAR_BUDGET = 60_000;
+
+function catalogPatch(result: SupabaseIntrospection, allowedTables: string[]): string {
+  const full = JSON.stringify(result);
+  if (full.length <= CATALOG_CHAR_BUDGET) return full;
+  return JSON.stringify({
+    tables: result.tables,
+    columnsByTable: Object.fromEntries(
+      allowedTables.map((table) => [table, result.columnsByTable[table] ?? []]),
+    ),
+  });
 }
 
 function parseList(value: string): string[] {
@@ -60,6 +98,7 @@ export function SupabaseSchemaPicker({
   tableAllowList,
   selectColumns,
   columnMap,
+  columnCatalog,
   onPatch,
 }: SupabaseSchemaPickerProps) {
   const [introspection, setIntrospection] = useState<SupabaseIntrospection | null>(null);
@@ -90,30 +129,33 @@ export function SupabaseSchemaPicker({
   // "price,total" to BOTH, so each query failed on the column its table lacks,
   // and adding a second table broke access that already worked.
   //
-  // The tree is drawn from the SAVED selection before any load. On edit the
-  // anon key is never shown back, so introspection cannot run until it is
-  // re-entered -- and until this change the tree stayed empty, so editing a
-  // connector looked like starting from scratch. A later load only ADDS what
-  // the project reports; saved tables and columns stay listed and ticked even
-  // if the project no longer lists them, so a save cannot silently drop them.
+  // The tree is drawn before any load. On edit the anon key is never shown
+  // back, so introspection cannot run until it is re-entered -- and an empty
+  // tree made editing look like starting from scratch. The base is the catalog
+  // this picker stored on its last successful load (every table, every column,
+  // so the saved columns show ticked AMONG the others); a connector saved
+  // before the catalog existed falls back to the saved selection alone, which
+  // is all it has. A live load then only ADDS what the project reports; saved
+  // tables and columns stay listed and ticked even if the project no longer
+  // lists them, so a save cannot silently drop them.
   const union = (first: string[], second: string[]) => [...new Set([...first, ...second])];
-  const savedView: SupabaseIntrospection | null = selectedTables.length > 0
+  const base = introspection ?? parseCatalog(columnCatalog);
+  const view: SupabaseIntrospection | null = base
+    ? {
+      tables: union(base.tables, selectedTables),
+      columnsByTable: Object.fromEntries(
+        selectedTables.map((table) => [
+          table,
+          union(base.columnsByTable[table] ?? [], columnsFor(table)),
+        ]),
+      ),
+    }
+    : selectedTables.length > 0
     ? {
       tables: selectedTables,
       columnsByTable: Object.fromEntries(selectedTables.map((table) => [table, columnsFor(table)])),
     }
     : null;
-  const view: SupabaseIntrospection | null = introspection
-    ? {
-      tables: union(introspection.tables, selectedTables),
-      columnsByTable: Object.fromEntries(
-        selectedTables.map((table) => [
-          table,
-          union(introspection.columnsByTable[table] ?? [], columnsFor(table)),
-        ]),
-      ),
-    }
-    : savedView;
 
   // The adapter refuses any table an active map does not name, so narrowing one
   // table must not silently deny the others. Every allowed table is therefore
@@ -189,14 +231,18 @@ export function SupabaseSchemaPicker({
     setError(null);
     setTableListUnavailable(false);
     try {
-      setIntrospection(await fetchSupabaseIntrospection(projectUrl, anonKey, schema));
+      const result = await fetchSupabaseIntrospection(projectUrl, anonKey, schema);
+      setIntrospection(result);
+      onPatch({ column_catalog: catalogPatch(result, selectedTables) });
     } catch (cause) {
       if (cause instanceof TableListUnavailableError && selectedTables.length > 0) {
         // The listing is gated, not the data: fall back to sampling the tables
         // the operator has already named.
         try {
-          setIntrospection(await sampleTypedTables());
+          const sampled = await sampleTypedTables();
+          setIntrospection(sampled);
           setTableListUnavailable(true);
+          onPatch({ column_catalog: catalogPatch(sampled, selectedTables) });
         } catch (sampleCause) {
           setIntrospection(null);
           setError(sampleCause instanceof Error ? sampleCause.message : "Could not read the project.");
@@ -242,7 +288,9 @@ export function SupabaseSchemaPicker({
       {error && <p className="text-[10px] text-destructive">{error}</p>}
       {!introspection && view && (
         <p className="text-[10px] text-muted-foreground">
-          Showing the saved selection. Load from project to see the other tables and columns.
+          {parseCatalog(columnCatalog)
+            ? "Showing the tables and columns as last read from the project, with the saved selection ticked. Load from project to refresh."
+            : "Showing the saved selection only. Load from project to see the other tables and columns."}
         </p>
       )}
       {tableListUnavailable && (

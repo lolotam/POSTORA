@@ -51,7 +51,7 @@ Deno.test("every declared connector type has credentials and a usage guide", () 
     for (const field of definition.credentials) {
       assertEquals(typeof field.key, "string");
       assertEquals(typeof field.label, "string");
-      assert(["text", "secret", "url"].includes(field.kind));
+      assert(["text", "secret", "url", "hidden"].includes(field.kind));
       assertEquals(typeof field.required, "boolean");
       assertEquals(typeof field.help, "string");
     }
