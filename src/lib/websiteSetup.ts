@@ -1,6 +1,6 @@
 import {
-  GOAL_OPTIONS, INDUSTRY_OPTIONS, RESPONSE_LENGTH_OPTIONS, TONE_OPTIONS,
-  type AgentBehavior, type BusinessProfile,
+  GOAL_OPTIONS, INDUSTRY_OPTIONS, POLICY_KEYS, POLICY_LABELS, policyKeysForIndustry, RESPONSE_LENGTH_OPTIONS, TONE_OPTIONS,
+  type AgentBehavior, type BusinessPolicyKey, type BusinessProfile, type BusinessProfilePolicies,
 } from "@/lib/agentProfile";
 
 export interface WebsiteSetupResult {
@@ -26,6 +26,8 @@ interface FieldDefinition {
   path: string;
   label: string;
   suggestion: boolean;
+  /** Set on the policy rows, so the review can drop those the business type hides. */
+  policy?: BusinessPolicyKey;
   read: (profile: BusinessProfile, behavior: AgentBehavior) => string;
 }
 
@@ -38,9 +40,9 @@ const FIELD_DEFINITIONS: FieldDefinition[] = [
     read: (profile) => optionLabel(INDUSTRY_OPTIONS, profile.industry) },
   { path: "business_profile.products", label: "Products and services", suggestion: false,
     read: (profile) => profile.products ?? "" },
-  ...(["returns", "shipping", "warranty"] as const).map((policy) => ({
+  ...POLICY_KEYS.map((policy) => ({
     path: `business_profile.policies.${policy}`,
-    label: `${policy[0].toUpperCase()}${policy.slice(1)} policy`, suggestion: false,
+    label: POLICY_LABELS[policy], suggestion: false, policy,
     read: (profile: BusinessProfile) => profile.policies?.[policy] ?? "",
   })),
   { path: "business_profile.faqs", label: "Frequently asked questions", suggestion: false,
@@ -60,7 +62,12 @@ const FIELD_DEFINITIONS: FieldDefinition[] = [
 ];
 
 export function draftFields(result: WebsiteSetupResult, profile: BusinessProfile, behavior: AgentBehavior) {
-  return FIELD_DEFINITIONS.map((field) => {
+  // A policy the business type hides is never offered: applying it would store
+  // a fact the renderer then leaves out of the indexed text, so the user would
+  // select something the agent never learns. The draft's own type wins when it
+  // proposes one, since applying the draft is what makes it the type.
+  const visiblePolicies = new Set(policyKeysForIndustry(result.business_profile.industry ?? profile.industry));
+  return FIELD_DEFINITIONS.filter((field) => !field.policy || visiblePolicies.has(field.policy)).map((field) => {
     const proposed = field.read(result.business_profile, result.agent_behavior).trim();
     const current = field.read(profile, behavior).trim();
     return {
@@ -81,11 +88,10 @@ export function websiteIndexingMessage(response: { queued?: boolean; chunk_count
 export function mergeProfileRefresh(current: BusinessProfile, baseline: BusinessProfile, incoming: BusinessProfile): BusinessProfile {
   const choose = <T,>(local: T, previous: T, next: T): T =>
     JSON.stringify(local) === JSON.stringify(previous) ? next : local;
-  const policies = {
-    returns: choose(current.policies?.returns, baseline.policies?.returns, incoming.policies?.returns),
-    shipping: choose(current.policies?.shipping, baseline.policies?.shipping, incoming.policies?.shipping),
-    warranty: choose(current.policies?.warranty, baseline.policies?.warranty, incoming.policies?.warranty),
-  };
+  const policies: BusinessProfilePolicies = {};
+  for (const key of POLICY_KEYS) {
+    policies[key] = choose(current.policies?.[key], baseline.policies?.[key], incoming.policies?.[key]);
+  }
   return {
     industry: choose(current.industry, baseline.industry, incoming.industry),
     products: choose(current.products, baseline.products, incoming.products),

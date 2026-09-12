@@ -8,8 +8,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import {
   INDUSTRY_OPTIONS,
+  POLICY_KEYS,
+  POLICY_LABELS,
+  policyKeysForIndustry,
   renderBusinessProfileText,
   type BusinessIndustry,
+  type BusinessPolicyKey,
   type BusinessProfile,
 } from "@/lib/agentProfile";
 
@@ -27,11 +31,28 @@ export interface ManualProfilePanelProps {
   catalogBusy: boolean;
 }
 
-const POLICY_FIELDS = [
-  { key: "returns", label: "Returns policy", placeholder: "e.g. 14 days, unopened, receipt required" },
-  { key: "shipping", label: "Shipping policy", placeholder: "e.g. free over 20 KWD, 2-4 working days" },
-  { key: "warranty", label: "Warranty policy", placeholder: "e.g. 1 year manufacturer warranty" },
-] as const;
+const POLICY_PLACEHOLDERS: Record<BusinessPolicyKey, string> = {
+  returns: "e.g. 14 days, unopened, receipt required",
+  shipping: "e.g. free over 20 KWD, 2-4 working days",
+  warranty: "e.g. 1 year manufacturer warranty",
+  payment_methods: "e.g. KNET, Visa, cash on delivery",
+  delivery: "e.g. same-day inside Kuwait City, 1.5 KWD fee",
+  booking: "e.g. book on WhatsApp at least 24 hours ahead",
+  cancellation: "e.g. free up to 24 hours before, then 50%",
+  opening_hours: "e.g. Sat-Thu 9am-9pm, Fri 4pm-9pm",
+  menu: "e.g. halal, vegan options, gluten-free on request",
+  insurance: "e.g. GIG, Warba; cash patients welcome",
+  service_area: "e.g. all of Kuwait; Hawally same-day",
+  leasing: "e.g. viewings Sat-Thu, 1 year minimum, 2 months deposit",
+};
+
+/** A filled field the selected type no longer shows: kept, not indexed. */
+function hiddenFilledPolicyCount(profile: BusinessProfile): number {
+  const visible = new Set(policyKeysForIndustry(profile.industry));
+  return POLICY_KEYS.filter(
+    (key) => !visible.has(key) && (profile.policies?.[key] ?? "").trim(),
+  ).length;
+}
 
 /**
  * Describing the business by hand.
@@ -62,7 +83,12 @@ export function ManualProfilePanel({
   const setField = <K extends keyof BusinessProfile>(key: K, value: BusinessProfile[K]) =>
     onProfileChange({ ...profile, [key]: value });
 
-  const setPolicy = (key: (typeof POLICY_FIELDS)[number]["key"], value: string) =>
+  // Only the fields this business type shows. The others stay in `profile`
+  // untouched, so switching the type back brings their text with it.
+  const policyKeys = policyKeysForIndustry(profile.industry);
+  const hiddenFilled = hiddenFilledPolicyCount(profile);
+
+  const setPolicy = (key: BusinessPolicyKey, value: string) =>
     onProfileChange({ ...profile, policies: { ...(profile.policies ?? {}), [key]: value } });
 
   const faqs = profile.faqs ?? [];
@@ -113,19 +139,26 @@ export function ManualProfilePanel({
             />
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3">
-            {POLICY_FIELDS.map((field) => (
-              <div key={field.key} className="space-y-1.5">
-                <Label htmlFor={`profile-${field.key}`}>{field.label}</Label>
-                <Textarea
-                  id={`profile-${field.key}`}
-                  value={profile.policies?.[field.key] ?? ""}
-                  onChange={(event) => setPolicy(field.key, event.target.value)}
-                  rows={2}
-                  placeholder={field.placeholder}
-                />
-              </div>
-            ))}
+          <div className="space-y-2">
+            <div className="grid gap-4 md:grid-cols-2">
+              {policyKeys.map((key) => (
+                <div key={key} className="space-y-1.5">
+                  <Label htmlFor={`profile-${key}`}>{POLICY_LABELS[key]}</Label>
+                  <Textarea
+                    id={`profile-${key}`}
+                    value={profile.policies?.[key] ?? ""}
+                    onChange={(event) => setPolicy(key, event.target.value)}
+                    rows={2}
+                    placeholder={POLICY_PLACEHOLDERS[key]}
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              These fields match the selected business type.
+              {hiddenFilled > 0 &&
+                ` ${hiddenFilled} filled ${hiddenFilled === 1 ? "field" : "fields"} for other business types ${hiddenFilled === 1 ? "is" : "are"} kept but not indexed.`}
+            </p>
           </div>
 
           <div className="space-y-2">

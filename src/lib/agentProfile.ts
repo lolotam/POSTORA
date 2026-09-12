@@ -11,16 +11,132 @@
 
 export type BusinessIndustry =
   | "ecommerce"
+  | "retail"
   | "clinic"
-  | "b2b_services"
+  | "dental"
+  | "pharmacy"
+  | "beauty"
+  | "fitness"
   | "restaurant"
+  | "cafe"
+  | "hotel"
+  | "real_estate"
+  | "b2b_services"
+  | "agency"
+  | "education"
+  | "legal"
+  | "finance"
+  | "automotive"
+  | "logistics"
+  | "travel"
+  | "events"
+  | "home_services"
+  | "saas"
   | "other";
 
-export interface BusinessProfilePolicies {
-  returns?: string;
-  shipping?: string;
-  warranty?: string;
+/** Kept in step with INDUSTRY_LABELS in the server module. */
+const INDUSTRY_LABELS: Record<BusinessIndustry, string> = {
+  ecommerce: "E-commerce store",
+  retail: "Retail store",
+  clinic: "Clinic or medical practice",
+  dental: "Dental clinic",
+  pharmacy: "Pharmacy",
+  beauty: "Beauty salon or spa",
+  fitness: "Gym or fitness studio",
+  restaurant: "Restaurant",
+  cafe: "Cafe or bakery",
+  hotel: "Hotel or accommodation",
+  real_estate: "Real estate or property management",
+  b2b_services: "B2B services",
+  agency: "Agency or consultancy",
+  education: "Education or training",
+  legal: "Legal services",
+  finance: "Finance or insurance",
+  automotive: "Automotive sales or service",
+  logistics: "Logistics or courier",
+  travel: "Travel or tourism",
+  events: "Events or entertainment",
+  home_services: "Home services or maintenance",
+  saas: "Software or SaaS",
+  other: "Other",
+};
+
+export const INDUSTRY_OPTIONS: { value: BusinessIndustry; label: string }[] = (
+  Object.keys(INDUSTRY_LABELS) as BusinessIndustry[]
+).map((value) => ({ value, label: INDUSTRY_LABELS[value] }));
+
+/** Kept in step with POLICY_KEYS in the server module; this is the render order. */
+export const POLICY_KEYS = [
+  "returns",
+  "shipping",
+  "warranty",
+  "payment_methods",
+  "delivery",
+  "booking",
+  "cancellation",
+  "opening_hours",
+  "menu",
+  "insurance",
+  "service_area",
+  "leasing",
+] as const;
+
+export type BusinessPolicyKey = (typeof POLICY_KEYS)[number];
+
+export const POLICY_LABELS: Record<BusinessPolicyKey, string> = {
+  returns: "Returns policy",
+  shipping: "Shipping policy",
+  warranty: "Warranty policy",
+  payment_methods: "Payment methods",
+  delivery: "Delivery options",
+  booking: "Booking and appointments",
+  cancellation: "Cancellation policy",
+  opening_hours: "Opening hours",
+  menu: "Menu and dietary information",
+  insurance: "Insurance accepted",
+  service_area: "Service area",
+  leasing: "Viewing and leasing terms",
+};
+
+/** Kept in step with INDUSTRY_FIELDS in the server module. */
+const INDUSTRY_FIELDS: Record<BusinessIndustry, readonly BusinessPolicyKey[]> = {
+  ecommerce: ["returns", "shipping", "warranty", "payment_methods", "delivery"],
+  retail: ["returns", "warranty", "payment_methods", "delivery", "opening_hours"],
+  clinic: ["booking", "cancellation", "opening_hours", "insurance", "payment_methods"],
+  dental: ["booking", "cancellation", "opening_hours", "insurance", "payment_methods"],
+  pharmacy: ["returns", "payment_methods", "delivery", "opening_hours", "insurance"],
+  beauty: ["booking", "cancellation", "opening_hours", "payment_methods"],
+  fitness: ["booking", "cancellation", "opening_hours", "payment_methods"],
+  restaurant: ["delivery", "booking", "opening_hours", "menu", "payment_methods"],
+  cafe: ["delivery", "opening_hours", "menu", "payment_methods"],
+  hotel: ["booking", "cancellation", "payment_methods"],
+  real_estate: ["payment_methods", "opening_hours", "service_area", "leasing"],
+  b2b_services: ["payment_methods", "cancellation", "opening_hours", "service_area"],
+  agency: ["payment_methods", "cancellation", "service_area"],
+  education: ["booking", "cancellation", "opening_hours", "payment_methods"],
+  legal: ["booking", "opening_hours", "payment_methods", "service_area"],
+  finance: ["cancellation", "opening_hours", "insurance", "payment_methods"],
+  automotive: ["warranty", "booking", "opening_hours", "payment_methods", "service_area"],
+  logistics: ["shipping", "delivery", "payment_methods", "service_area"],
+  travel: ["booking", "cancellation", "payment_methods"],
+  events: ["booking", "cancellation", "payment_methods"],
+  home_services: ["warranty", "booking", "cancellation", "payment_methods", "service_area"],
+  saas: ["returns", "payment_methods", "cancellation"],
+  other: POLICY_KEYS,
+};
+
+/**
+ * The fields a profile of this type shows, in render order. No type, or
+ * "other", shows every field. A field outside the type is kept in the stored
+ * profile but neither shown nor indexed until the type shows it again.
+ */
+export function policyKeysForIndustry(industry?: BusinessIndustry): readonly BusinessPolicyKey[] {
+  if (!industry) return POLICY_KEYS;
+  const allowed = new Set<BusinessPolicyKey>(INDUSTRY_FIELDS[industry]);
+  return POLICY_KEYS.filter((key) => allowed.has(key));
 }
+
+export type BusinessProfilePolicies = Partial<Record<BusinessPolicyKey, string>>;
 
 export interface BusinessProfileFaq {
   q: string;
@@ -55,19 +171,6 @@ export interface AgentBehavior {
   greeting?: string;
   instruction_blocks?: AgentInstructionBlock[];
 }
-
-/** Kept in step with INDUSTRY_LABELS in the server module. */
-const INDUSTRY_LABELS: Record<BusinessIndustry, string> = {
-  ecommerce: "E-commerce store",
-  clinic: "Clinic or medical practice",
-  b2b_services: "B2B services",
-  restaurant: "Restaurant or cafe",
-  other: "Other",
-};
-
-export const INDUSTRY_OPTIONS: { value: BusinessIndustry; label: string }[] = (
-  Object.keys(INDUSTRY_LABELS) as BusinessIndustry[]
-).map((value) => ({ value, label: INDUSTRY_LABELS[value] }));
 
 export const TONE_OPTIONS: { value: AgentTone; label: string; hint: string }[] = [
   {
@@ -116,9 +219,9 @@ export function renderBusinessProfileText(profile: BusinessProfile): string {
 
   if (profile.industry) sections.push(`Business type: ${INDUSTRY_LABELS[profile.industry]}`);
   addSection("Products and services", profile.products);
-  addSection("Returns policy", profile.policies?.returns);
-  addSection("Shipping policy", profile.policies?.shipping);
-  addSection("Warranty policy", profile.policies?.warranty);
+  for (const key of policyKeysForIndustry(profile.industry)) {
+    addSection(POLICY_LABELS[key], profile.policies?.[key]);
+  }
   for (const faq of profile.faqs ?? []) {
     const question = faq.q.trim();
     const answer = faq.a.trim();

@@ -1,7 +1,10 @@
 import { assertEquals, assertThrows } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  BUSINESS_INDUSTRIES,
   BusinessProfileError,
   parseBusinessProfile,
+  POLICY_KEYS,
+  policyKeysForIndustry,
   renderBusinessProfileText,
 } from "./businessProfileText.ts";
 
@@ -88,11 +91,51 @@ Deno.test("parse accepts an empty object, null and undefined", () => {
 
 Deno.test("parse round-trips a full profile unchanged", () => {
   const input = {
-    industry: "clinic",
+    industry: "clinic" as const,
     products: "Dermatology consultations",
     policies: { returns: "No refunds", shipping: "N/A", warranty: "None" },
     faqs: [{ q: "Do you take walk-ins?", a: "Mornings only." }],
     notes: "Two branches",
   };
   assertEquals(parseBusinessProfile(input), input);
+});
+
+Deno.test("only the selected business type's fields are rendered; the rest are kept by parse", () => {
+  // A clinic that filled in a shipping policy while it was still set to
+  // e-commerce must not index it: the agent would quote a policy the form no
+  // longer shows. The value survives parse, so switching back restores it.
+  const stored = {
+    industry: "clinic" as const,
+    policies: { shipping: "Free over 20 KWD", booking: "WhatsApp, 24h ahead" },
+  };
+  assertEquals(parseBusinessProfile(stored), stored);
+  assertEquals(
+    renderBusinessProfileText(parseBusinessProfile(stored)).split("\n\n"),
+    ["Business type: Clinic or medical practice", "Booking and appointments:\nWhatsApp, 24h ahead"],
+  );
+});
+
+Deno.test("no business type, or 'other', renders every filled field in the fixed order", () => {
+  const policies = { leasing: "1 year minimum", returns: "14 days" };
+  assertEquals(
+    renderBusinessProfileText({ policies }),
+    "Returns policy:\n14 days\n\nViewing and leasing terms:\n1 year minimum",
+  );
+  assertEquals(
+    renderBusinessProfileText({ industry: "other", policies }).split("\n\n").length,
+    3,
+  );
+});
+
+Deno.test("every industry maps only to known fields and keeps the fixed render order", () => {
+  for (const industry of BUSINESS_INDUSTRIES) {
+    const keys = policyKeysForIndustry(industry);
+    assertEquals(keys.length > 0, true, industry);
+    assertEquals(keys, POLICY_KEYS.filter((key) => keys.includes(key)), industry);
+  }
+});
+
+Deno.test("parse accepts every policy key regardless of industry", () => {
+  const policies = Object.fromEntries(POLICY_KEYS.map((key) => [key, "x"])) as Record<string, string>;
+  assertEquals(parseBusinessProfile({ industry: "hotel", policies }).policies, policies);
 });

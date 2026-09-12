@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderBusinessProfileText } from "@/lib/agentProfile";
+import { INDUSTRY_OPTIONS, POLICY_KEYS, policyKeysForIndustry, renderBusinessProfileText } from "@/lib/agentProfile";
 
 // These fixtures are copied VERBATIM from
 // supabase/functions/_shared/businessProfileText.test.ts. That is the point:
@@ -43,5 +43,33 @@ describe("renderBusinessProfileText matches the server renderer", () => {
 
   it("drops a FAQ missing either half", () => {
     expect(renderBusinessProfileText({ faqs: [{ q: "A?", a: "  " }] })).toBe("");
+  });
+});
+
+// Copied verbatim from the server suite, for the same reason as above: the
+// client preview and the server must hide the same fields for the same type.
+describe("business-type-aware fields match the server renderer", () => {
+  it("renders only the selected business type's fields", () => {
+    const text = renderBusinessProfileText({
+      industry: "clinic",
+      policies: { shipping: "Free over 20 KWD", booking: "WhatsApp, 24h ahead" },
+    });
+    expect(text.split("\n\n")).toEqual([
+      "Business type: Clinic or medical practice",
+      "Booking and appointments:\nWhatsApp, 24h ahead",
+    ]);
+  });
+
+  it("renders every filled field when no type is chosen", () => {
+    expect(renderBusinessProfileText({ policies: { leasing: "1 year minimum", returns: "14 days" } }))
+      .toBe("Returns policy:\n14 days\n\nViewing and leasing terms:\n1 year minimum");
+  });
+
+  it("maps every industry to known fields in the fixed render order", () => {
+    for (const { value } of INDUSTRY_OPTIONS) {
+      const keys = policyKeysForIndustry(value);
+      expect(keys.length).toBeGreaterThan(0);
+      expect(keys).toEqual(POLICY_KEYS.filter((key) => keys.includes(key)));
+    }
   });
 });
