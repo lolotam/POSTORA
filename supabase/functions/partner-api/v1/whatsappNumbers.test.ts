@@ -23,10 +23,12 @@ function database(opts: {
   deactivationFails?: boolean; mode?: string; syncOutcome?: unknown;
   leaseHeld?: boolean; unresolved?: boolean; noWorkspace?: boolean;
   accountPatch?: Record<string, unknown>;
+  unbound?: boolean;
 } = {}) {
   const reads: URL[] = [];
   const writes: Array<{ table: string; row: Record<string, unknown> }> = [];
   const claims: Record<string, unknown>[] = [];
+  const claimReads: URL[][] = [];
   const settlements: Array<{ url: URL; row: Record<string, unknown> }> = [];
   let storedHash: string | undefined;
   let settled: Record<string, unknown> | undefined;
@@ -41,6 +43,7 @@ function database(opts: {
       }
       if (table === "claim_partner_idempotency") {
         const row = JSON.parse(String(init?.body));
+        claimReads.push([...reads]);
         claims.push(row);
         const outcome = storedHash && row.p_request_hash !== storedHash ? "conflict" : opts.claim ?? (settled ? "replay" : "claimed");
         storedHash ??= row.p_request_hash;
@@ -86,9 +89,10 @@ function database(opts: {
         }],
         partner_provisioned_workspaces: [{ owner_user_id: "owner-1" }],
         app_settings: [{ key: "feature_msg_whatsapp", value: opts.entitled ?? true },
-          { key: "feature_wa_evolution_qr_enabled", value: opts.qrEntitled ?? true }],
+          { key: "feature_wa_evolution_qr_enabled", value: opts.qrEntitled ?? true },
+          { key: "feature_wa_cloud_api_enabled", value: true }],
         user_feature_overrides: [],
-        partner_api_key_accounts: url.searchParams.has("social_account_id") && url.searchParams.get("social_account_id") !== `eq.${ID}` ? [] : [{ social_account_id: ID }],
+        partner_api_key_accounts: opts.unbound || (url.searchParams.has("social_account_id") && url.searchParams.get("social_account_id") !== `eq.${ID}`) ? [] : [{ social_account_id: ID }],
         social_accounts: url.searchParams.get("id")?.startsWith("eq.") ? [{ ...ROW, connection_mode: opts.mode ?? ROW.connection_mode,
           user_id: "owner-1", workspace_id: opts.noWorkspace ? null : ROW.workspace_id,
           platform_user_id: opts.unresolved ? `pending_${ID}` : ROW.platform_user_id, ...opts.accountPatch }] :
@@ -100,7 +104,7 @@ function database(opts: {
       return Promise.resolve(Response.json(rows[table]));
     } },
   });
-  return { admin, reads, writes, claims, settlements };
+  return { admin, reads, writes, claims, claimReads, settlements };
 }
 
 function request(suffix = "") {
@@ -210,20 +214,60 @@ function mutation(suffix = "", body: unknown = REGISTRATION, key: string | null 
   });
 }
 
+Deno.test("a replay after the binding is removed answers 404 and never reads idempotency", async () => {
+  const db = database({ scopes: WRITE_SCOPES, claim: "replay", unbound: true });
+  const response = await handleRequest(mutation(`/${ID}/pairing`, {}, "K"), () => db.admin);
+  assertEquals(response.status, 404);
+  assertEquals((await response.json()).error.code, "resource_not_found");
+  assertEquals(db.claims.length, 0);
+  assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
+});
+
+async function claimWithoutDispatch(db: ReturnType<typeof database>, req: Request, numberSpecific: boolean) {
+  const savedFetch = globalThis.fetch;
+  let providerCalls = 0;
+  globalThis.fetch = () => {
+    providerCalls++;
+    return Promise.reject(new Error("Unexpected provider dispatch"));
+  };
+  try {
+    const response = await handleRequest(req, () => db.admin);
+    assertEquals(providerCalls, 0);
+    assertEquals(db.claims.length, 1);
+    assertEquals(db.claimReads[0], db.reads, "no execute-body reads after claiming");
+    const accounts = db.claimReads[0].filter((url) => url.pathname.endsWith("/social_accounts"));
+    const bindings = db.claimReads[0].filter((url) => url.pathname.endsWith("/partner_api_key_accounts"));
+    assertEquals(accounts.length, numberSpecific ? 1 : 0);
+    assertEquals(bindings.length, numberSpecific ? 1 : 0);
+    if (numberSpecific) {
+      assertEquals(accounts[0].searchParams.get("workspace_id"), "eq.ws-1");
+      assertEquals(accounts[0].searchParams.get("id"), `eq.${ID}`);
+      assertEquals(bindings[0].searchParams.get("workspace_id"), "eq.ws-1");
+      assertEquals(bindings[0].searchParams.get("key_id"), "eq.key-1");
+    }
+    const flags = db.claimReads[0].filter((url) => url.pathname.endsWith("/app_settings"));
+    assertEquals(flags.length, 1);
+    assertEquals(flags[0].searchParams.get("key"), "in.(feature_msg_whatsapp,feature_wa_evolution_qr_enabled)");
+    assertEquals(db.reads.some((url) => url.pathname.endsWith("/whatsapp_evolution_instances")), false);
+    assertEquals(db.writes.filter((write) => !["system_logs", "partner_api_usage"].includes(write.table)), []);
+    assertEquals(db.settlements.length, 0);
+    return response;
+  } finally {
+    globalThis.fetch = savedFetch;
+  }
+}
+
 for (const suffix of ["", `/${ID}/pairing`, `/${ID}/history-sync`]) {
   for (const claim of ["replay", "conflict", "in_progress", "indeterminate"]) {
     Deno.test(`write ${suffix || "registration"} handles ${claim} without dispatch`, async () => {
       const db = database({ scopes: WRITE_SCOPES, claim });
-      const res = await handleRequest(mutation(suffix, suffix ? {} : REGISTRATION), () => db.admin);
+      const res = await claimWithoutDispatch(db, mutation(suffix, suffix ? {} : REGISTRATION), Boolean(suffix));
       const body = await res.json();
       if (claim === "replay") {
         assertEquals(res.status, 202);
         assertEquals(body, { saved: "original outcome", request_id: "original-request" });
         assertEquals(res.headers.get("Idempotency-Replayed"), "true");
       } else assertEquals(body.error.code, `idempotency_${claim}`);
-      assert(!db.writes.some((write) => write.table === "register_partner_whatsapp_number"));
-      assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
-      assertEquals(db.settlements.length, 0);
     });
   }
   Deno.test(`write ${suffix || "registration"} requires Idempotency-Key before claiming`, async () => {
@@ -338,7 +382,7 @@ for (const method of ["GET", "POST"]) {
     const res = await handleRequest(method === "POST" ? mutation(suffix, {}) : request(suffix), () => db.admin);
     assertEquals((await res.json()).error.code, "resource_not_found");
     assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
-    if (method === "POST") assertEquals(db.settlements[0].row.http_status, 404);
+    if (method === "POST") { assertEquals(db.claims.length, 0); assertEquals(db.settlements.length, 0); }
   });
 }
 
@@ -426,11 +470,11 @@ for (const [method, resource, action] of [
   Deno.test(`${action} refuses entitlement and unbound accounts with a usage row`, async () => {
     for (const entitled of [false, true]) {
       const db = database({ scopes: WRITE_SCOPES, entitled });
-      const suffix = `/${OTHER}/${resource}`;
+      const suffix = `/${entitled ? OTHER : ID}/${resource}`;
       const res = await handleRequest(method === "GET" ? request(suffix) : mutation(suffix, {}, "key", method), () => db.admin);
       const code = entitled ? "resource_not_found" : "feature_not_entitled";
       assertEquals((await res.json()).error.code, code);
-      assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
+      assertEquals(db.reads.filter((url) => url.pathname.endsWith("/social_accounts")).length, entitled ? 0 : 1);
       if (!entitled) assertEquals(db.claims.length, 0);
       const usage = db.writes.find((write) => write.table === "partner_api_usage")!.row;
       assertEquals(usage.action, action);
@@ -442,15 +486,13 @@ for (const [method, resource, action] of [
 for (const claim of ["replay", "conflict", "in_progress", "indeterminate"]) {
   Deno.test(`session DELETE handles ${claim} without teardown`, async () => {
     const db = database({ scopes: WRITE_SCOPES, claim });
-    const res = await handleRequest(mutation(`/${ID}/session`, {}, "key", "DELETE"), () => db.admin);
+    const res = await claimWithoutDispatch(db, mutation(`/${ID}/session`, {}, "key", "DELETE"), true);
     const body = await res.json();
     if (claim === "replay") {
       assertEquals(res.status, 202);
       assertEquals(body.saved, "original outcome");
       assertEquals(res.headers.get("Idempotency-Replayed"), "true");
     } else assertEquals(body.error.code, `idempotency_${claim}`);
-    assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
-    assertEquals(db.settlements.length, 0);
   });
 }
 
@@ -590,11 +632,11 @@ for (const [scenario, options, expectedStatus, expectedCode] of [
   });
 }
 
-Deno.test("history POST rejects unexpected body fields before binding or the lease claim", async () => {
+Deno.test("history POST rejects unexpected body fields before the lease claim", async () => {
   const db = database({ scopes: WRITE_SCOPES });
   const res = await handleRequest(mutation(`/${ID}/history-sync`, { owner_id: "foreign-owner" }), () => db.admin);
   assertEquals((await res.json()).error.code, "invalid_request");
-  assert(!db.reads.some((url) => /\/(social_accounts|partner_api_key_accounts)$/.test(url.pathname)));
+  assertEquals(db.writes.some((write) => write.table === "claim_whatsapp_history_sync"), false);
   assertEquals(db.settlements[0].row.http_status, 400);
 });
 
@@ -603,7 +645,7 @@ for (const [body, key, expected] of [[{}, null, "missing_idempotency_key"], [{ u
     const db = database({ scopes: WRITE_SCOPES });
     const res = await handleRequest(mutation(`/${ID}/session`, body, key, "DELETE"), () => db.admin);
     assertEquals((await res.json()).error.code, expected);
-    assert(!db.reads.some((url) => url.pathname.endsWith("/social_accounts")));
+    assertEquals(db.reads.filter((url) => url.pathname.endsWith("/social_accounts")).length, key === null ? 0 : 1);
     assertEquals(db.writes.find((write) => write.table === "partner_api_usage")!.row.error_code, expected);
   });
 }

@@ -12,13 +12,13 @@ Deno.test("agent provisioner pins definer search path and inserts agent membersh
   assertMatch(sql, /INSERT INTO public\.whatsapp_agents \(workspace_id, user_id, display_name, max_conversations\)/i);
   assertEquals(/INSERT INTO auth\.users/i.test(sql), false);
 });
-Deno.test("the shared assignment foreign key is left exactly as it was", () => {
-  // An earlier draft retargeted it to ON DELETE NO ACTION to close a race in
-  // one handler. whatsapp_agents.user_id cascades from auth.users, so that
-  // would make deleting any user who ever held an assignment fail on a foreign
-  // key -- account offboarding and erasure included -- to fix a partner racing
-  // itself. deleteHumanAgent refuses on live assignments instead, and looks
-  // for them WITHOUT a workspace predicate so legacy null rows still count.
-  assertEquals(/ALTER TABLE public\.whatsapp_conversation_assignments/i.test(sql), false);
-  assertEquals(/NO ACTION/i.test(sql), false);
+Deno.test("the assignment FK becomes NO ACTION while history FKs stay unchanged", () => {
+  // Comments document the untouched history FKs; only executable SQL can alter them.
+  const statements = sql.replace(/--[^\r\n]*/g, "");
+  assertMatch(statements, /do\s+\$\$[\s\S]*?from pg_constraint as c[\s\S]*?end;\s*\$\$;/i);
+  assertMatch(statements, /c\.conrelid = 'public\.whatsapp_conversation_assignments'::regclass/i);
+  assertMatch(statements, /c\.confrelid = 'public\.whatsapp_agents'::regclass/i);
+  assertMatch(statements, /a\.attname = 'agent_id'/i);
+  assertMatch(statements, /alter table public\.whatsapp_conversation_assignments\s+add foreign key \(agent_id\) references public\.whatsapp_agents\(id\)\s+on delete no action;/i);
+  assertEquals(/whatsapp_assignment_history/i.test(statements), false);
 });

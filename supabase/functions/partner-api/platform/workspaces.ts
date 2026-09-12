@@ -69,6 +69,7 @@ async function resumeAttempt(authed: PlatformAuthedContext, externalRef: string)
   if (!attempt) return null;
   const { data: workspace, error: estateError } = await admin.from("partner_provisioned_workspaces")
     .select(WORKSPACE_COLUMNS).eq("principal_id", record.principalId)
+    .eq("environment", doorEnvironment())
     .eq("external_ref", externalRef).maybeSingle();
   if (estateError) return refuse(requestId, "internal_error");
   if (!workspace) return refuse(requestId, "idempotency_indeterminate");
@@ -211,8 +212,12 @@ export async function listWorkspaces(
     return pageRequest.res;
   }
   const { limit, cursor } = pageRequest.page;
+  // The estate is per environment as well as per principal: the SQL estate
+  // RPCs refuse a cross-environment issue/revoke, and a listing that showed
+  // production workspaces to a staging door would still leak their ids.
   let query = admin.from("partner_provisioned_workspaces").select(WORKSPACE_COLUMNS)
     .eq("principal_id", record.principalId)
+    .eq("environment", doorEnvironment())
     .order("created_at", { ascending: false }).order("workspace_id", { ascending: false })
     .limit(limit + 1);
   if (cursor) {
@@ -233,6 +238,7 @@ export async function getWorkspace(
   if (!z.string().uuid().safeParse(params.id).success) return refuse(requestId, "resource_not_found");
   const { data: workspace, error } = await admin.from("partner_provisioned_workspaces")
     .select(WORKSPACE_COLUMNS).eq("principal_id", record.principalId)
+    .eq("environment", doorEnvironment())
     .eq("workspace_id", params.id).maybeSingle();
   if (error) return refuse(requestId, "internal_error");
   if (!workspace) return refuse(requestId, "resource_not_found");

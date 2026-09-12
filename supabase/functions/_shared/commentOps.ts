@@ -16,6 +16,7 @@ export interface CommentContext {
   workspaceId: string;
   accountIds: string[];
   requestId: string;
+  entitledPlatforms?: readonly string[];
 }
 export interface CommentDeps {
   fetcher?: typeof fetch;
@@ -40,7 +41,7 @@ export class CommentOpError extends Error {
   constructor(public code: V1ErrorCode) { super(code); }
 }
 const ACCOUNT_COLUMNS = "id,workspace_id,platform,platform_user_id,access_token,refresh_token,token_expires_at,auth_provider,connection_id,ig_auth_type,account_metadata,is_active,needs_reauth";
-const PLATFORMS = ["facebook", "instagram", "youtube"];
+export const COMMENT_PLATFORMS = ["facebook", "instagram", "youtube"];
 const bytes = new TextEncoder();
 function pack(value: Uint8Array): string {
   return btoa(String.fromCharCode(...value)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
@@ -68,7 +69,7 @@ async function unseal<T>(prefix: string, token: string, deps: CommentDeps): Prom
   } catch { return null; } // Untrusted token syntax/signature, never a provider read.
 }
 export function requireCommentCapability(account: Account, action: string): void {
-  if (!PLATFORMS.includes(account.platform) || (action === "delete_comment" && account.platform === "youtube")) {
+  if (!COMMENT_PLATFORMS.includes(account.platform) || (action === "delete_comment" && account.platform === "youtube")) {
     throw new CommentOpError("unsupported_capability");
   }
   if (!account.is_active) throw new CommentOpError("account_not_connected");
@@ -123,8 +124,8 @@ async function present(ctx: CommentContext, account: Account, post: string, row:
     hidden: row.is_hidden ?? row.hidden ?? (row.moderationStatus ? row.moderationStatus === "rejected" : null),
   };
 }
-export async function getComment(ctx: CommentContext, id: string, deps: CommentDeps = {}): Promise<CommentResource> {
-  const { account, target } = await resolveComment(ctx, id, deps);
+export async function getComment(ctx: CommentContext, id: string, deps: CommentDeps = {}, resolved?: Awaited<ReturnType<typeof resolveComment>>): Promise<CommentResource> {
+  const { account, target } = resolved ?? await resolveComment(ctx, id, deps);
   requireCommentCapability(account, "get_comment");
   if (account.platform === "youtube") {
     const result = await getYouTubeComment(account, youtubeDeps(ctx, deps), target.comment);
@@ -165,7 +166,7 @@ function nextAfter(value: { data?: unknown; paging?: { next?: string; cursors?: 
   return value.paging.cursors.after;
 }
 export async function listComments(ctx: CommentContext, req: Request, filters: Filters, deps: CommentDeps = {}) {
-  if (filters.platform && !PLATFORMS.includes(filters.platform)) throw new CommentOpError("unsupported_capability");
+  if (filters.platform && !COMMENT_PLATFORMS.includes(filters.platform)) throw new CommentOpError("unsupported_capability");
   if (filters.accountId && !ctx.accountIds.includes(filters.accountId)) throw new CommentOpError("resource_not_found");
   const filter = JSON.stringify(filters);
   const url = new URL(req.url);
@@ -180,7 +181,9 @@ export async function listComments(ctx: CommentContext, req: Request, filters: F
   if (!page.ok) throw new CommentOpError("invalid_request");
   const scoped = filters.accountId ? { ...ctx, accountIds: [filters.accountId] } : ctx;
   const posts = filters.postId ? await selectedPosts(scoped, filters.postId) : null;
-  const candidates = (await accounts(scoped)).filter((a) => PLATFORMS.includes(a.platform) && (!filters.platform || a.platform === filters.platform) && (!posts || posts.has(a.id)));
+  const scopedCandidates = (await accounts(scoped)).filter((a) => COMMENT_PLATFORMS.includes(a.platform) && (!filters.platform || a.platform === filters.platform) && (!posts || posts.has(a.id)));
+  const candidates = scopedCandidates.filter((a) => !ctx.entitledPlatforms || ctx.entitledPlatforms.includes(a.platform));
+  if (scopedCandidates.length && !candidates.length) throw new CommentOpError("feature_not_entitled");
   const index = continuation ? candidates.findIndex((a) => a.id === continuation.account) : 0;
   if (continuation && index < 0) throw new CommentOpError("resource_not_found");
   if (!candidates.length) return { data: [], next_cursor: null };

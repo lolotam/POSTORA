@@ -262,6 +262,52 @@ Deno.test("pairing refresh keeps an existing instance and its webhook key", asyn
   assert(!db.calls.some((call) => call.method === "POST"));
 });
 
+Deno.test("a 429 from createInstance removes the reservation and the next attempt creates again", async () => {
+  const db = fixture();
+  const remote = provider();
+  let creates = 0;
+  remote.api.createInstance = () => ++creates === 1
+    ? Promise.reject(new EvolutionApiError("private rejection", 429, {})) : Promise.resolve({});
+  const deps = { api: remote.api, webhookBaseUrl: "https://api.example" };
+  await assertRejects(() => startPairing({ ...CTX, admin: db.admin }, ID, deps), WhatsAppOpError);
+  assertEquals(db.calls.filter((call) => call.method === "POST").length, 1);
+  const deletions = db.calls.filter((call) => call.method === "DELETE");
+  assertEquals(deletions.length, 1);
+  assertEquals(deletions[0].url.searchParams.get("social_account_id"), `eq.${ID}`);
+  assertEquals(deletions[0].url.searchParams.get("instance_name"), `eq.postora_${ID}`);
+  await startPairing({ ...CTX, admin: db.admin }, ID, deps);
+  assertEquals(creates, 2);
+  assertEquals(db.calls.filter((call) => call.method === "POST").length, 2);
+});
+
+Deno.test("connect 404 on a known instance recreates and retries once", async () => {
+  const db = fixture({ existing: true });
+  const remote = provider();
+  let connects = 0;
+  remote.api.connect = () => ++connects === 1
+    ? Promise.reject(new EvolutionApiError("missing", 404, {}))
+    : Promise.resolve({ qrcode: { base64: "qr-image" }, instance: { state: "connecting" } });
+  await startPairing({ ...CTX, admin: db.admin }, ID, { api: remote.api, webhookBaseUrl: "https://api.example" });
+  assertEquals(connects, 2);
+  assertEquals(remote.calls, [{ method: "create", input: {
+    instanceName: `postora_${ID}`, webhook: {
+      url: "https://api.example/functions/v1/whatsapp-evolution-webhook", headers: { jwt_key: "stored-secret" },
+      events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+    },
+  } }]);
+  assertEquals(db.calls.some((call) => call.method === "POST"), false);
+});
+
+Deno.test("a definite rejection is not a 5xx", async () => {
+  const db = fixture({ existing: true });
+  const remote = provider();
+  remote.api.connect = () => Promise.reject(new EvolutionApiError("private rejection", 400, {}));
+  const error = await assertRejects(() => startPairing({ ...CTX, admin: db.admin }, ID, { api: remote.api }), WhatsAppOpError);
+  assertEquals(error.status, 422);
+  assertEquals(error.code, "invalid_request");
+  assertEquals(error.indeterminate, false);
+});
+
 for (const state of ["open", "close"]) {
   Deno.test(`pairing poll reconciles ${state} through workspace-scoped writes`, async () => {
     const db = fixture({ existing: true, active: state === "close", resolved: state === "close" });

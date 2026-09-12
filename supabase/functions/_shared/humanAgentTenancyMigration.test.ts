@@ -14,7 +14,20 @@ async function migrationSql(): Promise<string> {
 Deno.test("human-agent expansion keeps both workspace columns nullable", async () => {
   const sql = await migrationSql();
   assertMatch(sql, /alter table public\.whatsapp_assignment_history\s+add column if not exists workspace_id uuid\s+references public\.workspaces\(id\) on delete cascade;/i);
-  assertEquals(/not\s+null/i.test(sql), false);
+  // Row predicates such as agent_id IS NOT NULL do not change nullability.
+  const statements = sql.replace(/--[^\r\n]*/g, "");
+  assertEquals(/workspace_id\s+uuid\s+not\s+null/i.test(statements), false);
+  assertEquals(/alter\s+(?:column\s+)?workspace_id\s+set\s+not\s+null/i.test(statements), false);
+});
+
+Deno.test("duplicate assignments are closed before the workspace backfill", async () => {
+  const sql = (await migrationSql()).replace(/--[^\r\n]*/g, "");
+  const reconcile = /do\s+\$\$[\s\S]*?set unassigned_at = now\(\)[\s\S]*?end;\s*\$\$;/i.exec(sql);
+  assertEquals(Boolean(reconcile), true);
+  assertMatch(reconcile![0], /target\.recency_rank > 1 or target\.collides_with_attributed/i);
+  const backfill = /update public\.whatsapp_conversation_assignments as assignment\s+set workspace_id = agent\.workspace_id/i.exec(sql);
+  assertEquals(Boolean(backfill), true);
+  assertEquals(reconcile!.index + reconcile![0].length <= backfill!.index, true);
 });
 
 Deno.test("history attribution prefers to-agent, from-agent, then actor personal workspace", async () => {

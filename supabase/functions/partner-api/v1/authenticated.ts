@@ -292,6 +292,7 @@ export async function resolveWhatsAppAccount(
         "connection_mode, is_active, needs_reauth, token_expires_at, account_metadata",
     )
     .eq("id", accountId ?? record.socialAccountId)
+    .eq("workspace_id", record.workspaceId)
     .maybeSingle();
 
   if (error) return { ok: false, res: v1ErrorResponse("internal_error", requestId) };

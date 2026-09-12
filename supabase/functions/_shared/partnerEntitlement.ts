@@ -19,6 +19,18 @@ const RULE_ACTIONS = new Set([
   "list_conversation_modes", "get_conversation_mode", "set_conversation_mode",
   "list_auto_replies", "create_auto_reply", "update_auto_reply", "delete_auto_reply",
 ]);
+const MODE_ACTIONS = new Set(["start_whatsapp_history_sync", "get_whatsapp_history_sync", "end_whatsapp_session"]);
+export const WHATSAPP_MODE_FEATURE_KEYS: Record<string, readonly string[]> = {
+  evolution_qr: ["feature_wa_evolution_qr_enabled"],
+  cloud_api: ["feature_wa_cloud_api_enabled"],
+  coexistence: ["feature_wa_cloud_api_enabled"],
+};
+export const COMMENT_PLATFORM_FEATURE_KEYS: Record<string, readonly string[]> = {
+  // FLAG_KEYS has no dedicated Facebook, Instagram or Threads comments flag.
+  // Their manual comment actions require only feature_comment_manager.
+  facebook: [], instagram: [], threads: [], youtube: ["feature_youtube_comments"],
+};
+const COMMENT_ACTIONS = new Set(["list_comments", "get_comment", "reply_comment", "hide_comment", "delete_comment"]);
 const AGENT_ACTION_FEATURE_KEYS: Record<string, typeof AGENT_PLATFORM_FEATURE_KEYS> = {
   ...Object.fromEntries([...RULE_ACTIONS].map((action) => [action, AGENT_PLATFORM_FEATURE_KEYS])),
   get_automation_handlers: AGENT_PLATFORM_FEATURE_KEYS,
@@ -60,8 +72,8 @@ export const ACTION_FEATURE_KEYS: Record<string, readonly string[]> = {
   start_whatsapp_history_sync: ["feature_msg_whatsapp"],
   get_whatsapp_history_sync: ["feature_msg_whatsapp"],
   // Business profiles are a Cloud API capability, independent of the QR flag.
-  get_whatsapp_profile: ["feature_msg_whatsapp"],
-  update_whatsapp_profile: ["feature_msg_whatsapp"],
+  get_whatsapp_profile: ["feature_msg_whatsapp", "feature_wa_cloud_api_enabled"],
+  update_whatsapp_profile: ["feature_msg_whatsapp", "feature_wa_cloud_api_enabled"],
 };
 
 /** The authenticated workspace's provisioned owner is its entitlement subject.
@@ -74,6 +86,7 @@ export async function assertEntitled(
   action: string,
   requestId: string,
   platform?: string,
+  connectionMode?: string,
 ): Promise<Response | null> {
   const refuse = async (
     code: "feature_not_entitled" | "internal_error" | "invalid_request",
@@ -107,8 +120,18 @@ export async function assertEntitled(
   if (agentPolicy && (platform === undefined || !Object.hasOwn(agentPolicy, platform))) {
     return await refuse("feature_not_entitled", "unsupported_agent_platform");
   }
-  const requiredKeys = agentPolicy ? agentPolicy[platform!]
-    : Object.hasOwn(ACTION_FEATURE_KEYS, action) ? ACTION_FEATURE_KEYS[action] : [];
+  if (MODE_ACTIONS.has(action) && (!connectionMode || !Object.hasOwn(WHATSAPP_MODE_FEATURE_KEYS, connectionMode))) {
+    return await refuse("feature_not_entitled", "unsupported_connection_mode");
+  }
+  if (COMMENT_ACTIONS.has(action) && platform !== undefined && !Object.hasOwn(COMMENT_PLATFORM_FEATURE_KEYS, platform)) {
+    return await refuse("feature_not_entitled", "unsupported_comment_platform");
+  }
+  const requiredKeys = [
+    ...(agentPolicy ? agentPolicy[platform!]
+      : Object.hasOwn(ACTION_FEATURE_KEYS, action) ? ACTION_FEATURE_KEYS[action] : []),
+    ...(MODE_ACTIONS.has(action) ? WHATSAPP_MODE_FEATURE_KEYS[connectionMode!] : []),
+    ...(COMMENT_ACTIONS.has(action) && platform ? COMMENT_PLATFORM_FEATURE_KEYS[platform] : []),
+  ];
   if (requiredKeys.length === 0) return await refuse("internal_error", "missing_action_policy");
 
   let readStage = "provisioning";

@@ -2,7 +2,7 @@
 // in partner_api_usage, including failures caught below.
 import { assertEntitled } from "../../_shared/partnerEntitlement.ts";
 import { deleteComment, hideComment, replyToComment } from "../../_shared/commentActions.ts";
-import { CommentOpError, getComment, listComments, requireCommentCapability, resolveComment, youtubeDeps, type CommentContext, type CommentDeps } from "../../_shared/commentOps.ts";
+import { COMMENT_PLATFORMS, CommentOpError, getComment, listComments, requireCommentCapability, resolveComment, youtubeDeps, type CommentContext, type CommentDeps } from "../../_shared/commentOps.ts";
 import { claimIdempotency, completeIdempotency, hashRequest, markIndeterminate } from "../../_shared/partnerApiIdempotency.ts";
 import type { V1AuthedContext } from "./authenticated.ts";
 import { boundAccountIds } from "./binding.ts";
@@ -24,7 +24,18 @@ export async function listCommentsRoute(req: Request, authed: V1AuthedContext, _
     const ctx = await context(authed);
     if (ctx instanceof Response) return ctx;
     const query = new URL(req.url).searchParams;
-    const result = await listComments(ctx, req, {
+    const platform = query.get("platform") ?? undefined;
+    if (platform && !COMMENT_PLATFORMS.includes(platform)) throw new CommentOpError("unsupported_capability");
+    const entitledPlatforms: string[] = [];
+    let refusal: Response | null = null;
+    for (const candidate of platform ? [platform] : COMMENT_PLATFORMS) {
+      const denied = await assertEntitled(authed.admin, authed.record.workspaceId, "list_comments", authed.requestId, candidate);
+      if (!denied) entitledPlatforms.push(candidate);
+      else if (denied.status === 403) refusal = denied;
+      else return denied; // A failed flag read must never look like a disabled flag.
+    }
+    if (!entitledPlatforms.length) return refusal!;
+    const result = await listComments({ ...ctx, entitledPlatforms }, req, {
       platform: query.get("platform") ?? undefined,
       postId: query.get("post_id") ?? undefined,
       accountId: query.get("account_id") ?? undefined,
@@ -38,7 +49,10 @@ export async function getCommentRoute(_req: Request, authed: V1AuthedContext, pa
   try {
     const ctx = await context(authed);
     if (ctx instanceof Response) return ctx;
-    const result = await getComment(ctx, params.id, deps);
+    const resolved = await resolveComment(ctx, params.id, deps);
+    const platformDenied = await assertEntitled(authed.admin, authed.record.workspaceId, "get_comment", authed.requestId, resolved.account.platform);
+    if (platformDenied) return platformDenied;
+    const result = await getComment(ctx, params.id, deps, resolved);
     return v1JsonResponse({ ...result, request_id: authed.requestId }, authed.requestId);
   } catch (error) { return failure(error, authed.requestId); }
 }
@@ -53,6 +67,8 @@ async function commentWrite(req: Request, authed: V1AuthedContext, target: { id:
     if (ctx instanceof Response) return ctx;
     // Replays still honor current binding, workspace, and platform capability.
     const resolved = await resolveComment(ctx, target.id, deps);
+    const platformDenied = await assertEntitled(admin, record.workspaceId, target.action, requestId, resolved.account.platform);
+    if (platformDenied) return platformDenied;
     requireCommentCapability(resolved.account, target.action);
     const key = req.headers.get("idempotency-key")?.trim();
     if (!key) return v1ErrorResponse("missing_idempotency_key", requestId);

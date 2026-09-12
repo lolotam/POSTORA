@@ -87,6 +87,11 @@ interface PairingAccount {
   connection_mode: string;
 }
 
+// A request-local resolved context lets the HTTP door authorize before replay
+// and the operation reuse that exact lookup. Standalone callers still resolve.
+interface ResolvedNumberContext extends WhatsAppNumberContext { account: PairingAccount }
+type PairingContext = WhatsAppNumberContext | ResolvedNumberContext;
+
 interface PairingInstance {
   instance_name: string;
   jwt_key: string;
@@ -106,17 +111,23 @@ function configuredPairingApi(deps: PairingDependencies): PairingApi {
   }
 }
 
-async function pairingAccount(ctx: WhatsAppNumberContext, accountId: string): Promise<PairingAccount> {
+export async function resolveNumberContext(ctx: WhatsAppNumberContext, accountId: string): Promise<ResolvedNumberContext> {
   if (!ctx.accountIds.includes(accountId)) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
   const { data, error } = await ctx.admin.from("social_accounts")
     .select("id, platform_user_id, is_active, connection_mode")
     .eq("workspace_id", ctx.workspaceId).eq("platform", "whatsapp").eq("id", accountId).maybeSingle();
   if (error) throw new WhatsAppOpError("Unable to read number", "internal_error", 500);
   if (!data) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
-  if (data.connection_mode !== "evolution_qr") {
+  return { ...ctx, account: data };
+}
+
+async function pairingAccount(ctx: PairingContext, accountId: string): Promise<PairingAccount> {
+  if (!ctx.accountIds.includes(accountId)) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
+  const { account } = "account" in ctx && ctx.account.id === accountId ? ctx : await resolveNumberContext(ctx, accountId);
+  if (account.connection_mode !== "evolution_qr") {
     throw new WhatsAppOpError("This operation is available only for Direct QR numbers", "unsupported_capability", 422);
   }
-  return data;
+  return account;
 }
 
 async function pairingInstance(ctx: WhatsAppNumberContext, accountId: string): Promise<PairingInstance | null> {
@@ -147,14 +158,13 @@ async function savePairing(ctx: WhatsAppNumberContext, accountId: string, patch:
 }
 
 export async function startPairing(
-  ctx: WhatsAppNumberContext, accountId: string, deps: PairingDependencies = {},
+  ctx: PairingContext, accountId: string, deps: PairingDependencies = {},
 ) {
   await pairingAccount(ctx, accountId);
   let instance = await pairingInstance(ctx, accountId);
   const api = configuredPairingApi(deps);
   if (!instance) {
-    const baseUrl = deps.webhookBaseUrl ?? Deno.env.get("SUPABASE_PUBLIC_URL") ?? Deno.env.get("SUPABASE_URL");
-    if (!baseUrl) throw new WhatsAppOpError("Pairing is not configured", "internal_error", 500);
+    const webhookUrl = pairingWebhookUrl(deps);
     const instanceName = `postora_${accountId}`;
     const jwtKeyBytes = crypto.getRandomValues(new Uint8Array(32));
     const jwtKey = btoa(String.fromCharCode(...jwtKeyBytes))
@@ -165,13 +175,30 @@ export async function startPairing(
     // Never upsert: a racing attempt must not replace the webhook credential.
     if (error) throw new WhatsAppOpError("Unable to create pairing", "internal_error", 500, undefined, error.code !== "23505");
     instance = { instance_name: instanceName, jwt_key: jwtKey, last_qr: null };
-    await pairingWrite(() => api.createInstance({ instanceName, webhook: {
-      url: `${baseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-evolution-webhook`,
-      headers: { jwt_key: jwtKey },
-      events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
-    } }));
+    try {
+      await createProviderInstance(api, instance, webhookUrl);
+    } catch (error) {
+      if (definiteRejection(error)) {
+        // Remove only this reservation, never a different racing instance.
+        const { error: cleanupError } = await ctx.admin.from("whatsapp_evolution_instances").delete()
+          .eq("social_account_id", accountId).eq("instance_name", instanceName);
+        if (cleanupError) throw new WhatsAppOpError("Pairing cleanup outcome unknown", "internal_error", 500, undefined, true);
+      }
+      throw pairingFailure(error);
+    }
   }
-  const connection = await pairingWrite(() => api.connect(instance.instance_name));
+  const current = instance;
+  const connection = await pairingWrite(async () => {
+    try {
+      return await api.connect(current.instance_name);
+    } catch (error) {
+      if (!(error instanceof EvolutionApiError) || error.status !== 404) throw error;
+      // A retained local reservation may outlive the provider instance. Reuse
+      // its credential and recreate once; a second failure is never looped.
+      await createProviderInstance(api, current, pairingWebhookUrl(deps));
+      return await api.connect(current.instance_name);
+    }
+  });
   const qr = extractQr(connection);
   const state = extractState(connection);
   if (!qr && !state) throw new WhatsAppOpError("Invalid pairing response", "internal_error", 502, undefined, true);
@@ -184,9 +211,30 @@ async function pairingWrite(call: () => Promise<unknown>): Promise<unknown> {
   try {
     return await call();
   } catch (error) {
-    const rejected = error instanceof EvolutionApiError && error.status >= 400 && error.status < 500;
-    throw new WhatsAppOpError("Pairing provider request failed", "internal_error", 502, undefined, !rejected);
+    throw pairingFailure(error);
   }
+}
+
+function definiteRejection(error: unknown): boolean {
+  return error instanceof EvolutionApiError && error.status >= 400 && error.status < 500;
+}
+function pairingFailure(error: unknown): WhatsAppOpError {
+  if (error instanceof WhatsAppOpError) return error;
+  // invalid_request is the contract's generic application rejection code.
+  return definiteRejection(error)
+    ? new WhatsAppOpError("Pairing provider rejected the request", "invalid_request", 422)
+    : new WhatsAppOpError("Pairing provider request failed", "internal_error", 502, undefined, true);
+}
+function pairingWebhookUrl(deps: PairingDependencies): string {
+  const baseUrl = deps.webhookBaseUrl ?? Deno.env.get("SUPABASE_PUBLIC_URL") ?? Deno.env.get("SUPABASE_URL");
+  if (!baseUrl) throw new WhatsAppOpError("Pairing is not configured", "internal_error", 500);
+  return `${baseUrl.replace(/\/$/, "")}/functions/v1/whatsapp-evolution-webhook`;
+}
+function createProviderInstance(api: PairingApi, instance: PairingInstance, url: string) {
+  return api.createInstance({ instanceName: instance.instance_name, webhook: {
+    url, headers: { jwt_key: instance.jwt_key },
+    events: ["MESSAGES_UPSERT", "MESSAGES_UPDATE", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
+  } });
 }
 
 export async function pairingStatus(
@@ -232,7 +280,7 @@ async function reconcileAccountConnection(
 }
 
 export async function endSession(
-  ctx: WhatsAppNumberContext, accountId: string,
+  ctx: PairingContext, accountId: string,
   deps: { evolution?: WhatsAppDisconnectDeps["evolution"]; disconnect?: typeof disconnectWhatsAppAccount } = {},
 ) {
   await pairingAccount(ctx, accountId);
@@ -262,7 +310,7 @@ export async function endSession(
 }
 
 export async function startHistorySync(
-  ctx: WhatsAppNumberContext, accountId: string, deps: { api?: EvolutionApi } = {},
+  ctx: PairingContext, accountId: string, deps: { api?: EvolutionApi } = {},
 ) {
   await pairingAccount(ctx, accountId);
   // Resolve the owner internally, after the workspace/binding gate. No owner id
@@ -312,7 +360,7 @@ function recordedHistoryState(instance: HistorySyncInstance): "idle" | "running"
       outcome.chatsImported === 0 || outcome.messagesWritten === 0 ? "partial" : "completed";
 }
 
-export async function historySyncStatus(ctx: WhatsAppNumberContext, accountId: string) {
+export async function historySyncStatus(ctx: PairingContext, accountId: string) {
   await pairingAccount(ctx, accountId);
   const { data, error } = await ctx.admin.from("whatsapp_evolution_instances")
     .select("sync_started_at, last_sync_at, last_sync_outcome").eq("social_account_id", accountId).maybeSingle();

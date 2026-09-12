@@ -101,11 +101,14 @@ for (const workspace of ["ws", null]) Deno.test(`delete refuses a live assignmen
   assertEquals((await response.json()).error.code, "invalid_request"); assertEquals(f.rows.whatsapp_agents.length, 1);
   assert(!f.writes.some((write) => write.table === "whatsapp_agents"));
 });
-Deno.test("delete proceeds when every assignment is already closed", async () => {
+Deno.test("delete refuses when every retained assignment is already closed", async () => {
   const f = humanAgentFixture();
   f.rows.whatsapp_conversation_assignments.push({ id: "closed", workspace_id: "ws", agent_id: AGENT_ID, unassigned_at: "2026-09-01T00:00:00Z" });
-  assertEquals((await drive(f, request("DELETE", `/${id}`))).status, 200);
-  assertEquals(f.rows.whatsapp_agents.length, 0);
+  const response = await drive(f, request("DELETE", `/${id}`));
+  assertEquals(response.status, 409);
+  assertEquals((await response.json()).error.code, "invalid_request");
+  assertEquals(f.rows.whatsapp_agents.length, 1);
+  assert(!f.writes.some((write) => write.table === "whatsapp_agents"));
 });
 Deno.test("delete replays after removal and never deletes Auth identity", async () => {
   const f = humanAgentFixture(); const first = await drive(f, request("DELETE", `/${id}`)); assertEquals(first.status, 200);

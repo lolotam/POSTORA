@@ -192,7 +192,12 @@ Deno.test("estate pagination uses both boundary columns in ONE disjunction and p
     assertEquals(table, "partner_provisioned_workspaces");
     return {
       select() { return this; },
-      eq(column: string, value: unknown) { assertEquals(column, "principal_id"); principals.push(value); return this; },
+      eq(column: string, value: unknown) {
+        // Environment travels with the estate: a staging door never lists
+        // production workspaces, whatever principal it belongs to.
+        if (column === "environment") { assertEquals(value, "production"); return this; }
+        assertEquals(column, "principal_id"); principals.push(value); return this;
+      },
       order(column: string, options: unknown) { orders.push(column); assertEquals(options, { ascending: false }); return this; },
       limit(n: number) { assertEquals(n, 3); return this; },
       or(condition: string) { conditions.push(condition); return this; },
@@ -217,12 +222,12 @@ for (const [label, row, error, status] of [
   ["read failed", { workspace_id: ID }, {}, 500],
   ["owned", { workspace_id: ID }, null, 200],
 ] as const) {
-  Deno.test(`get workspace ${label} uses principal and workspace predicates`, async () => {
+  Deno.test(`get workspace ${label} uses principal, environment and workspace predicates`, async () => {
     const filters: [string, unknown][] = [];
     const admin = { from() { return { select() { return this; }, eq(k: string, v: unknown) { filters.push([k, v]); return this; }, maybeSingle: () => Promise.resolve({ data: row, error }) }; } };
     const res = await getWorkspace(request(), { ...AUTHED, admin }, { id: ID });
     assertEquals(res.status, status);
-    assertEquals(filters, [["principal_id", "principal"], ["workspace_id", ID]]);
+    assertEquals(filters, [["principal_id", "principal"], ["environment", "production"], ["workspace_id", ID]]);
   });
 }
 

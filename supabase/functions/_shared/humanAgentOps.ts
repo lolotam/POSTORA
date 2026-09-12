@@ -127,14 +127,16 @@ export async function deleteHumanAgent(ctx: HumanAgentContext, id: string) {
   // this is tenant-safe without it -- while a workspace predicate would miss
   // the legacy rows that still hold a null workspace_id until the contract
   // migration lands. Those are exactly the live assignments a blind delete
-  // would orphan. Historical rows do not block: the FK nulls their agent and
-  // whatsapp_assignment_history keeps the record.
+  // would orphan. Ended assignments also retain the agent; only separate
+  // whatsapp_assignment_history rows do not block deletion.
   const { data: assignments, error: readError } = await ctx.admin.from("whatsapp_conversation_assignments").select("id")
-    .eq("agent_id", agentId(id)).is("unassigned_at", null).limit(1);
+    .eq("agent_id", agentId(id)).limit(1);
   if (readError) throw new HumanAgentOpError("internal_error", "Unable to read agent assignments");
   if (assignments?.length) assigned();
   const { data, error } = await ctx.admin.from("whatsapp_agents").delete()
     .eq("workspace_id", ctx.workspaceId).eq("id", agentId(id)).select("id").maybeSingle();
+  // NO ACTION also protects assignments committed after the pre-read.
+  if (error?.code === "23503") assigned();
   if (error) throw new Error("Agent deletion outcome unknown");
   if (!data) notFound();
   // Delete only the agent profile. Auth and membership may belong to a browser

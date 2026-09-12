@@ -45,7 +45,8 @@ function fixture(opts: { entitled?: boolean; claim?: string; unbound?: boolean; 
     const rows: Record<string, unknown[]> = {
       partner_api_keys: [{ id: "key", workspace_id: "ws", social_account_id: OTHER, key_prefix: "pk_live_test", scopes: ["comments:read", "comments:manage"], rate_limit_per_min: 60, monthly_quota: null, revoked_at: null, expires_at: null }],
       partner_provisioned_workspaces: [{ owner_user_id: "owner" }],
-      app_settings: [{ key: "feature_comment_manager", value: opts.entitled ?? true }],
+      app_settings: [{ key: "feature_comment_manager", value: opts.entitled ?? true },
+        { key: "feature_youtube_comments", value: true }],
       user_feature_overrides: [],
       partner_api_key_accounts: [{ social_account_id: opts.unbound ? OTHER : ID }],
       social_accounts: [{ ...ACCOUNT, platform: opts.platform ?? ACCOUNT.platform, token_expires_at: "2099-01-01T00:00:00Z", account_metadata: { granted_scopes: [YOUTUBE_COMMENT_SCOPE] } }],
@@ -145,8 +146,12 @@ for (const index of [1, 2, 3, 4]) {
 }
 Deno.test("YouTube delete is unsupported before an idempotency claim or provider write", async () => {
   const f = fixture({ platform: "youtube" }); const id = await f.seed();
+  f.reads.length = 0;
   const res = await drive(f, 4, id);
   assertEquals(res.status, 422); assertEquals((await res.json()).error.code, "unsupported_capability");
+  const flags = f.reads.filter((url) => url.pathname.endsWith("/app_settings"));
+  assertEquals(flags.length, 2);
+  assertEquals(flags.at(-1)!.searchParams.get("key"), "in.(feature_comment_manager,feature_youtube_comments)");
   assertEquals(f.claims.length, 0); assertEquals(f.providerWrites.length, 0);
 });
 Deno.test("hide and delete use shared Graph writes and include action and hidden state in the hash", async () => {

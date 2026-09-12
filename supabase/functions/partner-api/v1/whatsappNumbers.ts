@@ -9,7 +9,7 @@ import { assertEntitled } from "../../_shared/partnerEntitlement.ts";
 import { getWhatsAppNumber, listWhatsAppNumbers } from "../../_shared/whatsappNumberOps.ts";
 import { resolveWhatsAppAccount, type V1AuthedContext } from "./authenticated.ts";
 import { getBusinessProfile, updateBusinessProfile } from "../../_shared/whatsappProfileOps.ts";
-import { endSession, historySyncStatus, pairingStatus, registerNumber, startHistorySync, startPairing } from "../../_shared/whatsappPairingOps.ts";
+import { endSession, historySyncStatus, pairingStatus, registerNumber, resolveNumberContext, startHistorySync, startPairing } from "../../_shared/whatsappPairingOps.ts";
 import { WhatsAppOpError } from "../../_shared/whatsappPartnerOps.ts";
 import { claimIdempotency, completeIdempotency, hashRequest, markIndeterminate } from "../../_shared/partnerApiIdempotency.ts";
 
@@ -39,11 +39,14 @@ export async function updateProfileRoute(req: Request, authed: V1AuthedContext, 
   const { admin, record, requestId } = authed;
   const denied = await assertEntitled(admin, record.workspaceId, "update_whatsapp_profile", requestId);
   if (denied) return denied;
-  // Resolve before claiming: even a replay must honor the currently bound target.
-  const account = await profileAccount(req, authed, params);
-  if (!account.ok) return account.res;
-  return await numberWrite(req, authed, { action: "update_whatsapp_profile", accountId: params.id }, async (body) => {
-    const result = await updateBusinessProfile(account.ctx, body);
+  return await numberWrite(req, authed, {
+    action: "update_whatsapp_profile", accountId: params.id,
+    resolve: async () => {
+      const account = await profileAccount(req, authed, params);
+      return account.ok ? { ok: true as const, value: account.ctx } : account;
+    },
+  }, async (body, ctx) => {
+    const result = await updateBusinessProfile(ctx, body);
     return v1JsonResponse({ ...result, request_id: requestId }, requestId);
   });
 }
@@ -92,11 +95,33 @@ export async function getNumber(
 
 // Number writes use the same claim/settle cycle. The action and account are part
 // of the hash because keys share one idempotency namespace across routes.
-async function numberWrite(
+type NumberResolution<T> = { ok: true; value: T } | { ok: false; res: Response };
+type NumberWriteTarget<T> = { action: string; accountId?: never } | {
+  action: string; accountId: string; resolve: () => Promise<NumberResolution<T>>;
+};
+
+async function resolveNumberTarget(authed: V1AuthedContext, accountId: string, action?: string) {
+  const { admin, record, requestId } = authed;
+  const bound = await boundAccountIds(authed);
+  if (!bound.ok) return bound;
+  try {
+    const value = await resolveNumberContext({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, accountId);
+    if (action) {
+      const denied = await assertEntitled(admin, record.workspaceId, action, requestId, "whatsapp", value.account.connection_mode);
+      if (denied) return { ok: false as const, res: denied };
+    }
+    return { ok: true as const, value };
+  } catch (error) {
+    return { ok: false as const, res: error instanceof WhatsAppOpError
+      ? pairingError(error, requestId) : v1ErrorResponse("internal_error", requestId) };
+  }
+}
+
+async function numberWrite<T = undefined>(
   req: Request,
   authed: V1AuthedContext,
-  target: { action: string; accountId?: string },
-  execute: (body: Record<string, unknown>) => Promise<Response>,
+  target: NumberWriteTarget<T>,
+  execute: (body: Record<string, unknown>, resolved: T) => Promise<Response>,
 ): Promise<Response> {
   const { admin, record, requestId } = authed;
   const key = req.headers.get("idempotency-key")?.trim();
@@ -111,7 +136,13 @@ async function numberWrite(
   } catch {
     return v1ErrorResponse("invalid_request", requestId, { message: "body must be a JSON object" });
   }
-  const claim = await claimIdempotency(admin, record.id, key, await hashRequest({ ...target, body }));
+  let resolved: T;
+  if (target.accountId !== undefined) {
+    const result = await target.resolve();
+    if (!result.ok) return result.res;
+    resolved = result.value;
+  }
+  const claim = await claimIdempotency(admin, record.id, key, await hashRequest({ action: target.action, accountId: target.accountId, body }));
   switch (claim.outcome) {
     case "replay": {
       const response = v1JsonResponse(claim.body, requestId, claim.httpStatus);
@@ -126,7 +157,7 @@ async function numberWrite(
   try {
     let response: Response;
     try {
-      response = await execute(body);
+      response = await execute(body, resolved!);
     } catch (error) {
       if (!(error instanceof WhatsAppOpError) || error.indeterminate) throw error;
       response = pairingError(error, requestId);
@@ -171,11 +202,10 @@ export async function startPairingRoute(req: Request, authed: V1AuthedContext, p
   const { admin, record, requestId } = authed;
   const denied = await assertEntitled(admin, record.workspaceId, "create_whatsapp_pairing", requestId);
   if (denied) return denied;
-  return await numberWrite(req, authed, { action: "create_whatsapp_pairing", accountId: params.id }, async (body) => {
+  return await numberWrite(req, authed, { action: "create_whatsapp_pairing", accountId: params.id,
+    resolve: () => resolveNumberTarget(authed, params.id) }, async (body, ctx) => {
     if (Object.keys(body).length) return v1ErrorResponse("invalid_request", requestId, { message: "Pairing takes an empty body" });
-    const bound = await boundAccountIds(authed);
-    if (!bound.ok) return bound.res;
-    const result = await startPairing({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, params.id);
+    const result = await startPairing(ctx, params.id);
     return v1JsonResponse({ ...result, request_id: requestId }, requestId);
   });
 }
@@ -198,26 +228,21 @@ export async function endSessionRoute(
   req: Request, authed: V1AuthedContext, params: Record<string, string>,
   deps: Parameters<typeof endSession>[2] = {},
 ): Promise<Response> {
-  const { admin, record, requestId } = authed;
-  const denied = await assertEntitled(admin, record.workspaceId, "end_whatsapp_session", requestId);
-  if (denied) return denied;
-  return await numberWrite(req, authed, { action: "end_whatsapp_session", accountId: params.id }, async (body) => {
+  const { requestId } = authed;
+  return await numberWrite(req, authed, { action: "end_whatsapp_session", accountId: params.id,
+    resolve: () => resolveNumberTarget(authed, params.id, "end_whatsapp_session") }, async (body, ctx) => {
     if (Object.keys(body).length) return v1ErrorResponse("invalid_request", requestId, { message: "Session end takes an empty body" });
-    const bound = await boundAccountIds(authed);
-    if (!bound.ok) return bound.res;
-    const result = await endSession({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, params.id, deps);
+    const result = await endSession(ctx, params.id, deps);
     return v1JsonResponse({ ...result, request_id: requestId }, requestId);
   });
 }
 
 export async function historySyncStatusRoute(_req: Request, authed: V1AuthedContext, params: Record<string, string>): Promise<Response> {
-  const { admin, record, requestId } = authed;
-  const denied = await assertEntitled(admin, record.workspaceId, "get_whatsapp_history_sync", requestId);
-  if (denied) return denied;
-  const bound = await boundAccountIds(authed);
-  if (!bound.ok) return bound.res;
+  const { requestId } = authed;
+  const account = await resolveNumberTarget(authed, params.id, "get_whatsapp_history_sync");
+  if (!account.ok) return account.res;
   try {
-    const result = await historySyncStatus({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, params.id);
+    const result = await historySyncStatus(account.value, params.id);
     return v1JsonResponse({ ...result, request_id: requestId }, requestId);
   } catch (error) {
     return error instanceof WhatsAppOpError ? pairingError(error, requestId) : v1ErrorResponse("internal_error", requestId);
@@ -227,14 +252,11 @@ export async function historySyncStatusRoute(_req: Request, authed: V1AuthedCont
 export async function startHistorySyncRoute(
   req: Request, authed: V1AuthedContext, params: Record<string, string>,
 ): Promise<Response> {
-  const { admin, record, requestId } = authed;
-  const denied = await assertEntitled(admin, record.workspaceId, "start_whatsapp_history_sync", requestId);
-  if (denied) return denied;
-  return await numberWrite(req, authed, { action: "start_whatsapp_history_sync", accountId: params.id }, async (body) => {
+  const { requestId } = authed;
+  return await numberWrite(req, authed, { action: "start_whatsapp_history_sync", accountId: params.id,
+    resolve: () => resolveNumberTarget(authed, params.id, "start_whatsapp_history_sync") }, async (body, ctx) => {
     if (Object.keys(body).length) return v1ErrorResponse("invalid_request", requestId, { message: "History sync takes an empty body" });
-    const bound = await boundAccountIds(authed);
-    if (!bound.ok) return bound.res;
-    const result = await startHistorySync({ admin, workspaceId: record.workspaceId, accountIds: bound.ids, requestId }, params.id);
+    const result = await startHistorySync(ctx, params.id);
     return v1JsonResponse({ ...result, request_id: requestId }, requestId, 202);
   });
 }

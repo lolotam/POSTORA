@@ -1,12 +1,13 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { ACTION_FEATURE_KEYS, AGENT_PLATFORM_FEATURE_KEYS, assertEntitled } from "./partnerEntitlement.ts";
+import { ACTION_FEATURE_KEYS, AGENT_PLATFORM_FEATURE_KEYS, COMMENT_PLATFORM_FEATURE_KEYS, WHATSAPP_MODE_FEATURE_KEYS, assertEntitled } from "./partnerEntitlement.ts";
 
 const WORKSPACE = "ws-1";
 const OWNER = "svc-user-1";
 const REQUEST = "req-1";
 const MESSAGING = "feature_msg_whatsapp";
 const QR = "feature_wa_evolution_qr_enabled";
+const CLOUD = "feature_wa_cloud_api_enabled";
 const PHASE_ONE_ACTIONS = [
   "list_whatsapp_numbers", "get_whatsapp_number", "register_whatsapp_number",
   "create_whatsapp_pairing", "get_whatsapp_pairing", "end_whatsapp_session",
@@ -109,10 +110,17 @@ Deno.test("every Phase 1 action has a non-empty policy and passes when entitled"
   for (const action of PHASE_ONE_ACTIONS) {
     assert(Object.hasOwn(ACTION_FEATURE_KEYS, action), action);
     assert(ACTION_FEATURE_KEYS[action].length > 0, action);
-    const stub = adminStub();
-    assertEquals(await assertEntitled(stub.admin, WORKSPACE, action, REQUEST), null, action);
+    const modeAction = ["start_whatsapp_history_sync", "get_whatsapp_history_sync", "end_whatsapp_session"].includes(action);
+    const stub = adminStub({ globalRows: [MESSAGING, QR, CLOUD].map((key) => ({ key, value: true })) });
+    assertEquals(await assertEntitled(stub.admin, WORKSPACE, action, REQUEST, undefined, modeAction ? "evolution_qr" : undefined), null, action);
     assertEquals(stub.logs, []);
   }
+});
+
+Deno.test("a mode action without connectionMode refuses with unsupported_connection_mode", async () => {
+  const stub = await expectRefusal({}, "feature_not_entitled", "start_whatsapp_history_sync");
+  assertEquals((stub.logs[0].metadata as Record<string, unknown>).reason, "unsupported_connection_mode");
+  assertEquals(stub.reads, []);
 });
 
 Deno.test("a per-platform action refuses when the caller names no platform", async () => {
@@ -143,7 +151,8 @@ Deno.test("policy keys exist in the browser's FLAG_KEYS, without importing React
   // Every platform variant, not just the one ACTION_FEATURE_KEYS happens to
   // name: a key reachable only through the per-platform policy would otherwise
   // drift out of the browser's list unnoticed, and refuse that platform for good.
-  const policies = [...Object.values(ACTION_FEATURE_KEYS), ...Object.values(AGENT_PLATFORM_FEATURE_KEYS)];
+  const policies = [...Object.values(ACTION_FEATURE_KEYS), ...Object.values(AGENT_PLATFORM_FEATURE_KEYS),
+    ...Object.values(COMMENT_PLATFORM_FEATURE_KEYS), ...Object.values(WHATSAPP_MODE_FEATURE_KEYS)];
   for (const required of policies) {
     for (const key of required) assert(keys.includes(key), `unknown FLAG_KEYS entry: ${key}`);
   }
@@ -236,5 +245,38 @@ for (const action of ["create_whatsapp_pairing", "register_whatsapp_number", "ge
         { key: MESSAGING, value: messaging }, { key: QR, value: qr },
       ] }, undefined, action, [...missing]);
     }
+  });
+}
+
+for (const action of ["start_whatsapp_history_sync", "get_whatsapp_history_sync", "end_whatsapp_session"]) {
+  for (const [mode, modeKey] of [["evolution_qr", QR], ["cloud_api", CLOUD]]) {
+    Deno.test(`${action} requires messaging AND ${mode}`, async () => {
+      for (const enabled of [false, true]) {
+        const stub = adminStub({ globalRows: [{ key: MESSAGING, value: true }, { key: modeKey, value: enabled }] });
+        const response = await assertEntitled(stub.admin, WORKSPACE, action, REQUEST, "whatsapp", mode);
+        if (enabled) assertEquals(response, null);
+        else {
+          assertEquals(response?.status, 403);
+          assertEquals((await response!.json()).error.code, "feature_not_entitled");
+        }
+      }
+    });
+  }
+}
+
+for (const action of ["get_whatsapp_profile", "update_whatsapp_profile"]) {
+  Deno.test(`${action} with QR-only flags is refused`, async () => {
+    await expectRefusal({}, "feature_not_entitled", action, [CLOUD]);
+  });
+}
+
+for (const action of ["list_comments", "get_comment", "reply_comment", "hide_comment", "delete_comment"]) {
+  Deno.test(`YouTube ${action} requires manager AND YouTube comments`, async () => {
+    const stub = adminStub({ globalRows: [
+      { key: "feature_comment_manager", value: true }, { key: "feature_youtube_comments", value: false },
+    ] });
+    const response = await assertEntitled(stub.admin, WORKSPACE, action, REQUEST, "youtube");
+    assertEquals(response?.status, 403);
+    assertEquals((await response!.json()).error.code, "feature_not_entitled");
   });
 }
