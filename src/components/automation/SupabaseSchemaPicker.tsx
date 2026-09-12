@@ -74,16 +74,6 @@ export function SupabaseSchemaPicker({
   const selectedTables = parseList(tableAllowList);
   const selectedColumns = parseList(selectColumns);
 
-  // Columns are offered per SELECTED table. Unioning them was wrong once a
-  // connector allowed two tables: picking products.price and orders.total sent
-  // "price,total" to BOTH, so each query failed on the column its table lacks,
-  // and adding a second table broke access that already worked.
-  const columnsByTable: Record<string, string[]> = introspection
-    ? Object.fromEntries(
-      selectedTables.map((table) => [table, introspection.columnsByTable[table] ?? []]),
-    )
-    : {};
-
   const parsedMap = parseColumnMap(columnMap);
 
   const columnsFor = (table: string): string[] => {
@@ -94,6 +84,36 @@ export function SupabaseSchemaPicker({
     // Before any per-table choice exists, the flat list is what applies.
     return selectedColumns;
   };
+
+  // Columns are offered per SELECTED table. Unioning them was wrong once a
+  // connector allowed two tables: picking products.price and orders.total sent
+  // "price,total" to BOTH, so each query failed on the column its table lacks,
+  // and adding a second table broke access that already worked.
+  //
+  // The tree is drawn from the SAVED selection before any load. On edit the
+  // anon key is never shown back, so introspection cannot run until it is
+  // re-entered -- and until this change the tree stayed empty, so editing a
+  // connector looked like starting from scratch. A later load only ADDS what
+  // the project reports; saved tables and columns stay listed and ticked even
+  // if the project no longer lists them, so a save cannot silently drop them.
+  const union = (first: string[], second: string[]) => [...new Set([...first, ...second])];
+  const savedView: SupabaseIntrospection | null = selectedTables.length > 0
+    ? {
+      tables: selectedTables,
+      columnsByTable: Object.fromEntries(selectedTables.map((table) => [table, columnsFor(table)])),
+    }
+    : null;
+  const view: SupabaseIntrospection | null = introspection
+    ? {
+      tables: union(introspection.tables, selectedTables),
+      columnsByTable: Object.fromEntries(
+        selectedTables.map((table) => [
+          table,
+          union(introspection.columnsByTable[table] ?? [], columnsFor(table)),
+        ]),
+      ),
+    }
+    : savedView;
 
   // The adapter refuses any table an active map does not name, so narrowing one
   // table must not silently deny the others. Every allowed table is therefore
@@ -220,6 +240,11 @@ export function SupabaseSchemaPicker({
         </p>
       )}
       {error && <p className="text-[10px] text-destructive">{error}</p>}
+      {!introspection && view && (
+        <p className="text-[10px] text-muted-foreground">
+          Showing the saved selection. Load from project to see the other tables and columns.
+        </p>
+      )}
       {tableListUnavailable && (
         <p className="text-[10px] text-muted-foreground">
           This project only lists tables to its service_role key, so the table names come from
@@ -227,14 +252,14 @@ export function SupabaseSchemaPicker({
         </p>
       )}
 
-      {introspection && (
+      {view && (
         <div className="space-y-3">
           <div className="space-y-1">
             <p className="text-[10px] font-medium text-muted-foreground">
               Tables ({selectedTables.length} selected)
             </p>
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-40 overflow-y-auto">
-              {introspection.tables.map((table) => (
+              {view.tables.map((table) => (
                 <label key={table} className="flex items-center gap-2 text-xs cursor-pointer">
                   <Checkbox
                     checked={selectedTables.includes(table)}
@@ -259,7 +284,7 @@ export function SupabaseSchemaPicker({
                     {" selected"})
                   </p>
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-32 overflow-y-auto">
-                    {(columnsByTable[table] ?? []).map((column) => (
+                    {(view.columnsByTable[table] ?? []).map((column) => (
                       <label
                         key={`${table}.${column}`}
                         className="flex items-center gap-2 text-xs cursor-pointer"
