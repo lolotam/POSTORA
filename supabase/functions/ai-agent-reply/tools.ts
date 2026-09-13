@@ -252,46 +252,78 @@ export async function escalateConversation(
   // extended and not re-announced: under human_then_ai the assistant keeps
   // answering, so the model may escalate on every message, and each of those
   // must not push expires_at forward or page the admins again.
-  const { data: existingRow, error: existingError } = await target.admin
-    .from("ai_conversation_modes")
-    .select("id, mode, expires_at")
-    .eq("user_id", target.userId)
-    .eq("platform", target.platform)
-    .eq("conversation_id", target.conversationId)
-    .maybeSingle();
-  if (existingError) throw existingError;
-  const existing = (existingRow ?? null) as { mode: string; expires_at: string | null } | null;
-  const manual = existing !== null && existing.expires_at === null;
-  const repeated = existing !== null && !manual && !isOverrideExpired(existing, nowMs);
+  type StoredMode = { id: string; mode: string; expires_at: string | null };
+  const readExisting = async (): Promise<StoredMode | null> => {
+    const { data, error } = await target.admin
+      .from("ai_conversation_modes")
+      .select("id, mode, expires_at")
+      .eq("user_id", target.userId)
+      .eq("platform", target.platform)
+      .eq("conversation_id", target.conversationId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data ?? null) as StoredMode | null;
+  };
+  const classify = (row: StoredMode | null) => ({
+    manual: row !== null && row.expires_at === null,
+    repeated: row !== null && row.expires_at !== null && !isOverrideExpired(row, nowMs),
+  });
 
   // The first write happens before assignment, exactly as before, but bounded
   // by the timeout. Under human_then_ai it deliberately does NOT mute: the
   // exclusive human window is granted only once a human was actually assigned.
   // The outage floor and recovery ask for the mute regardless, which is the
   // same decision as a human_first default.
+  const proposed = escalationOverride(
+    target.muteRegardless ? "human_first" : target.defaultMode,
+    false,
+    target.escalationTimeoutMinutes,
+    nowMs,
+  );
+  // Compare-and-set against what was read: an insert when there was no row (a
+  // unique violation means someone wrote one meanwhile), a conditional update
+  // when the row observed had expired. Either way a row that changed between
+  // the read and the write is re-read and wins -- an operator's manual choice
+  // or a concurrent escalation is never overwritten (Codex P2, PR #178).
+  let existing = await readExisting();
+  let { manual, repeated } = classify(existing);
+  if (!manual && !repeated) {
+    const key = { user_id: target.userId, platform: target.platform, conversation_id: target.conversationId };
+    let written = false;
+    if (existing === null) {
+      const { error: insertError } = await target.admin
+        .from("ai_conversation_modes")
+        .insert({ ...key, mode: proposed.mode, expires_at: proposed.expires_at });
+      if (insertError && insertError.code !== "23505") throw insertError;
+      written = !insertError;
+    } else {
+      const { data: replaced, error: updateError } = await target.admin
+        .from("ai_conversation_modes")
+        .update({ mode: proposed.mode, expires_at: proposed.expires_at })
+        .eq("id", existing.id)
+        .eq("user_id", target.userId)
+        .eq("expires_at", existing.expires_at)
+        .select("id")
+        .maybeSingle();
+      if (updateError) throw updateError;
+      written = replaced !== null && replaced !== undefined;
+    }
+    if (!written) {
+      existing = await readExisting();
+      ({ manual, repeated } = classify(existing));
+      if (!manual && !repeated) {
+        // Deleted again between our two reads: nothing to protect, write plainly.
+        const { error: retryError } = await target.admin
+          .from("ai_conversation_modes")
+          .upsert({ ...key, mode: proposed.mode, expires_at: proposed.expires_at }, { onConflict: "user_id,platform,conversation_id" });
+        if (retryError) throw retryError;
+        written = true;
+      }
+    }
+  }
   const first: { mode: string; expires_at: string | null } = manual || repeated
     ? { mode: existing!.mode, expires_at: existing!.expires_at }
-    : escalationOverride(
-      target.muteRegardless ? "human_first" : target.defaultMode,
-      false,
-      target.escalationTimeoutMinutes,
-      nowMs,
-    );
-  if (!manual && !repeated) {
-    const { error: modeError } = await target.admin
-      .from("ai_conversation_modes")
-      .upsert(
-        {
-          user_id: target.userId,
-          platform: target.platform,
-          conversation_id: target.conversationId,
-          mode: first.mode,
-          expires_at: first.expires_at,
-        },
-        { onConflict: "user_id,platform,conversation_id" },
-      );
-    if (modeError) throw modeError;
-  }
+    : proposed;
 
   // Past this point the conversation is muted, which is the part of the escalation
   // the outage floor depends on. So nothing below may throw: a post-mute failure

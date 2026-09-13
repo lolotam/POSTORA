@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bot, HelpCircle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -44,10 +44,24 @@ function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChan
   // their cursor; only a finite positive number is committed, and blur puts the
   // stored value back.
   const [draft, setDraft] = useState<string>(String(displayValue(minutes, unit)));
+  // The field mounts before the account config has loaded (the form holds the
+  // 240 default) and stays mounted when the user switches accounts. A stored
+  // value arriving from outside re-derives the unit and the draft; a value we
+  // committed ourselves does not, so typing is never rewritten (Codex P2).
+  const committed = useRef(minutes);
+  useEffect(() => {
+    if (minutes === committed.current) return;
+    committed.current = minutes;
+    const hydratedUnit: TimeoutUnit = minutes >= 60 && minutes % 60 === 0 ? "hours" : "minutes";
+    setUnit(hydratedUnit);
+    setDraft(String(displayValue(minutes, hydratedUnit)));
+  }, [minutes]);
   const max = unit === "hours" ? MAX_ESCALATION_TIMEOUT_MINUTES / 60 : MAX_ESCALATION_TIMEOUT_MINUTES;
   const commit = (typed: number, inUnit: TimeoutUnit) => {
     const asMinutes = inUnit === "hours" ? typed * 60 : typed;
-    onChange(Math.min(MAX_ESCALATION_TIMEOUT_MINUTES, Math.max(1, Math.round(asMinutes))));
+    const clamped = Math.min(MAX_ESCALATION_TIMEOUT_MINUTES, Math.max(1, Math.round(asMinutes)));
+    committed.current = clamped;
+    onChange(clamped);
   };
   const onDraftChange = (value: string) => {
     setDraft(value);

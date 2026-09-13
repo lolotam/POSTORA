@@ -84,6 +84,27 @@ describe("AgentIdentityCard escalation timeout", () => {
     expect(input.value).toBe("90");
   });
 
+  it("a stored value arriving after mount replaces the default draft", () => {
+    // Codex P2 on PR #178: the field mounts with the form's 240 default and
+    // the account config loads afterwards; the draft has to follow it.
+    const update = vi.fn();
+    const { rerender } = renderCard({ default_mode: "human_then_ai", escalation_timeout_minutes: 240 }, update);
+    const input = screen.getByLabelText("Escalation fallback timeout") as HTMLInputElement;
+    expect(input.value).toBe("4");
+
+    rerender(
+      <AgentIdentityCard
+        form={{ is_enabled: true, default_mode: "human_then_ai", escalation_timeout_minutes: 90, language_mode: "auto", persona_instructions: "", business_profile_text: "" }}
+        update={update}
+        behavior={{}}
+        updateBehavior={vi.fn()}
+      />,
+    );
+    expect(input.value).toBe("90");
+    expect(screen.getByRole("combobox", { name: "Timeout unit" })).toHaveTextContent("Minutes");
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("switching the unit never changes the stored value", async () => {
     for (const { minutes, expectedHours } of [
       { minutes: 1, expectedHours: "0.02" },

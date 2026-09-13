@@ -130,7 +130,11 @@ Deno.test("a post-mute assignment failure still counts as escalated", async () =
         const none: Record<string, unknown> = {};
         none.eq = () => none;
         none.maybeSingle = () => Promise.resolve({ data: null, error: null });
-        return { select: () => none, upsert: () => Promise.resolve({ error: null }) };
+        return {
+          select: () => none,
+          insert: () => Promise.resolve({ error: null }),
+          upsert: () => Promise.resolve({ error: null }),
+        };
       }
       // Everything after the mute blows up.
       throw new Error("assignment table unavailable");
@@ -163,6 +167,10 @@ Deno.test("the outage floor mutes regardless of the account default", async () =
         return {
           // The pre-read finds no row, so the escalation writes.
           select: () => none,
+          insert: (payload: Record<string, unknown>) => {
+            captured.storedRow = payload;
+            return Promise.resolve({ error: null });
+          },
           upsert: (payload: Record<string, unknown>) => {
             captured.storedRow = payload;
             return Promise.resolve({ error: null });

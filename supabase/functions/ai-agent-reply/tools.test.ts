@@ -28,6 +28,13 @@ function escalationDatabase(existing: EscalationRow[] = [], fail?: string, onQue
         onQuery?.(table, operation);
         if (fail === `${table}:${operation}`) return { data: null, error: { message: "database failed", code: "57014" } };
         const matches = tables[table].filter((row) => filters.every(([key, value]) => row[key] === value));
+        if (operation === "insert" && table === "ai_conversation_modes") {
+          const conflict = tables[table].some((row) =>
+            row.user_id === payload.user_id && row.platform === payload.platform &&
+            row.conversation_id === payload.conversation_id
+          );
+          if (conflict) return { data: null, error: { message: "duplicate key", code: "23505" } };
+        }
         if (operation === "insert" || operation === "upsert") {
           tables[table].push(payload);
           writes.push({ table, payload });
@@ -907,4 +914,47 @@ Deno.test("a repeated escalation still tightens the window once a human comes on
   assertEquals(outcome.mode, "human_first");
   assertEquals(db.tables.ai_conversation_modes[0].mode, "human_first");
   assertEquals(db.tables.ai_conversation_modes[0].expires_at, until);
+});
+
+Deno.test("a manual override written between the read and the first write wins", async () => {
+  // Codex P2 on PR #178: the first write used to be an unconditional upsert.
+  // Here the operator sets a manual row right after the escalation's read;
+  // the insert hits the unique key, the row is re-read, and it is left alone.
+  const db = escalationDatabase([], undefined, (table, op) => {
+    if (table === "ai_conversation_modes" && op === "insert" && db.tables.ai_conversation_modes.length === 0) {
+      db.tables.ai_conversation_modes.push({
+        id: "m1", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key",
+        mode: "human_then_ai", expires_at: null,
+      });
+    }
+  });
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "ai_first" }),
+    "help",
+  );
+  assertEquals(db.writes.filter((write) => write.table === "ai_conversation_modes"), []);
+  assertEquals(db.tables.ai_conversation_modes.length, 1);
+  assertEquals(db.tables.ai_conversation_modes[0].mode, "human_then_ai");
+  assertEquals(db.tables.ai_conversation_modes[0].expires_at, null);
+  assertEquals(outcome.mode, "human_then_ai");
+  assertEquals(outcome.expiresAt, null);
+});
+
+Deno.test("an expired escalation row is replaced in place, conditionally on the expiry observed", async () => {
+  const db = escalationDatabase();
+  db.tables.whatsapp_agents.forEach((agent) => { agent.status = "offline"; });
+  const stale = new Date(Date.now() - 60_000).toISOString();
+  db.tables.ai_conversation_modes.push({
+    id: "m1", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key",
+    mode: "human_first", expires_at: stale,
+  });
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "human_then_ai", escalationTimeoutMinutes: 15 }),
+    "help",
+  );
+  assertEquals(db.tables.ai_conversation_modes.length, 1);
+  assertEquals(db.tables.ai_conversation_modes[0].mode, "human_then_ai");
+  assertEquals(db.tables.ai_conversation_modes[0].expires_at !== stale, true);
+  assertEquals(outcome.repeated, false);
+  assertEquals(outcome.mode, "human_then_ai");
 });
