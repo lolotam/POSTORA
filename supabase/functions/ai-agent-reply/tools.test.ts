@@ -1,11 +1,11 @@
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
-import { customToolDefinitions, escalateConversation, executeTool, type CustomTool, type ToolContext } from "./tools.ts";
+import { customToolDefinitions, escalateConversation, executeTool, type CustomTool, type EscalationTarget, type ToolContext } from "./tools.ts";
 import { composioBinding } from "../_shared/connectorRegistry.ts";
 
 type EscalationRow = Record<string, unknown>;
 
-function escalationDatabase(existing: EscalationRow[] = [], fail?: string) {
+function escalationDatabase(existing: EscalationRow[] = [], fail?: string, onQuery?: (table: string, op: string) => void) {
   const tables: Record<string, EscalationRow[]> = {
     workspaces: [{ id: "workspace-a", owner_id: "owner-a", is_personal: true }],
     // The foreign agent is online and less busy: an unscoped selection picks it.
@@ -25,6 +25,7 @@ function escalationDatabase(existing: EscalationRow[] = [], fail?: string) {
       let payload: EscalationRow = {};
       let single = false;
       const result = () => {
+        onQuery?.(table, operation);
         if (fail === `${table}:${operation}`) return { data: null, error: { message: "database failed", code: "57014" } };
         const matches = tables[table].filter((row) => filters.every(([key, value]) => row[key] === value));
         if (operation === "insert" || operation === "upsert") {
@@ -51,11 +52,12 @@ function escalationDatabase(existing: EscalationRow[] = [], fail?: string) {
   return { admin, tables, writes };
 }
 
-function escalationTarget(admin: ReturnType<typeof escalationDatabase>["admin"]) {
+function escalationTarget(admin: ReturnType<typeof escalationDatabase>["admin"], overrides: Partial<EscalationTarget> = {}) {
   return {
     admin, userId: "owner-a", platform: "whatsapp", conversationId: "shared-key",
     cachedConversation: { id: "cache-a", workspace_id: "workspace-a" },
     customerName: "Customer", adminPhoneNumbers: [], sendWhatsAppText: () => Promise.resolve(),
+    ...overrides,
   };
 }
 
@@ -111,12 +113,113 @@ for (const fail of ["workspaces:select", "whatsapp_agents:select", "whatsapp_con
       assertEquals(outcome.assigned, false);
       assertEquals(own.unassigned_at, null);
       assertEquals(db.writes.map((write) => write.table), ["ai_conversation_modes"]);
+      assertEquals(typeof db.writes[0].payload.expires_at, "string");
       assertEquals(errors.some((args) => args.includes("database failed")), true);
     } finally {
       console.error = originalError;
     }
   });
 }
+
+Deno.test("escalation under human_then_ai with an online agent tightens to human_first with an expiry", async () => {
+  const db = escalationDatabase();
+  const start = Date.now();
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "human_then_ai", escalationTimeoutMinutes: 30 }),
+    "help",
+  );
+  assertEquals(outcome.assigned, true);
+  assertEquals(outcome.mode, "human_first");
+  assertEquals(db.tables.ai_conversation_modes.length, 1);
+  const stored = db.tables.ai_conversation_modes[0];
+  assertEquals(stored.mode, "human_first");
+  const expiresAtMs = Date.parse(stored.expires_at as string);
+  assertEquals(Number.isNaN(expiresAtMs), false);
+  assertEquals(Math.abs(expiresAtMs - (start + 30 * 60_000)) < 5000, true);
+});
+
+Deno.test("escalation under human_then_ai with nobody online leaves the assistant answering", async () => {
+  const db = escalationDatabase();
+  db.tables.whatsapp_agents.forEach((agent) => { agent.status = "offline"; });
+  const start = Date.now();
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "human_then_ai", escalationTimeoutMinutes: 30 }),
+    "help",
+  );
+  assertEquals(outcome.assigned, false);
+  assertEquals(outcome.mode, "human_then_ai");
+  assertEquals(db.tables.ai_conversation_modes.length, 1);
+  const stored = db.tables.ai_conversation_modes[0];
+  assertEquals(stored.mode, "human_then_ai");
+  const expiresAtMs = Date.parse(stored.expires_at as string);
+  assertEquals(Number.isNaN(expiresAtMs), false);
+  assertEquals(Math.abs(expiresAtMs - (start + 30 * 60_000)) < 5000, true);
+});
+
+Deno.test("escalation under ai_first mutes for the window", async () => {
+  const db = escalationDatabase();
+  db.tables.whatsapp_agents.forEach((agent) => { agent.status = "offline"; });
+  const start = Date.now();
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "ai_first", escalationTimeoutMinutes: 45 }),
+    "help",
+  );
+  assertEquals(outcome.assigned, false);
+  assertEquals(outcome.mode, "human_first");
+  assertEquals(db.tables.ai_conversation_modes.length, 1);
+  const stored = db.tables.ai_conversation_modes[0];
+  assertEquals(stored.mode, "human_first");
+  const expiresAtMs = Date.parse(stored.expires_at as string);
+  assertEquals(Number.isNaN(expiresAtMs), false);
+  assertEquals(Math.abs(expiresAtMs - (start + 45 * 60_000)) < 5000, true);
+});
+
+Deno.test("muteRegardless mutes even under human_then_ai", async () => {
+  const db = escalationDatabase();
+  db.tables.whatsapp_agents.forEach((agent) => { agent.status = "offline"; });
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "human_then_ai", muteRegardless: true }),
+    "help",
+  );
+  assertEquals(outcome.assigned, false);
+  assertEquals(outcome.mode, "human_first");
+  assertEquals(db.tables.ai_conversation_modes.length, 1);
+  const stored = db.tables.ai_conversation_modes[0];
+  assertEquals(stored.mode, "human_first");
+  assertEquals(typeof stored.expires_at, "string");
+});
+
+Deno.test("a tightening that finds the row changed reports the row's mode, not its own", async () => {
+  const db = escalationDatabase([], undefined, (table, op) => {
+    if (table === "whatsapp_agents" && op === "select") {
+      db.tables.ai_conversation_modes[0].mode = "ai_first";
+    }
+  });
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "human_then_ai" }),
+    "help",
+  );
+  assertEquals(outcome.assigned, true);
+  assertEquals(outcome.mode, "ai_first");
+});
+
+Deno.test("a failed tightening is logged and the outcome still returns", async () => {
+  const db = escalationDatabase([], "ai_conversation_modes:update");
+  const errors: unknown[][] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(args); };
+  try {
+    const outcome = await escalateConversation(
+      escalationTarget(db.admin, { defaultMode: "human_then_ai" }),
+      "help",
+    );
+    assertEquals(outcome.assigned, true);
+    assertEquals(outcome.mode, "human_then_ai");
+    assertEquals(errors.some((args) => args.join(" ").includes("escalation mode decision failed")), true);
+  } finally {
+    console.error = originalError;
+  }
+});
 
 function context(overrides: Partial<ToolContext>): ToolContext {
   return {

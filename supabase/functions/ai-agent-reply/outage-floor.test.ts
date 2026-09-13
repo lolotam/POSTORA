@@ -1,6 +1,7 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
 import type { EscalationTarget } from "./tools.ts";
+import { activeOverrideMode } from "../_shared/conversationModeOverride.ts";
 
 /** An admin stub whose every query resolves empty: no online agent, nobody notified. */
 function quietAdmin(onTable?: (table: string) => void) {
@@ -141,4 +142,61 @@ Deno.test("a post-mute assignment failure still counts as escalated", async () =
   // Nobody was actually reached, so the copy must stay conservative.
   assertEquals(result.human_notified, false);
   assertEquals(c.sent[0].includes("notified"), false);
+});
+
+Deno.test("the outage floor mutes regardless of the account default", async () => {
+  const c = collector();
+  const captured: { storedRow: Record<string, unknown> | null } = { storedRow: null };
+  const admin = {
+    from(table: string) {
+      if (table === "ai_conversation_modes") {
+        return {
+          upsert: (payload: Record<string, unknown>) => {
+            captured.storedRow = payload;
+            return Promise.resolve({ error: null });
+          },
+        };
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            is: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }),
+            maybeSingle: () => Promise.resolve({ data: null }),
+            abortSignal: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }),
+          }),
+          abortSignal: () => ({
+            then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
+          }),
+          then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
+        }),
+        insert: () => Promise.resolve({ error: null }),
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    },
+  };
+
+  const t = target({
+    admin,
+    defaultMode: "human_then_ai",
+    escalationTimeoutMinutes: 60,
+  });
+
+  const start = Date.now();
+  const result = await deliverModelOutageFloor(DM, c.sender, "en", t, NONE);
+
+  assertEquals(result.escalated, true);
+  assertEquals(result.apology_sent, true);
+  assertEquals(c.sent.length, 1);
+
+  // The stored row is human_first with an expiry, proving muteRegardless: true reached escalateConversation
+  // and overrode human_then_ai (which with offline agents would otherwise have stored human_then_ai).
+  assert(captured.storedRow !== null);
+  assertEquals(captured.storedRow.mode, "human_first");
+  const expiresAtMs = Date.parse(captured.storedRow.expires_at as string);
+  assertEquals(Number.isNaN(expiresAtMs), false);
+  assertEquals(Math.abs(expiresAtMs - (start + 60 * 60_000)) < 5000, true);
+
+  // An active override in human_first mutes the conversation so a second inbound during the window
+  // is skipped by the reply gate and does not produce a second apology.
+  assertEquals(activeOverrideMode(captured.storedRow as { mode: string; expires_at: string }, Date.now()), "human_first");
 });
