@@ -337,9 +337,14 @@ async function processRow(admin: any, row: OutboxRow): Promise<string> {
       // Same gate, and here it matters more: escalateConversation mutes the conversation and
       // notifies people. Doing that on a row another worker already took would silence a
       // conversation twice and page an admin twice for one interruption.
+      // Read BEFORE the transition: loadAgentConfig throws on a failed read, and
+      // a throw after the row went terminal would strand it -- nothing would
+      // retry the hand-off and nobody would be told (Codex P1, PR #178). Thrown
+      // here, the row is still `running` and the next tick tries again.
+      const config = await loadAgentConfig(admin, row);
       const claimed = await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed while the agent was running" });
       if (!claimed) return "conceded";
-      const handed = await handToHuman(admin, row, await loadAgentConfig(admin, row));
+      const handed = await handToHuman(admin, row, config);
       await surfaceToHumans(
         admin,
         row,

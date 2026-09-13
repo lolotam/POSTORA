@@ -958,3 +958,55 @@ Deno.test("an expired escalation row is replaced in place, conditionally on the 
   assertEquals(outcome.repeated, false);
   assertEquals(outcome.mode, "human_then_ai");
 });
+
+Deno.test("the outcome says whether the conversation is really muted", async () => {
+  // Codex P2 on PR #178: with a manual ai_first row the outage floor's mute
+  // does not happen, and it must be told so rather than apologise repeatedly.
+  const db = escalationDatabase();
+  db.tables.ai_conversation_modes.push({
+    id: "m1", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key",
+    mode: "ai_first", expires_at: null,
+  });
+  const unmuted = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "human_then_ai", muteRegardless: true }),
+    "All configured AI models failed",
+  );
+  assertEquals(unmuted.muted, false);
+  assertEquals(unmuted.mode, "ai_first");
+  assertEquals(db.tables.ai_conversation_modes[0].expires_at, null);
+
+  const fresh = escalationDatabase();
+  const muted = await escalateConversation(
+    escalationTarget(fresh.admin, { defaultMode: "human_then_ai", muteRegardless: true }),
+    "All configured AI models failed",
+  );
+  assertEquals(muted.muted, true);
+});
+
+Deno.test("a manual override created during the retry window also wins", async () => {
+  // Codex P2 round 2: the retry after a conflict used to fall back to an
+  // unconditional upsert. Here the operator's row appears only on the second
+  // insert attempt, after the first conflict was caused by a row that was
+  // deleted again in between.
+  let inserts = 0;
+  const db = escalationDatabase([], undefined, (table, op) => {
+    if (table !== "ai_conversation_modes" || op !== "insert") return;
+    inserts++;
+    if (inserts === 1) {
+      // A row exists for the first insert (conflict) and vanishes before the re-read.
+      db.tables.ai_conversation_modes.push({ id: "tmp", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key", mode: "human_first", expires_at: "2000-01-01T00:00:00Z" });
+      queueMicrotask(() => { db.tables.ai_conversation_modes.length = 0; });
+    }
+    if (inserts === 2) {
+      db.tables.ai_conversation_modes.push({ id: "m2", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key", mode: "human_then_ai", expires_at: null });
+    }
+  });
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "ai_first" }),
+    "help",
+  );
+  assertEquals(db.writes.filter((write) => write.table === "ai_conversation_modes"), []);
+  assertEquals(db.tables.ai_conversation_modes.map((row) => row.id), ["m2"]);
+  assertEquals(outcome.mode, "human_then_ai");
+  assertEquals(outcome.expiresAt, null);
+});

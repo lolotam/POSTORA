@@ -219,6 +219,12 @@ export interface EscalationOutcome {
   expiresAt: string | null;
   /** True when an active escalation window already covered this conversation. */
   repeated: boolean;
+  /**
+   * True when the conversation is muted for the assistant when this returns
+   * (mode human_first). False when a manual row kept another mode: the outage
+   * floor must not then send an apology that would repeat on every message.
+   */
+  muted: boolean;
 }
 
 /**
@@ -287,13 +293,26 @@ export async function escalateConversation(
   // or a concurrent escalation is never overwritten (Codex P2, PR #178).
   let existing = await readExisting();
   let { manual, repeated } = classify(existing);
-  if (!manual && !repeated) {
-    const key = { user_id: target.userId, platform: target.platform, conversation_id: target.conversationId };
-    let written = false;
+  let written = false;
+  // Every attempt is compare-and-set; there is no unconditional write on any
+  // path, so a row an operator creates in the retry window survives too. Three
+  // attempts bound a pathological race; after that the row as it stands wins.
+  for (let attempt = 0; attempt < 3 && !written && !manual && !repeated; attempt++) {
+    if (attempt > 0) {
+      existing = await readExisting();
+      ({ manual, repeated } = classify(existing));
+      if (manual || repeated) break;
+    }
     if (existing === null) {
       const { error: insertError } = await target.admin
         .from("ai_conversation_modes")
-        .insert({ ...key, mode: proposed.mode, expires_at: proposed.expires_at });
+        .insert({
+          user_id: target.userId,
+          platform: target.platform,
+          conversation_id: target.conversationId,
+          mode: proposed.mode,
+          expires_at: proposed.expires_at,
+        });
       if (insertError && insertError.code !== "23505") throw insertError;
       written = !insertError;
     } else {
@@ -308,21 +327,11 @@ export async function escalateConversation(
       if (updateError) throw updateError;
       written = replaced !== null && replaced !== undefined;
     }
-    if (!written) {
-      existing = await readExisting();
-      ({ manual, repeated } = classify(existing));
-      if (!manual && !repeated) {
-        // Deleted again between our two reads: nothing to protect, write plainly.
-        const { error: retryError } = await target.admin
-          .from("ai_conversation_modes")
-          .upsert({ ...key, mode: proposed.mode, expires_at: proposed.expires_at }, { onConflict: "user_id,platform,conversation_id" });
-        if (retryError) throw retryError;
-        written = true;
-      }
-    }
   }
-  const first: { mode: string; expires_at: string | null } = manual || repeated
-    ? { mode: existing!.mode, expires_at: existing!.expires_at }
+  const first: { mode: string; expires_at: string | null } = written
+    ? proposed
+    : existing
+    ? { mode: existing.mode, expires_at: existing.expires_at }
     : proposed;
 
   // Past this point the conversation is muted, which is the part of the escalation
@@ -496,7 +505,15 @@ export async function escalateConversation(
     `[ai-agent-reply] Escalated conversation (assigned: ${assigned}, admins notified: ${adminsNotified}, mode: ${persistedMode}, until: ${first.expires_at ?? "released by an operator"}, repeated: ${repeated})`,
   );
 
-  return { assigned, assignmentNote, adminsNotified, mode: persistedMode, expiresAt: first.expires_at, repeated };
+  return {
+    assigned,
+    assignmentNote,
+    adminsNotified,
+    mode: persistedMode,
+    expiresAt: first.expires_at,
+    repeated,
+    muted: persistedMode === "human_first",
+  };
 }
 
 async function escalateToHuman(context: ToolContext, reason: string): Promise<ToolResult> {

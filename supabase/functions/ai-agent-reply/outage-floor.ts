@@ -65,6 +65,16 @@ export async function deliverModelOutageFloor(
     } catch (escalationError) {
       console.error("[ai-agent-reply] Outage escalation failed:", message(escalationError));
     }
+    // A manual override (ai_first or human_then_ai, no expiry) is the operator's
+    // and is never rewritten, so the escalation can return without a mute. An
+    // apology then would repeat on every message; treat it like a failed
+    // escalation (Codex P2, PR #178).
+    if (outcome && !outcome.muted) {
+      console.error(
+        `[ai-agent-reply] Outage escalation left the conversation unmuted (mode ${outcome.mode}, manual override); no apology sent`,
+      );
+      outcome = null;
+    }
   }
 
   // Nothing muted the conversation, so an apology now would repeat on every

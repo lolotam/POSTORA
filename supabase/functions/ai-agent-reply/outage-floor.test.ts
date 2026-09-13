@@ -220,3 +220,32 @@ Deno.test("the outage floor mutes regardless of the account default", async () =
   // is skipped by the reply gate and does not produce a second apology.
   assertEquals(activeOverrideMode(captured.storedRow as { mode: string; expires_at: string }, Date.now()), "human_first");
 });
+
+Deno.test("a manual ai_first override blocks the outage mute and no apology is sent", async () => {
+  // Codex P2 on PR #178: the operator's manual row is never rewritten, so the
+  // conversation is not muted; an apology would then repeat on every message.
+  const c = collector();
+  const admin = {
+    from(table: string) {
+      const chain: Record<string, unknown> = {};
+      chain.eq = () => chain;
+      chain.is = () => chain;
+      chain.abortSignal = () => chain;
+      chain.maybeSingle = () => Promise.resolve({
+        data: table === "ai_conversation_modes" ? { id: "m1", mode: "ai_first", expires_at: null } : null,
+        error: null,
+      });
+      chain.then = (resolve: (v: unknown) => void) => resolve({ data: [], error: null });
+      return {
+        select: () => chain,
+        insert: () => Promise.resolve({ error: null }),
+        upsert: () => Promise.resolve({ error: null }),
+        update: () => ({ eq: () => chain }),
+      };
+    },
+  };
+  const result = await deliverModelOutageFloor(DM, c.sender, "en", target({ admin }), NONE);
+  assertEquals(result.apology_sent, false);
+  assertEquals(result.escalated, false);
+  assertEquals(c.sent.length, 0);
+});
